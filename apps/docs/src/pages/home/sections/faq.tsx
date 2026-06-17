@@ -4,6 +4,7 @@ import { ChevronDown } from "lucide-react";
 import type { FC } from "react";
 import { useState } from "react";
 
+import Reveal from "@/components/sections/reveal";
 import Section from "@/components/sections/section";
 import SectionHeader from "@/components/sections/section-header";
 import JsonLd from "@/components/seo/json-ld";
@@ -77,7 +78,7 @@ const FAQ: FC = () => {
             <JsonLd data={faqPageJsonLd} />
             <Section gridLength={0} mode="dark">
                 <SectionHeader className="col-span-2 lg:col-span-4" eyebrow="FAQ" subhead="Common questions about Lunora." title="Frequently asked questions" />
-                <div className="col-span-2 mt-8 border-t border-white/[0.06] lg:col-span-4">
+                <Reveal className="col-span-2 mt-8 border-t border-white/[0.06] lg:col-span-4" delay={0.1}>
                     {faqs.map((faq, index) => (
                         <FaqItem
                             answer={faq.answer}
@@ -89,7 +90,7 @@ const FAQ: FC = () => {
                             question={faq.question}
                         />
                     ))}
-                </div>
+                </Reveal>
             </Section>
         </div>
     );

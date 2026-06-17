@@ -1,11 +1,13 @@
 "use client";
 
-import { Check, Copy, Plus } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { ArrowRight, Check, Copy, Plus } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { FC, ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import Section from "@/components/sections/section";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 const KEYWORD = /^(import|from|const|await|export|async|function|type|default|return)$/;
@@ -297,7 +299,7 @@ const AppColumn: FC<{
 };
 
 const TableColumn: FC<{ focused: boolean; todos: Todo[] }> = ({ focused, todos }) => (
-    <div className={cn("flex min-h-0 flex-col transition-colors duration-500", focused && "bg-sky-sapphire/[0.03]")}>
+    <div className={cn("hidden min-h-0 flex-col transition-colors duration-500 lg:flex", focused && "bg-sky-sapphire/[0.03]")}>
         <ColumnHeader
             accent={<span className="size-2 bg-crimson-energy/70" />}
             active={focused}
@@ -539,24 +541,32 @@ const MainHero: FC = () => {
                         </span>
                     </motion.h1>
 
-                    {/* description + install, in a row below the headline */}
-                    <motion.div {...fade(0.2)} className="mt-8 flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
-                        <p className="max-w-sm text-sm leading-relaxed text-white/55 sm:text-base">
+                    {/* description + CTAs, in a row below the headline */}
+                    <motion.div {...fade(0.2)} className="mt-8 flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
+                        <p className="max-w-sm text-sm leading-relaxed text-white/60 sm:text-base">
                             Typed queries, live sync, optimistic updates, and offline — global by default on Workers &amp; Durable Objects.
                         </p>
-                        <button
-                            className="group flex w-fit shrink-0 items-center gap-3 border-[0.75px] border-white/15 bg-white/[0.03] px-4 py-2.5 font-mono text-sm text-white/70 transition-colors hover:border-white/25 hover:text-white"
-                            onClick={copyCommand}
-                            type="button"
-                        >
-                            <span className="text-white/30 select-none">$</span>
-                            npx lunora init my-app
-                            {copied ? (
-                                <Check className="size-4 text-emerald-400" />
-                            ) : (
-                                <Copy className="size-4 text-white/30 transition-colors group-hover:text-white/60" />
-                            )}
-                        </button>
+                        <div className="flex shrink-0 flex-col items-start gap-3 sm:items-end">
+                            <Button asChild className="group h-11 gap-2 rounded-none px-6 text-base font-semibold" variant="default">
+                                <Link to="/docs/$">
+                                    Get started
+                                    <ArrowRight className="size-4 transition-transform duration-300 group-hover:translate-x-1" />
+                                </Link>
+                            </Button>
+                            <button
+                                className="group flex w-fit items-center gap-3 font-mono text-sm text-white/55 transition-colors hover:text-white"
+                                onClick={copyCommand}
+                                type="button"
+                            >
+                                <span className="text-white/35 select-none">$</span>
+                                npx lunora init my-app
+                                {copied ? (
+                                    <Check className="size-4 text-emerald-400" />
+                                ) : (
+                                    <Copy className="size-3.5 text-white/35 transition-colors group-hover:text-white/60" />
+                                )}
+                            </button>
+                        </div>
                     </motion.div>
 
                     {/* console + feature strip, on an aurora pedestal */}

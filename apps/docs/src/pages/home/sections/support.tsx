@@ -1,6 +1,7 @@
 import { ArrowRight, BookOpen, CircleDot, GitPullRequest } from "lucide-react";
 import type { ReactNode } from "react";
 
+import Reveal from "@/components/sections/reveal";
 import Section from "@/components/sections/section";
 import SectionTitle from "@/components/sections/section-title";
 import FlickeringGrid from "@/components/ui/flickering-grid";
@@ -32,7 +33,7 @@ const SupportCard = ({
     linkText?: string;
     title: string;
 }) => (
-    <div
+    <Reveal
         className={`group relative col-span-2 overflow-hidden border-y border-gray-200 bg-ivory transition-all duration-300 hover:bg-gray-50 ${className ?? ""}`}
     >
         {banner}
@@ -59,7 +60,7 @@ const SupportCard = ({
                 </a>
             )}
         </div>
-    </div>
+    </Reveal>
 );
 
 const SupportSection = () => (

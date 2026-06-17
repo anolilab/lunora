@@ -154,23 +154,28 @@ const WhyLunora = () => {
 
                 <Reveal className="col-span-full mt-14 grid gap-2.5 lg:grid-cols-[0.9fr_1.1fr]" delay={0.1}>
                     {/* feature list */}
-                    <div className="flex flex-col border-b border-white/[0.08]">
+                    <div aria-label="Lunora capabilities" className="flex flex-col border-b border-white/[0.08]" role="tablist">
                         {features.map((item, index) => {
                             const isActive = index === active;
 
                             return (
                                 <button
+                                    aria-selected={isActive}
                                     className={cn(
-                                        "relative border-t border-white/[0.08] py-5 pr-4 pl-5 text-left transition-colors",
+                                        "relative border-t border-white/[0.08] py-5 pr-4 pl-5 text-left transition-colors outline-none focus-visible:bg-white/[0.04]",
                                         isActive ? "bg-white/[0.03]" : "hover:bg-white/[0.015]",
                                     )}
                                     key={item.title}
                                     onClick={() => {
                                         setActive(index);
                                     }}
+                                    onFocus={() => {
+                                        setActive(index);
+                                    }}
                                     onMouseEnter={() => {
                                         setActive(index);
                                     }}
+                                    role="tab"
                                     type="button"
                                 >
                                     {isActive && (
@@ -202,7 +207,11 @@ const WhyLunora = () => {
                     </div>
 
                     {/* live code panel */}
-                    <div className="flex min-h-[20rem] flex-col overflow-hidden border border-white/10 bg-[hsl(240_16%_5%)]">
+                    <div
+                        aria-label={`${feature.title} example`}
+                        className="flex min-h-[20rem] flex-col overflow-hidden border border-white/10 bg-[hsl(240_16%_5%)]"
+                        role="tabpanel"
+                    >
                         <div className="flex h-9 shrink-0 items-center gap-2 border-b border-white/[0.08] px-3">
                             <span className="flex gap-1.5">
                                 <span className="size-2.5 rounded-full bg-white/[0.08]" />

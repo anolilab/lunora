@@ -23,9 +23,9 @@ const Reveal: FC<{ as?: "div" | "li" | "section"; className?: string; children: 
     return (
         <Component
             className={className}
-            initial={{ opacity: 0, y: 24 }}
-            transition={{ delay, duration: 0.6, ease: "easeOut" }}
-            viewport={{ amount: 0.25, once: true }}
+            initial={{ opacity: 0, y: 8 }}
+            transition={{ delay, duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+            viewport={{ amount: 0.2, once: true }}
             whileInView={{ opacity: 1, y: 0 }}
         >
             {children}

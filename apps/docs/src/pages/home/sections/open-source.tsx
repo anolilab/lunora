@@ -1,6 +1,7 @@
 import { GitFork, Heart, Star } from "lucide-react";
 
 import AuroraMesh from "@/components/sections/aurora-mesh";
+import Reveal from "@/components/sections/reveal";
 import Section from "@/components/sections/section";
 import SectionDivider from "@/components/sections/section-divider";
 import SectionHeader from "@/components/sections/section-header";
@@ -24,11 +25,11 @@ const OpenSource = () => (
                     subhead="Lunora is built in the open — a schema-first server and a live, typed client, so building a backend inspires instead of frustrates. Great tools lead to great products."
                     title="Proudly open source."
                 />
-                <div className="mt-6 flex flex-wrap gap-3">
+                <Reveal className="mt-6 flex flex-wrap gap-3" delay={0.15}>
                     <StatBadge icon={Star} label="FSL-1.1" />
                     <StatBadge icon={GitFork} label="Built on Cloudflare" />
                     <StatBadge icon={Heart} label="Community Driven" />
-                </div>
+                </Reveal>
             </div>
             <div className="hidden lg:col-span-1 lg:block" />
             <div className="col-span-1">
