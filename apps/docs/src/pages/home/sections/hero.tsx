@@ -516,7 +516,7 @@ const MainHero: FC = () => {
             <Section
                 classes={{
                     childrenWrapper: "!grid-cols-1",
-                    root: "!pt-32 !pb-16 sm:!pt-44",
+                    root: "!pt-40 !pb-16 sm:!pt-52",
                 }}
                 gridLength={0}
                 mode="dark"
@@ -529,36 +529,35 @@ const MainHero: FC = () => {
                     </p>
 
                     {/* headline */}
-                    <div className="flex flex-col gap-8 lg:flex-row lg:items-end lg:justify-between">
-                        <motion.h1
-                            {...fade(0.1)}
-                            className="font-display max-w-3xl text-5xl leading-[1.0] font-bold tracking-tighter text-balance text-white sm:text-6xl lg:text-7xl"
-                        >
-                            Realtime backends, end-to-end typed{" "}
-                            <span className="bg-gradient-to-r from-sky-sapphire via-royal-amethyst to-crimson-energy bg-clip-text text-transparent">
-                                on Cloudflare&apos;s edge.
-                            </span>
-                        </motion.h1>
+                    <motion.h1
+                        {...fade(0.1)}
+                        className="font-display max-w-4xl text-5xl leading-[1.06] font-medium tracking-tight text-balance text-white sm:text-6xl lg:text-7xl"
+                    >
+                        Realtime backends, end-to-end typed{" "}
+                        <span className="bg-gradient-to-r from-sky-sapphire via-royal-amethyst to-crimson-energy bg-clip-text text-transparent">
+                            on Cloudflare&apos;s edge.
+                        </span>
+                    </motion.h1>
 
-                        <motion.div {...fade(0.2)} className="flex shrink-0 flex-col gap-4 lg:max-w-xs lg:items-end">
-                            <p className="text-sm text-white/55 lg:text-right">
-                                Typed queries, live sync, optimistic updates, and offline — global by default on Workers &amp; Durable Objects.
-                            </p>
-                            <button
-                                className="group flex w-fit items-center gap-3 border-[0.75px] border-white/15 bg-white/[0.03] px-4 py-2.5 font-mono text-sm text-white/70 transition-colors hover:border-white/25 hover:text-white"
-                                onClick={copyCommand}
-                                type="button"
-                            >
-                                <span className="text-white/30 select-none">$</span>
-                                npx lunora init my-app
-                                {copied ? (
-                                    <Check className="size-4 text-emerald-400" />
-                                ) : (
-                                    <Copy className="size-4 text-white/30 transition-colors group-hover:text-white/60" />
-                                )}
-                            </button>
-                        </motion.div>
-                    </div>
+                    {/* description + install, in a row below the headline */}
+                    <motion.div {...fade(0.2)} className="mt-8 flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
+                        <p className="max-w-sm text-sm leading-relaxed text-white/55 sm:text-base">
+                            Typed queries, live sync, optimistic updates, and offline — global by default on Workers &amp; Durable Objects.
+                        </p>
+                        <button
+                            className="group flex w-fit shrink-0 items-center gap-3 border-[0.75px] border-white/15 bg-white/[0.03] px-4 py-2.5 font-mono text-sm text-white/70 transition-colors hover:border-white/25 hover:text-white"
+                            onClick={copyCommand}
+                            type="button"
+                        >
+                            <span className="text-white/30 select-none">$</span>
+                            npx lunora init my-app
+                            {copied ? (
+                                <Check className="size-4 text-emerald-400" />
+                            ) : (
+                                <Copy className="size-4 text-white/30 transition-colors group-hover:text-white/60" />
+                            )}
+                        </button>
+                    </motion.div>
 
                     {/* console + feature strip, on an aurora pedestal */}
                     <div className="relative mt-16">
