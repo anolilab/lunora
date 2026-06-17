@@ -32,7 +32,7 @@ const OpenSource = () => (
             </div>
             <div className="hidden lg:col-span-1 lg:block" />
             <div className="col-span-1">
-                <HighlightLink icon={<Star />} target="_blank" to="https://github.com/anolilab/lunora">
+                <HighlightLink icon={<Star />} mode="dark" target="_blank" to="https://github.com/anolilab/lunora">
                     Star us on GitHub
                 </HighlightLink>
             </div>
