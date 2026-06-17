@@ -75,6 +75,7 @@ catalogs:
     eslint-plugin-validate-jsx-nesting: ^0.1.1
     husky: ^9.1.7
     prettier: 3.8.4
+    prettier-plugin-svelte: 4.1.1
   node:
     fast-glob: ^3.3.3
     rimraf: 6.1.3

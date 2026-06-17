@@ -102,6 +102,8 @@ export default defineConfig({
         // plugin set and break rules + disable directives.
         "packages/**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx}": [{ command: "pnpm exec eslint --fix", perPackage: true }],
         "**/*.{md,mdx}": ["pnpm exec prettier --write"],
+        // Svelte needs prettier-plugin-svelte (wired in prettier.config.js).
+        "**/*.svelte": ["pnpm exec prettier --write"],
     },
     secrets: {
         walk: {

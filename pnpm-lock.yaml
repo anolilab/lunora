@@ -234,6 +234,9 @@ catalogs:
     prettier:
       specifier: 3.8.4
       version: 3.8.4
+    prettier-plugin-svelte:
+      specifier: 4.1.1
+      version: 4.1.1
   mail:
     '@react-email/render':
       specifier: 2.0.8
@@ -461,6 +464,9 @@ importers:
       prettier:
         specifier: catalog:lint
         version: 3.8.4
+      prettier-plugin-svelte:
+        specifier: catalog:lint
+        version: 4.1.1(prettier@3.8.4)(svelte@5.56.3(@typescript-eslint/types@8.61.0))
       react-doctor:
         specifier: 0.5.6
         version: 0.5.6(eslint@10.5.0(jiti@2.7.0))
@@ -12545,6 +12551,13 @@ packages:
     resolution: {integrity: sha512-vkcDPrRZo1QZLbn5RLGPpg/WmIQ65qoWWhcGKf/b5eplkkarX0m9z8ppCat4mlOqUsWpyNuYgO3VRyrYHSzX5g==}
     engines: {node: '>= 0.8.0'}
 
+  prettier-plugin-svelte@4.1.1:
+    resolution: {integrity: sha512-wXvbXMjSvb4C9ENWTHXyd+ihakKCsJ6rJhLP6/8HFNj4GkZr48jqL9PoKsl2sk7SyCZRTnJ7O2TTowUpOxP/KA==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      prettier: ^3.0.0
+      svelte: ^5.0.0
+
   prettier@3.8.4:
     resolution: {integrity: sha512-N2MylSdi48+5N/6S5j+maeHbUSIzzZ5uOcX5Hm4QpV8Dkb1HFjfAKTKX6yNPJQD9AhcT3ifHNB66tWTTJDi11Q==}
     engines: {node: '>=14'}
@@ -24452,6 +24465,11 @@ snapshots:
   powershell-utils@0.1.0: {}
 
   prelude-ls@1.2.1: {}
+
+  prettier-plugin-svelte@4.1.1(prettier@3.8.4)(svelte@5.56.3(@typescript-eslint/types@8.61.0)):
+    dependencies:
+      prettier: 3.8.4
+      svelte: 5.56.3(@typescript-eslint/types@8.61.0)
 
   prettier@3.8.4: {}
 

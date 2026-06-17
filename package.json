@@ -74,6 +74,7 @@
         "eslint-plugin-testing-library": "catalog:lint",
         "eslint-plugin-validate-jsx-nesting": "catalog:lint",
         "prettier": "catalog:lint",
+        "prettier-plugin-svelte": "catalog:lint",
         "react-doctor": "0.5.6",
         "rimraf": "catalog:node",
         "ts-morph": "catalog:tooling",
