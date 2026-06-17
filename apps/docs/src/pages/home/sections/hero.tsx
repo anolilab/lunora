@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, Copy, Plus } from "lucide-react";
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { FC, ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -344,6 +344,7 @@ const LunoraConsole: FC<{ focus: number }> = ({ focus }) => {
     const [inputValue, setInputValue] = useState("");
     const [engaged, setEngaged] = useState(false);
     const [suggestion, setSuggestion] = useState(randomPool[0]);
+    const reduce = useReducedMotion();
     const cursorRef = useRef(0);
     const idRef = useRef(seedTodos.length);
     const tickRef = useRef(0);
@@ -423,7 +424,9 @@ const LunoraConsole: FC<{ focus: number }> = ({ focus }) => {
     }, []);
 
     useEffect(() => {
-        if (engaged) {
+        // Pause the auto-playing demo once the user takes over, or when they
+        // prefer reduced motion (the panels stay fully interactive). DESIGN.md §5.
+        if (engaged || reduce) {
             return () => {
                 timeoutsRef.current.forEach(clearTimeout);
                 timeoutsRef.current = [];
@@ -459,7 +462,7 @@ const LunoraConsole: FC<{ focus: number }> = ({ focus }) => {
             timeoutsRef.current.forEach(clearTimeout);
             timeoutsRef.current = [];
         };
-    }, [engaged, autoAdd, settle]);
+    }, [engaged, reduce, autoAdd, settle]);
 
     return (
         <div className="grid h-auto grid-cols-1 divide-y divide-white/[0.08] bg-[hsl(240_16%_5%)] lg:h-[31rem] lg:grid-cols-3 lg:divide-x lg:divide-y-0">
