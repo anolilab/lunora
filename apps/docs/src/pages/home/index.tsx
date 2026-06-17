@@ -6,6 +6,7 @@ import FrameworkStrip from "@/pages/home/sections/framework-strip";
 import MainHero from "@/pages/home/sections/hero";
 import OpenSource from "@/pages/home/sections/open-source";
 import Packages from "@/pages/home/sections/packages";
+import StudioShowcase from "@/pages/home/sections/studio-showcase";
 import Support from "@/pages/home/sections/support";
 import WhyLunora from "@/pages/home/sections/why-lunora";
 import WorksWhereYouWork from "@/pages/home/sections/works-where-you-work";
@@ -15,6 +16,9 @@ const Home: FC = () => (
         <MainHero />
         <FrameworkStrip />
         <WhyLunora />
+        <div className="content-auto">
+            <StudioShowcase />
+        </div>
         <div className="content-auto">
             <WorksWhereYouWork />
         </div>
