@@ -1,4 +1,4 @@
-import type { FunctionReference, LunoraClient } from "@lunora/client";
+import type { FunctionDescriptor, FunctionReference, LunoraClient } from "@lunora/client";
 
 /**
  * The tool surface this MCP server exposes. Each tool maps onto a method the
@@ -40,6 +40,14 @@ const RUN_INPUT_SCHEMA: ToolInputSchema = {
 
 const NO_INPUT_SCHEMA: ToolInputSchema = { properties: {}, type: "object" };
 
+const FUNCTION_PATH_INPUT_SCHEMA: ToolInputSchema = {
+    properties: {
+        functionPath: { description: 'Function reference, e.g. "messages:send"', type: "string" },
+    },
+    required: ["functionPath"],
+    type: "object",
+};
+
 const TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
     {
         description: "List the deployment's public functions (queries, mutations, actions) with their kinds.",
@@ -50,6 +58,12 @@ const TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
         description: "List the deployment's .global() tables and their column shapes.",
         inputSchema: NO_INPUT_SCHEMA,
         name: "lunora_list_tables",
+    },
+    {
+        description:
+            "Return a function's argument JSON Schema and kind, so a caller can construct a valid arguments object. Call lunora_list_functions first to discover available function paths.",
+        inputSchema: FUNCTION_PATH_INPUT_SCHEMA,
+        name: "lunora_get_function_schema",
     },
     {
         description: "Run a query and return its result. Read-only.",
@@ -67,6 +81,17 @@ const TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
         name: "lunora_run_action",
     },
 ];
+
+/** Extract and validate `functionPath` from an MCP `arguments` bag. */
+const readFunctionPath = (input: Record<string, unknown>): string => {
+    const { functionPath } = input;
+
+    if (typeof functionPath !== "string" || functionPath.length === 0) {
+        throw new Error('"functionPath" is required and must be a non-empty string');
+    }
+
+    return functionPath;
+};
 
 /** Coerce an MCP `arguments` bag into the `(fn, args, shardKey)` triple the run-tools share. */
 const readRunArguments = (input: Record<string, unknown>): { args: Record<string, unknown>; functionPath: string; shardKey: string | undefined } => {
@@ -109,6 +134,17 @@ const ok = (value: unknown): ToolResult => {
 const callTool = async (client: LunoraClient, name: string, input: Record<string, unknown>): Promise<ToolResult> => {
     try {
         switch (name) {
+            case "lunora_get_function_schema": {
+                const functionPath = readFunctionPath(input);
+                const functions = await client.listFunctions();
+                const descriptor: FunctionDescriptor | undefined = functions.find((function_) => function_.path === functionPath);
+
+                if (descriptor === undefined) {
+                    return { content: [{ text: `function not found: ${functionPath}`, type: "text" }], isError: true };
+                }
+
+                return ok({ args: descriptor.args ?? [], kind: descriptor.kind, path: descriptor.path });
+            }
             case "lunora_list_functions": {
                 return ok(await client.listFunctions());
             }

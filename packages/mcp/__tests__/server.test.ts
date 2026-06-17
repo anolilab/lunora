@@ -83,6 +83,7 @@ describe("createLunoraMcpServer request handlers", () => {
         expect(result.tools.map((tool) => tool.name)).toStrictEqual([
             "lunora_list_functions",
             "lunora_list_tables",
+            "lunora_get_function_schema",
             "lunora_run_query",
             "lunora_run_mutation",
             "lunora_run_action",

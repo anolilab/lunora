@@ -1,7 +1,26 @@
-import type { LunoraClient } from "@lunora/client";
+import type { FunctionDescriptor, LunoraClient } from "@lunora/client";
 import { describe, expect, it, vi } from "vitest";
 
 import { callTool, TOOL_DEFINITIONS } from "../src/tools";
+
+const MOCK_FUNCTIONS: FunctionDescriptor[] = [
+    {
+        args: [
+            { kind: "string", name: "cursor", optional: true },
+            { kind: "number", name: "limit", optional: true },
+        ],
+        kind: "query",
+        path: "messages:list",
+    },
+    {
+        args: [
+            { kind: "string", name: "text", optional: false },
+            { kind: "string", name: "roomId", optional: false },
+        ],
+        kind: "mutation",
+        path: "messages:send",
+    },
+];
 
 /** Minimal mock exposing only the methods the tools touch. */
 const mockClient = (): {
@@ -15,7 +34,7 @@ const mockClient = (): {
     const action = vi.fn<() => Promise<{ ran: string }>>(async () => {
         return { ran: "action" };
     });
-    const listFunctions = vi.fn<() => Promise<{ kind: string; path: string }[]>>(async () => [{ kind: "query", path: "messages:list" }]);
+    const listFunctions = vi.fn<() => Promise<FunctionDescriptor[]>>(async () => MOCK_FUNCTIONS);
     const listGlobalTables = vi.fn<() => Promise<{ columns: string[]; name: string }[]>>(async () => [{ columns: ["email"], name: "users" }]);
     const mutation = vi.fn<() => Promise<{ id: string }>>(async () => {
         return { id: "m1" };
@@ -30,12 +49,19 @@ const mockClient = (): {
 };
 
 describe("tOOL_DEFINITIONS", () => {
-    it("exposes the five expected tools, each with an object input schema", () => {
+    it("exposes the six expected tools, each with an object input schema", () => {
         expect.assertions(2);
 
         const names = TOOL_DEFINITIONS.map((tool) => tool.name);
 
-        expect(names).toStrictEqual(["lunora_list_functions", "lunora_list_tables", "lunora_run_query", "lunora_run_mutation", "lunora_run_action"]);
+        expect(names).toStrictEqual([
+            "lunora_list_functions",
+            "lunora_list_tables",
+            "lunora_get_function_schema",
+            "lunora_run_query",
+            "lunora_run_mutation",
+            "lunora_run_action",
+        ]);
         expect(TOOL_DEFINITIONS.every((tool) => tool.inputSchema.type === "object")).toBe(true);
     });
 });
@@ -49,7 +75,55 @@ describe("callTool", () => {
 
         expect(mock.listFunctions).toHaveBeenCalledTimes(1);
         expect(result.isError).toBeUndefined();
-        expect(JSON.parse(result.content[0]!.text)).toStrictEqual([{ kind: "query", path: "messages:list" }]);
+        expect(JSON.parse(result.content[0]!.text)).toStrictEqual(MOCK_FUNCTIONS);
+    });
+
+    it("lunora_get_function_schema returns kind + args for a known function path", async () => {
+        expect.assertions(3);
+
+        const mock = mockClient();
+        const result = await callTool(mock.asClient, "lunora_get_function_schema", { functionPath: "messages:list" });
+
+        expect(mock.listFunctions).toHaveBeenCalledTimes(1);
+        expect(result.isError).toBeUndefined();
+        expect(JSON.parse(result.content[0]!.text)).toStrictEqual({
+            args: [
+                { kind: "string", name: "cursor", optional: true },
+                { kind: "number", name: "limit", optional: true },
+            ],
+            kind: "query",
+            path: "messages:list",
+        });
+    });
+
+    it("lunora_get_function_schema returns an error result for an unknown function path", async () => {
+        expect.assertions(2);
+
+        const mock = mockClient();
+        const result = await callTool(mock.asClient, "lunora_get_function_schema", { functionPath: "no:such" });
+
+        expect(result.isError).toBe(true);
+        expect(result.content[0]!.text).toContain("no:such");
+    });
+
+    it("lunora_get_function_schema returns an error result when functionPath is missing", async () => {
+        expect.assertions(2);
+
+        const mock = mockClient();
+        const result = await callTool(mock.asClient, "lunora_get_function_schema", {});
+
+        expect(result.isError).toBe(true);
+        expect(mock.listFunctions).not.toHaveBeenCalled();
+    });
+
+    it("lunora_get_function_schema returns an error result when functionPath is empty", async () => {
+        expect.assertions(2);
+
+        const mock = mockClient();
+        const result = await callTool(mock.asClient, "lunora_get_function_schema", { functionPath: "" });
+
+        expect(result.isError).toBe(true);
+        expect(mock.listFunctions).not.toHaveBeenCalled();
     });
 
     it("lunora_run_query forwards the function reference, args, and shardKey", async () => {

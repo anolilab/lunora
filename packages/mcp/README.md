@@ -34,9 +34,35 @@
 
 ---
 
-A [Model Context Protocol](https://modelcontextprotocol.io) server that exposes a deployed Lunora app to AI agents. It registers tools for introspecting a deployment (`lunora_list_functions`, `lunora_list_tables`) and invoking its functions (`lunora_run_query`, `lunora_run_mutation`, `lunora_run_action`), each backed by `@lunora/client` over HTTP RPC.
+A [Model Context Protocol](https://modelcontextprotocol.io) server that exposes a deployed Lunora app to AI agents. It registers tools for introspecting a deployment (`lunora_list_functions`, `lunora_list_tables`, `lunora_get_function_schema`) and invoking its functions (`lunora_run_query`, `lunora_run_mutation`, `lunora_run_action`), each backed by `@lunora/client` over HTTP RPC.
 
 Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+
+## Tools
+
+| Tool                         | Description                                                                                                    |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `lunora_list_functions`      | List the deployment's public functions (queries, mutations, actions) with their kinds.                         |
+| `lunora_list_tables`         | List the deployment's `.global()` tables and their column shapes.                                              |
+| `lunora_get_function_schema` | Return a function's argument descriptors and kind by path, so a caller can construct a valid arguments object. |
+| `lunora_run_query`           | Run a query and return its result. Read-only.                                                                  |
+| `lunora_run_mutation`        | Run a mutation and return its result. Writes data — use with care.                                             |
+| `lunora_run_action`          | Run an action and return its result. May call external services.                                               |
+
+### Recommended agent flow
+
+```
+1. lunora_list_functions          → discover available paths and their kinds
+2. lunora_get_function_schema     → retrieve the argument descriptors for a specific path
+3. lunora_run_query / lunora_run_mutation / lunora_run_action
+                                  → call the function with a well-formed arguments object
+```
+
+`lunora_get_function_schema` returns a JSON object with three fields:
+
+- `path` — the function path (e.g. `"messages:send"`)
+- `kind` — `"query"`, `"mutation"`, or `"action"`
+- `args` — an array of argument descriptors (`name`, `kind`, `optional`, and optionally `element` or `table`)
 
 ## Install
 
