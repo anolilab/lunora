@@ -1,9 +1,20 @@
+<!-- START_PACKAGE_OG_IMAGE_PLACEHOLDER -->
+
+<a href="https://www.anolilab.com/open-source" align="center">
+
+  <img src="__assets__/package-og.svg" alt="kv" />
+
+</a>
+
 <h3 align="center">Typed Workers KV for Lunora: JSON helpers and ctx.kv</h3>
+
+<!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
 <br />
 
 <div align="center">
 
+[![typescript-image][typescript-badge]][typescript-url]
 [![FSL-1.1-Apache-2.0 licence][license-badge]][license]
 [![npm version][npm-version-badge]][npm-version]
 [![npm downloads][npm-downloads-badge]][npm-downloads]
@@ -28,6 +39,14 @@ Typed [Cloudflare Workers KV](https://developers.cloudflare.com/kv/) for Lunora.
 Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
+
+```sh
+npm install @lunora/kv
+```
+
+```sh
+yarn add @lunora/kv
+```
 
 ```sh
 pnpm add @lunora/kv
@@ -68,7 +87,7 @@ await tenantKv.put("session", payload); // writes `tenant/<id>/session`
 await kv.put(scopeKey(`tenant/${tenantId}`, "session"), payload);
 ```
 
-## API
+### API
 
 - `createKv({ namespace, keyPrefix? })` → `Kv`
 - `Kv.get<T>(key, { cacheTtl? })` — JSON-parsed read (`null` when absent)
@@ -79,15 +98,47 @@ await kv.put(scopeKey(`tenant/${tenantId}`, "session"), payload);
 - `Kv.list<M>({ prefix?, limit?, cursor? })` — `{ keys, cursor?, listComplete }`
 - `scopeKey(prefix, key)` — validated per-tenant key composition
 
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/kv)**.
+
+## Related
+
+- [`@lunora/server`](https://www.npmjs.com/package/@lunora/server) — read `ctx.kv` from actions.
+- [`@lunora/storage`](https://www.npmjs.com/package/@lunora/storage) — typed R2 buckets for larger blobs.
+- [`@lunora/config`](https://www.npmjs.com/package/@lunora/config) — infers and reconciles the `kv_namespaces` binding.
+
+## Supported Node.js Versions
+
+Libraries in this ecosystem make the best effort to track [Node.js' release schedule](https://github.com/nodejs/release#release-schedule).
+Here's [a post on why we think this is important](https://medium.com/the-node-js-collection/maintainers-should-consider-following-node-js-release-schedule-ab08ed4de71a).
+
+## Contributing
+
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/lunora/issues) and check our [Contributing](https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md) guidelines.
+
+> **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
+
+## Credits
+
+- [Daniel Bannert](https://github.com/prisis)
+- [All Contributors](https://github.com/anolilab/lunora/graphs/contributors)
+
+## Made with ❤️ at Anolilab
+
+This is an open source project and will always remain free to use. If you think it's cool, please star it 🌟. [Anolilab](https://www.anolilab.com/open-source) is a Development and AI Studio. Contact us at [hello@anolilab.com](mailto:hello@anolilab.com) if you need any help with these technologies or just want to say hi!
+
 ## License
 
-The lunora `@lunora/kv` package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora kv package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
 
-[license]: LICENSE.md
-[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-brightgreen.svg?style=for-the-badge
-[npm-version]: https://www.npmjs.com/package/@lunora/kv/v/latest
-[npm-version-badge]: https://img.shields.io/npm/v/@lunora/kv/latest.svg?style=for-the-badge
-[npm-downloads]: https://www.npmjs.com/package/@lunora/kv
+<!-- badges -->
+
+[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@lunora/kv?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@lunora/kv
 [npm-downloads-badge]: https://img.shields.io/npm/dm/@lunora/kv?style=for-the-badge
-[prs-welcome]: https://makeapullrequest.com
+[npm-downloads]: https://www.npmjs.com/package/@lunora/kv
 [prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
+[prs-welcome]: https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md
+[typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
+[typescript-url]: https://www.typescriptlang.org/

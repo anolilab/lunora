@@ -1,4 +1,14 @@
-<h3 align="center">Bring-your-own Postgres/MySQL for Lunora via Cloudflare Hyperdrive</h3>
+<!-- START_PACKAGE_OG_IMAGE_PLACEHOLDER -->
+
+<a href="https://www.anolilab.com/open-source" align="center">
+
+  <img src="__assets__/package-og.svg" alt="hyperdrive" />
+
+</a>
+
+<h3 align="center">Bring-your-own Postgres/MySQL for Lunora via Cloudflare Hyperdrive: a driver-agnostic, action-only ctx.sql</h3>
+
+<!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
 <br />
 
