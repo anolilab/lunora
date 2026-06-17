@@ -12,19 +12,16 @@
     },
     "dependencies": {
         "@lunora/client": "^0.0.0",
-        "@lunora/do": "^0.0.0",
-        "@lunora/runtime": "^0.0.0",
-        "@lunora/server": "^0.0.0",
         "@lunora/solid": "^0.0.0",
         "@tanstack/solid-router": "^1.170.15",
         "@tanstack/solid-start": "^1.168.25",
+        "lunora": "^0.0.0",
         "solid-js": "^1.9.13"
     },
     "devDependencies": {
-        "@lunora/cli": "^0.0.0",
-        "@lunora/vite": "^0.0.0",
         "@cloudflare/vite-plugin": "^1.40.2",
         "@cloudflare/workers-types": "^4.20260610.1",
+        "@lunora/vite": "^0.0.0",
         "typescript": "^6.0.3",
         "vite": "^8.0.16",
         "vite-plugin-solid": "^2.11.12",

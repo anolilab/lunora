@@ -103,7 +103,9 @@ const findPackages = () => {
                 try {
                     const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf-8"));
 
-                    if (packageJson.name && packageJson.name.startsWith(SCOPE)) {
+                    // The unscoped `lunora` umbrella package is part of the
+                    // family even though it lacks the @lunora/ scope.
+                    if (packageJson.name && (packageJson.name.startsWith(SCOPE) || packageJson.name === "lunora")) {
                         packages.push({
                             name: packageJson.name,
                             path: fullPath,

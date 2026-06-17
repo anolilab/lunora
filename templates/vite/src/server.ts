@@ -1,5 +1,5 @@
-import type { ExecutionContextLike, ShardNamespaceLike } from "@lunora/runtime";
-import { createWorker } from "@lunora/runtime";
+import type { ExecutionContextLike, ShardNamespaceLike } from "lunora/runtime";
+import { createWorker } from "lunora/runtime";
 
 import { LUNORA_FUNCTIONS } from "../lunora/_generated/functions.js";
 import { openApiSpec } from "../lunora/_generated/openapi.js";

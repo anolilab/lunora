@@ -9,12 +9,9 @@
         "deploy": "lunora deploy"
     },
     "dependencies": {
-        "@lunora/do": "^0.0.0",
-        "@lunora/runtime": "^0.0.0",
-        "@lunora/server": "^0.0.0"
+        "lunora": "^0.0.0"
     },
     "devDependencies": {
-        "@lunora/cli": "^0.0.0",
         "@cloudflare/workers-types": "^4.20260611.1",
         "typescript": "^6.0.3",
         "wrangler": "^4.100.0"

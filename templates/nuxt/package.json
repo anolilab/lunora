@@ -14,15 +14,12 @@
     },
     "dependencies": {
         "@lunora/client": "^0.0.0",
-        "@lunora/do": "^0.0.0",
-        "@lunora/runtime": "^0.0.0",
-        "@lunora/server": "^0.0.0",
         "@lunora/vue": "^0.0.0",
+        "lunora": "^0.0.0",
         "nuxt": "^4.4.8",
         "vue": "^3.5.38"
     },
     "devDependencies": {
-        "@lunora/cli": "^0.0.0",
         "@lunora/vite": "^0.0.0",
         "typescript": "^6.0.3",
         "wrangler": "^4.100.0"

@@ -1,4 +1,4 @@
-import type { ExecutionContextLike, ShardNamespaceLike } from "@lunora/runtime";
+import type { ExecutionContextLike, ShardNamespaceLike } from "lunora/runtime";
 // `@lunora/svelte/worker` is the socket-free composition entry: it wraps a
 // SvelteKit Cloudflare Worker handler as the `httpRouter` of Lunora's
 // `composeWorker`, so `/_lunora/*` hits Lunora and everything else delegates to

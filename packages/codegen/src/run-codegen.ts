@@ -303,8 +303,14 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         workflowCount: workflows.length,
     });
 
-    const dataModelContent = emitDataModel(schema);
-    const apiContent = emitApi(functions, workflows);
+    // When the project depends on the `lunora` umbrella (instead of the granular
+    // `@lunora/*` base packages), the generated files import the base surface
+    // through the umbrella's subpaths (`lunora/server`, `lunora/do`, …) so the
+    // app needs only the single `lunora` dependency installed.
+    const useUmbrella = dependencies.has("lunora");
+
+    const dataModelContent = emitDataModel(schema, useUmbrella);
+    const apiContent = emitApi(functions, workflows, useUmbrella);
     const serverContent = emitServer({
         containers,
         hasAi,
@@ -317,6 +323,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasPipelines,
         schema,
         storageRuleBuckets: storageRulesMetadata.rules.map((rule) => rule.bucket),
+        useUmbrella,
         workflows,
     });
     const functionsContent = emitFunctions(functions, migrations);
@@ -335,13 +342,14 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         schema,
         storageRules: storageRulesMetadata,
         studioFeatures,
+        useUmbrella,
         workflows,
     });
     const containersContent = emitContainers(containers);
     const workflowsContent = emitWorkflows(workflows);
     const cronsContent = emitCrons(crons);
     const vectorsContent = emitVectors(schema.vectorIndexes);
-    const drizzleFiles = emitDrizzleSchema(schema);
+    const drizzleFiles = emitDrizzleSchema(schema, useUmbrella);
     // Only emit the project-bound seed client when `@lunora/seed` is a declared
     // dependency — seeding is a dev/test concern, so a project that never
     // installs it keeps a clean `_generated/` and never imports the package.

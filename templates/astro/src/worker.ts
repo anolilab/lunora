@@ -1,6 +1,6 @@
 import { handle } from "@astrojs/cloudflare/handler";
 import { withLunora } from "@lunora/astro";
-import type { ShardNamespaceLike } from "@lunora/runtime";
+import type { ShardNamespaceLike } from "lunora/runtime";
 
 import { createShardDO } from "../lunora/_generated/shard.js";
 
