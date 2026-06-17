@@ -62,9 +62,7 @@ const NavigationMenuContent = ({
         ref={ref}
         {...properties}
     >
-        <div className="flex flex-col gap-0 ml-1 mt-1 mb-2 mr-2 border" style={{ borderColor: "var(--nav-big-menu-border)" }}>
-            {children}
-        </div>
+        <div className="p-2">{children}</div>
     </NavigationMenuPrimitive.Content>
 );
 
@@ -82,7 +80,7 @@ const NavigationMenuViewport = ({
     <div className={cn("absolute top-full left-0 flex justify-center")}>
         <NavigationMenuPrimitive.Viewport
             className={cn(
-                "origin-top-center bg-[var(--nav-big-menu-bg)] transition-all duration-300 rounded-b-md text-popover-foreground data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-90 relative mt-1.5 h-(--radix-navigation-menu-viewport-height) w-full overflow-hidden border border-[var(--nav-big-menu-border)] shadow-sm md:w-(--radix-navigation-menu-viewport-width)",
+                "origin-top-center bg-[var(--nav-big-menu-bg)] transition-all duration-300 rounded-none text-popover-foreground data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-90 relative mt-1.5 h-(--radix-navigation-menu-viewport-height) w-full overflow-hidden border border-[var(--nav-big-menu-border)] shadow-2xl md:w-(--radix-navigation-menu-viewport-width)",
                 className,
             )}
             ref={ref}

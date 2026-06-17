@@ -2,34 +2,32 @@
 
 import GitHubLogoIcon from "@icons-pack/react-simple-icons/icons/SiGithub.mjs";
 import { Link, useLocation } from "@tanstack/react-router";
-import type { ClassValue } from "clsx";
 import { useSearchContext } from "fumadocs-ui/contexts/search";
 import {
     Book,
-    Boxes,
     Bot,
+    Boxes,
+    ChevronRight,
     Clock,
     Database,
-    HardDrive,
     Handshake,
-    Home,
+    HardDrive,
     HardDriveDownload,
+    Home,
     KeyRound,
     LayoutDashboard,
     Menu,
-    Moon,
     Package,
     Rocket,
     ScrollText,
     Search,
     Server,
     Signature,
-    Sun,
     Sparkles,
     Wrench,
+    X,
 } from "lucide-react";
-import { useTheme } from "next-themes";
-import type { ComponentPropsWithoutRef, ElementRef, MouseEvent as ReactMouseEvent, ReactNode } from "react";
+import type { ElementRef, MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import lunoraLogoRaw from "@/assets/lunora_logo.svg?raw";
@@ -41,13 +39,41 @@ import {
     NavigationMenuLink,
     NavigationMenuList,
     NavigationMenuTrigger,
-    navigationMenuTriggerStyle,
 } from "@/components/ui/navigation-menu";
+import stats from "@/data/stats.json";
 import { cn } from "@/lib/utils";
 
 import { Button } from "../ui/button";
 
-const menu = [
+const formatStars = (count: number): string => {
+    if (count >= 1000) {
+        return `${(count / 1000).toFixed(1).replace(/\.0$/, "")}k`;
+    }
+
+    return count > 0 ? String(count) : "Star";
+};
+
+interface NavLeaf {
+    description: string;
+    href: string;
+    icon: ReactNode;
+    title: string;
+}
+
+interface NavGroup {
+    navItems: NavLeaf[];
+    title: string;
+}
+
+interface NavColumn {
+    classes: { root: string };
+    navItems: (NavGroup | NavLeaf)[];
+    navTitle: string;
+}
+
+const isNavGroup = (item: NavGroup | NavLeaf): item is NavGroup => "navItems" in item;
+
+const menu: NavColumn[] = [
     {
         classes: {
             root: "md:grid-cols-3 [&>li:last-child]:border-b-0 [&>li:last-child]:col-span-full",
@@ -203,50 +229,42 @@ const menu = [
 
 const ListItem = ({
     children,
-    classes,
+    href,
     icon,
     ref,
     title,
-    ...properties
-}: ComponentPropsWithoutRef<"a"> & { classes?: { link?: ClassValue; root?: string }; icon?: ReactNode } & {
+}: {
+    children: ReactNode;
+    href: string;
+    icon?: ReactNode;
     ref?: React.RefObject<ElementRef<"a"> | null>;
+    title: string;
 }) => {
     const content = (
         <>
-            {icon && <div className="flex items-start text-[var(--nav-big-menu-text)]">{icon}</div>}
-            <div className="flex flex-col gap-2">
-                <h3 className="text-md leading-none font-medium text-[var(--nav-big-menu-text)]">{title}</h3>
-                <p className={cn(navigationMenuTriggerStyle, "text-[var(--nav-big-menu-text)]/80 font-mono line-clamp-2 text-sm leading-snug")}>{children}</p>
-            </div>
+            {icon && (
+                <span className="flex size-9 shrink-0 items-center justify-center border border-[var(--nav-big-menu-text)]/10 text-[var(--nav-big-menu-text)]/70 [&_svg]:size-4.5">
+                    {icon}
+                </span>
+            )}
+            <span className="flex flex-col gap-1">
+                <span className="text-sm leading-none font-medium text-[var(--nav-big-menu-text)]">{title}</span>
+                <span className="line-clamp-1 text-xs leading-snug text-[var(--nav-big-menu-text)]/50">{children}</span>
+            </span>
         </>
     );
-    const className = cn(
-        "focus:bg-[var(--nav-big-menu-text)]/10 flex flex-row gap-3 space-y-1 p-3 leading-none no-underline outline-hidden transition-colors select-none hover:bg-[var(--nav-big-menu-text)]/10",
-        classes?.link,
-    );
+    const className =
+        "flex items-center gap-3 p-2.5 no-underline outline-hidden transition-colors select-none hover:bg-[var(--nav-big-menu-text)]/[0.06] focus:bg-[var(--nav-big-menu-text)]/[0.06]";
 
     return (
-        <li className={classes?.root}>
+        <li>
             <NavigationMenuLink asChild>
-                {properties.href?.startsWith("http") ? (
-                    <a
-                        className={className}
-                        ref={ref}
-                        // eslint-disable-next-line react/jsx-props-no-spreading
-                        {...properties}
-                        rel="noreferrer"
-                        target="_blank"
-                    >
+                {href.startsWith("http") ? (
+                    <a className={className} href={href} ref={ref} rel="noreferrer" target="_blank">
                         {content}
                     </a>
                 ) : (
-                    <Link
-                        className={className}
-                        ref={ref}
-                        to={properties.href}
-                        // eslint-disable-next-line react/jsx-props-no-spreading
-                        {...properties}
-                    >
+                    <Link className={className} ref={ref} to={href}>
                         {content}
                     </Link>
                 )}
@@ -265,8 +283,8 @@ const Logo = ({ pathname }: { pathname: string }) => {
             return;
         }
 
-        const handleOutsideClick = (e: MouseEvent) => {
-            if (!(e.target as HTMLElement).closest(".logo-context-menu")) {
+        const handleOutsideClick = (event: MouseEvent) => {
+            if (!(event.target as HTMLElement).closest(".logo-context-menu")) {
                 setIsOpen(false);
             }
         };
@@ -278,48 +296,44 @@ const Logo = ({ pathname }: { pathname: string }) => {
         };
     }, [isOpen]);
 
-    const handleContextMenu = (e: ReactMouseEvent) => {
-        e.preventDefault();
+    const handleContextMenu = (event: ReactMouseEvent) => {
+        event.preventDefault();
         setIsOpen(true);
     };
 
     const itemClass =
-        "block select-none space-y-1 p-3 leading-none no-underline outline-hidden transition-colors hover:white/10 hover:text-accent-foreground focus:white/10 text-sm flex items-center gap-2";
+        "flex items-center gap-2 select-none p-3 text-sm leading-none text-white/80 no-underline transition-colors hover:bg-white/10 hover:text-white";
 
     return (
         <div className="relative">
             <div className="logo-context-menu" onContextMenu={handleContextMenu}>
-                <Link className="group relative z-20 flex items-center gap-2" to={pathname.startsWith("/docs") ? "/docs/$" : "/"}>
-                    <LunoraLogo className="h-8 w-8" title="Lunora" />
-                    <span className="text-[var(--nav-text-color)] transition-colors hover:[var(--nav-text-color)]/80">
-                        {pathname.startsWith("/docs") ? "Documentation" : null}
-                    </span>
+                <Link className="group relative z-20 flex items-center gap-2.5" to={pathname.startsWith("/docs") ? "/docs/$" : "/"}>
+                    <LunoraLogo className="h-7 w-7" title="Lunora" />
+                    <span className="text-[15px] font-semibold tracking-tight text-[var(--nav-text-color)]">Lunora</span>
                 </Link>
             </div>
-            <ul
-                className={cn("hidden bg-red-200 transition-all", {
-                    "bg-popover text-popover-foreground absolute top-12 -left-2 z-10 block w-52 gap-2 rounded-md border border-gray-200 p-2 shadow-sm": isOpen,
-                })}
-            >
-                <li>
-                    <span className={itemClass} onClick={() => navigator.clipboard.writeText(lunoraLogoRaw)}>
-                        <LunoraLogo className="h-4 w-4" title="Lunora" /> Copy Logo as SVG
-                    </span>
-                </li>
-                <li className="py-2">
-                    <hr />
-                </li>
-                <li>
-                    <Link className={itemClass} target="_blank" to="/brand">
-                        <Signature className="h-4 w-4" /> Brand Guidelines
-                    </Link>
-                </li>
-                <li>
-                    <Link className={itemClass} target="_blank" to="/">
-                        <Home className="h-4 w-4" /> Home Page
-                    </Link>
-                </li>
-            </ul>
+            {isOpen && (
+                <ul className="logo-context-menu absolute top-12 -left-2 z-10 block w-52 border border-white/10 bg-[hsl(0_0%_10%)] p-2 text-white shadow-xl">
+                    <li>
+                        <button className={cn(itemClass, "w-full cursor-pointer")} onClick={() => navigator.clipboard.writeText(lunoraLogoRaw)} type="button">
+                            <LunoraLogo className="h-4 w-4" title="Lunora" /> Copy Logo as SVG
+                        </button>
+                    </li>
+                    <li className="py-1">
+                        <hr className="border-white/10" />
+                    </li>
+                    <li>
+                        <Link className={itemClass} target="_blank" to="/brand">
+                            <Signature className="h-4 w-4" /> Brand Guidelines
+                        </Link>
+                    </li>
+                    <li>
+                        <Link className={itemClass} to="/">
+                            <Home className="h-4 w-4" /> Home Page
+                        </Link>
+                    </li>
+                </ul>
+            )}
         </div>
     );
 };
@@ -328,49 +342,23 @@ const SearchButton = () => {
     const { setOpenSearch } = useSearchContext();
 
     return (
-        <button
-            className="flex h-8 w-64 cursor-pointer items-center gap-2 rounded-lg border border-[var(--nav-text-color)]/10 bg-white/[0.04] px-3 text-sm text-[var(--nav-text-color)]/50 transition-colors hover:border-[var(--nav-text-color)]/20 hover:bg-white/[0.06]"
+        <Button
+            aria-label="Search"
+            className="size-11 rounded-none border-b bg-white"
             onClick={() => {
                 setOpenSearch(true);
             }}
-            type="button"
+            size="icon"
+            variant="default"
         >
-            <Search className="size-3.5" />
-            <span>Search...</span>
-            <kbd className="ml-auto rounded border border-[var(--nav-text-color)]/10 px-1.5 py-0.5 text-xs text-[var(--nav-text-color)]/30">/</kbd>
-        </button>
-    );
-};
-
-const ThemeToggle = () => {
-    const { resolvedTheme, setTheme } = useTheme();
-    const [mounted, setMounted] = useState(false);
-
-    useEffect(() => {
-        setMounted(true);
-    }, []);
-
-    if (!mounted) {
-        return <div className="size-8" />;
-    }
-
-    return (
-        <button
-            aria-label={`Switch to ${resolvedTheme === "dark" ? "light" : "dark"} mode`}
-            className="flex size-8 cursor-pointer items-center justify-center rounded-lg border border-[var(--nav-text-color)]/10 text-[var(--nav-text-color)]/70 transition-colors hover:bg-white/[0.06] hover:text-[var(--nav-text-color)]"
-            onClick={() => {
-                setTheme(resolvedTheme === "dark" ? "light" : "dark");
-            }}
-            type="button"
-        >
-            {resolvedTheme === "dark" ? <Sun className="size-3.5" /> : <Moon className="size-3.5" />}
-        </button>
+            <Search className="size-4" />
+        </Button>
     );
 };
 
 const Navbar = () => {
     const { pathname } = useLocation();
-    const navReference = useRef(null);
+    const navReference = useRef<HTMLElement>(null);
     const [scrolled, setScrolled] = useState(false);
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
@@ -398,7 +386,7 @@ const Navbar = () => {
                 }
 
                 if (navReference.current) {
-                    (navReference.current as HTMLDivElement).dataset.theme = currentTheme;
+                    navReference.current.dataset.theme = currentTheme;
                 }
 
                 setScrolled(window.scrollY > 10);
@@ -413,75 +401,144 @@ const Navbar = () => {
         return () => {
             window.removeEventListener("scroll", handleScroll);
         };
-    }, [navReference]);
+    }, []);
 
     return (
-        <div className={cn("flex fixed top-0 z-20 w-full gap-8 transition-all duration-300", { "top-5": scrolled })} data-theme="dark" ref={navReference}>
-            <NavigationMenu className="bg-opacity-25 mx-auto flex gap-5 rounded-t-md px-4 py-2 shadow-sm backdrop-blur-lg backdrop-filter">
-                <div className="flex items-center gap-4">
+        <header className="fixed inset-x-0 top-0 z-100 flex items-center pt-2.5" data-theme="dark" ref={navReference}>
+            <div className="container mx-auto flex items-center gap-30 transition-all duration-300">
+                <div className="relative z-10 flex h-11 flex-1 items-center justify-between bg-foreground  pr-2 pl-6 text-background [--nav-text-color:var(--background)]">
                     <Logo pathname={pathname} />
+                    <nav aria-label="Primary navigation" className="hidden h-full items-center gap-1 lg:flex">
+                        <NavigationMenu className="h-full">
+                            <NavigationMenuList>
+                                {menu.map((item) => (
+                                    <NavigationMenuItem key={item.navTitle}>
+                                        <NavigationMenuTrigger>{item.navTitle}</NavigationMenuTrigger>
+                                        <NavigationMenuContent>
+                                            <ul className="grid w-[460px] grid-cols-2 gap-0.5">
+                                                {item.navItems
+                                                    .flatMap((navItem) => (isNavGroup(navItem) ? navItem.navItems : [navItem]))
+                                                    .map((leaf) => (
+                                                        <ListItem href={leaf.href} icon={leaf.icon} key={leaf.title} title={leaf.title}>
+                                                            {leaf.description}
+                                                        </ListItem>
+                                                    ))}
+                                            </ul>
+                                        </NavigationMenuContent>
+                                    </NavigationMenuItem>
+                                ))}
+                            </NavigationMenuList>
+                        </NavigationMenu>
+                    </nav>
                 </div>
-                <NavigationMenuList className="hidden lg:flex">
-                    {menu.map((item) => (
-                        <NavigationMenuItem key={item.navTitle}>
-                            <NavigationMenuTrigger>{item.navTitle}</NavigationMenuTrigger>
-                            <NavigationMenuContent>
-                                <ul
-                                    className={cn(
-                                        "grid w-full md:w-[840px] [&>li]:border-[var(--nav-big-menu-border)] [&>li:not(:last-child)]:border-b [&>li:not(:last-child)]:border-r",
-                                        item?.classes?.root,
-                                    )}
-                                >
-                                    {item.navItems.map((item: any, index: number) => {
-                                        if (item.navItems) {
-                                            return (
-                                                <li key={item.title + index}>
-                                                    <h3 className="text-md leading-none font-medium text-[var(--nav-big-menu-text)] p-3 border-b border-[var(--nav-big-menu-border)] h-10">
-                                                        {item.title}
-                                                    </h3>
-                                                    <ul className="flex flex-col gap-0">
-                                                        {item.navItems.map((item: any, index2: number) => (
-                                                            <ListItem href={item.href} icon={item.icon} key={item.title + index + index2} title={item.title}>
-                                                                {item.description}
-                                                            </ListItem>
-                                                        ))}
-                                                    </ul>
-                                                </li>
-                                            );
-                                        }
 
-                                        return (
-                                            <ListItem href={item.href} icon={item.icon} key={item.title + index} title={item.title}>
-                                                {item.description}
-                                            </ListItem>
-                                        );
-                                    })}
-                                </ul>
-                            </NavigationMenuContent>
-                        </NavigationMenuItem>
-                    ))}
-                </NavigationMenuList>
-                <SearchButton />
-                <ThemeToggle />
-                <a className="text-white transition-colors hover:text-white/80" href="https://github.com/anolilab/lunora" rel="noreferrer" target="_blank">
-                    <GitHubLogoIcon className="size-4 fill-[var(--nav-text-color)]" title="Star us on GitHub" />
-                </a>
-                {!pathname.startsWith("/docs") && (
-                    <Link className="hidden lg:block bg-coal py-1 px-2 text-white transition-colors hover:text-white/80 rounded-[9px]" to="/docs/$">
-                        Documentation
-                    </Link>
-                )}
-                <Button
-                    className="lg:hidden cursor-pointer"
+                <nav aria-label="Actions" className="hidden items-center gap-1 lg:flex">
+                    <SearchButton />
+                    <Button
+                        aria-label={`GitHub repository (${formatStars(stats.stars)} stars)`}
+                        asChild
+                        className="h-11 gap-1.5 rounded-none px-5 text-sm font-semibold border-b bg-white"
+                        variant="default"
+                    >
+                        <a href="https://github.com/anolilab/lunora" rel="noreferrer" target="_blank">
+                            <GitHubLogoIcon className="size-4 fill-current" title="Lunora on GitHub" />
+                            <span className="font-mono tabular-nums">{formatStars(stats.stars)}</span>
+                        </a>
+                    </Button>
+                    <Button asChild className="h-11 gap-1 rounded-none px-6 text-sm font-semibold border-b bg-white" variant="default">
+                        <Link to="/docs/$">
+                            Get started
+                            <ChevronRight className="size-4" />
+                        </Link>
+                    </Button>
+                </nav>
+
+                <button
+                    aria-label="Open menu"
+                    className="flex size-11 items-center justify-center bg-foreground text-background transition-colors hover:bg-foreground/90 lg:hidden"
                     onClick={() => {
-                        setIsMobileMenuOpen(!isMobileMenuOpen);
+                        setIsMobileMenuOpen(true);
                     }}
-                    variant="ghost"
+                    type="button"
                 >
-                    <Menu className="size-4" />
-                </Button>
-            </NavigationMenu>
-        </div>
+                    <Menu className="size-5" />
+                </button>
+            </div>
+
+            {isMobileMenuOpen && (
+                <div className="fixed inset-0 z-[110] overflow-y-auto bg-[hsl(0_0%_7%)] lg:hidden" data-theme="dark">
+                    <div className="flex items-center justify-between border-b border-white/10 px-5 py-3">
+                        <Logo pathname={pathname} />
+                        <button
+                            aria-label="Close menu"
+                            className="flex size-11 items-center justify-center text-white/80 transition-colors hover:bg-white/10"
+                            onClick={() => {
+                                setIsMobileMenuOpen(false);
+                            }}
+                            type="button"
+                        >
+                            <X className="size-5" />
+                        </button>
+                    </div>
+                    <div className="flex flex-col px-5 py-4">
+                        {menu.map((item) => (
+                            <div className="border-b border-white/[0.06] py-3" key={item.navTitle}>
+                                <p className="px-1 pb-2 font-mono text-xs tracking-wider text-white/40 uppercase">{item.navTitle}</p>
+                                <div className="flex flex-col">
+                                    {item.navItems
+                                        .flatMap((navItem) => (isNavGroup(navItem) ? navItem.navItems : [navItem]))
+                                        .map((leaf) =>
+                                            leaf.href.startsWith("http") ? (
+                                                <a
+                                                    className="flex items-center justify-between py-2.5 text-base font-medium text-white/80"
+                                                    href={leaf.href}
+                                                    key={leaf.title}
+                                                    rel="noreferrer"
+                                                    target="_blank"
+                                                >
+                                                    {leaf.title}
+                                                    <ChevronRight className="size-4 text-white/30" />
+                                                </a>
+                                            ) : (
+                                                <Link
+                                                    className="flex items-center justify-between py-2.5 text-base font-medium text-white/80"
+                                                    key={leaf.title}
+                                                    onClick={() => {
+                                                        setIsMobileMenuOpen(false);
+                                                    }}
+                                                    to={leaf.href}
+                                                >
+                                                    {leaf.title}
+                                                    <ChevronRight className="size-4 text-white/30" />
+                                                </Link>
+                                            ),
+                                        )}
+                                </div>
+                            </div>
+                        ))}
+                        <div className="mt-6 flex flex-col gap-2">
+                            <Button asChild className="h-11 gap-2 rounded-none border-white/15 bg-transparent text-sm font-medium text-white" variant="outline">
+                                <a href="https://github.com/anolilab/lunora" rel="noreferrer" target="_blank">
+                                    <GitHubLogoIcon className="size-4 fill-current" title="Lunora on GitHub" />
+                                    Star on GitHub
+                                </a>
+                            </Button>
+                            <Button asChild className="h-11 gap-1 rounded-none text-sm font-semibold" variant="default">
+                                <Link
+                                    onClick={() => {
+                                        setIsMobileMenuOpen(false);
+                                    }}
+                                    to="/docs/$"
+                                >
+                                    Get started
+                                    <ChevronRight className="size-4" />
+                                </Link>
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </header>
     );
 };
 
