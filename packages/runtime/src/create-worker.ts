@@ -96,6 +96,21 @@ interface HttpRouterLike {
 interface ResolvedIdentity {
     /** Arbitrary additional claims. Must be JSON-serialisable. */
     [key: string]: unknown;
+
+    /**
+     * JWT-standard expiry in epoch SECONDS. When present (and `expiresAtMs` is
+     * absent), the runtime forwards it as the socket's credential expiry — the
+     * DO drops the socket once it lapses. Used only on the WebSocket path.
+     */
+    exp?: number;
+
+    /**
+     * Credential expiry in epoch MILLISECONDS. Preferred over `exp` when
+     * both are present. Forwarded as the socket's expiry on the WebSocket path
+     * so the DO drops the socket once it lapses; omit for non-expiring sessions.
+     */
+    expiresAtMs?: number;
+
     /** Stable user identifier (e.g. `"user_2k3..."` or `"u_42"`). */
     userId: string;
 }
@@ -927,10 +942,31 @@ const buildErrorEvent = (
 };
 
 /**
+ * Extract a token-expiry (epoch ms) from a resolved identity, or `undefined`
+ * when none is declared. Prefers an explicit `expiresAtMs` (epoch ms); falls
+ * back to the JWT-standard `exp` (epoch SECONDS, scaled to ms). Non-finite /
+ * non-numeric values are ignored so a malformed claim never expires a socket.
+ */
+const identityExpiryMs = (identity: ResolvedIdentity): number | undefined => {
+    const { exp, expiresAtMs } = identity;
+
+    if (typeof expiresAtMs === "number" && Number.isFinite(expiresAtMs)) {
+        return expiresAtMs;
+    }
+
+    if (typeof exp === "number" && Number.isFinite(exp)) {
+        return exp * 1000;
+    }
+
+    return undefined;
+};
+
+/**
  * Build the headers forwarded to the shard and the resolved identity, shared by
  * the RPC path and HTTP-action context. `userId` and `claims` mirror what the
  * DO reconstructs from the `x-lunora-userid` / `x-lunora-identity` headers.
  */
+
 const resolveForwardContext = async (request: Request, env: unknown, resolveIdentity: WorkerOptions["resolveIdentity"]): Promise<ForwardContext> => {
     const headers: Record<string, string> = { "content-type": "application/json" };
     const authorization = request.headers.get("authorization");
@@ -980,6 +1016,16 @@ const resolveForwardContext = async (request: Request, env: unknown, resolveIden
     }
 
     headers["x-lunora-userid"] = identity.userId;
+
+    // Forward an optional token-expiry so the DO can drop a socket whose
+    // credential has lapsed (the client then reconnects, re-resolving identity).
+    // Accept either `expiresAtMs` (epoch ms) or the JWT-standard `exp` (epoch
+    // seconds); the DO reads `x-lunora-identity-exp` as epoch ms.
+    const expiresAtMs = identityExpiryMs(identity);
+
+    if (expiresAtMs !== undefined) {
+        headers["x-lunora-identity-exp"] = String(expiresAtMs);
+    }
 
     // Strip `userId` so the DO doesn't see it twice. The rest of the identity
     // (claims like email/name/roles) is JSON-encoded so handlers can read it
@@ -1750,8 +1796,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const upgradeHeaders = new Headers(request.headers);
         upgradeHeaders.delete("x-lunora-userid");
         upgradeHeaders.delete("x-lunora-identity");
+        upgradeHeaders.delete("x-lunora-identity-exp");
         const forwardedUserId = forwardedHeaders["x-lunora-userid"];
         const forwardedIdentity = forwardedHeaders["x-lunora-identity"];
+        const forwardedExp = forwardedHeaders["x-lunora-identity-exp"];
 
         if (forwardedUserId !== undefined) {
             upgradeHeaders.set("x-lunora-userid", forwardedUserId);
@@ -1759,6 +1807,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         if (forwardedIdentity !== undefined) {
             upgradeHeaders.set("x-lunora-identity", forwardedIdentity);
+        }
+
+        if (forwardedExp !== undefined) {
+            upgradeHeaders.set("x-lunora-identity-exp", forwardedExp);
         }
 
         return forwardToShard(options.shardDO, shardKey, new Request(request, { headers: upgradeHeaders }));

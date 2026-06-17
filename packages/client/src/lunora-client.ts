@@ -41,6 +41,7 @@ import type {
     ServerErrorMessage,
     ServerMessage,
     ServerResumeMessage,
+    ServerWhisperMessage,
     ShardTrafficResult,
     StorageListPage,
     StorageObject,
@@ -471,6 +472,16 @@ class LunoraClient {
     /** Subscribers to aggregate connection-status changes (see `onConnectionStatus`). */
     private readonly statusListeners = new Set<(status: ConnectionStatus) => void>();
 
+    /** Subscribers notified when the server drops a socket for an expired token (see `onTokenExpired`). */
+    private readonly tokenExpiredListeners = new Set<() => void>();
+
+    /**
+     * Whisper-topic handlers, keyed by `connectionKey(shardKey)` → topic → set
+     * of callbacks. Membership doubles as the resubscribe set replayed on every
+     * (re)connect so a topic survives a socket bounce.
+     */
+    private readonly whisperHandlers = new Map<string, Map<string, Set<(data: unknown, from?: string) => void>>>();
+
     /** Last status broadcast, so we only notify listeners on an actual change. */
     private lastStatus: ConnectionStatus = "idle";
 
@@ -676,6 +687,116 @@ class LunoraClient {
         if (conn?.wsState === "open") {
             this.sendConnectEnvelope(conn);
         }
+    }
+
+    // --- Whispering ---------------------------------------------------------
+
+    /**
+     * Join a whisper `topic` and receive every ephemeral message other members
+     * broadcast to it on the same shard (typing indicators, live cursors,
+     * presence pings). Whispers never touch the server's durable state — there's
+     * no query, no row, no CDC entry. Returns an unsubscribe function; the topic
+     * is left on the server once its last local handler unsubscribes.
+     *
+     * `handler` receives the raw `data` and the sender's verified `from` user id
+     * (omitted for an anonymous sender). The topic is scoped to `options.shardKey`
+     * (the default shard when omitted) — use the same shard you target with the
+     * matching queries/mutations so members land on the same Durable Object.
+     *
+     * Security: whisper topics are NOT access-controlled beyond the shard
+     * boundary — any client that can open a socket to the shard can join, read,
+     * and inject on any topic name. `from` is server-stamped and unforgeable, but
+     * do not put data on a whisper topic that some shard members shouldn't see,
+     * and don't trust a whisper's `data` as authorization. Use a query/mutation
+     * (with RLS) for anything privileged; whispers are for transient awareness.
+     */
+    public whisperSubscribe(topic: string, handler: (data: unknown, from?: string) => void, options: { shardKey?: string } = {}): Unsubscribe {
+        const key = connectionKey(options.shardKey);
+        let byTopic = this.whisperHandlers.get(key);
+
+        if (!byTopic) {
+            byTopic = new Map();
+            this.whisperHandlers.set(key, byTopic);
+        }
+
+        let handlers = byTopic.get(topic);
+        const first = handlers === undefined;
+
+        if (!handlers) {
+            handlers = new Set();
+            byTopic.set(topic, handlers);
+        }
+
+        handlers.add(handler);
+
+        this.ensureSocket(options.shardKey);
+
+        // Only the first local handler for a topic sends the server join — later
+        // handlers piggyback on the existing membership.
+        if (first) {
+            const conn = this.getConnection(options.shardKey);
+
+            if (conn) {
+                sendOn(conn, { topic, type: "whisper_subscribe" });
+            }
+        }
+
+        return () => {
+            const stillByTopic = this.whisperHandlers.get(key);
+            const stillHandlers = stillByTopic?.get(topic);
+
+            if (!stillHandlers?.delete(handler) || stillHandlers.size > 0) {
+                return;
+            }
+
+            // Last handler for this topic on this shard: leave the topic and
+            // prune the empty maps so the resubscribe set stays accurate.
+            stillByTopic?.delete(topic);
+
+            if (stillByTopic?.size === 0) {
+                this.whisperHandlers.delete(key);
+            }
+
+            const conn = this.getConnection(options.shardKey);
+
+            if (conn) {
+                sendOn(conn, { topic, type: "whisper_unsubscribe" });
+            }
+        };
+    }
+
+    /**
+     * Broadcast an ephemeral `data` payload to the other members of a whisper
+     * `topic` on `options.shardKey`'s shard. Fire-and-forget: the frame is
+     * dropped when the shard socket isn't open (whispers are transient, never
+     * queued), and the server silently drops it if the sender exceeds its
+     * whisper rate budget. The sender never receives its own whisper. Omitting
+     * `data` delivers JSON `null` to receivers (not `undefined`).
+     */
+    public whisper(topic: string, data?: unknown, options: { shardKey?: string } = {}): void {
+        this.ensureSocket(options.shardKey);
+
+        const conn = this.getConnection(options.shardKey);
+
+        if (conn) {
+            sendOn(conn, { data, topic, type: "whisper" });
+        }
+    }
+
+    /**
+     * Subscribe to token-expiry events: invoked whenever the server drops a
+     * shard socket because the connection's credential lapsed (close code
+     * `4001`). The client already reconnects automatically (re-resolving
+     * identity from the cookie/token in effect); use this to refresh a
+     * short-lived token first — e.g. call {@link setWsToken} / {@link setAuthToken}
+     * with a freshly minted one. Returns an unsubscribe function.
+     */
+    public onTokenExpired(listener: () => void): Unsubscribe {
+        this.tokenExpiredListeners.add(listener);
+
+        return () => {
+            this.tokenExpiredListeners.delete(listener);
+        };
     }
 
     // --- Connection status --------------------------------------------------
@@ -1528,6 +1649,7 @@ class LunoraClient {
                 serverCursor: cached?.serverCursor,
                 serverVersion: 0,
                 shardKey: options.shardKey,
+                ...(cached?.serverEpoch === undefined ? {} : { serverEpoch: cached.serverEpoch }),
             };
             this.subscriptions.add(state);
         }
@@ -1806,6 +1928,7 @@ class LunoraClient {
             serverCursor: state.serverCursor,
             ts: Date.now(),
             value: state.lastValue,
+            ...(state.serverEpoch === undefined ? {} : { serverEpoch: state.serverEpoch }),
         });
 
         this.cacheFlushTimer ??= setTimeout(() => {
@@ -2236,16 +2359,34 @@ class LunoraClient {
                 }
             }
 
+            // Rejoin every whisper topic registered for this shard so ephemeral
+            // channels survive a socket bounce.
+            const byTopic = this.whisperHandlers.get(connectionKey(shardKey));
+
+            if (byTopic) {
+                for (const topic of byTopic.keys()) {
+                    sendOn(conn, { topic, type: "whisper_subscribe" });
+                }
+            }
+
             this.flushOfflineQueue(shardKey).catch(() => undefined);
 
             this.startHeartbeat(conn);
         });
 
         socket.addEventListener("message", (event: MessageEvent): void => {
-            this.handleServerMessage(event.data);
+            this.handleServerMessage(event.data, shardKey);
         });
 
-        socket.addEventListener("close", (): void => {
+        socket.addEventListener("close", (event?: { code?: number }): void => {
+            // Close code 4001 is the server's `token_expired` signal: notify
+            // listeners so the app can refresh its credential before the
+            // (always-armed) reconnect re-resolves identity. The event is
+            // optional — some WS doubles fire `close` without one.
+            if (event?.code === 4001) {
+                this.notifyTokenExpired();
+            }
+
             this.handleDisconnect(conn);
         });
 
@@ -2366,12 +2507,13 @@ class LunoraClient {
                 functionPath: state.fn.__lunoraRef,
                 table,
                 ...(state.serverCursor === undefined ? {} : { sinceSeq: state.serverCursor }),
+                ...(state.serverEpoch === undefined ? {} : { sinceEpoch: state.serverEpoch }),
             },
             type: "subscribe",
         });
     }
 
-    private handleServerMessage(raw: unknown): void {
+    private handleServerMessage(raw: unknown, shardKey?: string): void {
         const text = decodeServerFrame(raw);
 
         if (text === undefined) {
@@ -2425,6 +2567,11 @@ class LunoraClient {
 
                 break;
             }
+            case "whisper": {
+                this.dispatchWhisper(message, shardKey);
+
+                break;
+            }
             default: {
                 break;
             }
@@ -2432,6 +2579,17 @@ class LunoraClient {
     }
 
     private handleErrorMessage(message: ServerErrorMessage): void {
+        // Token-expiry rejection (sent just before the server closes the socket
+        // with code 4001). Surface it to listeners; the close handler also fires
+        // and arms the reconnect, so nothing else to do here.
+        const errorCode = (message.error as { code?: unknown } | undefined)?.code;
+
+        if (errorCode === "TOKEN_EXPIRED") {
+            this.notifyTokenExpired();
+
+            return;
+        }
+
         // Stream-scoped errors arrive on the same `error` envelope as
         // subscription errors; dispatch by id-prefix lookup.
         const { id } = message;
@@ -2477,10 +2635,15 @@ class LunoraClient {
         state.lastValue = payload;
         state.serverVersion += 1;
 
-        // Advance the resume cursor when the frame carries one (CDC-enabled
-        // shard); replayed as `sinceSeq` on the next reconnect.
+        // Advance the resume cursor + epoch when the frame carries them
+        // (CDC-enabled shard); replayed as `sinceSeq` / `sinceEpoch` on the
+        // next reconnect.
         if (message.cursor !== undefined) {
             state.serverCursor = message.cursor;
+        }
+
+        if (message.epoch !== undefined) {
+            state.serverEpoch = message.epoch;
         }
 
         // Persist the new value to the durable read cache (debounced).
@@ -2512,8 +2675,15 @@ class LunoraClient {
 
         state.acked = true;
 
-        if (message.cursor !== undefined && message.cursor !== state.serverCursor) {
-            state.serverCursor = message.cursor;
+        if ((message.cursor !== undefined && message.cursor !== state.serverCursor) || (message.epoch !== undefined && message.epoch !== state.serverEpoch)) {
+            if (message.cursor !== undefined) {
+                state.serverCursor = message.cursor;
+            }
+
+            if (message.epoch !== undefined) {
+                state.serverEpoch = message.epoch;
+            }
+
             this.persistQueryValue(state);
         }
     }
@@ -2550,6 +2720,34 @@ class LunoraClient {
         // cached base to merge into, or an unmergeable shape: replace wholesale,
         // preserving the historical behaviour. The next snapshot reconciles.
         return delta;
+    }
+
+    /** Route an inbound whisper to the topic's handlers on the originating shard. */
+    private dispatchWhisper(message: ServerWhisperMessage, shardKey?: string): void {
+        const handlers = this.whisperHandlers.get(connectionKey(shardKey))?.get(message.topic);
+
+        if (!handlers) {
+            return;
+        }
+
+        for (const handler of handlers) {
+            try {
+                handler(message.data, message.from);
+            } catch {
+                /* user callback threw — ignore */
+            }
+        }
+    }
+
+    /** Notify every {@link onTokenExpired} listener (best-effort, listener throws swallowed). */
+    private notifyTokenExpired(): void {
+        for (const listener of this.tokenExpiredListeners) {
+            try {
+                listener();
+            } catch {
+                /* listener threw — ignore */
+            }
+        }
     }
 
     private handleCompleteMessage(id: string): void {

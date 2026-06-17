@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { SqlExec } from "../src/ctx-db";
-import { CDC_LOG_TABLE, runShardMigrations } from "../src/ctx-db";
+import { CDC_LOG_TABLE, readCdcEpoch, runShardMigrations } from "../src/ctx-db";
 import type { ShardDOState, SubscriptionOutcome } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import { messagesSchema } from "./_helpers/fake-sql";
@@ -21,6 +21,7 @@ import createSqliteExec from "./_helpers/node-sqlite";
 interface Frame {
     cursor?: number;
     data?: unknown;
+    epoch?: string;
     id?: string;
     type: string;
 }
@@ -75,10 +76,14 @@ const append = (sql: SqlExec, table: string): void => {
     sql.exec(`INSERT INTO "${CDC_LOG_TABLE}" (ts, "table", id, op, doc) VALUES (?, ?, ?, ?, ?)`, 1, table, "row", "insert", null);
 };
 
-const subscribeEnvelope = (sinceSeq?: number): string =>
+const subscribeEnvelope = (sinceSeq?: number, sinceEpoch?: string): string =>
     JSON.stringify({
         id: "s1",
-        query: { functionPath: "messages:list", ...(sinceSeq === undefined ? {} : { sinceSeq }) },
+        query: {
+            functionPath: "messages:list",
+            ...(sinceSeq === undefined ? {} : { sinceSeq }),
+            ...(sinceEpoch === undefined ? {} : { sinceEpoch }),
+        },
         type: "subscribe",
     });
 
@@ -118,14 +123,16 @@ describe("shardDO subscription resume cursor", () => {
             runShardMigrations(database.sql, messagesSchema, { cdc: true });
             append(database.sql, "messages");
             append(database.sql, "messages");
+            // Mint the shard's epoch so the client can present a matching one.
+            const epoch = readCdcEpoch(database.sql);
 
             const shard = new FixedSubscriptionShard(makeState(database), {});
             const ws = new FakeSocket();
 
-            await shard.webSocketMessage(ws as unknown as WebSocket, subscribeEnvelope(2));
+            await shard.webSocketMessage(ws as unknown as WebSocket, subscribeEnvelope(2, epoch));
 
             expect(ws.frames[0]).toEqual({ id: "s1", type: "ack" });
-            expect(ws.frames[1]).toEqual({ cursor: 2, id: "s1", type: "resume" });
+            expect(ws.frames[1]).toEqual({ cursor: 2, epoch, id: "s1", type: "resume" });
             // No data frame — the client keeps its cached value.
             expect(ws.frames).toHaveLength(2);
         } finally {
@@ -144,14 +151,15 @@ describe("shardDO subscription resume cursor", () => {
             append(database.sql, "messages");
             // A change to an unrelated table the query never reads.
             append(database.sql, "other");
+            const epoch = readCdcEpoch(database.sql);
 
             const shard = new FixedSubscriptionShard(makeState(database), {});
             const ws = new FakeSocket();
 
-            await shard.webSocketMessage(ws as unknown as WebSocket, subscribeEnvelope(2));
+            await shard.webSocketMessage(ws as unknown as WebSocket, subscribeEnvelope(2, epoch));
 
             // Resumable: the read-set ({messages}) is untouched in (2, 3].
-            expect(ws.frames[1]).toEqual({ cursor: 3, id: "s1", type: "resume" });
+            expect(ws.frames[1]).toEqual({ cursor: 3, epoch, id: "s1", type: "resume" });
             expect(ws.frames).toHaveLength(2);
         } finally {
             database.close();

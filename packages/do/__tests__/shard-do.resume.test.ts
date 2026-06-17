@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+import { createShardCtxDb as createShardContextDatabase, readCdcEpoch, runShardMigrations } from "../src/ctx-db";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import { messagesSchema } from "./_helpers/fake-sql";
@@ -21,10 +21,13 @@ class ResumeShard extends ShardDO {
         return Promise.resolve(undefined);
     }
 
-    public probe(sinceSeq: number, readSet: Set<string>): { cursor: number | undefined; resumable: boolean } {
-        return this.evaluateResume(sinceSeq, readSet);
+    public probe(sinceSeq: number, readSet: Set<string>, sinceEpoch?: string): { cursor: number | undefined; resumable: boolean } {
+        return this.evaluateResume(sinceSeq, readSet, sinceEpoch);
     }
 }
+
+/** The shard's current CDC epoch — a resume only succeeds when the client supplies a matching one. */
+const currentEpoch = (): string => readCdcEpoch(harness.sql);
 
 const buildShard = (): ResumeShard => {
     const state: ShardDOState = {
@@ -67,26 +70,50 @@ describe("shardDO.evaluateResume", () => {
 
         // Empty read-set means we never recorded the query's table deps, so we
         // can't prove they were untouched — must re-snapshot, never resume blind.
-        expect(buildShard().probe(0, new Set()).resumable).toBe(false);
+        expect(buildShard().probe(0, new Set(), currentEpoch()).resumable).toBe(false);
     });
 
     it("resumes when no read-set table changed since the cursor", () => {
         expect.assertions(1);
 
         // The change touched `messages`; a query reading only `users` is unaffected.
-        expect(buildShard().probe(0, new Set(["users"])).resumable).toBe(true);
+        expect(buildShard().probe(0, new Set(["users"]), currentEpoch()).resumable).toBe(true);
     });
 
     it("does not resume when a read-set table changed since the cursor", () => {
         expect.assertions(1);
 
-        expect(buildShard().probe(0, new Set(["messages"])).resumable).toBe(false);
+        expect(buildShard().probe(0, new Set(["messages"]), currentEpoch()).resumable).toBe(false);
     });
 
     it("resumes trivially when the client is already at the high-watermark", () => {
         expect.assertions(1);
 
-        // `sinceSeq >= cursor`: nothing newer exists, current regardless of deps.
-        expect(buildShard().probe(1, new Set()).resumable).toBe(true);
+        // `sinceSeq === cursor`: nothing newer exists, current regardless of deps.
+        expect(buildShard().probe(1, new Set(), currentEpoch()).resumable).toBe(true);
+    });
+
+    it("does not resume when the client's epoch does not match (timeline fork)", () => {
+        expect.assertions(1);
+
+        // A reset / recycled-shard advertises a fresh epoch; the client's cached
+        // epoch no longer matches, so its `sinceSeq` names an unrelated timeline.
+        expect(buildShard().probe(1, new Set(["users"]), "stale-epoch").resumable).toBe(false);
+    });
+
+    it("does not resume without an epoch (pre-epoch client)", () => {
+        expect.assertions(1);
+
+        // A client that supplies `sinceSeq` but no epoch can't prove it shares
+        // this timeline — re-snapshot.
+        expect(buildShard().probe(1, new Set(["users"])).resumable).toBe(false);
+    });
+
+    it("does not resume when sinceSeq exceeds the cursor (rollback guard)", () => {
+        expect.assertions(1);
+
+        // A `sinceSeq` past the high-watermark under a matching epoch means the
+        // log rolled back (e.g. PITR) — re-snapshot rather than trust it.
+        expect(buildShard().probe(99, new Set(["users"]), currentEpoch()).resumable).toBe(false);
     });
 });

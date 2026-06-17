@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { SqlExec } from "../src/ctx-db";
-import { CDC_LOG_TABLE, minCdcSeq, readCdcCursor, runShardMigrations } from "../src/ctx-db";
+import { bumpCdcEpoch, CDC_LOG_TABLE, minCdcSeq, readCdcCursor, readCdcEpoch, runShardMigrations } from "../src/ctx-db";
 import { messagesSchema } from "./_helpers/fake-sql";
 import createSqliteExec from "./_helpers/node-sqlite";
 
@@ -37,6 +37,21 @@ describe("ctx-db cdc cursor helpers", () => {
 
         expect(readCdcCursor(harness.sql)).toBe(0);
         expect(minCdcSeq(harness.sql)).toBeUndefined();
+    });
+
+    it("mints a stable epoch and rolls it on bump", () => {
+        expect.assertions(3);
+
+        const first = readCdcEpoch(harness.sql);
+
+        // Stable across reads — the same minted value is returned, not re-minted.
+        expect(readCdcEpoch(harness.sql)).toBe(first);
+
+        // A bump rolls it to a fresh value (timeline fork) that then persists.
+        const bumped = bumpCdcEpoch(harness.sql);
+
+        expect(bumped).not.toBe(first);
+        expect(readCdcEpoch(harness.sql)).toBe(bumped);
     });
 
     it("tracks the high-watermark as changes are appended", () => {

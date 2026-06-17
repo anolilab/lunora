@@ -100,6 +100,17 @@ interface PresenceMember {
 /** Options for {@link definePresence}. */
 interface DefinePresenceOptions {
     /**
+     * Grace window (ms) before a gracefully-closed session is dropped from the
+     * present list. When `0` (the default), `onDisconnect` hard-deletes the
+     * session's row the instant its socket closes. When `> 0`, the row is
+     * instead aged so the read-time TTL filter hides it `disconnectGraceMs`
+     * from now — a reconnect with the same `sessionId` within the window
+     * re-heartbeats and restores full presence with no visible flicker (the
+     * AnyCable `presence_ttl` behaviour). Clamped to `ttlMs`.
+     */
+    disconnectGraceMs?: number;
+
+    /**
      * How long (ms) a heartbeat keeps a member present. `listPresent` excludes
      * rows whose `lastSeen` is older than `now - ttlMs`. Defaults to 30s.
      */
@@ -197,6 +208,9 @@ const { mutation, query } = initLunora.dataModel().create();
 
 const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent => {
     const ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
+    // A grace window longer than the TTL would never hide the row before the
+    // TTL filter already does, so clamp it; negative values disable the grace.
+    const disconnectGraceMs = Math.max(0, Math.min(options.disconnectGraceMs ?? 0, ttlMs));
 
     const heartbeat = mutation
         .input({
@@ -253,28 +267,50 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
             .withIndex("byRoom", (q) => q.eq("roomId", args.roomId))
             .collect();
 
-        return rows
-            .filter((row) => (row["lastSeen"] as number) > cutoff)
-            .map((row) => {
-                // `sessionId` is intentionally omitted from the public payload
-                // (see {@link PresenceMember}) so a subscriber can't enumerate
-                // other members' connection ids and target their rows.
-                const member: PresenceMember = {
-                    lastSeen: row["lastSeen"] as number,
-                    roomId: row["roomId"] as string,
-                };
+        // Newest heartbeat first, so the dedup below keeps the freshest row per
+        // user and the returned list stays newest-first.
+        const live = rows.filter((row) => (row["lastSeen"] as number) > cutoff).toSorted((a, b) => (b["lastSeen"] as number) - (a["lastSeen"] as number));
 
-                if (row["userId"] !== undefined) {
-                    member.userId = row["userId"] as string;
+        // Collapse multiple sessions of the same authenticated user — the
+        // common multi-tab / multi-device case — to a single member so a "who's
+        // here" UI shows the user once, not once per open tab (AnyCable dedups
+        // sessions sharing a presence id the same way). The most recent row
+        // wins (the list is already newest-first). Anonymous rows carry no
+        // `userId` to collapse on, so each anonymous session stays distinct.
+        const seenUsers = new Set<string>();
+        const members: PresenceMember[] = [];
+
+        for (const row of live) {
+            const userId = row["userId"] as string | undefined;
+
+            if (userId !== undefined) {
+                if (seenUsers.has(userId)) {
+                    continue;
                 }
 
-                if (row["data"] !== undefined) {
-                    member.data = row["data"] as Record<string, unknown>;
-                }
+                seenUsers.add(userId);
+            }
 
-                return member;
-            })
-            .toSorted((a, b) => b.lastSeen - a.lastSeen);
+            // `sessionId` is intentionally omitted from the public payload
+            // (see {@link PresenceMember}) so a subscriber can't enumerate
+            // other members' connection ids and target their rows.
+            const member: PresenceMember = {
+                lastSeen: row["lastSeen"] as number,
+                roomId: row["roomId"] as string,
+            };
+
+            if (userId !== undefined) {
+                member.userId = userId;
+            }
+
+            if (row["data"] !== undefined) {
+                member.data = row["data"] as Record<string, unknown>;
+            }
+
+            members.push(member);
+        }
+
+        return members;
     });
 
     const sweep = mutation.input({ roomId: v.string() }).mutation(async ({ args, ctx: context }): Promise<{ deleted: number }> => {
@@ -327,9 +363,26 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
         // back to the TTL filter + `sweep` for the real owner.
         const verifiedUserId = event.userId ?? undefined;
 
-        if ((existing["userId"] ?? undefined) === verifiedUserId) {
-            await context.db.delete(existing["_id"] as never);
+        if ((existing["userId"] ?? undefined) !== verifiedUserId) {
+            return;
         }
+
+        if (disconnectGraceMs === 0) {
+            // No grace: drop the row now so the member disappears immediately.
+            await context.db.delete(existing["_id"] as never);
+
+            return;
+        }
+
+        // Grace window: instead of vanishing instantly, age the row so the
+        // read-time TTL filter (`lastSeen > now - ttlMs`) hides it
+        // `disconnectGraceMs` from now. A reconnect with the same `sessionId`
+        // within the window re-heartbeats and restores full presence — no
+        // flicker. `min` ensures we only ever SHORTEN the row's life (a row
+        // already due to expire sooner is left alone), never extend it.
+        const agedLastSeen = Math.min(existing["lastSeen"] as number, Date.now() + disconnectGraceMs - ttlMs);
+
+        await context.db.patch(existing["_id"] as never, { lastSeen: agedLastSeen });
     });
 
     return defineComponent(PRESENCE_KEY, {

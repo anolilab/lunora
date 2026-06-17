@@ -8,7 +8,7 @@ import { appendAuditEntry, ensureAuditTable, readAuditLog } from "./audit-log";
 import type { AuthMetrics } from "./auth-metrics";
 import { readAuthMetrics, recordAuthEvent } from "./auth-metrics";
 import type { CdcChange, SqlExec } from "./ctx-db";
-import { CDC_LOG_TABLE, minCdcSeq, readCdcChanges, readCdcCursor, readIdempotent, trimIdempotent, writeIdempotent } from "./ctx-db";
+import { bumpCdcEpoch, CDC_LOG_TABLE, minCdcSeq, readCdcChanges, readCdcCursor, readCdcEpoch, readIdempotent, trimIdempotent, writeIdempotent } from "./ctx-db";
 import type { MigrationDirection, MigrationRunResult } from "./data-migration";
 import { DATA_MIGRATION_STATE_TABLE, readMigrationStatus } from "./data-migration";
 import type { DependencyTracker } from "./dependency-tracker";
@@ -192,23 +192,25 @@ interface SubscriptionOutcome {
  * `executeSubscription` → `buildCtx` rather than read from the shared,
  * per-request `currentRequestUserId`/`currentRequestIdentity` instance fields.
  *
- * Subscriptions are established over the WS handshake, which does not resolve
- * identity, so the default is fully anonymous (both fields `undefined`).
- * Passing identity by value — never by reading a mutable instance field from a
- * deferred (`waitUntil`) or concurrently-interleaved context — is what prevents
- * a cross-user leak: a subscription re-run can never observe an in-flight RPC's
- * identity, and a subscription re-run can never clobber that RPC's identity.
+ * The value passed is the socket's OWN verified identity, captured at the WS
+ * upgrade from the runtime-forwarded, server-minted `x-lunora-userid` /
+ * `x-lunora-identity` headers (the client cannot forge them — the runtime
+ * strips any client-supplied copies) and stamped on the {@link SocketAttachment}.
+ * `seedSubscription` and `refreshSubscriptions` read it off the attachment and
+ * pass it here BY VALUE — never by reading the mutable per-request
+ * `currentRequestUserId`/`currentRequestIdentity` instance fields, which a
+ * deferred (`waitUntil`) refresh or a concurrently-interleaved RPC could be
+ * mutating. That value-passing is what keeps a subscription re-run from
+ * observing or clobbering an in-flight RPC's identity.
  *
  * Developer-facing consequence: a query that authorizes or filters on the
- * caller's identity — via `.use(rls(...))` or by reading `ctx.auth.userId`
- * directly — evaluates as ANONYMOUS over the live channel. Its one-shot `fetch`
- * RPC carries identity and returns the user's rows, but the WS subscription
- * (seed + every write-driven refresh) runs anonymous, so it fails CLOSED: an
- * empty/denied result rather than another user's data (no leak), but a silent
- * correctness mismatch between the initial fetch and the live updates. For
- * per-user live data, scope it by shard (`.shardBy(...)`) or pass the identifier
- * as an explicit query arg instead of relying on `ctx.auth` inside a subscribed
- * query. See the lunora-realtime skill ("Authorization & live queries").
+ * caller's identity — via `.use(rls(...))` or by reading `ctx.auth.userId` —
+ * evaluates over the live channel under the CONNECTING user, so its seed and
+ * every write-driven refresh return that user's rows, matching the one-shot
+ * `fetch` RPC. An anonymous socket (no identity resolved at upgrade) leaves
+ * both fields `undefined`, so such a query fails closed (empty/denied) rather
+ * than leaking another user's data. See the lunora-realtime skill
+ * ("Authorization & live queries").
  */
 interface SubscriptionIdentity {
     identity?: Record<string, unknown>;
@@ -627,6 +629,17 @@ const awaitWsDrain = async (ws: WebSocket): Promise<void> => {
         });
     }
 };
+
+/**
+ * The trailing `,"cursor":&lt;n>,"epoch":"&lt;e>"` fragment appended to a
+ * `data`/`delta`/`resume` frame so a client can persist a resume position it can
+ * prove still belongs to this shard's timeline (see `evaluateResume`). Each part
+ * is omitted when absent, keeping the wire byte-identical to the pre-cursor /
+ * pre-epoch format on non-CDC shards. Single source of the wire rule so the
+ * resume frame and `pushSubscriptionData` can never drift apart.
+ */
+const cdcSuffix = (cursor?: number, epoch?: string): string =>
+    (cursor === undefined ? "" : `,"cursor":${String(cursor)}`) + (epoch === undefined ? "" : `,"epoch":${JSON.stringify(epoch)}`);
 
 /** True when `a` and `b` share at least one element. */
 const setsIntersect = (a: Set<string>, b: Set<string>): boolean => {
@@ -1537,6 +1550,35 @@ abstract class ShardDO {
     protected static readonly MAX_SUBSCRIPTIONS_PER_SOCKET = 32;
 
     /**
+     * Per-socket whisper-topic cap. Topic membership rides the same hibernation
+     * attachment as `subs`, so bound it for the same reason — a runaway
+     * `whisper_subscribe` loop must not wedge the attachment past the runtime's
+     * size budget. Over-cap joins are silently ignored (whispering is
+     * best-effort, never acked).
+     */
+    protected static readonly MAX_WHISPER_TOPICS_PER_SOCKET = 64;
+
+    /**
+     * Cap on the serialized size (bytes) of a whisper `data` payload. Whispers
+     * carry small awareness blobs (cursor, typing flag); bounding the payload
+     * stops a client from turning the fan-out into a bandwidth-amplification
+     * vector. An over-limit whisper is dropped (best-effort, never acked).
+     */
+    protected static readonly MAX_WHISPER_BYTES = 4096;
+
+    /**
+     * Whisper-rate token bucket: each socket may burst {@link ShardDO.WHISPER_RATE_BURST}
+     * whispers, refilling at {@link ShardDO.WHISPER_RATE_PER_SEC}/s. Without this a single
+     * client could loop `whisper` frames, each costing O(connections) to fan out
+     * — an O(N) CPU + egress amplification the per-message byte cap alone doesn't
+     * close. In-memory (resets to full burst on hibernation, which is the
+     * conservative direction).
+     */
+    protected static readonly WHISPER_RATE_BURST = 50;
+
+    protected static readonly WHISPER_RATE_PER_SEC = 25;
+
+    /**
      * Set once the very first `__root__` warning has been emitted. Static so
      * a hot DO cannot spam the log on every write; the v0.1 lifetime of a DO
      * exceeds any reasonable cooldown so a single warning is sufficient. The
@@ -1666,6 +1708,9 @@ abstract class ShardDO {
      * memo simply forces one re-run and (at most) one redundant push.
      */
     private readonly subMemos = new WeakMap<WebSocket, Map<string, SubscriptionMemo>>();
+
+    /** Per-socket whisper-rate token bucket (see {@link ShardDO.WHISPER_RATE_BURST}). In-memory; resets on hibernation. */
+    private readonly whisperBuckets = new WeakMap<WebSocket, { last: number; tokens: number }>();
 
     /**
      * Per-socket {@link AbortController} map keyed by stream id, used to
@@ -1985,6 +2030,19 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line sonarjs/cognitive-complexity -- Workers hibernation message router: the type/credential/route branching is the wire protocol and stays clearer inline than split across helpers sharing the socket + envelope
     public async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+        // Token-expiry: a socket whose credential lapsed is dropped before its
+        // frame is processed, so the client reconnects and re-resolves identity.
+        // This is the inbound-activity check; the load-bearing one is in
+        // `refreshSubscriptions`, which drops an expired socket BEFORE pushing it
+        // the user's live data (a passive subscriber sends no frames — its
+        // keepalive pings auto-respond and never reach here — so inbound checks
+        // alone would never fire for the common case).
+        if (this.isSocketExpired(ws)) {
+            this.dropExpiredSocket(ws);
+
+            return;
+        }
+
         const text = typeof message === "string" ? message : new TextDecoder().decode(message);
         let envelope: SubscriptionEnvelope;
 
@@ -2094,6 +2152,22 @@ abstract class ShardDO {
             this.handleStream(ws, envelope.id, envelope.query.functionPath, envelope.query.args ?? {}).catch(() => {
                 /* socket already gone; nothing to report */
             });
+
+            return;
+        }
+
+        if (envelope.type === "whisper_subscribe" || envelope.type === "whisper_unsubscribe") {
+            if (typeof envelope.topic === "string" && envelope.topic.length > 0) {
+                this.setWhisperMembership(ws, envelope.topic, envelope.type === "whisper_subscribe");
+            }
+
+            return;
+        }
+
+        if (envelope.type === "whisper") {
+            if (typeof envelope.topic === "string" && envelope.topic.length > 0) {
+                this.broadcastWhisper(ws, envelope.topic, envelope.data);
+            }
 
             return;
         }
@@ -2882,16 +2956,18 @@ abstract class ShardDO {
      * wire stays byte-identical to the pre-cursor format for non-CDC apps.
      */
     protected currentCdcCursor(): number | undefined {
-        try {
-            const sql = this.sql as SqlExec;
-            const present = sql.exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, CDC_LOG_TABLE).toArray().length > 0;
+        return this.cdcEnabled() ? readCdcCursor(this.sql as SqlExec) : undefined;
+    }
 
-            return present ? readCdcCursor(sql) : undefined;
-        } catch {
-            // Stub `sql` handle (test double) or a pre-CDC shard — no cursor to
-            // advertise; the frame simply omits it.
-            return undefined;
-        }
+    /**
+     * This shard's current CDC epoch, stamped on `data`/`delta`/`resume` frames
+     * next to the cursor so a reconnecting client can prove it is resuming the
+     * same changelog timeline it cached (see {@link evaluateResume}). Returns
+     * `undefined` when CDC was never enabled — the frame omits the field, keeping
+     * the wire byte-identical to the pre-epoch format for non-CDC apps.
+     */
+    protected currentCdcEpoch(): string | undefined {
+        return this.cdcEnabled() ? readCdcEpoch(this.sql as SqlExec) : undefined;
     }
 
     /**
@@ -2908,28 +2984,45 @@ abstract class ShardDO {
      * retention gap), a read table changed (the client needs the fresh value),
      * or CDC is off — the caller falls back to the full-snapshot seed.
      */
-    protected evaluateResume(sinceSeq: number, readSet: Set<string>): { cursor: number | undefined; resumable: boolean } {
+    protected evaluateResume(
+        sinceSeq: number,
+        readSet: Set<string>,
+        sinceEpoch?: string,
+    ): { cursor: number | undefined; epoch: string | undefined; resumable: boolean } {
         const sql = this.sql as SqlExec;
-        let present: boolean;
 
-        try {
-            present = sql.exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, CDC_LOG_TABLE).toArray().length > 0;
-        } catch {
-            // Stub `sql` handle (test double): can't prove the client is current,
-            // so fall back to a full snapshot.
-            return { cursor: undefined, resumable: false };
-        }
-
-        if (!present) {
-            return { cursor: undefined, resumable: false };
+        if (!this.cdcEnabled()) {
+            // Stub `sql` handle or a pre-CDC shard: can't prove the client is
+            // current, so fall back to a full snapshot.
+            return { cursor: undefined, epoch: undefined, resumable: false };
         }
 
         const cursor = readCdcCursor(sql);
+        // Read the epoch once: it gates the resume verdict AND is returned so the
+        // caller (`seedSubscription`) can stamp the frame without a second read.
+        const epoch = readCdcEpoch(sql);
 
-        // Client already at (or somehow past) the high-watermark: nothing newer
-        // exists, so it is trivially current regardless of the read-set.
-        if (sinceSeq >= cursor) {
-            return { cursor, resumable: true };
+        // Timeline fork: the client cached against a different epoch (a reset, or
+        // a recycled DO id), so its `sinceSeq` indexes an unrelated changelog.
+        // Re-snapshot regardless of the seq comparison. A client that supplies a
+        // `sinceSeq` but no epoch (pre-epoch client) is treated the same — we
+        // can't prove it shares this timeline.
+        if (sinceEpoch !== epoch) {
+            return { cursor, epoch, resumable: false };
+        }
+
+        // Rollback guard: a legitimate `sinceSeq` can never exceed the current
+        // high-watermark (the cursor is monotonic and survives trims). A client
+        // claiming to have seen MORE than the shard holds means the log rolled
+        // back (e.g. a PITR restore) under a matching epoch — re-snapshot.
+        if (sinceSeq > cursor) {
+            return { cursor, epoch, resumable: false };
+        }
+
+        // Client already at the high-watermark: nothing newer exists, so it is
+        // trivially current regardless of the read-set.
+        if (sinceSeq === cursor) {
+            return { cursor, epoch, resumable: true };
         }
 
         // Retention gap: the log no longer covers `(sinceSeq, cursor]`, so we
@@ -2943,14 +3036,14 @@ abstract class ShardDO {
         const floor = minCdcSeq(sql);
 
         if (floor === undefined || floor > sinceSeq + 1) {
-            return { cursor, resumable: false };
+            return { cursor, epoch, resumable: false };
         }
 
         // An empty read-set means we never recorded which tables the query
         // depends on (unknown deps), so we can't prove it was untouched — force
         // a full snapshot rather than resuming blindly on stale data.
         if (readSet.size === 0) {
-            return { cursor, resumable: false };
+            return { cursor, epoch, resumable: false };
         }
 
         // Resumable iff no table the query reads changed since `sinceSeq`. We
@@ -2962,12 +3055,12 @@ abstract class ShardDO {
         // `sinceSeq`, so a touching change may sit beyond the page we scanned.
         // We can't prove the read-set is untouched — force a full snapshot.
         if (changes.length >= CDC_RESUME_SCAN_LIMIT) {
-            return { cursor, resumable: false };
+            return { cursor, epoch, resumable: false };
         }
 
         const touchedReadSet = changes.some((change) => readSet.has(change.table));
 
-        return { cursor, resumable: !touchedReadSet };
+        return { cursor, epoch, resumable: !touchedReadSet };
     }
 
     /**
@@ -4356,6 +4449,17 @@ abstract class ShardDO {
         const bookmark = typeof args.bookmark === "string" ? args.bookmark : undefined;
         const armed = await armRestore(this.state.storage, { bookmark, time });
 
+        // Roll the CDC epoch so live subscribers re-snapshot rather than try to
+        // resume across the timeline fork a restore introduces. This bump is the
+        // proactive half (it takes effect immediately, before any `restart`);
+        // the native restore itself reverts SQLite — including this epoch row —
+        // so the post-restore safety net is `evaluateResume`'s `sinceSeq >
+        // cursor` rollback guard. Best-effort: `cdcEnabled()` is false on a stub
+        // `sql` handle or a pre-CDC shard, so the bump simply no-ops there.
+        if (this.cdcEnabled()) {
+            bumpCdcEpoch(this.sql as SqlExec);
+        }
+
         this.recordAudit("pitrRestore", { detail: { restart, restoredTo: armed.restoredTo, undoBookmark: armed.undoBookmark } });
 
         const response = jsonResponse({ result: { ...armed, restarted: restart } }, 200);
@@ -4940,12 +5044,13 @@ abstract class ShardDO {
             return;
         }
 
-        // Subscription re-execution runs anonymously: `refreshSubscriptions`
-        // threads an explicit empty `SubscriptionIdentity` into every
-        // `executeSubscription` call, so the deferred re-run below neither reads
-        // nor mutates the shared per-request identity field. Crucial here because
-        // this refresh is dispatched via `waitUntil` (a LATER macrotask), where a
-        // concurrent in-flight RPC owns `currentRequestUserId`.
+        // `refreshSubscriptions` re-runs each subscription under the socket's OWN
+        // verified identity (stamped on the attachment at upgrade), threaded as
+        // an explicit `SubscriptionIdentity` by value — so the deferred re-run
+        // below neither reads nor mutates the shared per-request identity fields.
+        // Crucial here because this refresh is dispatched via `waitUntil` (a
+        // LATER macrotask), where a concurrent in-flight RPC owns
+        // `currentRequestUserId`. See {@link SubscriptionIdentity}.
 
         if (typeof this.state.waitUntil === "function") {
             this.state.waitUntil(this.refreshSubscriptions(changed));
@@ -5018,8 +5123,20 @@ abstract class ShardDO {
         // this pass (they all observe the committed state), so resolve it once
         // and stamp it on every frame as the cursor each subscriber advances to.
         const frameCursor = this.currentCdcCursor();
+        const frameEpoch = this.currentCdcEpoch();
 
         const refreshOne = async (ws: WebSocket): Promise<void> => {
+            // Enforce token-expiry on the OUTBOUND path: a lapsed socket must not
+            // keep receiving its user's live (RLS/`ctx.auth`-scoped) data. This is
+            // the load-bearing check — a passive subscriber never sends an inbound
+            // frame, so `webSocketMessage`'s check would never fire for it. Drop
+            // the socket and skip its push.
+            if (this.isSocketExpired(ws)) {
+                this.dropExpiredSocket(ws);
+
+                return;
+            }
+
             const attachment = this.readAttachment(ws);
 
             for (const [subId, query] of Object.entries(attachment.subs)) {
@@ -5055,7 +5172,16 @@ abstract class ShardDO {
                         continue;
                     }
 
-                    this.pushSubscriptionData(ws, subId, outcome, frameCursor);
+                    // Backpressure: a write storm fanning out to a slow consumer
+                    // would otherwise grow this socket's outbound buffer without
+                    // bound (the runtime queues every `ws.send`). Pause this
+                    // socket's fan-out until its buffer drains — the per-socket
+                    // workers run in parallel, so one backed-up socket never
+                    // stalls the others. Mirrors the `handleStream` gate.
+                    // eslint-disable-next-line no-await-in-loop -- intentional per-socket backpressure: drain before pushing the next subscription's frame
+                    await awaitWsDrain(ws);
+
+                    this.pushSubscriptionData(ws, subId, outcome, frameCursor, frameEpoch);
                 } catch {
                     // A throwing subscription must not abort the refresh of its
                     // siblings, nor fail the mutation that triggered it. The memo
@@ -5121,17 +5247,20 @@ abstract class ShardDO {
             return;
         }
 
-        const { sinceSeq } = query;
-        const resume = isAdmin || sinceSeq === undefined ? undefined : this.evaluateResume(sinceSeq, outcome.tables);
+        const { sinceEpoch, sinceSeq } = query;
+        const resume = isAdmin || sinceSeq === undefined ? undefined : this.evaluateResume(sinceSeq, outcome.tables, sinceEpoch);
+        // `evaluateResume` already read the epoch; reuse it and only fall back to
+        // a fresh read when no resume was evaluated (first subscribe / admin).
+        const epoch = isAdmin ? undefined : (resume?.epoch ?? this.currentCdcEpoch());
 
         if (resume?.resumable) {
             // Keep the per-socket baseline current (so the next change diffs
-            // cleanly) but send only the cursor — the client already holds an
-            // equivalent value at `sinceSeq`.
+            // cleanly) but send only the cursor + epoch — the client already
+            // holds an equivalent value at `sinceSeq`.
             this.seedSubscriptionMemo(ws, subId, outcome);
 
             try {
-                ws.send(`{"type":"resume","id":${JSON.stringify(subId)},"cursor":${String(resume.cursor ?? 0)}}`);
+                ws.send(`{"type":"resume","id":${JSON.stringify(subId)}${cdcSuffix(resume.cursor ?? 0, epoch)}}`);
             } catch {
                 /* socket may have closed between the ack and this seed */
             }
@@ -5139,7 +5268,7 @@ abstract class ShardDO {
             return;
         }
 
-        this.pushSubscriptionData(ws, subId, outcome, resume?.cursor ?? this.currentCdcCursor());
+        this.pushSubscriptionData(ws, subId, outcome, resume?.cursor ?? this.currentCdcCursor(), epoch);
     }
 
     /**
@@ -5178,7 +5307,7 @@ abstract class ShardDO {
      * (Pillar 1b). Omitted on shards without CDC, keeping the wire byte-identical
      * to the pre-cursor format.
      */
-    private pushSubscriptionData(ws: WebSocket, subId: string, outcome: SubscriptionOutcome, cursor?: number): void {
+    private pushSubscriptionData(ws: WebSocket, subId: string, outcome: SubscriptionOutcome, cursor?: number, epoch?: string): void {
         let memos = this.subMemos.get(ws);
 
         if (!memos) {
@@ -5186,7 +5315,7 @@ abstract class ShardDO {
             this.subMemos.set(ws, memos);
         }
 
-        const cursorSuffix = cursor === undefined ? "" : `,"cursor":${String(cursor)}`;
+        const cursorSuffix = cdcSuffix(cursor, epoch);
 
         // eslint-disable-next-line unicorn/no-null -- WS frame payload: an undefined result serializes to JSON null so the delta frame carries an explicit value
         const json = JSON.stringify(outcome.result ?? null);
@@ -5364,6 +5493,10 @@ abstract class ShardDO {
         // request of its own.
         const userId = request.headers.get("x-lunora-userid") ?? undefined;
         const identity = parseIdentityHeader(request.headers.get("x-lunora-identity"));
+        // Optional credential expiry (epoch ms) forwarded by the runtime. A
+        // malformed value is ignored (the socket simply never auto-expires).
+        const expiresAtRaw = Number(request.headers.get("x-lunora-identity-exp"));
+        const expiresAt = Number.isFinite(expiresAtRaw) && expiresAtRaw > 0 ? expiresAtRaw : undefined;
 
         // Stamp admin authorization onto the socket at upgrade so later
         // `__lunora_admin__:*` subscribe envelopes (which carry no credential of
@@ -5372,12 +5505,159 @@ abstract class ShardDO {
             admin: this.isAdminSocket(request),
             connectionId: crypto.randomUUID(),
             subs: {},
+            ...(expiresAt === undefined ? {} : { expiresAt }),
             ...(identity === undefined ? {} : { identity }),
             ...(userId === undefined ? {} : { userId }),
         } satisfies SocketAttachment);
 
         // eslint-disable-next-line unicorn/no-null -- Web Response body for a 101 upgrade is `BodyInit | null`; null is the standard "no body" value
         return new Response(null, { status: 101, webSocket: client });
+    }
+
+    /**
+     * Whether this shard has a `__cdc_log` table. The single source of the
+     * "is CDC on here?" probe shared by {@link currentCdcCursor},
+     * {@link currentCdcEpoch}, {@link evaluateResume}, and the PITR-restore epoch
+     * bump. Returns `false` (rather than throwing) on a stub `sql` handle (unit
+     * harness double) or a pre-CDC shard, so callers degrade to the no-CDC path.
+     */
+    private cdcEnabled(): boolean {
+        try {
+            return (this.sql as SqlExec).exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, CDC_LOG_TABLE).toArray().length > 0;
+        } catch {
+            return false;
+        }
+    }
+
+    /** Whether `ws` carries a credential whose expiry (stamped at upgrade) is now past. */
+    private isSocketExpired(ws: WebSocket): boolean {
+        const { expiresAt } = this.readAttachment(ws);
+
+        return typeof expiresAt === "number" && Date.now() >= expiresAt;
+    }
+
+    /**
+     * Send the `TOKEN_EXPIRED` error frame and close the socket with code 4001 so
+     * the client distinguishes an expired-credential drop from an ordinary one
+     * and refreshes before reconnecting. Best-effort: a throw (socket already
+     * gone) is swallowed — this must never escape the hibernation handlers.
+     */
+    // eslint-disable-next-line class-methods-use-this -- cohesive socket helper grouped with isSocketExpired; operates only on the passed socket
+    private dropExpiredSocket(ws: WebSocket): void {
+        try {
+            ws.send(JSON.stringify({ code: "TOKEN_EXPIRED", error: { code: "TOKEN_EXPIRED", message: "authentication token expired" }, type: "error" }));
+            ws.close(4001, "token_expired");
+        } catch {
+            /* socket already gone */
+        }
+    }
+
+    /**
+     * Join (`join = true`) or leave a whisper `topic` on this socket. Membership rides
+     * the hibernation attachment, bounded by
+     * {@link ShardDO.MAX_WHISPER_TOPICS_PER_SOCKET}. Best-effort and silent:
+     * whispering is never acked, and an over-cap join or a serialize failure is
+     * simply dropped (the join just doesn't take).
+     */
+    private setWhisperMembership(ws: WebSocket, topic: string, join: boolean): void {
+        const attachment = this.readAttachment(ws);
+        const topics = attachment.whispers ?? [];
+        const has = topics.includes(topic);
+
+        if (join) {
+            if (has || topics.length >= ShardDO.MAX_WHISPER_TOPICS_PER_SOCKET) {
+                return;
+            }
+
+            attachment.whispers = [...topics, topic];
+        } else {
+            if (!has) {
+                return;
+            }
+
+            const next = topics.filter((entry) => entry !== topic);
+
+            if (next.length === 0) {
+                delete attachment.whispers;
+            } else {
+                attachment.whispers = next;
+            }
+        }
+
+        try {
+            (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+        } catch {
+            /* over-large attachment — the membership change just doesn't persist */
+        }
+    }
+
+    /**
+     * Token-bucket admission for a sender's whisper. Refills lazily from elapsed
+     * wall-clock at {@link ShardDO.WHISPER_RATE_PER_SEC}/s up to a burst of
+     * {@link ShardDO.WHISPER_RATE_BURST}; returns `false` (drop the whisper) when
+     * the bucket is empty. Per-socket, in-memory — a hibernation resets it to a
+     * full burst, which is the safe direction (never under-counts into a denial).
+     */
+    private allowWhisper(ws: WebSocket): boolean {
+        const now = Date.now();
+        const bucket = this.whisperBuckets.get(ws) ?? { last: now, tokens: ShardDO.WHISPER_RATE_BURST };
+        const refilled = Math.min(ShardDO.WHISPER_RATE_BURST, bucket.tokens + ((now - bucket.last) / 1000) * ShardDO.WHISPER_RATE_PER_SEC);
+
+        if (refilled < 1) {
+            this.whisperBuckets.set(ws, { last: now, tokens: refilled });
+
+            return false;
+        }
+
+        this.whisperBuckets.set(ws, { last: now, tokens: refilled - 1 });
+
+        return true;
+    }
+
+    /**
+     * Fan an ephemeral whisper out to every OTHER socket on this shard that
+     * joined `topic`. No SQLite write, no CDC entry, no query re-run — the
+     * payload is relayed verbatim, so it never touches durable state (the
+     * AnyCable "whisper" primitive: typing indicators, live cursors). The sender
+     * is excluded; an over-limit or over-rate whisper is dropped.
+     *
+     * Authorization note: whisper topics are NOT access-controlled beyond the
+     * shard boundary — any socket on this shard can join and read/inject on any
+     * topic name. That matches the AnyCable model (and `from` is unforgeable),
+     * but per-topic auth does not exist here; see `whisperSubscribe` on the client.
+     */
+    private broadcastWhisper(sender: WebSocket, topic: string, data: unknown): void {
+        // Rate-limit first — cheapest rejection, and it bounds the O(connections)
+        // fan-out cost a tight whisper loop would otherwise impose.
+        if (!this.allowWhisper(sender)) {
+            return;
+        }
+
+        // eslint-disable-next-line unicorn/no-null -- JSON payload: an undefined whisper body serializes to null so the frame carries an explicit value
+        const dataJson = JSON.stringify(data ?? null);
+
+        if (dataJson.length > ShardDO.MAX_WHISPER_BYTES) {
+            return;
+        }
+
+        // Surface the sender's verified userId so receivers can attribute the
+        // whisper (omitted for an anonymous socket). Unforgeable — it comes off
+        // the sender's own attachment, stamped at upgrade.
+        const from = this.readAttachment(sender).userId;
+        const fromSuffix = from === undefined ? "" : `,"from":${JSON.stringify(from)}`;
+        const frame = `{"type":"whisper","topic":${JSON.stringify(topic)},"data":${dataJson}${fromSuffix}}`;
+
+        for (const ws of this.state.getWebSockets()) {
+            if (ws === sender || this.readAttachment(ws).whispers?.includes(topic) !== true) {
+                continue;
+            }
+
+            try {
+                ws.send(frame);
+            } catch {
+                /* socket may have been closed mid-broadcast */
+            }
+        }
     }
 
     // eslint-disable-next-line class-methods-use-this -- cohesive DO instance method grouped with the hibernation/attachment helpers; reads only the socket

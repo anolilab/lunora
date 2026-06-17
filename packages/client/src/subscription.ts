@@ -39,6 +39,15 @@ export interface SubscriptionState {
     serverCursor?: number;
 
     /**
+     * The CDC `epoch` token the `serverCursor` belongs to, captured from the
+     * same frame. Replayed as `sinceEpoch` on reconnect so the server resumes
+     * only when the client is still on the same changelog timeline — a reset or
+     * recycled shard advertises a new epoch, forcing a fresh snapshot. Absent
+     * until the first epoch-stamped frame arrives.
+     */
+    serverEpoch?: string;
+
+    /**
      * Monotonic counter incremented on every server-pushed delta or data.
      * Used by optimistic-update rollback to detect whether the server has
      * already moved past the value we'd otherwise restore.

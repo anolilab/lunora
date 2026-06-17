@@ -2220,4 +2220,133 @@ describe("lunoraClient", () => {
             ]);
         });
     });
+
+    describe("lunoraClient — whispering", () => {
+        it("joins a topic, delivers inbound whispers, and broadcasts outbound ones", () => {
+            expect.assertions(4);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const received: { data: unknown; from?: string }[] = [];
+            const unsubscribe = client.whisperSubscribe("cursors", (data, from) => received.push({ data, from }));
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            // The join frame goes out on connect.
+            expect(wireFrames(socket)).toContainEqual({ topic: "cursors", type: "whisper_subscribe" });
+
+            // An inbound whisper reaches the handler with its `from`.
+            socket.receive({ data: { x: 1 }, from: "user-b", topic: "cursors", type: "whisper" });
+
+            expect(received).toEqual([{ data: { x: 1 }, from: "user-b" }]);
+
+            // Outbound whisper is sent on the wire.
+            client.whisper("cursors", { y: 2 });
+
+            expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ data: { y: 2 }, topic: "cursors", type: "whisper" });
+
+            // Last handler leaving the topic sends the leave frame.
+            unsubscribe();
+
+            expect(JSON.parse(socket.sent.at(-1)!)).toEqual({ topic: "cursors", type: "whisper_unsubscribe" });
+        });
+
+        it("rejoins whisper topics after a reconnect", () => {
+            expect.assertions(1);
+
+            vi.useFakeTimers();
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.whisperSubscribe("cursors", () => undefined);
+
+            const first = latestSocket();
+
+            first.open();
+            first.triggerClose();
+
+            // Fire the scheduled reconnect timer (independent of the backoff
+            // delay constant) so a fresh socket opens.
+            vi.runOnlyPendingTimers();
+
+            const second = latestSocket();
+
+            second.open();
+
+            expect(wireFrames(second)).toContainEqual({ topic: "cursors", type: "whisper_subscribe" });
+
+            client.close();
+        });
+    });
+
+    describe("lunoraClient — token expiry & resume epoch", () => {
+        it("notifies onTokenExpired listeners when the server sends a TOKEN_EXPIRED error", () => {
+            expect.assertions(1);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            let expired = 0;
+
+            client.onTokenExpired(() => {
+                expired += 1;
+            });
+
+            client.subscribe(fnRef("messages:list"), {}, () => undefined);
+            latestSocket().open();
+            latestSocket().receive({ error: { code: "TOKEN_EXPIRED", message: "authentication token expired" }, type: "error" });
+
+            expect(expired).toBe(1);
+        });
+
+        it("replays the resume epoch as sinceEpoch on reconnect", () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers();
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.subscribe(fnRef("messages:list"), {}, () => undefined);
+
+            const first = latestSocket();
+
+            first.open();
+            const sub = firstSub(first);
+
+            // A data frame stamped with cursor + epoch advances the resume position.
+            first.receive({ cursor: 7, data: { count: 1 }, epoch: "epoch-abc", id: sub.id, type: "data" });
+
+            first.triggerClose();
+            // Fire the scheduled reconnect timer regardless of the backoff delay.
+            vi.runOnlyPendingTimers();
+
+            const second = latestSocket();
+
+            second.open();
+
+            const resub = firstSub(second);
+
+            expect(resub.query.sinceSeq).toBe(7);
+            expect(resub.query.sinceEpoch).toBe("epoch-abc");
+
+            client.close();
+        });
+    });
 });

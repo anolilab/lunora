@@ -151,6 +151,13 @@ export interface CachedQuery {
      */
     serverCursor?: number;
 
+    /**
+     * The CDC `epoch` the `serverCursor` belongs to, replayed as `sinceEpoch`
+     * on reconnect so the server only resumes when the client is still on the
+     * same changelog timeline. Absent when no epoch was advertised.
+     */
+    serverEpoch?: string;
+
     /** Wall-clock millis the value was written — drives LRU eviction. */
     ts: number;
 
@@ -254,7 +261,7 @@ export interface ClientSubscribeMessage {
      * snapshot when nothing the query reads changed since it. Absent on a
      * first-time subscribe.
      */
-    query: { args?: Record<string, unknown>; functionPath?: string; sinceSeq?: number; table?: string };
+    query: { args?: Record<string, unknown>; functionPath?: string; sinceEpoch?: string; sinceSeq?: number; table?: string };
     type: "subscribe";
 }
 
@@ -293,7 +300,36 @@ export interface ClientStreamMessage {
     type: "stream";
 }
 
-export type ClientMessage = ClientAckMessage | ClientConnectMessage | ClientStreamMessage | ClientSubscribeMessage | ClientUnsubscribeMessage;
+/**
+ * Join or leave a whisper `topic` — an app-chosen ephemeral channel scoped to a
+ * shard. While joined, the client receives every {@link ServerWhisperMessage}
+ * other members broadcast to the topic.
+ */
+export interface ClientWhisperSubscribeMessage {
+    topic: string;
+    type: "whisper_subscribe" | "whisper_unsubscribe";
+}
+
+/**
+ * Broadcast ephemeral `data` to the topic's other members on the shard. The
+ * payload is relayed verbatim with no server-side persistence (no SQLite/CDC
+ * write) — for typing indicators, live cursors, presence pings. The sender does
+ * not receive its own whisper.
+ */
+export interface ClientWhisperMessage {
+    data?: unknown;
+    topic: string;
+    type: "whisper";
+}
+
+export type ClientMessage =
+    | ClientAckMessage
+    | ClientConnectMessage
+    | ClientStreamMessage
+    | ClientSubscribeMessage
+    | ClientUnsubscribeMessage
+    | ClientWhisperMessage
+    | ClientWhisperSubscribeMessage;
 
 /** Subscription protocol — server → client. */
 export interface ServerDataMessage {
@@ -305,6 +341,8 @@ export interface ServerDataMessage {
     cursor?: number;
     data?: unknown;
     delta?: unknown;
+    /** The CDC epoch this frame's cursor belongs to (see {@link CachedQuery.serverEpoch}). */
+    epoch?: string;
     id: string;
     type: "data" | "delta";
 }
@@ -317,6 +355,8 @@ export interface ServerDataMessage {
  */
 export interface ServerResumeMessage {
     cursor?: number;
+    /** The CDC epoch this resume's cursor belongs to (see {@link CachedQuery.serverEpoch}). */
+    epoch?: string;
     id: string;
     type: "resume";
 }
@@ -345,7 +385,27 @@ export interface ServerChunkMessage {
     type: "chunk";
 }
 
-export type ServerMessage = ServerAckMessage | ServerChunkMessage | ServerCompleteMessage | ServerDataMessage | ServerErrorMessage | ServerResumeMessage;
+/**
+ * An ephemeral whisper relayed from another member of `topic` on the same shard
+ * (AnyCable-style whispering). `data` is the sender's payload verbatim; `from`
+ * is the sender's verified user id when known (absent for an anonymous sender).
+ * Never persisted server-side.
+ */
+export interface ServerWhisperMessage {
+    data: unknown;
+    from?: string;
+    topic: string;
+    type: "whisper";
+}
+
+export type ServerMessage =
+    | ServerAckMessage
+    | ServerChunkMessage
+    | ServerCompleteMessage
+    | ServerDataMessage
+    | ServerErrorMessage
+    | ServerResumeMessage
+    | ServerWhisperMessage;
 
 /**
  * The authenticated user as exposed client-side, mirroring better-auth's

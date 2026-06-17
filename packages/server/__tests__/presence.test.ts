@@ -219,6 +219,74 @@ describe("definePresence", () => {
         expect((presence.functions.sweep as { visibility?: string }).visibility).toBe("internal");
     });
 
+    it("listPresent collapses multiple sessions of the same user to one member (newest wins)", async () => {
+        expect.assertions(3);
+
+        const db = createMemoryDb();
+        const presence = definePresence({ ttlMs: 10_000 });
+
+        // Same user, two tabs: distinct sessionIds, distinct rows.
+        vi.setSystemTime(1000);
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "user-1"), { data: { tab: "a" }, roomId: "room-1", sessionId: "tab-a" });
+
+        vi.setSystemTime(3000);
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "user-1"), { data: { tab: "b" }, roomId: "room-1", sessionId: "tab-b" });
+
+        const present = await presence.functions.listPresent.handler(makeQueryContext(db), { roomId: "room-1" });
+
+        // One member for the user, carrying the most-recent heartbeat's data.
+        expect(present).toHaveLength(1);
+        expect(present[0]?.userId).toBe("user-1");
+        expect(present[0]?.data).toEqual({ tab: "b" });
+    });
+
+    it("listPresent keeps anonymous sessions distinct (no userId to dedup on)", async () => {
+        expect.assertions(1);
+
+        const db = createMemoryDb();
+        const presence = definePresence({ ttlMs: 10_000 });
+
+        vi.setSystemTime(1000);
+        await presence.functions.heartbeat.handler(makeMutationContext(db), { roomId: "room-1", sessionId: "anon-1" });
+        await presence.functions.heartbeat.handler(makeMutationContext(db), { roomId: "room-1", sessionId: "anon-2" });
+
+        const present = await presence.functions.listPresent.handler(makeQueryContext(db), { roomId: "room-1" });
+
+        expect(present).toHaveLength(2);
+    });
+
+    it("disconnect with a grace window ages the row out instead of deleting it", async () => {
+        expect.assertions(3);
+
+        const db = createMemoryDb();
+        const presence = definePresence({ disconnectGraceMs: 2000, ttlMs: 10_000 });
+
+        const deleteSpy = vi.spyOn(db, "delete");
+
+        vi.setSystemTime(1000);
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "user-1"), { roomId: "room-1", sessionId: "sess-1" });
+
+        // Socket drops at t=1000 with a 2s grace: the row is patched, not deleted.
+        await presence.functions.disconnect.handler(
+            makeMutationContext(db, "user-1"),
+            lifecycleEvent({ context: { roomId: "room-1", sessionId: "sess-1" }, userId: "user-1" }),
+        );
+
+        expect(deleteSpy).not.toHaveBeenCalled();
+
+        // Within the grace window (t=2000 < 1000+2000): still present.
+        vi.setSystemTime(2000);
+        const during = await presence.functions.listPresent.handler(makeQueryContext(db), { roomId: "room-1" });
+
+        expect(during).toHaveLength(1);
+
+        // Past the grace window (t=3500 > 1000+2000): the TTL filter hides it.
+        vi.setSystemTime(3500);
+        const after = await presence.functions.listPresent.handler(makeQueryContext(db), { roomId: "room-1" });
+
+        expect(after).toHaveLength(0);
+    });
+
     it("disconnect is registered as a `disconnect` lifecycle hook", () => {
         expect.assertions(3);
 

@@ -10,6 +10,17 @@ export interface SubscriptionQuery {
     functionPath?: string;
 
     /**
+     * Resume epoch: the `epoch` token the client persisted alongside
+     * `sinceSeq` from an earlier frame. The server resumes only when this
+     * matches the shard's current epoch — a mismatch means the changelog
+     * timeline forked (a reset, or a recycled Durable Object id) since the
+     * client cached, so its `sinceSeq` names an unrelated point and it must
+     * re-snapshot. Absent on a first-time subscribe and on pre-epoch clients
+     * (treated as "unknown epoch" → full snapshot when `sinceSeq` is set).
+     */
+    sinceEpoch?: string;
+
+    /**
      * Resume cursor: the `__cdc_log.seq` high-watermark the client last observed
      * for this shard (the `cursor` it persisted from an earlier `data`/`delta`
      * frame). Present only on a reconnecting subscription that opts into
@@ -36,8 +47,20 @@ export interface SubscriptionEnvelope {
      * to every lifecycle hook as `event.context`. Ignored on other envelope types.
      */
     context?: Record<string, unknown>;
+
+    /**
+     * Opaque ephemeral payload of a `whisper` envelope, fanned out verbatim to
+     * the topic's other subscribers. Bounded in size; never persisted.
+     */
+    data?: unknown;
     id: string;
     query?: SubscriptionQuery;
+
+    /**
+     * Topic of a `whisper`/`whisper_subscribe`/`whisper_unsubscribe` envelope —
+     * an app-chosen channel name (e.g. `"room:42:cursors"`) scoped to this shard.
+     */
+    topic?: string;
 
     /**
      * `subscribe`/`unsubscribe`/`ack` drive live queries; `stream` opens a
@@ -46,8 +69,13 @@ export interface SubscriptionEnvelope {
      * `unsubscribe` on the same id). `connect` is the one-shot control frame the
      * client sends right after the socket opens to register its connection
      * `context` and fire the `onConnect` lifecycle hooks.
+     *
+     * `whisper_subscribe`/`whisper_unsubscribe` join/leave a whisper `topic`;
+     * `whisper` broadcasts ephemeral `data` to the topic's other subscribers on
+     * this shard with NO SQLite/CDC write (AnyCable-style whispering — typing
+     * indicators, live cursors). The sender never receives its own whisper.
      */
-    type: "ack" | "connect" | "stream" | "subscribe" | "unsubscribe";
+    type: "ack" | "connect" | "stream" | "subscribe" | "unsubscribe" | "whisper" | "whisper_subscribe" | "whisper_unsubscribe";
 }
 
 /**
@@ -151,6 +179,15 @@ export interface SocketAttachment {
     context?: Record<string, unknown>;
 
     /**
+     * Token-expiry (epoch ms) of the credential resolved at upgrade, when the
+     * runtime forwarded one (`x-lunora-identity-exp`). The DO drops the socket
+     * with a `TOKEN_EXPIRED` error + close code `4001` the next time it sends a
+     * frame at or after this instant, so the client reconnects and re-resolves a
+     * fresh identity. Absent for sockets whose identity declares no expiry.
+     */
+    expiresAt?: number;
+
+    /**
      * Verified caller identity claims resolved at upgrade (from the
      * `x-lunora-identity` header the runtime forwards). Replayed to lifecycle
      * hooks so they run under the connecting user.
@@ -163,4 +200,12 @@ export interface SocketAttachment {
      * for an anonymous socket. Replayed to lifecycle hooks as `event.userId`.
      */
     userId?: string;
+
+    /**
+     * Topics this socket listens to for AnyCable-style whisper messages —
+     * ephemeral peer broadcasts to co-subscribers WITHOUT any SQLite / CDC write
+     * (typing indicators, cursors, presence pings). Persisted so the membership
+     * survives hibernation; absent until the socket joins a topic.
+     */
+    whispers?: string[];
 }

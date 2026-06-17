@@ -1715,6 +1715,61 @@ const minCdcSeq = (sql: SqlExec): number | undefined => {
     return rows[0]?.seq ?? undefined;
 };
 
+/**
+ * Single-row table holding this shard's CDC **epoch** — an opaque token that
+ * changes whenever the changelog timeline forks (a `reset` that recreates the
+ * log, or a fresh shard reusing a recycled Durable Object id). The `seq` cursor
+ * alone can't detect such a fork: after a reset/rollback the AUTOINCREMENT
+ * counter restarts low, so a client holding an old high `sinceSeq` would be
+ * told "resumable" against the new, unrelated timeline and keep forked data.
+ * Pairing the epoch with the cursor closes that hole — a subscriber resumes
+ * only when BOTH the epoch matches and the cursor is in range.
+ */
+const CDC_META_TABLE = "__cdc_meta";
+
+/** Create the single-row CDC-meta table (idempotent). The `id = 1` check pins it to exactly one row. */
+const migrateCdcMeta = (sql: SqlExec): void => {
+    runSql(sql, `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(CDC_META_TABLE)} (id INTEGER PRIMARY KEY CHECK (id = 1), epoch TEXT NOT NULL)`);
+};
+
+/**
+ * This shard's current CDC epoch, minting and persisting a fresh one on first
+ * read. Stamped on every `data`/`delta`/`resume` frame next to the cursor so a
+ * reconnecting client can prove it is resuming the same timeline it cached.
+ */
+const readCdcEpoch = (sql: SqlExec): string => {
+    migrateCdcMeta(sql);
+
+    const rows = runSql<{ epoch: string }>(sql, `SELECT epoch FROM ${quoteIdentifier(CDC_META_TABLE)} WHERE id = 1`).toArray();
+    const existing = rows[0]?.epoch;
+
+    if (typeof existing === "string" && existing.length > 0) {
+        return existing;
+    }
+
+    const minted = crypto.randomUUID();
+
+    runSql(sql, `INSERT INTO ${quoteIdentifier(CDC_META_TABLE)} (id, epoch) VALUES (1, ?)`, minted);
+
+    return minted;
+};
+
+/**
+ * Roll the CDC epoch to a fresh value — called whenever the changelog timeline
+ * is reset (the log is dropped/recreated), so any subscriber still holding the
+ * prior epoch is forced to re-snapshot instead of resuming onto a forked log.
+ */
+const bumpCdcEpoch = (sql: SqlExec): string => {
+    migrateCdcMeta(sql);
+
+    const next = crypto.randomUUID();
+
+    // Upsert the single row so a bump works whether or not an epoch existed yet.
+    runSql(sql, `INSERT INTO ${quoteIdentifier(CDC_META_TABLE)} (id, epoch) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET epoch = excluded.epoch`, next);
+
+    return next;
+};
+
 const IDEMPOTENCY_TABLE = "__idempotency";
 
 /** A previously-committed mutation, keyed by its client-issued id, so a replay returns the cached result instead of re-executing. */
@@ -3801,6 +3856,10 @@ const runShardMigrations = (sql: SqlExec, schema: SchemaLike, options: { cdc?: b
 
     if (options.cdc) {
         migrateCdcLog(sql);
+        // The epoch row lives next to the log so a reconnecting subscriber can
+        // prove timeline continuity; created upfront (the row itself is minted
+        // lazily by `readCdcEpoch` on first frame).
+        migrateCdcMeta(sql);
     }
 
     // Always present: the mutation-replay dedup table is independent of CDC and
@@ -3917,16 +3976,20 @@ export {
     assertValidClientId,
     backfillAggregateIndexes,
     backfillRankIndexes,
+    bumpCdcEpoch,
     CDC_LOG_TABLE,
+    CDC_META_TABLE,
     createShardCtxDb,
     IDEMPOTENCY_TABLE,
     migrateCdcLog,
+    migrateCdcMeta,
     migrateIdempotency,
     minCdcSeq,
     normalizeIdStructurally,
     NotUniqueError,
     readCdcChanges,
     readCdcCursor,
+    readCdcEpoch,
     readIdempotent,
     runShardMigrations,
     trimCdcChanges,

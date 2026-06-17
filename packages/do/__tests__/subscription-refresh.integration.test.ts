@@ -581,4 +581,35 @@ describe("shardDO: mutation → subscription-refresh pipeline", () => {
 
         expect(refreshed).toBe(true);
     });
+
+    // -------------------------------------------------------------------------
+    // Token-expiry on the OUTBOUND push path. A passive subscriber sends no
+    // inbound frames, so the only place its lapsed credential can be caught is
+    // the refresh fan-out — which must drop it instead of pushing the user's
+    // live data. (The inbound `webSocketMessage` check is covered separately.)
+    // -------------------------------------------------------------------------
+    it("expired socket is dropped on refresh, never pushed the user's live data", async () => {
+        expect.assertions(3);
+
+        const shard = new SubscriptionRefreshShard(state, {});
+
+        const ws = createFakeWebSocket();
+
+        // Subscribe while still valid (expiry in the future) so the seed lands.
+        shard.registerSocket(ws, { expiresAt: Date.now() + 60_000, subs: {} });
+        shard.outcomes.set("messages:list", { result: [{ _id: "m1" }], tables: new Set(["messages"]) });
+        await subscribeSocket(shard, ws, "sub-A", "messages:list");
+
+        expect(subFrames(ws, "sub-A")).toHaveLength(1); // seeded
+
+        // Credential lapses, then a write triggers a refresh.
+        ws.serializeAttachment({ expiresAt: Date.now() - 1, subs: { "sub-A": { args: {}, functionPath: "messages:list" } } });
+        shard.outcomes.set("messages:list", { result: [{ _id: "m1" }, { _id: "m2" }], tables: new Set(["messages"]) });
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        // No new data/delta frame after the seed — the expired socket was dropped.
+        expect(subFrames(ws, "sub-A")).toHaveLength(1);
+        expect(ws.closed).toBe(true);
+    });
 });
