@@ -532,7 +532,7 @@ const MainHero: FC = () => {
                     <div className="flex flex-col gap-8 lg:flex-row lg:items-end lg:justify-between">
                         <motion.h1
                             {...fade(0.1)}
-                            className="font-display max-w-3xl text-4xl leading-[1.02] font-bold tracking-tighter text-balance text-white sm:text-5xl md:text-6xl"
+                            className="font-display max-w-3xl text-5xl leading-[1.0] font-bold tracking-tighter text-balance text-white sm:text-6xl lg:text-7xl"
                         >
                             Realtime backends, end-to-end typed{" "}
                             <span className="bg-gradient-to-r from-sky-sapphire via-royal-amethyst to-crimson-energy bg-clip-text text-transparent">
@@ -560,58 +560,65 @@ const MainHero: FC = () => {
                         </motion.div>
                     </div>
 
-                    {/* console + feature strip */}
-                    <motion.div {...fade(0.4)} className="mt-10 border border-white/10">
-                        <LunoraConsole focus={activeFeature} />
-                        <div className="grid grid-cols-1 divide-y divide-white/[0.08] border-t border-white/10 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
-                            {features.map((feature, index) => {
-                                const isActive = index === activeFeature;
+                    {/* console + feature strip, on an aurora pedestal */}
+                    <div className="relative mt-16">
+                        <div
+                            aria-hidden="true"
+                            className="pointer-events-none absolute -inset-x-16 top-1/3 bottom-[-12%] -z-0 blur-3xl"
+                            style={{ background: "radial-gradient(ellipse at 50% 95%, hsl(256 72% 68% / 0.28), hsl(186 84% 56% / 0.10) 45%, transparent 72%)" }}
+                        />
+                        <motion.div {...fade(0.4)} className="relative z-10 border border-white/10 shadow-2xl shadow-black/60">
+                            <LunoraConsole focus={activeFeature} />
+                            <div className="grid grid-cols-1 divide-y divide-white/[0.08] border-t border-white/10 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+                                {features.map((feature, index) => {
+                                    const isActive = index === activeFeature;
 
-                                return (
-                                    <button
-                                        className={cn(
-                                            "relative flex flex-col gap-1.5 p-4 text-left transition-colors",
-                                            isActive ? "bg-white/[0.03]" : "hover:bg-white/[0.015]",
-                                        )}
-                                        key={feature.title}
-                                        onClick={() => {
-                                            setActiveFeature(index);
-                                        }}
-                                        onMouseEnter={() => {
-                                            setActiveFeature(index);
-                                        }}
-                                        type="button"
-                                    >
-                                        {isActive && (
-                                            <motion.span
-                                                className="absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-sky-sapphire via-royal-amethyst to-crimson-energy"
-                                                layoutId="feature-accent"
-                                            />
-                                        )}
-                                        <span className="flex items-center gap-2">
-                                            <span
-                                                className={cn(
-                                                    "font-mono text-[11px] tabular-nums transition-colors",
-                                                    isActive ? "text-sky-sapphire" : "text-white/30",
-                                                )}
-                                            >
-                                                {String(index + 1).padStart(2, "0")}
+                                    return (
+                                        <button
+                                            className={cn(
+                                                "relative flex flex-col gap-1.5 p-4 text-left transition-colors",
+                                                isActive ? "bg-white/[0.03]" : "hover:bg-white/[0.015]",
+                                            )}
+                                            key={feature.title}
+                                            onClick={() => {
+                                                setActiveFeature(index);
+                                            }}
+                                            onMouseEnter={() => {
+                                                setActiveFeature(index);
+                                            }}
+                                            type="button"
+                                        >
+                                            {isActive && (
+                                                <motion.span
+                                                    className="absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-sky-sapphire via-royal-amethyst to-crimson-energy"
+                                                    layoutId="feature-accent"
+                                                />
+                                            )}
+                                            <span className="flex items-center gap-2">
+                                                <span
+                                                    className={cn(
+                                                        "font-mono text-[11px] tabular-nums transition-colors",
+                                                        isActive ? "text-sky-sapphire" : "text-white/30",
+                                                    )}
+                                                >
+                                                    {String(index + 1).padStart(2, "0")}
+                                                </span>
+                                                <span
+                                                    className={cn(
+                                                        "text-sm font-medium tracking-tight transition-colors",
+                                                        isActive ? "text-white" : "text-white/55",
+                                                    )}
+                                                >
+                                                    {feature.title}
+                                                </span>
                                             </span>
-                                            <span
-                                                className={cn(
-                                                    "text-sm font-medium tracking-tight transition-colors",
-                                                    isActive ? "text-white" : "text-white/55",
-                                                )}
-                                            >
-                                                {feature.title}
-                                            </span>
-                                        </span>
-                                        <span className="text-xs leading-snug text-white/45">{feature.description}</span>
-                                    </button>
-                                );
-                            })}
-                        </div>
-                    </motion.div>
+                                            <span className="text-xs leading-snug text-white/45">{feature.description}</span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </motion.div>
+                    </div>
                 </div>
             </Section>
         </div>

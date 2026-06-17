@@ -1,6 +1,7 @@
 import type { FC } from "react";
 
 import GitHub from "@/pages/home/components/github";
+import CtaBand from "@/pages/home/sections/cta-band";
 import FAQ from "@/pages/home/sections/faq";
 import FrameworkStrip from "@/pages/home/sections/framework-strip";
 import MainHero from "@/pages/home/sections/hero";
@@ -34,6 +35,9 @@ const Home: FC = () => (
         </div>
         <div className="content-auto">
             <Support />
+        </div>
+        <div className="content-auto">
+            <CtaBand />
         </div>
     </>
 );
