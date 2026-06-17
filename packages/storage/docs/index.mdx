@@ -1,0 +1,56 @@
+---
+title: "@lunora/storage"
+description: R2 object storage with signed URLs.
+---
+
+`@lunora/storage` wraps the R2 binding with an ergonomic API and signed URL
+helpers so the browser can upload/download directly without proxying through
+your Worker.
+
+```ts
+import { createStorage } from "@lunora/storage";
+
+export const storage = createStorage({
+    bucket: env.FILES,
+    publicBaseUrl: "https://files.example.com",
+    signingSecret: env.STORAGE_SECRET,
+});
+```
+
+## Direct upload from a mutation
+
+```ts
+import { mutation, v } from "lunora/server";
+import { storage } from "./storage";
+
+export const uploadAvatar = mutation.input({ key: v.string(), contentType: v.string() }).mutation(async ({ ctx, args: { key, contentType } }) => {
+    const url = await storage.getSignedUrl(`avatars/${ctx.auth.user.id}/${key}`, {
+        method: "PUT",
+        expiresInSeconds: 60,
+        contentType,
+    });
+    return { url };
+});
+```
+
+## Reading
+
+```ts
+const object = await storage.download("avatars/abc.png");
+const blob = await object?.body;
+```
+
+`storage.list(prefix)` paginates with a `cursor` you can echo back for the
+next page. The cursor is opaque — treat it as a string, don't parse it.
+
+## Signed URLs
+
+`buildSignedUrl({ key, method, expiresInSeconds, contentType })` produces a
+URL with an HMAC-SHA-256 signature derived from `signingSecret`. The
+companion `verifySignedUrl(url, secret)` runs on the Worker side to gate
+direct GETs without round-tripping back to R2 for ACL checks.
+
+## See also
+
+- [@lunora/server](/docs/packages/server)
+- [Architecture](/docs/architecture)

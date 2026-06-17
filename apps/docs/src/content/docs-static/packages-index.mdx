@@ -1,0 +1,80 @@
+---
+title: Package Directory
+description: Browse the Lunora package ecosystem — the server runtime, validators, client SDK, framework adapters, and opt-in add-ons, organized by category.
+---
+
+import { Cards, Card } from "fumadocs-ui/components/card";
+
+Lunora ships as a set of focused, independently versioned `@lunora/*` packages. Install the unscoped [`lunora`](/packages/lunora) umbrella for the base (server, values, runtime, Durable Objects, client) in a single dependency, then add only the opt-in packages you need.
+
+## Core Runtime
+
+The type-safe server API, validators, and the Worker + Durable Object runtime.
+
+<Cards>
+    <Card title="lunora" description="Unscoped umbrella — the base in one install, plus the CLI bin" href="/packages/lunora" />
+    <Card title="Server" description="defineSchema, defineTable, query, mutation, action" href="/packages/server" />
+    <Card title="Values" description="v.* validators and return-type inference" href="/packages/values" />
+    <Card title="Runtime" description="Worker entry: RPC router, shard resolver, query coordinator" href="/packages/runtime" />
+    <Card title="Durable Objects" description="ShardDO and SessionDO — SQLite, OCC, hibernated subscriptions" href="/packages/do" />
+    <Card title="Codegen" description="Emits _generated/{api,server,dataModel}.ts from schema.ts" href="/packages/codegen" />
+</Cards>
+
+## Client & Frameworks
+
+The browser SDK plus reactive adapters for React, Vue, Solid, Svelte, and Astro.
+
+<Cards>
+    <Card title="Client" description="Browser SDK: WebSocket, optimistic updates, offline queue" href="/packages/client" />
+    <Card title="React" description="useQuery / useMutation / useSubscription / useAuth" href="/packages/react" />
+    <Card title="Vue" description="Live composables and optimistic mutations" href="/packages/vue" />
+    <Card title="Solid" description="Live queries, optimistic mutations, reactive loaders" href="/packages/solid" />
+    <Card title="Svelte" description="Live stores, optimistic mutations, reactive loaders" href="/packages/svelte" />
+    <Card title="Astro" description="Single-worker composition and reactive-loader helpers" href="/packages/astro" />
+    <Card title="DB" description="TanStack DB binding with a durable offline outbox" href="/packages/db" />
+</Cards>
+
+## Tooling
+
+The CLI, Vite plugin, local Studio, and the shared config layer.
+
+<Cards>
+    <Card title="CLI" description="init, dev, deploy, codegen, run, reset, migrate" href="/packages/cli" />
+    <Card title="Vite" description="Codegen, wrangler validator, and error overlay" href="/packages/vite" />
+    <Card title="Studio" description="Local admin UI for schema, data, logs, and advisors" href="/packages/studio" />
+    <Card title="Config" description="Shared CLI + Vite config and scaffolding layer" href="/packages/config" />
+    <Card title="Testing" description="In-memory harness for queries, mutations, and actions" href="/packages/testing" />
+    <Card title="Advisor" description="Schema and query lints feeding the Studio Advisors table" href="/packages/advisor" />
+    <Card title="Seed" description="Snaplet-style deterministic seeding from defineSchema" href="/packages/seed" />
+    <Card title="MCP" description="Model Context Protocol server for AI agents" href="/packages/mcp" />
+</Cards>
+
+## Add-ons
+
+Opt-in packages for auth, mail, storage, AI, scheduling, and more.
+
+<Cards>
+    <Card title="Auth" description="better-auth, D1-backed: email/password, OAuth, passkeys, 2FA" href="/packages/auth" />
+    <Card title="Mail" description="Resend adapter, TSX templates, queue-backed sends" href="/packages/mail" />
+    <Card title="Storage" description="R2 typed buckets and signed URLs" href="/packages/storage" />
+    <Card title="AI" description="Workers AI helper on the Vercel AI SDK" href="/packages/ai" />
+    <Card title="Scheduler" description="runAfter / runAt plus Cron Triggers via SchedulerDO" href="/packages/scheduler" />
+    <Card title="Container" description="Cloudflare Containers: defineContainer and typed ctx.containers" href="/packages/container" />
+    <Card title="Workflow" description="Durable, multi-step workflows" href="/packages/workflow" />
+    <Card title="Rate Limit" description="Token-bucket, fixed- and sliding-window limiting" href="/packages/ratelimit" />
+</Cards>
+
+## Data & Edge
+
+Adapters for global state, external databases, vectors, and KV.
+
+<Cards>
+    <Card title="D1" description="D1 adapter for .global() tables with read-your-writes" href="/packages/d1" />
+    <Card title="Hyperdrive" description="Connect external Postgres / MySQL via Hyperdrive" href="/packages/hyperdrive" />
+    <Card title="Vectors" description="Cloudflare Vectorize adapter for similarity search" href="/packages/vectors" />
+    <Card title="KV" description="Typed Cloudflare KV access" href="/packages/kv" />
+    <Card title="Images" description="Cloudflare Images helpers" href="/packages/images" />
+    <Card title="Analytics" description="Analytics integration for Lunora apps" href="/packages/analytics" />
+    <Card title="Payment" description="Payment integration for Lunora apps" href="/packages/payment" />
+    <Card title="Browser" description="Browser-side utilities" href="/packages/browser" />
+</Cards>

@@ -1,0 +1,339 @@
+---
+title: "@lunora/auth plugins"
+description: Org, admin, and other better-auth plugins surfaced as first-class Lunora middleware.
+---
+
+`@lunora/auth` is a thin wrapper around [better-auth](https://better-auth.com).
+The Lunora-specific surface is small on purpose:
+
+- `createAuth(options)` — `betterAuth(options)` with a clearer error when
+  `secret` is missing.
+- `handleAuthRequest(auth, request)` — prefix routing for `/api/auth/*`.
+- `ensureMigrated(auth)` / `compileMigrationsSql(options)` — schema sync for
+  the configured plugins.
+- `withAuthPlugins(auth)` — middleware that mounts the plugin endpoint API
+  onto `ctx.authApi`.
+
+The actual plugin behaviour (organizations, admin, OAuth, MFA, …) is
+better-auth's. Lunora just re-exports the factories under
+`@lunora/auth/plugins` so you don't have to know the deep import paths.
+
+## Supported plugins
+
+Re-exported from `@lunora/auth/plugins`:
+
+```ts
+import {
+    admin,
+    anonymous,
+    bearer,
+    captcha,
+    createAccessControl,
+    customSession,
+    deviceAuthorization,
+    emailOTP,
+    genericOAuth,
+    haveIBeenPwned,
+    jwt,
+    magicLink,
+    mcp,
+    multiSession,
+    oAuthProxy,
+    oidcProvider,
+    oneTimeToken,
+    organization,
+    passkey,
+    phoneNumber,
+    siwe,
+    twoFactor,
+    username,
+    withMcpAuth,
+} from "@lunora/auth/plugins";
+```
+
+A few of these are worth calling out:
+
+- `captcha` — better-auth's native CAPTCHA plugin (Cloudflare Turnstile,
+  reCAPTCHA, hCaptcha, captchafox). The idiomatic way to gate auth endpoints —
+  see [CAPTCHA / Turnstile](#captcha--turnstile) below.
+- `createAccessControl` — the access-control / RBAC builder (from
+  `better-auth/plugins/access`); the companion to `admin` / `organization` for
+  defining custom roles + permissions.
+- `deviceAuthorization` — OAuth 2.0 device authorization grant (CLI / headless
+  / TV login).
+- `haveIBeenPwned` — rejects passwords found in the HIBP breach corpus via a
+  k-anonymity check.
+- `oneTimeToken` — issue / verify single-use tokens.
+- `mcp` + `withMcpAuth` — OAuth-protected Model Context Protocol server auth;
+  pairs with the [`@lunora/mcp`](/docs/packages/mcp) package.
+
+> `captcha`, `mcp`, and `withMcpAuth` have no dedicated
+> `better-auth/plugins/<name>` subpath — they ship only via the
+> `better-auth/plugins` barrel, and `@lunora/auth/plugins` re-exports them
+> from there.
+
+Anything else better-auth ships (or anything from the community, e.g.
+Polar) keeps working — `createAuth(...)` passes `plugins:` through
+unchanged.
+
+## Add org + admin
+
+```ts
+// lunora/auth.ts
+import { createAuth } from "@lunora/auth";
+import { admin, organization } from "@lunora/auth/plugins";
+
+export const buildAuth = (env: { AUTH_SECRET: string; DB: unknown }) =>
+    createAuth({
+        // Better-auth accepts the D1 binding directly; no Kysely wiring.
+        database: env.DB as never,
+        emailAndPassword: { enabled: true },
+        plugins: [organization({ allowUserToCreateOrganization: true }), admin({ defaultRole: "user" })],
+        secret: env.AUTH_SECRET,
+    });
+```
+
+That's the whole change — the new tables (`organization`, `member`,
+`invitation`, …) are discovered by `ensureMigrated` next time the worker
+boots.
+
+To define **custom roles + permissions** beyond the built-in `user` / `admin`,
+use `createAccessControl` (re-exported from `@lunora/auth/plugins`) and pass the
+resulting roles into `admin({ ac, roles })` / `organization({ ac, roles })` —
+it's better-auth's standard access-control builder, unchanged.
+
+## CAPTCHA / Turnstile
+
+There are two ways to add a Cloudflare Turnstile (or other CAPTCHA) check, and
+they cover different layers.
+
+### `captcha` plugin — for the auth flow
+
+For the **auth flow**, prefer the `captcha` plugin. It hooks better-auth's
+request pipeline directly and protects the sensitive endpoints
+(`/sign-up/email`, `/sign-in/email`, `/request-password-reset` by default in
+better-auth 1.6.18). It reads the token from the `x-captcha-response` request
+header:
+
+```ts
+// lunora/auth.ts
+import { createAuth } from "@lunora/auth";
+import { captcha } from "@lunora/auth/plugins";
+
+export const buildAuth = (env: { AUTH_SECRET: string; DB: unknown; TURNSTILE_SECRET_KEY: string }) =>
+    createAuth({
+        database: env.DB as never,
+        emailAndPassword: { enabled: true },
+        plugins: [captcha({ provider: "cloudflare-turnstile", secretKey: env.TURNSTILE_SECRET_KEY })],
+        secret: env.AUTH_SECRET,
+    });
+```
+
+Pass `endpoints: [...]` to override which routes are gated. The secret lives in
+a plain env var / `.dev.vars` (conventionally `TURNSTILE_SECRET_KEY`) — Turnstile
+has no Cloudflare binding.
+
+### Standalone helpers — for non-auth procedures
+
+For **non-auth** procedures and mutations (where there's no better-auth
+pipeline to hook), `@lunora/auth` ships standalone Turnstile helpers from the
+package root:
+
+- `verifyTurnstile({ secret, token, remoteip?, fetch? })` — a pure server-side
+  `siteverify` helper, usable from any mutation/action. A `success: false`
+  (bot / invalid / expired) verdict is **returned**, not thrown; it only throws
+  a structural `LunoraError` on transport failure (network error / non-2xx).
+- `verifyTurnstileMiddleware({ secret, token, ... })` — Lunora procedure
+  middleware (`.use()`) that gates any procedure on a Turnstile check. It reads
+  the token from `ctx` via the `token` selector (the token travels in the
+  function `args`, since the procedure context carries no raw `Headers`). Fails
+  **closed** by default; pass `failOpen: true` to admit on a siteverify outage.
+
+```ts
+// lunora/contactForm.ts — gate a plain mutation, no auth involved
+import { mutation } from "lunora/server";
+import { verifyTurnstileMiddleware } from "@lunora/auth";
+
+import { v } from "lunora/values";
+
+export const submit = mutation
+    .input({ message: v.string(), turnstileToken: v.string() })
+    // The procedure context carries no raw Headers, so the token rides in args
+    // and the selector reads it back off ctx once it's been surfaced there.
+    .use(
+        verifyTurnstileMiddleware({
+            secret: env.TURNSTILE_SECRET_KEY,
+            token: (ctx) => ctx.turnstileToken,
+        }),
+    )
+    .mutation(async ({ args }) => {
+        /* args.message has passed the Turnstile check */
+    });
+```
+
+> **Use the `captcha` plugin for the auth flow.** It hooks better-auth's
+> pipeline and reads the token from the `x-captcha-response` header. The
+> standalone helpers above are for **non-auth** procedures, where you hand them
+> the token explicitly — so reach for them only outside the sign-in/sign-up flow.
+
+## Studio user dashboard
+
+The [studio](/docs/packages/studio) ships a full user-management dashboard —
+browse/search users, set roles, ban, revoke sessions, impersonate, create and
+delete, plus an Organizations section and per-user linked-accounts / 2FA /
+passkey panels. Wiring it is **one line**: hand `createWorker` an `authAdmin`
+built from your auth instance.
+
+```ts
+// src/server/index.ts
+import { createAuthAdmin } from "@lunora/auth";
+
+createWorker({
+    shardDO: env.SHARD,
+    adminToken: env.LUNORA_ADMIN_TOKEN, // the dashboard's authorization gate
+    authAdmin: createAuthAdmin(auth), // backed by better-auth's adapter
+});
+```
+
+### The dashboard follows your plugins
+
+There is **no studio-side switch** — the plugins you enable in `createAuth(...)`
+are the switch. `createAuthAdmin` reads the enabled plugin set from
+`auth.$context`, the worker exposes a `GET /_lunora/admin/auth/capabilities`
+endpoint, and the studio renders only the surfaces that apply:
+
+| Enable in `createAuth(...)`       | Dashboard surface that appears                                           |
+| --------------------------------- | ------------------------------------------------------------------------ |
+| `admin()`                         | User actions: role, ban/unban, set password, impersonate, create, delete |
+| `organization()`                  | The **Organizations** section (orgs → members → invitations)             |
+| `twoFactor()`                     | "Disable two-factor" in the user detail drawer                           |
+| `passkey()`                       | The user's passkeys (list + revoke) in the detail drawer                 |
+| _(always — core `account` table)_ | Linked accounts (providers + unlink)                                     |
+
+Turn a plugin off and its surface disappears (the Organizations tab shows an
+"Organizations are not enabled" empty state instead of erroring). Auth-method
+plugins that have no admin entity — `magicLink`, `emailOTP`, `username`,
+`phoneNumber`, … — need no dedicated panel; they show up through the user's
+fields and linked accounts.
+
+### Force a surface off
+
+To hide a surface even when its plugin is enabled, pass a `features` override:
+
+```ts
+authAdmin: createAuthAdmin(auth, { features: { organization: false } }),
+```
+
+### Safe by construction
+
+Every `/_lunora/admin/auth/*` endpoint is gated by `LUNORA_ADMIN_TOKEN`, and
+`createAuthAdmin` is a trusted server-side operator — it talks to better-auth's
+adapter directly, so it is **not** an end-user API. Password hashes, session
+tokens, and OAuth access/refresh tokens are stripped from every response; the
+only token ever returned is the one from an explicit **Impersonate**.
+
+> The older read-only `authIntrospector` option still works (browse-only) but
+> is deprecated — prefer `authAdmin`.
+
+## The `withAuthPlugins` middleware
+
+`@lunora/auth/middleware` exports a Lunora-style middleware factory that
+surfaces every plugin endpoint on `ctx.authApi`:
+
+```ts
+import { httpAction } from "lunora/server";
+import { withAuthPlugins } from "@lunora/auth/middleware";
+
+import { auth } from "./auth.js";
+
+// Compose once with .use(...) and every handler downstream sees authApi.
+export const createOrg = httpAction(async (ctx, request) => {
+    const { name } = await request.json();
+
+    const org = await ctx.authApi.createOrganization({
+        body: { name, slug: name.toLowerCase().replace(/\s+/g, "-") },
+        headers: request.headers,
+    });
+
+    return Response.json(org);
+});
+```
+
+`ctx.authApi` is typed against the plugin set loaded on the auth instance —
+`createOrganization`, `inviteMember`, `listMembers`, `banUser`,
+`impersonateUser`, etc. all show up automatically.
+
+### Why callers still pass `headers`
+
+Lunora's procedure context carries the resolved identity (`ctx.auth.userId`,
+`ctx.auth.getIdentity()`) but not the raw inbound `Headers`. Better-auth
+endpoints need the headers to read the caller's session cookie, so the
+middleware does **not** pre-bind them — pass them through from the transport
+that has them:
+
+- **HTTP action** — `request.headers` (as shown above).
+- **WebSocket subscription** — propagated from the upgrade request.
+- **Server-to-server** (cron job, queue consumer) — pass `new Headers()` and
+  authenticate via a bearer token or service-key plugin instead.
+
+## Migrations
+
+`ensureMigrated(auth)` does a schema diff and applies missing DDL on the
+configured database — fine for dev and small deployments:
+
+```ts
+// src/server/index.ts
+import { ensureMigrated, handleAuthRequest } from "@lunora/auth";
+
+import { buildAuth } from "../../lunora/auth.js";
+
+export default {
+    async fetch(request, env, ctx) {
+        const auth = buildAuth(env);
+
+        await ensureMigrated(auth); // idempotent, cached per options
+
+        const authResponse = await handleAuthRequest(auth, request);
+        if (authResponse) return authResponse;
+
+        return worker.fetch(request, env, ctx);
+    },
+};
+```
+
+For production, prefer pre-applying the schema at deploy time:
+
+```bash
+node -e "
+import('@lunora/auth').then(async ({ compileMigrationsSql }) => {
+    const sql = await compileMigrationsSql({
+        database: undefined, // schema-only, no live DB
+        secret: 'placeholder',
+        plugins: [/* same list as runtime */],
+    });
+    console.log(sql);
+});
+" > schema.sql
+
+wrangler d1 execute my-db --file schema.sql
+```
+
+The migration runner discovers every loaded plugin's tables, so adding
+`organization()` / `admin()` / Polar / etc. picks them up for free.
+
+## Full demo
+
+The [`examples/auth-playground`](https://github.com/anolilab/lunora/tree/alpha/examples/auth-playground)
+app shows the whole flow end-to-end: sign-up, create org, invite member,
+admin-only ban panel.
+
+## Polar billing
+
+Intentionally not bundled. If you want Polar in the mix:
+
+```bash
+pnpm add @polar-sh/better-auth
+```
+
+then add `polar(...)` to the `plugins:` array in your `createAuth(...)`
+call. `ensureMigrated` will pick up Polar's tables on the next boot.

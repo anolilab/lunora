@@ -1,0 +1,54 @@
+---
+title: "@lunora/scheduler"
+description: Durable Object-backed scheduler for deferred and cron jobs.
+---
+
+`@lunora/scheduler` ships a `SchedulerDO` you mount once per app. It stores
+pending invocations sorted by scheduled time and fires them via HTTP on the
+DO alarm. Two flavours: **deferred** (`runAfter`/`runAt`) and **cron**.
+
+```ts
+import { createScheduler } from "@lunora/scheduler";
+
+export const scheduler = createScheduler({ schedulerDO: env.SCHEDULER });
+```
+
+## Deferred jobs
+
+Inside a mutation or action:
+
+```ts
+import { mutation, v } from "lunora/server";
+
+export const requestExport = mutation.input({ workspaceId: v.id("workspaces") }).mutation(async ({ ctx, args: { workspaceId } }) => {
+    await ctx.scheduler.runAfter(5 * 60_000, "exports:run", { workspaceId });
+});
+```
+
+Under the hood `ctx.scheduler.runAfter` POSTs to the SchedulerDO's
+`/schedule` endpoint with `functionPath`, `args`, `scheduledFor`, and an
+`originUrl` it can call back into.
+
+## Cron jobs
+
+Declare cron triggers as plain objects and merge them into `wrangler.jsonc`:
+
+```ts
+import { createCronTrigger } from "@lunora/scheduler";
+
+export const triggers = [createCronTrigger({ cron: "0 3 * * *", functionPath: "cleanup:cleanupOldMessages" })];
+```
+
+The CLI's wrangler validator surfaces missing or unreachable triggers as
+errors during dev.
+
+## Dispatch contract
+
+When the alarm fires the DO POSTs to `${originUrl}/_lunora/scheduler/dispatch`
+with `{ functionPath, args, shardKey, scheduledFor, id }`. The runtime
+unwraps that and runs the function exactly as if it were an RPC call.
+
+## See also
+
+- [@lunora/server](/docs/packages/server) — `ctx.scheduler`
+- [Architecture](/docs/architecture)

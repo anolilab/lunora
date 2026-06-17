@@ -1,0 +1,182 @@
+---
+title: Offline-first
+description: Persist reads and writes to disk so the app boots, renders, and accepts edits with no network.
+---
+
+Lunora's transport is online-first by default: reads hydrate from a live
+WebSocket and writes go straight to your Worker. Two opt-in client options turn
+that into an **offline-first** experience — the app boots from disk, renders
+cached reads before a socket opens, and accepts writes while disconnected:
+
+- **`queryCache`** — a durable read cache. Query results are persisted as their
+  subscriptions advance and replayed on construction, so a reload renders the
+  last-seen data immediately, then resumes the live subscription from the
+  persisted cursor (no full snapshot refetch).
+- **`persistence`** — a durable store for the offline mutation outbox. Mutations
+  issued while disconnected survive a reload and flush, exactly once, on
+  reconnect.
+
+Both are off by default — current behaviour is unchanged until you pass an
+adapter.
+
+## Enable persistent reads and writes
+
+Pass IndexedDB adapters for both stores when you construct the client:
+
+```ts
+import { LunoraClient, createIndexedDbPersistence, createIndexedDbQueryCache } from "lunora/client";
+
+const client = new LunoraClient({
+    url: import.meta.env.VITE_LUNORA_URL,
+    // Durable outbox: queued mutations survive a reload.
+    persistence: createIndexedDbPersistence(),
+    // Durable read cache: queries hydrate from disk on boot.
+    queryCache: createIndexedDbQueryCache(),
+});
+```
+
+Both adapters share a single `lunora` IndexedDB database, so there is nothing
+else to wire up. For tests or SSR you can swap in the in-memory variants
+(`createInMemoryPersistence()` / `createInMemoryQueryCache()`), which implement
+the same contract without touching IndexedDB.
+
+In React, build the client once and hand it to the provider:
+
+```tsx
+import { LunoraProvider } from "@lunora/react";
+import { useState } from "react";
+
+export const Providers = ({ children }: { children: React.ReactNode }) => {
+    const [client] = useState(
+        () =>
+            new LunoraClient({
+                url: import.meta.env.VITE_LUNORA_URL,
+                persistence: createIndexedDbPersistence(),
+                queryCache: createIndexedDbQueryCache(),
+            }),
+    );
+
+    return <LunoraProvider client={client}>{children}</LunoraProvider>;
+};
+```
+
+## What gets persisted
+
+Each cached query stores `{ identity, value, serverCursor, ts }`, keyed by
+`functionPath::argsKey::shardKey`. The cache is LRU-capped by `ts` (oldest
+entries evicted first) and written with a short debounce as values advance, so a
+chatty subscription doesn't thrash the disk.
+
+The `identity` field is a fingerprint of the auth token at write time. On boot
+the client only hydrates entries whose identity matches the **current** token —
+a signed-out cache never leaks into a new session, and an identity change clears
+the cache outright. The offline outbox is gated by the same rule, so queued
+writes are never replayed under a different user.
+
+## Connection status UI
+
+Show the user when they're working offline. Every framework adapter exposes the
+client's aggregate socket status (`idle` → `connecting` → `connected` →
+`offline`), reading the current value synchronously and updating on every
+transition:
+
+```tsx
+// React
+import { useConnectionStatus } from "@lunora/react";
+
+const SyncBadge = () => {
+    const status = useConnectionStatus();
+    return <span data-status={status}>{status === "connected" ? "Live" : "Offline"}</span>;
+};
+```
+
+```vue
+<!-- Vue -->
+<script setup lang="ts">
+import { useConnectionStatus } from "@lunora/vue";
+
+const status = useConnectionStatus();
+</script>
+
+<template>
+    <span :data-status="status">{{ status === "connected" ? "Live" : "Offline" }}</span>
+</template>
+```
+
+```tsx
+// Solid
+import { createConnectionStatus } from "@lunora/solid";
+
+const SyncBadge = () => {
+    const status = createConnectionStatus();
+    return <span data-status={status()}>{status() === "connected" ? "Live" : "Offline"}</span>;
+};
+```
+
+```svelte
+<!-- Svelte -->
+<script lang="ts">
+    import { connectionStatus } from "@lunora/svelte";
+
+    const status = connectionStatus();
+</script>
+
+<span data-status={$status}>{$status === "connected" ? "Live" : "Offline"}</span>
+```
+
+## Boot with no network (the app shell)
+
+The client renders cached reads on boot, but the browser still has to fetch your
+HTML, JS, and CSS. To open the app cold while offline, cache the app shell with
+a service worker. A minimal cache-first shell:
+
+```ts
+// sw.ts
+const SHELL = "lunora-shell-v1";
+const ASSETS = ["/", "/index.html", "/assets/app.js", "/assets/app.css"];
+
+self.addEventListener("install", (event: ExtendableEvent) => {
+    event.waitUntil(caches.open(SHELL).then((cache) => cache.addAll(ASSETS)));
+});
+
+self.addEventListener("fetch", (event: FetchEvent) => {
+    // Never cache the WebSocket or RPC — only the static shell.
+    const url = new URL(event.request.url);
+    if (url.pathname.startsWith("/_lunora")) return;
+
+    event.respondWith(caches.match(event.request).then((hit) => hit ?? fetch(event.request)));
+});
+```
+
+With the shell cached and `queryCache` enabled, a cold offline launch paints the
+last-seen data instead of a blank page. Leave the Lunora transport paths
+(`/_lunora/*`, the WebSocket) out of the service worker — Lunora owns its own
+reconnect, replay, and read-your-writes semantics, and caching them would fight
+it.
+
+## The reconciliation model
+
+When the socket comes back, Lunora reconciles disk state with the server without
+you writing sync glue:
+
+1. **Reads resume from the cursor.** The client sends the persisted
+   `serverCursor` as `sinceSeq`. The server replays only the deltas you missed
+   (or a `resume` ack when nothing in your read-set changed) instead of a full
+   snapshot — the cached value you already rendered stays on screen and is
+   patched forward.
+2. **Writes flush exactly once.** Queued mutations are deduped by `mutationKey`
+   and replayed on reconnect; the idempotency key means a retry after a flaky
+   ack is a no-op server-side, not a duplicate.
+3. **Optimistic rows settle.** A mutation's optimistic patch renders instantly,
+   is superseded by the authoritative server row on acknowledgement, and rolls
+   back if the server rejects it with a coded conflict.
+4. **Identity is the trust boundary.** A token change between sessions drops both
+   the cached reads and the queued writes rather than replaying them under the
+   new identity.
+
+## See also
+
+- [@lunora/db](/docs/packages/db) — the same outbox + optimistic model as a
+  TanStack DB collection layer, generated from your schema.
+- [Real-time](/docs/concepts/realtime) — how subscriptions and deltas flow.
+- [@lunora/client](/docs/packages/client) — the transport these options configure.

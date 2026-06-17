@@ -1,0 +1,252 @@
+---
+title: Deployment
+description: Wrangler bindings, secrets, and the deploy flow.
+---
+
+Lunora apps deploy as a single Cloudflare Worker plus Durable Object class,
+D1 database, and R2 bucket bindings. There is nothing else to provision —
+no separate API service, no platform sign-up.
+
+## `wrangler.jsonc`
+
+```jsonc
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "my-lunora-app",
+    "main": "src/server/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat", "web_socket_auto_reply_to_close"],
+    "durable_objects": {
+        "bindings": [
+            { "name": "SHARD", "class_name": "ShardDO" },
+            { "name": "SCHEDULER", "class_name": "SchedulerDO" },
+        ],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] }],
+    "d1_databases": [{ "binding": "DB", "database_name": "my-lunora-app", "database_id": "<from-wrangler-d1-create>" }],
+    "r2_buckets": [{ "binding": "FILES", "bucket_name": "my-lunora-files" }],
+}
+```
+
+## Secrets
+
+### Locally
+
+Local secrets live in `.dev.vars` (gitignored), which `wrangler dev` and the
+Vite dev server load automatically. Commit a `.dev.vars.example` listing the
+keys your worker needs:
+
+```bash
+# .dev.vars.example
+AUTH_SECRET="replace-with-openssl-rand-hex-32"
+AUTH_URL="http://localhost:5173"
+STORAGE_SECRET="replace-with-openssl-rand-hex-32"
+```
+
+When you run `lunora dev` (or start Vite) without a `.dev.vars`, Lunora offers
+to generate one from the example — secret-looking placeholders (`*_SECRET`,
+`*_TOKEN`, …) are filled with fresh random values, everything else is copied
+verbatim. If `.dev.vars` exists but is missing keys the example lists (e.g. you
+enabled a new addon), it offers to append just those. Non-interactive runs (CI)
+skip the prompt. You can also manage keys by hand with `lunora env set NAME VALUE`
+/ `lunora env list`.
+
+To check a `.dev.vars` against its example — missing keys, still-unset
+placeholders, stray extras — run `lunora env doctor`. It exits non-zero when
+anything is actionable, so it works as a CI gate or a pre-`dev` sanity check.
+
+### In production
+
+Set with `wrangler secret put`:
+
+```bash
+wrangler secret put AUTH_SECRET
+wrangler secret put RESEND_API_KEY
+wrangler secret put STORAGE_SECRET
+```
+
+Or push everything from `.dev.vars` at once with `lunora env push --yes`.
+
+Lunora never logs secret values; the `wrangler-validator` plugin warns if a
+binding marked `secret: true` in your schema is missing from your secret list.
+
+## Containers
+
+If your app declares [containers](/docs/packages/container), `wrangler deploy`
+also builds each Dockerfile-backed image with your local Docker engine and
+pushes it to Cloudflare's registry. `lunora deploy` runs a Docker preflight
+first and stops with an actionable message when an engine isn't available, so
+the failure is one line rather than a wrangler stack trace. Images must target
+**`linux/amd64`**.
+
+To split image build/push from the Worker deploy (e.g. across CI jobs), use the
+`lunora containers` wrappers:
+
+```bash
+lunora containers build ./containers/transcoder --tag transcoder:v1 --push
+lunora containers images list
+```
+
+Container egress is billed separately from Workers — see [Limits](/docs/limits).
+
+## Deploy
+
+```bash
+pnpm lunora deploy
+```
+
+This runs:
+
+1. `lunora codegen` (no-op if up-to-date)
+2. D1 migration runner against the bound database
+3. a Docker preflight when Dockerfile-backed containers are declared
+4. `wrangler deploy` against the resolved Worker (building/pushing container images)
+
+CI should run `lunora codegen --check` first so a stale `_generated/` is a
+build failure, not a deploy that silently uses old types.
+
+## Streaming logs
+
+Tail a deployed Worker's live logs with:
+
+```bash
+pnpm lunora logs                     # pretty-printed live tail
+pnpm lunora logs --format json       # one JSON object per line (pipe to jq)
+pnpm lunora logs --status error      # only failed invocations
+pnpm lunora logs --search "userId"   # substring filter on log messages
+```
+
+This wraps `wrangler tail`, so it needs a deployed Worker and your wrangler
+config; pass a Worker name as the first argument to override the configured
+one, and `--env <name>` to target an environment.
+
+For durable, off-Cloudflare log sinks (Datadog, an HTTP endpoint, R2), forward
+tail events to a **consumer Worker** via `tail_consumers` in `wrangler.jsonc`:
+
+```jsonc
+{
+    // ...
+    "tail_consumers": [{ "service": "log-forwarder" }],
+}
+```
+
+Each entry names a Worker that receives this Worker's logs, exceptions, and
+fetch metadata. `@lunora/config` exports a `withTailConsumer(config, consumer)`
+helper that appends an entry idempotently (deduped by `service` + `environment`),
+and the wrangler validator flags any `tail_consumers` entry missing its
+`service`.
+
+### Logpush
+
+To ship logs to a retention/SIEM sink (R2, HTTP, Splunk, Datadog, S3) without a
+consumer Worker, enable [Cloudflare
+Logpush](https://developers.cloudflare.com/workers/observability/logs/logpush/)
+with a single flag:
+
+```jsonc
+{
+    // ...
+    "logpush": true,
+}
+```
+
+Lunora validates that `logpush` is a boolean (a typo like `"logPush"` would
+otherwise be silently dropped by wrangler), but the **sink itself is a Logpush
+_job_** created in the Cloudflare dashboard or via the API — Lunora does not
+manage job lifecycle. The Studio surfaces both halves: its **Logs → Log drains**
+panel renders the `{ "logpush": true }` snippet and deep-links to the Cloudflare
+observability dashboard where you create the job. In short: Lunora validates the
+flag; the job lifecycle stays in Cloudflare.
+
+## Platform configuration
+
+A few Cloudflare platform features are pure `wrangler.jsonc` config — there is
+no Lunora adapter to import, you just declare the block and Lunora's
+`wrangler-validator` shape-checks it so a typo is a build-time error instead of
+a value wrangler silently drops. The resource itself is always provisioned by
+you (dashboard or `wrangler`); Lunora validates the config, it does not manage
+lifecycle.
+
+### Smart Placement
+
+[Smart Placement](https://developers.cloudflare.com/workers/configuration/smart-placement/)
+lets Cloudflare run your Worker close to the services it calls (e.g. a regional
+database) instead of close to the user. Opt in with:
+
+```jsonc
+{
+    // ...
+    "placement": { "mode": "smart" },
+}
+```
+
+`"smart"` is the only supported mode — the validator rejects any other value (a
+typo like `"fast"`) and a non-object `placement`.
+
+### mTLS client certificates
+
+To present a client certificate when your Worker calls a mutually-authenticated
+upstream, upload the cert (`wrangler mtls-certificate upload`) and bind it:
+
+```jsonc
+{
+    // ...
+    "mtls_certificates": [{ "binding": "MY_CERT", "certificate_id": "<from-upload>" }],
+}
+```
+
+Each entry must name a non-empty `binding` and a non-empty `certificate_id`; the
+validator flags either when missing.
+
+### Workers for Platforms
+
+If you build a multi-tenant platform that deploys user Workers into a [dispatch
+namespace](https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/),
+bind the namespace:
+
+```jsonc
+{
+    // ...
+    "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "tenants" }],
+}
+```
+
+Both `binding` and `namespace` are required on each entry.
+
+### Static assets
+
+Lunora deploys as a single Worker, so the conventional way to serve your Vite
+client build is [Workers Static
+Assets](https://developers.cloudflare.com/workers/static-assets/) — Cloudflare
+serves the files for free and only invokes the Worker on a miss, so the Lunora
+SSR/API fetch handler still runs underneath:
+
+```jsonc
+{
+    // ...
+    "assets": { "directory": "./dist/client", "binding": "ASSETS" },
+}
+```
+
+The validator requires a non-empty `directory` (pointing at the built client
+output) and shape-checks the optional `binding` / `html_handling` /
+`not_found_handling` fields. Lunora does **not** auto-inject this block — the
+output directory is framework-adapter-specific, so you declare it.
+
+## Non-goals
+
+A couple of Cloudflare products are deliberately **not** wired into Lunora:
+
+- **Cloudflare Pages.** The Lunora Worker is the deploy unit; there is no second
+  Pages artifact. Serve your client build from the same Worker with the
+  [Static assets](#static-assets) block above instead.
+- **Pub/Sub (MQTT).** Realtime fan-out is handled by Durable-Object-hibernated
+  WebSocket subscriptions (see [Real-time](/docs/concepts/realtime)), which need
+  no external broker. Cloudflare Pub/Sub is a beta MQTT broker with no Worker
+  binding; the only thing it adds is native-MQTT device ingest, a narrow niche
+  we'll revisit if/when it reaches GA and a concrete need appears.
+
+## See also
+
+- [Limits](/docs/limits)
+- [Architecture](/docs/architecture)

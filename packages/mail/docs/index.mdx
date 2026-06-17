@@ -1,0 +1,169 @@
+---
+title: "@lunora/mail"
+description: Transactional email via Resend or any @visulima/email transport.
+---
+
+`@lunora/mail` wraps `@visulima/email` so you can send transactional email
+from inside an `action`. It ships with a Resend-backed default transport,
+accepts any transport you wire yourself, and can render React Email
+templates inline.
+
+```ts
+import { createMailer } from "@lunora/mail";
+
+export const mailer = createMailer({
+    apiKey: env.RESEND_API_KEY,
+    from: "Lunora <noreply@lunora.sh>",
+});
+```
+
+Pass a custom `transport` to swap providers; pass a Cloudflare `queue`
+binding to enable deferred sends via `mailer.queue(...)`.
+
+## Sending from an action
+
+```ts
+import { action, v } from "lunora/server";
+
+import { mailer } from "./mail";
+
+export const welcomeEmail = action.input({ userId: v.id("users") }).action(async ({ ctx, args: { userId } }) => {
+    const user = await ctx.runQuery("users:get", { userId });
+
+    await mailer.send({
+        to: user.email,
+        subject: "Welcome to Lunora",
+        html: `<p>Hi ${user.name} — your account is ready.</p>`,
+    });
+});
+```
+
+## React Email templates
+
+Pass a `@react-email/components` element through the `react` field. The
+mailer renders it via `renderEmail` (a `@react-email/render` wrapper) and
+fills in `html` + `text` if you didn't provide them yourself:
+
+```ts
+import Welcome from "../emails/Welcome";
+
+await mailer.send({
+    to: user.email,
+    subject: "Welcome",
+    react: <Welcome name={user.name} />,
+});
+```
+
+## Queueing
+
+`mailer.queue(options)` serialises the rendered payload and hands it to the
+Cloudflare Queue binding you passed as `queue`. React elements are NOT
+structured-cloneable, so the queue body always carries pre-rendered html/
+text — never the original JSX.
+
+A consumer Worker can re-hydrate the payload with `consumeQueuedSend`:
+
+```ts
+import { consumeQueuedSend, createMailer } from "@lunora/mail";
+
+export default {
+    queue: async (batch, env) => {
+        const mailer = createMailer({ apiKey: env.RESEND_API_KEY, from: "..." });
+
+        for (const message of batch.messages) {
+            const payload = consumeQueuedSend(message.body);
+            await mailer.send(payload);
+        }
+    },
+};
+```
+
+## Receiving email
+
+`@lunora/mail/inbound` is the inbound counterpart: it turns a Cloudflare [Email
+Worker](https://developers.cloudflare.com/email-routing/email-workers/) delivery
+into a call to one of your Lunora functions. The package never imports
+`cloudflare:email` — the generated worker entry supplies the real binding, and
+the package stays unit-testable in plain Node (exactly like the outbound
+Cloudflare transport).
+
+A Cloudflare Email Worker delivers inbound mail to a top-level `email(message,
+env, ctx)` export — a sibling of `fetch`/`scheduled`. Export one built by
+`createInboundEmailHandler`:
+
+```ts
+import { createInboundEmailHandler, dispatchToLunoraFunction, parseInboundEmail } from "@lunora/mail/inbound";
+
+export const email = createInboundEmailHandler({
+    parse: parseInboundEmail,
+    dispatch: dispatchToLunoraFunction({
+        shard: env.SHARD,
+        functionPath: "inbound:onEmail",
+        shardKey: "__root__",
+    }),
+});
+```
+
+The handler reads `message.raw`, parses it into a normalised `InboundEmail`
+(`{ from, to, subject, messageId, inReplyTo?, references?, headers, text?, html?,
+attachments }`, every header CR/LF-checked), and dispatches it.
+`dispatchToLunoraFunction` posts an RPC envelope to the root shard stub — the
+same admin-RPC-over-shard path the dev mail catcher uses — calling the named
+mutation/action with the parsed message as its args. It needs
+`LUNORA_ADMIN_TOKEN` to authorize the RPC (read from `env` by default). On a
+parse/dispatch failure the handler calls `message.setReject(reason)` so
+Cloudflare bounces or retries rather than silently dropping the mail; override
+`onError` to log/forward/swallow instead.
+
+The receiving function is an ordinary mutation/action:
+
+```ts
+import { mutation, v } from "lunora/server";
+
+export const onEmail = mutation
+    .input({
+        from: v.string(),
+        to: v.array(v.string()),
+        subject: v.optional(v.string()),
+        text: v.optional(v.string()),
+    })
+    .mutation(async ({ ctx, args: { from, subject, text } }) => {
+        await ctx.db.insert("inbox", { from, subject: subject ?? "", body: text ?? "" });
+    });
+```
+
+### wrangler config
+
+Inbound delivery is configured in Cloudflare, not by codegen. Add an [Email
+Routing](https://developers.cloudflare.com/email-routing/) rule (dashboard or
+`wrangler`) that routes an address to this Worker. If your function replies or
+forwards, also declare a `send_email` binding:
+
+```jsonc
+{
+    "send_email": [{ "name": "OUTBOUND" }],
+}
+```
+
+Lunora validates the `send_email` binding shape but does not manage routing
+rules — that lifecycle stays in Cloudflare.
+
+## Public API
+
+| Export                                                                                               | Purpose                                                      |
+| ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `createMailer(options)`                                                                              | Build a `Mailer` (Resend-backed unless you pass `transport`) |
+| `renderEmail(element)`                                                                               | Render a React Email element to `{ html, text }`             |
+| `toQueuedPayload(payload)`                                                                           | Internal helper exposed for custom queue setups              |
+| `consumeQueuedSend(body)`                                                                            | Re-hydrate a queued payload on the consumer side             |
+| `Mailer`, `MailTransport`, `SendOpts`, `SendPayload`, `QueueLike`, `LunoraMailOptions`, `QueuedSend` | Type-only                                                    |
+
+## Testing
+
+Build your own stub transport — `{ send: async () => ({ id: "stub" }) }` is
+enough — and pass it as `transport`. No network, no flakes, no API keys.
+
+## See also
+
+- [@lunora/scheduler](/docs/packages/scheduler) — useful for delayed sends
+- [Concepts: queries & mutations](/docs/concepts/queries-mutations)

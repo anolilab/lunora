@@ -1,18 +1,8 @@
-# Next.js
-.next/
-out/
-next-env.d.ts
+.source
+.tmp-external-docs
+.tanstack/tmp
+.netlify
+public/assets
 
-# Fumadocs MDX generated source map
-.source/
-
-# Node
-node_modules/
-
-# Build artifacts
-dist/
-*.tsbuildinfo
-
-# Local env
-.env*
-!.env.example
+!src/data
+src/content/docs/packages

@@ -1,0 +1,205 @@
+---
+title: "@lunora/db"
+description: Optimistic, offline-first client data layer on TanStack DB.
+---
+
+`@lunora/db` turns your Lunora queries and mutations into a [TanStack DB](https://tanstack.com/db)
+data layer: live, indexed client collections for reads, and a durable, retried
+**offline outbox** for writes. A sent message renders instantly, survives a
+reload or an offline window, is superseded by the real server row on
+acknowledgement, and rolls back if the server rejects it — without you
+hand-writing any sync glue.
+
+It sits on top of `@lunora/client`'s transport (the same WebSocket subscriptions
+and RPC the React hooks use). You keep your schema and functions exactly as they
+are; `@lunora/db` binds them to collections.
+
+## Install
+
+`@lunora/db` peer-depends on the TanStack packages, so install them alongside it:
+
+```bash
+pnpm add @lunora/db @tanstack/db @tanstack/react-db @tanstack/offline-transactions
+```
+
+## Quick start (generated)
+
+You don't have to write the binding by hand. With a schema and functions in
+`lunora/`, generate it from them:
+
+```bash
+lunora codegen                    # ensure _generated/ is up to date
+vis generate lunora-collections   # writes lunora/collections.ts
+```
+
+The generator reads `schema.ts` and `_generated/api.ts` and wires each table:
+
+- **reads** from the table's `list` query,
+- **`scopeBy`** for sharded tables (from their `shardBy`),
+- **writes** from the mutation that calls `ctx.db.insert("<table>", …)` — attributed
+  by behaviour, with `toArgs` mapped from the mutation's real arguments.
+
+The result is a ready-to-use `createCollections(client)`:
+
+```ts title="lunora/collections.ts (generated)"
+import { defineCollections } from "@lunora/db";
+import type { LunoraClient } from "@lunora/react";
+
+import { api } from "./_generated/api.js";
+import type { Doc, Id } from "./_generated/dataModel.js";
+
+export const createCollections = (client: LunoraClient) =>
+    defineCollections(client, {
+        channels: {
+            list: api.channels.list,
+            insert: {
+                mutation: api.channels.create,
+                optimistic: (input: Omit<Doc<"channels">, "_id" | "_creationTime">, id) => ({
+                    _id: id as Id<"channels">,
+                    _creationTime: Date.now(),
+                    ...input,
+                }),
+                toArgs: (row) => ({ id: row._id, name: row.name }),
+            },
+        },
+        messages: {
+            list: api.messages.list,
+            scopeBy: "channelId",
+            insert: {
+                mutation: api.messages.send,
+                optimistic: (input: Omit<Doc<"messages">, "_id" | "_creationTime">, id) => ({
+                    _id: id as Id<"messages">,
+                    _creationTime: Date.now(),
+                    ...input,
+                }),
+                toArgs: (row) => ({ channelId: row.channelId, id: row._id, text: row.text }),
+            },
+        },
+        users: { list: api.users.list }, // read-only — no insert mutation
+    });
+```
+
+Build it once (it owns the outbox, so keep a single instance) and use it in your
+components:
+
+```tsx
+import { useLiveQuery } from "@tanstack/react-db";
+
+import { createCollections } from "../lunora/collections";
+
+const db = createCollections(client); // `client` from <LunoraProvider>
+
+function Chat({ channelId }: { channelId: Id<"channels"> }) {
+    // Point the sharded `messages` collection at the active channel.
+    db.scope.messages({ channelId });
+
+    const { data: messages } = useLiveQuery((q) => q.from({ message: db.collections.messages }));
+
+    const send = (text: string) => db.actions.messages({ channelId, text, userId: me });
+
+    return /* … */;
+}
+```
+
+## Reads — live, indexed queries
+
+Each collection is a normal TanStack DB collection, so `useLiveQuery` gives you a
+reactive relational layer that runs **on the client**: joins, filters, sorts and
+aggregates, all maintained incrementally as deltas arrive. Collections are
+`autoIndex`ed, so these stay fast as data grows.
+
+```tsx
+import { eq } from "@tanstack/db";
+
+const { data } = useLiveQuery((q) =>
+    q
+        .from({ message: db.collections.messages })
+        .join({ author: db.collections.users }, ({ author, message }) => eq(message.userId, author._id), "left")
+        .orderBy(({ message }) => message.createdAt, "asc")
+        .select(({ author, message }) => ({ id: message._id, text: message.text, author: author?.name })),
+);
+```
+
+No extra server round-trip — the author name and ordering are derived from the
+two synced collections.
+
+## Writes — optimistic + durable outbox
+
+Each `insert` binding produces an action under `db.actions.<table>`. Calling it:
+
+1. **inserts the optimistic row immediately** (so the UI updates with no latency),
+2. **persists the write to a durable outbox** (IndexedDB) and sends it via your
+   Lunora mutation, retrying with backoff until it succeeds — so a write made
+   offline is never lost and replays on reconnect,
+3. **supersedes the optimistic row** with the real server row on acknowledgement
+   (matched by id — see [client ids](#client-generated-ids)),
+4. **rolls the optimistic row back** if the server _rejects_ the mutation (a
+   validation or conflict error). Transient network/HTTP failures are retried,
+   not rolled back.
+
+```ts
+const { id, transaction } = db.actions.messages({ channelId, text, userId });
+
+// `id` is the client-generated row id; `transaction.isPersisted.promise`
+// resolves when the write is confirmed (or rejects on rollback).
+await transaction.isPersisted.promise;
+```
+
+This is the same durable-outbox and reconciliation model `@lunora/client`
+exposes directly — see [Offline-first](/docs/concepts/offline-first) for the
+lower-level `persistence` + `queryCache` options, the service-worker app-shell
+recipe, and the connection-status APIs, if you want offline reads and writes
+without adopting the full TanStack DB collection layer.
+
+## Scoped (sharded) collections
+
+A `scopeBy` field makes a collection re-pointable — for a [sharded](/docs/concepts/sharding)
+query like `messages.list({ channelId })`, call `db.scope.<table>(args)` to switch
+which shard it syncs, or with no args to detach:
+
+```ts
+db.scope.messages({ channelId }); // sync this channel
+db.scope.messages(); // detach (e.g. on unmount)
+```
+
+## Client-generated ids
+
+For the optimistic row and the persisted server row to reconcile by key, the
+client must choose the row id up front. The `insert` binding generates a UUID,
+hands it to `optimistic` (as the row's `_id`) and forwards it to the mutation via
+`toArgs` — your mutation persists it with the validated `clientId` option:
+
+```ts title="lunora/messages.ts"
+export const send = mutation
+    .input({ channelId: v.id("channels"), id: v.optional(v.string()), text: v.string() })
+    .mutation(({ ctx, args: { channelId, id, text } }) =>
+        ctx.db.insert("messages", { channelId, text, userId: ctx.auth.userId }, id ? { clientId: id } : undefined),
+    );
+```
+
+`ctx.db.insert(table, doc, { clientId })` honours a **UUID-shaped** client id and
+is validated for shape; uniqueness is still enforced by the primary key, so a
+client can't collide with, overwrite, or forge a peer row. Without `clientId`,
+Lunora mints the id as usual. See [`ctx.db.insert`](/docs/packages/server#client-supplied-ids).
+
+## Manual binding
+
+`defineCollections(client, defs)` is the underlying API. Each entry is:
+
+- `list` — the Lunora query that lists the rows (the sync source). **Required.**
+- `getKey?` — row key extractor; defaults to `row._id`.
+- `scopeBy?` — a field that scopes the list (a shard key); makes the collection
+  re-pointable via `db.scope.<table>`.
+- `insert?` — `{ mutation, optimistic, toArgs }` to make the table writable
+  through the outbox.
+
+It returns `{ collections, actions, scope, executor }`. The row and action-input
+types are inferred from each binding's `list` return and `optimistic` input, so
+`db.collections.*` and `db.actions.*` are fully typed.
+
+## Advisor
+
+Because the data layer keys writes off `ctx.db.insert` attribution, codegen runs
+a [`table_without_insert`](/docs/packages/studio) advisory: an `INFO` nudge for any
+schema table no function inserts into. It's a confirm-intent signal (the table
+may be read-only, seeded by a migration, or written elsewhere), not an error.

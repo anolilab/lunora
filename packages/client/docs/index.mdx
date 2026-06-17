@@ -1,0 +1,66 @@
+---
+title: "@lunora/client"
+description: Framework-agnostic browser/edge client.
+---
+
+`@lunora/client` is the framework-agnostic SDK. React, Vue, Solid and Svelte
+adapters wrap it. You only depend on it directly when writing a custom
+adapter or driving Lunora from a Node/Bun script.
+
+```ts
+import { LunoraClient } from "lunora/client";
+
+const client = new LunoraClient({ url: "https://app.example.workers.dev" });
+const messages = await client.query(api.messages.list, { channelId });
+await client.mutation(api.messages.send, { channelId, text: "hi" });
+```
+
+## Wire protocol
+
+- **Queries / mutations / actions** — `POST /_lunora/rpc`, JSON body
+  `{ functionPath, args, shardKey? }`. Response: `{ result }` or `{ error }`.
+- **Subscriptions** — single multiplexed WebSocket at `/_lunora/ws`. Frames
+  are `{ type: "subscribe" | "unsubscribe" | "delta" | "ack", id, ... }`.
+
+## Reconnect & bookmarks
+
+The client keeps a per-session monotonic bookmark in `BookmarkStorage`
+(in-memory by default). On reconnect it includes the bookmark with each
+subscription so the server can replay any deltas it missed. Bookmarks also
+flow through the `x-d1-bookmark` header to give D1 read-your-writes
+consistency across replicas.
+
+## Offline queue
+
+Mutations issued while disconnected land in `OfflineQueue`. They are
+**deduped by `mutationKey`** (default: `functionPath + args hash`) and
+flushed on reconnect. The queue lives in memory by default; for durability
+across a reload pass a `persistence` adapter:
+
+```ts
+import { LunoraClient, createIndexedDbPersistence, createAsyncStoragePersistence } from "lunora/client";
+
+// Browser:
+new LunoraClient({ url, persistence: createIndexedDbPersistence() });
+
+// React Native / Expo (any async key/value store):
+import AsyncStorage from "@react-native-async-storage/async-storage";
+new LunoraClient({ url, persistence: createAsyncStoragePersistence({ storage: AsyncStorage }) });
+```
+
+See [Offline-first](/docs/concepts/offline-first) for the full reads + writes story.
+
+## Optimistic updates
+
+`client.mutation(fn, args, { optimistic: (current) => next })` patches the
+cache immediately and rolls back if the server rejects the call.
+
+## Auth
+
+`client.setAuthToken(jwt)` stamps an `Authorization: Bearer <jwt>` header
+on every RPC and includes it as a query param on the WebSocket handshake.
+
+## See also
+
+- [@lunora/react](/docs/packages/react)
+- [Concepts: real-time](/docs/concepts/realtime)

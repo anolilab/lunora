@@ -1,0 +1,177 @@
+---
+title: Build a real-time chat app in 15 minutes
+description: End-to-end Lunora walkthrough — schema, query, mutation, subscription, React, sharding.
+---
+
+This tutorial ships a working multi-channel chat in roughly fifteen minutes of
+typing. By the end you'll have a typed schema, a query that auto-subscribes,
+a mutation that broadcasts deltas, a React UI that reacts to them, and the
+table sharded by `channelId` so it scales past one Durable Object.
+
+You'll need the prerequisites from [Getting started](/docs/getting-started):
+Node 22+, pnpm 10+, and a Cloudflare account if you want to deploy.
+
+## 1. Scaffold
+
+```bash
+pnpm create lunora@latest chat
+cd chat
+pnpm install
+```
+
+The template gives you a `lunora/schema.ts`, a starter `lunora/messages.ts`,
+and a `src/server/index.ts` that boots `@lunora/runtime`'s `createWorker`.
+
+## 2. Model the data
+
+Replace `lunora/schema.ts` with two tables — `channels` (global, so every shard
+sees them) and `messages` (sharded by channel, so each room gets its own DO):
+
+```ts
+import { defineSchema, defineTable, v } from "lunora/server";
+
+export const schema = defineSchema({
+    channels: defineTable({
+        name: v.string(),
+        topic: v.optional(v.string()),
+    })
+        .global()
+        .index("by_name", ["name"], { unique: true }),
+
+    messages: defineTable({
+        channelId: v.id("channels"),
+        userId: v.id("users"),
+        text: v.string(),
+        createdAt: v.number(),
+    })
+        .shardBy("channelId")
+        .index("by_channel", ["channelId", "createdAt"]),
+});
+```
+
+`.global()` puts `channels` in D1 — there are only so many rooms, and you
+want them addressable from any shard. `.shardBy("channelId")` puts each
+channel's messages in its own Durable Object so a single noisy room can't
+exhaust another room's budget.
+
+## 3. Generate the migration
+
+`channels` is global, so it needs a D1 migration. Lunora reads the schema
+and writes the SQL for you:
+
+```bash
+pnpm lunora migrate generate init
+# wrote lunora/migrations/20240401123456_init.sql
+```
+
+Commit the SQL and the `.snapshot.json` next to it — both are deterministic.
+
+## 4. Write the query
+
+Create `lunora/messages.ts` (the template already has a starter version — replace
+its contents with the real implementation):
+
+```ts
+import { mutation, query, v } from "lunora/server";
+
+export const list = query.input({ channelId: v.id("channels"), limit: v.optional(v.number()) }).query(async ({ ctx, args: { channelId, limit } }) => {
+    return ctx.db
+        .query("messages")
+        .withIndex("by_channel", (q) => q.eq("channelId", channelId))
+        .order("desc")
+        .take(limit ?? 50);
+});
+```
+
+Every Lunora `query` doubles as a subscription. The React side calls
+`useQuery` and re-renders whenever a mutation in the same shard touches the
+`messages` table.
+
+## 5. Write the mutation
+
+```ts
+export const send = mutation.input({ channelId: v.id("channels"), text: v.string() }).mutation(async ({ ctx, args: { channelId, text } }) => {
+    if (!ctx.auth.user) throw new Error("must be signed in");
+
+    await ctx.db.insert("messages", {
+        channelId,
+        userId: ctx.auth.user.id,
+        text,
+        createdAt: Date.now(),
+    });
+});
+```
+
+`ctx.db.insert` types itself against your schema — pass the wrong shape and
+TypeScript yells. At runtime the insert broadcasts a delta envelope; every
+client subscribed to `list` for that `channelId` re-renders.
+
+## 6. Wire the React app
+
+`src/client/main.tsx` already wraps your tree in `LunoraProvider`. Build the
+chat panel:
+
+```tsx
+import { api } from "@/lunora/_generated/api";
+import { useMutation, useQuery } from "@lunora/react";
+import { useState } from "react";
+
+export const Chat = ({ channelId }: { channelId: string }) => {
+    const messages = useQuery(api.messages.list, { channelId });
+    const send = useMutation(api.messages.send);
+    const [text, setText] = useState("");
+
+    if (!messages) return <p>Loading...</p>;
+
+    return (
+        <div>
+            <ul>
+                {messages.toReversed().map((m) => (
+                    <li key={m._id}>{m.text}</li>
+                ))}
+            </ul>
+            <form
+                onSubmit={(event) => {
+                    event.preventDefault();
+                    void send({ channelId, text });
+                    setText("");
+                }}
+            >
+                <input value={text} onChange={(event) => setText(event.target.value)} />
+                <button type="submit">Send</button>
+            </form>
+        </div>
+    );
+};
+```
+
+## 7. Run the dev loop
+
+```bash
+pnpm dev
+```
+
+Open two browser tabs at `http://localhost:5173`, point them at the same
+`channelId`, and type. The second tab sees the first tab's message land
+without a refresh — the mutation broadcast travelled through the channel's
+Durable Object back to every subscriber.
+
+## 8. Deploy
+
+```bash
+pnpm lunora deploy
+```
+
+`lunora deploy` runs codegen, validates `wrangler.jsonc`, applies any pending
+D1 migrations through `MigrationRunner`, and finally invokes
+`wrangler deploy`. Your chat is now live on Cloudflare's edge — one DO per
+channel, hibernated when idle, billed by the millisecond.
+
+## Where to next
+
+- [Concepts: sharding](/docs/concepts/sharding) — when to reach for `.shardBy()`
+  vs. `.global()`
+- [@lunora/auth](/docs/packages/auth) — replace the `must be signed in` stub
+  with real sessions
+- [@lunora/storage](/docs/packages/storage) — attach images and files to messages
+- [Limits](/docs/limits) — the per-DO ceilings you're now under

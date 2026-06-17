@@ -1,0 +1,53 @@
+---
+title: Queries & mutations
+description: query / mutation / action — what each is for and how ctx is shaped.
+---
+
+Lunora exposes three function kinds. Picking the right one is a function of
+**what side-effects you need** and **what reactivity guarantees the client
+gets back**.
+
+| Kind       | Side effects                  | Reactive                     | Use when                                     |
+| ---------- | ----------------------------- | ---------------------------- | -------------------------------------------- |
+| `query`    | reads only                    | yes — clients auto-subscribe | listing/reading data                         |
+| `mutation` | reads + writes                | broadcasts deltas            | inserts/updates/deletes                      |
+| `action`   | anything, including `fetch()` | no                           | calling external APIs, queues, sending email |
+
+```ts
+import { mutation, query, v } from "lunora/server";
+
+export const list = query.input({ channelId: v.id("channels"), limit: v.optional(v.number()) }).query(async ({ ctx, args: { channelId, limit } }) => {
+    return ctx.db
+        .query("messages")
+        .withIndex("by_channel", (q) => q.eq("channelId", channelId))
+        .order("desc")
+        .take(limit ?? 50);
+});
+
+export const send = mutation.input({ channelId: v.id("channels"), text: v.string() }).mutation(async ({ ctx, args }) => {
+    if (!ctx.auth.user) throw new Error("must be signed in");
+    await ctx.db.insert("messages", { ...args, userId: ctx.auth.user.id });
+});
+```
+
+## `ctx.db`
+
+Inside a `query` you get a read-only `DatabaseReader`. Inside a `mutation`
+you get a `DatabaseWriter` with `insert`, `patch`, `replace` and `delete`.
+Both are typed by your schema — `ctx.db.insert("messages", ...)` errors at
+compile time if the shape is wrong.
+
+## `ctx.auth`
+
+Populated by `@lunora/auth` when an authenticated session cookie is present.
+`ctx.auth.authenticated` narrows `ctx.auth.user` from `User | null` to `User`.
+
+## `ctx.scheduler`
+
+Available in mutations and actions. `ctx.scheduler.runAfter(ms, fn, args)`
+enqueues a deferred call against the SchedulerDO.
+
+## See also
+
+- [Real-time](/docs/concepts/realtime)
+- [API: @lunora/server](/docs/packages/server)

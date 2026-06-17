@@ -1,0 +1,153 @@
+{
+    "lunora": {
+        "displayName": "lunora",
+        "description": "Unscoped umbrella — one install for the base packages (server, values, runtime, do, client) via subpaths, plus the lunora CLI bin."
+    },
+    "server": {
+        "displayName": "Server",
+        "description": "Authoring API: defineSchema, defineTable, query, mutation, action.",
+        "features": ["Typed query / mutation / action builders", "Schema & table definitions", "End-to-end type inference"]
+    },
+    "values": {
+        "displayName": "Values",
+        "description": "v.* validators and return-type inference."
+    },
+    "runtime": {
+        "displayName": "Runtime",
+        "description": "Worker entry: RPC router, shard resolver, query coordinator."
+    },
+    "do": {
+        "displayName": "Durable Objects",
+        "description": "ShardDO (SQLite, OCC, hibernated WebSocket subscriptions) and SessionDO."
+    },
+    "d1": {
+        "displayName": "D1",
+        "description": "D1 adapter for .global() tables; wraps the Sessions API for read-your-writes."
+    },
+    "client": {
+        "displayName": "Client",
+        "description": "Browser SDK: WebSocket transport, optimistic updates, offline queue.",
+        "features": ["Live subscriptions", "Optimistic updates", "Offline queue"]
+    },
+    "react": {
+        "displayName": "React",
+        "description": "useQuery / useMutation / useSubscription / useAuth hooks."
+    },
+    "vue": {
+        "displayName": "Vue",
+        "description": "Live composables, optimistic mutations, reactive loaders."
+    },
+    "solid": {
+        "displayName": "Solid",
+        "description": "Live queries, optimistic mutations, reactive loaders for SolidJS."
+    },
+    "svelte": {
+        "displayName": "Svelte",
+        "description": "Live stores, optimistic mutations, reactive loaders."
+    },
+    "db": {
+        "displayName": "TanStack DB",
+        "description": "defineCollections wires Lunora queries/mutations into live, indexed client collections + a durable offline outbox."
+    },
+    "studio": {
+        "displayName": "Studio",
+        "description": "Local admin UI for your schema, data, logs, and advisors."
+    },
+    "vite": {
+        "displayName": "Vite Plugin",
+        "description": "Vite plugin over @cloudflare/vite-plugin — codegen, wrangler validator, error overlay."
+    },
+    "astro": {
+        "displayName": "Astro",
+        "description": "Astro integration: single-worker composition plus reactive-loader server helpers."
+    },
+    "codegen": {
+        "displayName": "Codegen",
+        "description": "Emits _generated/{api,server,dataModel}.ts from your schema.ts."
+    },
+    "cli": {
+        "displayName": "CLI",
+        "description": "Subcommands: init, dev, deploy, codegen, run, reset, migrate."
+    },
+    "config": {
+        "displayName": "Config",
+        "description": "Shared CLI + Vite config/scaffolding layer (wrangler validator, .dev.vars grammar)."
+    },
+    "testing": {
+        "displayName": "Testing",
+        "description": "In-memory harness for queries/mutations/actions plus E2E mail-catcher helpers."
+    },
+    "advisor": {
+        "displayName": "Advisor",
+        "description": "Schema & query lints (splinter-style advisors) feeding the Studio Advisors table."
+    },
+    "ai": {
+        "displayName": "AI",
+        "description": "Workers AI helper on the Vercel AI SDK — ctx.ai with generateText / streamText / embed."
+    },
+    "analytics": {
+        "displayName": "Analytics",
+        "description": "Analytics Engine bindings for usage and event metrics."
+    },
+    "auth": {
+        "displayName": "Auth",
+        "description": "Auth built on better-auth, D1-backed: email/password, OAuth, passkeys, 2FA, organizations.",
+        "features": ["Email/password + OAuth", "Passkeys & 2FA", "Sessions & organizations"]
+    },
+    "browser": {
+        "displayName": "Browser",
+        "description": "Browser Rendering — Playwright on Cloudflare Workers."
+    },
+    "container": {
+        "displayName": "Containers",
+        "description": "Cloudflare Containers: defineContainer → generated container DOs + typed ctx.containers."
+    },
+    "hyperdrive": {
+        "displayName": "Hyperdrive",
+        "description": "Connect an external Postgres/MySQL database via Cloudflare Hyperdrive (ctx.sql)."
+    },
+    "images": {
+        "displayName": "Images",
+        "description": "Cloudflare Images transforms and typed delivery."
+    },
+    "kv": {
+        "displayName": "KV",
+        "description": "Typed Workers KV namespaces."
+    },
+    "mail": {
+        "displayName": "Mail",
+        "description": "Resend adapter, TSX templates, queue-backed sends."
+    },
+    "mcp": {
+        "displayName": "MCP",
+        "description": "Model Context Protocol server exposing a Lunora deployment to AI agents."
+    },
+    "payment": {
+        "displayName": "Payment",
+        "description": "Payment provider integration (Stripe) with typed actions and webhooks."
+    },
+    "ratelimit": {
+        "displayName": "Rate Limit",
+        "description": "Token-bucket / fixed-window / sliding-window limiting with pluggable stores and middleware."
+    },
+    "scheduler": {
+        "displayName": "Scheduler",
+        "description": "runAfter / runAt plus Cron Triggers via SchedulerDO."
+    },
+    "seed": {
+        "displayName": "Seed",
+        "description": "Snaplet-style deterministic seeding introspected from defineSchema."
+    },
+    "storage": {
+        "displayName": "Storage",
+        "description": "R2 typed buckets and signed URLs."
+    },
+    "vectors": {
+        "displayName": "Vectors",
+        "description": "Cloudflare Vectorize adapter: typed vector indexes and similarity search."
+    },
+    "workflow": {
+        "displayName": "Workflows",
+        "description": "Durable, multi-step workflows wired into the worker entry."
+    }
+}

@@ -1,0 +1,253 @@
+---
+title: "@lunora/vue"
+description: Vue 3 composables built on @lunora/client — live queries, optimistic mutations, and an SSR hydration handoff.
+---
+
+`@lunora/vue` is the Vue 3 adapter for Lunora. It's a thin, idiomatic layer over
+the framework-neutral [`@lunora/client`](/docs/packages/client) — which owns the
+WebSocket transport, subscription registry, offline queue, and delta-merge — and
+re-expresses that contract as Vue composables. A live query is just a
+`shallowRef` the socket writes to; an optimistic mutation is a small bundle of
+refs plus an awaitable `mutate`.
+
+> **Preview.** The Vue adapter exists and exposes the same hydrate-then-subscribe
+> handoff as React, but it is **preview** maturity — not yet proven end-to-end
+> against a running app. The React adapter is the only one verified through the
+> full live-loader path. See [Bring your framework](/docs/frameworks/bring-your-framework).
+
+```ts
+import { LunoraClient } from "lunora/client";
+import { createLunora } from "@lunora/vue";
+import { createApp } from "vue";
+
+import { api } from "./lunora/_generated/api";
+import App from "./App.vue";
+
+const client = new LunoraClient({ url: import.meta.env.VITE_LUNORA_URL });
+
+createApp(App).use(createLunora(client)).mount("#app");
+```
+
+## Exports
+
+| Symbol                 | Kind          | Role                                                                                         |
+| ---------------------- | ------------- | -------------------------------------------------------------------------------------------- |
+| `createLunora`         | plugin        | `app.use(createLunora(client))` — provide the shared client to the whole app.                |
+| `provideLunora`        | composable    | `provide` the client to a subtree from inside a parent `setup()`.                            |
+| `useLunora`            | composable    | Read the `LunoraClient` from the nearest provider. Throws if none is mounted.                |
+| `LUNORA_INJECTION_KEY` | injection key | The `InjectionKey` the provider uses — for advanced manual `inject()`.                       |
+| `useQuery`             | composable    | Live query as a `ref`. Reactive args re-subscribe; `"skip"` short-circuits.                  |
+| `useMutation`          | composable    | Optimistic mutation handle: `{ data, error, pending, mutate, reset }` refs.                  |
+| `subscribeToQuery`     | function      | Low-level: subscribe with **fixed** args into a `ref` (the primitive behind hydration).      |
+| `hydratePreloaded`     | composable    | Seed a `ref` synchronously from an SSR `Preloaded` token, then attach the live subscription. |
+
+Re-exported types: `ArgsOf`, `LunoraClient`, `FunctionReference`,
+`MutationCallOptions`, `OptimisticLocalStore`, `OptimisticUpdate`, `Preloaded`,
+`ReturnOf`, `Unsubscribe`, `User`, `UseQueryOptions`, and the `MutationHandle`
+interface.
+
+## Provider — `createLunora` / `provideLunora` / `useLunora`
+
+Mount the single app-wide `LunoraClient` so every composable can resolve it. Use
+the plugin form at the app root, or `provideLunora` inside a parent component's
+`setup()` to scope a client to a subtree:
+
+```ts
+import { createLunora, provideLunora, useLunora } from "@lunora/vue";
+
+// Plugin form (app root):
+createApp(App).use(createLunora(client)).mount("#app");
+
+// Composition form (inside a parent <script setup>):
+provideLunora(client);
+
+// Anywhere below: read the client directly.
+const client = useLunora();
+```
+
+`useLunora()` throws a clear error when called outside a
+`createLunora`/`provideLunora` scope, so a missing provider fails loudly instead
+of surfacing as a later `undefined` dereference.
+
+## `useQuery(fn, args, options?)`
+
+Subscribes to a query and exposes the latest value as a `ref`. The ref is
+`undefined` until the first server response lands, then updates on every delta
+the server pushes — the Vue equivalent of React's `useQuery`.
+
+`args` may be a plain value, a `ref`, or a getter. Passing a reactive source
+makes the subscription reactive: when the args change, the previous subscription
+is torn down and a fresh one opens for the new args. Pass `"skip"` (or a source
+resolving to `"skip"`) to short-circuit — no network call, no socket. Multiple
+`useQuery` calls with identical args share a single underlying subscription (the
+client de-dupes by `(fn, args, shardKey)`).
+
+```vue
+<script setup lang="ts">
+import { useQuery } from "@lunora/vue";
+import { ref } from "vue";
+
+import { api } from "./lunora/_generated/api";
+
+const channelId = ref("general");
+
+// Reactive getter args: changing `channelId` re-subscribes.
+const messages = useQuery(api.messages.list, () => ({ channelId: channelId.value }));
+
+const signedIn = ref(false);
+const profile = useQuery(api.users.me, () => (signedIn.value ? {} : "skip"));
+</script>
+
+<template>
+    <ul>
+        <li v-for="m in messages" :key="m._id">{{ m.text }}</li>
+    </ul>
+</template>
+```
+
+Pass `{ shardKey }` in `options` to route to a specific shard when the target
+function is `.shardBy(...)`-partitioned. The subscription tears down
+automatically when the owning component unmounts (or its effect scope stops), so
+call `useQuery` inside `setup()` or another active effect scope.
+
+## `useMutation(fn)`
+
+Returns a reactive `MutationHandle` for a mutation reference:
+
+```ts
+interface MutationHandle<F> {
+    data: Ref<ReturnOf<F> | undefined>; // latest resolved value
+    error: Ref<Error | undefined>; // latest error
+    pending: Ref<boolean>; // true while any call from this handle is in flight (ref-counted)
+    mutate: (args, options?) => Promise<ReturnOf<F>>; // awaitable; resolves with the server value
+    reset: () => void; // clear data/error back to idle
+}
+```
+
+`pending` is ref-counted across overlapping invocations of the same handle, so
+it only flips back to `false` once every concurrent call has settled.
+
+```vue
+<script setup lang="ts">
+import { useMutation } from "@lunora/vue";
+
+import { api } from "./lunora/_generated/api";
+
+const { mutate, pending, error } = useMutation(api.messages.send);
+
+async function send(channelId: string, text: string) {
+    await mutate({ channelId, text });
+}
+</script>
+
+<template>
+    <button :disabled="pending" @click="send('general', 'hi')">Send</button>
+    <p v-if="error">{{ error.message }}</p>
+</template>
+```
+
+### Optimistic updates
+
+Optimistic updates stay client-owned and are passed **per call** via
+`mutate`'s `MutationCallOptions` — the `optimistic` / `optimisticUpdate` options
+pass straight through to `client.mutation`, which applies them against the live
+Lunora subscription cache and rolls them back on failure. Any `useQuery` /
+`hydratePreloaded` ref reading the same data reflects the change immediately and
+reverts if the server rejects.
+
+```ts
+await mutate(
+    { channelId, text },
+    {
+        optimisticUpdate: (store) => {
+            const current = store.getQuery(api.messages.list, { channelId }) ?? [];
+            store.setQuery(api.messages.list, { channelId }, [...current, draft]);
+        },
+    },
+);
+```
+
+> The Vue adapter does **not** ship a bound `withOptimisticUpdate(...)` handle
+> (React keeps one). Use `mutate(args, { optimisticUpdate })` per call instead.
+
+## Reactive loaders — `hydratePreloaded`
+
+The SSR-seed-to-live handoff: the Vue half of "your loaders are live". Run the
+query on the server with `preloadQuery` (from `@lunora/vue/server`), pass the
+serializable `Preloaded` token to the client, and `hydratePreloaded` seeds a
+`ref` **synchronously** from `preloaded.value` — so the first read during
+hydration shows the server value with no loading flash and no hydration
+mismatch. After seeding it opens the live WebSocket subscription on the same
+`(functionPath, args, shardKey)` the loader used, so every later delta updates
+the ref exactly like `useQuery`.
+
+```vue
+<script setup lang="ts">
+import { hydratePreloaded } from "@lunora/vue";
+import type { Preloaded } from "@lunora/vue";
+
+const props = defineProps<{ preloaded: Preloaded<Array<{ _id: string; title: string }>> }>();
+
+// Seeded from SSR on first read, then live.
+const posts = hydratePreloaded(props.preloaded);
+</script>
+
+<template>
+    <ul>
+        <li v-for="p in posts" :key="p._id">{{ p.title }}</li>
+    </ul>
+</template>
+```
+
+`subscribeToQuery(client, fn, args, { seed?, shardKey? })` is the lower-level
+primitive `hydratePreloaded` builds on — it subscribes with **fixed** args
+(never reactive) and seeds the ref synchronously. Reach for it only when you
+already hold a client and immutable args; otherwise prefer `useQuery` or
+`hydratePreloaded`.
+
+## `@lunora/vue/server`
+
+Server-side preload helpers, re-exported from `@lunora/client/ssr` — the
+framework-neutral server contract shared by every adapter. This entry opens no
+WebSocket and touches no browser globals, so it is safe to import from a
+Nuxt/Nitro server route or any SSR context.
+
+```ts
+import { createServerClient, preloadQuery } from "@lunora/vue/server";
+
+import { api } from "./lunora/_generated/api";
+
+// Per request — never reuse a client across requests (token leakage).
+const client = createServerClient({ url: process.env.LUNORA_URL!, token });
+const preloaded = await preloadQuery(client, api.posts.list, {});
+// → pass `preloaded` to the component, hand it to hydratePreloaded on the client.
+```
+
+Exports: `createServerClient`, `preloadQuery`, `serializePreloaded`,
+`deserializePreloaded`, `preloadedQueryResult`, `getServerSession`, plus the
+`Preloaded` / `ServerClientOptions` / `ServerSession` types.
+
+## `@lunora/vue/worker`
+
+Single-worker composition helper for frameworks whose build exposes the emitted
+fetch handler as an importable module. Re-exports `withLunora`
+(`withFrameworkWorker` from [`@lunora/runtime`](/docs/packages/runtime)), which wraps a
+framework handler as Lunora's fallback `httpRouter` and mounts only the reserved
+`/_lunora/*` plane plus `ShardDO`.
+
+> **Nuxt caveat.** Nitro does not expose its emitted fetch handler as an
+> importable virtual module, so single-worker `withLunora` composition is **not**
+> achievable for Nuxt. The supported Nuxt integration is a two-worker split: the
+> Nuxt/Nitro SSR worker plus a separate standalone Lunora worker owning
+> `/_lunora/*` + `ShardDO`, wired by `NUXT_PUBLIC_LUNORA_URL`. `withLunora`
+> stays useful for other frameworks that do expose their handler.
+
+## See also
+
+- [@lunora/react](/docs/packages/react) — the same contract for React
+- [@lunora/solid](/docs/packages/solid) — the SolidJS adapter
+- [@lunora/svelte](/docs/packages/svelte) — the Svelte adapter
+- [@lunora/client](/docs/packages/client) — the framework-neutral SDK this wraps
+- [Bring your framework](/docs/frameworks/bring-your-framework) — composition + adapter maturity
+- [Reactive loaders](/docs/frameworks/reactive-loaders) — the hydrate-then-subscribe handoff
+- [Real-time](/docs/concepts/realtime)
