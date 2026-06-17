@@ -72,6 +72,23 @@ const { mutate, pending } = useMutation(api.messages.send);
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/frameworks/bring-your-framework)**.
 
+## API
+
+| Composable            | React equivalent      | Description                                                                     |
+| --------------------- | --------------------- | ------------------------------------------------------------------------------- |
+| `createLunora`        | `LunoraProvider`      | Vue plugin — call `app.use(createLunora(client))` at the app root.              |
+| `useLunora`           | `useLunora`           | Inject the ambient `LunoraClient` from the nearest provider.                    |
+| `useQuery`            | `useQuery`            | Live query `ShallowRef` — re-subscribes when reactive args change.              |
+| `useMutation`         | `useMutation`         | Optimistic mutation handle (`data`, `error`, `pending`, `mutate`, `reset`).     |
+| `useSubscription`     | `useSubscription`     | Raw subscription `ShallowRef` — unbounded live stream.                          |
+| `usePaginatedQuery`   | `usePaginatedQuery`   | Cursor-paginated query with `loadMore`, `status`, and `results`.                |
+| `useInfiniteQuery`    | `useInfiniteQuery`    | Infinite-scroll variant of `usePaginatedQuery`.                                 |
+| `useAuth`             | `useAuth`             | Reactive auth state (`user`, `isLoading`, `isAuthenticated`).                   |
+| `usePresence`         | `usePresence`         | Collaborative-awareness — heartbeat + live present-members `ShallowRef`.        |
+| `useRateLimit`        | `useRateLimit`        | Client-side rate-limit mirror — `ok`, `disabled`, `retryAfter` as ComputedRefs. |
+| `useConnectionStatus` | `useConnectionStatus` | Reactive connection state (`connecting`, `connected`, `disconnected`).          |
+| `hydratePreloaded`    | `usePreloadedQuery`   | Seed a query synchronously from an SSR `Preloaded` token, then go live.         |
+
 ## Related
 
 - [`@lunora/client`](https://www.npmjs.com/package/@lunora/client) — the framework-neutral browser SDK this adapter wraps.

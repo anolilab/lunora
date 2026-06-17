@@ -1,3 +1,5 @@
+export type { AuthStore } from "./auth";
+export { auth } from "./auth";
 export type { ConnectionStatusStore } from "./connection-status";
 export { connectionStatus } from "./connection-status";
 
@@ -26,7 +28,15 @@ export { getLunoraClient, setLunoraClient } from "./context";
 export { default as hydratePreloaded } from "./hydrate-preloaded";
 export type { MutationHandle } from "./mutation";
 export { mutation } from "./mutation";
+export type { InfiniteQueryHandle, InfiniteQueryOptions, PageItemOf, PaginatedArgs, PaginatedQueryHandle, PaginatedQueryOptions } from "./paginated-query";
+export { infiniteQuery, paginatedQuery } from "./paginated-query";
+export type { HeartbeatReference, ListPresentReference, PresenceHandle, PresenceOptions } from "./presence";
+export { presence } from "./presence";
 export type { QueryStore, QueryStoreOptions } from "./query";
 export { query } from "./query";
+export type { RateLimitHandle, RateLimitOptions } from "./rate-limit";
+export { rateLimit } from "./rate-limit";
+export type { SubscriptionHandle, SubscriptionStoreOptions } from "./subscription";
+export { subscription } from "./subscription";
 // Re-export the core types adapters lean on, so consumers import them from one place.
 export type { ArgsOf, ConnectionStatus, FunctionReference, LunoraClient, MutationCallOptions, Preloaded, ReturnOf } from "@lunora/client";

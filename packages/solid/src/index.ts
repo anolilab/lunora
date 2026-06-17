@@ -1,9 +1,26 @@
 export { LunoraContext, useLunora } from "./context";
+export type { UseAuthResult } from "./create-auth";
+export { Authenticated, AuthLoading, createAuth, Unauthenticated } from "./create-auth";
 export { default as createConnectionStatus } from "./create-connection-status";
 export type { MutationClient, MutationHandle } from "./create-mutation";
 export { createMutation, createMutationForClient } from "./create-mutation";
+export type {
+    CreateInfiniteQueryOptions,
+    CreateInfiniteQueryResult,
+    CreatePaginatedQueryOptions,
+    CreatePaginatedQueryResult,
+    PageItemOf,
+    PaginatedArgs,
+} from "./create-paginated-query";
+export { createInfiniteQuery, createPaginatedQuery } from "./create-paginated-query";
+export type { CreatePresenceOptions, CreatePresenceResult, HeartbeatReference, ListPresentReference } from "./create-presence";
+export { createPresence } from "./create-presence";
 export type { CreateQueryOptions } from "./create-query";
 export { createQuery } from "./create-query";
+export type { CreateRateLimitOptions, CreateRateLimitResult } from "./create-rate-limit";
+export { createRateLimit } from "./create-rate-limit";
+export type { CreateSubscriptionResult } from "./create-subscription";
+export { createSubscription } from "./create-subscription";
 export { default as hydratePreloaded } from "./hydrate-preloaded";
 
 /**
@@ -26,7 +43,6 @@ export { default as hydratePreloaded } from "./hydrate-preloaded";
  */
 export type { LunoraProviderProps } from "./lunora-provider";
 export { LunoraProvider } from "./lunora-provider";
-
 // Re-export the core type surface so consumers can stay on a single import for
 // function references, args/return inference, and the SSR `Preloaded` token.
 export type { ArgsOf, FunctionReference, OptimisticUpdate, Preloaded, ReturnOf, Unsubscribe } from "@lunora/client";

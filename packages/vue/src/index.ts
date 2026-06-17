@@ -1,3 +1,4 @@
+export { Authenticated, AuthLoading, Unauthenticated } from "./auth-gates";
 export { hydratePreloaded } from "./hydrate-preloaded";
 
 /**
@@ -26,13 +27,32 @@ export type {
     MutationCallOptions,
     OptimisticLocalStore,
     OptimisticUpdate,
+    PaginationResult,
+    PaginationStatus,
     Preloaded,
     ReturnOf,
     Unsubscribe,
     UseQueryOptions,
     User,
 } from "./types";
+export type { UseAuthResult } from "./use-auth";
+export { useAuth } from "./use-auth";
 export { default as useConnectionStatus } from "./use-connection-status";
 export type { MutationHandle } from "./use-mutation";
 export { useMutation } from "./use-mutation";
+export type {
+    PageItemOf,
+    PaginatedArgs,
+    UseInfiniteQueryOptions,
+    UseInfiniteQueryResult,
+    UsePaginatedQueryOptions,
+    UsePaginatedQueryResult,
+} from "./use-paginated-query";
+export { useInfiniteQuery, usePaginatedQuery } from "./use-paginated-query";
+export type { HeartbeatReference, ListPresentReference, UsePresenceOptions, UsePresenceResult } from "./use-presence";
+export { usePresence } from "./use-presence";
 export { subscribeToQuery, useQuery } from "./use-query";
+export type { UseRateLimitOptions, UseRateLimitResult } from "./use-rate-limit";
+export { useRateLimit } from "./use-rate-limit";
+export type { UseSubscriptionResult } from "./use-subscription";
+export { useSubscription } from "./use-subscription";

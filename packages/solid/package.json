@@ -60,7 +60,8 @@
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
-        "@lunora/client": "workspace:*"
+        "@lunora/client": "workspace:*",
+        "@lunora/ratelimit": "workspace:*"
     },
     "devDependencies": {
         "@babel/core": "catalog:build",

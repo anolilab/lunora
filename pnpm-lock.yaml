@@ -2409,6 +2409,9 @@ importers:
       '@lunora/client':
         specifier: workspace:*
         version: link:../client
+      '@lunora/ratelimit':
+        specifier: workspace:*
+        version: link:../ratelimit
     devDependencies:
       '@babel/core':
         specifier: catalog:build
@@ -2603,6 +2606,9 @@ importers:
       '@lunora/client':
         specifier: workspace:*
         version: link:../client
+      '@lunora/ratelimit':
+        specifier: workspace:*
+        version: link:../ratelimit
       '@lunora/runtime':
         specifier: workspace:*
         version: link:../runtime
@@ -2774,6 +2780,9 @@ importers:
       '@lunora/client':
         specifier: workspace:*
         version: link:../client
+      '@lunora/ratelimit':
+        specifier: workspace:*
+        version: link:../ratelimit
       '@lunora/runtime':
         specifier: workspace:*
         version: link:../runtime

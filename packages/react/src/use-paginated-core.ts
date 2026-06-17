@@ -1,13 +1,14 @@
 "use client";
 
 import type { FunctionReference } from "@lunora/client";
+import type { Page,PaginatedCoreResult, PaginationResult } from "@lunora/client/pagination";
+import { applyLoadMore, derivePaginationStatus, initialPages, rebalance, } from "@lunora/client/pagination";
 import type { QueryKey } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
 import { getSubscriptionRegistry, lunoraQueryKey, serializeQueryKey } from "./cache";
 import { useLunora } from "./lunora-provider";
-import type { PaginationResult, PaginationStatus } from "./types";
 import useLazyRef from "./use-lazy-ref";
 
 /**
@@ -44,96 +45,16 @@ import useLazyRef from "./use-lazy-ref";
  * `(fnRef, args, shardKey)` where `args.paginationOpts` carries the page's
  * `(cursor=lower, endCursor=upper, numItems)` — so a delta on one range patches
  * exactly that page.
- */
-
-/** Grow factor: a bounded page is split when it exceeds this multiple of its target size. */
-const SPLIT_FACTOR = 2;
-
-/** Shrink factor: a bounded page with a neighbour is joined when it falls below this multiple of its target size. */
-const JOIN_FACTOR = 0.5;
-
-/** A loaded page: a fixed `(lower, upper]` range plus the size it targets. */
-interface Page {
-    // `null | string` mirrors the server's cursor wire shape: a `lower` of
-    // `null` is the first-page start; an `upper` of `null` is the open-ended
-    // (still-growing) final page.
-    lower: null | string;
-    numItems: number;
-    upper: null | string;
-}
-
-interface PaginatedCoreResult<T> {
-    /** Request another page off the open-ended tail. A no-op unless `status === "CanLoadMore"`. */
-    loadMore: (numberItems: number) => void;
-    /** Per-page resolved results in order; entries are `undefined` until a page resolves. */
-    pageResults: (PaginationResult<T> | undefined)[];
-    status: PaginationStatus;
-}
-
-/** First-page seed: a single open-ended range starting at the feed head. */
-const initialPages = (numberItems: number): Page[] => [
-    // eslint-disable-next-line unicorn/no-null -- `lower: null` is the feed head, `upper: null` the open-ended tail — both are wire-shape cursors.
-    { lower: null, numItems: numberItems, upper: null },
-];
-
-/**
- * Run the SPLIT/JOIN maintenance pass over the current page list given freshly
- * resolved results. Returns a new page list when a boundary changed, or
- * `undefined` when the layout is already balanced (so the caller can skip a
- * setState).
  *
- * Only ONE structural edit is applied per pass (the first split or join found),
- * letting the subsequent re-render's resolved results drive the next pass — this
- * keeps each transition observable and avoids reasoning about several
- * simultaneous boundary moves.
+ * The pure state machine (SPLIT_FACTOR, JOIN_FACTOR, Page type, initialPages,
+ * rebalance, derivePaginationStatus, applyLoadMore) lives in
+ * `@lunora/client/pagination` so framework-agnostic adapters can reuse it.
  */
-const rebalance = (pages: Page[], results: (PaginationResult | undefined)[]): Page[] | undefined => {
-    for (const [index, page] of pages.entries()) {
-        // Only bounded (fully-resolved, fixed-range) pages participate; the
-        // open-ended tail grows via `loadMore`, not split/join.
-        if (page.upper === null) {
-            continue;
-        }
 
-        const result = results[index];
+// Re-export pure constants so consumers of this module (tests, etc.) that
+// previously imported them from here continue to work unchanged.
 
-        if (!result) {
-            continue;
-        }
 
-        const size = result.page.length;
-
-        // SPLIT: the range outgrew its target. Cut at the server's midpoint
-        // cursor into `(lower, splitCursor]` and `(splitCursor, upper]`.
-        if (size > SPLIT_FACTOR * page.numItems && result.splitCursor) {
-            const split = result.splitCursor;
-            const next = [...pages];
-
-            next.splice(index, 1, { lower: page.lower, numItems: page.numItems, upper: split }, { lower: split, numItems: page.numItems, upper: page.upper });
-
-            return next;
-        }
-
-        // JOIN: the range shrank below its target and has a following neighbour;
-        // merge by dropping the shared boundary (this page's upper). The merged
-        // page keeps this page's lower and the neighbour's upper.
-        if (size < JOIN_FACTOR * page.numItems && index + 1 < pages.length) {
-            const neighbour = pages[index + 1];
-
-            if (!neighbour) {
-                continue;
-            }
-
-            const next = [...pages];
-
-            next.splice(index, 2, { lower: page.lower, numItems: page.numItems, upper: neighbour.upper });
-
-            return next;
-        }
-    }
-
-    return undefined;
-};
 
 /**
  * The reactive-pagination engine shared by both public hooks. Owns the page
@@ -327,26 +248,7 @@ const usePaginatedCore = <T>(
         }
     });
 
-    let status: PaginationStatus;
-    let nextCursor: null | string | undefined;
-
-    if (skipped || !pageResults[0]) {
-        status = "LoadingFirstPage";
-    } else {
-        const tail = pageResults.at(-1);
-
-        if (!tail) {
-            status = "LoadingMore";
-        } else if (tail.isDone || tail.continueCursor === null) {
-            // The tail is the open-ended page (`upper === null`); a `null`
-            // continueCursor / `isDone` means the feed is fully loaded. A bounded
-            // tail can't occur — `loadMore` always appends an open-ended page.
-            status = "Exhausted";
-        } else {
-            status = "CanLoadMore";
-            nextCursor = tail.continueCursor;
-        }
-    }
+    const { nextCursor, status } = derivePaginationStatus(skipped, pageResults);
 
     const nextCursorRef = useRef<null | string | undefined>(undefined);
 
@@ -361,30 +263,13 @@ const usePaginatedCore = <T>(
     const loadMore = useCallback((numberItems: number) => {
         const cursor = nextCursorRef.current;
 
-        if (cursor === undefined || cursor === null) {
-            return;
-        }
-
-        // Pin the current open-ended tail at `cursor` (it becomes a fixed
-        // `(lower, cursor]` range) and append a fresh open-ended page starting
-        // at `cursor`. The shared boundary keeps the feed gap- and dup-free.
-        setPages((current) => {
-            const next = [...current];
-            const tail = next.at(-1);
-
-            if (tail) {
-                next[next.length - 1] = { lower: tail.lower, numItems: tail.numItems, upper: cursor };
-            }
-
-            // eslint-disable-next-line unicorn/no-null -- a fresh tail is open-ended (`upper: null`); its lower is the just-pinned boundary cursor.
-            next.push({ lower: cursor, numItems: numberItems, upper: null });
-
-            return next;
-        });
+        // applyLoadMore returns undefined when cursor is invalid — no-op.
+        setPages((current) => applyLoadMore(current, cursor, numberItems) ?? current);
     }, []);
 
     return { loadMore, pageResults, status };
 };
 
-export { JOIN_FACTOR, SPLIT_FACTOR, usePaginatedCore };
-export type { Page };
+export { usePaginatedCore };
+
+export {JOIN_FACTOR,type Page, SPLIT_FACTOR} from "@lunora/client/pagination";

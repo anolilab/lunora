@@ -65,6 +65,7 @@
     },
     "dependencies": {
         "@lunora/client": "workspace:*",
+        "@lunora/ratelimit": "workspace:*",
         "@lunora/runtime": "workspace:*"
     },
     "devDependencies": {

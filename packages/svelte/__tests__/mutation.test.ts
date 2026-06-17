@@ -1,4 +1,4 @@
-import type { LunoraClient, FunctionReference } from "@lunora/client";
+import type { FunctionReference, LunoraClient } from "@lunora/client";
 import { get } from "svelte/store";
 import { describe, expect, it, vi } from "vitest";
 

@@ -46,6 +46,14 @@
             "types": "./dist/query/index.d.ts",
             "import": "./dist/query/index.mjs"
         },
+        "./auth": {
+            "types": "./dist/auth/index.d.ts",
+            "import": "./dist/auth/index.mjs"
+        },
+        "./pagination": {
+            "types": "./dist/pagination/index.d.ts",
+            "import": "./dist/pagination/index.mjs"
+        },
         "./ssr": {
             "types": "./dist/ssr/index.d.ts",
             "import": "./dist/ssr/index.mjs"

@@ -1,4 +1,4 @@
-import type { ArgsOf, LunoraClient, FunctionReference, ReturnOf, SubscriptionErrorCallback } from "@lunora/client";
+import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionErrorCallback } from "@lunora/client";
 import { createQuerySubscription } from "@lunora/client/query";
 import type { Readable } from "svelte/store";
 import { readable } from "svelte/store";

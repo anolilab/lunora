@@ -6,8 +6,8 @@ export interface UseQueryOptions {
 
 export {
     type ArgsOf,
-    type LunoraClient,
     type FunctionReference,
+    type LunoraClient,
     type MutationCallOptions,
     type OptimisticLocalStore,
     type OptimisticUpdate,
@@ -16,3 +16,4 @@ export {
     type Unsubscribe,
     type User,
 } from "@lunora/client";
+export { type PaginationResult, type PaginationStatus } from "@lunora/client/pagination";

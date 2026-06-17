@@ -1,4 +1,4 @@
-import type { LunoraClient, FunctionReference, Preloaded } from "@lunora/client";
+import type { FunctionReference, LunoraClient, Preloaded } from "@lunora/client";
 import type { Readable } from "svelte/store";
 import { readable } from "svelte/store";
 

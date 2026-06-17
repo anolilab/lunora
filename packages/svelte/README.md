@@ -69,6 +69,25 @@ const { mutate, pending } = mutation(api.messages.send);
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/frameworks/reactive-loaders)**.
 
+## API
+
+All functions that require a component lifecycle (presence, rate-limit) return a `teardown()` function. Call it from `onDestroy(handle.teardown)` to clean up intervals and subscriptions.
+
+| Function           | React equivalent      | Description                                                                            |
+| ------------------ | --------------------- | -------------------------------------------------------------------------------------- |
+| `setLunoraClient`  | `LunoraProvider`      | Store the ambient `LunoraClient` in Svelte context.                                    |
+| `getLunoraClient`  | `useLunora`           | Read the ambient `LunoraClient` from Svelte context.                                   |
+| `query`            | `useQuery`            | Live readable store — updates on every server delta.                                   |
+| `mutation`         | `useMutation`         | Optimistic mutation handle (`data`, `error`, `pending`, `mutate`, `reset` stores).     |
+| `subscription`     | `useSubscription`     | Raw subscription readable — unbounded live stream.                                     |
+| `paginatedQuery`   | `usePaginatedQuery`   | Cursor-paginated query with `loadMore`, `status`, and `results` stores.                |
+| `infiniteQuery`    | `useInfiniteQuery`    | Infinite-scroll variant of `paginatedQuery`.                                           |
+| `auth`             | `useAuth`             | Reactive auth state stores (`user`, `isLoading`, `isAuthenticated`).                   |
+| `presence`         | `usePresence`         | Collaborative-awareness — heartbeat + live present-members readable + `teardown`.      |
+| `rateLimit`        | `useRateLimit`        | Client-side rate-limit mirror — `ok`, `disabled`, `retryAfter` readables + `teardown`. |
+| `connectionStatus` | `useConnectionStatus` | Reactive connection state store.                                                       |
+| `hydratePreloaded` | `usePreloadedQuery`   | Seed a query store from an SSR `Preloaded` token, then go live.                        |
+
 ## Related
 
 - [`@lunora/client`](https://www.npmjs.com/package/@lunora/client) — the framework-neutral browser SDK this adapter wraps.

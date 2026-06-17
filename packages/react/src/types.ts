@@ -1,4 +1,7 @@
 import type { OptimisticUpdate, User } from "@lunora/client";
+import type { PaginationStatus } from "@lunora/client/pagination";
+
+
 
 export interface UseQueryOptions {
     shardKey?: string;
@@ -20,30 +23,6 @@ export interface UseSubscriptionResult<T> {
     data: T | undefined;
     error: Error | undefined;
 }
-
-/** One page returned by a paginated query — the shape `.paginate()` yields. */
-export interface PaginationResult<T = unknown> {
-    continueCursor: null | string;
-    isDone: boolean;
-    page: T[];
-
-    /**
-     * Reactive-pagination only: the midpoint cursor of a bounded
-     * `(cursor, endCursor]` page, used to split an over-grown page into two
-     * adjacent ranges. Absent on legacy (open-ended) pages.
-     */
-    splitCursor?: null | string;
-}
-
-/**
- * Lifecycle of a `usePaginatedQuery` feed.
- *
- * - `LoadingFirstPage` — the first page is in flight; `results` is empty.
- * - `CanLoadMore` — the loaded tail has a cursor; calling `loadMore` fetches the next page.
- * - `LoadingMore` — a `loadMore` page is in flight; earlier results stay visible.
- * - `Exhausted` — every page has loaded and the server reported `isDone`.
- */
-export type PaginationStatus = "CanLoadMore" | "Exhausted" | "LoadingFirstPage" | "LoadingMore";
 
 export interface UsePaginatedQueryOptions {
     /** Page size for the first page (and the default for `loadMore`). */
@@ -97,3 +76,4 @@ export {
     type ReturnOf,
     type User,
 } from "@lunora/client";
+export {type PaginationResult, type PaginationStatus} from "@lunora/client/pagination";

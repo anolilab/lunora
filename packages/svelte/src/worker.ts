@@ -42,9 +42,9 @@
  * declared in `wrangler.jsonc` so a single Worker bundles both planes.
  */
 export type {
+    ExecutionContextLike,
     FrameworkWorkerOptions as LunoraWorkerOptions,
     FrameworkWorkerOptionsInput as LunoraWorkerOptionsInput,
-    ExecutionContextLike,
     FrameworkHostHandler as SvelteKitWorker,
 } from "@lunora/runtime";
 export { withFrameworkWorker as withLunora } from "@lunora/runtime";

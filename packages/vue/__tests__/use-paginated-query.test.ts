@@ -1,0 +1,198 @@
+import type { PaginationResult } from "@lunora/client/pagination";
+import { describe, expect, it, vi } from "vitest";
+import { effectScope, nextTick } from "vue";
+
+import { useInfiniteQuery, usePaginatedQuery } from "../src/use-paginated-query";
+import { createFakeClient } from "./fake-client";
+
+/** Flush reactive microtask queue. */
+const flushAsync = async (): Promise<void> => {
+    await vi.waitFor(() => undefined);
+    await nextTick();
+    await nextTick();
+};
+
+/** Minimal paginated query function reference. */
+const fn = { __lunoraRef: "messages:list" } as Parameters<typeof usePaginatedQuery>[0];
+
+/**
+ * Tests use `initialNumItems: 5` and push exactly 5 items per page so that
+ * the rebalance thresholds (JOIN at < 0.5×5 = 2.5, SPLIT at > 2×5 = 10) are
+ * never crossed. This lets the tests verify the pagination lifecycle without
+ * triggering split/join maintenance passes.
+ */
+const NUM_ITEMS = 5;
+const firstPageItems = [{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d" }, { id: "e" }];
+const secondPageItems = [{ id: "f" }, { id: "g" }, { id: "h" }, { id: "i" }, { id: "j" }];
+
+describe("usePaginatedQuery (Vue)", () => {
+    it("first page loads and results flatten", async () => {
+        const fake = createFakeClient();
+
+        const scope = effectScope();
+        const result = scope.run(() => fake.provide(() => usePaginatedQuery(fn, {}, { initialNumItems: NUM_ITEMS })))!;
+
+        expect(result.status.value).toBe("LoadingFirstPage");
+        expect(result.results.value).toStrictEqual([]);
+
+        // Push a first-page result.
+        const firstPage: PaginationResult<{ id: string }> = {
+            continueCursor: "cur-1",
+            isDone: false,
+            page: firstPageItems,
+        };
+
+        fake.push("messages:list", { paginationOpts: { cursor: null, endCursor: null, numItems: NUM_ITEMS } }, firstPage);
+        await flushAsync();
+
+        expect(result.status.value).toBe("CanLoadMore");
+        expect(result.results.value).toStrictEqual(firstPageItems);
+
+        scope.stop();
+    });
+
+    it("loadMore appends a second page", async () => {
+        const fake = createFakeClient();
+
+        const scope = effectScope();
+        const result = scope.run(() => fake.provide(() => usePaginatedQuery(fn, {}, { initialNumItems: NUM_ITEMS })))!;
+
+        // Deliver first page.
+        fake.push(
+            "messages:list",
+            { paginationOpts: { cursor: null, endCursor: null, numItems: NUM_ITEMS } },
+            {
+                continueCursor: "cur-1",
+                isDone: false,
+                page: firstPageItems,
+            },
+        );
+        await flushAsync();
+
+        expect(result.status.value).toBe("CanLoadMore");
+
+        // Call loadMore.
+        result.loadMore(NUM_ITEMS);
+        await flushAsync();
+
+        // The second page subscription should have been opened.
+        const secondPageArgs = { paginationOpts: { cursor: "cur-1", endCursor: null, numItems: NUM_ITEMS } };
+        const secondPage: PaginationResult<{ id: string }> = {
+            continueCursor: null,
+            isDone: true,
+            page: secondPageItems,
+        };
+
+        fake.push("messages:list", secondPageArgs, secondPage);
+        await flushAsync();
+
+        expect(result.results.value).toStrictEqual([...firstPageItems, ...secondPageItems]);
+        expect(result.status.value).toBe("Exhausted");
+
+        scope.stop();
+    });
+
+    it("skip short-circuits and sets status to LoadingFirstPage", async () => {
+        const fake = createFakeClient();
+
+        const scope = effectScope();
+        const result = scope.run(() => fake.provide(() => usePaginatedQuery(fn, "skip", { initialNumItems: NUM_ITEMS })))!;
+
+        await flushAsync();
+
+        expect(result.status.value).toBe("LoadingFirstPage");
+        expect(result.results.value).toStrictEqual([]);
+
+        scope.stop();
+    });
+
+    it("last page reports Exhausted", async () => {
+        const fake = createFakeClient();
+
+        const scope = effectScope();
+        const result = scope.run(() => fake.provide(() => usePaginatedQuery(fn, {}, { initialNumItems: NUM_ITEMS })))!;
+
+        fake.push(
+            "messages:list",
+            { paginationOpts: { cursor: null, endCursor: null, numItems: NUM_ITEMS } },
+            {
+                continueCursor: null,
+                isDone: true,
+                page: firstPageItems,
+            },
+        );
+        await flushAsync();
+
+        expect(result.status.value).toBe("Exhausted");
+
+        scope.stop();
+    });
+});
+
+describe("useInfiniteQuery (Vue)", () => {
+    it("first page loads as first page array", async () => {
+        const fake = createFakeClient();
+
+        const scope = effectScope();
+        const result = scope.run(() => fake.provide(() => useInfiniteQuery(fn, {}, { initialNumItems: NUM_ITEMS })))!;
+
+        expect(result.isLoading.value).toBe(true);
+        expect(result.pages.value).toStrictEqual([]);
+
+        fake.push(
+            "messages:list",
+            { paginationOpts: { cursor: null, endCursor: null, numItems: NUM_ITEMS } },
+            {
+                continueCursor: "cur-1",
+                isDone: false,
+                page: firstPageItems,
+            },
+        );
+        await flushAsync();
+
+        expect(result.isLoading.value).toBe(false);
+        expect(result.hasNextPage.value).toBe(true);
+        expect(result.pages.value).toStrictEqual([firstPageItems]);
+
+        scope.stop();
+    });
+
+    it("fetchNextPage appends second page array", async () => {
+        const fake = createFakeClient();
+
+        const scope = effectScope();
+        const result = scope.run(() => fake.provide(() => useInfiniteQuery(fn, {}, { initialNumItems: NUM_ITEMS })))!;
+
+        // First page.
+        fake.push(
+            "messages:list",
+            { paginationOpts: { cursor: null, endCursor: null, numItems: NUM_ITEMS } },
+            {
+                continueCursor: "cur-1",
+                isDone: false,
+                page: firstPageItems,
+            },
+        );
+        await flushAsync();
+
+        result.fetchNextPage();
+        await flushAsync();
+
+        // Second page.
+        fake.push(
+            "messages:list",
+            { paginationOpts: { cursor: "cur-1", endCursor: null, numItems: NUM_ITEMS } },
+            {
+                continueCursor: null,
+                isDone: true,
+                page: secondPageItems,
+            },
+        );
+        await flushAsync();
+
+        expect(result.pages.value).toStrictEqual([firstPageItems, secondPageItems]);
+        expect(result.hasNextPage.value).toBe(false);
+
+        scope.stop();
+    });
+});
