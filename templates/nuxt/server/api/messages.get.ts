@@ -1,4 +1,4 @@
-import type { Preloaded, ReturnOf } from "@lunora/client";
+import type { Preloaded, ReturnOf } from "lunora/client";
 import { createServerClient, preloadQuery } from "@lunora/vue/server";
 
 import { api } from "../../lunora/_generated/api";

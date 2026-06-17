@@ -2,7 +2,7 @@
 // Run `lunora codegen` to regenerate.
 
 import { anyApi } from "lunora/server/types";
-import type { FunctionReference } from "@lunora/client";
+import type { FunctionReference } from "lunora/client";
 
 import type { Id } from "./dataModel.js";
 

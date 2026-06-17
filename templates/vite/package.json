@@ -10,7 +10,6 @@
         "deploy": "lunora deploy"
     },
     "dependencies": {
-        "@lunora/client": "^0.0.0",
         "@lunora/react": "^0.0.0",
         "lunora": "^0.0.0",
         "react": "^19.2.7",

@@ -21,7 +21,7 @@ required to build or use it.
 ```svelte
 <!-- +layout.svelte — provide the client once at the root. -->
 <script lang="ts">
-    import { LunoraClient } from "@lunora/client";
+    import { LunoraClient } from "lunora/client";
     import { setLunoraClient } from "@lunora/svelte";
 
     setLunoraClient(new LunoraClient({ url: import.meta.env.VITE_LUNORA_URL }));

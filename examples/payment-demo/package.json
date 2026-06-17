@@ -13,7 +13,6 @@
         "lint:types": "tsc --noEmit"
     },
     "dependencies": {
-        "@lunora/client": "workspace:*",
         "@lunora/payment": "workspace:*",
         "@lunora/react": "workspace:*",
         "@lunora/vite": "workspace:*",

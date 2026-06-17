@@ -73,7 +73,7 @@ describe("run-codegen", () => {
         });
 
         it("imports base packages directly when the project depends on the granular @lunora/* packages", () => {
-            expect.assertions(5);
+            expect.assertions(6);
 
             // No package.json (or one without `lunora`) → granular form, the default.
             const result = runCodegen({ projectRoot: workdir });
@@ -81,12 +81,13 @@ describe("run-codegen", () => {
             expect(result.generated.server).toContain('from "@lunora/server"');
             expect(result.generated.dataModel).toContain('from "@lunora/server/data-model"');
             expect(result.generated.api).toContain('from "@lunora/server/types"');
+            expect(result.generated.api).toContain('from "@lunora/client"');
             expect(result.generated.shard).toContain('from "@lunora/do"');
             expect(result.generated.drizzleShard).toContain('from "@lunora/server/drizzle"');
         });
 
         it("imports base packages through the lunora umbrella subpaths when the project depends on `lunora`", () => {
-            expect.assertions(8);
+            expect.assertions(9);
 
             writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { lunora: "*" }, name: "umbrella-app" }));
 
@@ -96,13 +97,13 @@ describe("run-codegen", () => {
             expect(result.generated.server).toContain('from "lunora/server"');
             expect(result.generated.dataModel).toContain('from "lunora/server/data-model"');
             expect(result.generated.api).toContain('from "lunora/server/types"');
+            expect(result.generated.api).toContain('from "lunora/client"');
             expect(result.generated.shard).toContain('from "lunora/do"');
             expect(result.generated.drizzleShard).toContain('from "lunora/server/drizzle"');
             // …and never the granular base specifiers.
             expect(result.generated.server).not.toContain('from "@lunora/server"');
             expect(result.generated.shard).not.toContain('from "@lunora/do"');
-            // `@lunora/client` is installed separately, so it stays scoped even under the umbrella.
-            expect(result.generated.api).toContain('from "@lunora/client"');
+            expect(result.generated.api).not.toContain('from "@lunora/client"');
         });
 
         it("wires ctx.ai end-to-end when a function reads ctx.ai", () => {

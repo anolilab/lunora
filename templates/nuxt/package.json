@@ -13,7 +13,6 @@
         "deploy": "pnpm run deploy:lunora && pnpm run deploy:nuxt"
     },
     "dependencies": {
-        "@lunora/client": "^0.0.0",
         "@lunora/vue": "^0.0.0",
         "lunora": "^0.0.0",
         "nuxt": "^4.4.8",

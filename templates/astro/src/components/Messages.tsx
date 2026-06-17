@@ -1,4 +1,4 @@
-import { LunoraClient } from "@lunora/client";
+import { LunoraClient } from "lunora/client";
 import type { Preloaded } from "@lunora/react";
 import { LunoraProvider, hydratePreloaded, useMutation } from "@lunora/react";
 import { useMemo, useState } from "react";

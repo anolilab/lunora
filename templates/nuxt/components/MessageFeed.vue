@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Preloaded, ReturnOf } from "@lunora/client";
+import type { Preloaded, ReturnOf } from "lunora/client";
 import { hydratePreloaded, useMutation } from "@lunora/vue";
 import { ref } from "vue";
 

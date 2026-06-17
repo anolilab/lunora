@@ -12,7 +12,6 @@
         "prepare": "svelte-kit sync"
     },
     "dependencies": {
-        "@lunora/client": "^0.0.0",
         "@lunora/svelte": "^0.0.0",
         "lunora": "^0.0.0"
     },

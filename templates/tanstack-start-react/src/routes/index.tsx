@@ -1,4 +1,4 @@
-import type { Preloaded, ReturnOf } from "@lunora/client";
+import type { Preloaded, ReturnOf } from "lunora/client";
 import { useMutation, usePreloadedQuery } from "@lunora/react";
 import { createServerClient, preloadQuery } from "@lunora/react/server";
 import { createFileRoute } from "@tanstack/react-router";

@@ -8,7 +8,7 @@ adapters wrap it. You only depend on it directly when writing a custom
 adapter or driving Lunora from a Node/Bun script.
 
 ```ts
-import { LunoraClient } from "@lunora/client";
+import { LunoraClient } from "lunora/client";
 
 const client = new LunoraClient({ url: "https://app.example.workers.dev" });
 const messages = await client.query(api.messages.list, { channelId });
@@ -38,7 +38,7 @@ flushed on reconnect. The queue lives in memory by default; for durability
 across a reload pass a `persistence` adapter:
 
 ```ts
-import { LunoraClient, createIndexedDbPersistence, createAsyncStoragePersistence } from "@lunora/client";
+import { LunoraClient, createIndexedDbPersistence, createAsyncStoragePersistence } from "lunora/client";
 
 // Browser:
 new LunoraClient({ url, persistence: createIndexedDbPersistence() });

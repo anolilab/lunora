@@ -14,7 +14,6 @@
     },
     "dependencies": {
         "@lunora/auth": "workspace:*",
-        "@lunora/client": "workspace:*",
         "@lunora/d1": "workspace:*",
         "@lunora/react": "workspace:*",
         "@lunora/scheduler": "workspace:*",

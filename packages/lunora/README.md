@@ -34,7 +34,7 @@
 
 ---
 
-The Lunora umbrella package: one install for the base of a Lunora app. `lunora` re-exports the server authoring API, the worker runtime, and the Durable Objects through subpaths, and ships the `lunora` CLI binary — so you depend on a single package instead of `@lunora/server` + `@lunora/values` + `@lunora/runtime` + `@lunora/do` + `@lunora/cli`.
+The Lunora umbrella package: one install for the base of a Lunora app. `lunora` re-exports the server authoring API, the worker runtime, the Durable Objects, and the browser client through subpaths, and ships the `lunora` CLI binary — so you depend on a single package instead of `@lunora/server` + `@lunora/values` + `@lunora/runtime` + `@lunora/do` + `@lunora/client` + `@lunora/cli`.
 
 Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
@@ -52,7 +52,7 @@ yarn add lunora
 pnpm add lunora
 ```
 
-Pick a framework adapter (`@lunora/react`, `@lunora/vue`, `@lunora/solid`, `@lunora/svelte`, `@lunora/astro`), the browser SDK (`@lunora/client`), the Vite plugin (`@lunora/vite`), and any add-ons (`@lunora/auth`, `@lunora/storage`, …) alongside it — those stay as separate, opt-in installs.
+Pick a framework adapter (`@lunora/react`, `@lunora/vue`, `@lunora/solid`, `@lunora/svelte`, `@lunora/astro`), the Vite plugin (`@lunora/vite`), and any add-ons (`@lunora/auth`, `@lunora/mail`, `@lunora/storage`, …) alongside it — those stay as separate, opt-in installs.
 
 ## Usage
 
@@ -91,8 +91,9 @@ pnpm exec lunora deploy
 | `lunora/values`            | `@lunora/values`  | the `v.*` validator suite                          |
 | `lunora/runtime`           | `@lunora/runtime` | `createWorker` and the query coordinator           |
 | `lunora/do`                | `@lunora/do`      | `ShardDO` / `SessionDO`                            |
+| `lunora/client`            | `@lunora/client`  | the browser SDK (`LunoraClient`, `Preloaded`, …)   |
 
-Codegen targets these subpaths automatically: a project with `lunora` installed gets `_generated/*` files that import from `lunora/server`, `lunora/server/data-model`, `lunora/do`, etc.
+Codegen targets these subpaths automatically: a project with `lunora` installed gets `_generated/*` files that import from `lunora/server`, `lunora/server/data-model`, `lunora/do`, `lunora/client`, etc.
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs)**.
 

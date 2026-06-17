@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { LunoraClient } from "@lunora/client";
+    import { LunoraClient } from "lunora/client";
     import { setLunoraClient } from "@lunora/svelte";
 
     // Publish one LunoraClient on Svelte context for the whole app. The live

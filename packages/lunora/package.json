@@ -76,6 +76,10 @@
             "types": "./dist/do.d.ts",
             "import": "./dist/do.mjs"
         },
+        "./client": {
+            "types": "./dist/client.d.ts",
+            "import": "./dist/client.mjs"
+        },
         "./package.json": "./package.json"
     },
     "scripts": {
@@ -91,6 +95,7 @@
     },
     "dependencies": {
         "@lunora/cli": "workspace:*",
+        "@lunora/client": "workspace:*",
         "@lunora/do": "workspace:*",
         "@lunora/runtime": "workspace:*",
         "@lunora/server": "workspace:*",
@@ -106,6 +111,6 @@
         "vitest": "catalog:test"
     },
     "engines": {
-        "node": "^22.15.0 || >=24.10.0"
+        "node": "^22.15.0 || >=24.11.0"
     }
 }

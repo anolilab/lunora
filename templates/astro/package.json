@@ -14,7 +14,6 @@
         "@astrojs/cloudflare": "^13.7.0",
         "@astrojs/react": "^5.0.7",
         "@lunora/astro": "^0.0.0",
-        "@lunora/client": "^0.0.0",
         "@lunora/react": "^0.0.0",
         "astro": "^6.4.6",
         "lunora": "^0.0.0",

@@ -32,4 +32,13 @@ describe("lunora umbrella re-exports", () => {
 
         expect(sorted(Object.keys(viaUmbrella))).toStrictEqual(sorted(Object.keys(direct)));
     });
+
+    it("forwards @lunora/client from lunora/client", async () => {
+        expect.assertions(1);
+
+        const viaUmbrella = await import("lunora/client");
+        const direct = await import("@lunora/client");
+
+        expect(sorted(Object.keys(viaUmbrella))).toStrictEqual(sorted(Object.keys(direct)));
+    });
 });

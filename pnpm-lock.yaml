@@ -528,9 +528,6 @@ importers:
       '@lunora/auth':
         specifier: workspace:*
         version: link:../../packages/auth
-      '@lunora/client':
-        specifier: workspace:*
-        version: link:../../packages/client
       '@lunora/d1':
         specifier: workspace:*
         version: link:../../packages/d1
@@ -671,9 +668,6 @@ importers:
       '@lunora/auth':
         specifier: workspace:*
         version: link:../../packages/auth
-      '@lunora/client':
-        specifier: workspace:*
-        version: link:../../packages/client
       '@lunora/react':
         specifier: workspace:*
         version: link:../../packages/react
@@ -720,9 +714,6 @@ importers:
       '@lunora/auth':
         specifier: workspace:*
         version: link:../../packages/auth
-      '@lunora/client':
-        specifier: workspace:*
-        version: link:../../packages/client
       '@lunora/d1':
         specifier: workspace:*
         version: link:../../packages/d1
@@ -778,9 +769,6 @@ importers:
 
   examples/payment-demo:
     dependencies:
-      '@lunora/client':
-        specifier: workspace:*
-        version: link:../../packages/client
       '@lunora/payment':
         specifier: workspace:*
         version: link:../../packages/payment
@@ -827,9 +815,6 @@ importers:
 
   examples/realtime-cursors:
     dependencies:
-      '@lunora/client':
-        specifier: workspace:*
-        version: link:../../packages/client
       '@lunora/react':
         specifier: workspace:*
         version: link:../../packages/react
@@ -870,9 +855,6 @@ importers:
 
   examples/todo-app:
     dependencies:
-      '@lunora/client':
-        specifier: workspace:*
-        version: link:../../packages/client
       '@lunora/react':
         specifier: workspace:*
         version: link:../../packages/react
@@ -1564,6 +1546,9 @@ importers:
       '@lunora/cli':
         specifier: workspace:*
         version: link:../cli
+      '@lunora/client':
+        specifier: workspace:*
+        version: link:../client
       '@lunora/do':
         specifier: workspace:*
         version: link:../do

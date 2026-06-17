@@ -1,4 +1,4 @@
-import { LunoraClient } from "@lunora/client";
+import { LunoraClient } from "lunora/client";
 import { createLunora } from "@lunora/vue";
 
 /**

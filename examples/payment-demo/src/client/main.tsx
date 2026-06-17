@@ -1,4 +1,4 @@
-import { LunoraClient } from "@lunora/client";
+import { LunoraClient } from "lunora/client";
 import { LunoraProvider } from "@lunora/react";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";

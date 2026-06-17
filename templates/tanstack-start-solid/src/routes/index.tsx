@@ -1,4 +1,4 @@
-import type { Preloaded, ReturnOf } from "@lunora/client";
+import type { Preloaded, ReturnOf } from "lunora/client";
 import { createMutation, hydratePreloaded } from "@lunora/solid";
 import { createServerClient, preloadQuery } from "@lunora/solid/server";
 import { createFileRoute } from "@tanstack/solid-router";

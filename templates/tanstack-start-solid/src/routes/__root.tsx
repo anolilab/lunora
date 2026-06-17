@@ -1,4 +1,4 @@
-import { LunoraClient } from "@lunora/client";
+import { LunoraClient } from "lunora/client";
 import { LunoraProvider } from "@lunora/solid";
 import { createRootRouteWithContext, HeadContent, Outlet, Scripts } from "@tanstack/solid-router";
 import { Suspense } from "solid-js";

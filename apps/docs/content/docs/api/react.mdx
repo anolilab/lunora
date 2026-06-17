@@ -10,7 +10,7 @@ root (a client boundary); server-side data loading for React Server Components /
 the Next.js App Router lives in [`@lunora/react/server`](#server-components-nextjs-app-router).
 
 ```tsx
-import { LunoraClient } from "@lunora/client";
+import { LunoraClient } from "lunora/client";
 import { LunoraProvider, useMutation, useQuery } from "@lunora/react";
 import { api } from "@/lunora/_generated/api";
 
@@ -165,7 +165,7 @@ reuses) the TanStack `QueryClient` that `HydrationBoundary` hydrates into.
 ```tsx title="app/providers.tsx"
 "use client";
 
-import { LunoraClient } from "@lunora/client";
+import { LunoraClient } from "lunora/client";
 import { LunoraProvider } from "@lunora/react";
 import { useState } from "react";
 
