@@ -1,4 +1,4 @@
-import type { ArgsOf, LunoraClient, FunctionReference, ReturnOf, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
+import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import { vi } from "vitest";
 import { createApp } from "vue";
 

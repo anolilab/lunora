@@ -1,4 +1,4 @@
-import type { ArgsOf, LunoraClient, FunctionReference, ReturnOf, Unsubscribe } from "@lunora/client";
+import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, Unsubscribe } from "@lunora/client";
 import { createQuerySubscription } from "@lunora/client/query";
 import type { MaybeRefOrGetter, Ref } from "vue";
 import { getCurrentScope, onScopeDispose, shallowRef, toValue, watch } from "vue";
