@@ -1,6 +1,5 @@
 import SiAstro from "@icons-pack/react-simple-icons/icons/SiAstro.mjs";
 import SiCloudflare from "@icons-pack/react-simple-icons/icons/SiCloudflare.mjs";
-import SiCloudflarepages from "@icons-pack/react-simple-icons/icons/SiCloudflarepages.mjs";
 import SiCloudflareworkers from "@icons-pack/react-simple-icons/icons/SiCloudflareworkers.mjs";
 import SiReact from "@icons-pack/react-simple-icons/icons/SiReact.mjs";
 import SiSolid from "@icons-pack/react-simple-icons/icons/SiSolid.mjs";
@@ -8,7 +7,7 @@ import SiSvelte from "@icons-pack/react-simple-icons/icons/SiSvelte.mjs";
 import SiTypescript from "@icons-pack/react-simple-icons/icons/SiTypescript.mjs";
 import SiVite from "@icons-pack/react-simple-icons/icons/SiVite.mjs";
 import SiVuedotjs from "@icons-pack/react-simple-icons/icons/SiVuedotjs.mjs";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Database, HardDrive, Layers } from "lucide-react";
 import type { ComponentType, FC } from "react";
 
 import TanstackStartLogo from "@/assets/tanstack-start.svg?react";
@@ -31,7 +30,9 @@ const frameworks: { icon: ComponentType<{ className?: string }>; label: string }
 const platforms: { icon: ComponentType<{ className?: string }>; label: string }[] = [
     { icon: SiCloudflareworkers, label: "Workers" },
     { icon: SiCloudflare, label: "Durable Objects" },
-    { icon: SiCloudflarepages, label: "Pages" },
+    { icon: Database, label: "D1" },
+    { icon: HardDrive, label: "R2" },
+    { icon: Layers, label: "Queues" },
 ];
 
 const IconTile: FC<{ icon: ComponentType<{ className?: string }>; label: string }> = ({ icon: Icon, label }) => (
