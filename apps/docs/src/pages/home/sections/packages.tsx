@@ -180,7 +180,7 @@ const ServerTerminal = () => {
 };
 
 const ServerSection = () => (
-    <Section classes={{ root: "pt-0" }} mode="dark">
+    <Section classes={{ root: "pt-0" }} gridLength={0} mode="dark">
         <div className="hidden lg:col-span-1 lg:block" />
         <div className="col-span-4 -ml-px flex flex-col xl:col-span-3 bg-background">
             <div className="relative overflow-hidden border-b border-white/6 bg-gradient-to-br from-sky-sapphire/[0.08] via-transparent to-transparent">
@@ -314,7 +314,7 @@ const ClientTerminal = () => {
 };
 
 const ClientSection = () => (
-    <Section classes={{ root: "pt-0" }} mode="dark">
+    <Section classes={{ root: "pt-0" }} gridLength={0} mode="dark">
         <div className="col-span-3 flex flex-col bg-background">
             <div className="relative overflow-hidden border border-white/6 bg-gradient-to-br from-crimson-energy/[0.08] via-transparent to-transparent">
                 <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-crimson-energy/60 to-transparent" />
@@ -532,7 +532,7 @@ const ReactTerminal = () => {
 };
 
 const ReactSection = () => (
-    <Section classes={{ root: "pt-0" }} mode="dark">
+    <Section classes={{ root: "pt-0" }} gridLength={0} mode="dark">
         <div className="hidden lg:col-span-1 lg:block" />
         <div className="col-span-4 -ml-px flex flex-col xl:col-span-3 bg-background">
             <div className="relative overflow-hidden border border-white/6 bg-gradient-to-br from-royal-amethyst/[0.08] via-transparent to-transparent">
@@ -609,7 +609,7 @@ const Packages: FC = () => (
         <ServerSection />
         <ClientSection />
         <ReactSection />
-        <Section classes={{ root: "pt-0" }} mode="dark">
+        <Section classes={{ root: "pt-0" }} gridLength={0} mode="dark">
             <div className="col-span-1 hidden lg:block" />
             <div className="col-span-2 flex flex-col gap-16">
                 <SectionHeader
