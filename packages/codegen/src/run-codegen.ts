@@ -83,6 +83,30 @@ const writeIfPresent = (filePath: string, content: string): void => {
 };
 
 /**
+ * Read the `version` field from the `package.json` at `projectRoot`.
+ *
+ * Returns the version string when present and parseable, or `undefined` when
+ * the manifest is absent, malformed, or carries no `version` field. The
+ * `?? "0.0.0"` fallback in the spec emitters then applies, so a missing
+ * package.json never breaks codegen.
+ */
+const readProjectVersion = (projectRoot: string): string | undefined => {
+    const manifestPath = join(projectRoot, "package.json");
+
+    if (!existsSync(manifestPath)) {
+        return undefined;
+    }
+
+    try {
+        const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string, unknown>;
+
+        return typeof manifest["version"] === "string" && manifest["version"] !== "" ? manifest["version"] : undefined;
+    } catch {
+        return undefined;
+    }
+};
+
+/**
  * Walk up from `startPath` until we find a `tsconfig.json` or hit the file
  * system root. Returns the absolute path to the tsconfig, or `undefined`.
  */
@@ -366,8 +390,9 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // identical content and can never drift. Both are computed regardless of
     // `apiSpec` (cheap, pure) so `CodegenResult` can carry whichever the caller
     // asked for; only the requested file(s) are written.
-    const openApiDocument = buildOpenApiDocument({ functions, httpRoutes });
-    const openRpcDocument = buildOpenRpcDocument({ functions });
+    const projectVersion = readProjectVersion(options.projectRoot);
+    const openApiDocument = buildOpenApiDocument({ functions, httpRoutes, version: projectVersion });
+    const openRpcDocument = buildOpenRpcDocument({ functions, version: projectVersion });
 
     const openApiContent = `${JSON.stringify(openApiDocument, undefined, 2)}\n`;
     const openRpcContent = `${JSON.stringify(openRpcDocument, undefined, 2)}\n`;

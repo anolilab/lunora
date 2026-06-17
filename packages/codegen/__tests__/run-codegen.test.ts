@@ -617,6 +617,31 @@ export default crons;
             expect(document.methods[0]?.params[0]?.name).toBe("args");
         });
 
+        it("threads package.json version into info.version of both OpenAPI and OpenRPC docs", () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ name: "test-app", version: "1.2.3" }), "utf8");
+
+            const result = runCodegen({ apiSpec: "both", projectRoot: workdir });
+            const openApiDoc = JSON.parse(result.generated.openApi) as { info: { version: string } };
+            const openRpcDoc = JSON.parse(result.generated.openRpc) as { info: { version: string } };
+
+            expect(openApiDoc.info.version).toBe("1.2.3");
+            expect(openRpcDoc.info.version).toBe("1.2.3");
+        });
+
+        it("falls back to 0.0.0 in info.version when package.json has no version", () => {
+            expect.assertions(2);
+
+            // workdir has no package.json by default (fixture copies lunora/ only).
+            const result = runCodegen({ apiSpec: "both", projectRoot: workdir });
+            const openApiDoc = JSON.parse(result.generated.openApi) as { info: { version: string } };
+            const openRpcDoc = JSON.parse(result.generated.openRpc) as { info: { version: string } };
+
+            expect(openApiDoc.info.version).toBe("0.0.0");
+            expect(openRpcDoc.info.version).toBe("0.0.0");
+        });
+
         it("emits drizzle.global.ts containing only `.global()` tables", () => {
             expect.assertions(3);
 

@@ -114,7 +114,6 @@ const buildOpenRpcDocument = (input: OpenRpcEmitInput): Record<string, unknown> 
         info: {
             description: "Auto-generated from @lunora/values-typed functions by @lunora/codegen. Do not edit — run `lunora codegen` to regenerate.",
             title: "Lunora RPC",
-            // TODO: thread the project/app package version through here when available.
             version,
         },
         methods,
