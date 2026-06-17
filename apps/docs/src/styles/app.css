@@ -1,4 +1,3 @@
-@import url("https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&display=swap");
 @import "tailwindcss";
 
 @plugin 'tailwindcss-animate';
@@ -12,7 +11,7 @@
 @theme {
     --font-sans: Geist Sans, ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
     --font-mono: Geist Mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-    --font-display: "Bricolage Grotesque", Geist Sans, ui-sans-serif, system-ui, sans-serif;
+    --font-display: Geist Sans, ui-sans-serif, system-ui, sans-serif;
 
     --transition-property-width: width;
 

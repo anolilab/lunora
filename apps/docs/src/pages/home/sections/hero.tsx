@@ -566,7 +566,7 @@ const MainHero: FC = () => {
                             className="pointer-events-none absolute -inset-x-16 top-1/3 bottom-[-12%] -z-0 blur-3xl"
                             style={{ background: "radial-gradient(ellipse at 50% 95%, hsl(256 72% 68% / 0.28), hsl(186 84% 56% / 0.10) 45%, transparent 72%)" }}
                         />
-                        <motion.div {...fade(0.4)} className="relative z-10 border border-white/10 shadow-2xl shadow-black/60">
+                        <motion.div {...fade(0.4)} className="relative z-10 border border-white/10">
                             <LunoraConsole focus={activeFeature} />
                             <div className="grid grid-cols-1 divide-y divide-white/[0.08] border-t border-white/10 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
                                 {features.map((feature, index) => {
