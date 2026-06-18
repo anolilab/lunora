@@ -235,7 +235,7 @@ const StudioLanding: FC = () => (
 
         {/* CTA */}
         <section className="border-t border-white/[0.08]" data-nav-theme="dark">
-            <div className="mx-auto max-w-6xl px-5 py-24 lg:px-0">
+            <div className="mx-auto max-w-6xl px-5 pt-24 lg:px-0">
                 <SectionHead
                     eyebrow="Zero setup"
                     subtitle="Studio runs locally with the Lunora CLI and Vite plugin — always pointed at your live edge database. Nothing to install, nothing to deploy."
