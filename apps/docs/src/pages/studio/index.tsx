@@ -21,8 +21,8 @@ import { cn } from "@/lib/utils";
  * spacers). Screenshots are dark-mode captures from src/assets/studio/dark.
  */
 
-const Shot: FC<{ alt: string; src: string }> = ({ alt, src }) => (
-    <div className="overflow-hidden rounded-none border border-white/[0.08] shadow-2xl shadow-black/40">
+const Shot: FC<{ alt: string; bare?: boolean; src: string }> = ({ alt, bare, src }) => (
+    <div className={cn("overflow-hidden", !bare && "rounded-none border border-white/[0.08] shadow-2xl shadow-black/40")}>
         <img alt={alt} className="block w-full" loading="lazy" src={src} />
     </div>
 );
@@ -159,7 +159,7 @@ const StudioLanding: FC = () => (
                 </Reveal>
             </div>
             <Reveal className="relative z-10 mx-auto max-w-6xl px-5 pb-20 lg:px-0">
-                <Shot alt="Lunora Studio — overview" src={homeImg} />
+                <Shot alt="Lunora Studio — overview" bare src={homeImg} />
             </Reveal>
         </section>
 
