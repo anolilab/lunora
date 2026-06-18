@@ -3,42 +3,66 @@ title: "@lunora/auth"
 description: First-party auth — email/password, GitHub, Google, sessions in D1.
 ---
 
-`@lunora/auth` is a Cloudflare-native auth module. It is **not** better-auth
-running on Workers; the wire shape is borrowed but the storage and crypto
-are first-party so it boots without external services.
+`@lunora/auth` is a Cloudflare-native auth module built on
+[better-auth](https://better-auth.com). It runs on your own Cloudflare account:
+user records live in D1, session lifecycle lives in a dedicated `SessionDO`, and
+password hashing runs in WebCrypto. There is no external auth service to boot.
 
 ```ts
-import { createAuth, providers } from "@lunora/auth";
+import { createAuth, lunoraD1Adapter } from "@lunora/auth";
+import { passkey } from "@lunora/auth/plugins";
 
 export const auth = createAuth({
     secret: env.AUTH_SECRET,
-    providers: [
-        providers.emailPassword(),
-        providers.github({ clientId: env.GH_CLIENT_ID, clientSecret: env.GH_CLIENT_SECRET }),
-        providers.google({ clientId: env.G_CLIENT_ID, clientSecret: env.G_CLIENT_SECRET }),
-    ],
+    database: lunoraD1Adapter(env.DB),
+    emailAndPassword: { enabled: true },
+    plugins: [passkey()],
 });
 ```
+
+`createAuth` is a thin wrapper over better-auth. It requires `secret` up front, so
+a misconfigured deployment fails loudly at setup. Curated plugins (passkeys, 2FA,
+magic-link, organization, and more) are re-exported from
+[`@lunora/auth/plugins`](/docs/packages/auth/plugins).
 
 ## Mount the routes
 
+`handleAuthRequest(auth, request)` serves every auth endpoint under `/api/auth/*`
+(sign-up, sign-in, OAuth callbacks, session refresh, and each plugin's routes).
+Call it at the top of your worker's `fetch`. It returns a `Response` for an auth
+request and a falsy value otherwise, so you fall through to the Lunora worker for
+everything else:
+
 ```ts
-import { createWorker } from "lunora/runtime";
+import { ensureMigrated, handleAuthRequest } from "@lunora/auth";
 
-export default createWorker({
-    shardDO: env.SHARD,
-    routes: auth.routes(),
-});
+export default {
+    async fetch(request, env, ctx) {
+        await ensureMigrated(auth);
+
+        const response = await handleAuthRequest(auth, request);
+        if (response) return response;
+
+        // … hand off to your Lunora worker
+    },
+};
 ```
-
-`auth.routes()` returns `{ "/auth/signup": handler, "/auth/signin": handler, ... }`.
-You can prefix-mount or merge with your own routes.
 
 ## Read `ctx.auth` in functions
 
-`auth.resolveAuth(request, env)` resolves the session cookie and populates
-`ctx.auth` for every `query` / `mutation` / `action`. When unauthenticated
-`ctx.auth = { authenticated: false, user: null, session: null }`.
+The runtime resolves the inbound session and populates `ctx.auth` on every
+`query` / `mutation` / `action`. It carries the verified identity:
+
+- `ctx.auth.userId` is the signed-in user's id, or `null` for an anonymous
+  request. A truthy check narrows it to `string` and doubles as your "is signed
+  in" guard.
+- `ctx.auth.getIdentity()` resolves the decoded identity claims, or `null` when
+  anonymous.
+
+```ts
+if (!ctx.auth.userId) throw new Error("must be signed in");
+const identity = await ctx.auth.getIdentity();
+```
 
 ## Sessions
 
@@ -87,10 +111,10 @@ code-for-token-for-userinfo exchange:
   transport alone.
 
 Configure credentials via `OAUTH_GITHUB_CLIENT_ID`, `OAUTH_GITHUB_CLIENT_SECRET`,
-`OAUTH_GOOGLE_CLIENT_ID`, `OAUTH_GOOGLE_CLIENT_SECRET` (or pass them to
-`providers.github({...})` directly). If both env and provider options leave
-the credentials empty, the callback route returns `503 OAUTH_NOT_CONFIGURED`
-instead of falling back to a stub user.
+`OAUTH_GOOGLE_CLIENT_ID`, `OAUTH_GOOGLE_CLIENT_SECRET` (or set them on the
+better-auth `socialProviders` config directly). If both the env vars and the
+provider config leave the credentials empty, the callback route returns
+`503 OAUTH_NOT_CONFIGURED` instead of falling back to a stub user.
 
 ## Rate limiting
 

@@ -253,7 +253,7 @@ export const list = query.input({ channelId: v.id("channels"), limit: v.optional
 export const send = mutation.input({ channelId: v.id("channels"), text: v.string() }).mutation(async ({ ctx, args: { channelId, text } }) => {
     await ctx.db.insert("messages", {
         channelId,
-        userId: ctx.auth.user!.id,
+        userId: ctx.auth.userId!,
         text,
         createdAt: Date.now(),
     });

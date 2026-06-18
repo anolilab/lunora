@@ -91,11 +91,11 @@ Every Lunora `query` doubles as a subscription. The React side calls
 
 ```ts
 export const send = mutation.input({ channelId: v.id("channels"), text: v.string() }).mutation(async ({ ctx, args: { channelId, text } }) => {
-    if (!ctx.auth.user) throw new Error("must be signed in");
+    if (!ctx.auth.userId) throw new Error("must be signed in");
 
     await ctx.db.insert("messages", {
         channelId,
-        userId: ctx.auth.user.id,
+        userId: ctx.auth.userId,
         text,
         createdAt: Date.now(),
     });

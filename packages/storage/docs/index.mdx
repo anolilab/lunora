@@ -24,7 +24,7 @@ import { mutation, v } from "lunora/server";
 import { storage } from "./storage";
 
 export const uploadAvatar = mutation.input({ key: v.string(), contentType: v.string() }).mutation(async ({ ctx, args: { key, contentType } }) => {
-    const url = await storage.getSignedUrl(`avatars/${ctx.auth.user.id}/${key}`, {
+    const url = await storage.getSignedUrl(`avatars/${ctx.auth.userId}/${key}`, {
         method: "PUT",
         expiresInSeconds: 60,
         contentType,

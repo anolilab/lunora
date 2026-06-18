@@ -24,8 +24,8 @@ export const list = query.input({ channelId: v.id("channels"), limit: v.optional
 });
 
 export const send = mutation.input({ channelId: v.id("channels"), text: v.string() }).mutation(async ({ ctx, args }) => {
-    if (!ctx.auth.user) throw new Error("must be signed in");
-    await ctx.db.insert("messages", { ...args, userId: ctx.auth.user.id });
+    if (!ctx.auth.userId) throw new Error("must be signed in");
+    await ctx.db.insert("messages", { ...args, userId: ctx.auth.userId });
 });
 ```
 
@@ -38,8 +38,11 @@ compile time if the shape is wrong.
 
 ## `ctx.auth`
 
-Populated by `@lunora/auth` when an authenticated session cookie is present.
-`ctx.auth.authenticated` narrows `ctx.auth.user` from `User | null` to `User`.
+Carries the verified identity for the request. `ctx.auth.userId` is the signed-in
+user's id, or `null` for an anonymous caller, so a truthy check both narrows it to
+`string` and acts as your "is signed in" guard. For the full decoded claims (email,
+roles, and so on), call `await ctx.auth.getIdentity()`, which returns the identity
+object or `null`.
 
 ## `ctx.scheduler`
 

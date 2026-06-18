@@ -24,7 +24,7 @@ import { LunoraError } from "lunora/server";
 import { mutation, query, v } from "@/lunora/_generated/server";
 
 export const send = mutation.input({ channelId: v.id("channels"), text: v.string() }).mutation(async ({ ctx, args }) => {
-    if (!ctx.auth.user) {
+    if (!ctx.auth.userId) {
         throw new LunoraError("UNAUTHORIZED", "Sign in to post");
     }
 
@@ -34,7 +34,7 @@ export const send = mutation.input({ channelId: v.id("channels"), text: v.string
         throw new LunoraError("NOT_FOUND", "That channel no longer exists");
     }
 
-    await ctx.db.insert("messages", { ...args, userId: ctx.auth.user.id });
+    await ctx.db.insert("messages", { ...args, userId: ctx.auth.userId });
 });
 ```
 
