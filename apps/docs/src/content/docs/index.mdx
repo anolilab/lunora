@@ -6,15 +6,15 @@ description: A type-safe real-time backend on your own Cloudflare account.
 Lunora is a Convex-style backend framework that runs entirely on **your own
 Cloudflare Workers + Durable Objects account**. It gives you typed functions,
 live subscriptions, schema-driven storage, first-party auth, file storage, a
-scheduler, durable workflows, server-side authorization (row-level security and
-data masking), and a local admin studio — without making you give up ownership
-of the data or paying a per-seat platform tax.
+scheduler, durable workflows, and server-side authorization (row-level security
+and data masking), plus a local admin studio. You keep ownership of your data,
+and there is no per-seat platform fee.
 
-Where Convex couples you to a hosted runtime, Lunora lets you ship the exact
-same DX onto your own infrastructure. Where prior art on Cloudflare like
-`convex.do` and `zeroback` peaked at a single Durable Object, Lunora is
-**scale-proof by default**: tables stay in one root DO until you opt into
-sharding, and the moment you do, every call site routes itself.
+Convex ties you to its hosted runtime. Lunora gives you the same developer
+experience on infrastructure you control. Earlier Cloudflare projects like
+`convex.do` and `zeroback` topped out at a single Durable Object. Lunora keeps
+your tables in one root DO until you opt into sharding, and once you do, every
+call site routes itself.
 
 ```ts
 // lunora/messages.ts

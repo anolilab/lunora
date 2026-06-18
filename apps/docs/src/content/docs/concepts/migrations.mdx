@@ -15,7 +15,7 @@ storage backends:
   schema and emits a timestamped `.sql` file that is applied at deploy time.
 
 Separately, **data migrations** (`defineMigration`) rewrite existing rows in a
-sharded table — a backfill or shape change applied to live documents, running
+sharded table: a backfill or shape change applied to live documents, running
 inside each shard's DO in resumable batches.
 
 > There is no migrations DSL for sharded-table _schema_. If all your tables are
@@ -39,8 +39,8 @@ the snapshot is what the next `generate` diffs against.
 
 Supported diffs: `CREATE TABLE` (new global table), `DROP TABLE` (removed
 table), `ALTER TABLE … ADD COLUMN` (added column), and `CREATE INDEX` (added
-index). Unsupported deltas — column rename, column type change, dropping a
-column or index — are surfaced as a commented `unsupported` block in the
+index). Unsupported deltas (column rename, column type change, dropping a
+column or index) are surfaced as a commented `unsupported` block in the
 generated file with a warning; write that SQL by hand.
 
 The generated SQL is applied through `@lunora/d1`'s `MigrationRunner`, which
@@ -74,7 +74,7 @@ export const backfillReadBy = defineMigration({
 
 The transform receives the stored document (including `_id` and
 `_creationTime`). Return a new document to rewrite the row, or `undefined` (or
-nothing) to leave it untouched — untouched rows are counted as processed, not
+nothing) to leave it untouched; untouched rows are counted as processed, not
 changed. The runner always preserves the original `_id` and `_creationTime`, so
 a transform should not change row identity.
 
@@ -133,11 +133,11 @@ lunora deploy --migrate --migrate-token $LUNORA_ADMIN_TOKEN
 
 ### Resumable and idempotent
 
-Each shard's runner tracks progress — cursor, processed/changed counts, status —
+Each shard's runner tracks progress (cursor, processed/changed counts, status)
 in a reserved `__lunora_migrations` table, persisting after every batch. Two
 properties follow:
 
-- **Resumable.** An interrupted run (or one stopped by `--steps`) resumes from
+- **Resumable.** An interrupted run, or one stopped by `--steps`, resumes from
   the stored cursor instead of rescanning. Iteration uses a stable
   `_creationTime ASC, _id ASC` keyset order, and rewrites preserve row identity,
   so each row is visited exactly once even as the batch ahead is rewritten.
@@ -155,11 +155,11 @@ also reports summed `processed` / `changed` counts and the number of `ok` vs
 The Studio's **Database → Migrations** panel (see
 [Studio › Database](/docs/packages/studio#database)) inspects and drives data
 migrations on a single shard. Enter a shard key to read its persisted run-state
-table — `id`, `direction`, `status`, `processed`, `changed`, last `updated`, and
-any `error` — over a live channel, so an in-progress migration's counts climb in
+table (`id`, `direction`, `status`, `processed`, `changed`, last `updated`, and
+any `error`) over a live channel, so an in-progress migration's counts climb in
 place. You can kick off a migration by id with a direction and an optional
 dry-run toggle; a real (non-dry-run) run is behind a confirm gate. The panel
-issues no credentials of its own — it relies on the worker's `LUNORA_ADMIN_TOKEN`
+issues no credentials of its own; it relies on the worker's `LUNORA_ADMIN_TOKEN`
 gate like the CLI.
 
 ## Resetting local state
@@ -174,7 +174,7 @@ lunora reset --all    # also remove .lunora-cache
 lunora reset --yes    # skip the prompt (required when stdin is not a TTY)
 ```
 
-This only touches local state — it never reaches a deployed worker or D1.
+This only touches local state; it never reaches a deployed worker or D1.
 
 ## See also
 

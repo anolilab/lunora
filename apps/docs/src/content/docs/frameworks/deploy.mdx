@@ -5,7 +5,7 @@ description: One worker, one deploy — how a composed Lunora + meta-framework a
 
 A Lunora + meta-framework app is **one Cloudflare Worker**. Your framework's
 pages, API routes, and SSR loaders share the same Worker that serves Lunora
-realtime — there is no second service to provision and no second deploy to
+realtime. There is no second service to provision and no second deploy to
 coordinate. This page covers how the single-worker bundle is assembled per
 framework class and how it ships.
 
@@ -74,8 +74,8 @@ pnpm lunora deploy   # codegen → D1 migrations → wrangler deploy
 
 Because the SSR handler and Lunora run in the **same** Worker, an SSR loader can
 call Lunora over a same-process loopback (`/_lunora/rpc`) with near-zero latency.
-An in-process `serverQuery` fast-path that skips even the loopback is in progress
-(see [Reactive loaders](/docs/frameworks/reactive-loaders)).
+An in-process `serverQuery` fast-path that skips even the loopback is in progress.
+See [Reactive loaders](/docs/frameworks/reactive-loaders).
 
 ## Class B — the framework owns the CF adapter
 
@@ -97,21 +97,21 @@ realtime mounts under `/_lunora/*`, and the framework keeps everything else.
 The deploy command is still the framework's own build plus `wrangler deploy`. The
 one thing you must reconcile by hand for class B today is that the **Durable
 Object class and its migration** (`ShardDO`, `new_sqlite_classes`) are declared in
-the framework adapter's `wrangler.jsonc`, because the framework — not Lunora —
-owns that file.
+the framework adapter's `wrangler.jsonc`, because the framework owns that file,
+not Lunora.
 
-> **Status — be honest about the tier.** Class-A deploy (TanStack Start) is
+> **Status: be honest about the tier.** Class-A deploy (TanStack Start) is
 > proven. Class-B composition (SvelteKit / Nuxt / Astro) is **preview**: the
-> templates and adapters exist, but the hook-injection + single-bundle deploy has
-> not been run end-to-end in production. Treat the class-B steps above as the
+> templates and adapters exist, but the hook-injection and single-bundle deploy
+> have not been run end-to-end in production. Treat the class-B steps above as the
 > intended shape, and verify against your framework's current Cloudflare adapter
 > when you scaffold.
 
 ## Class C — SPA / SSR-less
 
 A standalone SPA (the `vite` / `standalone` templates) deploys as a Lunora Worker
-with no SSR loaders — the client adapter opens the live subscription on the
-client. This is the original Lunora deploy and is fully shipped; see
+with no SSR loaders; the client adapter opens the live subscription on the
+client. This is the original Lunora deploy and is fully shipped. See
 [Deployment](/docs/deployment).
 
 ## Wrangler reconciliation

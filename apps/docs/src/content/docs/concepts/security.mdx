@@ -4,9 +4,9 @@ description: Lunora's secure-by-default posture — the protections you get for 
 ---
 
 Lunora is **secure by default**. The edge protections, auth-cookie hardening, and
-input guards described below are on the moment you run `createWorker` — you do
-not opt _in_ to them, you opt _out_. Every layer is individually disable-able for
-the rare case that needs it, and the [advisors](/docs/concepts/advisors) flag the
+input guards described below are on the moment you run `createWorker`. You don't
+opt _in_ to them, you opt _out_. Every layer can be disabled individually for the
+rare case that needs it, and the [advisors](/docs/concepts/advisors) flag the
 gaps that defaults can't close on their own (a public mutation with no rate
 limit, a `v.any()` argument, a secret checked into source).
 
@@ -16,10 +16,10 @@ security advisor catalog with remediation.
 ## The HTTP edge
 
 The worker's top-level `fetch` is the single choke point every response passes
-through — RPC, auth, admin, `httpRoute` handlers, and the SSR fallback alike.
+through: RPC, auth, admin, `httpRoute` handlers, and the SSR fallback alike.
 Three layers are applied there, all on by default and configured through the
 `security` option on `createWorker`. None ever overwrites a header or decision an
-inner handler already made — defaults _fill in_, they never clobber.
+inner handler already made; defaults _fill in_, they never clobber.
 
 ### Baseline response headers
 
@@ -75,7 +75,7 @@ When you don't pass `security.cors` in code, the worker falls back to env config
 deployment set its origins through wrangler `vars` without a code change. Code
 config always wins — an explicit `security.cors` ignores the env vars entirely.
 
-A `*` wildcard combined with credentials is rejected — browsers refuse the
+A `*` wildcard combined with credentials is rejected: browsers refuse the
 combination and it defeats the allowlist. Set in code it throws at construction;
 set through the env vars the worker keeps serving the allowlist but **silently
 drops credentials** (it can't throw in the request path), and the
@@ -86,7 +86,7 @@ build time. Preflight (`OPTIONS`) is answered automatically for allowlisted orig
 
 State-changing, **cookie-authenticated** requests whose `Origin`/`Referer` is
 neither same-origin nor allowlisted are rejected with `403`. The guard is scoped
-deliberately to cookie-bearing browser requests — the only vector a cross-site
+deliberately to cookie-bearing browser requests, the only vector a cross-site
 forgery can ride. Bearer-token and server-to-server traffic (no `Cookie` header)
 is exempt, as are safe methods (`GET`/`HEAD`/`OPTIONS`).
 
@@ -139,14 +139,14 @@ export const signUp = mutation
     });
 ```
 
-The rate limit runs first (cheapest gate, sheds obvious floods before the
-Turnstile round-trip). Omitted fields are skipped; an empty bundle is a
-transparent pass-through.
+The rate limit runs first (the cheapest gate, shedding obvious floods before the
+Turnstile round-trip). Omitted fields are skipped; an empty bundle passes
+through unchanged.
 
 ## Advisor catalog
 
 Every protection above has a matching [advisor](/docs/concepts/advisors) lint, so
-an app that opts out — or never opted in — is warned at build time. The static
+an app that opts out, or never opted in, is warned at build time. The static
 lints run on every `lunora dev` save and on deploy.
 
 | Lint                                     | Level | Remediation                                                                           |
@@ -184,7 +184,7 @@ introspection:
 <small>\* downgraded to `info` on a local dev worker, where an open gate is expected.</small>
 
 The `LUNORA_SECURITY_HEADERS` and `LUNORA_SECURITY_CSRF` env vars are the
-env-level opt-outs for the corresponding `security` layers — setting either to
+env-level opt-outs for the corresponding `security` layers; setting either to
 `off`/`false`/`0` relaxes the secure default. Code config always wins: an explicit
 `security.headers` / `security.csrf` in `createWorker` overrides the env knob, so
 the audit and the running worker never disagree.

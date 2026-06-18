@@ -4,8 +4,8 @@ description: Wrangler bindings, secrets, and the deploy flow.
 ---
 
 Lunora apps deploy as a single Cloudflare Worker plus Durable Object class,
-D1 database, and R2 bucket bindings. There is nothing else to provision —
-no separate API service, no platform sign-up.
+D1 database, and R2 bucket bindings. There is nothing else to provision: no
+separate API service, no platform sign-up.
 
 ## `wrangler.jsonc`
 
@@ -44,15 +44,15 @@ STORAGE_SECRET="replace-with-openssl-rand-hex-32"
 ```
 
 When you run `lunora dev` (or start Vite) without a `.dev.vars`, Lunora offers
-to generate one from the example — secret-looking placeholders (`*_SECRET`,
-`*_TOKEN`, …) are filled with fresh random values, everything else is copied
-verbatim. If `.dev.vars` exists but is missing keys the example lists (e.g. you
-enabled a new addon), it offers to append just those. Non-interactive runs (CI)
-skip the prompt. You can also manage keys by hand with `lunora env set NAME VALUE`
-/ `lunora env list`.
+to generate one from the example. Secret-looking placeholders (`*_SECRET`,
+`*_TOKEN`, and the like) are filled with fresh random values, and everything
+else is copied verbatim. If `.dev.vars` exists but is missing keys the example
+lists (e.g. you enabled a new addon), it offers to append just those.
+Non-interactive runs (CI) skip the prompt. You can also manage keys by hand with
+`lunora env set NAME VALUE` and `lunora env list`.
 
-To check a `.dev.vars` against its example — missing keys, still-unset
-placeholders, stray extras — run `lunora env doctor`. It exits non-zero when
+To check a `.dev.vars` against its example for missing keys, still-unset
+placeholders, and stray extras, run `lunora env doctor`. It exits non-zero when
 anything is actionable, so it works as a CI gate or a pre-`dev` sanity check.
 
 ### In production
@@ -76,7 +76,7 @@ If your app declares [containers](/docs/packages/container), `wrangler deploy`
 also builds each Dockerfile-backed image with your local Docker engine and
 pushes it to Cloudflare's registry. `lunora deploy` runs a Docker preflight
 first and stops with an actionable message when an engine isn't available, so
-the failure is one line rather than a wrangler stack trace. Images must target
+the failure is one line instead of a wrangler stack trace. Images must target
 **`linux/amd64`**.
 
 To split image build/push from the Worker deploy (e.g. across CI jobs), use the
@@ -87,7 +87,7 @@ lunora containers build ./containers/transcoder --tag transcoder:v1 --push
 lunora containers images list
 ```
 
-Container egress is billed separately from Workers — see [Limits](/docs/limits).
+Container egress is billed separately from Workers. See [Limits](/docs/limits).
 
 ## Deploy
 
@@ -152,26 +152,26 @@ with a single flag:
 
 Lunora validates that `logpush` is a boolean (a typo like `"logPush"` would
 otherwise be silently dropped by wrangler), but the **sink itself is a Logpush
-_job_** created in the Cloudflare dashboard or via the API — Lunora does not
-manage job lifecycle. The Studio surfaces both halves: its **Logs → Log drains**
+_job_** created in the Cloudflare dashboard or via the API, and Lunora does not
+manage its lifecycle. The Studio surfaces both halves: its **Logs → Log drains**
 panel renders the `{ "logpush": true }` snippet and deep-links to the Cloudflare
-observability dashboard where you create the job. In short: Lunora validates the
-flag; the job lifecycle stays in Cloudflare.
+observability dashboard where you create the job. Lunora validates the flag; the
+job lifecycle stays in Cloudflare.
 
 ## Platform configuration
 
-A few Cloudflare platform features are pure `wrangler.jsonc` config — there is
-no Lunora adapter to import, you just declare the block and Lunora's
-`wrangler-validator` shape-checks it so a typo is a build-time error instead of
-a value wrangler silently drops. The resource itself is always provisioned by
-you (dashboard or `wrangler`); Lunora validates the config, it does not manage
+A few Cloudflare platform features are pure `wrangler.jsonc` config. There is
+no Lunora adapter to import; you declare the block and Lunora's
+`wrangler-validator` shape-checks it, so a typo is a build-time error instead of
+a value wrangler silently drops. You always provision the resource itself
+(dashboard or `wrangler`); Lunora validates the config, it does not manage the
 lifecycle.
 
 ### Smart Placement
 
 [Smart Placement](https://developers.cloudflare.com/workers/configuration/smart-placement/)
-lets Cloudflare run your Worker close to the services it calls (e.g. a regional
-database) instead of close to the user. Opt in with:
+lets Cloudflare run your Worker close to the services it calls, such as a
+regional database, instead of close to the user. Opt in with:
 
 ```jsonc
 {
@@ -180,7 +180,7 @@ database) instead of close to the user. Opt in with:
 }
 ```
 
-`"smart"` is the only supported mode — the validator rejects any other value (a
+`"smart"` is the only supported mode. The validator rejects any other value (a
 typo like `"fast"`) and a non-object `placement`.
 
 ### mTLS client certificates
@@ -217,7 +217,7 @@ Both `binding` and `namespace` are required on each entry.
 
 Lunora deploys as a single Worker, so the conventional way to serve your Vite
 client build is [Workers Static
-Assets](https://developers.cloudflare.com/workers/static-assets/) — Cloudflare
+Assets](https://developers.cloudflare.com/workers/static-assets/). Cloudflare
 serves the files for free and only invokes the Worker on a miss, so the Lunora
 SSR/API fetch handler still runs underneath:
 
@@ -230,7 +230,7 @@ SSR/API fetch handler still runs underneath:
 
 The validator requires a non-empty `directory` (pointing at the built client
 output) and shape-checks the optional `binding` / `html_handling` /
-`not_found_handling` fields. Lunora does **not** auto-inject this block — the
+`not_found_handling` fields. Lunora does **not** auto-inject this block; the
 output directory is framework-adapter-specific, so you declare it.
 
 ## Non-goals
@@ -243,8 +243,8 @@ A couple of Cloudflare products are deliberately **not** wired into Lunora:
 - **Pub/Sub (MQTT).** Realtime fan-out is handled by Durable-Object-hibernated
   WebSocket subscriptions (see [Real-time](/docs/concepts/realtime)), which need
   no external broker. Cloudflare Pub/Sub is a beta MQTT broker with no Worker
-  binding; the only thing it adds is native-MQTT device ingest, a narrow niche
-  we'll revisit if/when it reaches GA and a concrete need appears.
+  binding; the only thing it adds is native-MQTT device ingest, a narrow case
+  we'll revisit if it reaches GA and a concrete need appears.
 
 ## See also
 

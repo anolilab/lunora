@@ -5,8 +5,8 @@ description: Unique, non-null and foreign-key integrity declared on the schema a
 
 A **constraint** is an invariant your data must hold: a column is unique, a
 column is never null, or a foreign key always points at a row that exists.
-Lunora constraints are declared on the [schema](/docs/concepts/schema) — on the
-column validator or the relation — and most are enforced **at write time** by
+Lunora constraints are declared on the [schema](/docs/concepts/schema), on the
+column validator or the relation, and most are enforced **at write time** by
 the storage layer, so a violating `insert` / `patch` / `delete` throws rather
 than committing.
 
@@ -47,7 +47,7 @@ export default defineSchema({
 
 > The advisor [`constraint_validator`](/docs/concepts/advisors) lint is a
 > _complementary_ check: it samples existing rows and flags ones that already
-> violate a declared constraint (data inserted before the constraint existed —
+> violate a declared constraint (data inserted before the constraint existed:
 > a migration, a raw import, a past bug). Write-time enforcement guards new
 > writes; the advisor catches the backlog.
 
@@ -65,8 +65,8 @@ defineTable({
 ```
 
 When a write would create a duplicate, the storage layer maps the engine's
-`UNIQUE constraint failed` error to a `ConflictError` — code `CONFLICT`, HTTP
-status `409` — so callers can refetch and retry or surface the conflict.
+`UNIQUE constraint failed` error to a `ConflictError` (code `CONFLICT`, HTTP
+status `409`), so callers can refetch and retry or surface the conflict.
 
 > `.unique()` (the column constraint) is distinct from the `.unique()` **query**
 > helper, which asserts a read matched at most one row and throws a
@@ -74,7 +74,7 @@ status `409` — so callers can refetch and retry or surface the conflict.
 
 ## Non-null
 
-Every column is `NOT NULL` by default — `notNull` is `true` on a fresh column
+Every column is `NOT NULL` by default: `notNull` is `true` on a fresh column
 validator. Calling `.nullable()` widens the read type to `T | null` and flips
 `notNull` to `false`, allowing SQL `NULL`. A write that supplies `null` for a
 non-nullable column fails the column validator's `parse`, raising a
@@ -89,7 +89,7 @@ defineTable({
 ```
 
 > `.default(value)` / `.$defaultFn(fn)` make a column _optional on insert_ (the
-> write layer fills it) but it is still `NOT NULL` once stored — "optional on
+> write layer fills it) but it is still `NOT NULL` once stored. "Optional on
 > insert" and "nullable" are independent. Use `.nullable()` only when `NULL` is
 > a value you actually want to read back.
 

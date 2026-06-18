@@ -6,8 +6,8 @@ description: How ctx.auth threads the signed-in user through queries, mutations,
 Authentication in Lunora is two halves that meet at `ctx.auth`. On the server,
 [`@lunora/auth`](/docs/packages/auth) resolves the inbound session and stamps a
 verified identity onto every function context. In your functions you read that
-identity off `ctx.auth` — the same shape inside a `query`, a `mutation`, and an
-`action` — and use it to authorize work. Nothing else in a handler needs to know
+identity off `ctx.auth` (the same shape inside a `query`, a `mutation`, and an
+`action`) and use it to authorize work. Nothing else in a handler needs to know
 _how_ the caller proved who they are.
 
 ```ts
@@ -21,7 +21,7 @@ export const send = mutation.input({ channelId: v.id("channels"), text: v.string
 
 ## `ctx.auth` inside functions
 
-Every function context — `QueryCtx`, `MutationCtx`, and `ActionCtx` — carries an
+Every function context (`QueryCtx`, `MutationCtx`, and `ActionCtx`) carries an
 `auth` handle with the resolved caller:
 
 - `ctx.auth.userId` — the verified user id, or `null` when the request is
@@ -40,9 +40,9 @@ export const me = query.query(async ({ ctx }) => {
 });
 ```
 
-The identity is **server-resolved and trusted** — it is not a value the client
+The identity is **server-resolved and trusted**; it is not a value the client
 hands you in `args`. On an HTTP call it comes from the session the request
-carries; on a live subscription it is the identity stamped at the WebSocket
+carries. On a live subscription it is the identity stamped at the WebSocket
 upgrade and replayed on every re-run, so a long-lived socket can never drift to a
 different user (see [real-time](/docs/concepts/realtime)).
 
@@ -77,8 +77,8 @@ export const buildAuth = (env: { AUTH_SECRET: string; DB: unknown }) =>
 ```
 
 User records live in D1; session lifecycle lives in a dedicated `SessionDO`. The
-full configuration surface — providers, rate limiting, migrations, the studio
-user dashboard — is in the [package reference](/docs/packages/auth).
+full configuration surface (providers, rate limiting, migrations, the studio
+user dashboard) is in the [package reference](/docs/packages/auth).
 
 ## Routing `/api/auth/*`
 
@@ -107,7 +107,7 @@ export default {
 };
 ```
 
-Because the routes are mounted, the browser talks to better-auth directly — your
+Because the routes are mounted, the browser talks to better-auth directly. Your
 functions never implement sign-in; they only _read_ the resolved `ctx.auth`.
 
 ## The client side
@@ -136,7 +136,7 @@ function Account() {
 
 `setToken(jwt)` makes every later query/mutation/subscription authenticate as
 that user; `setToken(null)` signs out. `user` is resolved from better-auth's
-`get-session` endpoint and refetched whenever the token changes, and the value is
+`get-session` endpoint and refetched whenever the token changes. The value is
 shared across every mounted `useAuth`, so a sign-in in one component re-renders
 the rest. Outside React, the underlying primitives are
 `client.setAuthToken(token)` / `getAuthToken()` / `onAuthTokenChange(fn)` on the
@@ -158,7 +158,7 @@ definePolicy({ table: "messages", on: "read", when: ({ auth }) => ({ userId: aut
 ```
 
 Wiring the same resolved identity into RLS keeps authorization out of every
-handler body and applies it uniformly — including over live queries, which
+handler body and applies it uniformly, including over live queries, which
 re-evaluate the policy under the socket's verified identity on each push.
 
 ## See also

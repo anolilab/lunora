@@ -3,7 +3,7 @@ title: Environment variables
 description: Configure secrets and vars — .dev.vars locally, wrangler secrets in production, env bindings inside functions.
 ---
 
-A Lunora app reads its configuration — API keys, signing secrets, allowlists —
+A Lunora app reads its configuration (API keys, signing secrets, allowlists)
 from the Cloudflare Worker's `env`. There are two kinds of value:
 
 | Kind       | Where it lives                                | Visible in the dashboard | Use for                          |
@@ -11,7 +11,7 @@ from the Cloudflare Worker's `env`. There are two kinds of value:
 | **var**    | `vars` block in `wrangler.jsonc`              | yes (plain text)         | non-secret config, feature flags |
 | **secret** | `wrangler secret put` (encrypted, write-only) | no                       | API keys, signing secrets        |
 
-Both surface the same way at runtime — as properties on `env`. The only
+Both surface the same way at runtime, as properties on `env`. The only
 difference is how you set them and whether the value is encrypted at rest. **Use
 a secret for anything sensitive; use a `var` for non-secret config you're happy
 to see in plain text.**
@@ -36,7 +36,7 @@ When you run `lunora dev` (or start Vite) without a `.dev.vars`,
 [`@lunora/config`](/docs/packages/config) offers to generate one from the
 example: secret-looking placeholders (`*_SECRET`, `*_TOKEN`, …) are filled with
 fresh random values, everything else is copied verbatim. If `.dev.vars` exists
-but is missing keys the example lists — e.g. you just enabled an addon — it
+but is missing keys the example lists (say, you just enabled an addon), it
 offers to append just those. Non-interactive runs (CI) skip the prompt.
 
 You can also manage keys by hand:
@@ -48,7 +48,7 @@ lunora env doctor                        # check .dev.vars against its example
 ```
 
 `lunora env doctor` reports missing keys, still-unset placeholders, and stray
-extras, and exits non-zero when anything is actionable — so it works as a CI
+extras, and exits non-zero when anything is actionable, so it works as a CI
 gate or a pre-`dev` sanity check.
 
 ## In production — secrets and vars
@@ -68,7 +68,7 @@ Or push everything from your local `.dev.vars` at once:
 lunora env push --yes
 ```
 
-Set non-secret **vars** declaratively in `wrangler.jsonc` — they ship with the
+Set non-secret **vars** declaratively in `wrangler.jsonc`; they ship with the
 Worker and are visible in the dashboard:
 
 ```jsonc
@@ -87,14 +87,14 @@ the worker picks it up at request time (see [Security](/docs/concepts/security))
 
 > Lunora never logs secret values, and the `wrangler-validator` plugin warns when
 > a binding marked `secret: true` in your schema is missing from your secret
-> list — so a forgotten `wrangler secret put` is a build-time warning, not a
+> list, so a forgotten `wrangler secret put` is a build-time warning, not a
 > production 500.
 
 ## Accessing `env` inside your app
 
 Cloudflare hands the Worker its bindings as the `env` object. In Lunora you wire
-configuration from `env` at the **worker entry** — into `createWorker`, into the
-generated DO factory thunks, and into adapter setup — rather than reading
+configuration from `env` at the **worker entry** (into `createWorker`, the
+generated DO factory thunks, and adapter setup) rather than reading
 globals inside handlers:
 
 ```ts
@@ -108,14 +108,14 @@ const auth = createAuth({
 });
 ```
 
-The same `env` flows into the binding thunks the generated factories accept —
+The same `env` flows into the binding thunks the generated factories accept,
 for example a Vectorize binding `(env) => ({ "docs-body": env.DOCS_BODY })` or a
 KV namespace `createKv({ namespace: env.KV })`. This keeps every secret read in
 one place (the entry), so a handler never reaches for a global and your functions
 stay testable against the [in-memory harness](/docs/concepts/testing).
 
 Adapters built on this `env` plumbing then expose the live capability on the
-function `ctx` — `ctx.vectors`, `ctx.ai`, `ctx.storage`, and so on — so your
+function `ctx` (`ctx.vectors`, `ctx.ai`, `ctx.storage`, and so on), so your
 queries/mutations/actions consume configured services without touching raw
 bindings themselves.
 

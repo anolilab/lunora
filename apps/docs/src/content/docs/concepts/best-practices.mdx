@@ -4,8 +4,8 @@ description: The opinionated idioms that keep a Lunora app fast, safe, and react
 ---
 
 Lunora has a grain. Go with it and most performance, correctness, and security
-problems never appear — and the [Advisors](/docs/concepts/advisors) catch the
-ones that try to. This is the short list.
+problems never appear; the [Advisors](/docs/concepts/advisors) catch the
+ones that do. This is the short list.
 
 ## Schema first
 
@@ -19,7 +19,7 @@ ones that try to. This is the short list.
 ## Reads
 
 - **Index every filtered read.** A `query(...).filter(...)` with no leading
-  `.withIndex()` loads every row and filters in memory — fine on ten rows, a
+  `.withIndex()` loads every row and filters in memory: fine on ten rows, a
   full-scan on a million. Declare the index and lead with it. The
   `filter_without_index` advisor flags this for you.
 - **Index foreign keys you read by.** A FK column with no index leading with it
@@ -31,20 +31,20 @@ ones that try to. This is the short list.
 ## Writes
 
 - **Keep mutations small and deterministic.** A `mutation` reads and writes the
-  database and nothing else. No `Date.now()`, `Math.random()`, or `fetch()` —
+  database and nothing else. No `Date.now()`, `Math.random()`, or `fetch()`:
   nondeterminism breaks caching and replay, and the
   `nondeterministic_query_mutation` advisor will warn you. Pass a timestamp in as
   an argument instead.
 - **Push side effects into actions.** External API calls, queues, sending mail,
-  anything non-deterministic or with the outside world — that's what an `action`
-  is for. See [Actions](/docs/concepts/actions). Have the action call back into a
-  `mutation` to persist the result.
+  anything non-deterministic or that touches the outside world: that's what an
+  `action` is for. See [Actions](/docs/concepts/actions). Have the action call
+  back into a `mutation` to persist the result.
 
 ## Inputs and safety
 
 - **Validate every input with `v.*`.** A typed `.input({ … })` rejects malformed
   args with a `400` before your handler runs. Never accept `v.any()` on a public
-  function — `public_arg_uses_any` flags it — and bound public strings with a
+  function (`public_arg_uses_any` flags it), and bound public strings with a
   length `.check` so they can't be abused as a storage/DoS vector.
 - **Throw `LunoraError` for expected failures.** It carries a `code` and the
   right status to the client; plain `Error`s are hidden behind a generic `500`.
@@ -59,14 +59,14 @@ ones that try to. This is the short list.
   reason about and is enough for most apps. Don't shard preemptively.
 - **Shard by tenant or room when you actually need to.** `.shardBy(key)`
   partitions state per user/tenant/room so load spreads across many DOs. Pick a
-  key with even traffic — the `hot_shard` runtime advisor flags a key where one
+  key with even traffic; the `hot_shard` runtime advisor flags a key where one
   shard dominates. See [Sharding](/docs/concepts/sharding).
 
 ## Lean on Advisors
 
 You don't have to remember all of the above. The [Advisors](/docs/concepts/advisors)
 run the static set on every `lunora dev` save and on deploy, and the Studio
-computes the runtime set from live shard metrics — surfacing unindexed scans,
+computes the runtime set from live shard metrics, surfacing unindexed scans,
 missing guards, hot shards, and dead schema before they bite.
 
 ## See also

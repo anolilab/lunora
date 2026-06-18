@@ -6,9 +6,9 @@ description: The v.* validators that type your columns and parse query / mutatio
 A **validator** is a single runtime object that does two jobs at once: it
 parses a value at runtime (throwing `ValidationError` on a mismatch) and it
 carries the TypeScript type that value infers to. The same `v.*` validators
-describe your storage columns and guard the boundary of every function — so
-one declaration drives both the database shape and the function's contract,
-and the inferred types flow all the way to the generated client.
+describe your storage columns and guard the boundary of every function. One
+declaration drives both the database shape and the function's contract, and the
+inferred types flow all the way to the generated client.
 
 ```ts
 // In schema.ts — table + column definitions:
@@ -70,7 +70,7 @@ export const send = mutation
     });
 ```
 
-`.input(...)` is chainable and additive — call it more than once and the maps
+`.input(...)` is chainable and additive: call it more than once and the maps
 merge. The terminal method (`.query()`, `.mutation()`, `.action()`) takes the
 handler and marks the function kind.
 
@@ -99,10 +99,10 @@ export const getProfile = query
 
 Codegen emits a typed `api` object from your function exports. The client's
 `useQuery` / `useMutation` (and the bare client calls) read the inferred input
-and output types straight off that `api`, so the **same validators** that parse
-on the server type the client call site — pass the wrong `args` shape, or use
-the result as the wrong type, and it's a compile error in the browser. There is
-no second schema to keep in sync: the validator is the contract on both ends.
+and output types straight off that `api`, so the same validators that parse on
+the server type the client call site. Pass the wrong `args` shape, or use the
+result as the wrong type, and it's a compile error in the browser. There is no
+second schema to keep in sync: the validator is the contract on both ends.
 
 ## Common validators
 

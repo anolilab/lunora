@@ -6,8 +6,8 @@ description: Keyset pagination with .paginate(options) — page through a query 
 `.paginate(options)` is the terminal that turns any `ctx.db.query(table)` chain
 into a keyset-paginated read. Unlike `.collect()` (every row) or `.take(n)`
 (the first `n`), it returns one **page** plus an opaque cursor you pass back to
-fetch the next. Cursors are keyset, not offset — paging stays stable as rows are
-inserted or deleted ahead of the cursor.
+fetch the next. Cursors are keyset, not offset, so paging stays stable as rows
+are inserted or deleted ahead of the cursor.
 
 ```ts
 import { query, v } from "@/lunora/_generated/server";
@@ -21,7 +21,7 @@ export const list = query.input({ channelId: v.id("channels"), paginationOpts: v
 });
 ```
 
-`.paginate()` composes with `.withIndex()`, `.filter()`, and `.order()` — page
+`.paginate()` composes with `.withIndex()`, `.filter()`, and `.order()`: it pages
 within the active index in the chosen direction.
 
 ## `PaginationOptions`
@@ -68,7 +68,7 @@ do {
 
 ## Load more / infinite lists on the client
 
-On the client a paginated list is just the same query re-run with the next
+On the client a paginated list is the same query re-run with the next
 cursor. The framework adapter hooks (`useQuery` in `@lunora/react`,
 `@lunora/vue`, `@lunora/solid`, `@lunora/svelte`) wrap this for you: you hold the
 accumulated `page` arrays, track the latest `continueCursor`, and call "load
@@ -93,7 +93,7 @@ async function loadMore() {
 }
 ```
 
-Because queries are reactive, each loaded page stays live — a mutation that
+Because queries are reactive, each loaded page stays live. A mutation that
 touches a row already on screen re-runs the query and pushes the delta to the
 client without re-fetching the whole list.
 

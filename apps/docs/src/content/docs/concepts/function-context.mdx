@@ -4,10 +4,10 @@ description: The ctx object passed to every query, mutation, and action — and 
 ---
 
 Every Lunora function receives a `ctx` as the first argument of its handler.
-`ctx` is the only way a function touches the outside world — the database,
-auth, storage, the scheduler, and any add-on surfaces. **Which `ctx` you get
-is determined by the function kind**, and the kind constrains what `ctx` can
-do: a `query` cannot write, an `action` cannot transact against the database.
+`ctx` is the only way a function reaches anything outside itself: the database,
+auth, storage, the scheduler, and any add-on surfaces. The function kind decides
+which `ctx` you get, and the kind constrains what `ctx` can do. A `query` cannot
+write; an `action` cannot transact against the database.
 
 ```ts
 import { mutation, query } from "@/lunora/_generated/server";
@@ -35,9 +35,9 @@ export const send = mutation.mutation(async ({ ctx, args }) => {
 Read-only. `ctx.db` is a `DatabaseReader` (`get`, `query`, `normalizeId`, plus
 the `ctx.db.system` reader for `_scheduled_functions` / `_storage`). Storage
 and vectors are present but read-only (`ReadOnlyStorage`, `VectorSearchReader`).
-A query may compose other **queries** with `ctx.runQuery` — it observes the same
-transaction snapshot — but there is no `runMutation`/`runAction`, because a
-query is not allowed to write.
+A query may compose other **queries** with `ctx.runQuery`, observing the same
+transaction snapshot. There is no `runMutation`/`runAction`, because a query is
+not allowed to write.
 
 ### `MutationCtx`
 
@@ -55,9 +55,9 @@ The escape hatch. An action can do anything a Worker can: it gets `ctx.fetch`
 (the standard `fetch`) for calling external APIs, the full read/write
 `ctx.storage` (`store`, `delete`, `generateUploadUrl`), `ctx.scheduler`,
 `ctx.workflows`, and the mutating `ctx.vectors`. It composes other functions of
-**every** kind — `ctx.runQuery`, `ctx.runMutation`, `ctx.runAction`. An action's
-`ctx.db` writes are **not** part of a single mutation transaction; do
-transactional reads/writes inside a `mutation` and call it from the action.
+every kind: `ctx.runQuery`, `ctx.runMutation`, `ctx.runAction`. An action's
+`ctx.db` writes are **not** part of a single mutation transaction. Do
+transactional reads and writes inside a `mutation` and call it from the action.
 
 ## Surfaces on every `ctx`
 
@@ -67,12 +67,12 @@ These are present regardless of kind:
   user id or `null`; `ctx.auth.getIdentity()` resolves the full claim set.
   Populated by `@lunora/auth` when a session is present.
 - **`ctx.log`** — a structured, function-attributed logger (`log`, `info`,
-  `warn`, `error`, `debug`). A drop-in for `console`, but each line is tagged
-  with the function path and routed to your observability sink / the dev
+  `warn`, `error`, `debug`). A drop-in for `console`, except each line is tagged
+  with the function path and routed to your observability sink or the dev
   terminal.
 - **`ctx.ip`** — the caller's trusted `CF-Connecting-IP`, or `undefined` for a
   live-subscription re-run, a server-initiated dispatch, or non-Cloudflare
-  hosting. Handy as a rate-limit key for anonymous traffic.
+  hosting. Useful as a rate-limit key for anonymous traffic.
 
 ## ctx field matrix
 
@@ -95,7 +95,7 @@ These are present regardless of kind:
 
 ## Add-on surfaces (codegen-wired)
 
-Opt-in packages attach extra surfaces onto `ctx` through codegen: when a
+Opt-in packages attach extra surfaces onto `ctx` through codegen. When a
 project uses one, the generated `_generated/server.ts` widens the context type
 so the surface is typed and present at runtime. Add-ons that wire a `ctx`
 surface include:
@@ -109,7 +109,7 @@ surface include:
 - `@lunora/container` → `ctx.containers`
 
 The base `QueryCtx` / `MutationCtx` / `ActionCtx` in `@lunora/server` do not
-declare these — they appear only after codegen detects the add-on. Middleware
+declare these; they appear only after codegen detects the add-on. Middleware
 can also augment `ctx` for downstream handlers (see
 [Middleware](/docs/concepts/middleware)).
 

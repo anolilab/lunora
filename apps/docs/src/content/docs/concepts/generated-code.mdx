@@ -4,7 +4,7 @@ description: What @lunora/codegen emits from your schema.ts, and how api / Id / 
 ---
 
 `@lunora/codegen` reads your `schema.ts` (and the functions it discovers) and
-emits a `_generated/` directory next to it. You **never edit these files** — they
+emits a `_generated/` directory next to it. You **never edit these files**; they
 are derived artifacts, regenerated on every save. What they buy you is end-to-end
 type safety: a query's argument and return types are inferred on the server and
 handed to the client through `api`, so a rename or a wrong arg is a compile
@@ -22,7 +22,7 @@ Three files are emitted from `schema.ts`:
 
 `api` is a typed registry of your **public** functions; `internal` is the same
 registry for functions you mark internal. Each entry is a `FunctionReference`
-carrying the function's kind, argument type, and return type — that's what lets a
+carrying the function's kind, argument type, and return type. That's what lets a
 client call hooks with full inference:
 
 ```tsx
@@ -33,7 +33,7 @@ import { api } from "@/lunora/_generated/api";
 const messages = useQuery(api.messages.list, { channelId });
 ```
 
-`api` and `internal` are the same proxy at runtime — visibility is enforced
+`api` and `internal` are the same proxy at runtime; visibility is enforced
 server-side at dispatch, not in the reference. Splitting the _types_ is what
 keeps internal functions off the client-facing `api` surface, so you can't
 accidentally call one from the browser. Internal functions are reachable only
@@ -43,8 +43,8 @@ server-side via `ctx.runQuery` / `ctx.runMutation` / `ctx.runAction`, passing an
 ## `server.ts` — typed helpers
 
 `server.ts` re-exports the procedure builders and `v` validators **bound to your
-schema**, so `ctx.db` knows your tables. Author functions importing from the
-generated `server` (not the base package) and `ctx.db.query("messages")`,
+schema**, so `ctx.db` knows your tables. Author functions by importing from the
+generated `server` (not the base package); then `ctx.db.query("messages")`,
 `ctx.db.insert("messages", …)`, and `ctx.db.get(id)` are all typed against your
 real schema with no casts.
 
@@ -85,7 +85,7 @@ project's declared dependencies, and emits matching imports in `_generated/*`:
 - depend on `@lunora/server`, `@lunora/client`, … → they import from
   `@lunora/server`, `@lunora/server/types`, `@lunora/client`, etc.
 
-This is opt-in and fully backward-compatible — switching to the umbrella changes
+This is opt-in and fully backward-compatible: switching to the umbrella changes
 only the import specifiers in the generated code, never your function code.
 
 ## Regenerating

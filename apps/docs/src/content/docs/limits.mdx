@@ -57,7 +57,7 @@ Requires the **Workers Paid** plan. Images must be `linux/amd64`.
 | Autoscaling          | **none yet**                            | Fixed pools; `.any()` picks uniformly                   |
 
 Billing is **active-CPU** based: instances scale to zero on `sleepAfter` and
-cost nothing idle. **Egress is billed** (~$0.025/GB NA+EU, more elsewhere) —
+cost nothing idle. **Egress is billed** (~$0.025/GB NA+EU, more elsewhere),
 unlike R2, which is free. See the
 [Containers pricing docs](https://developers.cloudflare.com/containers/pricing/).
 
@@ -69,8 +69,7 @@ The runtime emits warnings (and the dev overlay shows a banner) when:
 - a single DO is sustaining **>700 req/s**
 - a fan-out query touches more than **100 shards** in one invocation
 
-These are pre-emptive — well below the hard ceiling — so you have time to
-react.
+These warnings fire well below the hard ceiling, so you have time to react.
 
 ## See also
 

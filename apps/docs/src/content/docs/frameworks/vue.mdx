@@ -3,16 +3,16 @@ title: Vue
 description: Use Lunora with Vue 3 — a client plugin, live useQuery/useMutation composables, and the SSR-seed → live reactive-loader handoff.
 ---
 
-`@lunora/vue` is the Vue 3 adapter — an idiomatic layer over
+`@lunora/vue` is the Vue 3 adapter, an idiomatic layer over
 [`@lunora/client`](/docs/packages/client) that re-expresses the live contract as
-composables. A live query is a `ref` the socket writes to; an optimistic mutation
+composables. A live query is a `ref` the socket writes to. An optimistic mutation
 is a bundle of refs plus an awaitable `mutate`.
 
 This page is the task-oriented guide; for the full reference see
 [`@lunora/vue`](/docs/packages/vue).
 
 > **Preview.** The Vue adapter exposes the same hydrate-then-subscribe handoff as
-> React, but it is **preview** maturity — not yet proven end-to-end against a
+> React, but it is **preview** maturity: not yet proven end-to-end against a
 > running app. See [Bring your framework](/docs/frameworks/bring-your-framework).
 
 ## Install
@@ -43,7 +43,7 @@ createApp(App).use(createLunora(client)).mount("#app");
 
 `useQuery(fn, args)` subscribes and exposes the latest value as a `ref`
 (`undefined` until the first response). Pass `args` as a plain value, a `ref`, or
-a getter — a reactive source re-subscribes when it changes. Pass `"skip"` to
+a getter; a reactive source re-subscribes when it changes. Pass `"skip"` to
 short-circuit.
 
 ```vue
@@ -72,9 +72,9 @@ tears down on unmount.
 
 ## Mutations
 
-`useMutation(fn)` returns a `MutationHandle` of refs —
+`useMutation(fn)` returns a `MutationHandle` of refs:
 `{ data, error, pending, mutate, reset }`. `pending` is ref-counted across
-overlapping calls. Optimistic updates are passed **per call** (the Vue adapter
+overlapping calls. You pass optimistic updates **per call** (the Vue adapter
 has no bound `withOptimisticUpdate`).
 
 ```vue
@@ -108,7 +108,7 @@ async function send(channelId: string, text: string) {
 
 Run the query on the server with the socket-free `@lunora/vue/server` entry, hand
 the serializable `Preloaded` token to the client, and `hydratePreloaded` seeds a
-`ref` **synchronously** — the first read shows the server value with no loading
+`ref` **synchronously**. The first read shows the server value with no loading
 flash, then the live subscription attaches.
 
 ```ts title="server (Nuxt/Nitro route)"
@@ -148,7 +148,7 @@ emitted fetch handler as an importable module.
 
 > **Nuxt caveat.** Nitro does not expose its fetch handler as an importable
 > module, so single-worker composition is **not** achievable for Nuxt. The
-> supported Nuxt integration is a two-worker split — the Nuxt/Nitro SSR worker
+> supported Nuxt integration is a two-worker split: the Nuxt/Nitro SSR worker
 > plus a standalone Lunora worker owning `/_lunora/*` + `ShardDO`, wired by
 > `NUXT_PUBLIC_LUNORA_URL`.
 

@@ -5,25 +5,25 @@ description: Your loaders are live — SSR data that hydrates into a real-time s
 
 Every meta-framework has a route loader: Next.js Server Components, TanStack
 Start `createServerFn`, React Router `loader`, SvelteKit `load`. They all do the
-same thing — fetch data on the server, ship it in the HTML, hydrate it on the
-client. And then they stop. The data is a **snapshot**: correct at request time,
-stale the moment anyone else writes.
+same thing: fetch data on the server, ship it in the HTML, hydrate it on the
+client. And then they stop. The data is a **snapshot**, correct at request time
+and stale the moment anyone else writes.
 
 Lunora changes the second half. A Lunora loader fetches on the server _and_ hands
 the client a token that re-opens the same query as a **live subscription**. The
-first paint is the SSR value (no loading spinner, no flash); every write after
-that re-renders the component automatically.
+first paint is the SSR value, with no loading spinner and no flash; every write
+after that re-renders the component automatically.
 
 > **Bring your framework. Your loaders are live.**
 
 ## The problem with static loaders
 
-- **Next / TanStack / React Router** render server data beautifully, but it's a
-  one-shot fetch. Keeping it fresh means polling, manual `revalidate`, or wiring
-  your own WebSocket on top — none of which the loader knows about.
+- **Next / TanStack / React Router** render server data well, but it's a one-shot
+  fetch. Keeping it fresh means polling, manual `revalidate`, or wiring your own
+  WebSocket on top, none of which the loader knows about.
 - **void** plugs any framework into one worker, but its loaders are static
-  fetches. It has no reactivity layer; there is nothing to keep the rendered data
-  in sync after hydration.
+  fetches. It has no reactivity layer; nothing keeps the rendered data in sync
+  after hydration.
 
 Lunora's loader and its real-time subscription are the **same query**. The server
 runs it once for SSR; the client resumes it as a subscription. No second data
@@ -39,14 +39,14 @@ path, no polling, no hand-rolled socket.
                                                        → re-render on every write
 ```
 
-Everything left of "bind to UI" is framework-neutral — it's the same
+Everything left of "bind to UI" is framework-neutral: the same
 `createServerClient` / `preloadQuery` flow regardless of which meta-framework
 runs the loader. Only the last step (read the token, seed the cache, attach the
 socket) is per-framework, and that's what each adapter provides.
 
 ### Server: preload the query
 
-The server half lives in `@lunora/react/server` — a module with no `"use client"`
+The server half lives in `@lunora/react/server`, a module with no `"use client"`
 directive, no WebSocket, and no browser globals, so it is safe to import from any
 SSR loader or React Server Component. `createServerClient` builds a request-scoped
 HTTP client; `preloadQuery` runs the query and returns a serializable `Preloaded`
@@ -74,8 +74,8 @@ const loadMessages = createServerFn().handler(async ({ request }) => {
 });
 ```
 
-The `Preloaded` token is a plain JSON-serializable object —
-`{ __lunoraPreloaded: true, functionPath, args, shardKey?, value }` — so the
+The `Preloaded` token is a plain JSON-serializable object
+(`{ __lunoraPreloaded: true, functionPath, args, shardKey?, value }`), so the
 framework's router dehydration embeds it directly in the SSR HTML inside a
 `<script>` tag. No special serializer is needed.
 
@@ -102,7 +102,7 @@ function ChannelView() {
 }
 ```
 
-The component never renders a loading state — `messages` is the real list on the
+The component never renders a loading state. `messages` is the real list on the
 very first paint, and it updates on every write from any client, with no extra
 wiring.
 
@@ -120,7 +120,7 @@ The no-flash behaviour is two TanStack Query options working together:
   `queryClient.setQueryData` and React re-renders.
 
 The result: the first paint already contains live data, and the transition from
-"server-rendered" to "live-subscribed" is invisible — no refetch, no spinner, no
+server-rendered to live-subscribed is invisible. No refetch, no spinner, no
 content shift.
 
 ## Identity continuity (SSR → client)
@@ -136,11 +136,11 @@ origin this is automatic:
   upgrade to `/_lunora/ws`. The subscription resumes the same identity with **no
   token-exchange step**.
 
-So for same-origin, same-session apps you don't manage any tokens — cookie
+So for same-origin, same-session apps you don't manage any tokens: cookie
 forwarding on the server and the browser's own cookie on the socket are enough.
-Apps that deploy the SSR layer and the worker on **different origins** (e.g. a
-separate edge-SSR tier) pass the `token` option to `createServerClient` instead,
-and the client provider is configured with the matching bearer token.
+Apps that deploy the SSR layer and the worker on **different origins** (for
+example a separate edge-SSR tier) pass the `token` option to `createServerClient`
+instead, and the client provider is configured with the matching bearer token.
 
 ## Sharding carries through
 
@@ -148,7 +148,7 @@ and the client provider is configured with the matching bearer token.
 `Preloaded` token. On the client, `usePreloadedQuery` reads `preloaded.shardKey`
 and opens the subscription to the **same** Durable Object shard the loader read
 from. For route-param-driven sharding (`/rooms/:roomId`), pass `roomId` as the
-`shardKey` in the loader — shard continuity SSR → client is then automatic.
+`shardKey` in the loader, and shard continuity from SSR to client is then automatic.
 
 ```ts
 const preloaded = await preloadQuery(client, api.messages.list, { roomId }, { shardKey: roomId });
@@ -160,8 +160,8 @@ The reactive-loader contract is shipped for React today via `@lunora/react`
 (`createServerClient`, `preloadQuery`, `usePreloadedQuery`) and proven end-to-end
 on the TanStack Start template (`lunora init -t tanstack-start`).
 
-A framework-neutral server entrypoint — `@lunora/client/ssr`, promoting
-`createServerClient` / `preloadQuery` plus a `getServerSession` cookie helper —
+A framework-neutral server entrypoint, `@lunora/client/ssr` (promoting
+`createServerClient` / `preloadQuery` plus a `getServerSession` cookie helper),
 backs each adapter's `/server` entry, with Solid, Svelte, and Vue adapters that
 expose the same hydrate-then-subscribe handoff idiomatically. See
 [Bring your framework](/docs/frameworks/bring-your-framework) for the

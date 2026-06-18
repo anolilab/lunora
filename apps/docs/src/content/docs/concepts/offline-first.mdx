@@ -5,7 +5,7 @@ description: Persist reads and writes to disk so the app boots, renders, and acc
 
 Lunora's transport is online-first by default: reads hydrate from a live
 WebSocket and writes go straight to your Worker. Two opt-in client options turn
-that into an **offline-first** experience — the app boots from disk, renders
+that into an **offline-first** experience, where the app boots from disk, renders
 cached reads before a socket opens, and accepts writes while disconnected:
 
 - **`queryCache`** — a durable read cache. Query results are persisted as their
@@ -16,7 +16,7 @@ cached reads before a socket opens, and accepts writes while disconnected:
   issued while disconnected survive a reload and flush, exactly once, on
   reconnect.
 
-Both are off by default — current behaviour is unchanged until you pass an
+Both are off by default; current behaviour is unchanged until you pass an
 adapter.
 
 ## Enable persistent reads and writes
@@ -68,8 +68,8 @@ entries evicted first) and written with a short debounce as values advance, so a
 chatty subscription doesn't thrash the disk.
 
 The `identity` field is a fingerprint of the auth token at write time. On boot
-the client only hydrates entries whose identity matches the **current** token —
-a signed-out cache never leaks into a new session, and an identity change clears
+the client only hydrates entries whose identity matches the **current** token.
+A signed-out cache never leaks into a new session, and an identity change clears
 the cache outright. The offline outbox is gated by the same rule, so queued
 writes are never replayed under a different user.
 
@@ -150,7 +150,7 @@ self.addEventListener("fetch", (event: FetchEvent) => {
 
 With the shell cached and `queryCache` enabled, a cold offline launch paints the
 last-seen data instead of a blank page. Leave the Lunora transport paths
-(`/_lunora/*`, the WebSocket) out of the service worker — Lunora owns its own
+(`/_lunora/*`, the WebSocket) out of the service worker. Lunora owns its own
 reconnect, replay, and read-your-writes semantics, and caching them would fight
 it.
 
@@ -162,7 +162,7 @@ you writing sync glue:
 1. **Reads resume from the cursor.** The client sends the persisted
    `serverCursor` as `sinceSeq`. The server replays only the deltas you missed
    (or a `resume` ack when nothing in your read-set changed) instead of a full
-   snapshot — the cached value you already rendered stays on screen and is
+   snapshot, so the cached value you already rendered stays on screen and is
    patched forward.
 2. **Writes flush exactly once.** Queued mutations are deduped by `mutationKey`
    and replayed on reconnect; the idempotency key means a retry after a flaky

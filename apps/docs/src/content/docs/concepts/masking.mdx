@@ -7,7 +7,7 @@ Dynamic data masking controls **which column values** a caller sees in the
 clear. Where [row-level security](/docs/concepts/rls) decides _which rows_ a
 procedure returns, masking decides _which fields_ within those rows come back
 redacted. Both are server-side, both attach to a procedure's `.use(...)` chain,
-and both are **opt-in per procedure** — a procedure without `.use(mask(...))`
+and both are **opt-in per procedure**: a procedure without `.use(mask(...))`
 sees raw values, even if another procedure masks the same column.
 
 ```ts
@@ -23,11 +23,11 @@ export const listUsers = query.use(mask({ users: { email: "redact" } })).query(a
 
 A policy maps `table → column → strategy`. Three strategies:
 
-| Strategy   | Result                                                                                                                                                                                                                            |
-| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `"redact"` | The value becomes `null`. Simplest and safest.                                                                                                                                                                                    |
-| `"hash"`   | A deterministic, non-reversible token (FNV-1a). The same input always yields the same token, so values stay **joinable/groupable** client-side without revealing the original. Not cryptographic — a masking token, not a digest. |
-| `MaskFn`   | A custom transform `(value, context) => masked` — branch on the caller's roles or sibling columns.                                                                                                                                |
+| Strategy   | Result                                                                                                                                                                                                                                |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `"redact"` | The value becomes `null`. Simplest and safest.                                                                                                                                                                                        |
+| `"hash"`   | A deterministic, non-reversible token (FNV-1a). The same input always yields the same token, so values stay **joinable/groupable** client-side without revealing the original. Not cryptographic; it's a masking token, not a digest. |
+| `MaskFn`   | A custom transform `(value, context) => masked` that can branch on the caller's roles or sibling columns.                                                                                                                             |
 
 ```ts
 export const listUsers = query
@@ -89,14 +89,14 @@ mask({
   `query().withIndex().order().collect()/first()/take()/paginate()` chain, and
   `rankPage` all rewrite the declared columns of each **top-level** row.
 - **Nested relations are not masked.** Rows hydrated through a `with` clause sit
-  below the facade the mask wraps — the same boundary RLS draws.
+  below the facade the mask wraps, the same boundary RLS draws.
 - **Writes pass through untouched.** `insert`, `patch`, `replace`, and `delete`
   are never wrapped; stored data is never altered. Masking is an output filter.
 - **Aggregates fail closed.** `aggregate()` and `groupBy()` over a masked column
-  throw `MASK_UNSUPPORTED` (HTTP 422) — a group key _is_ the raw value and an
+  throw `MASK_UNSUPPORTED` (HTTP 422): a group key _is_ the raw value and an
   aggregate is computed _from_ it, so neither can be served without leaking.
   `count`, `rank`, and `rankBefore` (which return counts, not values) still work.
-- **A throwing `MaskFn` redacts to `null`** — it never leaks the raw value.
+- **A throwing `MaskFn` redacts to `null`.** It never leaks the raw value.
 
 ## Tooling
 
@@ -106,7 +106,7 @@ mask({
   `(table, column, strategy)` map it reads.
 - **Advisor** — the [`mask_uncovered_pii_column`](/docs/concepts/advisors) lint
   warns when a **public** procedure reads a table whose columns are masked
-  elsewhere but the procedure has no `.use(mask(...))` — the opt-in gap that
+  elsewhere but the procedure has no `.use(mask(...))`, the opt-in gap that
   would return PII in the clear.
 
 ## See also

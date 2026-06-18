@@ -3,18 +3,18 @@ title: Svelte
 description: Use Lunora with Svelte 5 / SvelteKit — context-provided client, live query/mutation stores, and the SSR-seed → live reactive-loader handoff.
 ---
 
-`@lunora/svelte` is the Svelte adapter — an idiomatic layer over
+`@lunora/svelte` is the Svelte adapter, an idiomatic layer over
 [`@lunora/client`](/docs/packages/client) that re-expresses the live contract as
 Svelte stores you read with the `$store` idiom. A live query is a readable store
 that re-emits on every server delta; an optimistic mutation is a bundle of stores
-plus an awaitable `mutate`. It is plain `.ts` over Svelte stores — no `.svelte`
+plus an awaitable `mutate`. It is plain `.ts` over Svelte stores, so no `.svelte`
 compiler is required to build it.
 
 This page is the task-oriented guide; for the full reference see
 [`@lunora/svelte`](/docs/packages/svelte).
 
 > **Preview.** The Svelte adapter exposes the same hydrate-then-subscribe handoff
-> as React, but it is **preview** maturity — not yet proven end-to-end against a
+> as React, but it is **preview** maturity: not yet proven end-to-end against a
 > running app. See [Bring your framework](/docs/frameworks/bring-your-framework).
 
 ## Install
@@ -64,15 +64,15 @@ store holds `undefined` until the first response.
 </ul>
 ```
 
-`query` is overloaded — pass `client` explicitly as the first argument, or omit
+`query` is overloaded: pass `client` explicitly as the first argument, or omit
 it to use the ambient client. `options` accepts `{ shardKey }` (for
 `.shardBy(...)`-partitioned functions) and `{ onError }`.
 
 ## Mutations
 
-`mutation(fn)` creates an optimistic `MutationHandle` of readable stores —
+`mutation(fn)` creates an optimistic `MutationHandle` of readable stores:
 `{ data, error, pending, mutate, reset }`. Read `$pending` to disable a button;
-it is ref-counted across overlapping calls. Optimistic updates are passed **per
+it is ref-counted across overlapping calls. You pass optimistic updates **per
 call**.
 
 ```svelte
@@ -103,7 +103,7 @@ call**.
 
 Run the query on the server with the socket-free `@lunora/svelte/server` entry in
 a SvelteKit `+page.ts` / `+layout.ts` `load`, return the serializable `Preloaded`
-token, and `hydratePreloaded` seeds the readable store **synchronously** — the
+token, and `hydratePreloaded` seeds the readable store **synchronously**. The
 first `$store` read returns the server value with no loading flash, then the live
 subscription attaches when the store gains its first client subscriber.
 
@@ -142,7 +142,7 @@ See [Reactive loaders](/docs/frameworks/reactive-loaders) for the full handoff.
 ## One worker, one deploy
 
 SvelteKit owns its Cloudflare build via `@sveltejs/adapter-cloudflare`
-(class-B — "own CF adapter, hook-injection"), so Lunora **injects** its realtime
+(class-B, "own CF adapter, hook-injection"), so Lunora **injects** its realtime
 plane into the worker SvelteKit emits. `@lunora/svelte/worker` re-exports
 `withLunora`, which wraps the SvelteKit handler as Lunora's fallback `httpRouter`:
 reserved `/_lunora/*` endpoints hit Lunora, everything else delegates to

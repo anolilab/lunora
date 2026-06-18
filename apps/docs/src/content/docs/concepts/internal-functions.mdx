@@ -3,12 +3,12 @@ title: Internal functions
 description: internalQuery / internalMutation / internalAction — server-only functions never exposed to the client.
 ---
 
-Every `query`, `mutation`, and `action` you export is **public** by default —
+Every `query`, `mutation`, and `action` you export is **public** by default,
 reachable from clients through the generated `api`. An **internal** function is
-the same in every way except its **visibility**: it is never exposed on `api`,
-the Durable Object's external RPC path rejects it, and it is reachable **only
-server-side** via `ctx.runQuery` / `ctx.runMutation` / `ctx.runAction` against
-the `internal` reference.
+identical except for its visibility: it is never exposed on `api`, the Durable
+Object's external RPC path rejects it, and it is reachable only server-side via
+`ctx.runQuery` / `ctx.runMutation` / `ctx.runAction` against the `internal`
+reference.
 
 Use them for privileged logic you don't want a client to call directly:
 post-webhook writes, scheduled jobs, fan-out helpers, anything that assumes a
@@ -30,8 +30,8 @@ export const applyStripeSync = internalMutation.input({ id: v.id("customers"), r
 ```
 
 The three builders mirror their public counterparts and produce the same
-`ctx` — `internalQuery` gets a read-only `QueryCtx`, `internalMutation` a
-transactional `MutationCtx`, `internalAction` the side-effectful `ActionCtx`.
+`ctx`. `internalQuery` gets a read-only `QueryCtx`, `internalMutation` a
+transactional `MutationCtx`, and `internalAction` the side-effectful `ActionCtx`.
 
 | Public     | Internal           | `ctx`         |
 | ---------- | ------------------ | ------------- |
@@ -56,14 +56,14 @@ export const syncCustomer = action.input({ stripeId: v.string() }).action(async 
 });
 ```
 
-There is no client equivalent — `internal.*` references exist only in
+There is no client equivalent: `internal.*` references exist only in
 server-side generated code. A client that tries to invoke an internal function
 by name is rejected at the RPC boundary, so visibility is a real security
 boundary, not just a naming convention.
 
 ## Internal functions and scheduling
 
-The scheduler dispatches a function **server-side**, so its target is almost
+The scheduler dispatches a function server-side, so its target is almost
 always internal. Schedule an `internal*` reference from a mutation or action:
 
 ```ts

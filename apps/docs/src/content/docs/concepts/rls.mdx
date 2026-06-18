@@ -7,7 +7,7 @@ Row-level security (RLS) controls **which rows** a caller can see and change.
 Where [data masking](/docs/concepts/masking) decides _which fields_ within a row
 come back redacted, RLS decides _which rows_ a procedure returns or is allowed to
 write. Both are server-side, both attach to a procedure's `.use(...)` chain, and
-both are **opt-in per procedure** — a bare `query`/`mutation` sees an unwrapped
+both are **opt-in per procedure**: a bare `query`/`mutation` sees an unwrapped
 `ctx.db` and no policy applies, even if another procedure guards the same table.
 
 ```ts
@@ -64,8 +64,8 @@ const documentPolicies = definePolicies([
 - `auth.can(permission)` — whether any of those roles grants a named permission
   (see below). Fails closed for unknown roles.
 - `auth.identity` — the raw identity claims.
-- `row` — present only on **write** policies: the candidate document on `insert`,
-  the pre-write row on `update`/`delete`.
+- `row` — present only on **write** policies; the candidate document on
+  `insert`, the pre-write row on `update`/`delete`.
 - `ctx` — the full procedure context the middleware closed over.
 
 ## Permissions and roles
@@ -100,9 +100,9 @@ shared with [data masking](/docs/concepts/masking), which checks the same
 ## Relation predicates
 
 A policy predicate can cross a relation. Alongside the flat column operators, a
-`when` decision may return a Prisma-style **relation predicate** — `is`/`isNot`
-on a to-one relation, `some`/`none`/`every` on a to-many — and the `@lunora/do`
-pre-resolver resolves it (a batched semijoin, or a correlated `EXISTS` when the
+`when` decision may return a Prisma-style **relation predicate** (`is`/`isNot`
+on a to-one relation, `some`/`none`/`every` on a to-many), which the `@lunora/do`
+pre-resolver resolves (a batched semijoin, or a correlated `EXISTS` when the
 related table is co-located on the same shard) before the read runs:
 
 ```ts
@@ -127,10 +127,10 @@ directly (`every` therefore means "every child _the caller can read_ matches").
 
 Relation predicates are a **read-policy** capability. A write policy evaluates a
 single in-memory candidate row and has no fetcher, so a relation predicate in an
-`insert`/`update`/`delete` decision throws `RELATION_PREDICATE_UNSUPPORTED` —
-use a flat column check (or a read policy) instead. `rank`/`rankPage` likewise
+`insert`/`update`/`delete` decision throws `RELATION_PREDICATE_UNSUPPORTED`; use
+a flat column check (or a read policy) instead. `rank`/`rankPage` likewise
 reject them: their `where` only pins a partition, so a relation predicate there
-would silently drop. They are also bounded — an overly broad `some: {}` that
+would silently drop. They are also bounded: an overly broad `some: {}` that
 collects more than `maxRelationKeys` child keys fails closed with a descriptive
 error rather than silently truncating the `IN (...)` set (a same-shard `EXISTS`
 push-down lifts this cap, since it needs no key list).
@@ -156,29 +156,29 @@ narrow, so the `rls()` chain discovers a policy authored either way the same.
 
 - **Reads are AND-merged.** Every `get`, `findFirst`/`findMany`, and the
   `query().withIndex().order().collect()/first()/take()/paginate()` chain folds
-  the policy predicate in, so a non-matching row is invisible — not an error.
+  the policy predicate in, so a non-matching row is invisible, not an error.
 - **Writes throw on denial.** `insert`, `patch`/`replace`, and `delete` evaluate
   the candidate/pre-write row and throw `FORBIDDEN` (HTTP 403) on a mismatch.
 - **`count` is unsupported on a restricted table.** It throws
-  `COUNT_RLS_UNSUPPORTED` (HTTP 422) — a count over a row-filtered table would
-  leak the size of rows you can't see.
+  `COUNT_RLS_UNSUPPORTED` (HTTP 422), because a count over a row-filtered table
+  would leak the size of rows you can't see.
 - **Nested `with` reads inherit the child's read policy.** A row hydrated through
   a `with` clause is filtered by the related table's own `read` policy — the same
   `baseWhere` a direct read of that table would get is threaded down every `with`
   level (and into `_count`), so `findMany({ with: { child: true } })` can't return
   child rows the caller couldn't read directly. (Column-level **masking** is the
-  boundary that still draws at the wrapped facade — see below.)
+  boundary that still draws at the wrapped facade; see below.)
 - **It's opt-in.** Only procedures whose chain includes `.use(rls(...))` are
   guarded. The [`rls_uncovered_table`](/docs/concepts/advisors) advisor warns
   when a **public** procedure reads or writes a table that's RLS-protected
-  elsewhere but skips the middleware — the authorization gap.
+  elsewhere but skips the middleware, leaving an authorization gap.
 
 ### RLS over live queries
 
 A subscription re-runs its query server-side on every relevant write, then
 pushes the new result down the socket. That re-run evaluates RLS under the
 **socket's own verified identity** — the `userId`/identity stamped at WebSocket
-upgrade (unforgeable, carried by the connection), not a per-request claim — so
+upgrade, unforgeable and carried by the connection, not a per-request claim — so
 an `rls()`/`ctx.auth`-scoped live query returns the subscriber's rows over the
 live channel exactly as it does on the initial HTTP fetch.
 
@@ -193,9 +193,9 @@ dependency is stamped, since D1 has no per-row reactive tracker).
 ## Testing policies
 
 Policies are pure functions, so you can assert their behaviour in a plain unit
-test — no Worker, Durable Object, or live socket. `expectPolicy(policies)` from
-`@lunora/server/rls/testing` evaluates them through the **same** primitives the
-`rls()` middleware runs at request time, so a green test means the policy
+test, with no Worker, Durable Object, or live socket. `expectPolicy(policies)`
+from `@lunora/server/rls/testing` evaluates them through the **same** primitives
+the `rls()` middleware runs at request time, so a green test means the policy
 behaves identically in production:
 
 ```ts
@@ -215,7 +215,7 @@ ada.can("insert", "docs", { ownerId: "ada" }); // true
 ada.cannot("insert", "docs", { ownerId: "x" }); // true  — write denied
 ```
 
-`.as(identity)` binds a caller (`userId` / `roles` / `identity`, all optional —
+`.as(identity)` binds a caller (`userId` / `roles` / `identity`, all optional;
 an omitted identity is the anonymous caller). For `read`, `.can(...)` answers
 "is this row visible?" (the effective read `baseWhere` matches it); for writes
 it answers allow/deny exactly as the middleware would, including default-DENY on

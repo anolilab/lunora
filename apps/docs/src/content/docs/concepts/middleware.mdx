@@ -3,10 +3,10 @@ title: Middleware
 description: Compose cross-cutting concerns — auth checks, rate limiting, logging — and augment ctx for downstream handlers.
 ---
 
-Middleware wraps a procedure builder so a piece of logic runs **before** the
+Middleware wraps a procedure builder so a piece of logic runs before the
 handler on every function built from it. It is the seam for cross-cutting
-concerns — authentication, permission checks, rate limiting, logging — and for
-**augmenting `ctx`** so downstream handlers see fields the middleware added.
+concerns (authentication, permission checks, rate limiting, logging) and for
+augmenting `ctx` so downstream handlers see fields the middleware added.
 
 A middleware is a function of `({ ctx, next })` that calls `next` exactly once,
 optionally passing a widened context:
@@ -17,7 +17,7 @@ const middleware = ({ ctx, next }) => next({ ctx: { ...ctx, requestId: crypto.ra
 
 Calling `next({ ctx })` invokes the rest of the chain (the next middleware, or
 the handler) with that context. Whatever you spread onto `ctx` is visible to
-everything downstream — including the handler's `ctx`.
+everything downstream, including the handler's `ctx`.
 
 ## Attaching middleware
 
@@ -45,7 +45,7 @@ export const send = authed.input({ text: v.string() }).mutation(async ({ ctx, ar
 ## Augmenting ctx
 
 The convention for plugin middleware is to attach helpers under `ctx.api.<key>`
-so two plugins never collide. A middleware widens `ctx` by spreading and
+so two plugins never collide. A middleware widens `ctx` by spreading it and
 returning it through `next`:
 
 ```ts
@@ -67,7 +67,7 @@ const guarded = c.query.use(logging).use(requireAuth).use(rateLimit);
 ### Rate limiting with `@lunora/ratelimit`
 
 `@lunora/ratelimit` ships procedure middleware so you can enforce a limit
-before the handler runs. Compose it like any other middleware — key the limit
+before the handler runs. Compose it like any other middleware, keying the limit
 on `ctx.auth.userId` (or `ctx.ip` for anonymous traffic):
 
 ```ts
@@ -88,7 +88,7 @@ const limited = c.mutation.use(rateLimit(limiter, "send", { key: (ctx) => ctx.au
 
 A plugin packages a schema extension plus middleware. To attach several
 plugins' middleware in a single `.use(...)`, compose them with
-`composePluginMiddleware([...])` — equivalent to chaining each
+`composePluginMiddleware([...])`. It's equivalent to chaining each
 `.use(plugin.middleware)`, but as one value, and the chain's context carries
 every plugin's additions:
 

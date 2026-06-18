@@ -3,7 +3,7 @@ title: React
 description: Use Lunora with React — a provider, live useQuery/useMutation hooks, and the SSR-seed → live reactive-loader handoff.
 ---
 
-`@lunora/react` is the official React binding — a thin layer over
+`@lunora/react` is the official React binding. It's a thin layer over
 [`@lunora/client`](/docs/packages/client) that maps the live cache to
 `useSyncExternalStore`, so concurrent React works correctly out of the box. It is
 the **reference adapter**: the only one verified end-to-end through the full
@@ -22,8 +22,8 @@ pnpm add @lunora/react
 
 ## Provide the client
 
-Create one `LunoraClient` and mount it for the subtree with `<LunoraProvider>` —
-required at the root.
+Create one `LunoraClient` and mount it for the subtree with `<LunoraProvider>`.
+This is required at the root.
 
 ```tsx title="src/main.tsx"
 import { LunoraClient } from "lunora/client";
@@ -44,7 +44,7 @@ export const Root = () => (
 
 `useQuery(fn, args)` subscribes to a query and re-renders on every server delta.
 It returns `T | undefined` (undefined until the first response). Pass `"skip"` as
-`args` to short-circuit with no network call; identical args across components
+`args` to short-circuit with no network call. Components that pass identical args
 share one underlying subscription.
 
 ```tsx
@@ -71,8 +71,8 @@ function Messages({ channelId }: { channelId: string }) {
 
 ## Mutations
 
-`useMutation(fn)` returns a callable with a `.pending` flag. Optimistic updates
-are passed per call and roll back automatically if the server rejects.
+`useMutation(fn)` returns a callable with a `.pending` flag. You pass optimistic
+updates per call, and they roll back automatically if the server rejects.
 
 ```tsx
 import { useMutation } from "@lunora/react";
@@ -96,7 +96,7 @@ function Composer({ channelId }: { channelId: string }) {
 ## Auth
 
 `useAuth()` returns `{ user, token, setToken(next) }`. Call `setToken(jwt)` after
-a sign-in flow and every subsequent RPC carries the token automatically.
+a sign-in flow, and every subsequent RPC carries the token automatically.
 
 ## Reactive loaders
 
@@ -125,22 +125,22 @@ export default async function PostsPage() {
 }
 ```
 
-The client `useQuery(api.posts.list, {})` reads the prefetched value from cache on
-first render (no loading flash), then a live subscription attaches on mount. To
+On the client, `useQuery(api.posts.list, {})` reads the prefetched value from cache
+on first render (no loading flash), then a live subscription attaches on mount. To
 thread a single value without a `HydrationBoundary`, use `preloadQuery` on the
 server and read it with `usePreloadedQuery` on the client. See
 [Reactive loaders](/docs/frameworks/reactive-loaders) for the full handoff and
 [`@lunora/react`](/docs/packages/react#server-components-nextjs-app-router) for the
 server reference.
 
-> Create a `createServerClient` **per request** — the bearer token and forwarded
+> Create a `createServerClient` **per request**. The bearer token and forwarded
 > cookies are per-user, so a shared module-level client would leak identity.
 
 ## One worker, one deploy
 
 With **TanStack Start**, Lunora owns the worker entry (a class-A framework in
 [Bring your framework](/docs/frameworks/bring-your-framework)), so the realtime
-plane and your SSR share one worker with no extra wiring. For the Next.js App
+plane and your SSR share one worker with no extra wiring. On the Next.js App
 Router, load data through `@lunora/react/server` as above. See
 [Deploy your framework](/docs/frameworks/deploy) for the one-worker deploy story.
 

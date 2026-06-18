@@ -3,8 +3,8 @@ title: Architecture
 description: How Worker, ShardDO, SchedulerDO, D1, R2 and Queues fit together.
 ---
 
-A Lunora deployment is a small constellation of Cloudflare primitives glued
-together by `@lunora/runtime`. Each piece is single-purpose and replaceable.
+A Lunora deployment is a small set of Cloudflare primitives wired together by
+`@lunora/runtime`. Each piece is single-purpose and replaceable.
 
 ```text
             ┌────────────────────────────────────────────────┐
@@ -28,8 +28,8 @@ its own CPU budget and its own hibernation timer.
 Reasoning rules:
 
 - **Real-time subscriptions stay in-process.** A delta never crosses DO
-  boundaries — the mutation that wrote the row is also the broadcast source.
-- **Single-region writes.** A DO is pinned to a region near its creator;
+  boundaries; the mutation that wrote the row is also the broadcast source.
+- **Single-region writes.** A DO is pinned to a region near its creator, and
   writes are strongly consistent within that region.
 - **Account-unlimited.** You can have millions of `ShardDO` instances per
   account.
@@ -37,7 +37,7 @@ Reasoning rules:
 ## Tier 2 — Global (D1)
 
 `.global()` tables move to Cloudflare D1. Use this for identities, billing,
-cross-tenant audit logs — anything that needs to be queryable across shards.
+cross-tenant audit logs, anything that needs to be queryable across shards.
 Reads can be served by regional replicas; writes route to the primary.
 `@lunora/d1` threads the `withSession(bookmark)` API so your client gets
 read-your-writes without a sticky-session router.
@@ -53,11 +53,11 @@ read-your-writes without a sticky-session router.
 
 ## Why this beats single-DO
 
-Zeroback's single-DO model dies at **10 GB SQLite + ~1 000 req/s**. Lunora's
-opt-in sharding moves both ceilings to **`N × 10 GB`** and **`N × 1 000 req/s`**
-without changing your call sites. The cost is purely tooling: codegen has to
-know how to address shards, and the docs have to be honest about cross-shard
-queries being fan-out.
+Zeroback's single-DO model caps out at **10 GB SQLite and ~1 000 req/s**.
+Lunora's opt-in sharding moves both ceilings to **`N × 10 GB`** and
+**`N × 1 000 req/s`** without changing your call sites. The cost is tooling:
+codegen has to know how to address shards, and the docs have to be honest about
+cross-shard queries being fan-out.
 
 ## See also
 

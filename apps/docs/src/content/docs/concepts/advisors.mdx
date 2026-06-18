@@ -10,7 +10,7 @@ that emits zero or more **findings**, each tagged with a level
 remediation.
 
 What sets Lunora apart from a live-database-only advisor is that most lints are
-**static** — they run at codegen/build time against the declared schema and the
+**static**: they run at codegen/build time against the declared schema and the
 discovered query/insert/middleware sites, so they catch a problem _before_ it
 ships. A smaller set is **runtime**: it needs observed signal from a running
 shard (full-scan attribution, index hit counts, per-shard traffic, row samples).

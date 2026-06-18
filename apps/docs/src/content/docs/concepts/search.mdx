@@ -34,8 +34,8 @@ export default defineSchema({
 ## Running a search query
 
 Use `.withSearchIndex(name, q => …)`. The builder's `.search(field, query)` runs
-the full-text match against the index's searchable field (call it exactly once);
-`.eq(field, value)` narrows by a declared filter field.
+the full-text match against the index's searchable field (call it exactly once),
+and `.eq(field, value)` narrows by a declared filter field.
 
 ```ts
 import { query, v } from "@/lunora/_generated/server";
@@ -57,9 +57,9 @@ scoring, so a per-channel or per-tenant search stays scoped.
 
 ## Relevance ordering and `.take(n)`
 
-A search query returns rows **ordered by relevance** to the search term — the
-best match first. You cannot re-`.order()` it, and **`.paginate()` is not
-supported on a search query**. Bound the result set with `.take(n)` instead:
+A search query returns rows **ordered by relevance** to the search term, best
+match first. You cannot re-`.order()` it, and `.paginate()` is not supported on
+a search query. Bound the result set with `.take(n)` instead:
 
 ```ts
 .withSearchIndex("search_text", (q) => q.search("text", term))

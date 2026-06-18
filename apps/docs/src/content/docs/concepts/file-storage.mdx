@@ -3,8 +3,8 @@ title: File storage
 description: Typed R2 buckets exposed as ctx.storage — uploading, serving via signed URLs, and deleting files from your functions.
 ---
 
-[`@lunora/storage`](/docs/packages/storage) wraps Cloudflare R2 in a typed,
-ergonomic surface and threads it onto every function context as `ctx.storage`. A
+[`@lunora/storage`](/docs/packages/storage) wraps Cloudflare R2 in a typed
+surface and threads it onto every function context as `ctx.storage`. A
 file is addressed by a string **key** you choose; the bucket and signing secret
 are configured once and never appear in a handler. As with everything else in
 Lunora, _which_ operations you can reach depends on the kind of function you're
@@ -24,7 +24,7 @@ export const importLogo = action.input({ key: v.string() }).action(async ({ ctx,
 
 `ctx.storage` is **read-only inside a `query` or a `mutation`**, and the **full
 read/write surface inside an `action`**. The split is deliberate: queries are
-pure reads, and mutations run inside a transactional scope — neither is allowed
+pure reads, and mutations run inside a transactional scope. Neither is allowed
 to perform a side-effectful R2 write or delete, because those can't participate
 in the transaction or be rolled back. Both can still read existing objects and
 mint signed URLs, since signing is an HMAC computation with no R2 round-trip.
@@ -37,8 +37,8 @@ mint signed URLs, since signing is an HMAC computation with no R2 round-trip.
 | `store`                    |   —   |    —     |   ✓    |
 | `delete`                   |   —   |    —     |   ✓    |
 
-So: serve and inspect files from anywhere; mint a **direct-upload** URL or write
-and delete bytes only from an action.
+In short: serve and inspect files from anywhere; mint a **direct-upload** URL or
+write and delete bytes only from an action.
 
 ## Uploading
 
@@ -59,8 +59,8 @@ export const requestUpload = action.input({ key: v.string(), contentType: v.stri
 });
 ```
 
-When the bytes already live server-side — fetched in the same action, generated,
-or transformed — upload them directly with `store`, which also enforces optional
+When the bytes already live server-side (fetched in the same action, generated,
+or transformed), upload them directly with `store`, which also enforces optional
 `maxSize` / `allowedContentTypes` guards:
 
 ```ts
@@ -71,7 +71,7 @@ await ctx.storage.store(key, body, { allowedContentTypes: ["image/png", "image/j
 
 `getUrl(key)` returns a stable public URL against the configured base. For
 private objects, `getSignedUrl(key, { expiresInSeconds })` returns a short-lived
-URL that grants access without exposing the bucket — and because signing is
+URL that grants access without exposing the bucket. Because signing is
 HMAC-only, you can hand one out from a `query` to feed a `<img src>` reactively:
 
 ```ts
@@ -114,7 +114,7 @@ export const removeAttachment = action.input({ key: v.string() }).action(async (
 ```
 
 A common shape is a mutation that deletes the database row and schedules an
-action to delete the underlying object — keeping the byte-level side-effect out
+action to delete the underlying object, keeping the byte-level side-effect out
 of the transaction (see [scheduling](/docs/concepts/scheduling)).
 
 ## See also

@@ -10,7 +10,7 @@ it needs instead of scanning the whole table and filtering in memory.
 ## Declaring an index
 
 `.index(name, [fields], { unique? })` adds a secondary index. List the columns in
-the order you'll constrain them — the index is ordered left to right, so the
+the order you'll constrain them. The index is ordered left to right, so the
 leftmost field must be the one you equality-match first.
 
 ```ts
@@ -39,7 +39,7 @@ value.
 ## Querying with `withIndex`
 
 `q.withIndex(name, q => …)` selects the index and builds a range over its
-leading columns. The range builder offers `.eq`, `.gt`, `.gte`, `.lt`, `.lte` —
+leading columns. The range builder offers `.eq`, `.gt`, `.gte`, `.lt`, `.lte`:
 equality-match the leading fields, then optionally bound the next one:
 
 ```ts
@@ -59,11 +59,11 @@ export const recent = query.input({ channelId: v.id("channels"), since: v.number
 
 ## Why every filtered read should hit an index
 
-`ctx.db.query(table).filter(...)` with no `.withIndex()` first loads **every**
-row and filters in memory — fine for a handful of rows, a problem as the table
-grows. A `.withIndex()` read seeks straight to the matching range. As a rule,
-any read that constrains a column should constrain it through an index, and any
-foreign-key column you read by should have an index leading with it.
+`ctx.db.query(table).filter(...)` with no `.withIndex()` first loads every
+row and filters in memory. That's fine for a handful of rows, but a problem as
+the table grows. A `.withIndex()` read seeks straight to the matching range. As
+a rule, any read that constrains a column should constrain it through an index,
+and any foreign-key column you read by should have an index leading with it.
 
 ## How the Advisors catch unindexed reads
 
@@ -73,7 +73,7 @@ at build time and surface these in the Studio:
 - **`filter_without_index`** (warn) — a `query(...).filter(...)` with no
   `.withIndex()` first; it loads every row and filters in memory.
 - **`unindexed_foreign_key`** (info) — a foreign-key column with no index leading
-  with it, so reads on it full-scan. (Honours SQLite's leftmost-prefix rule;
+  with it, so reads on it full-scan. (It honours SQLite's leftmost-prefix rule;
   FKs onto `_id` are exempt.)
 - **`empty_index`** (warn) and **`duplicate_index`** (info) catch indexes that
   narrow nothing or are a redundant prefix of another.
@@ -87,8 +87,8 @@ Beyond ordinary secondary indexes, a table can declare an **aggregate index**
 via `.aggregateIndex(name, { by, op, field, where })`. The runtime keeps a
 counter row per `by` group (maintained by triggers on every write), so reads
 whose `where` keys all participate in `by` are answered in O(1) from the counter
-table without scanning rows — `count` (field-less), `sum`/`min`/`max`/`avg` (take
-a `field`).
+table without scanning rows. Use `count` (field-less), or `sum`/`min`/`max`/`avg`
+(which take a `field`).
 
 ```ts
 messages: defineTable({

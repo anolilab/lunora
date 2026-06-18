@@ -3,10 +3,10 @@ title: Build a real-time chat app in 15 minutes
 description: End-to-end Lunora walkthrough — schema, query, mutation, subscription, React, sharding.
 ---
 
-This tutorial ships a working multi-channel chat in roughly fifteen minutes of
+This tutorial builds a working multi-channel chat in about fifteen minutes of
 typing. By the end you'll have a typed schema, a query that auto-subscribes,
 a mutation that broadcasts deltas, a React UI that reacts to them, and the
-table sharded by `channelId` so it scales past one Durable Object.
+messages table sharded by `channelId` so it scales past one Durable Object.
 
 You'll need the prerequisites from [Getting started](/docs/getting-started):
 Node 22+, pnpm 10+, and a Cloudflare account if you want to deploy.
@@ -24,7 +24,7 @@ and a `src/server/index.ts` that boots `@lunora/runtime`'s `createWorker`.
 
 ## 2. Model the data
 
-Replace `lunora/schema.ts` with two tables — `channels` (global, so every shard
+Replace `lunora/schema.ts` with two tables: `channels` (global, so every shard
 sees them) and `messages` (sharded by channel, so each room gets its own DO):
 
 ```ts
@@ -49,7 +49,7 @@ export const schema = defineSchema({
 });
 ```
 
-`.global()` puts `channels` in D1 — there are only so many rooms, and you
+`.global()` puts `channels` in D1: there are only so many rooms, and you
 want them addressable from any shard. `.shardBy("channelId")` puts each
 channel's messages in its own Durable Object so a single noisy room can't
 exhaust another room's budget.
@@ -153,7 +153,7 @@ pnpm dev
 
 Open two browser tabs at `http://localhost:5173`, point them at the same
 `channelId`, and type. The second tab sees the first tab's message land
-without a refresh — the mutation broadcast travelled through the channel's
+without a refresh: the mutation broadcast travelled through the channel's
 Durable Object back to every subscriber.
 
 ## 8. Deploy
@@ -164,7 +164,7 @@ pnpm lunora deploy
 
 `lunora deploy` runs codegen, validates `wrangler.jsonc`, applies any pending
 D1 migrations through `MigrationRunner`, and finally invokes
-`wrangler deploy`. Your chat is now live on Cloudflare's edge — one DO per
+`wrangler deploy`. Your chat is now live on Cloudflare's edge: one DO per
 channel, hibernated when idle, billed by the millisecond.
 
 ## Where to next

@@ -3,9 +3,8 @@ title: Queries & mutations
 description: query / mutation / action — what each is for and how ctx is shaped.
 ---
 
-Lunora exposes three function kinds. Picking the right one is a function of
-**what side-effects you need** and **what reactivity guarantees the client
-gets back**.
+Lunora exposes three function kinds. Which one you pick depends on the
+side effects you need and the reactivity guarantees the client gets back.
 
 | Kind       | Side effects                  | Reactive                     | Use when                                     |
 | ---------- | ----------------------------- | ---------------------------- | -------------------------------------------- |
@@ -34,7 +33,7 @@ export const send = mutation.input({ channelId: v.id("channels"), text: v.string
 
 Inside a `query` you get a read-only `DatabaseReader`. Inside a `mutation`
 you get a `DatabaseWriter` with `insert`, `patch`, `replace` and `delete`.
-Both are typed by your schema — `ctx.db.insert("messages", ...)` errors at
+Both are typed by your schema, so `ctx.db.insert("messages", ...)` errors at
 compile time if the shape is wrong.
 
 ## `ctx.auth`

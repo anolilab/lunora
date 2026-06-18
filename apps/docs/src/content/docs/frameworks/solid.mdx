@@ -3,16 +3,16 @@ title: Solid
 description: Use Lunora with SolidJS — a provider, live createQuery/createMutation primitives, and the SSR-seed → live reactive-loader handoff.
 ---
 
-`@lunora/solid` is the SolidJS adapter — an idiomatic layer over
+`@lunora/solid` is the SolidJS adapter, an idiomatic layer over
 [`@lunora/client`](/docs/packages/client). Solid's fine-grained signals map
-directly onto Lunora's per-subscription deltas, so a live query is just a signal
+directly onto Lunora's per-subscription deltas, so a live query is a signal
 the socket writes to: only the components that read the accessor re-render.
 
 This page is the task-oriented guide; for the full reference see
 [`@lunora/solid`](/docs/packages/solid).
 
 > **Preview.** The Solid adapter exposes the same hydrate-then-subscribe handoff
-> as React, but it is **preview** maturity — not yet proven end-to-end against a
+> as React, but it is **preview** maturity: not yet proven end-to-end against a
 > running app. Solid lands first after React because its signals map most directly
 > onto Lunora deltas. See [Bring your framework](/docs/frameworks/bring-your-framework).
 
@@ -50,7 +50,7 @@ render(
 
 `createQuery(fn, args)` subscribes and returns a reactive **accessor**
 (`undefined` until the first frame, then updated on every delta). Pass `args` as
-a plain value or an accessor — an accessor re-subscribes when it changes. Pass
+a plain value or an accessor; an accessor re-subscribes when it changes. Pass
 `"skip"` to short-circuit.
 
 ```tsx
@@ -75,10 +75,10 @@ scope is disposed.
 
 ## Mutations
 
-`createMutation(fn)` returns a `MutationHandle` of accessors —
+`createMutation(fn)` returns a `MutationHandle` of accessors:
 `{ data, error, pending, mutate, reset }`. `pending` is ref-counted, and the
-mutation engages the client's offline queue when the socket is down. Optimistic
-updates are passed **per call**.
+mutation engages the client's offline queue when the socket is down. You pass
+optimistic updates **per call**.
 
 ```tsx
 import { createMutation } from "@lunora/solid";
@@ -113,7 +113,7 @@ function Composer(props: { channelId: string }) {
 
 Run the query on the server with the socket-free `@lunora/solid/server` entry
 inside a SolidStart route loader, hand the serializable `Preloaded` token to the
-client, and `hydratePreloaded` seeds the accessor **synchronously** — the first
+client, and `hydratePreloaded` seeds the accessor **synchronously**. The first
 read returns the server value with no loading flash and no `Suspense` fallback,
 then the live subscription attaches after mount.
 
@@ -140,7 +140,7 @@ function Posts(props: { preloaded: Preloaded<Array<{ _id: string; title: string 
 }
 ```
 
-Effects do not run during SSR, so the subscription is strictly client-side — the
+Effects do not run during SSR, so the subscription is strictly client-side: the
 seed is the only value the server render sees. See
 [Reactive loaders](/docs/frameworks/reactive-loaders) for the full handoff.
 

@@ -3,20 +3,20 @@ title: Bring your framework
 description: Compose any meta-framework's SSR with Lunora realtime in one Cloudflare Worker.
 ---
 
-Lunora is not a web framework, and it does not want to be one. It is the
-**reactive backend that any meta-framework plugs into** — TanStack Start, React
-Router, SolidStart, SvelteKit, Nuxt, Astro — composed into **one Cloudflare
-Worker**. You keep your framework's routing, rendering, and DX; Lunora adds
-type-safe data and the thing no other backend has: [live loaders](/docs/frameworks/reactive-loaders).
+Lunora is not a web framework, and it does not try to be one. It is a reactive
+backend that any meta-framework plugs into (TanStack Start, React Router,
+SolidStart, SvelteKit, Nuxt, Astro), composed into a single Cloudflare Worker.
+You keep your framework's routing, rendering, and developer experience; Lunora
+adds type-safe data and [live loaders](/docs/frameworks/reactive-loaders).
 
 > **Bring your framework. Your loaders are live.**
 
 ## One worker, two dispatch flows
 
-A Lunora worker is created with `createWorker(...)`, which already accepts an
-optional `httpRouter` — any object shaped like `{ fetch(request, env?, ctx?) }`.
-Every meta-framework's SSR handler is structurally exactly that, so you mount it
-as the `httpRouter` and Lunora dispatches by path:
+A Lunora worker is created with `createWorker(...)`, which accepts an optional
+`httpRouter`: any object shaped like `{ fetch(request, env?, ctx?) }`. Every
+meta-framework's SSR handler has exactly that shape, so you mount it as the
+`httpRouter` and Lunora dispatches by path:
 
 ```ts
 import { createWorker } from "lunora/runtime";
@@ -45,13 +45,13 @@ never collides with your framework's routes. Pages and API go to your framework;
 queries, mutations, and subscriptions go to `/_lunora/*`. A 500 from your SSR
 handler does not take down the realtime endpoints.
 
-> **Shipped:** a `composeWorker({ httpRouter, ...lunoraOptions })` helper — thin
-> sugar over `createWorker` — so templates read cleanly, plus an in-process
-> `serverQuery` fast-path so an SSR loader can call Lunora _directly_ inside the
-> same worker instead of round-tripping `/_lunora/rpc`. (`serverQuery` keeps the
-> worker→Durable-Object hop — dispatch lives inside the DO, so a worker-side
-> `createCaller` is impossible — but drops the self-`fetch` loopback while keeping
-> byte-identical identity/RLS semantics.)
+> **Shipped:** a `composeWorker({ httpRouter, ...lunoraOptions })` helper, a thin
+> wrapper over `createWorker` so templates read cleanly, plus an in-process
+> `serverQuery` fast-path so an SSR loader can call Lunora directly inside the
+> same worker instead of round-tripping `/_lunora/rpc`. `serverQuery` still makes
+> the worker-to-Durable-Object hop (dispatch lives inside the DO, so a worker-side
+> `createCaller` is impossible), but it drops the self-`fetch` loopback while
+> keeping byte-identical identity and RLS semantics.
 
 ## The per-framework matrix
 
@@ -68,18 +68,18 @@ mirrors void's class-a/b/c model.
 framework's SSR handler straight into `httpRouter`. **Class B** frameworks bundle
 their own worker, so Lunora is injected into their server entry rather than
 fighting their build (the adapter ships `withLunora()`-style wrappers). **Class
-C** has no SSR loaders, so there's nothing to make live on the server — the client
-adapter still gives you live queries, they just hydrate on the client.
+C** has no SSR loaders, so there's nothing to make live on the server. The client
+adapter still gives you live queries; they just hydrate on the client.
 
-> **How class-B composition deploys one worker.** The subtlety class-B frameworks
+> **How class-B composition deploys one worker.** The wrinkle class-B frameworks
 > introduce is that their Cloudflare adapter owns the build. `@sveltejs/adapter-cloudflare`
 > **overwrites whatever the wrangler `main` field points at** with its own generated
-> worker — so `main` cannot point at the template's `src/worker.ts` (the build would
-> clobber it). The working wiring, proven by a real `lunora init -t sveltekit` →
-> `vite build` → `wrangler deploy --dry-run` smoke:
+> worker, so `main` cannot point at the template's `src/worker.ts` (the build would
+> clobber it). Here is the working wiring, proven by a real `lunora init -t sveltekit`,
+> then `vite build`, then `wrangler deploy --dry-run`:
 >
 > 1. Point wrangler `main` at the adapter's **own** default output
->    (`.svelte-kit/cloudflare/_worker.js`) — so the adapter writes there and never
+>    (`.svelte-kit/cloudflare/_worker.js`), so the adapter writes there and never
 >    touches `src/worker.ts`.
 > 2. Keep `src/worker.ts` as the `withLunora` wrapper: it imports that emitted
 >    handler, mounts Lunora realtime under `/_lunora/*`, and re-exports `ShardDO`.
@@ -89,19 +89,19 @@ adapter still gives you live queries, they just hydrate on the client.
 >    output exists.)
 >
 > The dry-run confirms a single worker exporting `ShardDO` with both the `SHARD`
-> (Durable Object) and `ASSETS` bindings — no second worker, no class-C fallback.
-> Astro composes the same way via `src/worker.ts` + `withLunora`; because
-> `@astrojs/cloudflare` writes to `dist/_worker.js/` (it does **not** clobber `main`),
+> (Durable Object) and `ASSETS` bindings: no second worker, no class-C fallback.
+> Astro composes the same way via `src/worker.ts` plus `withLunora`. Because
+> `@astrojs/cloudflare` writes to `dist/_worker.js/` and does **not** clobber `main`,
 > its wiring needs no `main` redirection. Nuxt uses Nitro's emitted server as `main`
 > directly.
 
 ## Client adapters
 
-The browser SDK, `@lunora/client`, is **framework-neutral** — transport,
+The browser SDK, `@lunora/client`, is **framework-neutral**: transport,
 subscriptions, the offline queue, delta-merge, and reconnect have zero framework
 code. Each adapter is a thin idiomatic layer on top, and every adapter exposes the
-same handoff: a live `useQuery`/equivalent, an optimistic `useMutation`/
-equivalent, a provider/context, and the preloaded-hydration primitive that seeds
+same handoff: a live `useQuery` (or equivalent), an optimistic `useMutation` (or
+equivalent), a provider/context, and the preloaded-hydration primitive that seeds
 an SSR value into a live subscription.
 
 | Adapter          | Idiom                            | Status  |
@@ -115,7 +115,7 @@ an SSR value into a live subscription.
 > Lunora deltas, so it showcases live loaders with the least glue.
 
 The Solid, Svelte, and Vue adapter **packages exist** and expose the same
-hydrate-then-subscribe handoff under their idiom — but they are **preview**: not
+hydrate-then-subscribe handoff under their idiom, but they are **preview**: not
 yet proven end-to-end against a running app. The React adapter is the only one
 proven through the full live-loader path (see
 [Manual end-to-end verification](/docs/frameworks/verify-live-loaders)).
@@ -130,14 +130,15 @@ name.
 The adapters share one contract across frameworks. A couple of differences are
 worth calling out for anyone who tracked the earlier previews:
 
-- **`useMutation` handle is uniform** — `{ data, error, pending, mutate, reset }`
-  in React/Solid/Vue (Svelte: the same fields as stores). Multi-query optimistic
-  updates are passed **per call** via the `optimisticUpdate` option on `mutate`;
-  the Vue adapter no longer ships a bound `withOptimisticUpdate(...)` handle
-  (React keeps it). Use `mutate(args, { optimisticUpdate })` everywhere instead.
+- **`useMutation` handle is uniform**: `{ data, error, pending, mutate, reset }`
+  in React/Solid/Vue (Svelte exposes the same fields as stores). Multi-query
+  optimistic updates are passed **per call** via the `optimisticUpdate` option on
+  `mutate`; the Vue adapter no longer ships a bound `withOptimisticUpdate(...)`
+  handle (React keeps it). Use `mutate(args, { optimisticUpdate })` everywhere
+  instead.
 - **Provider accessor is `useLunora`** in React/Solid/Vue (Svelte uses the
   idiomatic `getLunoraClient`). The Vue adapter's earlier `useLunoraClient` name
-  is gone — use `useLunora`.
+  is gone; use `useLunora`.
 
 ## Scaffolding
 
@@ -152,11 +153,11 @@ lunora init my-app -t standalone       # worker-only, no frontend
 `lunora init -t tanstack-start` is fully wired: it mounts the framework SSR
 handler as the worker's `httpRouter`, ships a sample **live loader** route, and
 sets up the `@lunora/react` provider. `lunora init -t sveltekit` is proven
-end-to-end — its `src/worker.ts` + `wrangler.jsonc` + `lunora deploy` compose
-into a single worker (verified through `vite build` → `wrangler deploy --dry-run`,
+end-to-end; its `src/worker.ts`, `wrangler.jsonc`, and `lunora deploy` compose
+into a single worker (verified through `vite build` then `wrangler deploy --dry-run`,
 exporting `ShardDO` with the `SHARD` and `ASSETS` bindings). Templates for
 `react-router`, `solid-start`, `nuxt`, and `astro` exist alongside their
-adapters and are wired on the same composition seam; they are **preview** —
+adapters and are wired on the same composition seam. They are **preview**:
 scaffoldable, not yet each smoke-proven end-to-end.
 
 To add Lunora to an **existing** meta-framework app, the in-place patcher

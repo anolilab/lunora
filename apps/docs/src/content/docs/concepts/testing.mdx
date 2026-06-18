@@ -5,8 +5,8 @@ description: Unit-test queries, mutations, and actions in memory with lunoraTest
 
 You test Lunora functions the same way you write them: as plain handlers that
 take a `ctx` and `args`. The [`@lunora/testing`](/docs/packages/testing) harness
-runs those handlers against a **fresh in-memory SQLite database** — no Durable
-Object, no `wrangler`, no network — so a query/mutation/action suite is a normal,
+runs those handlers against a **fresh in-memory SQLite database** (no Durable
+Object, no `wrangler`, no network), so a query/mutation/action suite is a normal,
 fast Vitest run.
 
 ```sh
@@ -19,7 +19,7 @@ pnpm add -D @lunora/testing
 database, builds the same `ctx.db` writer the real `ShardDO` builds, and returns
 a harness whose methods execute a registered function's handler directly. All
 methods share one database, so a write from a mutation is visible to a later
-query — exactly the reactivity guarantee your app relies on.
+query, which is exactly the reactivity guarantee your app relies on.
 
 ```ts
 import { defineSchema, defineTable, initLunora, v } from "lunora/server";
@@ -53,7 +53,7 @@ test("sends and lists a message", async () => {
 ```
 
 Each `lunoraTest(...)` opens one native in-memory database. Call `t.close()`
-(idempotent) to release it — typically in an `afterEach`:
+(idempotent) to release it, typically in an `afterEach`:
 
 ```ts
 import { afterEach } from "vitest";
@@ -84,7 +84,7 @@ afterEach(() => {
 | `close()`                   | Close the in-memory database. Idempotent.                                         |
 
 Each method accepts **either** a registered function reference plus its args,
-**or** a bare inline handler — handy for poking at `ctx.db` directly without
+**or** a bare inline handler, handy for poking at `ctx.db` directly without
 registering a function:
 
 ```ts
@@ -102,7 +102,7 @@ test("inline access to the db", async () => {
 
 ## Asserting reactive results
 
-There is no live socket in the harness — and you don't need one. The reactivity
+There is no live socket in the harness, and you don't need one. The reactivity
 contract is "a query re-run after a write sees the write," and because every
 method shares the same database, you assert it directly: run the mutation, then
 re-run the query and assert on the rows it now returns.
@@ -120,8 +120,8 @@ test("a send shows up in the next list", async () => {
 });
 ```
 
-> Proving the **full** live path — SSR preload → WebSocket push → second-tab
-> update — needs a running, scaffolded app and is a manual procedure, not a unit
+> Proving the **full** live path (SSR preload → WebSocket push → second-tab
+> update) needs a running, scaffolded app and is a manual procedure, not a unit
 > test. See [Manual end-to-end verification](/docs/frameworks/verify-live-loaders).
 
 ### Auth and row-level security
@@ -147,7 +147,7 @@ test("reflects the injected identity", async () => {
 });
 ```
 
-Writes made under the scoped view persist for every accessor — the view is a
+Writes made under the scoped view persist for every accessor; the view is a
 lens onto identity, not a separate database.
 
 ### Internal functions
@@ -185,15 +185,15 @@ clearly-throwing stubs. A handler that never touches one runs fine; one that
 does fails with a descriptive error the first time it reaches for it (e.g.
 `ctx.scheduler is not available in the in-memory @lunora/testing harness (v1)`).
 HTTP actions, scheduled-function draining, real R2 storage, `.global()` / D1
-tables, and Vectorize are deferred to a follow-up — exercise those over a
+tables, and Vectorize are deferred to a follow-up; exercise those over a
 running worker instead.
 
 ## Mail-catcher helpers (E2E)
 
 In `lunora dev`, [`@lunora/mail`](/docs/packages/mail) captures every outbound
 email (sign-up verification, forgot-password, magic links) into the studio's
-root-shard inbox instead of hitting a real provider. The mail-catcher helpers —
-re-exported from `@lunora/testing` — read that inbox over the admin RPC, so a
+root-shard inbox instead of hitting a real provider. The mail-catcher helpers,
+re-exported from `@lunora/testing`, read that inbox over the admin RPC, so a
 Playwright (or any HTTP) test can drive "request reset → read the email → follow
 the link → set a new password" deterministically.
 
@@ -206,7 +206,7 @@ the link → set a new password" deterministically.
 `waitForMail` takes the worker `baseUrl`, the admin bearer token (the worker
 gates introspection behind `LUNORA_ADMIN_TOKEN`), the recipient `to`, and an
 optional `subjectMatch`. It polls (every 250ms, timing out after 10s by default)
-and returns the matching message — or throws on timeout.
+and returns the matching message, or throws on timeout.
 
 ```ts
 import { extractLink, waitForMail } from "@lunora/testing";
@@ -232,14 +232,14 @@ test("password reset email carries a working link", async () => {
 
 ## Running in CI
 
-The harness is plain Vitest, so it runs anywhere `pnpm run test` does — no
+The harness is plain Vitest, so it runs anywhere `pnpm run test` does, with no
 Cloudflare account or `wrangler` login needed. Two things to wire up:
 
 - **`lunora codegen --check`** before the test job, so a stale `_generated/` is a
   build failure rather than tests passing against old types (the same gate
   [deployment](/docs/deployment) recommends before deploy).
 - For the **mail-catcher E2E** path, your CI must boot `lunora dev` and pass the
-  worker's `baseUrl` and `LUNORA_ADMIN_TOKEN` to the test — those helpers talk to
+  worker's `baseUrl` and `LUNORA_ADMIN_TOKEN` to the test; those helpers talk to
   a running worker, unlike the in-memory harness.
 
 ```bash

@@ -5,8 +5,8 @@ description: Declarative tables, validators, indexes and sharding.
 
 A Lunora schema is a single TypeScript file. It is the source of truth for
 your storage layout, the input to codegen, and the contract the type-safe
-client is generated against. There is no separate migrations DSL — schema
-edits + a codegen run is the migration.
+client is generated against. There is no separate migrations DSL: editing the
+schema and running codegen is the migration.
 
 ```ts
 // lunora/schema.ts

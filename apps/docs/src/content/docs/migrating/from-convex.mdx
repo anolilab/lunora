@@ -4,11 +4,11 @@ description: Side-by-side mapping — schema, queries, mutations, actions, React
 ---
 
 Lunora borrows Convex's authoring shape on purpose: if you've used Convex, you
-already know 80% of Lunora. The wire transport, runtime, and storage are
-different — and where Convex defines a function with an object
+already know most of Lunora. The wire transport, runtime, and storage are
+different, and where Convex defines a function with an object
 (`query({ args, handler })`), Lunora uses a typed, chainable builder form
-(`query.input({...}).query(handler)`) instead. But the file layout, the
-`defineSchema` / `query` / `mutation` / `action` factories and the React hooks
+(`query.input({...}).query(handler)`) instead. The file layout, the
+`defineSchema` / `query` / `mutation` / `action` factories, and the React hooks
 are intentionally familiar.
 
 This guide is a side-by-side mapping plus the specific gotchas you'll hit
@@ -78,7 +78,7 @@ determines which Durable Object owns the row**. See
 
 ## Queries, mutations, actions
 
-Same factories, same `ctx` properties. The difference is the authoring form:
+Same factories, same `ctx` properties. The difference is the authoring form.
 Convex passes an `{ args, handler }` object; Lunora uses a chainable builder
 (`.input({...})` then a `.query` / `.mutation` / `.action` terminal).
 
@@ -114,7 +114,7 @@ export const list = query.input({ channelId: v.id("channels") }).query(async ({ 
 
 Single import path (`@lunora/server`) instead of two
 (`./_generated/server` + `convex/values`). Where Convex passes an object
-(`{ args, handler }`), Lunora uses a typed, chainable builder form — declare
+(`{ args, handler }`), Lunora uses a typed, chainable builder form: declare
 inputs with `.input({...})`, then close with a `.query` / `.mutation` /
 `.action` terminal whose handler takes a single `{ ctx, args }` argument. The
 handler body itself is identical.
@@ -138,7 +138,7 @@ typed function. `usePaginatedQuery` and `useAction` mirror Convex too.
 ## Auth
 
 Convex pairs with external providers (Clerk, Auth0, Convex Auth). Lunora
-ships [`@lunora/auth`](/docs/packages/auth) — an opt-in add-on that handles
+ships [`@lunora/auth`](/docs/packages/auth), an opt-in add-on that handles
 sessions, password and OAuth flows, and rotating refresh tokens inside a
 `SessionDO`. The `ctx.auth` shape is the same.
 
@@ -151,14 +151,14 @@ queue.
 ## File storage
 
 `ctx.storage.generateUploadUrl()` / `ctx.storage.getUrl(id)` mirror the
-Convex shape. Lunora backs them with **R2** — uploads go straight to R2 via
-a presigned URL, downloads stream from the Worker.
+Convex shape. Lunora backs them with **R2**: uploads go straight to R2 via
+a presigned URL, and downloads stream from the Worker.
 
 ## Subscriptions
 
 Both products implement the same observable mental model: a query is a
 subscription, mutations broadcast deltas, the client re-renders. The
-difference is the routing layer — Convex broadcasts via its hosted service,
+difference is the routing layer. Convex broadcasts via its hosted service;
 Lunora broadcasts via the owning Durable Object using WebSocket hibernation
 so idle subscribers cost zero CPU. See [Real-time](/docs/concepts/realtime).
 
@@ -201,7 +201,7 @@ so idle subscribers cost zero CPU. See [Real-time](/docs/concepts/realtime).
 - **Self-hosted studio, not managed**. There's no hosted control plane like
   Convex's. Instead `@lunora/studio` ships a first-party studio that
   `lunora dev` serves at `/__lunora` (data browser, function runner, metrics,
-  migrations, scheduled jobs, and more) — gated by your own `LUNORA_ADMIN_TOKEN`.
+  migrations, scheduled jobs, and more), gated by your own `LUNORA_ADMIN_TOKEN`.
   Cloudflare's DO browser, the D1 console, and `lunora run` remain available for
   ad-hoc work. See [@lunora/studio](/docs/packages/studio).
 

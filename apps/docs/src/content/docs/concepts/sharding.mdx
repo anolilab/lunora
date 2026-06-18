@@ -3,18 +3,18 @@ title: Sharding
 description: Default __root__ DO, opt-in .shardBy(), and .global() escape hatch.
 ---
 
-Lunora is **scale-proof by default but single-shard by default**. New apps
-get one Durable Object — addressable as `__root__` — that holds every table
-without an explicit tier modifier. This is exactly the Zeroback shape and
-the right answer for the first 80% of an app's life.
+Lunora scales out, but starts on a single shard. New apps get one Durable
+Object, addressable as `__root__`, that holds every table without an explicit
+tier modifier. This is the Zeroback shape, and the right answer for the first
+80% of an app's life.
 
 ## When to shard
 
-The per-DO ceiling is **10 GB of SQLite + ~1 000 req/s** sustained. When the
-`__root__` DO crosses **1 GB** the runtime emits a `console.warn` once per
-DO lifetime so you can plan the migration before you hit the wall. The
-threshold (`1 073 741 824` bytes) is exactly 10% of the per-DO ceiling — far
-enough below the wall that a `.shardBy()` migration has runway to land.
+The per-DO ceiling is **10 GB of SQLite** and roughly 1 000 sustained req/s.
+When the `__root__` DO crosses 1 GB, the runtime emits a `console.warn` once
+per DO lifetime so you can plan the migration before you hit the wall. The
+threshold (`1 073 741 824` bytes) is 10% of the per-DO ceiling, far enough
+below it that a `.shardBy()` migration has runway to land.
 
 ```text
 [@lunora/do] __root__ Durable Object SQLite size is 1075000000 bytes
@@ -35,14 +35,14 @@ messages: defineTable({ channelId: v.id("channels"), text: v.string() }).shardBy
 ```
 
 After codegen, every call to `ctx.db.messages.*` routes by `channelId`. A
-chat with 5 000 active channels now spreads across 5 000 DOs — each with its
-own SQLite, its own CPU budget, its own hibernation timer.
+chat with 5 000 active channels now spreads across 5 000 DOs, each with its
+own SQLite, CPU budget, and hibernation timer.
 
 ## What stays in the root DO
 
-Anything without `.shardBy()` or `.global()` stays in `__root__`. That makes
-the common case — app config, feature flags, small per-app state — cheap and
-strongly consistent without any routing overhead.
+Anything without `.shardBy()` or `.global()` stays in `__root__`. That keeps
+the common case (app config, feature flags, small per-app state) cheap and
+strongly consistent, with no routing overhead.
 
 ## Going global
 
@@ -58,8 +58,8 @@ users: defineTable({ email: v.string(), name: v.string() }).global().index("by_e
 ## Cross-shard reads
 
 `ctx.db.query("messages").collect()` against a `.shardBy()` table that
-doesn't pin a shard is a **fan-out**. Codegen routes it via the Query
-Coordinator Worker, which dispatches to every shard and merges results.
+doesn't pin a shard is a **fan-out**: codegen routes it through the Query
+Coordinator Worker, which dispatches to every shard and merges the results.
 Avoid this in hot paths.
 
 ## See also

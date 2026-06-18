@@ -21,7 +21,7 @@ your query, mutation, and action contexts.
 ## Declaring an index
 
 A vector index always names a source of text to embed. The common case is to
-embed one string column — chain `.vectorize` off `defineTable`. The `index` is
+embed one string column: chain `.vectorize` off `defineTable`. The `index` is
 the logical name (it must match a `vectorize` binding in `wrangler.jsonc`);
 `embed` is your own embedder.
 
@@ -48,7 +48,7 @@ export default defineSchema({
 ```
 
 When the embedded text is derived from multiple columns, use the standalone
-`defineVectorIndex(...)` form with a `source.select(row)` projection — see the
+`defineVectorIndex(...)` form with a `source.select(row)` projection. See the
 [package reference](/docs/packages/vectors#standalone--definevectorindexoptions)
 for the full shape.
 
@@ -57,13 +57,12 @@ for the full shape.
 You never upsert vectors by hand for declared indexes. On every `insert`,
 `update`, or `delete` to a table that sources an index, the adapter embeds the
 source and upserts under the row's id (or removes it on delete). The sync runs
-inline within the mutation; upserts/deletes are keyed by row id (idempotent), so
-the authoritative recovery from a transient Vectorize failure is simply
-re-running the (idempotent) write.
+inline within the mutation. Upserts and deletes are keyed by row id, so they're
+idempotent: to recover from a transient Vectorize failure, re-run the write.
 
 > **Tenant isolation.** Vectorize indexes are account-global and shared by every
 > shard. In a multi-tenant / sharded app you **must** scope writes and queries
-> with a `namespace` (the shard/tenant key) — without it, one tenant's vectors
+> with a `namespace` (the shard/tenant key). Without it, one tenant's vectors
 > are queryable by another.
 
 ## `ctx.vectors`
@@ -81,7 +80,7 @@ available everywhere; the mutating half is gated by context kind:
 
 A query gets a read-only `VectorSearchReader` (search + fetch); mutations and
 actions get the full `VectorSearch` (also upsert + delete). This matches the
-reactivity model — a query may not write — so search lives naturally in a
+reactivity model: a query may not write, so search lives naturally in a
 reactive `query`.
 
 ### Similarity search
@@ -159,7 +158,7 @@ await ctx.vectors.upsert("docs-body", { id, input: text, embed: async () => embe
 ## Binding & config wiring
 
 Each declared index needs a matching `vectorize` binding in `wrangler.jsonc`
-whose `index_name` equals the index name from your schema — `@lunora/vite`
+whose `index_name` equals the index name from your schema. `@lunora/vite`
 validates this, and a declared index with no binding fails the build.
 
 ```jsonc

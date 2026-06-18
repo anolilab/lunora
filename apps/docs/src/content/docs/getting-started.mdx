@@ -4,8 +4,8 @@ description: Scaffold a Lunora app and run the dev loop in under a minute.
 ---
 
 The fastest way to start a Lunora project is the official template. It wires
-up Vite, the codegen plugin, a starter schema and a working Worker entrypoint
-pointing at a `wrangler.jsonc` you can deploy straight to your own account.
+up Vite, the codegen plugin, a starter schema, and a working Worker entrypoint,
+all pointing at a `wrangler.jsonc` you can deploy straight to your own account.
 
 ## Requirements
 
@@ -39,9 +39,10 @@ my-app/
 
 ## Run
 
-`pnpm dev` boots Vite + Wrangler in one terminal. Edits to `lunora/schema.ts`
-trigger codegen and a typed-API HMR within ~200 ms. Throw inside a handler
-and the `@visulima/vite-overlay` integration shows a mapped source frame.
+`pnpm dev` boots Vite and Wrangler in one terminal. Edits to `lunora/schema.ts`
+trigger codegen and a typed-API hot reload within ~200 ms. Throw inside a
+handler and the `@visulima/vite-overlay` integration shows a mapped source
+frame.
 
 ## Deploy
 
@@ -49,8 +50,8 @@ and the `@visulima/vite-overlay` integration shows a mapped source frame.
 pnpm lunora deploy
 ```
 
-Under the hood this calls `wrangler deploy`, runs pending D1 migrations and
-publishes the Worker — everything lives on your account, addressable via your
+Under the hood this calls `wrangler deploy`, runs pending D1 migrations, and
+publishes the Worker. Everything lives on your account, reachable through your
 own `*.workers.dev` hostname or a custom domain.
 
 ## See also
