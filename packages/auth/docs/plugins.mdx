@@ -51,30 +51,60 @@ import {
 } from "@lunora/auth/plugins";
 ```
 
-A few of these are worth calling out:
+Each factory configures one better-auth feature. Add the ones you want to
+`createAuth({ plugins: [...] })`. Lunora only re-exports the factory; the
+behaviour and the full option reference are better-auth's, linked per row.
 
-- `captcha` — better-auth's native CAPTCHA plugin (Cloudflare Turnstile,
-  reCAPTCHA, hCaptcha, captchafox). The idiomatic way to gate auth endpoints —
-  see [CAPTCHA / Turnstile](#captcha--turnstile) below.
-- `createAccessControl` — the access-control / RBAC builder (from
-  `better-auth/plugins/access`); the companion to `admin` / `organization` for
-  defining custom roles + permissions.
-- `deviceAuthorization` — OAuth 2.0 device authorization grant (CLI / headless
-  / TV login).
-- `haveIBeenPwned` — rejects passwords found in the HIBP breach corpus via a
-  k-anonymity check.
-- `oneTimeToken` — issue / verify single-use tokens.
-- `mcp` + `withMcpAuth` — OAuth-protected Model Context Protocol server auth;
-  pairs with the [`@lunora/mcp`](/docs/packages/mcp) package.
+### Sign-in methods
 
-> `captcha`, `mcp`, and `withMcpAuth` have no dedicated
-> `better-auth/plugins/<name>` subpath — they ship only via the
-> `better-auth/plugins` barrel, and `@lunora/auth/plugins` re-exports them
-> from there.
+| Export        | What it adds                                                                                    | Reference                                                                          |
+| ------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `passkey`     | WebAuthn passkeys (Face ID, fingerprint, security keys) for passwordless login or a 2nd factor. | [better-auth: passkey](https://www.better-auth.com/docs/plugins/passkey)           |
+| `twoFactor`   | TOTP authenticator apps plus backup codes for two-factor auth.                                  | [better-auth: 2FA](https://www.better-auth.com/docs/plugins/2fa)                   |
+| `magicLink`   | Passwordless sign-in by emailing a one-time login link.                                         | [better-auth: magic link](https://www.better-auth.com/docs/plugins/magic-link)     |
+| `emailOTP`    | Email a one-time numeric code to verify an address or sign in.                                  | [better-auth: email OTP](https://www.better-auth.com/docs/plugins/email-otp)       |
+| `phoneNumber` | Phone-number sign-in and verification over SMS OTP.                                             | [better-auth: phone number](https://www.better-auth.com/docs/plugins/phone-number) |
+| `username`    | A unique username as a login identifier alongside email.                                        | [better-auth: username](https://www.better-auth.com/docs/plugins/username)         |
+| `anonymous`   | Throwaway guest sessions you can upgrade to a real account later.                               | [better-auth: anonymous](https://www.better-auth.com/docs/plugins/anonymous)       |
+| `siwe`        | Sign-In with Ethereum (wallet-based auth).                                                      | [better-auth: SIWE](https://www.better-auth.com/docs/plugins/siwe)                 |
 
-Anything else better-auth ships (or anything from the community, e.g.
-Polar) keeps working — `createAuth(...)` passes `plugins:` through
-unchanged.
+### Accounts, orgs, and access
+
+| Export                | What it adds                                                                          | Reference                                                                                    |
+| --------------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `admin`               | Admin APIs: list and ban users, set roles, impersonate, revoke sessions.              | [better-auth: admin](https://www.better-auth.com/docs/plugins/admin)                         |
+| `organization`        | Multi-tenant orgs with members, invitations, and roles.                               | [better-auth: organization](https://www.better-auth.com/docs/plugins/organization)           |
+| `createAccessControl` | Builder for custom roles and permissions (RBAC) passed into `admin` / `organization`. | [better-auth: access control](https://www.better-auth.com/docs/plugins/admin#access-control) |
+| `multiSession`        | Hold several signed-in accounts at once and switch between them.                      | [better-auth: multi session](https://www.better-auth.com/docs/plugins/multi-session)         |
+| `customSession`       | Add custom fields to the session object returned to the client.                       | [better-auth: session](https://www.better-auth.com/docs/concepts/session-management)         |
+
+### Tokens and machine clients
+
+| Export                | What it adds                                                                                              | Reference                                                                                          |
+| --------------------- | --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `bearer`              | Accept the session token as an `Authorization: Bearer` header instead of a cookie (native / CLI clients). | [better-auth: bearer](https://www.better-auth.com/docs/plugins/bearer)                             |
+| `jwt`                 | Issue verifiable JWTs with a JWKS endpoint for services that expect a token.                              | [better-auth: JWT](https://www.better-auth.com/docs/plugins/jwt)                                   |
+| `oidcProvider`        | Turn your app into an OpenID Connect identity provider other apps log in with.                            | [better-auth: OIDC provider](https://www.better-auth.com/docs/plugins/oidc-provider)               |
+| `genericOAuth`        | Add any OAuth2 / OIDC provider beyond the built-in social ones.                                           | [better-auth: generic OAuth](https://www.better-auth.com/docs/plugins/generic-oauth)               |
+| `oAuthProxy`          | Route OAuth callbacks through one stable URL (useful for preview / branch deploys).                       | [better-auth: OAuth proxy](https://www.better-auth.com/docs/plugins/oauth-proxy)                   |
+| `oneTimeToken`        | Issue and verify single-use tokens (short-lived hand-off links).                                          | [better-auth: one-time token](https://www.better-auth.com/docs/plugins/one-time-token)             |
+| `deviceAuthorization` | OAuth 2.0 device grant for CLIs, TVs, and other input-constrained clients.                                | [better-auth: device authorization](https://www.better-auth.com/docs/plugins/device-authorization) |
+| `mcp` / `withMcpAuth` | OAuth-protect a Model Context Protocol server. Pairs with [`@lunora/mcp`](/docs/packages/mcp).            | [better-auth: MCP](https://www.better-auth.com/docs/plugins/mcp)                                   |
+
+### Abuse protection
+
+| Export           | What it adds                                                                                                                      | Reference                                                                       |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `captcha`        | Gate sensitive auth endpoints with Turnstile, reCAPTCHA, hCaptcha, or captchafox. See [CAPTCHA / Turnstile](#captcha--turnstile). | [better-auth: captcha](https://www.better-auth.com/docs/plugins/captcha)        |
+| `haveIBeenPwned` | Reject passwords found in the Have I Been Pwned breach corpus (k-anonymity check).                                                | [better-auth: HIBP](https://www.better-auth.com/docs/plugins/have-i-been-pwned) |
+
+> `captcha`, `mcp`, and `withMcpAuth` have no dedicated `better-auth/plugins/<name>`
+> subpath. They ship via the `better-auth/plugins` barrel, and `@lunora/auth/plugins`
+> re-exports them from there.
+
+Anything else better-auth ships, or a community plugin like Polar, keeps
+working too: `createAuth(...)` passes `plugins:` through unchanged. For setup
+and options on any plugin, follow its better-auth reference above.
 
 ## Add org + admin
 
