@@ -356,9 +356,14 @@ const Navbar = () => {
     };
 
     const active = menu.find((column) => column.navTitle === openMenu);
+    const onDocs = pathname.startsWith("/docs");
 
     return (
-        <header className="fixed inset-x-0 top-0 z-100" data-theme={light ? "light" : "dark"} onMouseLeave={scheduleClose}>
+        <header
+            className={cn("fixed inset-x-0 top-0 z-100", onDocs && "border-b border-white/[0.08] bg-[#0e0e11]")}
+            data-theme={light ? "light" : "dark"}
+            onMouseLeave={scheduleClose}
+        >
             <div className="relative mx-auto flex h-16 max-w-6xl items-center px-5">
                 <Logo light={light} pathname={pathname} />
 

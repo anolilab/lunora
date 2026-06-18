@@ -61,7 +61,7 @@
     --color-crimson-energy: var(--crimson-energy);
     --color-royal-amethyst: var(--royal-amethyst);
 
-    --color-dark-coal: hsl(240 18% 4%); /* eclipse */
+    --color-dark-coal: #0e0e11; /* eclipse — matches the landing/footer charcoal */
 
     @keyframes button-shine {
         from {
@@ -224,6 +224,10 @@
 #nd-sidebar {
     background-color: var(--color-dark-coal);
     border-color: transparent;
+
+    /* Sit below the fixed external navbar (h-16) instead of underneath it. */
+    top: 4rem;
+    height: calc(100dvh - 4rem);
 }
 
 #nd-subnav > div {
@@ -232,6 +236,11 @@
 
 html {
     scroll-behavior: smooth;
+
+    /* Reserve space for the fixed external navbar (h-16) so the docs layout's
+       sticky sidebar / TOC and content sit below it instead of underneath. */
+    --fd-nav-height: 4rem;
+    scroll-padding-top: 5rem;
 }
 
 /* Subtle grain texture for depth */

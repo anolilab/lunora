@@ -169,7 +169,7 @@ const Page = () => {
             <JsonLd data={{ "@type": "BreadcrumbList", itemListElement: breadcrumbItems }} />
             <DocsLayout
                 containerProps={{
-                    className: "bg-background",
+                    className: "bg-background pt-16",
                 }}
                 nav={{
                     enabled: false,
