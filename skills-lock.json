@@ -6,6 +6,12 @@
             "sourceType": "autoskills-registry",
             "computedHash": "bffe3d08cfe92ebad63699f74ce29e35c19850ebfbf474c1463183cfe34d6a09"
         },
+        "analytics": {
+            "source": "coreyhaines31/marketingskills",
+            "sourceType": "github",
+            "skillPath": "skills/analytics/SKILL.md",
+            "computedHash": "11fcba681577e36b5ad88e391d932a9c94fb1e593e94010c750739eefa9c4057"
+        },
         "bash-defensive-patterns": {
             "source": "wshobson/agents",
             "sourceType": "autoskills-registry",
@@ -26,10 +32,40 @@
             "sourceType": "autoskills-registry",
             "computedHash": "a0e0265fb534369d95944a58ab25159b7838f62abdcd86afa2266d69b3309561"
         },
+        "competitors": {
+            "source": "coreyhaines31/marketingskills",
+            "sourceType": "github",
+            "skillPath": "skills/competitors/SKILL.md",
+            "computedHash": "9e15de4d3b5e9a44f500124e2d2f57ba7fd3f4134912d9caf155ff6975215e99"
+        },
         "composition-patterns": {
             "source": "vercel-labs/agent-skills",
             "sourceType": "autoskills-registry",
             "computedHash": "c124390cc3441844903ada94cb5820b23d922f2d0ad34e01e029e410197c8a32"
+        },
+        "content-strategy": {
+            "source": "coreyhaines31/marketingskills",
+            "sourceType": "github",
+            "skillPath": "skills/content-strategy/SKILL.md",
+            "computedHash": "13824c129ab70874c57d766c2d844f8dac7a0b366845f108a73527c9d094c4f6"
+        },
+        "copy-editing": {
+            "source": "coreyhaines31/marketingskills",
+            "sourceType": "github",
+            "skillPath": "skills/copy-editing/SKILL.md",
+            "computedHash": "ba4e44a8470b3ae2add3e0ffa74c85d8b0357db4ca2cf8cfa7b4abc9d94fc602"
+        },
+        "copywriting": {
+            "source": "coreyhaines31/marketingskills",
+            "sourceType": "github",
+            "skillPath": "skills/copywriting/SKILL.md",
+            "computedHash": "c8d63b1f77be04fd54981720de65697988810bd28331097dbe0aaf3e166d638a"
+        },
+        "cro": {
+            "source": "coreyhaines31/marketingskills",
+            "sourceType": "github",
+            "skillPath": "skills/cro/SKILL.md",
+            "computedHash": "07f7a27c57e48f4b67230712f8efbc5bcc01611b35321b3c2c2e5279c9304bcd"
         },
         "drizzle": {
             "source": "bobmatnyc/claude-mpm-skills",
@@ -50,6 +86,24 @@
             "source": "anthropics/skills",
             "sourceType": "autoskills-registry",
             "computedHash": "82fb11a63fb1e35ee2469516ed02d54695f783115b1540c0e783197af4240a3a"
+        },
+        "launch": {
+            "source": "coreyhaines31/marketingskills",
+            "sourceType": "github",
+            "skillPath": "skills/launch/SKILL.md",
+            "computedHash": "a2b19accde6cace3af7cb9875072163d436eb48f12bab900dff6d312507459e0"
+        },
+        "marketing-ideas": {
+            "source": "coreyhaines31/marketingskills",
+            "sourceType": "github",
+            "skillPath": "skills/marketing-ideas/SKILL.md",
+            "computedHash": "c2a310c97126a0c493bae2b4b0e9fa767598bb2d139a747217fa1d8d7615e85d"
+        },
+        "marketing-plan": {
+            "source": "coreyhaines31/marketingskills",
+            "sourceType": "github",
+            "skillPath": "skills/marketing-plan/SKILL.md",
+            "computedHash": "c6a0c9473c11a6b3c7ffe72bcf76417ce7e1a90330147fa1aac8dc9610ee1e38"
         },
         "migrate-to-vinext": {
             "source": "cloudflare/vinext",
@@ -91,6 +145,12 @@
             "sourceType": "autoskills-registry",
             "computedHash": "dcc414410b81cfcc5c56490a7e450e664b11d170f3c336fe475c6e0a47def574"
         },
+        "product-marketing": {
+            "source": "coreyhaines31/marketingskills",
+            "sourceType": "github",
+            "skillPath": "skills/product-marketing/SKILL.md",
+            "computedHash": "2fe9e9093e385345d17e0e77d032d68015417c37ceffeb5fb34fc761c46c94a0"
+        },
         "react-best-practices": {
             "source": "vercel-labs/agent-skills",
             "sourceType": "autoskills-registry",
@@ -101,11 +161,23 @@
             "sourceType": "autoskills-registry",
             "computedHash": "c184da724d1c61ad077f27418ea8e7e88fd54bcdf98165e18be7e4681cbd5e20"
         },
+        "seo-audit": {
+            "source": "coreyhaines31/marketingskills",
+            "sourceType": "github",
+            "skillPath": "skills/seo-audit/SKILL.md",
+            "computedHash": "f2dc52130189068981f21e1c0bdc4471ac7cd9b08d8a1320604411aa0f950385"
+        },
         "shadcn": {
             "source": "shadcn/ui",
             "sourceType": "github",
             "skillPath": "skills/shadcn/SKILL.md",
             "computedHash": "ac9d0d69caac7de1d1e5647f3db3bcd2f13af355d6b3a78780fbf7fc80e8dca0"
+        },
+        "site-architecture": {
+            "source": "coreyhaines31/marketingskills",
+            "sourceType": "github",
+            "skillPath": "skills/site-architecture/SKILL.md",
+            "computedHash": "48a38c5e2b000d134c3db282364b1014bad362fa91d4618ad8c2eb7cee991208"
         },
         "tailwind-css-patterns": {
             "source": "giuseppe-trisciuoglio/developer-kit",
