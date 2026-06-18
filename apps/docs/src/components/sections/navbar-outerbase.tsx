@@ -3,13 +3,10 @@
 import GitHubLogoIcon from "@icons-pack/react-simple-icons/icons/SiGithub.mjs";
 import { Link, useLocation } from "@tanstack/react-router";
 import { useSearchContext } from "fumadocs-ui/contexts/search";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
-    ArrowUpRight,
     Book,
     Bot,
     Boxes,
-    ChevronDown,
     ChevronRight,
     Clock,
     Database,
@@ -20,16 +17,15 @@ import {
     KeyRound,
     LayoutDashboard,
     Menu,
-    Package,
     Rocket,
     ScrollText,
     Search,
     Server,
     Signature,
     Sparkles,
-    Wrench,
     X,
 } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 
@@ -40,19 +36,20 @@ import stats from "@/data/stats.json";
 import { cn } from "@/lib/utils";
 
 /**
- * Outerbase-style navbar (experiment): a floating, centered glass bar with
- * mega-menu dropdowns that carry a featured preview image (sourced from
- * Unsplash). Adapts dark/light to the section under it. Swapped into __root.
+ * Outerbase-style navbar (experiment): a transparent bar — logo left, centered
+ * text links, a light "GitHub" pill right — over a single dark dropdown that
+ * morphs size between menus. Each dropdown pairs a vertical icon list with one
+ * or two tall feature image cards (sourced from Unsplash). Swapped into __root.
  */
 
-const unsplash = (id: string): string => `https://images.unsplash.com/${id}?q=80&w=640&auto=format&fit=crop`;
+const card = (id: string): string => `https://images.unsplash.com/${id}?q=80&w=900&auto=format&fit=crop`;
 
 const formatStars = (count: number): string => {
     if (count >= 1000) {
         return `${(count / 1000).toFixed(1).replace(/\.0$/, "")}k`;
     }
 
-    return count > 0 ? String(count) : "Star";
+    return count > 0 ? String(count) : "GitHub";
 };
 
 interface NavLeaf {
@@ -62,77 +59,68 @@ interface NavLeaf {
     title: string;
 }
 
+interface NavFeature {
+    href: string;
+    image: string;
+    subtitle: string;
+    title: string;
+}
+
 interface NavColumn {
-    featured: { credit: string; href: string; image: string; subtitle: string; title: string };
-    navTitle: string;
+    features: NavFeature[];
     navItems: NavLeaf[];
+    navTitle: string;
 }
 
 const menu: NavColumn[] = [
     {
-        featured: {
-            credit: "Unsplash",
-            href: "/packages",
-            image: unsplash("photo-1654198340681-a2e0fc449f1b"),
-            subtitle: "Server, client, framework adapters, and add-ons — one typed surface.",
-            title: "Explore all packages",
-        },
+        features: [
+            { href: "/packages/studio", image: card("photo-1654198340681-a2e0fc449f1b"), subtitle: "Schema, data, SQL, and logs", title: "Studio" },
+            { href: "/packages/do", image: card("photo-1635776062360-af423602aff3"), subtitle: "Point-in-time restore, any moment", title: "Time travel" },
+        ],
         navItems: [
-            { description: "Schema, queries, mutations, actions.", href: "/packages/server", icon: <Server className="size-4.5" />, title: "Server" },
-            { description: "ShardDO + SessionDO: SQLite, OCC, WS.", href: "/packages/do", icon: <Database className="size-4.5" />, title: "Durable Objects" },
-            { description: "Browser SDK, optimistic + offline queue.", href: "/packages/client", icon: <Boxes className="size-4.5" />, title: "Client" },
-            { description: "useQuery, useMutation, useSubscription.", href: "/packages/react", icon: <Sparkles className="size-4.5" />, title: "React" },
-            { description: "Codegen, type sync, dev server.", href: "/packages/vite", icon: <Wrench className="size-4.5" />, title: "Vite Plugin" },
-            {
-                description: "Live, indexed TanStack DB collections.",
-                href: "/packages/db",
-                icon: <HardDriveDownload className="size-4.5" />,
-                title: "TanStack DB",
-            },
+            { description: "Schema, queries, mutations, actions.", href: "/packages/server", icon: <Server />, title: "Server" },
+            { description: "ShardDO + SessionDO: SQLite, OCC, WS.", href: "/packages/do", icon: <Database />, title: "Durable Objects" },
+            { description: "Browser SDK, optimistic + offline queue.", href: "/packages/client", icon: <Boxes />, title: "Client" },
+            { description: "useQuery, useMutation, useSubscription.", href: "/packages/react", icon: <Sparkles />, title: "React" },
+            { description: "Live, indexed TanStack DB collections.", href: "/packages/db", icon: <HardDriveDownload />, title: "TanStack DB" },
         ],
         navTitle: "Packages",
     },
     {
-        featured: {
-            credit: "Unsplash",
-            href: "/docs/getting-started",
-            image: unsplash("photo-1635776062360-af423602aff3"),
-            subtitle: "Go from a fresh project to a typed, live backend in an afternoon.",
-            title: "Getting started",
-        },
+        features: [
+            {
+                href: "/docs/getting-started",
+                image: card("photo-1566410824233-a8011929225c"),
+                subtitle: "A typed, live backend in an afternoon",
+                title: "Getting started",
+            },
+        ],
         navItems: [
-            { description: "Build your first app in minutes.", href: "/docs/getting-started", icon: <Rocket className="size-4.5" />, title: "Quickstart" },
-            { description: "The full Lunora framework reference.", href: "/docs/", icon: <Book className="size-4.5" />, title: "Documentation" },
-            { description: "Auth: email/password, OAuth, passkeys.", href: "/packages/auth", icon: <KeyRound className="size-4.5" />, title: "Auth" },
-            { description: "Workers AI on the Vercel AI SDK.", href: "/packages/ai", icon: <Bot className="size-4.5" />, title: "AI" },
-            { description: "runAfter / runAt + Cron Triggers.", href: "/packages/scheduler", icon: <Clock className="size-4.5" />, title: "Scheduler" },
-            { description: "New updates and improvements.", href: "/changelog", icon: <ScrollText className="size-4.5" />, title: "Changelog" },
+            { description: "Build your first app in minutes.", href: "/docs/getting-started", icon: <Rocket />, title: "Quickstart" },
+            { description: "The full Lunora framework reference.", href: "/docs/", icon: <Book />, title: "Documentation" },
+            { description: "Auth: email/password, OAuth, passkeys.", href: "/packages/auth", icon: <KeyRound />, title: "Auth" },
+            { description: "Workers AI on the Vercel AI SDK.", href: "/packages/ai", icon: <Bot />, title: "AI" },
+            { description: "runAfter / runAt + Cron Triggers.", href: "/packages/scheduler", icon: <Clock />, title: "Scheduler" },
         ],
         navTitle: "Developers",
     },
     {
-        featured: {
-            credit: "Unsplash",
-            href: "/packages/studio",
-            image: unsplash("photo-1566410824233-a8011929225c"),
-            subtitle: "A local studio for schema, data, SQL, logs, and time-travel.",
-            title: "Lunora Studio",
-        },
-        navItems: [
-            { description: "Admin UI for schema, data, advisors.", href: "/packages/studio", icon: <LayoutDashboard className="size-4.5" />, title: "Studio" },
-            { description: "R2 typed buckets and signed URLs.", href: "/packages/storage", icon: <HardDrive className="size-4.5" />, title: "Storage" },
+        features: [
+            { href: "/packages/studio", image: card("photo-1671226366556-c3efaa10edf0"), subtitle: "A local studio for your backend", title: "Lunora Studio" },
             {
-                description: "Q&A, ideas, and discussion.",
                 href: "https://github.com/anolilab/lunora/discussions",
-                icon: <Handshake className="size-4.5" />,
-                title: "Discussions",
+                image: card("photo-1614852206732-6728910dc175"),
+                subtitle: "Join the discussion",
+                title: "Community",
             },
-            {
-                description: "Issues, requests, and source code.",
-                href: "https://github.com/anolilab/lunora",
-                icon: <GitHubLogoIcon className="size-4.5" />,
-                title: "GitHub",
-            },
+        ],
+        navItems: [
+            { description: "Admin UI for schema, data, advisors.", href: "/packages/studio", icon: <LayoutDashboard />, title: "Studio" },
+            { description: "R2 typed buckets and signed URLs.", href: "/packages/storage", icon: <HardDrive />, title: "Storage" },
+            { description: "New updates and improvements.", href: "/changelog", icon: <ScrollText />, title: "Changelog" },
+            { description: "Q&A, ideas, and discussion.", href: "https://github.com/anolilab/lunora/discussions", icon: <Handshake />, title: "Discussions" },
+            { description: "Issues, requests, and source code.", href: "https://github.com/anolilab/lunora", icon: <GitHubLogoIcon />, title: "GitHub" },
         ],
         navTitle: "Resources",
     },
@@ -154,7 +142,9 @@ const Logo = ({ light, pathname }: { light: boolean; pathname: string }) => {
 
         document.addEventListener("click", handleOutsideClick);
 
-        return () => document.removeEventListener("click", handleOutsideClick);
+        return () => {
+            document.removeEventListener("click", handleOutsideClick);
+        };
     }, [isOpen]);
 
     const itemClass =
@@ -207,16 +197,16 @@ const Logo = ({ light, pathname }: { light: boolean; pathname: string }) => {
 const LeafLink = ({ leaf, onNavigate }: { leaf: NavLeaf; onNavigate?: () => void }) => {
     const content = (
         <>
-            <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] text-white/70 transition-colors group-hover/leaf:border-white/20 group-hover/leaf:text-white">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-white/80 transition-colors group-hover/leaf:border-white/20 group-hover/leaf:text-white [&>svg]:size-5">
                 {leaf.icon}
             </span>
             <span className="flex flex-col gap-0.5">
-                <span className="text-sm leading-none font-medium text-white">{leaf.title}</span>
-                <span className="line-clamp-1 text-xs leading-snug text-white/45">{leaf.description}</span>
+                <span className="text-sm leading-none font-semibold text-white">{leaf.title}</span>
+                <span className="max-w-[200px] text-xs leading-snug text-white/45">{leaf.description}</span>
             </span>
         </>
     );
-    const className = "group/leaf flex items-start gap-3 rounded-xl p-2.5 no-underline transition-colors hover:bg-white/[0.05]";
+    const className = "group/leaf flex items-start gap-3 rounded-xl p-3 no-underline transition-colors hover:bg-white/[0.05]";
 
     return leaf.href.startsWith("http") ? (
         <a className={className} href={leaf.href} onClick={onNavigate} rel="noreferrer" target="_blank">
@@ -229,35 +219,57 @@ const LeafLink = ({ leaf, onNavigate }: { leaf: NavLeaf; onNavigate?: () => void
     );
 };
 
-const MegaPanel = ({ column }: { column: NavColumn }) => (
-    <div className="grid w-[680px] grid-cols-[260px_1fr] gap-2 p-2">
-        <Link className="group/feat relative flex flex-col justify-end overflow-hidden rounded-xl border border-white/10 p-4" to={column.featured.href}>
+const FeatureCard = ({ feature, single }: { feature: NavFeature; single: boolean }) => {
+    const content = (
+        <>
             <img
                 alt=""
                 aria-hidden="true"
-                className="absolute inset-0 size-full object-cover opacity-60 transition-all duration-500 group-hover/feat:scale-105 group-hover/feat:opacity-75"
+                className="absolute inset-0 size-full object-cover transition-transform duration-500 group-hover/feat:scale-105"
                 loading="lazy"
-                src={column.featured.image}
+                src={feature.image}
             />
-            <div aria-hidden="true" className="absolute inset-0 bg-gradient-to-t from-[hsl(240_20%_4%)] via-[hsl(240_20%_4%)]/55 to-transparent" />
-            <div className="relative z-10 flex flex-col gap-1.5">
-                <span className="flex items-center gap-1 text-sm font-semibold text-white">
-                    {column.featured.title}
-                    <ArrowUpRight className="size-3.5 transition-transform duration-300 group-hover/feat:translate-x-0.5 group-hover/feat:-translate-y-0.5" />
-                </span>
-                <span className="text-xs leading-snug text-white/70">{column.featured.subtitle}</span>
-                <span className="mt-1 font-mono text-[10px] tracking-wider text-white/35 uppercase">Photo · {column.featured.credit}</span>
+            <div aria-hidden="true" className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/30 to-transparent" />
+            <div className="relative z-10 p-5">
+                <p className="text-base font-semibold text-white">{feature.title}</p>
+                <p className="mt-0.5 text-sm text-white/70">{feature.subtitle}</p>
             </div>
+        </>
+    );
+    const className = cn(
+        "group/feat relative flex min-h-[440px] flex-col justify-end overflow-hidden rounded-xl border border-white/[0.06] no-underline",
+        single ? "w-[420px]" : "w-[244px]",
+    );
+
+    return feature.href.startsWith("http") ? (
+        <a className={className} href={feature.href} rel="noreferrer" target="_blank">
+            {content}
+        </a>
+    ) : (
+        <Link className={className} to={feature.href}>
+            {content}
         </Link>
-        <ul className="grid grid-cols-2 gap-0.5">
-            {column.navItems.map((leaf) => (
-                <li key={leaf.title}>
+    );
+};
+
+const MegaPanel = ({ column }: { column: NavColumn }) => (
+    <div className="flex gap-2">
+        <ul className="flex w-[316px] flex-col">
+            {column.navItems.map((leaf, index) => (
+                <li className={index > 0 ? "border-t border-white/[0.05]" : undefined} key={leaf.title}>
                     <LeafLink leaf={leaf} />
                 </li>
             ))}
         </ul>
+        <div className="flex gap-2">
+            {column.features.map((feature) => (
+                <FeatureCard feature={feature} key={feature.title} single={column.features.length === 1} />
+            ))}
+        </div>
     </div>
 );
+
+const Kbd = ({ children }: { children: ReactNode }) => <kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[10px] text-white/70">{children}</kbd>;
 
 const SearchButton = ({ light }: { light: boolean }) => {
     const { setOpenSearch } = useSearchContext();
@@ -266,10 +278,12 @@ const SearchButton = ({ light }: { light: boolean }) => {
         <button
             aria-label="Search"
             className={cn(
-                "flex size-9 items-center justify-center rounded-full border transition-colors",
-                light ? "border-black/10 text-black/60 hover:bg-black/[0.05]" : "border-white/10 text-white/70 hover:bg-white/[0.06] hover:text-white",
+                "flex size-9 items-center justify-center rounded-full transition-colors",
+                light ? "text-black/60 hover:bg-black/[0.05]" : "text-white/70 hover:bg-white/[0.08] hover:text-white",
             )}
-            onClick={() => setOpenSearch(true)}
+            onClick={() => {
+                setOpenSearch(true);
+            }}
             type="button"
         >
             <Search className="size-4" />
@@ -281,7 +295,6 @@ const Navbar = () => {
     const { pathname } = useLocation();
     const reduceMotion = useReducedMotion();
     const [light, setLight] = useState(false);
-    const [scrolled, setScrolled] = useState(false);
     const [openMenu, setOpenMenu] = useState<string | null>(null);
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
     const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -309,7 +322,6 @@ const Navbar = () => {
                 }
 
                 setLight(theme === "light");
-                setScrolled(window.scrollY > 10);
                 ticking = false;
             });
         };
@@ -317,7 +329,9 @@ const Navbar = () => {
         window.addEventListener("scroll", handleScroll, { passive: true });
         handleScroll();
 
-        return () => window.removeEventListener("scroll", handleScroll);
+        return () => {
+            window.removeEventListener("scroll", handleScroll);
+        };
     }, []);
 
     const openWith = (title: string) => {
@@ -328,60 +342,57 @@ const Navbar = () => {
         setOpenMenu(title);
     };
 
-    const scheduleClose = () => {
+    const cancelClose = () => {
         if (closeTimer.current) {
             clearTimeout(closeTimer.current);
         }
+    };
 
-        closeTimer.current = setTimeout(() => setOpenMenu(null), 120);
+    const scheduleClose = () => {
+        cancelClose();
+        closeTimer.current = setTimeout(setOpenMenu, 160, null);
     };
 
     const active = menu.find((column) => column.navTitle === openMenu);
 
     return (
-        <header className="fixed inset-x-0 top-0 z-100 px-4 pt-3" data-theme={light ? "light" : "dark"}>
-            <div
-                className={cn(
-                    "mx-auto flex h-14 max-w-5xl items-center justify-between gap-4 rounded-2xl border px-3 pl-4 backdrop-blur-xl transition-colors duration-300",
-                    light
-                        ? "border-black/[0.08] bg-white/70 shadow-lg shadow-black/[0.04]"
-                        : cn("border-white/10 shadow-xl shadow-black/30", scrolled || openMenu ? "bg-[hsl(240_18%_7%)]/85" : "bg-[hsl(240_18%_7%)]/55"),
-                )}
-                onMouseLeave={scheduleClose}
-            >
+        <header className="fixed inset-x-0 top-0 z-100" data-theme={light ? "light" : "dark"} onMouseLeave={scheduleClose}>
+            <div className="relative mx-auto flex h-16 max-w-7xl items-center px-6">
                 <Logo light={light} pathname={pathname} />
 
-                <nav aria-label="Primary navigation" className="hidden h-full items-center lg:flex">
+                <nav aria-label="Primary navigation" className="absolute left-1/2 hidden -translate-x-1/2 items-center lg:flex">
                     {menu.map((column) => (
-                        <div className="flex h-full items-center" key={column.navTitle} onMouseEnter={() => openWith(column.navTitle)}>
+                        <div
+                            className="flex items-center"
+                            key={column.navTitle}
+                            onMouseEnter={() => {
+                                openWith(column.navTitle);
+                            }}
+                        >
                             <button
                                 aria-expanded={openMenu === column.navTitle}
                                 className={cn(
-                                    "flex items-center gap-1 rounded-full px-3.5 py-2 text-sm font-medium transition-colors",
-                                    light
-                                        ? "text-black/70 hover:text-black data-[open=true]:text-black"
-                                        : "text-white/70 hover:text-white data-[open=true]:text-white",
+                                    "flex w-max cursor-default items-center px-3.5 py-2 text-sm font-medium transition-colors",
+                                    light ? "text-black/80 hover:text-black/60" : "text-white hover:text-neutral-300",
                                 )}
-                                data-open={openMenu === column.navTitle}
-                                onFocus={() => openWith(column.navTitle)}
+                                onFocus={() => {
+                                    openWith(column.navTitle);
+                                }}
                                 type="button"
                             >
                                 {column.navTitle}
-                                <ChevronDown className={cn("size-3.5 transition-transform duration-300", openMenu === column.navTitle && "rotate-180")} />
                             </button>
                         </div>
                     ))}
                 </nav>
 
-                <div className="hidden items-center gap-1.5 lg:flex">
+                <div className="ml-auto hidden items-center gap-2 lg:flex">
                     <SearchButton light={light} />
                     <a
                         aria-label={`GitHub repository (${formatStars(stats.stars)} stars)`}
                         className={cn(
-                            "flex h-9 items-center gap-1.5 rounded-full border px-3.5 text-sm font-medium transition-colors",
-                            light
-                                ? "border-black/10 text-black/70 hover:bg-black/[0.05]"
-                                : "border-white/12 text-white/80 hover:bg-white/[0.06] hover:text-white",
+                            "flex h-9 items-center gap-1.5 rounded-full px-4 text-sm font-medium transition-colors",
+                            light ? "bg-neutral-900 text-white hover:bg-neutral-800" : "bg-white text-neutral-900 hover:bg-white/90",
                         )}
                         href="https://github.com/anolilab/lunora"
                         rel="noreferrer"
@@ -401,30 +412,46 @@ const Navbar = () => {
                 <button
                     aria-label="Open menu"
                     className={cn(
-                        "flex size-9 items-center justify-center rounded-full lg:hidden",
+                        "ml-auto flex size-9 items-center justify-center rounded-full lg:hidden",
                         light ? "text-black/70 hover:bg-black/[0.05]" : "text-white/80 hover:bg-white/10",
                     )}
-                    onClick={() => setIsMobileMenuOpen(true)}
+                    onClick={() => {
+                        setIsMobileMenuOpen(true);
+                    }}
                     type="button"
                 >
                     <Menu className="size-5" />
                 </button>
+            </div>
 
-                {/* mega-menu dropdown */}
+            {/* mega-menu dropdown — a single centered box that morphs size between menus */}
+            <div className="absolute top-[4.25rem] left-1/2 hidden -translate-x-1/2 lg:block" onMouseEnter={cancelClose} onMouseLeave={scheduleClose}>
                 <AnimatePresence>
                     {active ? (
                         <motion.div
                             animate={{ opacity: 1, y: 0 }}
-                            className="absolute top-[calc(100%+8px)] left-1/2 z-50 hidden -translate-x-1/2 lg:block"
-                            exit={{ opacity: 0, y: -6 }}
-                            initial={{ opacity: 0, y: -6 }}
-                            key={active.navTitle}
-                            onMouseEnter={() => openWith(active.navTitle)}
-                            onMouseLeave={scheduleClose}
-                            transition={reduceMotion ? { duration: 0 } : { duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+                            exit={{ opacity: 0, y: -8 }}
+                            initial={{ opacity: 0, y: -8 }}
+                            key="mega"
+                            transition={reduceMotion ? { duration: 0 } : { duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
                         >
-                            <div className="overflow-hidden rounded-2xl border border-white/10 bg-[hsl(240_18%_7%)]/90 shadow-2xl shadow-black/50 backdrop-blur-2xl">
+                            <motion.div
+                                className="overflow-hidden rounded-2xl border border-white/10 bg-[hsl(240_22%_5%)] p-2 shadow-2xl shadow-black/70"
+                                layout
+                                transition={reduceMotion ? { duration: 0 } : { duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+                            >
                                 <MegaPanel column={active} />
+                            </motion.div>
+                            <div className="pointer-events-none mt-3 flex items-center justify-center gap-5 text-xs text-white/45">
+                                <span className="flex items-center gap-1.5">
+                                    <Kbd>↓</Kbd> Enter menu
+                                </span>
+                                <span className="flex items-center gap-1.5">
+                                    <Kbd>tab</Kbd> Navigate menu
+                                </span>
+                                <span className="flex items-center gap-1.5">
+                                    <Kbd>↑</Kbd> Exit menu
+                                </span>
                             </div>
                         </motion.div>
                     ) : null}
@@ -439,7 +466,9 @@ const Navbar = () => {
                         <button
                             aria-label="Close menu"
                             className="flex size-10 items-center justify-center rounded-full text-white/80 transition-colors hover:bg-white/10"
-                            onClick={() => setIsMobileMenuOpen(false)}
+                            onClick={() => {
+                                setIsMobileMenuOpen(false);
+                            }}
                             type="button"
                         >
                             <X className="size-5" />
@@ -451,7 +480,13 @@ const Navbar = () => {
                                 <p className="px-1 pb-2 font-mono text-xs tracking-wider text-white/40 uppercase">{column.navTitle}</p>
                                 <div className="flex flex-col gap-0.5">
                                     {column.navItems.map((leaf) => (
-                                        <LeafLink key={leaf.title} leaf={leaf} onNavigate={() => setIsMobileMenuOpen(false)} />
+                                        <LeafLink
+                                            key={leaf.title}
+                                            leaf={leaf}
+                                            onNavigate={() => {
+                                                setIsMobileMenuOpen(false);
+                                            }}
+                                        />
                                     ))}
                                 </div>
                             </div>
@@ -464,7 +499,12 @@ const Navbar = () => {
                                 </a>
                             </Button>
                             <Button asChild className="h-11 gap-1 rounded-full text-sm font-semibold" variant="default">
-                                <Link onClick={() => setIsMobileMenuOpen(false)} to="/docs/$">
+                                <Link
+                                    onClick={() => {
+                                        setIsMobileMenuOpen(false);
+                                    }}
+                                    to="/docs/$"
+                                >
                                     Get started
                                     <ChevronRight className="size-4" />
                                 </Link>
