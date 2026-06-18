@@ -146,7 +146,7 @@ const PackagesListing: FC = () => {
 
             {/* grid */}
             <section className="border-t border-white/[0.08]" data-nav-theme="dark">
-                <div className="mx-auto max-w-6xl px-5 py-12 lg:px-0">
+                <div className="mx-auto max-w-6xl px-5 lg:px-0">
                     {filteredPackages.length > 0 ? (
                         <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
                             {filteredPackages.map((pkg) => (
