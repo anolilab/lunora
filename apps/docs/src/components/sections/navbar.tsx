@@ -31,15 +31,19 @@ import { useEffect, useRef, useState } from "react";
 
 import lunoraLogoRaw from "@/assets/lunora_logo.svg?raw";
 import LunoraLogo from "@/assets/lunora_logo.svg?react";
+import dashboardsImg from "@/assets/studio/dashboards.png";
+import homeImg from "@/assets/studio/home.png";
+import schemaImg from "@/assets/studio/schema.png";
+import timeTravelImg from "@/assets/studio/time-travel.png";
 import { Button } from "@/components/ui/button";
 import stats from "@/data/stats.json";
 import { cn } from "@/lib/utils";
 
 /**
- * Outerbase-style navbar (experiment): a transparent bar — logo left, centered
- * text links, a light "GitHub" pill right — over a single dark dropdown that
- * morphs size between menus. Each dropdown pairs a vertical icon list with one
- * or two tall feature image cards (sourced from Unsplash). Swapped into __root.
+ * Primary navbar: a transparent bar — logo left, centered text links, a light
+ * "GitHub" pill right — over a single dark dropdown that morphs size between
+ * menus. Each dropdown pairs a vertical icon list with one or two tall feature
+ * cards (Lunora Studio screenshots).
  */
 
 const card = (id: string): string => `https://images.unsplash.com/${id}?q=80&w=900&auto=format&fit=crop`;
@@ -75,8 +79,8 @@ interface NavColumn {
 const menu: NavColumn[] = [
     {
         features: [
-            { href: "/packages/studio", image: card("photo-1654198340681-a2e0fc449f1b"), subtitle: "Schema, data, SQL, and logs", title: "Studio" },
-            { href: "/packages/do", image: card("photo-1635776062360-af423602aff3"), subtitle: "Point-in-time restore, any moment", title: "Time travel" },
+            { href: "/studio", image: schemaImg, subtitle: "Schema, data, SQL, and logs", title: "Studio" },
+            { href: "/packages/do", image: timeTravelImg, subtitle: "Point-in-time restore, any moment", title: "Time travel" },
         ],
         navItems: [
             { description: "Schema, queries, mutations, actions.", href: "/packages/server", icon: <Server />, title: "Server" },
@@ -91,7 +95,7 @@ const menu: NavColumn[] = [
         features: [
             {
                 href: "/docs/getting-started",
-                image: card("photo-1566410824233-a8011929225c"),
+                image: homeImg,
                 subtitle: "A typed, live backend in an afternoon",
                 title: "Getting started",
             },
@@ -107,7 +111,7 @@ const menu: NavColumn[] = [
     },
     {
         features: [
-            { href: "/packages/studio", image: card("photo-1671226366556-c3efaa10edf0"), subtitle: "A local studio for your backend", title: "Lunora Studio" },
+            { href: "/studio", image: dashboardsImg, subtitle: "A local studio for your backend", title: "Lunora Studio" },
             {
                 href: "https://github.com/anolilab/lunora/discussions",
                 image: card("photo-1614852206732-6728910dc175"),
@@ -116,7 +120,7 @@ const menu: NavColumn[] = [
             },
         ],
         navItems: [
-            { description: "Admin UI for schema, data, advisors.", href: "/packages/studio", icon: <LayoutDashboard />, title: "Studio" },
+            { description: "Admin UI for schema, data, advisors.", href: "/studio", icon: <LayoutDashboard />, title: "Studio" },
             { description: "R2 typed buckets and signed URLs.", href: "/packages/storage", icon: <HardDrive />, title: "Storage" },
             { description: "New updates and improvements.", href: "/changelog", icon: <ScrollText />, title: "Changelog" },
             { description: "Q&A, ideas, and discussion.", href: "https://github.com/anolilab/lunora/discussions", icon: <Handshake />, title: "Discussions" },
@@ -165,7 +169,7 @@ const Logo = ({ light, pathname }: { light: boolean; pathname: string }) => {
                 </Link>
             </div>
             {isOpen && (
-                <ul className="logo-context-menu absolute top-12 -left-2 z-10 block w-52 rounded-none border border-white/10 bg-[hsl(240_18%_8%)] p-2 text-white shadow-xl">
+                <ul className="logo-context-menu absolute top-12 -left-2 z-10 block w-52 rounded-none border border-white/[0.08] bg-[#0e0e11] p-2 text-white shadow-xl">
                     <li>
                         <button
                             className={cn(itemClass, "w-full cursor-pointer rounded-none")}
@@ -206,7 +210,7 @@ const LeafLink = ({ leaf, onNavigate }: { leaf: NavLeaf; onNavigate?: () => void
             </span>
         </>
     );
-    const className = "group/leaf flex items-start gap-3 rounded-none p-3 no-underline transition-colors hover:bg-white/[0.05]";
+    const className = "group/leaf flex items-start gap-3 rounded-none px-3 py-2.5 no-underline transition-colors hover:bg-white/[0.05]";
 
     return leaf.href.startsWith("http") ? (
         <a className={className} href={leaf.href} onClick={onNavigate} rel="noreferrer" target="_blank">
@@ -225,7 +229,7 @@ const FeatureCard = ({ feature, single }: { feature: NavFeature; single: boolean
             <img
                 alt=""
                 aria-hidden="true"
-                className="absolute inset-0 size-full object-cover transition-transform duration-500 group-hover/feat:scale-105"
+                className="absolute inset-0 size-full object-cover object-left-top transition-transform duration-500 group-hover/feat:scale-105"
                 loading="lazy"
                 src={feature.image}
             />
@@ -237,7 +241,7 @@ const FeatureCard = ({ feature, single }: { feature: NavFeature; single: boolean
         </>
     );
     const className = cn(
-        "group/feat relative flex min-h-[440px] flex-col justify-end overflow-hidden rounded-none border border-white/[0.06] no-underline",
+        "group/feat relative flex min-h-[300px] flex-col justify-end overflow-hidden rounded-none border border-white/[0.08] no-underline",
         single ? "w-[420px]" : "w-[244px]",
     );
 
@@ -256,7 +260,7 @@ const MegaPanel = ({ column }: { column: NavColumn }) => (
     <div className="flex gap-2">
         <ul className="flex w-[316px] flex-col">
             {column.navItems.map((leaf, index) => (
-                <li className={index > 0 ? "border-t border-white/[0.05]" : undefined} key={leaf.title}>
+                <li className={index > 0 ? "border-t border-white/[0.08]" : undefined} key={leaf.title}>
                     <LeafLink leaf={leaf} />
                 </li>
             ))}
@@ -438,7 +442,7 @@ const Navbar = () => {
                             transition={reduceMotion ? { duration: 0 } : { duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
                         >
                             <motion.div
-                                className="overflow-hidden rounded-none border border-white/10 bg-[hsl(240_22%_5%)] p-2 shadow-2xl shadow-black/70"
+                                className="overflow-hidden rounded-none border border-white/[0.08] bg-[#0e0e11] p-2 shadow-2xl shadow-black/70"
                                 layout
                                 transition={reduceMotion ? { duration: 0 } : { duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
                             >
@@ -462,8 +466,8 @@ const Navbar = () => {
 
             {/* mobile menu */}
             {isMobileMenuOpen && (
-                <div className="fixed inset-0 z-[110] overflow-y-auto bg-[hsl(240_18%_5%)] lg:hidden" data-theme="dark">
-                    <div className="flex items-center justify-between border-b border-white/10 px-5 py-3.5">
+                <div className="fixed inset-0 z-[110] overflow-y-auto bg-[#0e0e11] lg:hidden" data-theme="dark">
+                    <div className="flex items-center justify-between border-b border-white/[0.08] px-5 py-3.5">
                         <Logo light={false} pathname={pathname} />
                         <button
                             aria-label="Close menu"

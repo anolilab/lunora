@@ -6,7 +6,7 @@ import type { FC, PropsWithChildren } from "react";
 import { lazy, Suspense } from "react";
 
 import Footer from "@/components/sections/footer";
-import Navbar from "@/components/sections/navbar-outerbase";
+import Navbar from "@/components/sections/navbar";
 import JsonLd from "@/components/seo/json-ld";
 import { NotFound } from "@/pages/not-found";
 import appCss from "@/styles/app.css?url";
