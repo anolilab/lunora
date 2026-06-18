@@ -102,7 +102,7 @@ export const list = query({
 Lunora:
 
 ```ts
-import { mutation, query, v } from "lunora/server";
+import { mutation, query, v } from "@/lunora/_generated/server";
 
 export const list = query.input({ channelId: v.id("channels") }).query(async ({ ctx, args: { channelId } }) => {
     return ctx.db

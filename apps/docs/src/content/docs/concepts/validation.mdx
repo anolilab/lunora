@@ -11,12 +11,17 @@ one declaration drives both the database shape and the function's contract,
 and the inferred types flow all the way to the generated client.
 
 ```ts
-import { defineTable, mutation, v } from "lunora/server";
+// In schema.ts — table + column definitions:
+import { defineSchema, defineTable, v } from "lunora/server";
+
+// In a query/mutation/action — the typed builders + v:
+import { mutation, query, v } from "@/lunora/_generated/server";
 ```
 
 Validators come from [`@lunora/values`](/docs/packages/values); `@lunora/server`
-re-exports the `v` namespace, so application code imports `v` straight from
-`lunora/server`.
+re-exports the `v` namespace for schema files. Inside `query` / `mutation` /
+`action` files, import `v` (and the builders) from the generated
+`@/lunora/_generated/server` instead — its `v.id(...)` is branded to your tables.
 
 ## Job 1 — column types in `defineTable`
 
@@ -51,7 +56,7 @@ fails with `ValidationError` and never reaches your code. Inside the handler,
 `args` is fully typed from those validators:
 
 ```ts
-import { mutation, v } from "lunora/server";
+import { mutation, v } from "@/lunora/_generated/server";
 
 export const send = mutation
     .input({

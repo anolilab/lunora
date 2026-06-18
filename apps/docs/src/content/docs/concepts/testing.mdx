@@ -22,7 +22,7 @@ methods share one database, so a write from a mutation is visible to a later
 query — exactly the reactivity guarantee your app relies on.
 
 ```ts
-import { defineSchema, defineTable, mutation, query, v } from "lunora/server";
+import { defineSchema, defineTable, initLunora, v } from "lunora/server";
 import { lunoraTest } from "@lunora/testing";
 import { expect, test } from "vitest";
 
@@ -32,6 +32,10 @@ const schema = defineSchema({
         body: v.string(),
     }),
 });
+
+// A self-contained test derives its builders from the inline schema. In your
+// app you instead import `query` / `mutation` from `@/lunora/_generated/server`.
+const { mutation, query } = initLunora.dataModel().create();
 
 const send = mutation.input({ author: v.string(), body: v.string() }).mutation(({ ctx, args }) => ctx.db.insert("messages", args));
 
@@ -155,7 +159,9 @@ through `ctx.runQuery` / `ctx.runMutation` / `ctx.runAction` from another
 function succeeds.
 
 ```ts
-import { internalMutation } from "lunora/server";
+import { initLunora, v } from "lunora/server";
+
+const { internalMutation, mutation } = initLunora.dataModel().create();
 
 const internalSend = internalMutation.input({ author: v.string(), body: v.string() }).mutation(({ ctx, args }) => ctx.db.insert("messages", args));
 

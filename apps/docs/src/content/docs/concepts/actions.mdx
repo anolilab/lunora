@@ -11,7 +11,7 @@ email, talk to a queue, drive an AI model. The cost of that freedom: actions are
 transactional `db`** to read or write your tables through.
 
 ```ts
-import { action, v } from "lunora/server";
+import { action, v } from "@/lunora/_generated/server";
 import { api, internal } from "@/lunora/_generated/api";
 
 export const syncWithStripe = action.input({ customerId: v.string() }).action(async ({ ctx, args }) => {
@@ -68,7 +68,7 @@ internal ones — so the call is fully typed and the argument validators are
 enforced:
 
 ```ts
-import { action, v } from "lunora/server";
+import { action, v } from "@/lunora/_generated/server";
 import { api, internal } from "@/lunora/_generated/api";
 
 export const importContacts = action.input({ url: v.string() }).action(async ({ ctx, args }) => {

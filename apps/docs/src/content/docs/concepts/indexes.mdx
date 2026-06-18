@@ -43,7 +43,7 @@ leading columns. The range builder offers `.eq`, `.gt`, `.gte`, `.lt`, `.lte` â€
 equality-match the leading fields, then optionally bound the next one:
 
 ```ts
-import { query, v } from "lunora/server";
+import { query, v } from "@/lunora/_generated/server";
 
 export const recent = query.input({ channelId: v.id("channels"), since: v.number() }).query(async ({ ctx, args: { channelId, since } }) => {
     return ctx.db

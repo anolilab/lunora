@@ -15,7 +15,7 @@ post-webhook writes, scheduled jobs, fan-out helpers, anything that assumes a
 trusted caller.
 
 ```ts
-import { internalMutation, internalQuery, v } from "lunora/server";
+import { internalMutation, internalQuery, v } from "@/lunora/_generated/server";
 
 export const byStripeId = internalQuery.input({ stripeId: v.string() }).query(async ({ ctx, args }) => {
     return ctx.db
@@ -45,7 +45,7 @@ Internal functions are addressed through the generated `internal` namespace
 (the sibling of `api`), and can only be invoked from another function's `ctx`:
 
 ```ts
-import { action, v } from "lunora/server";
+import { action, v } from "@/lunora/_generated/server";
 import { internal } from "@/lunora/_generated/api";
 
 export const syncCustomer = action.input({ stripeId: v.string() }).action(async ({ ctx, args }) => {
@@ -67,7 +67,7 @@ The scheduler dispatches a function **server-side**, so its target is almost
 always internal. Schedule an `internal*` reference from a mutation or action:
 
 ```ts
-import { mutation, v } from "lunora/server";
+import { mutation, v } from "@/lunora/_generated/server";
 import { internal } from "@/lunora/_generated/api";
 
 export const enqueueReport = mutation.input({ accountId: v.id("accounts") }).mutation(async ({ ctx, args }) => {

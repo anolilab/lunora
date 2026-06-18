@@ -11,7 +11,7 @@ Lunora, _which_ operations you can reach depends on the kind of function you're
 in.
 
 ```ts
-import { action, v } from "lunora/server";
+import { action, v } from "@/lunora/_generated/server";
 
 export const importLogo = action.input({ key: v.string() }).action(async ({ ctx, args: { key } }) => {
     const upstream = await ctx.fetch("https://example.com/logo.png");
@@ -47,7 +47,7 @@ short-lived `PUT` URL, the browser uploads straight to R2 (your Worker never
 proxies the bytes), and a follow-up mutation records the key in your database.
 
 ```ts
-import { action, v } from "lunora/server";
+import { action, v } from "@/lunora/_generated/server";
 
 export const requestUpload = action.input({ key: v.string(), contentType: v.string() }).action(async ({ ctx, args: { key, contentType } }) => {
     if (!ctx.auth.userId) throw new Error("must be signed in");
@@ -75,7 +75,7 @@ URL that grants access without exposing the bucket — and because signing is
 HMAC-only, you can hand one out from a `query` to feed a `<img src>` reactively:
 
 ```ts
-import { query, v } from "lunora/server";
+import { query, v } from "@/lunora/_generated/server";
 
 export const avatarUrl = query.input({ key: v.string() }).query(async ({ ctx, args: { key } }) => {
     if (!(await ctx.storage.getMetadata(key))) return null;
@@ -106,7 +106,7 @@ const stream = await ctx.storage.bucket("exports").download(key); // any context
 writes are:
 
 ```ts
-import { action, v } from "lunora/server";
+import { action, v } from "@/lunora/_generated/server";
 
 export const removeAttachment = action.input({ key: v.string() }).action(async ({ ctx, args: { key } }) => {
     await ctx.storage.delete(key);

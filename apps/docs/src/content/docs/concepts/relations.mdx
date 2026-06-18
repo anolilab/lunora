@@ -141,7 +141,7 @@ There are two ways to read related rows; both go through the indexed FK.
 the children off the index you declared:
 
 ```ts
-import { query, v } from "lunora/server";
+import { query, v } from "@/lunora/_generated/server";
 
 export const postsByAuthor = query.input({ authorId: v.id("users") }).query(async ({ ctx, args: { authorId } }) => {
     return ctx.db

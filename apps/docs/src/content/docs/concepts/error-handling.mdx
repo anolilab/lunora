@@ -20,7 +20,8 @@ rejected promise (or as `error` on a hook). The only decision you make is
 wiring you need:
 
 ```ts
-import { LunoraError, mutation, query, v } from "lunora/server";
+import { LunoraError } from "lunora/server";
+import { mutation, query, v } from "@/lunora/_generated/server";
 
 export const send = mutation.input({ channelId: v.id("channels"), text: v.string() }).mutation(async ({ ctx, args }) => {
     if (!ctx.auth.user) {

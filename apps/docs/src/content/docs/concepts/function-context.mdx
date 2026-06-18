@@ -10,7 +10,7 @@ is determined by the function kind**, and the kind constrains what `ctx` can
 do: a `query` cannot write, an `action` cannot transact against the database.
 
 ```ts
-import { mutation, query } from "lunora/server";
+import { mutation, query } from "@/lunora/_generated/server";
 
 export const list = query.query(async ({ ctx }) => {
     return ctx.db.query("messages").take(50); // read-only

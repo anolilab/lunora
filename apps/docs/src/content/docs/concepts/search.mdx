@@ -38,7 +38,7 @@ the full-text match against the index's searchable field (call it exactly once);
 `.eq(field, value)` narrows by a declared filter field.
 
 ```ts
-import { query, v } from "lunora/server";
+import { query, v } from "@/lunora/_generated/server";
 
 export const searchMessages = query.input({ channelId: v.id("channels"), term: v.string() }).query(async ({ ctx, args: { channelId, term } }) => {
     return ctx.db

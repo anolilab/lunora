@@ -18,7 +18,7 @@ sharding, and the moment you do, every call site routes itself.
 
 ```ts
 // lunora/messages.ts
-import { mutation, query, v } from "lunora/server";
+import { mutation, query, v } from "@/lunora/_generated/server";
 
 export const send = mutation.input({ channelId: v.id("channels"), text: v.string() }).mutation(async ({ ctx, args }) => {
     await ctx.db.insert("messages", { ...args, userId: ctx.auth.user.id });

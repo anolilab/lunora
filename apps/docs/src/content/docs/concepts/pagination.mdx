@@ -10,7 +10,7 @@ fetch the next. Cursors are keyset, not offset — paging stays stable as rows a
 inserted or deleted ahead of the cursor.
 
 ```ts
-import { query, v } from "lunora/server";
+import { query, v } from "@/lunora/_generated/server";
 
 export const list = query.input({ channelId: v.id("channels"), paginationOpts: v.any() }).query(async ({ ctx, args: { channelId, paginationOpts } }) => {
     return ctx.db

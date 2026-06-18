@@ -27,7 +27,7 @@ function that isn't exposed to clients, which is the usual choice for follow-up
 work.
 
 ```ts
-import { mutation, v } from "lunora/server";
+import { mutation, v } from "@/lunora/_generated/server";
 
 export const publishPost = mutation.input({ postId: v.id("posts") }).mutation(async ({ ctx, args: { postId } }) => {
     await ctx.db.patch(postId, { status: "published" });
@@ -55,7 +55,7 @@ The two contexts schedule identically, but the intent differs:
   call later, or fan a long job out into stages.
 
 ```ts
-import { mutation, v } from "lunora/server";
+import { mutation, v } from "@/lunora/_generated/server";
 
 export const orderPlaced = mutation.input({ orderId: v.id("orders") }).mutation(async ({ ctx, args: { orderId } }) => {
     await ctx.db.patch(orderId, { state: "placed" });

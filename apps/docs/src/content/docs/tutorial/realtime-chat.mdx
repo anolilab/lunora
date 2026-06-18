@@ -72,7 +72,7 @@ Create `lunora/messages.ts` (the template already has a starter version — repl
 its contents with the real implementation):
 
 ```ts
-import { mutation, query, v } from "lunora/server";
+import { mutation, query, v } from "@/lunora/_generated/server";
 
 export const list = query.input({ channelId: v.id("channels"), limit: v.optional(v.number()) }).query(async ({ ctx, args: { channelId, limit } }) => {
     return ctx.db

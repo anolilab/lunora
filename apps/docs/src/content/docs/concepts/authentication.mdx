@@ -11,7 +11,7 @@ identity off `ctx.auth` — the same shape inside a `query`, a `mutation`, and a
 _how_ the caller proved who they are.
 
 ```ts
-import { mutation, v } from "lunora/server";
+import { mutation, v } from "@/lunora/_generated/server";
 
 export const send = mutation.input({ channelId: v.id("channels"), text: v.string() }).mutation(async ({ ctx, args }) => {
     if (!ctx.auth.userId) throw new Error("must be signed in");
@@ -31,7 +31,7 @@ Every function context — `QueryCtx`, `MutationCtx`, and `ActionCtx` — carrie
   you need more than the id (email, name, roles, custom claims).
 
 ```ts
-import { query } from "lunora/server";
+import { query } from "@/lunora/_generated/server";
 
 export const me = query.query(async ({ ctx }) => {
     if (!ctx.auth.userId) return null;

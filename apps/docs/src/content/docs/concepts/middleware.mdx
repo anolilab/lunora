@@ -71,9 +71,17 @@ before the handler runs. Compose it like any other middleware — key the limit
 on `ctx.auth.userId` (or `ctx.ip` for anonymous traffic):
 
 ```ts
-import { rateLimit } from "@lunora/ratelimit";
+import { rateLimit, RateLimiter } from "@lunora/ratelimit";
 
-const limited = c.mutation.use(rateLimit({ key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon", limit: 20, window: "1m" }));
+// A limiter holds the named limit configs; `rateLimit(limiter, name, options?)`
+// returns the middleware. Key the limit on the signed-in user (or IP).
+const limiter = new RateLimiter({
+    config: {
+        send: { kind: "token bucket", period: 1_000, rate: 10, capacity: 20 },
+    },
+});
+
+const limited = c.mutation.use(rateLimit(limiter, "send", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon" }));
 ```
 
 ### Installing many at once
