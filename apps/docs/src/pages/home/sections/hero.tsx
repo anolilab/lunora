@@ -6,9 +6,14 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { FC, ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import NeuralNoise from "@/components/sections/neural-noise";
 import Section from "@/components/sections/section";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+
+// Brand aurora amethyst (hsl(256 72% 68%)) in linear RGB, for the hero backdrop.
+const NEURAL_COLOR = [0.57, 0.45, 0.91] as const;
+const NEURAL_MASK = "linear-gradient(to bottom, black 55%, transparent)";
 
 const KEYWORD = /^(import|from|const|await|export|async|function|type|default|return)$/;
 const WHITESPACE = /^\s+$/;
@@ -513,7 +518,13 @@ const MainHero: FC = () => {
             <div
                 aria-hidden="true"
                 className="pointer-events-none absolute inset-x-0 top-0 -z-0 h-[40rem]"
-                style={{ background: "radial-gradient(60% 50% at 50% -5%, hsl(256 72% 68% / 0.14), transparent 70%)" }}
+                style={{ background: "radial-gradient(60% 50% at 50% -5%, hsl(256 72% 68% / 0.12), transparent 70%)" }}
+            />
+            <NeuralNoise
+                className="pointer-events-none absolute inset-x-0 top-0 -z-0 h-[46rem] w-full"
+                color={NEURAL_COLOR}
+                opacity={0.55}
+                style={{ WebkitMaskImage: NEURAL_MASK, maskImage: NEURAL_MASK }}
             />
             <Section
                 classes={{
