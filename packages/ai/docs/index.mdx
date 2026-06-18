@@ -25,7 +25,7 @@ Inference is an external, non-deterministic call — like `ctx.fetch`, `ctx.ai`
 lives on actions, not queries or mutations.
 
 ```ts
-import { action, v } from "lunora/server";
+import { action, v } from "@/lunora/_generated/server";
 import { generateText } from "@lunora/ai";
 
 export const summarize = action.input({ text: v.string() }).action(async ({ ctx, args: { text } }) => {

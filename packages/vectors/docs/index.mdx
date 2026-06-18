@@ -136,7 +136,7 @@ the search.
 
 ```ts
 // lunora/searchDocs.ts
-import { query, v } from "lunora/server";
+import { query, v } from "@/lunora/_generated/server";
 import { embed } from "../app/embed";
 
 export const searchDocs = query.input({ q: v.string(), workspaceId: v.id("workspaces") }).query(async ({ ctx, args: { q, workspaceId } }) => {
@@ -203,7 +203,7 @@ the AI SDK, store and search with `ctx.vectors`. Embedding is a non-deterministi
 external call, so it lives on **action** contexts.
 
 ```ts
-import { action, v } from "lunora/server";
+import { action, v } from "@/lunora/_generated/server";
 import { embed as aiEmbed } from "@lunora/ai";
 
 export const semanticSearch = action.input({ q: v.string(), workspaceId: v.id("workspaces") }).action(async ({ ctx, args: { q, workspaceId } }) => {

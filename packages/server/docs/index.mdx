@@ -3,11 +3,16 @@ title: "@lunora/server"
 description: Authoring API — defineSchema, query, mutation, action, validators.
 ---
 
-`@lunora/server` is the authoring-side package. It is the only Lunora package
-you import from your `lunora/*.ts` function files.
+`@lunora/server` is the authoring-side package. It provides `defineSchema`,
+`defineTable`, the `v.*` validators, and `initLunora`. The typed
+`query` / `mutation` / `action` builders are emitted by codegen, so you import
+them from the generated `_generated/server`:
 
 ```ts
-import { action, defineSchema, defineTable, mutation, query, v } from "lunora/server";
+// schema + validators from the package:
+import { defineSchema, defineTable, v } from "lunora/server";
+// typed builders from codegen:
+import { action, mutation, query } from "@/lunora/_generated/server";
 ```
 
 ## `defineSchema(tables)`

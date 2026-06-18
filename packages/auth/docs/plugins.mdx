@@ -110,13 +110,12 @@ and options on any plugin, follow its better-auth reference above.
 
 ```ts
 // lunora/auth.ts
-import { createAuth } from "@lunora/auth";
+import { createAuth, lunoraD1Adapter } from "@lunora/auth";
 import { admin, organization } from "@lunora/auth/plugins";
 
-export const buildAuth = (env: { AUTH_SECRET: string; DB: unknown }) =>
+export const buildAuth = (env: { AUTH_SECRET: string; DB: D1Database }) =>
     createAuth({
-        // Better-auth accepts the D1 binding directly; no Kysely wiring.
-        database: env.DB as never,
+        database: lunoraD1Adapter(env.DB),
         emailAndPassword: { enabled: true },
         plugins: [organization({ allowUserToCreateOrganization: true }), admin({ defaultRole: "user" })],
         secret: env.AUTH_SECRET,
@@ -147,12 +146,12 @@ header:
 
 ```ts
 // lunora/auth.ts
-import { createAuth } from "@lunora/auth";
+import { createAuth, lunoraD1Adapter } from "@lunora/auth";
 import { captcha } from "@lunora/auth/plugins";
 
-export const buildAuth = (env: { AUTH_SECRET: string; DB: unknown; TURNSTILE_SECRET_KEY: string }) =>
+export const buildAuth = (env: { AUTH_SECRET: string; DB: D1Database; TURNSTILE_SECRET_KEY: string }) =>
     createAuth({
-        database: env.DB as never,
+        database: lunoraD1Adapter(env.DB),
         emailAndPassword: { enabled: true },
         plugins: [captcha({ provider: "cloudflare-turnstile", secretKey: env.TURNSTILE_SECRET_KEY })],
         secret: env.AUTH_SECRET,
@@ -181,7 +180,7 @@ package root:
 
 ```ts
 // lunora/contactForm.ts — gate a plain mutation, no auth involved
-import { mutation } from "lunora/server";
+import { mutation } from "@/lunora/_generated/server";
 import { verifyTurnstileMiddleware } from "@lunora/auth";
 
 import { v } from "lunora/values";

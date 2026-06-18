@@ -23,7 +23,7 @@ binding to enable deferred sends via `mailer.queue(...)`.
 ## Sending from an action
 
 ```ts
-import { action, v } from "lunora/server";
+import { action, v } from "@/lunora/_generated/server";
 
 import { mailer } from "./mail";
 
@@ -118,7 +118,7 @@ Cloudflare bounces or retries rather than silently dropping the mail; override
 The receiving function is an ordinary mutation/action:
 
 ```ts
-import { mutation, v } from "lunora/server";
+import { mutation, v } from "@/lunora/_generated/server";
 
 export const onEmail = mutation
     .input({

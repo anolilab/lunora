@@ -22,7 +22,7 @@ Add the binding to your `wrangler.jsonc` (the Vite plugin / CLI infers and recon
 ## Usage
 
 ```ts
-import { action, v } from "@lunora/server";
+import { action, v } from "@/lunora/_generated/server";
 
 export const screenshotPage = action.input({ url: v.string() }).action(async ({ args: { url }, ctx }) => {
     // ctx.browser is wired automatically — action context only.

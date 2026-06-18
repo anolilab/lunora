@@ -70,7 +70,7 @@ Container calls are external I/O, so — like `ctx.fetch` and `ctx.ai` —
 one handle per declared container.
 
 ```ts
-import { action, v } from "lunora/server";
+import { action, v } from "@/lunora/_generated/server";
 
 export const transcode = action.input({ videoId: v.id("videos") }).action(async ({ ctx, args: { videoId } }) => {
     // One instance per entity — same id always routes to the same container.
