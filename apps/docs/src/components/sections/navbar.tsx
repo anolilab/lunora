@@ -34,7 +34,6 @@ import LunoraLogo from "@/assets/lunora_logo.svg?react";
 import dashboardsImg from "@/assets/studio/dark/dashboards.png";
 import homeImg from "@/assets/studio/dark/home.png";
 import schemaImg from "@/assets/studio/dark/schema.png";
-import timeTravelImg from "@/assets/studio/dark/time-travel.png";
 import { Button } from "@/components/ui/button";
 import stats from "@/data/stats.json";
 import { cn } from "@/lib/utils";
@@ -78,10 +77,7 @@ interface NavColumn {
 
 const menu: NavColumn[] = [
     {
-        features: [
-            { href: "/studio", image: schemaImg, subtitle: "Schema, data, SQL, and logs", title: "Studio" },
-            { href: "/studio", image: timeTravelImg, subtitle: "Point-in-time restore, any moment", title: "Time travel" },
-        ],
+        features: [{ href: "/studio", image: schemaImg, subtitle: "Schema, data, SQL, and logs", title: "Studio" }],
         navItems: [
             { description: "Schema, queries, mutations, actions.", href: "/packages/server", icon: <Server />, title: "Server" },
             { description: "ShardDO + SessionDO: SQLite, OCC, WS.", href: "/packages/do", icon: <Database />, title: "Durable Objects" },
