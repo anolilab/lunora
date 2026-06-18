@@ -22,7 +22,7 @@ const SectionHead: FC<{ eyebrow: string; subtitle: string; title: string }> = ({
 
 const Pill: FC<{ children: ReactNode; href?: string; primary?: boolean; to?: string }> = ({ children, href, primary, to }) => {
     const className = cn(
-        "inline-flex h-10 items-center gap-2 rounded-full px-5 text-sm font-medium transition-colors",
+        "inline-flex h-10 items-center gap-2 px-5 text-sm font-medium transition-colors",
         primary ? "bg-white text-black hover:bg-white/90" : "border border-white/15 text-white/85 hover:border-white/30 hover:bg-white/[0.06]",
     );
 

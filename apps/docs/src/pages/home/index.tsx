@@ -9,6 +9,7 @@ import type { ComponentType, FC, ReactNode } from "react";
 import schemaImg from "@/assets/studio/schema.png";
 import timeTravelImg from "@/assets/studio/time-travel.png";
 import CodeView from "@/components/sections/code-view";
+import HatchSpacer from "@/components/sections/hatch-spacer";
 import { ClosingCta, SectionHead } from "@/components/sections/langbase";
 import Reveal from "@/components/sections/reveal";
 import FrameworkStrip from "@/pages/home/sections/framework-strip";
@@ -93,14 +94,6 @@ const Showcase: FC<{ children: ReactNode; className?: string }> = ({ children, c
     <section className={`border-t border-white/[0.08] bg-[#0e0e11] ${className ?? ""}`} data-nav-theme="dark">
         {children}
     </section>
-);
-
-const HatchSpacer: FC = () => (
-    <div
-        aria-hidden="true"
-        className="h-16 w-full border-t border-white/[0.08] bg-[#0e0e11]"
-        style={{ backgroundImage: "repeating-linear-gradient(135deg, rgba(46,48,56,0.45) 0 1px, rgba(0,0,0,0) 1px 8px)" }}
-    />
 );
 
 const Home: FC = () => (

@@ -34,7 +34,6 @@ const columns: { links: (ExternalLinkType | TanstackLink)[]; title: string }[] =
             { title: "Privacy", to: "/privacy" },
             { title: "Code of Conduct", to: "/code-of-conduct" },
             { title: "Imprint", to: "/imprint" },
-            { href: "https://github.com/anolilab/lunora", title: "GitHub" },
         ],
         title: "Legal",
     },
