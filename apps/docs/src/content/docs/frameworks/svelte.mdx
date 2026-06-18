@@ -1,0 +1,168 @@
+---
+title: Svelte
+description: Use Lunora with Svelte 5 / SvelteKit — context-provided client, live query/mutation stores, and the SSR-seed → live reactive-loader handoff.
+---
+
+`@lunora/svelte` is the Svelte adapter — an idiomatic layer over
+[`@lunora/client`](/docs/packages/client) that re-expresses the live contract as
+Svelte stores you read with the `$store` idiom. A live query is a readable store
+that re-emits on every server delta; an optimistic mutation is a bundle of stores
+plus an awaitable `mutate`. It is plain `.ts` over Svelte stores — no `.svelte`
+compiler is required to build it.
+
+This page is the task-oriented guide; for the full reference see
+[`@lunora/svelte`](/docs/packages/svelte).
+
+> **Preview.** The Svelte adapter exposes the same hydrate-then-subscribe handoff
+> as React, but it is **preview** maturity — not yet proven end-to-end against a
+> running app. See [Bring your framework](/docs/frameworks/bring-your-framework).
+
+## Install
+
+```sh
+pnpm add @lunora/svelte
+```
+
+## Provide the client
+
+There is no provider component. Publish the client on Svelte context with
+`setLunoraClient(client)` once, high in the tree (your root `+layout.svelte` or
+`App.svelte`), during component init. `query` / `mutation` / `hydratePreloaded`
+resolve it for you; call `getLunoraClient()` only if you need it directly.
+
+```svelte title="src/routes/+layout.svelte"
+<script lang="ts">
+    import { LunoraClient } from "lunora/client";
+    import { setLunoraClient } from "@lunora/svelte";
+
+    setLunoraClient(new LunoraClient({ url: import.meta.env.VITE_LUNORA_URL }));
+</script>
+
+<slot />
+```
+
+## Live queries
+
+`query(fn, args)` opens a live query as a readable store — read it with `$store`.
+The subscription attaches the moment the store gains its first subscriber and
+tears down when the last one goes away, so an unread store opens no socket. The
+store holds `undefined` until the first response.
+
+```svelte
+<script lang="ts">
+    import { query } from "@lunora/svelte";
+
+    import { api } from "$lib/_generated/api";
+
+    const messages = query(api.messages.list, { channelId: "general" });
+</script>
+
+<ul>
+    {#each $messages ?? [] as m (m._id)}
+        <li>{m.text}</li>
+    {/each}
+</ul>
+```
+
+`query` is overloaded — pass `client` explicitly as the first argument, or omit
+it to use the ambient client. `options` accepts `{ shardKey }` (for
+`.shardBy(...)`-partitioned functions) and `{ onError }`.
+
+## Mutations
+
+`mutation(fn)` creates an optimistic `MutationHandle` of readable stores —
+`{ data, error, pending, mutate, reset }`. Read `$pending` to disable a button;
+it is ref-counted across overlapping calls. Optimistic updates are passed **per
+call**.
+
+```svelte
+<script lang="ts">
+    import { mutation } from "@lunora/svelte";
+
+    import { api } from "$lib/_generated/api";
+
+    const { mutate, pending, error } = mutation(api.messages.send);
+
+    const send = () =>
+        mutate(
+            { channelId: "general", text: "hi" },
+            {
+                optimisticUpdate: (store) => {
+                    const current = store.getQuery(api.messages.list, { channelId: "general" }) ?? [];
+                    store.setQuery(api.messages.list, { channelId: "general" }, [...current, { _id: "tmp", text: "hi" }]);
+                },
+            },
+        );
+</script>
+
+<button disabled={$pending} on:click={send}>Send</button>
+{#if $error}<p>{$error.message}</p>{/if}
+```
+
+## Reactive loaders
+
+Run the query on the server with the socket-free `@lunora/svelte/server` entry in
+a SvelteKit `+page.ts` / `+layout.ts` `load`, return the serializable `Preloaded`
+token, and `hydratePreloaded` seeds the readable store **synchronously** — the
+first `$store` read returns the server value with no loading flash, then the live
+subscription attaches when the store gains its first client subscriber.
+
+```ts title="src/routes/posts/+page.ts"
+import { createServerClient, preloadQuery } from "@lunora/svelte/server";
+
+import { api } from "$lib/_generated/api";
+
+export async function load({ fetch }) {
+    // Forward SvelteKit's fetch so the session cookie rides along.
+    const client = createServerClient({ url: import.meta.env.VITE_LUNORA_URL, fetch });
+    const preloaded = await preloadQuery(client, api.posts.list, {});
+
+    return { preloaded };
+}
+```
+
+```svelte title="src/routes/posts/+page.svelte"
+<script lang="ts">
+    import { hydratePreloaded } from "@lunora/svelte";
+
+    export let data;
+
+    const posts = hydratePreloaded(data.preloaded);
+</script>
+
+<ul>
+    {#each $posts as p (p._id)}
+        <li>{p.title}</li>
+    {/each}
+</ul>
+```
+
+See [Reactive loaders](/docs/frameworks/reactive-loaders) for the full handoff.
+
+## One worker, one deploy
+
+SvelteKit owns its Cloudflare build via `@sveltejs/adapter-cloudflare`
+(class-B — "own CF adapter, hook-injection"), so Lunora **injects** its realtime
+plane into the worker SvelteKit emits. `@lunora/svelte/worker` re-exports
+`withLunora`, which wraps the SvelteKit handler as Lunora's fallback `httpRouter`:
+reserved `/_lunora/*` endpoints hit Lunora, everything else delegates to
+SvelteKit. One worker, one deploy. Keep this socket-free entry out of client code.
+
+```ts title="src/worker.ts"
+import { withLunora } from "@lunora/svelte/worker";
+import svelteKitWorker from "../.svelte-kit/cloudflare/_worker.js"; // adapter output
+
+import { auth } from "./lunora/auth";
+
+// `shardDO` lives on `env` (per request), so pass a factory:
+export default withLunora(svelteKitWorker, (env) => ({ shardDO: env.SHARD, auth }));
+```
+
+See [Deploy your framework](/docs/frameworks/deploy).
+
+## See also
+
+- [@lunora/svelte](/docs/packages/svelte) — the full store + server reference
+- [Bring your framework](/docs/frameworks/bring-your-framework) — composition + adapter maturity
+- [Reactive loaders](/docs/frameworks/reactive-loaders) — the SSR-seed → live handoff
+- [Real-time](/docs/concepts/realtime) — how subscriptions and deltas work
