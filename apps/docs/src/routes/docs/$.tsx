@@ -11,7 +11,6 @@ import JsonLd from "@/components/seo/json-ld";
 import { source } from "@/lib/docs-source";
 import { createSeoHead } from "@/lib/seo";
 
-import SupportSection from "../../pages/home/sections/support";
 import { NotFound } from "../../pages/not-found";
 
 type ServerLoaderResult = {
@@ -186,25 +185,6 @@ const Page = () => {
             >
                 <Content />
             </DocsLayout>
-            <div className="relative">
-                <div className="absolute inset-x-0 z-10 mt-[calc(-3/16*1rem)] flex items-end rotate-180 top-0" data-nav-theme="light">
-                    <div className="mr-[calc(-1*(--spacing(8)-(--spacing(1.5))))] h-11 flex-auto bg-background" />
-                    <div className="mx-auto flex w-full justify-between px-7 sm:max-w-160 md:max-w-3xl lg:max-w-5xl xl:max-w-7xl">
-                        <svg aria-hidden="true" className="mb-[calc(-1/16*1rem)] w-14 flex-none overflow-visible fill-background" viewBox="0 0 56 48">
-                            <path d="M 2.686 3 H -4 V 48 H 56 V 47 H 53.314 A 8 8 0 0 1 47.657 44.657 L 8.343 5.343 A 8 8 0 0 0 2.686 3 Z" />
-                        </svg>
-                        <svg
-                            aria-hidden="true"
-                            className="fill-background md:fill-dark-coal mr-0.5 mb-[calc(-1/16*1rem)] w-14 flex-none overflow-visible"
-                            viewBox="0 0 56 48"
-                        >
-                            <path d="M 53.314 3 H 60 V 48 H 0 V 47 H 2.686 A 8 8 0 0 0 8.343 44.657 L 47.657 5.343 A 8 8 0 0 1 53.314 3 Z" />
-                        </svg>
-                    </div>
-                    <div className="bg-background md:bg-dark-coal ml-[calc(-1*(--spacing(8)-(--spacing(1.5))))] h-11 flex-auto" />
-                </div>
-                <SupportSection />
-            </div>
         </>
     );
 };
