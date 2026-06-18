@@ -226,6 +226,12 @@
     border-color: transparent;
 }
 
+/* Docs use the full page width — drop fumadocs' fixed ~1285px frame cap so the
+   sidebar, content, and TOC span edge to edge (paired with --fd-layout-width: 100%). */
+[class*="max-w-[1285px]"] {
+    max-width: none !important;
+}
+
 #nd-subnav > div {
     border-bottom: 0;
 }

@@ -173,7 +173,7 @@ const Page = () => {
                     // Reserve the fixed external navbar's height (h-16) as the docs
                     // header row so content, sidebar, and TOC all sit below it.
                     className: "bg-background",
-                    style: { "--fd-header-height": "4rem" } as CSSProperties,
+                    style: { "--fd-header-height": "4rem", "--fd-layout-width": "100%" } as CSSProperties,
                 }}
                 nav={{
                     enabled: false,
