@@ -1,0 +1,98 @@
+---
+title: Middleware
+description: Compose cross-cutting concerns — auth checks, rate limiting, logging — and augment ctx for downstream handlers.
+---
+
+Middleware wraps a procedure builder so a piece of logic runs **before** the
+handler on every function built from it. It is the seam for cross-cutting
+concerns — authentication, permission checks, rate limiting, logging — and for
+**augmenting `ctx`** so downstream handlers see fields the middleware added.
+
+A middleware is a function of `({ ctx, next })` that calls `next` exactly once,
+optionally passing a widened context:
+
+```ts
+const middleware = ({ ctx, next }) => next({ ctx: { ...ctx, requestId: crypto.randomUUID() } });
+```
+
+Calling `next({ ctx })` invokes the rest of the chain (the next middleware, or
+the handler) with that context. Whatever you spread onto `ctx` is visible to
+everything downstream — including the handler's `ctx`.
+
+## Attaching middleware
+
+Middleware attaches to a builder with `.use(...)`. Functions built from the
+returned builder all run through it:
+
+```ts
+import { initLunora } from "lunora/server";
+import type { DataModel } from "./_generated/dataModel";
+
+const c = initLunora.dataModel<DataModel>().create();
+
+const authed = c.mutation.use(({ ctx, next }) => {
+    if (!ctx.auth.userId) throw new Error("must be signed in");
+    // Narrow ctx for downstream handlers: `user` is now guaranteed.
+    return next({ ctx: { ...ctx, userId: ctx.auth.userId } });
+});
+
+export const send = authed.input({ text: v.string() }).mutation(async ({ ctx, args }) => {
+    // ctx.userId is present and non-null thanks to the middleware.
+    await ctx.db.insert("messages", { text: args.text, userId: ctx.userId });
+});
+```
+
+## Augmenting ctx
+
+The convention for plugin middleware is to attach helpers under `ctx.api.<key>`
+so two plugins never collide. A middleware widens `ctx` by spreading and
+returning it through `next`:
+
+```ts
+const withMetrics = ({ ctx, next }) => next({ ctx: { api: { ...ctx.api, metrics: makeMetricsApi(ctx) } } });
+```
+
+Each middleware sees the context the previous one produced, so widenings
+accumulate in order down the chain. The type flows too: a downstream handler's
+`ctx` type reflects every field added upstream.
+
+## Composing concerns
+
+Stack `.use(...)` calls to layer concerns; they run outermost-first:
+
+```ts
+const guarded = c.query.use(logging).use(requireAuth).use(rateLimit);
+```
+
+### Rate limiting with `@lunora/ratelimit`
+
+`@lunora/ratelimit` ships procedure middleware so you can enforce a limit
+before the handler runs. Compose it like any other middleware — key the limit
+on `ctx.auth.userId` (or `ctx.ip` for anonymous traffic):
+
+```ts
+import { rateLimit } from "@lunora/ratelimit";
+
+const limited = c.mutation.use(rateLimit({ key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon", limit: 20, window: "1m" }));
+```
+
+### Installing many at once
+
+A plugin packages a schema extension plus middleware. To attach several
+plugins' middleware in a single `.use(...)`, compose them with
+`composePluginMiddleware([...])` — equivalent to chaining each
+`.use(plugin.middleware)`, but as one value, and the chain's context carries
+every plugin's additions:
+
+```ts
+import { composePluginMiddleware } from "lunora/server";
+
+const c2 = c.query.use(composePluginMiddleware([ratelimit, audit]));
+```
+
+## See also
+
+- [Queries & mutations](/docs/concepts/queries-mutations)
+- [Actions](/docs/concepts/actions)
+- [API: @lunora/server](/docs/packages/server)
+- [API: @lunora/ratelimit](/docs/packages/ratelimit)

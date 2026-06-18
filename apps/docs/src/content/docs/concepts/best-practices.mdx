@@ -1,0 +1,80 @@
+---
+title: Best practices
+description: The opinionated idioms that keep a Lunora app fast, safe, and reactive.
+---
+
+Lunora has a grain. Go with it and most performance, correctness, and security
+problems never appear — and the [Advisors](/docs/concepts/advisors) catch the
+ones that try to. This is the short list.
+
+## Schema first
+
+- **Define your data in `schema.ts` before writing functions.** Codegen derives
+  `api`, `Id<"table">`, `Doc<"table">`, and the typed `ctx.db` from it, so the
+  schema is what makes the whole app type-safe end to end. See
+  [Generated code](/docs/concepts/generated-code).
+- **Let the schema, not your handlers, enforce shape.** Optionality, relations,
+  and [constraints](/docs/concepts/constraints) belong in the table definition.
+
+## Reads
+
+- **Index every filtered read.** A `query(...).filter(...)` with no leading
+  `.withIndex()` loads every row and filters in memory — fine on ten rows, a
+  full-scan on a million. Declare the index and lead with it. The
+  `filter_without_index` advisor flags this for you.
+- **Index foreign keys you read by.** A FK column with no index leading with it
+  full-scans on every join (`unindexed_foreign_key`). See [Indexes](/docs/concepts/indexes).
+- **Prefer reactive queries over actions for reads.** A `query` auto-subscribes
+  clients and pushes deltas; an `action` returns a one-shot value with no
+  reactivity. If the UI should update when the data changes, it's a query.
+
+## Writes
+
+- **Keep mutations small and deterministic.** A `mutation` reads and writes the
+  database and nothing else. No `Date.now()`, `Math.random()`, or `fetch()` —
+  nondeterminism breaks caching and replay, and the
+  `nondeterministic_query_mutation` advisor will warn you. Pass a timestamp in as
+  an argument instead.
+- **Push side effects into actions.** External API calls, queues, sending mail,
+  anything non-deterministic or with the outside world — that's what an `action`
+  is for. See [Actions](/docs/concepts/actions). Have the action call back into a
+  `mutation` to persist the result.
+
+## Inputs and safety
+
+- **Validate every input with `v.*`.** A typed `.input({ … })` rejects malformed
+  args with a `400` before your handler runs. Never accept `v.any()` on a public
+  function — `public_arg_uses_any` flags it — and bound public strings with a
+  length `.check` so they can't be abused as a storage/DoS vector.
+- **Throw `LunoraError` for expected failures.** It carries a `code` and the
+  right status to the client; plain `Error`s are hidden behind a generic `500`.
+  See [Error handling](/docs/concepts/error-handling).
+- **Guard public mutations.** Rate-limit and (where relevant) CAPTCHA-protect
+  abuse-sensitive endpoints; the security advisors raise the urgency on
+  login/signup/reset names.
+
+## Scaling
+
+- **Start with the default single Durable Object.** It's the easiest topology to
+  reason about and is enough for most apps. Don't shard preemptively.
+- **Shard by tenant or room when you actually need to.** `.shardBy(key)`
+  partitions state per user/tenant/room so load spreads across many DOs. Pick a
+  key with even traffic — the `hot_shard` runtime advisor flags a key where one
+  shard dominates. See [Sharding](/docs/concepts/sharding).
+
+## Lean on Advisors
+
+You don't have to remember all of the above. The [Advisors](/docs/concepts/advisors)
+run the static set on every `lunora dev` save and on deploy, and the Studio
+computes the runtime set from live shard metrics — surfacing unindexed scans,
+missing guards, hot shards, and dead schema before they bite.
+
+## See also
+
+- [Queries & mutations](/docs/concepts/queries-mutations) — picking the right function kind.
+- [Actions](/docs/concepts/actions) — where side effects live.
+- [Indexes](/docs/concepts/indexes) — making reads fast.
+- [Sharding](/docs/concepts/sharding) — scaling state across Durable Objects.
+- [Error handling](/docs/concepts/error-handling) — expected vs. unexpected failures.
+- [Generated code](/docs/concepts/generated-code) — the schema-derived types.
+- [Advisors](/docs/concepts/advisors) — the lints that enforce these idioms.

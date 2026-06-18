@@ -1,0 +1,191 @@
+---
+title: Vector search
+description: Typed Vectorize indexes on ctx.vectors — automatic write sync, similarity search, and RAG with embeddings.
+---
+
+[`@lunora/vectors`](/docs/packages/vectors) is the Cloudflare
+[Vectorize](https://developers.cloudflare.com/vectorize/) adapter. You declare a
+typed vector index alongside a regular table, the adapter keeps it in sync on
+every write, and you run similarity search from any function handler via
+`ctx.vectors`. Together with [`@lunora/ai`](/docs/packages/ai) embeddings, that's
+everything you need for retrieval-augmented generation (RAG).
+
+```sh
+pnpm add @lunora/vectors
+```
+
+When your schema declares at least one vector index, codegen imports
+`@lunora/vectors` into the generated server and wires a typed `ctx.vectors` onto
+your query, mutation, and action contexts.
+
+## Declaring an index
+
+A vector index always names a source of text to embed. The common case is to
+embed one string column — chain `.vectorize` off `defineTable`. The `index` is
+the logical name (it must match a `vectorize` binding in `wrangler.jsonc`);
+`embed` is your own embedder.
+
+```ts
+// lunora/schema.ts
+import { defineSchema, defineTable, v } from "lunora/server";
+import { embed } from "../app/embed"; // your own embedder
+
+export default defineSchema({
+    docs: defineTable({
+        title: v.string(),
+        body: v.string(),
+        workspaceId: v.id("workspaces"),
+    })
+        .shardBy("workspaceId")
+        .vectorize("body", {
+            index: "docs-body",
+            dimensions: 1024,
+            metric: "cosine",
+            embed,
+            metadata: ["title", "workspaceId"], // mirrored into Vectorize metadata for filtering
+        }),
+});
+```
+
+When the embedded text is derived from multiple columns, use the standalone
+`defineVectorIndex(...)` form with a `source.select(row)` projection — see the
+[package reference](/docs/packages/vectors#standalone--definevectorindexoptions)
+for the full shape.
+
+## Automatic write sync
+
+You never upsert vectors by hand for declared indexes. On every `insert`,
+`update`, or `delete` to a table that sources an index, the adapter embeds the
+source and upserts under the row's id (or removes it on delete). The sync runs
+inline within the mutation; upserts/deletes are keyed by row id (idempotent), so
+the authoritative recovery from a transient Vectorize failure is simply
+re-running the (idempotent) write.
+
+> **Tenant isolation.** Vectorize indexes are account-global and shared by every
+> shard. In a multi-tenant / sharded app you **must** scope writes and queries
+> with a `namespace` (the shard/tenant key) — without it, one tenant's vectors
+> are queryable by another.
+
+## `ctx.vectors`
+
+The function context exposes the bridged search surface. The read half is
+available everywhere; the mutating half is gated by context kind:
+
+| Method                    | `QueryCtx` | `MutationCtx` / `ActionCtx` | Use                         |
+| ------------------------- | :--------: | :-------------------------: | --------------------------- |
+| `query(index, input)`     |     ✓      |              ✓              | Similarity search.          |
+| `getByIds(index, ids)`    |     ✓      |              ✓              | Fetch stored vectors by id. |
+| `upsert(index, input)`    |     —      |              ✓              | Manually upsert one vector. |
+| `upsertNow(index, input)` |     —      |              ✓              | Synchronous upsert.         |
+| `deleteByIds(index, ids)` |     —      |              ✓              | Remove vectors by id.       |
+
+A query gets a read-only `VectorSearchReader` (search + fetch); mutations and
+actions get the full `VectorSearch` (also upsert + delete). This matches the
+reactivity model — a query may not write — so search lives naturally in a
+reactive `query`.
+
+### Similarity search
+
+`query` takes either a precomputed `vector` or an `input` plus an `embed`
+function. `topK` is capped at 100; `filter` and `namespace` scope the search.
+
+```ts
+// lunora/searchDocs.ts
+import { query, v } from "lunora/server";
+import { embed } from "../app/embed";
+
+export const searchDocs = query.input({ q: v.string(), workspaceId: v.id("workspaces") }).query(async ({ ctx, args: { q, workspaceId } }) => {
+    const { matches } = await ctx.vectors.query("docs-body", {
+        input: q,
+        embed,
+        topK: 10,
+        namespace: workspaceId,
+        filter: { workspaceId },
+    });
+
+    return matches.map((m) => ({ id: m.id, score: m.score, ...m.metadata }));
+});
+```
+
+Each match carries `id`, `score`, and (by default) the index's indexed
+`metadata`. You must pass either `vector`, or both `input` and `embed`.
+
+## RAG with `@lunora/ai`
+
+The retrieval half of RAG is `ctx.vectors.query`; the embedding half is an
+external, non-deterministic call, so it lives on an **action**. Embed the user's
+question with [`@lunora/ai`](/docs/packages/ai), search with `ctx.vectors`, then
+feed the retrieved context into a generation call:
+
+```ts
+// lunora/answer.ts
+import { action, v } from "lunora/server";
+import { embed, generateText } from "@lunora/ai";
+
+export const answer = action.input({ q: v.string(), workspaceId: v.id("workspaces") }).action(async ({ ctx, args: { q, workspaceId } }) => {
+    // 1. Embed the question.
+    const { embedding } = await embed({
+        model: ctx.ai.embeddingModel("@cf/baai/bge-base-en-v1.5"),
+        value: q,
+    });
+
+    // 2. Retrieve the nearest chunks (scoped to the tenant).
+    const { matches } = await ctx.vectors.query("docs-body", {
+        vector: embedding,
+        topK: 5,
+        namespace: workspaceId,
+    });
+
+    const context = matches.map((m) => m.metadata?.title).join("\n");
+
+    // 3. Generate an answer grounded in the retrieved context.
+    const { text } = await generateText({
+        model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
+        prompt: `Answer using only this context:\n${context}\n\nQuestion: ${q}`,
+    });
+
+    return text;
+});
+```
+
+To index content you embed yourself (rather than the schema's automatic sync),
+pass the precomputed vector to `upsert` via its `embed` thunk:
+
+```ts
+const { embedding } = await embed({ model: ctx.ai.embeddingModel("@cf/baai/bge-base-en-v1.5"), value: text });
+await ctx.vectors.upsert("docs-body", { id, input: text, embed: async () => embedding });
+```
+
+## Binding & config wiring
+
+Each declared index needs a matching `vectorize` binding in `wrangler.jsonc`
+whose `index_name` equals the index name from your schema — `@lunora/vite`
+validates this, and a declared index with no binding fails the build.
+
+```jsonc
+// wrangler.jsonc
+{
+    "vectorize": [{ "binding": "DOCS_BODY", "index_name": "docs-body" }],
+}
+```
+
+The generated `createShardDO(config)` factory then takes a `vectors` thunk
+mapping each index name to its binding, wired from the worker entry:
+
+```ts
+import { createShardDO } from "./_generated/server";
+
+export const ShardDO = createShardDO({
+    vectors: (env) => ({ "docs-body": env.DOCS_BODY }),
+});
+```
+
+Omit the thunk and `ctx.vectors` throws a descriptive "no vectors configured"
+error on first use.
+
+## See also
+
+- [Queries & mutations](/docs/concepts/queries-mutations) — why search is on a query and embedding is on an action
+- [@lunora/vectors](/docs/packages/vectors) — full adapter reference (standalone indexes, sync internals, Studio panel)
+- [@lunora/ai](/docs/packages/ai) — embeddings and the AI SDK helpers used for RAG
+- [Deployment](/docs/deployment) — wiring the `vectorize` binding

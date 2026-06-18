@@ -1,0 +1,89 @@
+---
+title: Internal functions
+description: internalQuery / internalMutation / internalAction — server-only functions never exposed to the client.
+---
+
+Every `query`, `mutation`, and `action` you export is **public** by default —
+reachable from clients through the generated `api`. An **internal** function is
+the same in every way except its **visibility**: it is never exposed on `api`,
+the Durable Object's external RPC path rejects it, and it is reachable **only
+server-side** via `ctx.runQuery` / `ctx.runMutation` / `ctx.runAction` against
+the `internal` reference.
+
+Use them for privileged logic you don't want a client to call directly:
+post-webhook writes, scheduled jobs, fan-out helpers, anything that assumes a
+trusted caller.
+
+```ts
+import { internalMutation, internalQuery, v } from "lunora/server";
+
+export const byStripeId = internalQuery.input({ stripeId: v.string() }).query(async ({ ctx, args }) => {
+    return ctx.db
+        .query("customers")
+        .withIndex("by_stripe", (q) => q.eq("stripeId", args.stripeId))
+        .unique();
+});
+
+export const applyStripeSync = internalMutation.input({ id: v.id("customers"), remote: v.object({ plan: v.string() }) }).mutation(async ({ ctx, args }) => {
+    await ctx.db.patch(args.id, { plan: args.remote.plan });
+});
+```
+
+The three builders mirror their public counterparts and produce the same
+`ctx` — `internalQuery` gets a read-only `QueryCtx`, `internalMutation` a
+transactional `MutationCtx`, `internalAction` the side-effectful `ActionCtx`.
+
+| Public     | Internal           | `ctx`         |
+| ---------- | ------------------ | ------------- |
+| `query`    | `internalQuery`    | `QueryCtx`    |
+| `mutation` | `internalMutation` | `MutationCtx` |
+| `action`   | `internalAction`   | `ActionCtx`   |
+
+## Calling internal functions
+
+Internal functions are addressed through the generated `internal` namespace
+(the sibling of `api`), and can only be invoked from another function's `ctx`:
+
+```ts
+import { action, v } from "lunora/server";
+import { internal } from "@/lunora/_generated/api";
+
+export const syncCustomer = action.input({ stripeId: v.string() }).action(async ({ ctx, args }) => {
+    const customer = await ctx.runQuery(internal.customers.byStripeId, args);
+    const remote = await (await ctx.fetch(`https://api.stripe.com/v1/customers/${args.stripeId}`)).json();
+
+    await ctx.runMutation(internal.customers.applyStripeSync, { id: customer!._id, remote });
+});
+```
+
+There is no client equivalent — `internal.*` references exist only in
+server-side generated code. A client that tries to invoke an internal function
+by name is rejected at the RPC boundary, so visibility is a real security
+boundary, not just a naming convention.
+
+## Internal functions and scheduling
+
+The scheduler dispatches a function **server-side**, so its target is almost
+always internal. Schedule an `internal*` reference from a mutation or action:
+
+```ts
+import { mutation, v } from "lunora/server";
+import { internal } from "@/lunora/_generated/api";
+
+export const enqueueReport = mutation.input({ accountId: v.id("accounts") }).mutation(async ({ ctx, args }) => {
+    // Build the report off the request path — and don't expose the builder to clients.
+    await ctx.scheduler.runAfter(0, internal.reports.build, args);
+});
+```
+
+The same applies to cron jobs (`cronJobs`) and connection-lifecycle hooks
+(`onConnect` / `onDisconnect`), which are registered as internal mutations the
+runtime dispatches on a schedule or socket event rather than via a client call.
+
+## See also
+
+- [Queries & mutations](/docs/concepts/queries-mutations)
+- [Actions](/docs/concepts/actions)
+- [HTTP endpoints](/docs/concepts/http-endpoints)
+- [API: @lunora/server](/docs/packages/server)
+- [API: @lunora/scheduler](/docs/packages/scheduler)

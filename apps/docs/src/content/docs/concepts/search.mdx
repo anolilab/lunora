@@ -1,0 +1,78 @@
+---
+title: Full-text search
+description: Declare a search index on a table and run relevance-ordered full-text queries.
+---
+
+A `searchIndex` adds a full-text index over one string column so you can match
+documents by their words rather than by an exact key. Results come back ordered
+by **relevance**, with optional exact-match filtering on declared filter fields.
+
+## Declaring a search index
+
+Add `.searchIndex(name, { field, filterFields })` to a table. `field` is the
+column the full-text index covers; `filterFields` lists columns you can narrow
+by with an exact match inside the search query.
+
+```ts
+// lunora/schema.ts
+import { defineSchema, defineTable, v } from "lunora/server";
+
+export default defineSchema({
+    messages: defineTable({
+        channelId: v.id("channels"),
+        userId: v.id("users"),
+        text: v.string(),
+    })
+        .index("by_channel", ["channelId", "_creationTime"])
+        .searchIndex("search_text", {
+            field: "text",
+            filterFields: ["channelId"],
+        }),
+});
+```
+
+## Running a search query
+
+Use `.withSearchIndex(name, q => …)`. The builder's `.search(field, query)` runs
+the full-text match against the index's searchable field (call it exactly once);
+`.eq(field, value)` narrows by a declared filter field.
+
+```ts
+import { query, v } from "lunora/server";
+
+export const searchMessages = query.input({ channelId: v.id("channels"), term: v.string() }).query(async ({ ctx, args: { channelId, term } }) => {
+    return ctx.db
+        .query("messages")
+        .withSearchIndex("search_text", (q) => q.search("text", term).eq("channelId", channelId))
+        .take(20);
+});
+```
+
+## Filter fields
+
+Every column you want to filter by inside a search must be declared in
+`filterFields` — only then can you call `.eq(field, value)` on it in the search
+builder. They narrow the candidate set by an exact match before relevance
+scoring, so a per-channel or per-tenant search stays scoped.
+
+## Relevance ordering and `.take(n)`
+
+A search query returns rows **ordered by relevance** to the search term — the
+best match first. You cannot re-`.order()` it, and **`.paginate()` is not
+supported on a search query**. Bound the result set with `.take(n)` instead:
+
+```ts
+.withSearchIndex("search_text", (q) => q.search("text", term))
+.take(20);
+```
+
+`.collect()` and `.first()` also work; reach for `.take(n)` to cap how many
+top-ranked hits you return.
+
+## See also
+
+- [Schema](/docs/concepts/schema)
+- [Queries & mutations](/docs/concepts/queries-mutations)
+- [Relations](/docs/concepts/relations)
+- [Advisors](/docs/concepts/advisors)
+- [API: @lunora/server](/docs/packages/server)

@@ -1,0 +1,147 @@
+---
+title: Error handling
+description: Throwing inside handlers, how errors travel to the client, and reading error state without losing optimistic safety.
+---
+
+Errors in Lunora travel one direction — a handler throws on the server, the
+runtime maps it to a transport response, and the client surfaces it as a
+rejected promise (or as `error` on a hook). The only decision you make is
+**which kind of error you throw**, because that decides what the caller sees.
+
+| Throw                              | Caller sees                                   | Use for                                          |
+| ---------------------------------- | --------------------------------------------- | ------------------------------------------------ |
+| `LunoraError(code, message)`       | the `code` + `message`, with the right status | expected/application failures the client handles |
+| any other `Error` (or a raw value) | a generic `500` `INTERNAL`, message stripped  | unexpected bugs — never meant to reach the user  |
+
+## Throwing from a handler
+
+`LunoraError` is the canonical error type for procedures and middleware. Its
+`code` maps to an HTTP/RPC status automatically, so throwing one is all the
+wiring you need:
+
+```ts
+import { LunoraError, mutation, query, v } from "lunora/server";
+
+export const send = mutation.input({ channelId: v.id("channels"), text: v.string() }).mutation(async ({ ctx, args }) => {
+    if (!ctx.auth.user) {
+        throw new LunoraError("UNAUTHORIZED", "Sign in to post");
+    }
+
+    const channel = await ctx.db.get(args.channelId);
+
+    if (!channel) {
+        throw new LunoraError("NOT_FOUND", "That channel no longer exists");
+    }
+
+    await ctx.db.insert("messages", { ...args, userId: ctx.auth.user.id });
+});
+```
+
+The codes are a fixed set, each with a status attached:
+
+| Code                    | Status | Code                    | Status |
+| ----------------------- | ------ | ----------------------- | ------ |
+| `BAD_REQUEST`           | 400    | `CONFLICT`              | 409    |
+| `UNAUTHORIZED`          | 401    | `TOO_MANY_REQUESTS`     | 429    |
+| `FORBIDDEN`             | 403    | `UNPROCESSABLE`         | 422    |
+| `NOT_FOUND`             | 404    | `NOT_IMPLEMENTED`       | 501    |
+| `INTERNAL_SERVER_ERROR` | 500    | `COUNT_RLS_UNSUPPORTED` | 422    |
+
+## Expected vs. unexpected
+
+This split is deliberate and security-relevant. The runtime only echoes a
+thrown value's `code` and `message` to the client when it's **`LunoraError`-shaped**
+(`name === "LunoraError"` plus a string `code`). Everything else — a plain
+`throw new Error(...)`, a `TypeError` from a bug, a rejected `fetch` — is logged
+server-side and replaced with a generic `{ code: "INTERNAL", message: "Internal error" }`
+at status `500`. Arbitrary `Error.message` strings can carry stack traces, file
+paths, or internal identifiers, so they never reach the wire.
+
+The practical rule: **throw `LunoraError` for anything the client should be able
+to react to** (not-found, forbidden, validation, rate-limited). Let unexpected
+failures throw naturally — the runtime will hide their detail for you.
+
+Two failures you don't throw yourself:
+
+- **Input validation.** Args are checked against your `v.*` schema before the
+  handler runs; a mismatch surfaces as a `400` `BAD_REQUEST` without you writing
+  any code.
+- **Write conflicts.** When two mutations race the same row, the optimistic-
+  concurrency layer rejects the loser with code `CONFLICT` (409). The client
+  exposes `isConflictError(error)` so you can refetch-and-retry instead of
+  treating it as a hard failure.
+
+## Reading error state on the client
+
+A mutation call rejects with a normalized `Error` carrying the server's `code`,
+so a `try`/`catch` is enough for one-off calls:
+
+```tsx
+import { isConflictError } from "lunora/client";
+
+try {
+    await send({ channelId, text });
+} catch (error) {
+    if (isConflictError(error)) {
+        // lost a write race — refetch and retry
+    } else {
+        // error.message is the LunoraError message, or "Internal error"
+    }
+}
+```
+
+For rendering, the React hooks expose error state directly so you don't manage a
+separate `useState`.
+
+`useMutation` returns a callable with a `.pending` flag for in-flight UI; await
+it and `catch` to handle failure:
+
+```tsx
+import { useMutation } from "@lunora/react";
+import { api } from "@/lunora/_generated/api";
+
+const send = useMutation(api.messages.send);
+
+// send.pending is true while a call is in flight
+await send({ channelId, text });
+```
+
+`useSubscription` is the lower-level read hook and surfaces `{ data, error }`,
+so you render an error branch inline:
+
+```tsx
+import { useSubscription } from "@lunora/react";
+import { api } from "@/lunora/_generated/api";
+
+const { data, error } = useSubscription(api.messages.list, { channelId });
+
+if (error) return <Banner>{error.message}</Banner>;
+return <Messages rows={data ?? []} />;
+```
+
+## Optimistic updates roll back on rejection
+
+When a mutation carries an optimistic update, the client writes the optimistic
+value onto every subscribed query it touches **and records a rollback closure
+for each**. If the mutation rejects — a thrown `LunoraError`, a `CONFLICT`, a
+network failure — those closures fire and the cache reverts. You don't write any
+rollback code; a rejected mutation simply leaves the UI as it was.
+
+```tsx
+const send = useMutation(api.messages.send);
+
+await send({ channelId, text }, { optimistic: (current) => [...(current ?? []), draft] });
+// If this rejects, `draft` is removed from the list automatically.
+```
+
+The rollback is conservative: it only restores when no newer server delta has
+superseded the optimistic write and no later optimistic write has stacked on top
+of it, so concurrent activity never gets clobbered by a late-arriving rollback.
+
+## See also
+
+- [Queries & mutations](/docs/concepts/queries-mutations) — the three function kinds and `ctx`.
+- [Constraints](/docs/concepts/constraints) — declarative checks that fail closed.
+- [Offline-first](/docs/concepts/offline-first) — how queued mutations retry and surface failures.
+- [@lunora/react](/docs/packages/react) — `useMutation` / `useSubscription` / `.pending`.
+- [@lunora/client](/docs/packages/client) — `isConflictError` and the rejection envelope.

@@ -1,0 +1,106 @@
+---
+title: Pagination
+description: Keyset pagination with .paginate(options) — page through a query and build an infinite list on the client.
+---
+
+`.paginate(options)` is the terminal that turns any `ctx.db.query(table)` chain
+into a keyset-paginated read. Unlike `.collect()` (every row) or `.take(n)`
+(the first `n`), it returns one **page** plus an opaque cursor you pass back to
+fetch the next. Cursors are keyset, not offset — paging stays stable as rows are
+inserted or deleted ahead of the cursor.
+
+```ts
+import { query, v } from "lunora/server";
+
+export const list = query.input({ channelId: v.id("channels"), paginationOpts: v.any() }).query(async ({ ctx, args: { channelId, paginationOpts } }) => {
+    return ctx.db
+        .query("messages")
+        .withIndex("by_channel", (q) => q.eq("channelId", channelId))
+        .order("desc")
+        .paginate(paginationOpts);
+});
+```
+
+`.paginate()` composes with `.withIndex()`, `.filter()`, and `.order()` — page
+within the active index in the chosen direction.
+
+## `PaginationOptions`
+
+The argument to `.paginate()`:
+
+| Field      | Type             | Meaning                                                                                 |
+| ---------- | ---------------- | --------------------------------------------------------------------------------------- |
+| `numItems` | `number`         | Maximum rows to return for this page.                                                   |
+| `cursor`   | `string \| null` | Cursor from the prior page's `continueCursor`; `null`/omitted starts at the first page. |
+
+## `PaginationResult`
+
+What `.paginate()` resolves to:
+
+| Field            | Type             | Meaning                                                         |
+| ---------------- | ---------------- | --------------------------------------------------------------- |
+| `page`           | `T[]`            | The rows for this page.                                         |
+| `isDone`         | `boolean`        | `true` when this is the last page.                              |
+| `continueCursor` | `string \| null` | Cursor to pass back as the next `cursor`; `null` once `isDone`. |
+
+## Paging through a query
+
+Drive it from the first page (`cursor: null`) and feed `continueCursor` back in
+until `isDone`:
+
+```ts
+let cursor: string | null = null;
+
+do {
+    const { page, isDone, continueCursor } = await ctx.runQuery(api.messages.list, {
+        channelId,
+        paginationOpts: { numItems: 50, cursor },
+    });
+
+    for (const message of page) {
+        // … handle each row
+    }
+
+    cursor = continueCursor;
+    if (isDone) break;
+} while (cursor !== null);
+```
+
+## Load more / infinite lists on the client
+
+On the client a paginated list is just the same query re-run with the next
+cursor. The framework adapter hooks (`useQuery` in `@lunora/react`,
+`@lunora/vue`, `@lunora/solid`, `@lunora/svelte`) wrap this for you: you hold the
+accumulated `page` arrays, track the latest `continueCursor`, and call "load
+more" to re-run the query with `cursor` set to it. When `isDone` is `true`, hide
+the button.
+
+```ts
+// Framework-neutral sketch of the "load more" loop the adapter hooks implement.
+const pages: Message[] = [];
+let cursor: string | null = null;
+let isDone = false;
+
+async function loadMore() {
+    if (isDone) return;
+    const result = await client.query(api.messages.list, {
+        channelId,
+        paginationOpts: { numItems: 50, cursor },
+    });
+    pages.push(...result.page);
+    cursor = result.continueCursor;
+    isDone = result.isDone;
+}
+```
+
+Because queries are reactive, each loaded page stays live — a mutation that
+touches a row already on screen re-runs the query and pushes the delta to the
+client without re-fetching the whole list.
+
+## See also
+
+- [Schema](/docs/concepts/schema)
+- [Queries & mutations](/docs/concepts/queries-mutations)
+- [Relations](/docs/concepts/relations)
+- [Advisors](/docs/concepts/advisors)
+- [API: @lunora/server](/docs/packages/server)

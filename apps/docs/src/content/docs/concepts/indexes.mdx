@@ -1,0 +1,109 @@
+---
+title: Indexes
+description: Declare B-tree indexes on tables and query them with withIndex — every filtered read should hit one.
+---
+
+An index is a sorted, B-tree-backed lookup over one or more columns. Declare it
+on a table, then read through it with `.withIndex()` so the query seeks the rows
+it needs instead of scanning the whole table and filtering in memory.
+
+## Declaring an index
+
+`.index(name, [fields], { unique? })` adds a secondary index. List the columns in
+the order you'll constrain them — the index is ordered left to right, so the
+leftmost field must be the one you equality-match first.
+
+```ts
+// lunora/schema.ts
+import { defineSchema, defineTable, v } from "lunora/server";
+
+export default defineSchema({
+    messages: defineTable({
+        channelId: v.id("channels"),
+        userId: v.id("users"),
+        text: v.string(),
+    })
+        .index("by_channel", ["channelId", "_creationTime"])
+        .index("by_user", ["userId"]),
+
+    users: defineTable({
+        email: v.string(),
+        name: v.string(),
+    }).index("by_email", ["email"], { unique: true }),
+});
+```
+
+`{ unique: true }` additionally enforces that no two rows share the indexed
+value.
+
+## Querying with `withIndex`
+
+`q.withIndex(name, q => …)` selects the index and builds a range over its
+leading columns. The range builder offers `.eq`, `.gt`, `.gte`, `.lt`, `.lte` —
+equality-match the leading fields, then optionally bound the next one:
+
+```ts
+import { query, v } from "lunora/server";
+
+export const recent = query.input({ channelId: v.id("channels"), since: v.number() }).query(async ({ ctx, args: { channelId, since } }) => {
+    return ctx.db
+        .query("messages")
+        .withIndex("by_channel", (q) => q.eq("channelId", channelId).gt("_creationTime", since))
+        .order("desc")
+        .take(50);
+});
+```
+
+`.withIndex()` composes with `.order()`, `.filter()`, and every terminal
+(`.collect()`, `.first()`, `.take(n)`, `.paginate()`, `.unique()`).
+
+## Why every filtered read should hit an index
+
+`ctx.db.query(table).filter(...)` with no `.withIndex()` first loads **every**
+row and filters in memory — fine for a handful of rows, a problem as the table
+grows. A `.withIndex()` read seeks straight to the matching range. As a rule,
+any read that constrains a column should constrain it through an index, and any
+foreign-key column you read by should have an index leading with it.
+
+## How the Advisors catch unindexed reads
+
+The [Advisors](/docs/concepts/advisors) lint your schema and discovered queries
+at build time and surface these in the Studio:
+
+- **`filter_without_index`** (warn) — a `query(...).filter(...)` with no
+  `.withIndex()` first; it loads every row and filters in memory.
+- **`unindexed_foreign_key`** (info) — a foreign-key column with no index leading
+  with it, so reads on it full-scan. (Honours SQLite's leftmost-prefix rule;
+  FKs onto `_id` are exempt.)
+- **`empty_index`** (warn) and **`duplicate_index`** (info) catch indexes that
+  narrow nothing or are a redundant prefix of another.
+
+At runtime, **`index_utilization`** flags a dead index (zero recorded reads) and
+a hot unindexed scan (a table full-scanned many times with no index).
+
+## Aggregate indexes
+
+Beyond ordinary secondary indexes, a table can declare an **aggregate index**
+via `.aggregateIndex(name, { by, op, field, where })`. The runtime keeps a
+counter row per `by` group (maintained by triggers on every write), so reads
+whose `where` keys all participate in `by` are answered in O(1) from the counter
+table without scanning rows — `count` (field-less), `sum`/`min`/`max`/`avg` (take
+a `field`).
+
+```ts
+messages: defineTable({
+    channelId: v.id("channels"),
+    userId: v.id("users"),
+    text: v.string(),
+})
+    .index("by_channel", ["channelId", "_creationTime"])
+    .aggregateIndex("count_by_channel", { by: ["channelId"] });
+```
+
+## See also
+
+- [Schema](/docs/concepts/schema)
+- [Queries & mutations](/docs/concepts/queries-mutations)
+- [Relations](/docs/concepts/relations)
+- [Advisors](/docs/concepts/advisors)
+- [API: @lunora/server](/docs/packages/server)

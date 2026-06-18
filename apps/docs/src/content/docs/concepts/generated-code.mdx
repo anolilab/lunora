@@ -1,0 +1,112 @@
+---
+title: Generated code
+description: What @lunora/codegen emits from your schema.ts, and how api / Id / Doc keep server and client in sync.
+---
+
+`@lunora/codegen` reads your `schema.ts` (and the functions it discovers) and
+emits a `_generated/` directory next to it. You **never edit these files** — they
+are derived artifacts, regenerated on every save. What they buy you is end-to-end
+type safety: a query's argument and return types are inferred on the server and
+handed to the client through `api`, so a rename or a wrong arg is a compile
+error, not a runtime surprise.
+
+Three files are emitted from `schema.ts`:
+
+| File           | What it gives you                                                                |
+| -------------- | -------------------------------------------------------------------------------- |
+| `api.ts`       | the typed `api.*` (public) and `internal.*` (server-only) function registries    |
+| `server.ts`    | the project-typed server helpers — `query`/`mutation`/`action`, `v`, typed `ctx` |
+| `dataModel.ts` | the data-model types — `Id<"table">`, `Doc<"table">`, and insert/document shapes |
+
+## `api.ts` — function references
+
+`api` is a typed registry of your **public** functions; `internal` is the same
+registry for functions you mark internal. Each entry is a `FunctionReference`
+carrying the function's kind, argument type, and return type — that's what lets a
+client call hooks with full inference:
+
+```tsx
+import { useQuery } from "@lunora/react";
+import { api } from "@/lunora/_generated/api";
+
+// args are checked against the query's input validator; the result is typed.
+const messages = useQuery(api.messages.list, { channelId });
+```
+
+`api` and `internal` are the same proxy at runtime — visibility is enforced
+server-side at dispatch, not in the reference. Splitting the _types_ is what
+keeps internal functions off the client-facing `api` surface, so you can't
+accidentally call one from the browser. Internal functions are reachable only
+server-side via `ctx.runQuery` / `ctx.runMutation` / `ctx.runAction`, passing an
+`internal.*` reference.
+
+## `server.ts` — typed helpers
+
+`server.ts` re-exports the procedure builders and `v` validators **bound to your
+schema**, so `ctx.db` knows your tables. Author functions importing from the
+generated `server` (not the base package) and `ctx.db.query("messages")`,
+`ctx.db.insert("messages", …)`, and `ctx.db.get(id)` are all typed against your
+real schema with no casts.
+
+## `dataModel.ts` — `Id` and `Doc`
+
+Two types you reach for constantly:
+
+- **`Id<"table">`** — a branded string id. It carries its table name in the type,
+  so `ctx.db.get(id)` resolves to the right document type and you can't pass a
+  `users` id where a `messages` id is expected.
+- **`Doc<"table">`** — the full stored document shape for a table, including the
+  built-in `_id` and `_creationTime`.
+
+```ts
+import type { Doc, Id } from "@/lunora/_generated/dataModel";
+
+function format(message: Doc<"messages">): string {
+    const author: Id<"users"> = message.userId;
+    return `${author}: ${message.text}`;
+}
+```
+
+## Importing the generated code
+
+The CLI scaffolds your functions under `lunora/`, with `_generated/` alongside.
+Import `api`/`internal` from `_generated/api`, data-model types from
+`_generated/dataModel`, and the typed builders from `_generated/server`. Most
+projects alias the directory (e.g. `@/lunora/_generated/*`).
+
+## `lunora/*` vs `@lunora/*` imports
+
+Codegen detects whether your project depends on the unscoped **`lunora`**
+umbrella package or on the granular **`@lunora/*`** packages, by inspecting the
+project's declared dependencies, and emits matching imports in `_generated/*`:
+
+- depend on `lunora` → the generated files import from `lunora/server`,
+  `lunora/server/types`, `lunora/client`, etc.
+- depend on `@lunora/server`, `@lunora/client`, … → they import from
+  `@lunora/server`, `@lunora/server/types`, `@lunora/client`, etc.
+
+This is opt-in and fully backward-compatible — switching to the umbrella changes
+only the import specifiers in the generated code, never your function code.
+
+## Regenerating
+
+You rarely run codegen by hand. The Vite plugin (`@lunora/vite`) regenerates
+`_generated/*` on every change to `schema.ts` or your functions during
+`lunora dev`, and codegen also runs on deploy. The
+[Advisors](/docs/concepts/advisors) static lints run as part of the same pass, so
+schema problems show up the moment you save.
+
+For CI, scripts, or a manual refresh, run it directly:
+
+```bash
+lunora codegen
+```
+
+## See also
+
+- [Schema](/docs/concepts/schema) — `defineSchema` / `defineTable`, the input to codegen.
+- [Queries & mutations](/docs/concepts/queries-mutations) — the functions `api` references.
+- [Indexes](/docs/concepts/indexes) — what the typed `ctx.db` query builder exposes.
+- [@lunora/codegen](/docs/packages/codegen) — the emitter package.
+- [@lunora/react](/docs/packages/react) — consuming `api` from hooks.
+- [Advisors](/docs/concepts/advisors) — the static lints run during codegen.
