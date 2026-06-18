@@ -7,7 +7,6 @@ import { useState } from "react";
 import AgentPanel from "@/components/sections/agent-panel";
 import { Pill } from "@/components/sections/langbase";
 import Reveal from "@/components/sections/reveal";
-import SpaceBackdrop from "@/components/sections/space-backdrop";
 
 /**
  * Hero: a centered headline + CTAs over a faint scenic backdrop, then the
@@ -39,10 +38,8 @@ const InstallCommand: FC = () => {
     );
 };
 
-const HeroLangbase: FC = () => (
+const Hero: FC = () => (
     <section className="relative border-t border-white/[0.08] bg-[#0e0e11]" data-nav-theme="dark">
-        <SpaceBackdrop className="absolute top-0 left-1/2 z-0 h-[48rem] w-screen -translate-x-1/2" fade id="photo-1708559831534-44c30eb3ab0e" opacity={0.4} />
-
         <div className="relative z-10 mx-auto flex max-w-4xl flex-col items-center gap-6 px-5 pt-40 pb-14 text-center sm:pt-48">
             <p className="sr-only">
                 Lunora is a type-safe, real-time backend framework on Cloudflare Workers and Durable Objects with a Vite-first developer experience. Define a
@@ -79,4 +76,4 @@ const HeroLangbase: FC = () => (
     </section>
 );
 
-export default HeroLangbase;
+export default Hero;

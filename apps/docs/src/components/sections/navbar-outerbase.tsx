@@ -359,7 +359,7 @@ const Navbar = () => {
 
     return (
         <header className="fixed inset-x-0 top-0 z-100" data-theme={light ? "light" : "dark"} onMouseLeave={scheduleClose}>
-            <div className="relative mx-auto flex h-16 max-w-7xl items-center px-6">
+            <div className="relative mx-auto flex h-16 max-w-6xl items-center px-5">
                 <Logo light={light} pathname={pathname} />
 
                 <nav aria-label="Primary navigation" className="absolute left-1/2 hidden -translate-x-1/2 items-center lg:flex">

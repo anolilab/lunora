@@ -12,7 +12,7 @@ import CodeView from "@/components/sections/code-view";
 import { ClosingCta, SectionHead } from "@/components/sections/langbase";
 import Reveal from "@/components/sections/reveal";
 import FrameworkStrip from "@/pages/home/sections/framework-strip";
-import HeroLangbase from "@/pages/home/sections/hero-langbase";
+import Hero from "@/pages/home/sections/hero";
 import HowItWorks from "@/pages/home/sections/how-it-works";
 import SupportSection from "@/pages/home/sections/support";
 
@@ -95,6 +95,14 @@ const Showcase: FC<{ children: ReactNode; className?: string }> = ({ children, c
     </section>
 );
 
+const HatchSpacer: FC = () => (
+    <div
+        aria-hidden="true"
+        className="h-16 w-full border-t border-white/[0.08] bg-[#0e0e11]"
+        style={{ backgroundImage: "repeating-linear-gradient(135deg, rgba(46,48,56,0.45) 0 1px, rgba(0,0,0,0) 1px 8px)" }}
+    />
+);
+
 const Home: FC = () => (
     <div className="relative overflow-x-clip bg-[#0e0e11]" data-theme="dark">
         {/* vertical guide lines at the container edges, full page height */}
@@ -103,8 +111,10 @@ const Home: FC = () => (
             className="pointer-events-none absolute inset-y-0 left-1/2 z-20 hidden w-full max-w-6xl -translate-x-1/2 border-x border-white/[0.08] lg:block"
         />
 
-        <HeroLangbase />
+        <Hero />
         <FrameworkStrip />
+
+        <HatchSpacer />
 
         {/* feature bento */}
         <Showcase className="py-24">
@@ -130,6 +140,8 @@ const Home: FC = () => (
             </div>
         </Showcase>
 
+        <HatchSpacer />
+
         {/* how it works */}
         <Showcase className="py-24">
             <div className="mx-auto max-w-6xl px-5 lg:px-0">
@@ -139,6 +151,8 @@ const Home: FC = () => (
                 </div>
             </div>
         </Showcase>
+
+        <HatchSpacer />
 
         {/* integrations */}
         <Showcase className="py-24">
@@ -162,7 +176,11 @@ const Home: FC = () => (
             </div>
         </Showcase>
 
+        <HatchSpacer />
+
         <SupportSection />
+
+        <HatchSpacer />
 
         <ClosingCta />
     </div>

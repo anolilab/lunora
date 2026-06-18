@@ -258,10 +258,10 @@ const AgentPanel: FC = () => {
     };
 
     return (
-        <div className="relative mx-auto w-[90vw] max-w-[1100px] border-x border-white/10 md:w-[80vw]">
-            <div className="grid grid-cols-1 md:h-[540px] md:grid-cols-[1.2fr_1fr]">
+        <div className="relative mx-auto w-full max-w-6xl px-5 lg:px-0">
+            <div className="grid grid-cols-1 gap-4 md:h-[540px] md:grid-cols-[1.2fr_1fr]">
                 {/* code — full height */}
-                <div className="flex min-h-0 flex-col border-white/10 md:border-r">
+                <div className="flex min-h-0 flex-col border border-white/10 lg:border-l-0">
                     <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/10">
                         <div className="flex items-center gap-2 px-4">
                             <span className="size-3 rounded-full border border-white/10 bg-white/25" />
@@ -313,9 +313,9 @@ const AgentPanel: FC = () => {
                 </div>
 
                 {/* right — app over table */}
-                <div className="flex min-h-0 flex-col border-t border-white/10 md:border-t-0">
+                <div className="flex min-h-0 flex-col gap-4">
                     {/* app */}
-                    <div className="flex min-h-0 flex-[1.1] flex-col">
+                    <div className="flex min-h-0 flex-[1.1] flex-col border border-white/10 lg:border-r-0">
                         <div className="flex h-14 shrink-0 items-center justify-between border-b border-white/10 px-4">
                             <span className="font-mono text-xs tracking-wide text-white/45">app · todos</span>
                             <span className="flex items-center gap-1.5 font-mono text-[11px] text-sky-sapphire">
@@ -371,7 +371,7 @@ const AgentPanel: FC = () => {
                     </div>
 
                     {/* table — mirrors the same data */}
-                    <div className="flex min-h-0 flex-1 flex-col border-t border-white/10">
+                    <div className="flex min-h-0 flex-1 flex-col border border-white/10 lg:border-r-0">
                         <div className="flex h-9 shrink-0 items-center justify-between border-b border-white/10 px-4">
                             <span className="flex items-center gap-2">
                                 <span className="size-2 bg-crimson-energy/70" />
