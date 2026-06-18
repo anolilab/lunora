@@ -209,10 +209,28 @@ function transformPageTree(root: PageTree.Root): PageTree.Root {
         }
 
         if (item.type === "folder") {
+            const index = item.index ? mapNode(item.index) : undefined;
+            const children = item.children.map(mapNode);
+
+            // Flatten a folder that only wraps its own index page (e.g. the
+            // per-package "Server" → "@lunora/server" folders) into a single
+            // link, keeping the folder's clean name. Folders with extra pages
+            // (auth) or separators/subfolders (Packages) are left untouched.
+            const pageUrls = new Set([index, ...children].filter((node) => node?.type === "page").map((node) => (node as PageTree.Item).url));
+            const hasNonPageChild = children.some((child) => child.type !== "page");
+
+            if (pageUrls.size === 1 && !hasNonPageChild) {
+                const page = index?.type === "page" ? index : children.find((child) => child.type === "page");
+
+                if (page) {
+                    return { ...page, name: item.name } as unknown as T;
+                }
+            }
+
             return {
                 ...item,
-                index: item.index ? mapNode(item.index) : undefined,
-                children: item.children.map(mapNode),
+                index,
+                children,
             };
         }
 
