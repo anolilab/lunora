@@ -5,6 +5,9 @@ import browserCollections from "fumadocs-mdx:collections/browser";
 import { DocsLayout } from "fumadocs-ui/layouts/notebook";
 import defaultMdxComponents from "fumadocs-ui/mdx";
 import { DocsBody, DocsDescription, DocsPage, DocsTitle } from "fumadocs-ui/page";
+import { Step, Steps } from "fumadocs-ui/components/steps";
+import { Tab, Tabs } from "fumadocs-ui/components/tabs";
+import { TypeTable } from "fumadocs-ui/components/type-table";
 import type { CSSProperties } from "react";
 import { useMemo } from "react";
 
@@ -115,6 +118,11 @@ const clientLoader = browserCollections.docs.createClientLoader({
                     <MDX
                         components={{
                             ...defaultMdxComponents,
+                            Step,
+                            Steps,
+                            Tab,
+                            Tabs,
+                            TypeTable,
                         }}
                     />
                 </DocsBody>

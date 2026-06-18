@@ -11,12 +11,39 @@ all pointing at a `wrangler.jsonc` you can deploy straight to your own account.
 
 - **Node** `^22.14.0 || >=24.10.0`
 - **pnpm** `>=10.32.1`
-- A Cloudflare account (Free plan works for development)
+- A Cloudflare account (the Free plan works for development)
 
-## Scaffold
+<Steps>
+
+<Step>
+
+### Scaffold
+
+Create a project from the official template:
+
+<Tabs items={["pnpm", "npm", "yarn", "bun"]}>
+
+```bash tab="pnpm"
+pnpm create lunora@latest my-app
+```
+
+```bash tab="npm"
+npm create lunora@latest my-app
+```
+
+```bash tab="yarn"
+yarn create lunora my-app
+```
+
+```bash tab="bun"
+bun create lunora@latest my-app
+```
+
+</Tabs>
+
+Then install and start the dev loop:
 
 ```bash
-pnpm create lunora@latest my-app
 cd my-app
 pnpm install
 pnpm dev
@@ -37,22 +64,36 @@ my-app/
 └── vite.config.ts         # lunora() Vite plugin
 ```
 
-## Run
+</Step>
+
+<Step>
+
+### Run
 
 `pnpm dev` boots Vite and Wrangler in one terminal. Edits to `lunora/schema.ts`
-trigger codegen and a typed-API hot reload within ~200 ms. Throw inside a
-handler and the `@visulima/vite-overlay` integration shows a mapped source
-frame.
+trigger codegen and a typed-API hot reload within ~200 ms.
 
-## Deploy
+<Callout type="info">
+    Throw inside a handler and the `@visulima/vite-overlay` integration shows a mapped source frame pointing at your code, not the bundle.
+</Callout>
+
+</Step>
+
+<Step>
+
+### Deploy
 
 ```bash
 pnpm lunora deploy
 ```
 
-Under the hood this calls `wrangler deploy`, runs pending D1 migrations, and
-publishes the Worker. Everything lives on your account, reachable through your
-own `*.workers.dev` hostname or a custom domain.
+This calls `wrangler deploy`, runs pending D1 migrations, and publishes the
+Worker. Everything lives on your account, reachable through your own
+`*.workers.dev` hostname or a custom domain.
+
+</Step>
+
+</Steps>
 
 ## See also
 
