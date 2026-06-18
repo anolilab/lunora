@@ -224,12 +224,24 @@
 #nd-sidebar {
     background-color: var(--color-dark-coal);
     border-color: transparent;
+
+    /* The sidebar panel is absolutely pinned to the viewport top, behind the
+       fixed h-16 navbar; drop it below the navbar so its items aren't hidden. */
+    top: 4rem;
+    height: calc(100dvh - 4rem);
 }
 
 /* Docs use the full page width — drop fumadocs' fixed ~1285px frame cap so the
    sidebar, content, and TOC span edge to edge (paired with --fd-layout-width: 100%). */
 [class*="max-w-[1285px]"] {
     max-width: none !important;
+}
+
+/* The page article starts at viewport top (under the fixed h-16 navbar); its
+   default top padding (pt-14) is less than the navbar, so the breadcrumb tucks
+   under it. Clear the navbar plus a little breathing room. */
+#nd-page {
+    padding-top: 5rem;
 }
 
 #nd-subnav > div {
