@@ -194,7 +194,9 @@ const Page = () => {
 };
 
 function transformPageTree(root: PageTree.Root): PageTree.Root {
-    function mapNode<T extends PageTree.Node>(item: T): T {
+    // Returns a PageTree.Node (not the input's narrowed type): the flatten branch
+    // can turn a folder into a page, so the contract is Node → Node.
+    function mapNode(item: PageTree.Node): PageTree.Node {
         if (typeof item.icon === "string") {
             item = {
                 ...item,
@@ -208,33 +210,30 @@ function transformPageTree(root: PageTree.Root): PageTree.Root {
             };
         }
 
-        if (item.type === "folder") {
-            const index = item.index ? mapNode(item.index) : undefined;
-            const children = item.children.map(mapNode);
-
-            // Flatten a folder that only wraps its own index page (e.g. the
-            // per-package "Server" → "@lunora/server" folders) into a single
-            // link, keeping the folder's clean name. Folders with extra pages
-            // (auth) or separators/subfolders (Packages) are left untouched.
-            const pageUrls = new Set([index, ...children].filter((node) => node?.type === "page").map((node) => (node as PageTree.Item).url));
-            const hasNonPageChild = children.some((child) => child.type !== "page");
-
-            if (pageUrls.size === 1 && !hasNonPageChild) {
-                const page = index?.type === "page" ? index : children.find((child) => child.type === "page");
-
-                if (page) {
-                    return { ...page, name: item.name } as unknown as T;
-                }
-            }
-
-            return {
-                ...item,
-                index,
-                children,
-            };
+        if (item.type !== "folder") {
+            return item;
         }
 
-        return item;
+        const index = item.index ? (mapNode(item.index) as PageTree.Item) : undefined;
+        const children = item.children.map(mapNode);
+
+        // Flatten a folder that only wraps its own index page (e.g. the
+        // per-package "Server" → "@lunora/server" folders) into a single link,
+        // keeping the folder's clean name. fumadocs lists the index both as
+        // `index` and as a child, so they dedupe to one URL. Folders with extra
+        // pages (auth) or separators/subfolders (Packages) are left untouched.
+        const pages = [index, ...children].filter((node): node is PageTree.Item => node?.type === "page");
+        const hasNonPageChild = children.some((child) => child.type !== "page");
+
+        if (!hasNonPageChild && new Set(pages.map((page) => page.url)).size === 1 && pages[0]) {
+            return { ...pages[0], name: item.name };
+        }
+
+        return {
+            ...item,
+            index,
+            children,
+        };
     }
 
     return {
