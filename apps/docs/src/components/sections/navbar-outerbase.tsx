@@ -165,10 +165,10 @@ const Logo = ({ light, pathname }: { light: boolean; pathname: string }) => {
                 </Link>
             </div>
             {isOpen && (
-                <ul className="logo-context-menu absolute top-12 -left-2 z-10 block w-52 rounded-xl border border-white/10 bg-[hsl(240_18%_8%)] p-2 text-white shadow-xl">
+                <ul className="logo-context-menu absolute top-12 -left-2 z-10 block w-52 rounded-none border border-white/10 bg-[hsl(240_18%_8%)] p-2 text-white shadow-xl">
                     <li>
                         <button
-                            className={cn(itemClass, "w-full cursor-pointer rounded-lg")}
+                            className={cn(itemClass, "w-full cursor-pointer rounded-none")}
                             onClick={() => navigator.clipboard.writeText(lunoraLogoRaw)}
                             type="button"
                         >
@@ -179,12 +179,12 @@ const Logo = ({ light, pathname }: { light: boolean; pathname: string }) => {
                         <hr className="border-white/10" />
                     </li>
                     <li>
-                        <Link className={cn(itemClass, "rounded-lg")} target="_blank" to="/brand">
+                        <Link className={cn(itemClass, "rounded-none")} target="_blank" to="/brand">
                             <Signature className="h-4 w-4" /> Brand Guidelines
                         </Link>
                     </li>
                     <li>
-                        <Link className={cn(itemClass, "rounded-lg")} to="/">
+                        <Link className={cn(itemClass, "rounded-none")} to="/">
                             <Home className="h-4 w-4" /> Home Page
                         </Link>
                     </li>
@@ -197,7 +197,7 @@ const Logo = ({ light, pathname }: { light: boolean; pathname: string }) => {
 const LeafLink = ({ leaf, onNavigate }: { leaf: NavLeaf; onNavigate?: () => void }) => {
     const content = (
         <>
-            <span className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-white/80 transition-colors group-hover/leaf:border-white/20 group-hover/leaf:text-white [&>svg]:size-5">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-none border border-white/10 bg-white/[0.04] text-white/80 transition-colors group-hover/leaf:border-white/20 group-hover/leaf:text-white [&>svg]:size-5">
                 {leaf.icon}
             </span>
             <span className="flex flex-col gap-0.5">
@@ -206,7 +206,7 @@ const LeafLink = ({ leaf, onNavigate }: { leaf: NavLeaf; onNavigate?: () => void
             </span>
         </>
     );
-    const className = "group/leaf flex items-start gap-3 rounded-xl p-3 no-underline transition-colors hover:bg-white/[0.05]";
+    const className = "group/leaf flex items-start gap-3 rounded-none p-3 no-underline transition-colors hover:bg-white/[0.05]";
 
     return leaf.href.startsWith("http") ? (
         <a className={className} href={leaf.href} onClick={onNavigate} rel="noreferrer" target="_blank">
@@ -237,7 +237,7 @@ const FeatureCard = ({ feature, single }: { feature: NavFeature; single: boolean
         </>
     );
     const className = cn(
-        "group/feat relative flex min-h-[440px] flex-col justify-end overflow-hidden rounded-xl border border-white/[0.06] no-underline",
+        "group/feat relative flex min-h-[440px] flex-col justify-end overflow-hidden rounded-none border border-white/[0.06] no-underline",
         single ? "w-[420px]" : "w-[244px]",
     );
 
@@ -269,7 +269,9 @@ const MegaPanel = ({ column }: { column: NavColumn }) => (
     </div>
 );
 
-const Kbd = ({ children }: { children: ReactNode }) => <kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[10px] text-white/70">{children}</kbd>;
+const Kbd = ({ children }: { children: ReactNode }) => (
+    <kbd className="rounded-none bg-white/10 px-1.5 py-0.5 font-mono text-[10px] text-white/70">{children}</kbd>
+);
 
 const SearchButton = ({ light }: { light: boolean }) => {
     const { setOpenSearch } = useSearchContext();
@@ -278,7 +280,7 @@ const SearchButton = ({ light }: { light: boolean }) => {
         <button
             aria-label="Search"
             className={cn(
-                "flex size-9 items-center justify-center rounded-full transition-colors",
+                "flex size-9 items-center justify-center rounded-none transition-colors",
                 light ? "text-black/60 hover:bg-black/[0.05]" : "text-white/70 hover:bg-white/[0.08] hover:text-white",
             )}
             onClick={() => {
@@ -391,7 +393,7 @@ const Navbar = () => {
                     <a
                         aria-label={`GitHub repository (${formatStars(stats.stars)} stars)`}
                         className={cn(
-                            "flex h-9 items-center gap-1.5 rounded-full px-4 text-sm font-medium transition-colors",
+                            "flex h-9 items-center gap-1.5 rounded-none px-4 text-sm font-medium transition-colors",
                             light ? "bg-neutral-900 text-white hover:bg-neutral-800" : "bg-white text-neutral-900 hover:bg-white/90",
                         )}
                         href="https://github.com/anolilab/lunora"
@@ -401,7 +403,7 @@ const Navbar = () => {
                         <GitHubLogoIcon className="size-4 fill-current" title="Lunora on GitHub" />
                         <span className="font-mono tabular-nums">{formatStars(stats.stars)}</span>
                     </a>
-                    <Button asChild className="h-9 gap-1 rounded-full px-4 text-sm font-semibold" variant="default">
+                    <Button asChild className="h-9 gap-1 rounded-none px-4 text-sm font-semibold" variant="default">
                         <Link to="/docs/$">
                             Get started
                             <ChevronRight className="size-4" />
@@ -412,7 +414,7 @@ const Navbar = () => {
                 <button
                     aria-label="Open menu"
                     className={cn(
-                        "ml-auto flex size-9 items-center justify-center rounded-full lg:hidden",
+                        "ml-auto flex size-9 items-center justify-center rounded-none lg:hidden",
                         light ? "text-black/70 hover:bg-black/[0.05]" : "text-white/80 hover:bg-white/10",
                     )}
                     onClick={() => {
@@ -436,7 +438,7 @@ const Navbar = () => {
                             transition={reduceMotion ? { duration: 0 } : { duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
                         >
                             <motion.div
-                                className="overflow-hidden rounded-2xl border border-white/10 bg-[hsl(240_22%_5%)] p-2 shadow-2xl shadow-black/70"
+                                className="overflow-hidden rounded-none border border-white/10 bg-[hsl(240_22%_5%)] p-2 shadow-2xl shadow-black/70"
                                 layout
                                 transition={reduceMotion ? { duration: 0 } : { duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
                             >
@@ -465,7 +467,7 @@ const Navbar = () => {
                         <Logo light={false} pathname={pathname} />
                         <button
                             aria-label="Close menu"
-                            className="flex size-10 items-center justify-center rounded-full text-white/80 transition-colors hover:bg-white/10"
+                            className="flex size-10 items-center justify-center rounded-none text-white/80 transition-colors hover:bg-white/10"
                             onClick={() => {
                                 setIsMobileMenuOpen(false);
                             }}
@@ -492,13 +494,13 @@ const Navbar = () => {
                             </div>
                         ))}
                         <div className="mt-6 flex flex-col gap-2">
-                            <Button asChild className="h-11 gap-2 rounded-full border-white/15 bg-transparent text-sm font-medium text-white" variant="outline">
+                            <Button asChild className="h-11 gap-2 rounded-none border-white/15 bg-transparent text-sm font-medium text-white" variant="outline">
                                 <a href="https://github.com/anolilab/lunora" rel="noreferrer" target="_blank">
                                     <GitHubLogoIcon className="size-4 fill-current" title="Lunora on GitHub" />
                                     Star on GitHub
                                 </a>
                             </Button>
-                            <Button asChild className="h-11 gap-1 rounded-full text-sm font-semibold" variant="default">
+                            <Button asChild className="h-11 gap-1 rounded-none text-sm font-semibold" variant="default">
                                 <Link
                                     onClick={() => {
                                         setIsMobileMenuOpen(false);
