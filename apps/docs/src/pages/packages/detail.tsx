@@ -240,24 +240,31 @@ const PackageDetail: FC = () => {
                 </div>
             </section>
 
-            <HatchSpacer />
+            {pkg.features.length > 0 ? (
+                <>
+                    <HatchSpacer />
 
-            {/* features */}
-            <section className="border-t border-white/[0.08]" data-nav-theme="dark">
-                <div className="mx-auto max-w-6xl px-5 py-20 lg:px-0">
-                    <h2 className="text-2xl font-semibold tracking-tight text-white">Features</h2>
-                    <div className="mt-10 grid gap-px border border-white/[0.08] sm:grid-cols-2 lg:border-x-0">
-                        {pkg.features.map((feature) => (
-                            <div className="group flex items-center gap-4 bg-white/[0.012] px-6 py-6 transition-colors hover:bg-white/[0.028]" key={feature}>
-                                <span className="flex size-8 shrink-0 items-center justify-center border border-white/12 bg-white/[0.03]">
-                                    <Check className={cn("size-4", accent)} />
-                                </span>
-                                <h3 className="text-sm font-medium text-white/75 transition-colors group-hover:text-white">{feature}</h3>
+                    {/* features */}
+                    <section className="border-t border-white/[0.08]" data-nav-theme="dark">
+                        <div className="mx-auto max-w-6xl px-5 py-20 lg:px-0">
+                            <h2 className="text-2xl font-semibold tracking-tight text-white">Features</h2>
+                            <div className="mt-10 grid gap-px border border-white/[0.08] sm:grid-cols-2 lg:border-x-0">
+                                {pkg.features.map((feature) => (
+                                    <div
+                                        className="group flex items-center gap-4 bg-white/[0.012] px-6 py-6 transition-colors hover:bg-white/[0.028]"
+                                        key={feature}
+                                    >
+                                        <span className="flex size-8 shrink-0 items-center justify-center border border-white/12 bg-white/[0.03]">
+                                            <Check className={cn("size-4", accent)} />
+                                        </span>
+                                        <h3 className="text-sm font-medium text-white/75 transition-colors group-hover:text-white">{feature}</h3>
+                                    </div>
+                                ))}
                             </div>
-                        ))}
-                    </div>
-                </div>
-            </section>
+                        </div>
+                    </section>
+                </>
+            ) : null}
 
             {/* downloads */}
             {chartData.length > 0 ? (

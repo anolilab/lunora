@@ -1,7 +1,8 @@
 {
     "lunora": {
         "displayName": "lunora",
-        "description": "Unscoped umbrella — one install for the base packages (server, values, runtime, do, client) via subpaths, plus the lunora CLI bin."
+        "description": "Unscoped umbrella — one install for the base packages (server, values, runtime, do, client) via subpaths, plus the lunora CLI bin.",
+        "features": ["One-install base bundle", "Subpath exports (lunora/server, /client, …)", "Ships the lunora CLI bin"]
     },
     "server": {
         "displayName": "Server",
@@ -10,19 +11,23 @@
     },
     "values": {
         "displayName": "Values",
-        "description": "v.* validators and return-type inference."
+        "description": "v.* validators and return-type inference.",
+        "features": ["v.* schema validators", "Return-type inference", "Composable value types"]
     },
     "runtime": {
         "displayName": "Runtime",
-        "description": "Worker entry: RPC router, shard resolver, query coordinator."
+        "description": "Worker entry: RPC router, shard resolver, query coordinator.",
+        "features": ["RPC router & envelope", "Shard resolver", "Query coordinator"]
     },
     "do": {
         "displayName": "Durable Objects",
-        "description": "ShardDO (SQLite, OCC, hibernated WebSocket subscriptions) and SessionDO."
+        "description": "ShardDO (SQLite, OCC, hibernated WebSocket subscriptions) and SessionDO.",
+        "features": ["SQLite-backed ShardDO", "Optimistic concurrency control", "Hibernated WebSocket subscriptions"]
     },
     "d1": {
         "displayName": "D1",
-        "description": "D1 adapter for .global() tables; wraps the Sessions API for read-your-writes."
+        "description": "D1 adapter for .global() tables; wraps the Sessions API for read-your-writes.",
+        "features": ["D1 adapter for .global() tables", "Sessions API wrapper", "Read-your-writes consistency"]
     },
     "client": {
         "displayName": "Client",
@@ -31,63 +36,78 @@
     },
     "react": {
         "displayName": "React",
-        "description": "useQuery / useMutation / useSubscription / useAuth hooks."
+        "description": "useQuery / useMutation / useSubscription / useAuth hooks.",
+        "features": ["useQuery / useMutation hooks", "useSubscription live data", "useAuth integration"]
     },
     "vue": {
         "displayName": "Vue",
-        "description": "Live composables, optimistic mutations, reactive loaders."
+        "description": "Live composables, optimistic mutations, reactive loaders.",
+        "features": ["Live query composables", "Optimistic mutations", "Reactive loaders"]
     },
     "solid": {
         "displayName": "Solid",
-        "description": "Live queries, optimistic mutations, reactive loaders for SolidJS."
+        "description": "Live queries, optimistic mutations, reactive loaders for SolidJS.",
+        "features": ["Live queries", "Optimistic mutations", "Reactive loaders"]
     },
     "svelte": {
         "displayName": "Svelte",
-        "description": "Live stores, optimistic mutations, reactive loaders."
+        "description": "Live stores, optimistic mutations, reactive loaders.",
+        "features": ["Live stores", "Optimistic mutations", "Reactive loaders"]
     },
     "db": {
         "displayName": "TanStack DB",
-        "description": "defineCollections wires Lunora queries/mutations into live, indexed client collections + a durable offline outbox."
+        "description": "defineCollections wires Lunora queries/mutations into live, indexed client collections + a durable offline outbox.",
+        "features": ["TanStack DB collections", "Live, indexed queries", "Durable offline outbox"]
     },
     "studio": {
         "displayName": "Studio",
-        "description": "Local admin UI for your schema, data, logs, and advisors."
+        "description": "Local admin UI for your schema, data, logs, and advisors.",
+        "features": ["Schema & data browser", "SQL editor & time travel", "Logs & advisors"]
     },
     "vite": {
         "displayName": "Vite Plugin",
-        "description": "Vite plugin over @cloudflare/vite-plugin — codegen, wrangler validator, error overlay."
+        "description": "Vite plugin over @cloudflare/vite-plugin — codegen, wrangler validator, error overlay.",
+        "features": ["Codegen on save", "Wrangler config validator", "Error overlay"]
     },
     "astro": {
         "displayName": "Astro",
-        "description": "Astro integration: single-worker composition plus reactive-loader server helpers."
+        "description": "Astro integration: single-worker composition plus reactive-loader server helpers.",
+        "features": ["Single-worker composition", "Reactive-loader server helpers", "First-class Astro integration"]
     },
     "codegen": {
         "displayName": "Codegen",
-        "description": "Emits _generated/{api,server,dataModel}.ts from your schema.ts."
+        "description": "Emits _generated/{api,server,dataModel}.ts from your schema.ts.",
+        "features": ["Generates _generated/api", "Server & dataModel types", "Schema-driven emit"]
     },
     "cli": {
         "displayName": "CLI",
-        "description": "Subcommands: init, dev, deploy, codegen, run, reset, migrate."
+        "description": "Subcommands: init, dev, deploy, codegen, run, reset, migrate.",
+        "features": ["init / dev / deploy", "codegen & migrate", "run & reset"]
     },
     "config": {
         "displayName": "Config",
-        "description": "Shared CLI + Vite config/scaffolding layer (wrangler validator, .dev.vars grammar)."
+        "description": "Shared CLI + Vite config/scaffolding layer (wrangler validator, .dev.vars grammar).",
+        "features": ["wrangler.jsonc validator", "Binding inference & reconciliation", ".dev.vars scaffolding"]
     },
     "testing": {
         "displayName": "Testing",
-        "description": "In-memory harness for queries/mutations/actions plus E2E mail-catcher helpers."
+        "description": "In-memory harness for queries/mutations/actions plus E2E mail-catcher helpers.",
+        "features": ["In-memory test harness", "Query / mutation / action tests", "Mail-catcher helpers"]
     },
     "advisor": {
         "displayName": "Advisor",
-        "description": "Schema & query lints (splinter-style advisors) feeding the Studio Advisors table."
+        "description": "Schema & query lints (splinter-style advisors) feeding the Studio Advisors table.",
+        "features": ["Schema & query lints", "Unindexed-FK detection", "Surfaced in Studio advisors"]
     },
     "ai": {
         "displayName": "AI",
-        "description": "Workers AI helper on the Vercel AI SDK — ctx.ai with generateText / streamText / embed."
+        "description": "Workers AI helper on the Vercel AI SDK — ctx.ai with generateText / streamText / embed.",
+        "features": ["Workers AI on the Vercel AI SDK", "generateText / streamText", "Embeddings & tools"]
     },
     "analytics": {
         "displayName": "Analytics",
-        "description": "Analytics Engine bindings for usage and event metrics."
+        "description": "Analytics Engine bindings for usage and event metrics.",
+        "features": ["Typed writeDataPoint", "SQL-API read client", "ctx.analytics binding"]
     },
     "auth": {
         "displayName": "Auth",
@@ -96,58 +116,72 @@
     },
     "browser": {
         "displayName": "Browser",
-        "description": "Browser Rendering — Playwright on Cloudflare Workers."
+        "description": "Browser Rendering — Playwright on Cloudflare Workers.",
+        "features": ["Headless browser control", "Screenshots & PDFs", "HTML scraping"]
     },
     "container": {
         "displayName": "Containers",
-        "description": "Cloudflare Containers: defineContainer → generated container DOs + typed ctx.containers."
+        "description": "Cloudflare Containers: defineContainer → generated container DOs + typed ctx.containers.",
+        "features": ["defineContainer DO classes", "Typed ctx.containers", "Dockerfile / registry images"]
     },
     "hyperdrive": {
         "displayName": "Hyperdrive",
-        "description": "Connect an external Postgres/MySQL database via Cloudflare Hyperdrive (ctx.sql)."
+        "description": "Connect an external Postgres/MySQL database via Cloudflare Hyperdrive (ctx.sql).",
+        "features": ["BYO Postgres / MySQL", "Driver-agnostic ctx.sql", "Hyperdrive connection pooling"]
     },
     "images": {
         "displayName": "Images",
-        "description": "Cloudflare Images transforms and typed delivery."
+        "description": "Cloudflare Images transforms and typed delivery.",
+        "features": ["Cloudflare Images transforms", "Resize / format / optimize", "Signed delivery URLs"]
     },
     "kv": {
         "displayName": "KV",
-        "description": "Typed Workers KV namespaces."
+        "description": "Typed Workers KV namespaces.",
+        "features": ["Typed Workers KV", "Scoped key helpers", "JSON get / put / list"]
     },
     "mail": {
         "displayName": "Mail",
-        "description": "Resend adapter, TSX templates, queue-backed sends."
+        "description": "Resend adapter, TSX templates, queue-backed sends.",
+        "features": ["Resend adapter", "TSX email templates", "Queue-backed sends"]
     },
     "mcp": {
         "displayName": "MCP",
-        "description": "Model Context Protocol server exposing a Lunora deployment to AI agents."
+        "description": "Model Context Protocol server exposing a Lunora deployment to AI agents.",
+        "features": ["MCP server for AI agents", "List functions & tables", "Run query / mutation / action"]
     },
     "payment": {
         "displayName": "Payment",
-        "description": "Payment provider integration (Stripe) with typed actions and webhooks."
+        "description": "Payment provider integration (Stripe) with typed actions and webhooks.",
+        "features": ["Stripe-first adapter", "Webhook sync & entitlements", "Subscription state machine"]
     },
     "ratelimit": {
         "displayName": "Rate Limit",
-        "description": "Token-bucket / fixed-window / sliding-window limiting with pluggable stores and middleware."
+        "description": "Token-bucket / fixed-window / sliding-window limiting with pluggable stores and middleware.",
+        "features": ["Token-bucket / sliding-window", "Deny lists & sharding", "Procedure middleware"]
     },
     "scheduler": {
         "displayName": "Scheduler",
-        "description": "runAfter / runAt plus Cron Triggers via SchedulerDO."
+        "description": "runAfter / runAt plus Cron Triggers via SchedulerDO.",
+        "features": ["runAfter / runAt scheduling", "Cron Triggers", "SchedulerDO"]
     },
     "seed": {
         "displayName": "Seed",
-        "description": "Snaplet-style deterministic seeding introspected from defineSchema."
+        "description": "Snaplet-style deterministic seeding introspected from defineSchema.",
+        "features": ["Deterministic seeding", "Schema introspection", "FK-aware topological order"]
     },
     "storage": {
         "displayName": "Storage",
-        "description": "R2 typed buckets and signed URLs."
+        "description": "R2 typed buckets and signed URLs.",
+        "features": ["R2 typed buckets", "Signed URLs", "Upload & download helpers"]
     },
     "vectors": {
         "displayName": "Vectors",
-        "description": "Cloudflare Vectorize adapter: typed vector indexes and similarity search."
+        "description": "Cloudflare Vectorize adapter: typed vector indexes and similarity search.",
+        "features": ["Cloudflare Vectorize adapter", "Typed vector indexes", "Similarity search"]
     },
     "workflow": {
         "displayName": "Workflows",
-        "description": "Durable, multi-step workflows wired into the worker entry."
+        "description": "Durable, multi-step workflows wired into the worker entry.",
+        "features": ["defineWorkflow", "Durable Cloudflare Workflows", "Step-scoped run context"]
     }
 }
