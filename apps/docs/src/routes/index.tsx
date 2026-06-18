@@ -11,7 +11,7 @@ export const Route = createFileRoute("/")({
                 description:
                     "Lunora gives you typed queries, mutations, and live subscriptions that sync from your Cloudflare Workers + Durable Objects backend straight to the client — with a Vite-first developer experience.",
                 path: "/",
-                title: "Lunora",
+                title: "The realtime backend for Cloudflare Workers",
             }),
         };
     },

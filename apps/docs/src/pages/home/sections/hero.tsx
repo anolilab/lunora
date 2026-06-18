@@ -108,7 +108,7 @@ interface Todo {
     text: string;
 }
 
-const makeDocId = (n: number): string => `k${((n + 3) * 48271 + 7).toString(36).padStart(7, "0").slice(0, 9)}`;
+const makeDocumentId = (n: number): string => `k${((n + 3) * 48_271 + 7).toString(36).padStart(7, "0").slice(0, 9)}`;
 
 const HEALTH_WORDS = /gym|run|exercise|walk|workout|sleep|cook|dinner|health|yoga|meditat|water/i;
 const WORK_WORDS = /work|boss|sprint|post|meeting|email|deploy|ship|launch|review|standup|client|pr\b/i;
@@ -116,16 +116,18 @@ const CHORES_WORDS = /groc|clean|dog|laundry|dishes|chore|shop|trash|errand|fix|
 
 const categorize = (text: string): string => {
     if (HEALTH_WORDS.test(text)) return "Health";
+
     if (WORK_WORDS.test(text)) return "Work";
+
     if (CHORES_WORDS.test(text)) return "Chores";
 
     return "Other";
 };
 
 const seedTodos: Omit<Todo, "fresh">[] = [
-    { category: "Other", completed: false, docId: makeDocId(0), id: 0, text: "Play basketball" },
-    { category: "Work", completed: false, docId: makeDocId(1), id: 1, text: "Talk to my boss" },
-    { category: "Chores", completed: false, docId: makeDocId(2), id: 2, text: "Buy groceries" },
+    { category: "Other", completed: false, docId: makeDocumentId(0), id: 0, text: "Play basketball" },
+    { category: "Work", completed: false, docId: makeDocumentId(1), id: 1, text: "Talk to my boss" },
+    { category: "Chores", completed: false, docId: makeDocumentId(2), id: 2, text: "Buy groceries" },
 ];
 
 const incoming: { category: string; text: string }[] = [
@@ -333,8 +335,16 @@ const TableColumn: FC<{ focused: boolean; todos: Todo[] }> = ({ focused, todos }
                                 transition={{ duration: 1.2 }}
                             >
                                 <td className="truncate px-2 py-1.5 text-white/30">{todo.docId}</td>
-                                <td className="max-w-[6rem] truncate px-2 py-1.5 text-sky-sapphire/70">&quot;{todo.text}&quot;</td>
-                                <td className="px-2 py-1.5 text-sky-sapphire/70">&quot;{todo.category}&quot;</td>
+                                <td className="max-w-[6rem] truncate px-2 py-1.5 text-sky-sapphire/70">
+                                    &quot;
+                                    {todo.text}
+                                    &quot;
+                                </td>
+                                <td className="px-2 py-1.5 text-sky-sapphire/70">
+                                    &quot;
+                                    {todo.category}
+                                    &quot;
+                                </td>
                                 <td className={cn("px-2 py-1.5", todo.completed ? "text-emerald-400/80" : "text-white/40")}>{String(todo.completed)}</td>
                             </motion.tr>
                         ))}
@@ -346,7 +356,11 @@ const TableColumn: FC<{ focused: boolean; todos: Todo[] }> = ({ focused, todos }
 );
 
 const LunoraConsole: FC<{ focus: number }> = ({ focus }) => {
-    const [todos, setTodos] = useState<Todo[]>(() => seedTodos.map((todo) => ({ ...todo, fresh: false })));
+    const [todos, setTodos] = useState<Todo[]>(() =>
+        seedTodos.map((todo) => {
+            return { ...todo, fresh: false };
+        }),
+    );
     const [writing, setWriting] = useState(false);
     const [inputValue, setInputValue] = useState("");
     const [engaged, setEngaged] = useState(false);
@@ -368,9 +382,10 @@ const LunoraConsole: FC<{ focus: number }> = ({ focus }) => {
     const pushTodo = useCallback(
         (text: string, category: string) => {
             const id = idRef.current;
+
             idRef.current += 1;
 
-            setTodos((previous) => [...previous, { category, completed: false, docId: makeDocId(id), fresh: true, id, text }].slice(-12));
+            setTodos((previous) => [...previous, { category, completed: false, docId: makeDocumentId(id), fresh: true, id, text }].slice(-12));
             settle(id);
         },
         [settle],
@@ -380,6 +395,7 @@ const LunoraConsole: FC<{ focus: number }> = ({ focus }) => {
         setWriting(true);
 
         const item = incoming[cursorRef.current % incoming.length];
+
         cursorRef.current += 1;
 
         const appendId = setTimeout(() => {
@@ -495,11 +511,13 @@ const features = [
     { description: "Durable Objects, edge runtime, SQLite, and global replication — production-ready by default.", title: "Built on Cloudflare" },
 ];
 
-const fade = (delay: number) => ({
-    animate: { opacity: 1, y: 0 },
-    initial: { opacity: 0, y: 16 },
-    transition: { delay, duration: 0.6, ease: "easeOut" as const },
-});
+const fade = (delay: number) => {
+    return {
+        animate: { opacity: 1, y: 0 },
+        initial: { opacity: 0, y: 16 },
+        transition: { delay, duration: 0.6, ease: "easeOut" as const },
+    };
+};
 
 const MainHero: FC = () => {
     const [activeFeature, setActiveFeature] = useState(0);
@@ -514,7 +532,7 @@ const MainHero: FC = () => {
     };
 
     return (
-        <div className="relative overflow-hidden bg-background">
+        <div className="relative overflow-hidden bg-black" data-nav-theme="dark">
             <div
                 aria-hidden="true"
                 className="pointer-events-none absolute inset-x-0 top-0 -z-0 h-[40rem]"
@@ -524,7 +542,7 @@ const MainHero: FC = () => {
                 className="pointer-events-none absolute inset-x-0 top-0 -z-0 h-[46rem] w-full"
                 color={NEURAL_COLOR}
                 opacity={0.55}
-                style={{ WebkitMaskImage: NEURAL_MASK, maskImage: NEURAL_MASK }}
+                style={{ maskImage: NEURAL_MASK, WebkitMaskImage: NEURAL_MASK }}
             />
             <Section
                 classes={{
