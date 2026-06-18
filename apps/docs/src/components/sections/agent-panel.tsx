@@ -419,14 +419,6 @@ const AgentPanel: FC = () => {
                     </div>
                 </div>
             </div>
-
-            {/* corner nodes — matching the product sections */}
-            <span aria-hidden="true" className="absolute top-0 left-0 z-10 size-2 -translate-x-1/2 -translate-y-1/2 bg-white/70" />
-            <span aria-hidden="true" className="absolute top-0 right-0 z-10 size-2 translate-x-1/2 -translate-y-1/2 bg-white/70" />
-            <span aria-hidden="true" className="absolute bottom-0 left-0 z-10 size-2 -translate-x-1/2 translate-y-1/2 bg-white/70" />
-            <span aria-hidden="true" className="absolute right-0 bottom-0 z-10 size-2 translate-x-1/2 translate-y-1/2 bg-white/70" />
-            <span aria-hidden="true" className="absolute top-0 left-[54.5%] z-10 hidden size-2 -translate-x-1/2 -translate-y-1/2 bg-white/70 md:block" />
-            <span aria-hidden="true" className="absolute bottom-0 left-[54.5%] z-10 hidden size-2 -translate-x-1/2 translate-y-1/2 bg-white/70 md:block" />
         </div>
     );
 };

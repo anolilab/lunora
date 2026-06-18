@@ -7,10 +7,12 @@ import { useState } from "react";
 import AgentPanel from "@/components/sections/agent-panel";
 import { Pill } from "@/components/sections/langbase";
 import Reveal from "@/components/sections/reveal";
+import SpaceBackdrop from "@/components/sections/space-backdrop";
 
 /**
- * Langbase-style hero: pure black, a centered headline + pills, then the
- * interactive transcript + code panel below.
+ * Hero: a centered headline + CTAs over a faint scenic backdrop, then the
+ * interactive panel (code tabs + live todo + reactive table) below. Lunora
+ * brand (Geist + aurora accents).
  */
 
 const InstallCommand: FC = () => {
@@ -26,7 +28,7 @@ const InstallCommand: FC = () => {
 
     return (
         <button
-            className="group flex items-center gap-3 border border-white/12 px-4 py-2 font-mono text-sm text-white/60 transition-colors hover:border-white/25 hover:text-white"
+            className="group flex w-fit items-center gap-3 border border-white/12 px-4 py-2 font-mono text-sm text-white/60 transition-colors hover:border-white/25 hover:text-white"
             onClick={copy}
             type="button"
         >
@@ -38,8 +40,10 @@ const InstallCommand: FC = () => {
 };
 
 const HeroLangbase: FC = () => (
-    <section className="relative overflow-hidden bg-black" data-nav-theme="dark">
-        <div className="mx-auto flex max-w-4xl flex-col items-center gap-6 px-5 pt-40 pb-14 text-center sm:pt-48">
+    <section className="relative border-t border-white/[0.08] bg-[#0e0e11]" data-nav-theme="dark">
+        <SpaceBackdrop className="absolute top-0 left-1/2 z-0 h-[48rem] w-screen -translate-x-1/2" fade id="photo-1708559831534-44c30eb3ab0e" opacity={0.4} />
+
+        <div className="relative z-10 mx-auto flex max-w-4xl flex-col items-center gap-6 px-5 pt-40 pb-14 text-center sm:pt-48">
             <p className="sr-only">
                 Lunora is a type-safe, real-time backend framework on Cloudflare Workers and Durable Objects with a Vite-first developer experience. Define a
                 schema and write query, mutation, and action functions on the server; the client gets end-to-end typed data with live subscriptions, optimistic
@@ -48,7 +52,7 @@ const HeroLangbase: FC = () => (
             <Reveal className="flex flex-col items-center gap-6">
                 <span className="flex items-center gap-2 border border-white/12 px-3 py-1 font-mono text-xs text-white/60">
                     <span className="size-1.5 bg-sky-sapphire" />
-                    Open source · Built on Cloudflare
+                    The realtime backend for Cloudflare
                 </span>
                 <h1 className="text-5xl leading-[1.04] font-semibold tracking-tight text-balance text-white sm:text-6xl">
                     Realtime backends, in a few lines of{" "}
@@ -69,7 +73,7 @@ const HeroLangbase: FC = () => (
             </Reveal>
         </div>
 
-        <Reveal className="pb-20">
+        <Reveal className="relative z-10 pb-20">
             <AgentPanel />
         </Reveal>
     </section>

@@ -1,36 +1,28 @@
 import GitHubLogoIcon from "@icons-pack/react-simple-icons/icons/SiGithub.mjs";
 import { Link } from "@tanstack/react-router";
-import { ExternalLink, Handshake } from "lucide-react";
-import type { FC } from "react";
+import { MessagesSquare } from "lucide-react";
+import type { FC, ReactNode } from "react";
 
 import AnolilabText from "@/assets/anolilab_text.svg?react";
-import LineGrid from "@/components/sections/line-grid";
+import LunoraLogo from "@/assets/lunora_logo.svg?react";
 import FlickeringGrid from "@/components/ui/flickering-grid";
-import HighlightLink from "@/components/ui/highlight-link";
-import OssLight from "@/components/ui/svgs/oss-lights";
 
 type TanstackLink = { title: string; to: string };
 type ExternalLinkType = { href: string; title: string };
 
-const Menus: {
-    links: (ExternalLinkType | TanstackLink)[];
-    title: string;
-}[] = [
+const columns: { links: (ExternalLinkType | TanstackLink)[]; title: string }[] = [
     {
         links: [
             { title: "Server", to: "/packages/server" },
             { title: "Client", to: "/packages/client" },
             { title: "React", to: "/packages/react" },
-            { title: "Durable Objects", to: "/packages/do" },
-            { title: "Vite Plugin", to: "/packages/vite" },
-            { title: "Auth", to: "/packages/auth" },
-            { title: "All Packages", to: "/packages" },
+            { title: "All packages", to: "/packages" },
         ],
         title: "Packages",
     },
     {
         links: [
-            { title: "Getting Started", to: "/docs/getting-started" },
+            { title: "Getting started", to: "/docs/getting-started" },
             { title: "Documentation", to: "/docs" },
             { title: "Changelog", to: "/changelog" },
             { title: "Brand", to: "/brand" },
@@ -39,70 +31,79 @@ const Menus: {
     },
     {
         links: [
-            { title: "Privacy Policy", to: "/privacy" },
+            { title: "Privacy", to: "/privacy" },
             { title: "Code of Conduct", to: "/code-of-conduct" },
             { title: "Imprint", to: "/imprint" },
+            { href: "https://github.com/anolilab/lunora", title: "GitHub" },
         ],
         title: "Legal",
     },
-    {
-        links: [
-            { href: "https://github.com/anolilab/lunora", title: "GitHub" },
-            { href: "https://github.com/anolilab/lunora/discussions", title: "Discussions" },
-        ],
-        title: "Community",
-    },
 ];
 
+const socials: { href: string; icon: ReactNode; label: string }[] = [
+    { href: "https://github.com/anolilab/lunora", icon: <GitHubLogoIcon className="size-5" />, label: "GitHub" },
+    { href: "https://github.com/anolilab/lunora/discussions", icon: <MessagesSquare className="size-5" />, label: "Discussions" },
+];
+
+const FooterLink: FC<{ link: ExternalLinkType | TanstackLink }> = ({ link }) => {
+    const className =
+        "flex flex-1 items-center border-b border-white/[0.08] px-6 py-5 text-sm text-white/55 transition-colors last:border-b-0 hover:text-white";
+
+    if ("href" in link) {
+        return (
+            <a className={className} href={link.href} rel="noopener noreferrer" target="_blank">
+                {link.title}
+            </a>
+        );
+    }
+
+    return (
+        <Link className={className} to={link.to}>
+            {link.title}
+        </Link>
+    );
+};
+
 const Footer: FC = () => (
-    <footer className="bg-background relative" data-nav-theme="dark">
-        <div className="absolute -top-64 right-0 left-0 mx-auto overflow-hidden">
-            <OssLight className="mx-auto" />
-        </div>
-
-        <div className="relative container mx-auto grid grid-cols-2 gap-y-8 p-0 sm:grid-cols-3 md:grid-cols-4">
-            <LineGrid mode="dark" />
-
-            <HighlightLink className="border-0" href="https://github.com/anolilab/lunora" mode="dark" rel="noopener noreferrer" target="_blank">
-                <GitHubLogoIcon />
-                <span className="grow">GitHub</span>
-                <ExternalLink />
-            </HighlightLink>
-            <HighlightLink className="border-0" href="https://github.com/anolilab/lunora/discussions" mode="dark" rel="noopener noreferrer" target="_blank">
-                <Handshake />
-                <span className="grow">Discussions</span>
-                <ExternalLink />
-            </HighlightLink>
-        </div>
-
-        <div className="relative container mx-auto grid grid-cols-2 gap-y-8 p-0 sm:grid-cols-3 md:grid-cols-4">
-            <LineGrid mode="dark" />
-
-            {Menus.map((menu) => (
-                <div className="relative z-10 flex flex-col space-y-4 border-t border-t-white/[0.06] py-24" key={menu.title}>
-                    <h2 className="mb-2 text-xs font-medium uppercase tracking-wider text-white/30">{menu.title}</h2>
-                    <div className="flex flex-col space-y-2 text-sm">
-                        {menu.links.map((link: TanstackLink | ExternalLinkType) =>
-                            (link as ExternalLinkType).href ? (
-                                <a
-                                    className="text-white/50 transition-colors hover:text-white"
-                                    href={(link as ExternalLinkType).href}
-                                    key={link.title}
-                                    rel="noopener noreferrer"
-                                >
-                                    {link.title}
-                                </a>
-                            ) : (
-                                <Link className="text-white/50 transition-colors hover:text-white" key={link.title} to={(link as TanstackLink).to}>
-                                    {link.title}
-                                </Link>
-                            ),
-                        )}
-                    </div>
+    <footer className="relative border-t border-white/[0.08] bg-[#0e0e11]" data-nav-theme="dark">
+        <div className="mx-auto grid max-w-6xl grid-cols-2 border-white/[0.08] lg:grid-cols-[1fr_1fr_1fr_1.6fr_auto] lg:border-x">
+            {columns.map((column) => (
+                <div className="flex flex-col border-b border-white/[0.08] lg:border-r lg:border-b-0" key={column.title}>
+                    {column.links.map((link) => (
+                        <FooterLink key={link.title} link={link} />
+                    ))}
                 </div>
             ))}
+
+            {/* center — brand over a particle field */}
+            <div className="relative col-span-2 flex min-h-[16rem] items-center justify-center overflow-hidden border-b border-white/[0.08] lg:col-span-1 lg:border-r lg:border-b-0">
+                <div aria-hidden="true" className="pointer-events-none absolute inset-0 opacity-40">
+                    <FlickeringGrid className="size-full" color="#6B7280" flickerChance={0.08} gridGap={3} maxOpacity={0.3} squareSize={2} />
+                </div>
+                <div className="relative z-10 flex items-center gap-2.5">
+                    <LunoraLogo className="h-7 w-7" title="Lunora" />
+                    <span className="text-2xl font-semibold tracking-tight text-white">Lunora</span>
+                </div>
+            </div>
+
+            {/* socials */}
+            <div className="col-span-2 flex border-b border-white/[0.08] lg:col-span-1 lg:flex-col lg:border-b-0">
+                {socials.map((social) => (
+                    <a
+                        aria-label={social.label}
+                        className="flex flex-1 items-center justify-center border-white/[0.08] px-6 py-5 text-white/40 transition-colors not-last:border-r hover:text-white lg:not-last:border-r-0 lg:not-last:border-b"
+                        href={social.href}
+                        key={social.label}
+                        rel="noopener noreferrer"
+                        target="_blank"
+                    >
+                        {social.icon}
+                    </a>
+                ))}
+            </div>
         </div>
 
+        {/* Built by anolilab — do not touch */}
         <div className="border-t border-white/[0.06] py-12">
             <div className="container mx-auto flex flex-col items-center justify-center gap-6">
                 <span className="font-mono text-xs tracking-wider text-white/25 uppercase">Built by</span>

@@ -2,14 +2,11 @@ import GitHubLogoIcon from "@icons-pack/react-simple-icons/icons/SiGithub.mjs";
 import { ArrowUpRight, CircleDot, GitPullRequest, MessagesSquare } from "lucide-react";
 import type { FC, ReactNode } from "react";
 
-import { Pill, SectionMarker } from "@/components/sections/langbase";
-import Reveal from "@/components/sections/reveal";
-import FlickeringGrid from "@/components/ui/flickering-grid";
+import { Pill, SectionHead } from "@/components/sections/langbase";
 
 /**
- * Open-source / contribute section (dark Langbase look) — a blueprint box with
- * a `// support` marker + CTAs on the left, and a list of contribution paths on
- * the right. The flickering grid adds subtle texture behind the marker.
+ * Open-source / contribute section — a centered section header, CTAs, and a
+ * three-card grid of contribution paths.
  */
 
 // Built from parts (with a synthesized double-quote char) to keep GitHub's
@@ -17,8 +14,6 @@ import FlickeringGrid from "@/components/ui/flickering-grid";
 const DQ = String.fromCodePoint(34);
 const ISSUE_QUERY = `is:open is:issue label:${DQ}good first issue${DQ},${DQ}help wanted${DQ} `;
 const GOOD_FIRST_ISSUES_URL = `https://github.com/anolilab/lunora/issues?q=${encodeURIComponent(ISSUE_QUERY)}`;
-
-const NODE = "absolute z-10 size-2 bg-white/70";
 
 const paths: { desc: string; href: string; icon: ReactNode; title: string }[] = [
     {
@@ -42,59 +37,42 @@ const paths: { desc: string; href: string; icon: ReactNode; title: string }[] = 
 ];
 
 const SupportSection: FC = () => (
-    <section className="border-t border-white/[0.06] bg-black" data-nav-theme="dark">
-        <div className="mx-auto max-w-6xl px-5 py-24">
-            <Reveal className="relative border border-white/[0.08]">
-                <span className={`${NODE} top-0 left-0 -translate-x-1/2 -translate-y-1/2`} />
-                <span className={`${NODE} top-0 right-0 translate-x-1/2 -translate-y-1/2`} />
-                <span className={`${NODE} bottom-0 left-0 -translate-x-1/2 translate-y-1/2`} />
-                <span className={`${NODE} right-0 bottom-0 translate-x-1/2 translate-y-1/2`} />
-                <span className={`${NODE} top-0 left-1/2 hidden -translate-x-1/2 -translate-y-1/2 lg:block`} />
-                <span className={`${NODE} bottom-0 left-1/2 hidden -translate-x-1/2 translate-y-1/2 lg:block`} />
+    <section className="border-t border-white/[0.08] bg-[#0e0e11]" data-nav-theme="dark">
+        <div className="mx-auto max-w-6xl px-5 py-24 lg:px-0">
+            <SectionHead
+                eyebrow="Support"
+                subtitle="Lunora is open source and built in the open. Star the repo, file an issue, or send a pull request — every contribution keeps it moving."
+                title="Open source, built together"
+            />
 
-                <div className="grid lg:grid-cols-2">
-                    {/* left — marker + CTAs over flickering texture */}
-                    <div className="relative flex flex-col justify-center gap-6 overflow-hidden border-b border-white/[0.08] px-8 py-14 lg:border-r lg:border-b-0 lg:px-12">
-                        <div aria-hidden="true" className="pointer-events-none absolute inset-0 opacity-20">
-                            <FlickeringGrid className="size-full" color="green" flickerChance={0.08} gridGap={3} maxOpacity={0.3} squareSize={2} />
-                        </div>
-                        <div className="relative z-10 flex flex-col gap-6">
-                            <SectionMarker label="support" />
-                            <p className="max-w-sm text-base leading-relaxed text-white/55">
-                                Lunora is open source and built in the open. Star the repo, file an issue, or send a pull request — every contribution keeps it
-                                moving.
-                            </p>
-                            <div className="flex flex-wrap items-center gap-3">
-                                <Pill href="https://github.com/anolilab/lunora" primary>
-                                    <GitHubLogoIcon className="size-4 fill-current" title="Lunora on GitHub" />
-                                    Star on GitHub
-                                </Pill>
-                                <Pill to="/docs/$">Contribution guide</Pill>
+            <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
+                <Pill href="https://github.com/anolilab/lunora" primary>
+                    <GitHubLogoIcon className="size-4 fill-current" title="Lunora on GitHub" />
+                    Star on GitHub
+                </Pill>
+                <Pill to="/docs/$">Contribution guide</Pill>
+            </div>
+
+            <div className="mt-14 grid gap-px border border-white/[0.08] bg-white/[0.08] md:grid-cols-3 lg:border-x-0">
+                {paths.map((path) => (
+                    <a
+                        className="group flex flex-col gap-4 bg-[#0e0e11] p-6 transition-colors hover:bg-white/[0.02]"
+                        href={path.href}
+                        key={path.title}
+                        rel="noreferrer"
+                        target="_blank"
+                    >
+                        <span className="flex size-10 items-center justify-center border border-white/12 bg-white/[0.03]">{path.icon}</span>
+                        <div className="flex items-start justify-between gap-2">
+                            <div className="flex flex-col gap-1">
+                                <span className="text-sm font-semibold text-white">{path.title}</span>
+                                <span className="text-xs leading-relaxed text-white/45">{path.desc}</span>
                             </div>
+                            <ArrowUpRight className="size-4 shrink-0 text-white/30 transition-all group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:text-white/70" />
                         </div>
-                    </div>
-
-                    {/* right — contribution paths */}
-                    <div className="flex flex-col">
-                        {paths.map((path) => (
-                            <a
-                                className="group flex items-center gap-4 border-b border-dashed border-white/[0.08] px-8 py-6 transition-colors last:border-b-0 hover:bg-white/[0.02] lg:px-12"
-                                href={path.href}
-                                key={path.title}
-                                rel="noreferrer"
-                                target="_blank"
-                            >
-                                <span className="flex size-10 shrink-0 items-center justify-center border border-white/12 bg-white/[0.03]">{path.icon}</span>
-                                <span className="flex flex-col gap-0.5">
-                                    <span className="text-sm font-semibold text-white">{path.title}</span>
-                                    <span className="text-xs leading-relaxed text-white/45">{path.desc}</span>
-                                </span>
-                                <ArrowUpRight className="ml-auto size-4 shrink-0 text-white/30 transition-all group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-white/70" />
-                            </a>
-                        ))}
-                    </div>
-                </div>
-            </Reveal>
+                    </a>
+                ))}
+            </div>
         </div>
     </section>
 );
