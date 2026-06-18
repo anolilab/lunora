@@ -5,6 +5,7 @@ import browserCollections from "fumadocs-mdx:collections/browser";
 import { DocsLayout } from "fumadocs-ui/layouts/notebook";
 import defaultMdxComponents from "fumadocs-ui/mdx";
 import { DocsBody, DocsDescription, DocsPage, DocsTitle } from "fumadocs-ui/page";
+import type { CSSProperties } from "react";
 import { useMemo } from "react";
 
 import JsonLd from "@/components/seo/json-ld";
@@ -169,7 +170,10 @@ const Page = () => {
             <JsonLd data={{ "@type": "BreadcrumbList", itemListElement: breadcrumbItems }} />
             <DocsLayout
                 containerProps={{
-                    className: "bg-background pt-16",
+                    // Reserve the fixed external navbar's height (h-16) as the docs
+                    // header row so content, sidebar, and TOC all sit below it.
+                    className: "bg-background",
+                    style: { "--fd-header-height": "4rem" } as CSSProperties,
                 }}
                 nav={{
                     enabled: false,

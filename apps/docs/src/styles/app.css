@@ -224,10 +224,6 @@
 #nd-sidebar {
     background-color: var(--color-dark-coal);
     border-color: transparent;
-
-    /* Sit below the fixed external navbar (h-16) instead of underneath it. */
-    top: 4rem;
-    height: calc(100dvh - 4rem);
 }
 
 #nd-subnav > div {
@@ -237,9 +233,7 @@
 html {
     scroll-behavior: smooth;
 
-    /* Reserve space for the fixed external navbar (h-16) so the docs layout's
-       sticky sidebar / TOC and content sit below it instead of underneath. */
-    --fd-nav-height: 4rem;
+    /* Keep in-page anchor targets clear of the fixed external navbar (h-16). */
     scroll-padding-top: 5rem;
 }
 
