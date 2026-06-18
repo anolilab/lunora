@@ -80,7 +80,7 @@ const menu: NavColumn[] = [
     {
         features: [
             { href: "/studio", image: schemaImg, subtitle: "Schema, data, SQL, and logs", title: "Studio" },
-            { href: "/packages/do", image: timeTravelImg, subtitle: "Point-in-time restore, any moment", title: "Time travel" },
+            { href: "/studio", image: timeTravelImg, subtitle: "Point-in-time restore, any moment", title: "Time travel" },
         ],
         navItems: [
             { description: "Schema, queries, mutations, actions.", href: "/packages/server", icon: <Server />, title: "Server" },
