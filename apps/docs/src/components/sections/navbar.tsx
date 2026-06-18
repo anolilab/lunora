@@ -31,10 +31,10 @@ import { useEffect, useRef, useState } from "react";
 
 import lunoraLogoRaw from "@/assets/lunora_logo.svg?raw";
 import LunoraLogo from "@/assets/lunora_logo.svg?react";
-import dashboardsImg from "@/assets/studio/dashboards.png";
-import homeImg from "@/assets/studio/home.png";
-import schemaImg from "@/assets/studio/schema.png";
-import timeTravelImg from "@/assets/studio/time-travel.png";
+import dashboardsImg from "@/assets/studio/dark/dashboards.png";
+import homeImg from "@/assets/studio/dark/home.png";
+import schemaImg from "@/assets/studio/dark/schema.png";
+import timeTravelImg from "@/assets/studio/dark/time-travel.png";
 import { Button } from "@/components/ui/button";
 import stats from "@/data/stats.json";
 import { cn } from "@/lib/utils";
