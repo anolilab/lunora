@@ -158,7 +158,7 @@ const StudioLanding: FC = () => (
                     </p>
                 </Reveal>
             </div>
-            <Reveal className="relative z-10 mx-auto max-w-6xl px-5 pb-20 lg:px-0">
+            <Reveal className="relative z-10 mx-auto max-w-6xl px-5 lg:px-0">
                 <Shot alt="Lunora Studio — overview" bare src={homeImg} />
             </Reveal>
         </section>
