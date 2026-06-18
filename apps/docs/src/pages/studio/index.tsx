@@ -22,7 +22,7 @@ import { cn } from "@/lib/utils";
  */
 
 const Shot: FC<{ alt: string; bare?: boolean; src: string }> = ({ alt, bare, src }) => (
-    <div className={cn("overflow-hidden", !bare && "rounded-none border border-white/[0.08] shadow-2xl shadow-black/40")}>
+    <div className={cn("overflow-hidden", !bare && "rounded-none border border-white/[0.08]")}>
         <img alt={alt} className="block w-full" loading="lazy" src={src} />
     </div>
 );
