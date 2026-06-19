@@ -2,7 +2,7 @@
     "name": "@lunora/cloud",
     "version": "0.0.0",
     "private": true,
-    "license": "UNLICENSED",
+    "license": "PolyForm-Noncommercial-1.0.0",
     "type": "module",
     "sideEffects": false,
     "engines": {
