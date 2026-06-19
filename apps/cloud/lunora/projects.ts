@@ -14,27 +14,25 @@ interface ProjectRow {
 }
 
 /** List an organization's projects. */
-export const listByOrg = query({
-    args: { organizationId: v.id("organizations") },
-    handler: async (context, { organizationId }): Promise<ProjectRow[]> => {
+export const listByOrg = query
+    .input({ organizationId: v.id("organizations") })
+    .query(async ({ ctx: context, args: { organizationId } }): Promise<ProjectRow[]> => {
         await assertMember(context, organizationId);
 
         const { page } = await context.db.projects.findMany({ where: { organizationId } });
 
         return page;
-    },
-});
+    });
 
 /** Resolve a project by its connected GitHub repository (`owner/name`). */
-export const byGithubRepo = query({
-    args: { repository: v.string() },
-    handler: async (context, { repository }): Promise<null | { organizationId: Id<"organizations">; projectId: Id<"projects">; slug: string }> => {
+export const byGithubRepo = query
+    .input({ repository: v.string() })
+    .query(async ({ ctx: context, args: { repository } }): Promise<null | { organizationId: Id<"organizations">; projectId: Id<"projects">; slug: string }> => {
         const { page } = await context.db.projects.findMany({ where: { githubRepo: repository } });
         const project = (page as unknown as ProjectRow[])[0];
 
         return project ? { organizationId: project.organizationId, projectId: project._id, slug: project.slug } : null; // secret-scanner:allow -- domain field name
-    },
-});
+    });
 
 /**
  * Create a project in an organization. Per-org slug uniqueness is enforced by
@@ -42,15 +40,15 @@ export const byGithubRepo = query({
  * project count (resolved from its synced subscription state, not the static
  * `plan` column — see `lunora/entitlements.ts`).
  */
-export const create = mutation({
-    args: {
+export const create = mutation
+    .input({
         framework: v.optional(v.string()),
         githubRepo: v.optional(v.string()),
         name: v.string(),
         organizationId: v.id("organizations"),
         slug: v.string(),
-    },
-    handler: async (context, arguments_): Promise<Id<"projects">> => {
+    })
+    .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"projects">> => {
         await assertMember(context, arguments_.organizationId, ["owner", "admin", "member"]);
 
         const { page } = await context.db.projects.findMany({ where: { organizationId: arguments_.organizationId } });
@@ -65,5 +63,4 @@ export const create = mutation({
             organizationId: arguments_.organizationId,
             slug: arguments_.slug,
         });
-    },
-});
+    });

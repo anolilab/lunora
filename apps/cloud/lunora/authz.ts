@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/server";
 
 import { hashDeployKey } from "../src/deploy/keys";
-import type { Id } from "./_generated/dataModel.js";
+import type { Id, TableName } from "./_generated/dataModel.js";
 import type { QueryCtx as QueryContext } from "./_generated/server.js";
 
 /**
@@ -97,7 +97,12 @@ export const authorizeDeployKey = async (
  * A's id with B's row id. Centralized here so the check (and its error contract)
  * lives in one place.
  */
-export const assertRowInOrg = async <T extends string>(context: QueryContext, id: Id<T>, organizationId: Id<"organizations">, label: string): Promise<void> => {
+export const assertRowInOrg = async <T extends TableName>(
+    context: QueryContext,
+    id: Id<T>,
+    organizationId: Id<"organizations">,
+    label: string,
+): Promise<void> => {
     const row = (await context.db.get(id)) as { organizationId?: Id<"organizations"> } | null;
 
     if (row?.organizationId !== organizationId) {

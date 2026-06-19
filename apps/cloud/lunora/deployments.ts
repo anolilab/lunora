@@ -33,9 +33,9 @@ interface ProjectRow {
  * proxy (§3). Asserts the caller is a member of the deployment's org. Returns
  * `null` when the deployment is missing, in another org, or not yet live.
  */
-export const adminTarget = query({
-    args: { deploymentId: v.id("deployments"), organizationId: v.id("organizations") },
-    handler: async (context, { deploymentId, organizationId }): Promise<null | { adminToken: string; url: string }> => {
+export const adminTarget = query
+    .input({ deploymentId: v.id("deployments"), organizationId: v.id("organizations") })
+    .query(async ({ ctx: context, args: { deploymentId, organizationId } }): Promise<null | { adminToken: string; url: string }> => {
         await assertMember(context, organizationId);
 
         const deployment = (await context.db.get(deploymentId)) as DeploymentRow | null;
@@ -45,8 +45,7 @@ export const adminTarget = query({
         }
 
         return { adminToken: deployment.adminToken, url: deployment.url };
-    },
-});
+    });
 
 /**
  * Resolve a dispatch-namespace script id to its org's plan name, for the
@@ -54,33 +53,29 @@ export const adminTarget = query({
  * (returns only a non-sensitive plan tier); the dispatcher reaches it through a
  * bearer-gated control-plane endpoint. Unknown scripts resolve to `free`.
  */
-export const planForScript = query({
-    args: { scriptName: v.string() },
-    handler: async (context, { scriptName }): Promise<{ plan: string }> => {
-        const { page } = await context.db.deployments.findMany({ where: { scriptName } });
-        const deployment = (page as unknown as DeploymentRow[])[0];
+export const planForScript = query.input({ scriptName: v.string() }).query(async ({ ctx: context, args: { scriptName } }): Promise<{ plan: string }> => {
+    const { page } = await context.db.deployments.findMany({ where: { scriptName } });
+    const deployment = (page as unknown as DeploymentRow[])[0];
 
-        if (!deployment) {
-            return { plan: "free" };
-        }
+    if (!deployment) {
+        return { plan: "free" };
+    }
 
-        const entitlements = await orgEntitlements(context, deployment.organizationId);
+    const entitlements = await orgEntitlements(context, deployment.organizationId);
 
-        return { plan: highestPlan(entitlements.plans) };
-    },
+    return { plan: highestPlan(entitlements.plans) };
 });
 
 /** A project's deployments, newest first. Caller must be a member of the org. */
-export const listByProject = query({
-    args: { organizationId: v.id("organizations"), projectId: v.id("projects") },
-    handler: async (context, { organizationId, projectId }): Promise<DeploymentRow[]> => {
+export const listByProject = query
+    .input({ organizationId: v.id("organizations"), projectId: v.id("projects") })
+    .query(async ({ ctx: context, args: { organizationId, projectId } }): Promise<DeploymentRow[]> => {
         await assertMember(context, organizationId);
 
         const { page } = await context.db.deployments.findMany({ where: { organizationId, projectId } });
 
         return (page as unknown as DeploymentRow[]).toSorted((a, b) => b.createdAt - a.createdAt);
-    },
-});
+    });
 
 /**
  * Record a new deployment in the `queued` state. Authorized either by a member
@@ -89,8 +84,8 @@ export const listByProject = query({
  * (`src/provision`), paced by the per-cell scheduler (§2.5) — is driven
  * separately and reports progress back through `updateStatus`.
  */
-export const create = mutation({
-    args: {
+export const create = mutation
+    .input({
         // Tenant admin token the platform set on the worker (for the admin proxy).
         adminToken: v.optional(v.string()),
         branch: v.optional(v.string()),
@@ -102,8 +97,8 @@ export const create = mutation({
         organizationId: v.id("organizations"),
         projectId: v.id("projects"),
         scriptName: v.string(),
-    },
-    handler: async (context, arguments_): Promise<Id<"deployments">> => {
+    })
+    .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"deployments">> => {
         let createdBy: string;
 
         if (arguments_.deployKey) {
@@ -140,8 +135,7 @@ export const create = mutation({
             status: "queued",
             updatedAt: now,
         });
-    },
-});
+    });
 
 /**
  * Mark expired preview deployments as `destroyed` (CLOUD-PLAN.md §2.3). Driven
@@ -150,23 +144,20 @@ export const create = mutation({
  * Cloudflare teardown is the provisioner's `destroy` (orchestrator) — wired once
  * Alchemy lands; this records the lifecycle transition.
  */
-export const cleanupExpiredPreviews = internalMutation({
-    args: {},
-    handler: async (context): Promise<{ destroyed: number }> => {
-        const now = Date.now();
-        const { page } = await context.db.deployments.findMany({ where: { kind: "preview" } });
+export const cleanupExpiredPreviews = internalMutation.mutation(async ({ ctx: context }): Promise<{ destroyed: number }> => {
+    const now = Date.now();
+    const { page } = await context.db.deployments.findMany({ where: { kind: "preview" } });
 
-        const expired = (page as unknown as DeploymentRow[]).filter(
-            (deployment) => deployment.status !== "destroyed" && deployment.expiresAt !== undefined && deployment.expiresAt < now,
-        );
+    const expired = (page as unknown as DeploymentRow[]).filter(
+        (deployment) => deployment.status !== "destroyed" && deployment.expiresAt !== undefined && deployment.expiresAt < now,
+    );
 
-        for (const deployment of expired) {
-            // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
-            await context.db.patch(deployment._id, { status: "destroyed", updatedAt: now });
-        }
+    for (const deployment of expired) {
+        // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
+        await context.db.patch(deployment._id, { status: "destroyed", updatedAt: now });
+    }
 
-        return { destroyed: expired.length };
-    },
+    return { destroyed: expired.length };
 });
 
 /**
@@ -181,15 +172,15 @@ export const cleanupExpiredPreviews = internalMutation({
  * seam (it would 404 at the RPC visibility gate). Authorization is enforced
  * here instead (deploy key or org membership).
  */
-export const updateStatus = mutation({
-    args: {
+export const updateStatus = mutation
+    .input({
         bundleHash: v.optional(v.string()),
         deployKey: v.optional(v.string()),
         id: v.id("deployments"),
         status: v.union(v.literal("queued"), v.literal("provisioning"), v.literal("building"), v.literal("live"), v.literal("failed"), v.literal("destroyed")),
         url: v.optional(v.string()),
-    },
-    handler: async (context, { bundleHash, deployKey, id, status, url }): Promise<void> => {
+    })
+    .mutation(async ({ ctx: context, args: { bundleHash, deployKey, id, status, url } }): Promise<void> => {
         const existing = (await context.db.get(id)) as DeploymentRow | null;
 
         if (!existing) {
@@ -206,5 +197,4 @@ export const updateStatus = mutation({
             status,
             updatedAt: Date.now(),
         });
-    },
-});
+    });
