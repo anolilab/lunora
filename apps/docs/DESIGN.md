@@ -24,14 +24,14 @@ accents, rounded glassy cards. Those read as every-other-dev-tool.
 
 ### Night & moonlight (neutrals)
 
-| Token                     | HSL                | Role                                            |
-| ------------------------- | ------------------ | ----------------------------------------------- |
-| `--dark-coal`             | `hsl(240 18% 4%)`  | Eclipse — deepest surface, page/body base       |
-| `--coal` / `--background` | `hsl(240 14% 6%)`  | Midnight — default dark surface                 |
-| (raised surface)          | `hsl(240 14% 9%)`  | Panels, popovers, consoles                      |
-| `--foreground`            | `hsl(228 30% 96%)` | Moonlight — primary text (cool, not pure white) |
-| `--ivory`                 | `hsl(228 32% 97%)` | Moonlight panel (inverted nav bar, menu sheets) |
-| `--stone`                 | `hsl(228 12% 86%)` | Muted moonlight                                 |
+| Token                     | HSL / hex          | Role                                                                                                                                         |
+| ------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--dark-coal`             | `#0e0e11`          | Eclipse — the charcoal page/body base, used across the landing and docs (also written as the literal `bg-[#0e0e11]` in marketing components) |
+| `--coal` / `--background` | `hsl(240 14% 6%)`  | Midnight — fumadocs docs base (~`#0d0d12`)                                                                                                   |
+| (raised surface)          | `hsl(240 14% 9%)`  | Panels, popovers, consoles                                                                                                                   |
+| `--foreground`            | `hsl(228 30% 96%)` | Moonlight — primary text (cool, not pure white)                                                                                              |
+| `--ivory`                 | `hsl(228 32% 97%)` | Moonlight panel (inverted nav bar, menu sheets)                                                                                              |
+| `--stone`                 | `hsl(228 12% 86%)` | Muted moonlight                                                                                                                              |
 
 The night surfaces carry a subtle **cool blue-violet** cast (hue ~240) instead of
 neutral coal — it reads as sky, not soot. Keep the cast subtle so it still sits
@@ -106,3 +106,36 @@ Depth comes from **value steps + a single hairline**, not shadows-on-everything:
 4. One glow per view.
 5. Reach for the gradient ribbon only on _the_ focal moment (headline, active
    state), so it stays special.
+
+## 7. Marketing layout (the section frame)
+
+The landing and package pages share one structural frame:
+
+- **Full-bleed dividers, container content.** Each `<section>` is full width with
+  a `border-t border-white/[0.08]` top rule that spans the viewport, but its
+  content sits in a centered `mx-auto max-w-6xl` column. The column runs flush to
+  its edges (`px-5 lg:px-0`) so content meets the frame, not a gutter.
+- **Vertical guide lines.** A single `z-20` absolute overlay draws `border-x`
+  lines down the container edges, full page height, so the centered column reads
+  as a framed plane. Grids inside use `lg:border-x-0` to avoid doubling the guide.
+- **Hatch spacers.** Sections are separated by a `HatchSpacer` band — a thin
+  `border-t` over a 135° repeating-line texture on the charcoal base.
+- **Sharp buttons.** Pills/CTAs are `rounded-none` (see §3); the shared `Pill`
+  primitive is square, primary = solid white-on-black, ghost = hairline border.
+- **Page root** is `bg-[#0e0e11]` with `overflow-x-clip` so full-bleed elements
+  can use `w-screen` without a horizontal scrollbar.
+
+## 8. Docs (fumadocs)
+
+The docs render through fumadocs with the charcoal base unified to `#0e0e11`
+(`--color-dark-coal`). Author docs with fumadocs MDX components rather than raw
+markdown where it adds clarity:
+
+- **`<Callout type="info|warn|error">`** for notes, gotchas, and preview flags —
+  never a raw `>` blockquote.
+- **`<Tabs>`** for package-manager install commands (pnpm / npm / yarn / bun).
+- **`<Steps>`/`<Step>`** for sequential procedures (getting-started, tutorials).
+- Code blocks are syntax-highlighted via shiki (`github-dark` / `github-light`).
+
+A build-time gate (`scripts/check-doc-imports.mjs`) verifies every `ts`/`tsx`
+snippet's imports resolve to real package exports.
