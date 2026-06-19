@@ -14,13 +14,30 @@ Reach for a container when a job doesn't fit the Workers runtime: an existing
 binary (ffmpeg, headless Chrome, a Python ML model), a long-running process, or
 anything that needs a full filesystem.
 
-```sh
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```bash tab="pnpm"
 pnpm add @lunora/container
 ```
 
-> Containers require the **Workers Paid** plan. Images must target
-> **`linux/amd64`** — on Apple Silicon, build with `--platform linux/amd64`
-> (the scaffolded Dockerfile does this for you). See [Limits](/docs/limits).
+```bash tab="npm"
+npm install @lunora/container
+```
+
+```bash tab="yarn"
+yarn add @lunora/container
+```
+
+```bash tab="bun"
+bun add @lunora/container
+```
+
+</Tabs>
+
+<Callout type="warn">
+    Containers require the **Workers Paid** plan. Images must target **`linux/amd64`** — on Apple Silicon, build with `--platform linux/amd64` (the scaffolded
+    Dockerfile does this for you). See [Limits](/docs/limits).
+</Callout>
 
 ## Declare a container
 
@@ -126,10 +143,10 @@ await sandbox.destroy(); // tear down and discard the ephemeral disk
 `.any()` and `.pool()` return fetch-only handles — lifecycle control is for
 named instances you own.
 
-> Cloudflare has no built-in autoscaling yet: pools are a fixed size and
-> `.any()`/`.pool()` pick uniformly, ignoring location. `.pool()` is the
-> recommended call for stateless work until then; for batch work, drive
-> instances from a [scheduler](/docs/packages/scheduler) cron or `runAfter`.
+<Callout type="warn">
+    Cloudflare has no built-in autoscaling yet: pools are a fixed size and `.any()`/`.pool()` pick uniformly, ignoring location. `.pool()` is the recommended
+    call for stateless work until then; for batch work, drive instances from a [scheduler](/docs/packages/scheduler) cron or `runAfter`.
+</Callout>
 
 ## Calling Lunora from inside a container
 

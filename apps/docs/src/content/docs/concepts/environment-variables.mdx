@@ -85,10 +85,10 @@ This is exactly how, for example, the security layer reads its CORS allowlist
 from config without a code change: set `LUNORA_ALLOWED_ORIGINS` as a `var` and
 the worker picks it up at request time (see [Security](/docs/concepts/security)).
 
-> Lunora never logs secret values, and the `wrangler-validator` plugin warns when
-> a binding marked `secret: true` in your schema is missing from your secret
-> list, so a forgotten `wrangler secret put` is a build-time warning, not a
-> production 500.
+<Callout type="warn">
+    Lunora never logs secret values, and the `wrangler-validator` plugin warns when a binding marked `secret: true` in your schema is missing from your secret
+    list, so a forgotten `wrangler secret put` is a build-time warning, not a production 500.
+</Callout>
 
 ## Accessing `env` inside your app
 

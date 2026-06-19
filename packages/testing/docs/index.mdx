@@ -10,9 +10,25 @@ database — no Durable Object, no `wrangler`, no network — and the **mail-cat
 helpers** re-exported from [`@lunora/mail/testing`](/docs/packages/mail) for
 driving end-to-end email flows.
 
-```sh
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```bash tab="pnpm"
 pnpm add -D @lunora/testing
 ```
+
+```bash tab="npm"
+npm install -D @lunora/testing
+```
+
+```bash tab="yarn"
+yarn add -d @lunora/testing
+```
+
+```bash tab="bun"
+bun add -D @lunora/testing
+```
+
+</Tabs>
 
 ## In-memory harness
 
@@ -185,10 +201,10 @@ test("stubbed surfaces throw a clear error", async () => {
 });
 ```
 
-> The stub only throws when a handler actually touches it — functions that
-> never reach for `ctx.storage` / `ctx.scheduler` / `ctx.vectors` / `ctx.fetch`
-> still run. HTTP actions, scheduled-function draining, real R2 storage,
-> `.global()` / D1 tables, and Vectorize are deferred to a follow-up.
+<Callout type="warn">
+    The stub only throws when a handler actually touches it — functions that never reach for `ctx.storage` / `ctx.scheduler` / `ctx.vectors` / `ctx.fetch` still
+    run. HTTP actions, scheduled-function draining, real R2 storage, `.global()` / D1 tables, and Vectorize are deferred to a follow-up.
+</Callout>
 
 ## Mail-catcher helpers (E2E)
 

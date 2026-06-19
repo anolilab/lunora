@@ -91,9 +91,10 @@ export const getProfile = query
     });
 ```
 
-> `.output()` does not apply to streaming/subscription chunks — each chunk is
-> yielded as-is. Use it for the single resolved value of a `query` / `mutation`
-> / `action`.
+<Callout type="info">
+    `.output()` does not apply to streaming/subscription chunks — each chunk is yielded as-is. Use it for the single resolved value of a `query` / `mutation` /
+    `action`.
+</Callout>
 
 ## Return-type inference to the client
 

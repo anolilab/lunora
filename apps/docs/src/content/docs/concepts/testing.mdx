@@ -9,9 +9,25 @@ runs those handlers against a **fresh in-memory SQLite database** (no Durable
 Object, no `wrangler`, no network), so a query/mutation/action suite is a normal,
 fast Vitest run.
 
-```sh
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```sh tab="pnpm"
 pnpm add -D @lunora/testing
 ```
+
+```sh tab="npm"
+npm install -D @lunora/testing
+```
+
+```sh tab="yarn"
+yarn add -D @lunora/testing
+```
+
+```sh tab="bun"
+bun add -D @lunora/testing
+```
+
+</Tabs>
 
 ## The in-memory harness
 
@@ -120,9 +136,10 @@ test("a send shows up in the next list", async () => {
 });
 ```
 
-> Proving the **full** live path (SSR preload → WebSocket push → second-tab
-> update) needs a running, scaffolded app and is a manual procedure, not a unit
-> test. See [Manual end-to-end verification](/docs/frameworks/verify-live-loaders).
+<Callout type="info">
+    Proving the **full** live path (SSR preload → WebSocket push → second-tab update) needs a running, scaffolded app and is a manual procedure, not a unit
+    test. See [Manual end-to-end verification](/docs/frameworks/verify-live-loaders).
+</Callout>
 
 ### Auth and row-level security
 

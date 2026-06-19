@@ -10,10 +10,11 @@ Solid's fine-grained signals map directly onto Lunora's per-subscription deltas,
 so a live query is just a signal the socket writes to: only the components that
 read the accessor re-render.
 
-> **Preview.** The Solid adapter exists and exposes the same hydrate-then-subscribe
-> handoff as React, but it is **preview** maturity — not yet proven end-to-end
-> against a running app. Solid lands first after React because its signals map
-> most directly onto Lunora deltas. See [Bring your framework](/docs/frameworks/bring-your-framework).
+<Callout type="warn">
+    **Preview.** The Solid adapter exists and exposes the same hydrate-then-subscribe handoff as React, but it is **preview** maturity — not yet proven
+    end-to-end against a running app. Solid lands first after React because its signals map most directly onto Lunora deltas. See [Bring your
+    framework](/docs/frameworks/bring-your-framework).
+</Callout>
 
 ```tsx
 import { LunoraClient } from "lunora/client";

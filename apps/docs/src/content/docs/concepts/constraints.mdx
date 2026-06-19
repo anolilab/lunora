@@ -45,11 +45,11 @@ export default defineSchema({
 | Non-null (`NOT NULL`) | default on every column; opt out with `.nullable()` | Write time — column validator parse        | `ValidationError`                                |
 | Foreign-key delete    | `r.one(table, { field, onDelete })`                 | Delete time on the referenced (parent) row | `ConflictError` (`CONFLICT`, 409) for `restrict` |
 
-> The advisor [`constraint_validator`](/docs/concepts/advisors) lint is a
-> _complementary_ check: it samples existing rows and flags ones that already
-> violate a declared constraint (data inserted before the constraint existed:
-> a migration, a raw import, a past bug). Write-time enforcement guards new
-> writes; the advisor catches the backlog.
+<Callout type="info">
+    The advisor [`constraint_validator`](/docs/concepts/advisors) lint is a _complementary_ check: it samples existing rows and flags ones that already violate
+    a declared constraint (data inserted before the constraint existed: a migration, a raw import, a past bug). Write-time enforcement guards new writes; the
+    advisor catches the backlog.
+</Callout>
 
 ## Unique
 
@@ -68,9 +68,10 @@ When a write would create a duplicate, the storage layer maps the engine's
 `UNIQUE constraint failed` error to a `ConflictError` (code `CONFLICT`, HTTP
 status `409`), so callers can refetch and retry or surface the conflict.
 
-> `.unique()` (the column constraint) is distinct from the `.unique()` **query**
-> helper, which asserts a read matched at most one row and throws a
-> `NotUniqueError` (code `NOT_UNIQUE`) when more than one matches.
+<Callout type="info">
+    `.unique()` (the column constraint) is distinct from the `.unique()` **query** helper, which asserts a read matched at most one row and throws a
+    `NotUniqueError` (code `NOT_UNIQUE`) when more than one matches.
+</Callout>
 
 ## Non-null
 
@@ -88,10 +89,10 @@ defineTable({
 });
 ```
 
-> `.default(value)` / `.$defaultFn(fn)` make a column _optional on insert_ (the
-> write layer fills it) but it is still `NOT NULL` once stored. "Optional on
-> insert" and "nullable" are independent. Use `.nullable()` only when `NULL` is
-> a value you actually want to read back.
+<Callout type="info">
+    `.default(value)` / `.$defaultFn(fn)` make a column _optional on insert_ (the write layer fills it) but it is still `NOT NULL` once stored. "Optional on
+    insert" and "nullable" are independent. Use `.nullable()` only when `NULL` is a value you actually want to read back.
+</Callout>
 
 ## Foreign-key integrity
 
@@ -124,12 +125,11 @@ non-null FK pointing at a missing row only surfaces via the advisor
 `constraint_validator` lint (which reports the dangling reference as a sampled
 finding).
 
-> **Cross-backend caveat.** When a cascade crosses storage backends (a sharded
-> Durable Object holder of a `.global()` D1 parent, or vice-versa) the cascade
-> is _not transactional_: the global side fires before the local delete commits.
-> If the local delete then fails, holders may be gone while the parent remains.
-> Add your own reconciliation (a periodic job or a queue retry) where this
-> matters.
+<Callout type="warn">
+    **Cross-backend caveat.** When a cascade crosses storage backends (a sharded Durable Object holder of a `.global()` D1 parent, or vice-versa) the cascade is
+    _not transactional_: the global side fires before the local delete commits. If the local delete then fails, holders may be gone while the parent remains.
+    Add your own reconciliation (a periodic job or a queue retry) where this matters.
+</Callout>
 
 ## Error codes
 

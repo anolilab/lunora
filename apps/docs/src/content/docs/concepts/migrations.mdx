@@ -18,9 +18,10 @@ Separately, **data migrations** (`defineMigration`) rewrite existing rows in a
 sharded table: a backfill or shape change applied to live documents, running
 inside each shard's DO in resumable batches.
 
-> There is no migrations DSL for sharded-table _schema_. If all your tables are
-> sharded, the only migration surface you'll touch is `defineMigration` for data
-> backfills.
+<Callout type="info">
+    There is no migrations DSL for sharded-table _schema_. If all your tables are sharded, the only migration surface you'll touch is `defineMigration` for data
+    backfills.
+</Callout>
 
 ## Schema migrations (global tables)
 
@@ -78,9 +79,10 @@ nothing) to leave it untouched; untouched rows are counted as processed, not
 changed. The runner always preserves the original `_id` and `_creationTime`, so
 a transform should not change row identity.
 
-> `id` and `table` must be **static string literals**. Codegen lifts them at
-> build time to key the registry and resolve the target table, and rejects
-> duplicate ids across the project.
+<Callout type="info">
+    `id` and `table` must be **static string literals**. Codegen lifts them at build time to key the registry and resolve the target table, and rejects
+    duplicate ids across the project.
+</Callout>
 
 ### Scaffolding
 

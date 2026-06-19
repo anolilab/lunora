@@ -64,9 +64,11 @@ Each entry in the config map is a `RateLimitConfig`:
 | `shards`   | `number`        | `1`     | Split a hot limit across N independent sub-buckets. Positive integer; `1` is equivalent to unset. See [Sharding](#sharding). |
 | `start`    | `number`        | `0`     | Phase offset in epoch ms for windowed algorithms — windows align to `start + n * period`. Ignored by token buckets.          |
 
-> The constructor validates every config up front: a non-positive `period` or
-> `rate`, a negative `capacity`, or a non-integer/`< 1` `shards` throws at
-> construction rather than corrupting accounting later.
+<Callout type="info">
+The constructor validates every config up front: a non-positive `period` or
+`rate`, a negative `capacity`, or a non-integer/`< 1` `shards` throws at
+construction rather than corrupting accounting later.
+</Callout>
 
 ## Consuming a limit
 
@@ -148,11 +150,11 @@ the rest of `options` matches `rateLimit`'s.
 | `message`  | `string`                       | —       | Override the error message thrown on rejection.                              |
 | `failOpen` | `boolean`                      | `false` | Behavior when the limiter itself throws (store unavailable, etc). See below. |
 
-> **Failure policy:** the middleware **fails closed by default** — if resolving
-> or invoking the limiter throws, it logs via `console.error` and rejects with
-> `503`. This is the safer default for security-sensitive limits (auth, account
-> creation). Set `failOpen: true` only when degraded availability is preferable
-> to refusal — a failing limiter then admits every request.
+<Callout type="warn">
+    **Failure policy:** the middleware **fails closed by default** — if resolving or invoking the limiter throws, it logs via `console.error` and rejects with
+    `503`. This is the safer default for security-sensitive limits (auth, account creation). Set `failOpen: true` only when degraded availability is preferable
+    to refusal — a failing limiter then admits every request.
+</Callout>
 
 ## Deny list
 
@@ -219,10 +221,10 @@ export const rateLimits = defineTable({
 }).index("by_key", ["key"]);
 ```
 
-> Inside a Durable Object the input gate serializes the limiter's
-> read-modify-write against storage, so both SQL- and ORM-backed stores are
-> atomic against concurrent calls without an explicit transaction. Driving
-> `createSqlStore` outside a DO, you own serialization yourself.
+<Callout type="info">
+    Inside a Durable Object the input gate serializes the limiter's read-modify-write against storage, so both SQL- and ORM-backed stores are atomic against
+    concurrent calls without an explicit transaction. Driving `createSqlStore` outside a DO, you own serialization yourself.
+</Callout>
 
 ## Plugin form
 

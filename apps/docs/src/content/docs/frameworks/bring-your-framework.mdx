@@ -9,7 +9,7 @@ SolidStart, SvelteKit, Nuxt, Astro), composed into a single Cloudflare Worker.
 You keep your framework's routing, rendering, and developer experience; Lunora
 adds type-safe data and [live loaders](/docs/frameworks/reactive-loaders).
 
-> **Bring your framework. Your loaders are live.**
+<Callout type="info">**Bring your framework. Your loaders are live.**</Callout>
 
 ## One worker, two dispatch flows
 
@@ -45,13 +45,15 @@ never collides with your framework's routes. Pages and API go to your framework;
 queries, mutations, and subscriptions go to `/_lunora/*`. A 500 from your SSR
 handler does not take down the realtime endpoints.
 
-> **Shipped:** a `composeWorker({ httpRouter, ...lunoraOptions })` helper, a thin
-> wrapper over `createWorker` so templates read cleanly, plus an in-process
-> `serverQuery` fast-path so an SSR loader can call Lunora directly inside the
-> same worker instead of round-tripping `/_lunora/rpc`. `serverQuery` still makes
-> the worker-to-Durable-Object hop (dispatch lives inside the DO, so a worker-side
-> `createCaller` is impossible), but it drops the self-`fetch` loopback while
-> keeping byte-identical identity and RLS semantics.
+<Callout type="info">
+**Shipped:** a `composeWorker({ httpRouter, ...lunoraOptions })` helper, a thin
+wrapper over `createWorker` so templates read cleanly, plus an in-process
+`serverQuery` fast-path so an SSR loader can call Lunora directly inside the
+same worker instead of round-tripping `/_lunora/rpc`. `serverQuery` still makes
+the worker-to-Durable-Object hop (dispatch lives inside the DO, so a worker-side
+`createCaller` is impossible), but it drops the self-`fetch` loopback while
+keeping byte-identical identity and RLS semantics.
+</Callout>
 
 ## The per-framework matrix
 
@@ -71,29 +73,32 @@ fighting their build (the adapter ships `withLunora()`-style wrappers). **Class
 C** has no SSR loaders, so there's nothing to make live on the server. The client
 adapter still gives you live queries; they just hydrate on the client.
 
-> **How class-B composition deploys one worker.** The wrinkle class-B frameworks
-> introduce is that their Cloudflare adapter owns the build. `@sveltejs/adapter-cloudflare`
-> **overwrites whatever the wrangler `main` field points at** with its own generated
-> worker, so `main` cannot point at the template's `src/worker.ts` (the build would
-> clobber it). Here is the working wiring, proven by a real `lunora init -t sveltekit`,
-> then `vite build`, then `wrangler deploy --dry-run`:
->
-> 1. Point wrangler `main` at the adapter's **own** default output
->    (`.svelte-kit/cloudflare/_worker.js`), so the adapter writes there and never
->    touches `src/worker.ts`.
-> 2. Keep `src/worker.ts` as the `withLunora` wrapper: it imports that emitted
->    handler, mounts Lunora realtime under `/_lunora/*`, and re-exports `ShardDO`.
-> 3. `lunora deploy` passes `src/worker.ts` as the **positional** deploy entry,
->    which overrides `main`, so the single worker Cloudflare runs is the composed
->    one. (The template's `deploy` script runs `vite build` first so the adapter
->    output exists.)
->
-> The dry-run confirms a single worker exporting `ShardDO` with both the `SHARD`
-> (Durable Object) and `ASSETS` bindings: no second worker, no class-C fallback.
-> Astro composes the same way via `src/worker.ts` plus `withLunora`. Because
-> `@astrojs/cloudflare` writes to `dist/_worker.js/` and does **not** clobber `main`,
-> its wiring needs no `main` redirection. Nuxt uses Nitro's emitted server as `main`
-> directly.
+<Callout type="info">
+**How class-B composition deploys one worker.** The wrinkle class-B frameworks
+introduce is that their Cloudflare adapter owns the build. `@sveltejs/adapter-cloudflare`
+**overwrites whatever the wrangler `main` field points at** with its own generated
+worker, so `main` cannot point at the template's `src/worker.ts` (the build would
+clobber it). Here is the working wiring, proven by a real `lunora init -t sveltekit`,
+then `vite build`, then `wrangler deploy --dry-run`:
+
+1. Point wrangler `main` at the adapter's **own** default output
+   (`.svelte-kit/cloudflare/_worker.js`), so the adapter writes there and never
+   touches `src/worker.ts`.
+2. Keep `src/worker.ts` as the `withLunora` wrapper: it imports that emitted
+   handler, mounts Lunora realtime under `/_lunora/*`, and re-exports `ShardDO`.
+3. `lunora deploy` passes `src/worker.ts` as the **positional** deploy entry,
+   which overrides `main`, so the single worker Cloudflare runs is the composed
+   one. (The template's `deploy` script runs `vite build` first so the adapter
+   output exists.)
+
+The dry-run confirms a single worker exporting `ShardDO` with both the `SHARD`
+(Durable Object) and `ASSETS` bindings: no second worker, no class-C fallback.
+Astro composes the same way via `src/worker.ts` plus `withLunora`. Because
+`@astrojs/cloudflare` writes to `dist/_worker.js/` and does **not** clobber `main`,
+its wiring needs no `main` redirection. Nuxt uses Nitro's emitted server as `main`
+directly.
+
+</Callout>
 
 ## Client adapters
 
@@ -111,8 +116,9 @@ an SSR value into a live subscription.
 | `@lunora/svelte` | stores (`$store`) / runes        | preview |
 | `@lunora/vue`    | composables (`ref` / `reactive`) | preview |
 
-> Solid lands first after React: its fine-grained signals map most directly onto
-> Lunora deltas, so it showcases live loaders with the least glue.
+<Callout type="info">
+    Solid lands first after React: its fine-grained signals map most directly onto Lunora deltas, so it showcases live loaders with the least glue.
+</Callout>
 
 The Solid, Svelte, and Vue adapter **packages exist** and expose the same
 hydrate-then-subscribe handoff under their idiom, but they are **preview**: not

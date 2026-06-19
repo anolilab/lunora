@@ -99,9 +99,10 @@ const approval = await context.step.waitForEvent<{ approved: boolean }>("await-a
 });
 ```
 
-> Steps must be **JSON-serialisable and idempotent** — the same determinism
-> contract Cloudflare (and Convex) impose. A step body may run more than once on
-> retry, so don't rely on side effects outside the step's return value.
+<Callout type="warn">
+    Steps must be **JSON-serialisable and idempotent** — the same determinism contract Cloudflare (and Convex) impose. A step body may run more than once on
+    retry, so don't rely on side effects outside the step's return value.
+</Callout>
 
 ## Start and manage instances
 
@@ -175,8 +176,9 @@ name; lets you **start an instance** from a JSON-params form; and shows a table
 of instances with their live status (queued / running / complete / errored) and
 output. See [the Studio guide](/docs/packages/studio#functions).
 
-> Cloudflare bills for workflow instance-state storage. Keep step payloads small
-> and set a `retention` policy when you don't need long-lived instance history.
+<Callout type="warn">
+    Cloudflare bills for workflow instance-state storage. Keep step payloads small and set a `retention` policy when you don't need long-lived instance history.
+</Callout>
 
 ## See also
 

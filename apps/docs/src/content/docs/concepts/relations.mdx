@@ -127,11 +127,11 @@ posts: defineTable({
     .relations((r) => ({ author: r.one("users", { field: "authorId" }) }));
 ```
 
-> **Advisors flag this for you.** The static lint `unindexed_foreign_key`
-> walks every declared relation and reports any FK column that no index leads
-> with, since the read that follows the relation would scan. It surfaces in the
-> [Studio Advisors table](/docs/concepts/advisors); fix it by adding an index
-> whose first field is the FK column.
+<Callout type="info">
+    **Advisors flag this for you.** The static lint `unindexed_foreign_key` walks every declared relation and reports any FK column that no index leads with,
+    since the read that follows the relation would scan. It surfaces in the [Studio Advisors table](/docs/concepts/advisors); fix it by adding an index whose
+    first field is the FK column.
+</Callout>
 
 ## Querying across a relation
 

@@ -10,9 +10,25 @@ any function handler via `ctx.vectors`. You bring your own embedder; the adapter
 handles the Vectorize binding plumbing, batching, concurrency limits, and delete
 propagation.
 
-```sh
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```bash tab="pnpm"
 pnpm add @lunora/vectors
 ```
+
+```bash tab="npm"
+npm install @lunora/vectors
+```
+
+```bash tab="yarn"
+yarn add @lunora/vectors
+```
+
+```bash tab="bun"
+bun add @lunora/vectors
+```
+
+</Tabs>
 
 When your schema declares at least one vector index, codegen imports
 `@lunora/vectors` into the generated server and wires a typed `ctx.vectors` onto
@@ -110,11 +126,11 @@ non-transactional, upserts/deletes are keyed by row id (idempotent), and a
 fan-out failure triggers a best-effort compensating delete before the error is
 re-thrown. The authoritative recovery is re-running the (idempotent) write.
 
-> **Tenant isolation.** Vectorize indexes are account-global and shared by every
-> shard. In a multi-tenant / sharded app you **must** scope writes and queries
-> with a `namespace` (the shard/tenant key) — without it, one tenant's vectors
-> are queryable by another. The adapter emits a one-time dev warning when an
-> index carrying metadata is synced without a namespace.
+<Callout type="warn">
+    **Tenant isolation.** Vectorize indexes are account-global and shared by every shard. In a multi-tenant / sharded app you **must** scope writes and queries
+    with a `namespace` (the shard/tenant key) — without it, one tenant's vectors are queryable by another. The adapter emits a one-time dev warning when an
+    index carrying metadata is synced without a namespace.
+</Callout>
 
 ## `ctx.vectors`
 

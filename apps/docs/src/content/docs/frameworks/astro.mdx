@@ -20,13 +20,29 @@ server-side seams Astro needs:
 This is the Astro-specific companion to [Bring your framework](/docs/frameworks/bring-your-framework)
 (Astro is a **class-B** framework there) and [Reactive loaders](/docs/frameworks/reactive-loaders).
 
-> **Bring your framework. Your loaders are live.**
+<Callout type="info">**Bring your framework. Your loaders are live.**</Callout>
 
 ## Install
 
-```sh
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```sh tab="pnpm"
 pnpm add @lunora/astro
 ```
+
+```sh tab="npm"
+npm install @lunora/astro
+```
+
+```sh tab="yarn"
+yarn add @lunora/astro
+```
+
+```sh tab="bun"
+bun add @lunora/astro
+```
+
+</Tabs>
 
 `astro` is an **optional** peer (`^6.0.0`); only the host Astro app pulls it in.
 `@lunora/astro`'s own public types are declared structurally, so the package
@@ -111,10 +127,10 @@ export default withLunora(
 );
 ```
 
-> **Injection point (Astro 6 / `@astrojs/cloudflare` v13).** The adapter no longer
-> emits a `dist/_worker.js` bundle as a custom-entry target. Import `handle` from
-> `@astrojs/cloudflare/handler` (the adapter's built-in SSR fetch function) and
-> wrap it at that boundary, as above.
+<Callout type="info">
+    **Injection point (Astro 6 / `@astrojs/cloudflare` v13).** The adapter no longer emits a `dist/_worker.js` bundle as a custom-entry target. Import `handle`
+    from `@astrojs/cloudflare/handler` (the adapter's built-in SSR fetch function) and wrap it at that boundary, as above.
+</Callout>
 
 The factory is rebuilt per request, so per-request bindings wire in correctly. If
 Astro's host handler carries its own `scheduled` and you configure no Lunora cron
@@ -218,9 +234,10 @@ adapter), so `@astrojs/cloudflare/handler`'s `handle` resolves at build time. Ru
 the Astro build first so the adapter output exists, then deploy. See
 [Deploy your framework](/docs/frameworks/deploy) for the one-worker deploy story.
 
-> Re-export `ShardDO` from your worker entry (or the schema's generated server
-> module) so the single deployed worker exports the Durable Object class wrangler
-> binds.
+<Callout type="info">
+    Re-export `ShardDO` from your worker entry (or the schema's generated server module) so the single deployed worker exports the Durable Object class wrangler
+    binds.
+</Callout>
 
 ## See also
 

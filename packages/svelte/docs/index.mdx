@@ -13,10 +13,11 @@ mutation is a small bundle of stores plus an awaitable `mutate`.
 The package is plain `.ts` over Svelte stores — no `.svelte` component compiler is
 required to build or use it.
 
-> **Preview.** The Svelte adapter exists and exposes the same hydrate-then-subscribe
-> handoff as React, but it is **preview** maturity — not yet proven end-to-end
-> against a running app. The React adapter is the only one verified through the
-> full live-loader path. See [Bring your framework](/docs/frameworks/bring-your-framework).
+<Callout type="warn">
+    **Preview.** The Svelte adapter exists and exposes the same hydrate-then-subscribe handoff as React, but it is **preview** maturity — not yet proven
+    end-to-end against a running app. The React adapter is the only one verified through the full live-loader path. See [Bring your
+    framework](/docs/frameworks/bring-your-framework).
+</Callout>
 
 ```svelte
 <!-- +layout.svelte — provide the client once at the root. -->
@@ -44,9 +45,11 @@ Re-exported types: `ArgsOf`, `LunoraClient`, `FunctionReference`,
 `MutationCallOptions`, `Preloaded`, `ReturnOf`, plus `QueryStore`,
 `QueryStoreOptions`, and the `MutationHandle` interface.
 
-> Unlike React/Solid/Vue (which use `useLunora`), the Svelte provider accessor is
-> the idiomatic `getLunoraClient`. There is no `<LunoraProvider>` component — you
-> publish the client with `setLunoraClient` during component init.
+<Callout type="info">
+Unlike React/Solid/Vue (which use `useLunora`), the Svelte provider accessor is
+the idiomatic `getLunoraClient`. There is no `<LunoraProvider>` component — you
+publish the client with `setLunoraClient` during component init.
+</Callout>
 
 ## Provider — `setLunoraClient` / `getLunoraClient`
 

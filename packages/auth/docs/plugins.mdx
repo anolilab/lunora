@@ -98,9 +98,11 @@ behaviour and the full option reference are better-auth's, linked per row.
 | `captcha`        | Gate sensitive auth endpoints with Turnstile, reCAPTCHA, hCaptcha, or captchafox. See [CAPTCHA / Turnstile](#captcha--turnstile). | [better-auth: captcha](https://www.better-auth.com/docs/plugins/captcha)        |
 | `haveIBeenPwned` | Reject passwords found in the Have I Been Pwned breach corpus (k-anonymity check).                                                | [better-auth: HIBP](https://www.better-auth.com/docs/plugins/have-i-been-pwned) |
 
-> `captcha`, `mcp`, and `withMcpAuth` have no dedicated `better-auth/plugins/<name>`
-> subpath. They ship via the `better-auth/plugins` barrel, and `@lunora/auth/plugins`
-> re-exports them from there.
+<Callout type="info">
+`captcha`, `mcp`, and `withMcpAuth` have no dedicated `better-auth/plugins/<name>`
+subpath. They ship via the `better-auth/plugins` barrel, and `@lunora/auth/plugins`
+re-exports them from there.
+</Callout>
 
 Anything else better-auth ships, or a community plugin like Polar, keeps
 working too: `createAuth(...)` passes `plugins:` through unchanged. For setup
@@ -200,10 +202,10 @@ export const submit = mutation
     });
 ```
 
-> **Use the `captcha` plugin for the auth flow.** It hooks better-auth's
-> pipeline and reads the token from the `x-captcha-response` header. The
-> standalone helpers above are for **non-auth** procedures, where you hand them
-> the token explicitly — so reach for them only outside the sign-in/sign-up flow.
+<Callout type="warn">
+    **Use the `captcha` plugin for the auth flow.** It hooks better-auth's pipeline and reads the token from the `x-captcha-response` header. The standalone
+    helpers above are for **non-auth** procedures, where you hand them the token explicitly — so reach for them only outside the sign-in/sign-up flow.
+</Callout>
 
 ## Studio user dashboard
 
@@ -261,8 +263,7 @@ adapter directly, so it is **not** an end-user API. Password hashes, session
 tokens, and OAuth access/refresh tokens are stripped from every response; the
 only token ever returned is the one from an explicit **Impersonate**.
 
-> The older read-only `authIntrospector` option still works (browse-only) but
-> is deprecated — prefer `authAdmin`.
+<Callout type="warn">The older read-only `authIntrospector` option still works (browse-only) but is deprecated — prefer `authAdmin`.</Callout>
 
 ## The `withAuthPlugins` middleware
 
@@ -360,9 +361,25 @@ admin-only ban panel.
 
 Intentionally not bundled. If you want Polar in the mix:
 
-```bash
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```bash tab="pnpm"
 pnpm add @polar-sh/better-auth
 ```
+
+```bash tab="npm"
+npm install @polar-sh/better-auth
+```
+
+```bash tab="yarn"
+yarn add @polar-sh/better-auth
+```
+
+```bash tab="bun"
+bun add @polar-sh/better-auth
+```
+
+</Tabs>
 
 then add `polar(...)` to the `plugins:` array in your `createAuth(...)`
 call. `ensureMigrated` will pick up Polar's tables on the next boot.

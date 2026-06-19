@@ -11,6 +11,9 @@ messages table sharded by `channelId` so it scales past one Durable Object.
 You'll need the prerequisites from [Getting started](/docs/getting-started):
 Node 22+, pnpm 10+, and a Cloudflare account if you want to deploy.
 
+<Steps>
+
+<Step>
 ## 1. Scaffold
 
 ```bash
@@ -22,6 +25,9 @@ pnpm install
 The template gives you a `lunora/schema.ts`, a starter `lunora/messages.ts`,
 and a `src/server/index.ts` that boots `@lunora/runtime`'s `createWorker`.
 
+</Step>
+
+<Step>
 ## 2. Model the data
 
 Replace `lunora/schema.ts` with two tables: `channels` (global, so every shard
@@ -54,6 +60,9 @@ want them addressable from any shard. `.shardBy("channelId")` puts each
 channel's messages in its own Durable Object so a single noisy room can't
 exhaust another room's budget.
 
+</Step>
+
+<Step>
 ## 3. Generate the migration
 
 `channels` is global, so it needs a D1 migration. Lunora reads the schema
@@ -66,6 +75,9 @@ pnpm lunora migrate generate init
 
 Commit the SQL and the `.snapshot.json` next to it — both are deterministic.
 
+</Step>
+
+<Step>
 ## 4. Write the query
 
 Create `lunora/messages.ts` (the template already has a starter version — replace
@@ -87,6 +99,9 @@ Every Lunora `query` doubles as a subscription. The React side calls
 `useQuery` and re-renders whenever a mutation in the same shard touches the
 `messages` table.
 
+</Step>
+
+<Step>
 ## 5. Write the mutation
 
 ```ts
@@ -106,6 +121,9 @@ export const send = mutation.input({ channelId: v.id("channels"), text: v.string
 TypeScript yells. At runtime the insert broadcasts a delta envelope; every
 client subscribed to `list` for that `channelId` re-renders.
 
+</Step>
+
+<Step>
 ## 6. Wire the React app
 
 `src/client/main.tsx` already wraps your tree in `LunoraProvider`. Build the
@@ -145,6 +163,9 @@ export const Chat = ({ channelId }: { channelId: string }) => {
 };
 ```
 
+</Step>
+
+<Step>
 ## 7. Run the dev loop
 
 ```bash
@@ -156,6 +177,9 @@ Open two browser tabs at `http://localhost:5173`, point them at the same
 without a refresh: the mutation broadcast travelled through the channel's
 Durable Object back to every subscriber.
 
+</Step>
+
+<Step>
 ## 8. Deploy
 
 ```bash
@@ -166,6 +190,10 @@ pnpm lunora deploy
 D1 migrations through `MigrationRunner`, and finally invokes
 `wrangler deploy`. Your chat is now live on Cloudflare's edge: one DO per
 channel, hibernated when idle, billed by the millisecond.
+
+</Step>
+
+</Steps>
 
 ## Where to next
 

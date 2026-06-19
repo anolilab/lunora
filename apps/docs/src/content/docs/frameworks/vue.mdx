@@ -11,15 +11,32 @@ is a bundle of refs plus an awaitable `mutate`.
 This page is the task-oriented guide; for the full reference see
 [`@lunora/vue`](/docs/packages/vue).
 
-> **Preview.** The Vue adapter exposes the same hydrate-then-subscribe handoff as
-> React, but it is **preview** maturity: not yet proven end-to-end against a
-> running app. See [Bring your framework](/docs/frameworks/bring-your-framework).
+<Callout type="warn">
+    **Preview.** The Vue adapter exposes the same hydrate-then-subscribe handoff as React, but it is **preview** maturity: not yet proven end-to-end against a
+    running app. See [Bring your framework](/docs/frameworks/bring-your-framework).
+</Callout>
 
 ## Install
 
-```sh
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```sh tab="pnpm"
 pnpm add @lunora/vue
 ```
+
+```sh tab="npm"
+npm install @lunora/vue
+```
+
+```sh tab="yarn"
+yarn add @lunora/vue
+```
+
+```sh tab="bun"
+bun add @lunora/vue
+```
+
+</Tabs>
 
 ## Provide the client
 
@@ -146,11 +163,11 @@ See [Reactive loaders](/docs/frameworks/reactive-loaders) for the full handoff.
 `@lunora/vue/worker` re-exports `withLunora` for frameworks that expose their
 emitted fetch handler as an importable module.
 
-> **Nuxt caveat.** Nitro does not expose its fetch handler as an importable
-> module, so single-worker composition is **not** achievable for Nuxt. The
-> supported Nuxt integration is a two-worker split: the Nuxt/Nitro SSR worker
-> plus a standalone Lunora worker owning `/_lunora/*` + `ShardDO`, wired by
-> `NUXT_PUBLIC_LUNORA_URL`.
+<Callout type="warn">
+    **Nuxt caveat.** Nitro does not expose its fetch handler as an importable module, so single-worker composition is **not** achievable for Nuxt. The supported
+    Nuxt integration is a two-worker split: the Nuxt/Nitro SSR worker plus a standalone Lunora worker owning `/_lunora/*` + `ShardDO`, wired by
+    `NUXT_PUBLIC_LUNORA_URL`.
+</Callout>
 
 See [Deploy your framework](/docs/frameworks/deploy).
 

@@ -10,9 +10,25 @@ invoking its functions (`lunora_run_query`, `lunora_run_mutation`,
 `lunora_run_action`), each backed by [`@lunora/client`](/docs/packages/client) over
 HTTP RPC.
 
-```sh
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```bash tab="pnpm"
 pnpm add @lunora/mcp
 ```
+
+```bash tab="npm"
+npm install @lunora/mcp
+```
+
+```bash tab="yarn"
+yarn add @lunora/mcp
+```
+
+```bash tab="bun"
+bun add @lunora/mcp
+```
+
+</Tabs>
 
 The server is transport-agnostic. The shipped `lunora-mcp` binary speaks
 JSON-RPC over **stdio** — the transport MCP clients use when they spawn a
@@ -42,8 +58,9 @@ Configuration comes from the environment, so the spawn config stays a plain
 }
 ```
 
-> The binary exits non-zero if `LUNORA_URL` is missing or the transport fails to
-> connect, so the spawning client surfaces a startup failure immediately.
+<Callout type="info">
+    The binary exits non-zero if `LUNORA_URL` is missing or the transport fails to connect, so the spawning client surfaces a startup failure immediately.
+</Callout>
 
 ## Exposed tools
 

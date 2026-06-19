@@ -11,16 +11,33 @@ the socket writes to: only the components that read the accessor re-render.
 This page is the task-oriented guide; for the full reference see
 [`@lunora/solid`](/docs/packages/solid).
 
-> **Preview.** The Solid adapter exposes the same hydrate-then-subscribe handoff
-> as React, but it is **preview** maturity: not yet proven end-to-end against a
-> running app. Solid lands first after React because its signals map most directly
-> onto Lunora deltas. See [Bring your framework](/docs/frameworks/bring-your-framework).
+<Callout type="warn">
+    **Preview.** The Solid adapter exposes the same hydrate-then-subscribe handoff as React, but it is **preview** maturity: not yet proven end-to-end against a
+    running app. Solid lands first after React because its signals map most directly onto Lunora deltas. See [Bring your
+    framework](/docs/frameworks/bring-your-framework).
+</Callout>
 
 ## Install
 
-```sh
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```sh tab="pnpm"
 pnpm add @lunora/solid
 ```
+
+```sh tab="npm"
+npm install @lunora/solid
+```
+
+```sh tab="yarn"
+yarn add @lunora/solid
+```
+
+```sh tab="bun"
+bun add @lunora/solid
+```
+
+</Tabs>
 
 ## Provide the client
 

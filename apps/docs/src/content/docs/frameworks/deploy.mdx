@@ -9,8 +9,7 @@ realtime. There is no second service to provision and no second deploy to
 coordinate. This page covers how the single-worker bundle is assembled per
 framework class and how it ships.
 
-> **One worker, one deploy.** Your loaders and your live subscriptions run in the
-> same process, behind the same domain.
+<Callout type="info">**One worker, one deploy.** Your loaders and your live subscriptions run in the same process, behind the same domain.</Callout>
 
 For the framework-neutral deploy mechanics (`wrangler.jsonc` bindings, secrets,
 `lunora deploy`, log tailing) see the [Deployment](/docs/deployment) reference.
@@ -100,12 +99,11 @@ Object class and its migration** (`ShardDO`, `new_sqlite_classes`) are declared 
 the framework adapter's `wrangler.jsonc`, because the framework owns that file,
 not Lunora.
 
-> **Status: be honest about the tier.** Class-A deploy (TanStack Start) is
-> proven. Class-B composition (SvelteKit / Nuxt / Astro) is **preview**: the
-> templates and adapters exist, but the hook-injection and single-bundle deploy
-> have not been run end-to-end in production. Treat the class-B steps above as the
-> intended shape, and verify against your framework's current Cloudflare adapter
-> when you scaffold.
+<Callout type="warn">
+    **Status: be honest about the tier.** Class-A deploy (TanStack Start) is proven. Class-B composition (SvelteKit / Nuxt / Astro) is **preview**: the
+    templates and adapters exist, but the hook-injection and single-bundle deploy have not been run end-to-end in production. Treat the class-B steps above as
+    the intended shape, and verify against your framework's current Cloudflare adapter when you scaffold.
+</Callout>
 
 ## Class C — SPA / SSR-less
 

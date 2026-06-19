@@ -13,15 +13,32 @@ compiler is required to build it.
 This page is the task-oriented guide; for the full reference see
 [`@lunora/svelte`](/docs/packages/svelte).
 
-> **Preview.** The Svelte adapter exposes the same hydrate-then-subscribe handoff
-> as React, but it is **preview** maturity: not yet proven end-to-end against a
-> running app. See [Bring your framework](/docs/frameworks/bring-your-framework).
+<Callout type="warn">
+    **Preview.** The Svelte adapter exposes the same hydrate-then-subscribe handoff as React, but it is **preview** maturity: not yet proven end-to-end against
+    a running app. See [Bring your framework](/docs/frameworks/bring-your-framework).
+</Callout>
 
 ## Install
 
-```sh
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```sh tab="pnpm"
 pnpm add @lunora/svelte
 ```
+
+```sh tab="npm"
+npm install @lunora/svelte
+```
+
+```sh tab="yarn"
+yarn add @lunora/svelte
+```
+
+```sh tab="bun"
+bun add @lunora/svelte
+```
+
+</Tabs>
 
 ## Provide the client
 

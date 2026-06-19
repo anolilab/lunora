@@ -12,13 +12,29 @@ live-loader path (see [Bring your framework](/docs/frameworks/bring-your-framewo
 This page is the task-oriented guide; for the full hook reference see
 [`@lunora/react`](/docs/packages/react).
 
-> **Bring your framework. Your loaders are live.**
+<Callout type="info">**Bring your framework. Your loaders are live.**</Callout>
 
 ## Install
 
-```sh
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```sh tab="pnpm"
 pnpm add @lunora/react
 ```
+
+```sh tab="npm"
+npm install @lunora/react
+```
+
+```sh tab="yarn"
+yarn add @lunora/react
+```
+
+```sh tab="bun"
+bun add @lunora/react
+```
+
+</Tabs>
 
 ## Provide the client
 
@@ -133,8 +149,9 @@ server and read it with `usePreloadedQuery` on the client. See
 [`@lunora/react`](/docs/packages/react#server-components-nextjs-app-router) for the
 server reference.
 
-> Create a `createServerClient` **per request**. The bearer token and forwarded
-> cookies are per-user, so a shared module-level client would leak identity.
+<Callout type="warn">
+    Create a `createServerClient` **per request**. The bearer token and forwarded cookies are per-user, so a shared module-level client would leak identity.
+</Callout>
 
 ## One worker, one deploy
 

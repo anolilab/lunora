@@ -14,9 +14,25 @@ Outbound calls carry idempotency keys (no double-charge), and every mutation is
 authorized per-caller. The package never imports a provider SDK — you inject the
 client, so `stripe` stays an optional peer dependency.
 
-```sh
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```bash tab="pnpm"
 pnpm add @lunora/payment stripe
 ```
+
+```bash tab="npm"
+npm install @lunora/payment stripe
+```
+
+```bash tab="yarn"
+yarn add @lunora/payment stripe
+```
+
+```bash tab="bun"
+bun add @lunora/payment stripe
+```
+
+</Tabs>
 
 ## Configure
 
@@ -208,11 +224,11 @@ always returns `200` so the provider stops retrying — a duplicate or no-op eve
 is acknowledged, not re-applied. The inbound provider event id keys an
 append-only `events` log for idempotency and audit.
 
-> Webhooks are eventually-but-not-guaranteed: an endpoint down past the
-> provider's retry window can drop an event for good. `reconcile` re-fetches the
-> provider's current truth for given payment/subscription ids and overwrites the
-> store when it has drifted — pair it with a `@lunora/scheduler` job that sweeps
-> non-terminal rows.
+<Callout type="warn">
+    Webhooks are eventually-but-not-guaranteed: an endpoint down past the provider's retry window can drop an event for good. `reconcile` re-fetches the
+    provider's current truth for given payment/subscription ids and overwrites the store when it has drifted — pair it with a `@lunora/scheduler` job that
+    sweeps non-terminal rows.
+</Callout>
 
 ## Data it stores
 

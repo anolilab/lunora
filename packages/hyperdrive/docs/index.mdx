@@ -9,30 +9,49 @@ Hyperdrive](https://developers.cloudflare.com/hyperdrive/) — pooled, cached
 connections from the edge. It surfaces the binding's connection string and a
 driver-agnostic `ctx.sql` client.
 
-> **Integrate an existing database — don't replace the Lunora data layer.**
-> Hyperdrive points at a database Lunora has no visibility into, so two
-> invariants the rest of Lunora relies on do **not** hold for it:
->
-> 1. **Non-deterministic.** A SQL query over the network is an external,
->    mutable read — exactly like `fetch`. It is therefore **forbidden in
->    `query`/`mutation`** and available only on `ActionCtx`. The
->    `hyperdrive_outside_action` advisor lint flags any `ctx.sql` reached from a
->    query or mutation.
-> 2. **Non-reactive.** Live queries track writes to the DO's SQLite / D1. An
->    `UPDATE` issued over Hyperdrive produces **no** Lunora change event, so
->    **subscriptions will not re-run** when external rows change.
->
-> Hyperdrive is the right tool for "read/write my legacy Postgres from an
-> action," and the wrong tool for "make my Postgres reactive." If you want
-> external data to be reactive, write a **projection** of it into a
-> `defineSchema` DO/D1 table (see [Making external data
-> reactive](#making-external-data-reactive)).
+<Callout type="warn">
+**Integrate an existing database — don't replace the Lunora data layer.**
+Hyperdrive points at a database Lunora has no visibility into, so two
+invariants the rest of Lunora relies on do **not** hold for it:
+
+1. **Non-deterministic.** A SQL query over the network is an external,
+   mutable read — exactly like `fetch`. It is therefore **forbidden in
+   `query`/`mutation`** and available only on `ActionCtx`. The
+   `hyperdrive_outside_action` advisor lint flags any `ctx.sql` reached from a
+   query or mutation.
+2. **Non-reactive.** Live queries track writes to the DO's SQLite / D1. An
+   `UPDATE` issued over Hyperdrive produces **no** Lunora change event, so
+   **subscriptions will not re-run** when external rows change.
+
+Hyperdrive is the right tool for "read/write my legacy Postgres from an
+action," and the wrong tool for "make my Postgres reactive." If you want
+external data to be reactive, write a **projection** of it into a
+`defineSchema` DO/D1 table (see [Making external data
+reactive](#making-external-data-reactive)).
+
+</Callout>
 
 ## Install
 
-```bash
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```bash tab="pnpm"
 pnpm add @lunora/hyperdrive
 ```
+
+```bash tab="npm"
+npm install @lunora/hyperdrive
+```
+
+```bash tab="yarn"
+yarn add @lunora/hyperdrive
+```
+
+```bash tab="bun"
+bun add @lunora/hyperdrive
+```
+
+</Tabs>
 
 No driver is bundled — `postgres`, `pg`, and `mysql2` are heavy and the choice
 is yours. They are declared as **optional peer dependencies**; install the one

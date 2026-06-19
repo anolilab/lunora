@@ -10,10 +10,11 @@ re-expresses that contract as Vue composables. A live query is just a
 `shallowRef` the socket writes to; an optimistic mutation is a small bundle of
 refs plus an awaitable `mutate`.
 
-> **Preview.** The Vue adapter exists and exposes the same hydrate-then-subscribe
-> handoff as React, but it is **preview** maturity — not yet proven end-to-end
-> against a running app. The React adapter is the only one verified through the
-> full live-loader path. See [Bring your framework](/docs/frameworks/bring-your-framework).
+<Callout type="warn">
+    **Preview.** The Vue adapter exists and exposes the same hydrate-then-subscribe handoff as React, but it is **preview** maturity — not yet proven end-to-end
+    against a running app. The React adapter is the only one verified through the full live-loader path. See [Bring your
+    framework](/docs/frameworks/bring-your-framework).
+</Callout>
 
 ```ts
 import { LunoraClient } from "lunora/client";
@@ -167,8 +168,9 @@ await mutate(
 );
 ```
 
-> The Vue adapter does **not** ship a bound `withOptimisticUpdate(...)` handle
-> (React keeps one). Use `mutate(args, { optimisticUpdate })` per call instead.
+<Callout type="warn">
+    The Vue adapter does **not** ship a bound `withOptimisticUpdate(...)` handle (React keeps one). Use `mutate(args, {optimisticUpdate})` per call instead.
+</Callout>
 
 ## Reactive loaders — `hydratePreloaded`
 
@@ -235,12 +237,11 @@ fetch handler as an importable module. Re-exports `withLunora`
 framework handler as Lunora's fallback `httpRouter` and mounts only the reserved
 `/_lunora/*` plane plus `ShardDO`.
 
-> **Nuxt caveat.** Nitro does not expose its emitted fetch handler as an
-> importable virtual module, so single-worker `withLunora` composition is **not**
-> achievable for Nuxt. The supported Nuxt integration is a two-worker split: the
-> Nuxt/Nitro SSR worker plus a separate standalone Lunora worker owning
-> `/_lunora/*` + `ShardDO`, wired by `NUXT_PUBLIC_LUNORA_URL`. `withLunora`
-> stays useful for other frameworks that do expose their handler.
+<Callout type="warn">
+    **Nuxt caveat.** Nitro does not expose its emitted fetch handler as an importable virtual module, so single-worker `withLunora` composition is **not**
+    achievable for Nuxt. The supported Nuxt integration is a two-worker split: the Nuxt/Nitro SSR worker plus a separate standalone Lunora worker owning
+    `/_lunora/*` + `ShardDO`, wired by `NUXT_PUBLIC_LUNORA_URL`. `withLunora` stays useful for other frameworks that do expose their handler.
+</Callout>
 
 ## See also
 

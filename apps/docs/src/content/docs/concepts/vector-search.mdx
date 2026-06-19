@@ -10,9 +10,25 @@ every write, and you run similarity search from any function handler via
 `ctx.vectors`. Together with [`@lunora/ai`](/docs/packages/ai) embeddings, that's
 everything you need for retrieval-augmented generation (RAG).
 
-```sh
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```sh tab="pnpm"
 pnpm add @lunora/vectors
 ```
+
+```sh tab="npm"
+npm install @lunora/vectors
+```
+
+```sh tab="yarn"
+yarn add @lunora/vectors
+```
+
+```sh tab="bun"
+bun add @lunora/vectors
+```
+
+</Tabs>
 
 When your schema declares at least one vector index, codegen imports
 `@lunora/vectors` into the generated server and wires a typed `ctx.vectors` onto
@@ -60,10 +76,10 @@ source and upserts under the row's id (or removes it on delete). The sync runs
 inline within the mutation. Upserts and deletes are keyed by row id, so they're
 idempotent: to recover from a transient Vectorize failure, re-run the write.
 
-> **Tenant isolation.** Vectorize indexes are account-global and shared by every
-> shard. In a multi-tenant / sharded app you **must** scope writes and queries
-> with a `namespace` (the shard/tenant key). Without it, one tenant's vectors
-> are queryable by another.
+<Callout type="warn">
+    **Tenant isolation.** Vectorize indexes are account-global and shared by every shard. In a multi-tenant / sharded app you **must** scope writes and queries
+    with a `namespace` (the shard/tenant key). Without it, one tenant's vectors are queryable by another.
+</Callout>
 
 ## `ctx.vectors`
 
