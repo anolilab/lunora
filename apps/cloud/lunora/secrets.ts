@@ -22,15 +22,15 @@ interface SecretRow {
 }
 
 /** Persist an already-encrypted secret (owner/admin). Upserts by project+name. */
-export const store = mutation({
-    args: {
+export const store = mutation
+    .input({
         ciphertext: v.string(),
         iv: v.string(),
         name: v.string(),
         organizationId: v.id("organizations"),
         projectId: v.id("projects"),
-    },
-    handler: async (context, arguments_): Promise<Id<"secrets">> => {
+    })
+    .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"secrets">> => {
         await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
 
         const { page } = await context.db.secrets.findMany({ where: { projectId: arguments_.projectId, name: arguments_.name } }); // secret-scanner:allow -- domain field name
@@ -52,31 +52,31 @@ export const store = mutation({
             projectId: arguments_.projectId, // secret-scanner:allow -- domain field name
             updatedAt: now,
         });
-    },
-});
+    });
 
 /** A project's secret names (members) — never returns values. */
-export const list = query({
-    args: { organizationId: v.id("organizations"), projectId: v.id("projects") },
-    handler: async (context, { organizationId, projectId }): Promise<{ createdAt: number; id: Id<"secrets">; name: string; updatedAt: number }[]> => {
-        await assertMember(context, organizationId);
+export const list = query
+    .input({ organizationId: v.id("organizations"), projectId: v.id("projects") })
+    .query(
+        async ({ ctx: context, args: { organizationId, projectId } }): Promise<{ createdAt: number; id: Id<"secrets">; name: string; updatedAt: number }[]> => {
+            await assertMember(context, organizationId);
 
-        const { page } = await context.db.secrets.findMany({ where: { projectId } });
+            const { page } = await context.db.secrets.findMany({ where: { projectId } });
 
-        return (page as unknown as SecretRow[]).map((secret) => {
-            return { createdAt: secret.createdAt, id: secret._id, name: secret.name, updatedAt: secret.updatedAt };
-        });
-    },
-});
+            return (page as unknown as SecretRow[]).map((secret) => {
+                return { createdAt: secret.createdAt, id: secret._id, name: secret.name, updatedAt: secret.updatedAt };
+            });
+        },
+    );
 
 /**
  * A project's encrypted secrets for the deploy path. Authorized by a member
  * session OR a valid `deployKey` (CI). Returns ciphertext + IV; the edge
  * decrypts and injects them into the tenant Worker — they never reach a browser.
  */
-export const listEncrypted = query({
-    args: { deployKey: v.optional(v.string()), organizationId: v.id("organizations"), projectId: v.id("projects") },
-    handler: async (context, { deployKey, organizationId, projectId }): Promise<{ ciphertext: string; iv: string; name: string }[]> => {
+export const listEncrypted = query
+    .input({ deployKey: v.optional(v.string()), organizationId: v.id("organizations"), projectId: v.id("projects") })
+    .query(async ({ ctx: context, args: { deployKey, organizationId, projectId } }): Promise<{ ciphertext: string; iv: string; name: string }[]> => {
         await (deployKey ? authorizeDeployKey(context, organizationId, deployKey, projectId) : assertMember(context, organizationId));
 
         const { page } = await context.db.secrets.findMany({ where: { projectId } });
@@ -84,16 +84,14 @@ export const listEncrypted = query({
         return (page as unknown as SecretRow[]).map((secret) => {
             return { ciphertext: secret.ciphertext, iv: secret.iv, name: secret.name };
         });
-    },
-});
+    });
 
 /** Delete a secret (owner/admin). */
-export const remove = mutation({
-    args: { id: v.id("secrets"), organizationId: v.id("organizations") },
-    handler: async (context, { id, organizationId }): Promise<void> => {
+export const remove = mutation
+    .input({ id: v.id("secrets"), organizationId: v.id("organizations") })
+    .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<void> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
         await assertRowInOrg(context, id, organizationId, "secret");
 
         await context.db.delete(id);
-    },
-});
+    });

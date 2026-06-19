@@ -32,24 +32,23 @@ interface InvitationRow {
 type InvitationView = Omit<InvitationRow, "tokenHash">;
 
 /** List an organization's invitations (any member may view). */
-export const list = query({
-    args: { organizationId: v.id("organizations") },
-    handler: async (context, { organizationId }): Promise<InvitationView[]> => {
+export const list = query
+    .input({ organizationId: v.id("organizations") })
+    .query(async ({ ctx: context, args: { organizationId } }): Promise<InvitationView[]> => {
         await assertMember(context, organizationId);
 
         const { page } = await context.db.invitations.findMany({ where: { organizationId } });
 
         return (page as unknown as InvitationRow[]).map(({ tokenHash: _tokenHash, ...view }) => view);
-    },
-});
+    });
 
 /**
  * Invite an email to an organization (owners/admins only). Returns the
  * single-use token **once** — the caller mails it; only its hash is persisted.
  */
-export const invite = mutation({
-    args: { email: v.string(), organizationId: v.id("organizations"), role },
-    handler: async (context, arguments_): Promise<{ id: Id<"invitations">; token: string }> => {
+export const invite = mutation
+    .input({ email: v.string(), organizationId: v.id("organizations"), role })
+    .mutation(async ({ ctx: context, args: arguments_ }): Promise<{ id: Id<"invitations">; token: string }> => {
         const { userId } = await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
         const now = Date.now();
         const token = randomSecret();
@@ -66,28 +65,26 @@ export const invite = mutation({
         });
 
         return { id, token };
-    },
-});
+    });
 
 /** Revoke a pending invitation (owners/admins only). */
-export const revoke = mutation({
-    args: { id: v.id("invitations"), organizationId: v.id("organizations") },
-    handler: async (context, { id, organizationId }): Promise<void> => {
+export const revoke = mutation
+    .input({ id: v.id("invitations"), organizationId: v.id("organizations") })
+    .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<void> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
         await assertRowInOrg(context, id, organizationId, "invitation");
 
         await context.db.patch(id, { status: "revoked" });
-    },
-});
+    });
 
 /**
  * Accept an invitation by its token (the signed-in invitee). Possession of the
  * token — mailed to the invited address — is the proof. Adds the caller as a
  * member with the invited role and marks the invitation accepted.
  */
-export const accept = mutation({
-    args: { token: v.string() },
-    handler: async (context, { token }): Promise<{ organizationId: Id<"organizations"> }> => {
+export const accept = mutation
+    .input({ token: v.string() })
+    .mutation(async ({ ctx: context, args: { token } }): Promise<{ organizationId: Id<"organizations"> }> => {
         const { userId } = context.auth;
 
         if (!userId) {
@@ -116,5 +113,4 @@ export const accept = mutation({
         await context.db.patch(invitation._id, { status: "accepted" });
 
         return { organizationId: invitation.organizationId };
-    },
-});
+    });

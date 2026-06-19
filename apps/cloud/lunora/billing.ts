@@ -35,14 +35,14 @@ interface SubscriptionRow {
  * Start a provider Checkout session for the org's subscription. Owners/admins
  * only. Returns the redirect URL the studio sends the browser to.
  */
-export const checkout = action({
-    args: {
+export const checkout = action
+    .input({
         cancelUrl: v.string(),
         organizationId: v.id("organizations"),
         priceId: v.string(),
         successUrl: v.string(),
-    },
-    handler: async (context, { cancelUrl, organizationId, priceId, successUrl }): Promise<{ url: string }> => {
+    })
+    .action(async ({ ctx: context, args: { cancelUrl, organizationId, priceId, successUrl } }): Promise<{ url: string }> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
 
         const result = await context.payments.createCheckout({
@@ -54,18 +54,16 @@ export const checkout = action({
         });
 
         return { url: result.url };
-    },
-});
+    });
 
 /** Open the provider billing portal for the org (owners/admins only). */
-export const portal = action({
-    args: { organizationId: v.id("organizations"), returnUrl: v.string() },
-    handler: async (context, { organizationId, returnUrl }): Promise<{ url: string }> => {
+export const portal = action
+    .input({ organizationId: v.id("organizations"), returnUrl: v.string() })
+    .action(async ({ ctx: context, args: { organizationId, returnUrl } }): Promise<{ url: string }> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
 
         return context.payments.createPortalSession(organizationId, returnUrl);
-    },
-});
+    });
 
 /**
  * Resolved entitlements for an org (members). Reads webhook-synced subscription
@@ -74,37 +72,37 @@ export const portal = action({
  * there's no active subscription, so a non-subscriber is bounded, never
  * unlimited).
  */
-export const entitlements = query({
-    args: { organizationId: v.id("organizations") },
-    handler: async (
-        context,
-        { organizationId },
-        // The limits key union is inlined (not the `QuotaResource` alias): codegen
-        // copies this annotation verbatim into the generated api and can't resolve
-        // a cross-module type name.
-    ): Promise<{ features: string[]; limits: Record<"members" | "previewDeployments" | "projects", number>; plans: string[] }> => {
-        await assertMember(context, organizationId);
+export const entitlements = query
+    .input({ organizationId: v.id("organizations") })
+    .query(
+        async ({
+            ctx: context,
+            args: { organizationId },
+        }): Promise<{ features: string[]; limits: Record<"members" | "previewDeployments" | "projects", number>; plans: string[] }> => {
+            await assertMember(context, organizationId);
 
-        const { page } = await context.db.subscriptions.findMany({ where: { referenceId: organizationId } });
-        const resolved = resolveEntitlements(LUNORA_CLOUD_PLANS, page as unknown as Subscription[]);
+            const { page } = await context.db.subscriptions.findMany({ where: { referenceId: organizationId } });
+            const resolved = resolveEntitlements(LUNORA_CLOUD_PLANS, page as unknown as Subscription[]);
 
-        const limits = Object.fromEntries(QUOTA_RESOURCES.map((resource) => [resource, effectiveLimit(resolved, resource)])) as Record<QuotaResource, number>;
+            const limits = Object.fromEntries(QUOTA_RESOURCES.map((resource) => [resource, effectiveLimit(resolved, resource)])) as Record<
+                QuotaResource,
+                number
+            >;
 
-        return { features: [...resolved.features], limits, plans: [...resolved.plans] };
-    },
-});
+            return { features: [...resolved.features], limits, plans: [...resolved.plans] };
+        },
+    );
 
 /** The org's subscriptions (members) — drives the studio billing tab. */
-export const subscription = query({
-    args: { organizationId: v.id("organizations") },
-    handler: async (context, { organizationId }): Promise<SubscriptionRow[]> => {
+export const subscription = query
+    .input({ organizationId: v.id("organizations") })
+    .query(async ({ ctx: context, args: { organizationId } }): Promise<SubscriptionRow[]> => {
         await assertMember(context, organizationId);
 
         const { page } = await context.db.subscriptions.findMany({ where: { referenceId: organizationId } });
 
         return page;
-    },
-});
+    });
 
 /**
  * Apply a verified provider webhook. Public by design — webhooks are
@@ -113,9 +111,9 @@ export const subscription = query({
  * (`POST /v1/billing/webhook`) forwards the raw body + signature here so the
  * verification + store write happen where `ctx.payments` exists.
  */
-export const processWebhook = action({
-    args: { body: v.string(), signature: v.string() },
-    handler: async (context, { body, signature }): Promise<{ applied: boolean; status: number }> => {
+export const processWebhook = action
+    .input({ body: v.string(), signature: v.string() })
+    .action(async ({ ctx: context, args: { body, signature } }): Promise<{ applied: boolean; status: number }> => {
         const request = new Request("https://internal/billing/webhook", {
             body,
             headers: { "stripe-signature": signature },
@@ -125,5 +123,4 @@ export const processWebhook = action({
         const result: { applied?: boolean } = await response.json();
 
         return { applied: result.applied ?? false, status: response.status };
-    },
-});
+    });
