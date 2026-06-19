@@ -5,7 +5,7 @@
 **Type-safe real-time backend on your own Cloudflare account. Vite-first.**
 
 [![License: FSL-1.1-Apache-2.0](https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg)](./LICENSE.md)
-[![Status: alpha](https://img.shields.io/badge/status-v0.1--alpha-blueviolet.svg)](#status)
+[![Status: alpha](https://img.shields.io/badge/status-v1.0.0--alpha-blueviolet.svg)](#status)
 [![Node](https://img.shields.io/badge/node-%5E22.14%20%7C%7C%20%3E%3D24.10-brightgreen.svg)](./.nvmrc)
 [![pnpm](https://img.shields.io/badge/pnpm-11.5.3-f69220.svg)](./package.json)
 [![CI](https://github.com/anolilab/lunora/actions/workflows/test.yml/badge.svg?branch=alpha)](https://github.com/anolilab/lunora/actions/workflows/test.yml)
@@ -160,7 +160,7 @@ All packages are published under the [`@lunora`](https://www.npmjs.com/org/lunor
 
 ## Status
 
-**v0.1-alpha — APIs WILL break.** This is bootstrap-quality. Nothing is on npm yet; the surface area, package boundaries, and on-disk layout will all shift before the first non-alpha tag.
+**v1.0.0-alpha — APIs WILL break.** This is bootstrap-quality. Nothing is on npm yet; the surface area, package boundaries, and on-disk layout will all shift before the first non-alpha tag.
 
 You are welcome to read, file issues, and open PRs against the [`alpha`](https://github.com/anolilab/lunora/tree/alpha) branch. Just don't build a production system on it yet.
 
