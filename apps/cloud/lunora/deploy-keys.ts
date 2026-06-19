@@ -20,9 +20,9 @@ interface DeployKeyRow extends DeployKeyView {
 }
 
 /** List an organization's deploy keys (metadata only — the hash is never returned). */
-export const list = query({
-    args: { organizationId: v.id("organizations") },
-    handler: async (context, { organizationId }): Promise<DeployKeyView[]> => {
+export const list = query
+    .input({ organizationId: v.id("organizations") })
+    .query(async ({ ctx: context, args: { organizationId } }): Promise<DeployKeyView[]> => {
         await assertMember(context, organizationId);
 
         const { page } = await context.db.deployKeys.findMany({ where: { organizationId } });
@@ -40,8 +40,7 @@ export const list = query({
                 type: row.type,
             };
         });
-    },
-});
+    });
 
 /**
  * Mint a deploy key (§2.2). The key encodes its target so the deploy API can
@@ -50,14 +49,14 @@ export const list = query({
  * plaintext is returned **once** and is never recoverable after. Owners/admins
  * only.
  */
-export const issue = mutation({
-    args: {
+export const issue = mutation
+    .input({
         name: v.string(),
         organizationId: v.id("organizations"),
         projectId: v.optional(v.id("projects")),
         type: v.union(v.literal("production"), v.literal("dev"), v.literal("preview")),
-    },
-    handler: async (context, arguments_): Promise<{ id: Id<"deployKeys">; key: string }> => {
+    })
+    .mutation(async ({ ctx: context, args: arguments_ }): Promise<{ id: Id<"deployKeys">; key: string }> => {
         await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
 
         const key = formatDeployKey({
@@ -78,19 +77,17 @@ export const issue = mutation({
         });
 
         return { id, key };
-    },
-});
+    });
 
 /** Revoke a deploy key (owners/admins only). A revoked key fails `verify`. */
-export const revoke = mutation({
-    args: { id: v.id("deployKeys"), organizationId: v.id("organizations") },
-    handler: async (context, { id, organizationId }): Promise<void> => {
+export const revoke = mutation
+    .input({ id: v.id("deployKeys"), organizationId: v.id("organizations") })
+    .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<void> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
         await assertRowInOrg(context, id, organizationId, "deploy key");
 
         await context.db.patch(id, { revokedAt: Date.now() });
-    },
-});
+    });
 
 /**
  * Resolve a presented deploy key to its target, or `null` if invalid/revoked.
@@ -105,12 +102,11 @@ export const revoke = mutation({
  * (an attacker must already hold a valid key), and the only side effect is the
  * `lastUsedAt` bump on a genuine match.
  */
-export const verify = mutation({
-    args: { key: v.string() },
-    handler: async (
-        context,
-        { key },
-    ): Promise<null | {
+export const verify = mutation.input({ key: v.string() }).mutation(
+    async ({
+        ctx: context,
+        args: { key },
+    }): Promise<null | {
         deployKeyId: Id<"deployKeys">;
         organizationId: Id<"organizations">;
         projectId?: Id<"projects">;
@@ -132,4 +128,4 @@ export const verify = mutation({
 
         return { deployKeyId: row._id, organizationId: row.organizationId, projectId: row.projectId, type: row.type };
     },
-});
+);
