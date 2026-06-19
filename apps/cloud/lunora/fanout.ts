@@ -8,10 +8,9 @@ import { internalMutation } from "./_generated/server.js";
  * it needs `env.DISPATCHER`, which a mutation context doesn't have, so it can't
  * live in this job. SYSTEM only (cron dispatch).
  */
-export const tick = internalMutation({
-    args: {},
-    // eslint-disable-next-line @typescript-eslint/require-await -- intentional no-op; its only purpose is to register the every-minute cron trigger
-    handler: async (): Promise<{ ok: true }> => {
+export const tick = internalMutation.mutation(
+    // eslint-disable-next-line @typescript-eslint/require-await -- intentional no-op; only exists to register the every-minute cron trigger
+    async (): Promise<{ ok: true }> => {
         return { ok: true };
     },
-});
+);

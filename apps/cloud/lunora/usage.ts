@@ -14,24 +14,25 @@ import { assertMember, authorizeDeployKey } from "./authz";
 const kind = v.union(v.literal("requests"), v.literal("cpuMs"), v.literal("storageBytes"));
 
 /** Record a metered event. SYSTEM only (internalMutation — cron/metering writer). */
-export const record = internalMutation({
-    args: {
+export const record = internalMutation
+    .input({
         deploymentId: v.optional(v.id("deployments")),
         kind,
         organizationId: v.id("organizations"),
         periodStart: v.number(),
         quantity: v.number(),
-    },
-    handler: async (context, arguments_): Promise<Id<"platformUsage">> =>
-        context.db.insert("platformUsage", {
-            createdAt: Date.now(),
-            deploymentId: arguments_.deploymentId,
-            kind: arguments_.kind,
-            organizationId: arguments_.organizationId,
-            periodStart: arguments_.periodStart,
-            quantity: arguments_.quantity,
-        }),
-});
+    })
+    .mutation(
+        async ({ ctx: context, args: arguments_ }): Promise<Id<"platformUsage">> =>
+            context.db.insert("platformUsage", {
+                createdAt: Date.now(),
+                deploymentId: arguments_.deploymentId,
+                kind: arguments_.kind,
+                organizationId: arguments_.organizationId,
+                periodStart: arguments_.periodStart,
+                quantity: arguments_.quantity,
+            }),
+    );
 
 /**
  * Ingest a metered event from the platform data plane (`POST /v1/usage`).
@@ -39,16 +40,16 @@ export const record = internalMutation({
  * the credential (no user session on the metering path, same as the deploy
  * path). The tenant Worker / metering sidecar reports requests/CPU/storage here.
  */
-export const ingest = mutation({
-    args: {
+export const ingest = mutation
+    .input({
         deployKey: v.string(),
         deploymentId: v.optional(v.id("deployments")),
         kind,
         organizationId: v.id("organizations"),
         periodStart: v.number(),
         quantity: v.number(),
-    },
-    handler: async (context, arguments_): Promise<Id<"platformUsage">> => {
+    })
+    .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"platformUsage">> => {
         await authorizeDeployKey(context, arguments_.organizationId, arguments_.deployKey);
 
         return context.db.insert("platformUsage", {
@@ -59,8 +60,7 @@ export const ingest = mutation({
             periodStart: arguments_.periodStart,
             quantity: arguments_.quantity,
         });
-    },
-});
+    });
 
 interface PlatformUsageRow {
     _id: Id<"platformUsage">;
@@ -91,58 +91,54 @@ const currentPeriodStart = (): number => {
  * surviving originals, which would *double-count* (over-bill). The survivor is
  * patched (not insert-then-delete) so no orphan summed row can ever exist.
  */
-export const rollup = internalMutation({
-    args: {},
-    handler: async (context): Promise<{ compacted: number }> => {
-        const cutoff = currentPeriodStart();
-        const { page } = await context.db.platformUsage.findMany({});
-        const closed = (page as unknown as PlatformUsageRow[]).filter((row) => row.periodStart < cutoff);
+export const rollup = internalMutation.mutation(async ({ ctx: context }): Promise<{ compacted: number }> => {
+    const cutoff = currentPeriodStart();
+    const { page } = await context.db.platformUsage.findMany({});
+    const closed = (page as unknown as PlatformUsageRow[]).filter((row) => row.periodStart < cutoff);
 
-        const groups = new Map<string, PlatformUsageRow[]>();
+    const groups = new Map<string, PlatformUsageRow[]>();
 
-        for (const row of closed) {
-            const groupKey = `${row.organizationId}|${String(row.periodStart)}|${row.kind}`;
-            const group = groups.get(groupKey) ?? [];
+    for (const row of closed) {
+        const groupKey = `${row.organizationId}|${String(row.periodStart)}|${row.kind}`;
+        const group = groups.get(groupKey) ?? [];
 
-            group.push(row);
-            groups.set(groupKey, group);
+        group.push(row);
+        groups.set(groupKey, group);
+    }
+
+    let compacted = 0;
+
+    for (const rows of groups.values()) {
+        if (rows.length < 2) {
+            continue;
         }
 
-        let compacted = 0;
+        const [survivor, ...extras] = rows;
+        const total = rows.reduce((sum, row) => sum + row.quantity, 0);
 
-        for (const rows of groups.values()) {
-            if (rows.length < 2) {
-                continue;
-            }
-
-            const [survivor, ...extras] = rows;
-            const total = rows.reduce((sum, row) => sum + row.quantity, 0);
-
-            // Delete the extras first (fail-safe ordering — see the doc comment).
-            for (const row of extras) {
-                // eslint-disable-next-line no-await-in-loop -- sequential delete of the now-summed rows
-                await context.db.delete(row._id);
-            }
-
-            // Then fold the group total onto the surviving row.
-            // eslint-disable-next-line no-await-in-loop -- one patch per group; volumes are small
-            await context.db.patch(survivor._id, { quantity: total });
-
-            compacted += extras.length;
+        // Delete the extras first (fail-safe ordering — see the doc comment).
+        for (const row of extras) {
+            // eslint-disable-next-line no-await-in-loop -- sequential delete of the now-summed rows
+            await context.db.delete(row._id);
         }
 
-        return { compacted };
-    },
+        // Then fold the group total onto the surviving row.
+        // eslint-disable-next-line no-await-in-loop -- one patch per group; volumes are small
+        await context.db.patch(survivor._id, { quantity: total });
+
+        compacted += extras.length;
+    }
+
+    return { compacted };
 });
 
 /** Summed usage for an org over a billing period (members only). */
-export const summary = query({
-    args: { organizationId: v.id("organizations"), periodStart: v.number() },
-    handler: async (context, { organizationId, periodStart }): Promise<Record<"cpuMs" | "requests" | "storageBytes", number>> => {
+export const summary = query
+    .input({ organizationId: v.id("organizations"), periodStart: v.number() })
+    .query(async ({ ctx: context, args: { organizationId, periodStart } }): Promise<Record<"cpuMs" | "requests" | "storageBytes", number>> => {
         await assertMember(context, organizationId);
 
         const { page } = await context.db.platformUsage.findMany({ where: { organizationId } });
 
         return aggregateUsage(page, periodStart);
-    },
-});
+    });
