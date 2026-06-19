@@ -14,7 +14,7 @@ const DEST_DIR = path.join(__dirname, "..", "src", "content", "docs", "packages"
 const PUBLIC_ASSETS_DIR = path.join(__dirname, "..", "public", "assets");
 
 /** Known app routes that should not be rewritten or stripped by the docs link processor. */
-const KNOWN_ROUTES = new Set(["brand", "changelog", "code-of-conduct", "docs", "imprint", "packages", "privacy"]);
+const KNOWN_ROUTES = new Set(["changelog", "code-of-conduct", "docs", "imprint", "packages", "privacy"]);
 const KNOWN_ROUTES_PATTERN = [...KNOWN_ROUTES].join("|");
 
 /**

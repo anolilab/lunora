@@ -25,7 +25,6 @@ const columns: { links: (ExternalLinkType | TanstackLink)[]; title: string }[] =
             { title: "Getting started", to: "/docs/getting-started" },
             { title: "Documentation", to: "/docs" },
             { title: "Changelog", to: "/changelog" },
-            { title: "Brand", to: "/brand" },
         ],
         title: "Developers",
     },

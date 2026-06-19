@@ -21,7 +21,6 @@ import {
     ScrollText,
     Search,
     Server,
-    Signature,
     Sparkles,
     X,
 } from "lucide-react";
@@ -177,11 +176,6 @@ const Logo = ({ light, pathname }: { light: boolean; pathname: string }) => {
                     </li>
                     <li className="py-1">
                         <hr className="border-white/10" />
-                    </li>
-                    <li>
-                        <Link className={cn(itemClass, "rounded-none")} target="_blank" to="/brand">
-                            <Signature className="h-4 w-4" /> Brand Guidelines
-                        </Link>
                     </li>
                     <li>
                         <Link className={cn(itemClass, "rounded-none")} to="/">

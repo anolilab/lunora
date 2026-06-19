@@ -17,7 +17,6 @@ import { Route as LlmsFullDottxtRouteImport } from './routes/llms-full[.]txt'
 import { Route as ImprintRouteImport } from './routes/imprint'
 import { Route as CodeOfConductRouteImport } from './routes/code-of-conduct'
 import { Route as ChangelogRouteImport } from './routes/changelog'
-import { Route as BrandRouteImport } from './routes/brand'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as PackagesIndexRouteImport } from './routes/packages/index'
 import { Route as PackagesSlugRouteImport } from './routes/packages/$slug'
@@ -66,11 +65,6 @@ const ChangelogRoute = ChangelogRouteImport.update({
   path: '/changelog',
   getParentRoute: () => rootRouteImport,
 } as any)
-const BrandRoute = BrandRouteImport.update({
-  id: '/brand',
-  path: '/brand',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -109,7 +103,6 @@ const LlmsDotmdxDocsSplatRoute = LlmsDotmdxDocsSplatRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/brand': typeof BrandRoute
   '/changelog': typeof ChangelogRoute
   '/code-of-conduct': typeof CodeOfConductRoute
   '/imprint': typeof ImprintRoute
@@ -127,7 +120,6 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/brand': typeof BrandRoute
   '/changelog': typeof ChangelogRoute
   '/code-of-conduct': typeof CodeOfConductRoute
   '/imprint': typeof ImprintRoute
@@ -146,7 +138,6 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/brand': typeof BrandRoute
   '/changelog': typeof ChangelogRoute
   '/code-of-conduct': typeof CodeOfConductRoute
   '/imprint': typeof ImprintRoute
@@ -166,7 +157,6 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
-    | '/brand'
     | '/changelog'
     | '/code-of-conduct'
     | '/imprint'
@@ -184,7 +174,6 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
-    | '/brand'
     | '/changelog'
     | '/code-of-conduct'
     | '/imprint'
@@ -202,7 +191,6 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
-    | '/brand'
     | '/changelog'
     | '/code-of-conduct'
     | '/imprint'
@@ -221,7 +209,6 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  BrandRoute: typeof BrandRoute
   ChangelogRoute: typeof ChangelogRoute
   CodeOfConductRoute: typeof CodeOfConductRoute
   ImprintRoute: typeof ImprintRoute
@@ -296,13 +283,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChangelogRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/brand': {
-      id: '/brand'
-      path: '/brand'
-      fullPath: '/brand'
-      preLoaderRoute: typeof BrandRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/': {
       id: '/'
       path: '/'
@@ -357,7 +337,6 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  BrandRoute: BrandRoute,
   ChangelogRoute: ChangelogRoute,
   CodeOfConductRoute: CodeOfConductRoute,
   ImprintRoute: ImprintRoute,
