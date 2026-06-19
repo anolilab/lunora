@@ -218,6 +218,17 @@ create the D1 database and replace the `database_id` placeholder in
 
 ## Licensing
 
-Marked `UNLICENSED` (not the framework's `FSL-1.1-Apache-2.0`): per
-`CLOUD-PLAN.md` §4 the control plane is the proprietary product layer and will
-likely move to a separate repo. Final license is an open decision.
+Licensed under the [PolyForm Noncommercial License 1.0.0](./LICENSE.md) — **not**
+the framework's `FSL-1.1-Apache-2.0`. Per `CLOUD-PLAN.md` §4 the control plane is
+the proprietary product layer (and will likely move to a separate repo). PolyForm
+Noncommercial permits any noncommercial purpose — research, study, hobby projects,
+and use by charities, schools, and government — but **commercial use is not
+licensed**: running this as (or inside) a paid product or service requires a
+separate commercial license from the maintainers.
+
+The choice is deliberate: FSL still grants broad commercial rights (everything
+except a competing product, converting to Apache-2.0 after two years), which is
+the opposite of what the control plane needs. PolyForm Noncommercial draws the
+line at "no commercial use, period." If we later want a time-delayed open-source
+conversion instead, the Business Source License (BSL 1.1) or FSL are the
+alternatives to revisit.
