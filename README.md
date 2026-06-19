@@ -92,16 +92,15 @@ export default function App() {
 
 ## Lunora vs. the alternatives
 
-|                                                  | **Lunora**             | Convex            | Zeroback         | Plain Cloudflare |
-| ------------------------------------------------ | ---------------------- | ----------------- | ---------------- | ---------------- |
-| Type-safe end-to-end                             | Yes                    | Yes               | Partial          | DIY              |
-| Real-time subscriptions                          | Yes (WS, reactive)     | Yes               | Yes (single DO)  | DIY              |
-| Runs on your account                             | **Yes (Cloudflare)**   | No (managed SaaS) | Yes (Cloudflare) | Yes              |
-| Scales past single DO                            | **Yes (`.shardBy()`)** | n/a               | No               | DIY (manual)     |
-| Vite-first DX                                    | **Yes**                | n/a               | Partial          | DIY              |
-| Feature breadth (auth, mail, storage, scheduler) | Add-ons (alpha)        | Broad (built-in)  | Narrow           | DIY              |
-| Cost at idle                                     | ≈ $0 (CF free tier)    | Paid              | ≈ $0             | ≈ $0             |
-| Maturity                                         | **v0.1-alpha**         | Production        | Beta             | Stable runtime   |
+|                                                  | **Lunora**             | Convex            | Firebase          | Plain Cloudflare |
+| ------------------------------------------------ | ---------------------- | ----------------- | ----------------- | ---------------- |
+| Type-safe end-to-end                             | Yes                    | Yes               | Partial           | DIY              |
+| Real-time subscriptions                          | Yes (WS, reactive)     | Yes               | Yes               | DIY              |
+| Runs on your account                             | **Yes (Cloudflare)**   | No (managed SaaS) | No (managed SaaS) | Yes              |
+| Scales past single DO                            | **Yes (`.shardBy()`)** | n/a               | n/a               | DIY (manual)     |
+| Vite-first DX                                    | **Yes**                | n/a               | n/a               | DIY              |
+| Feature breadth (auth, mail, storage, scheduler) | Add-ons (alpha)        | Broad (built-in)  | Broad (built-in)  | DIY              |
+| Cost at idle                                     | ≈ $0 (CF free tier)    | Paid              | ≈ $0 (Spark tier) | ≈ $0             |
 
 Lunora has fewer batteries-included features than Convex today. The trade you make is **infrastructure ownership and cost** — at idle, Lunora is free; at scale, you pay Cloudflare prices, not SaaS prices.
 
