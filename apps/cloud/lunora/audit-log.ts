@@ -16,9 +16,9 @@ interface AuditRow {
  * hosted-studio admin proxy and other flows that need a durable record of who
  * did what.
  */
-export const record = mutation({
-    args: { action: v.string(), organizationId: v.id("organizations"), target: v.optional(v.string()) },
-    handler: async (context, arguments_): Promise<Id<"auditLog">> => {
+export const record = mutation
+    .input({ action: v.string(), organizationId: v.id("organizations"), target: v.optional(v.string()) })
+    .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"auditLog">> => {
         const { userId } = await assertMember(context, arguments_.organizationId);
 
         return context.db.insert("auditLog", {
@@ -28,17 +28,13 @@ export const record = mutation({
             organizationId: arguments_.organizationId,
             target: arguments_.target,
         });
-    },
-});
+    });
 
 /** An organization's audit-log entries, newest first (members only). */
-export const list = query({
-    args: { organizationId: v.id("organizations") },
-    handler: async (context, { organizationId }): Promise<AuditRow[]> => {
-        await assertMember(context, organizationId);
+export const list = query.input({ organizationId: v.id("organizations") }).query(async ({ ctx: context, args: { organizationId } }): Promise<AuditRow[]> => {
+    await assertMember(context, organizationId);
 
-        const { page } = await context.db.auditLog.findMany({ where: { organizationId } });
+    const { page } = await context.db.auditLog.findMany({ where: { organizationId } });
 
-        return (page as unknown as AuditRow[]).toSorted((a, b) => b.createdAt - a.createdAt);
-    },
+    return (page as unknown as AuditRow[]).toSorted((a, b) => b.createdAt - a.createdAt);
 });

@@ -26,13 +26,10 @@ const assertSignedIn = (userId: null | string): string => {
  * surface — a real deployment gates this behind a platform-operator role.
  * `cells` is `.global()`, so reads go through the D1-backed per-table facade.
  */
-export const list = query({
-    args: {},
-    handler: async (context): Promise<CellRow[]> => {
-        const { page } = await context.db.cells.findMany();
+export const list = query.query(async ({ ctx: context }): Promise<CellRow[]> => {
+    const { page } = await context.db.cells.findMany();
 
-        return page as unknown as CellRow[];
-    },
+    return page as unknown as CellRow[];
 });
 
 /**
@@ -40,14 +37,14 @@ export const list = query({
  * dispatch namespaces is cell bring-up IaC (Alchemy, §2.2) and happens out of
  * band; this records the cell so orgs can be assigned to it.
  */
-export const register = mutation({
-    args: {
+export const register = mutation
+    .input({
         cloudflareAccountId: v.string(),
         dispatchNamespacePrefix: v.string(),
         jurisdiction: v.optional(v.string()),
         name: v.string(),
-    },
-    handler: async (context, arguments_): Promise<Id<"cells">> => {
+    })
+    .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"cells">> => {
         assertSignedIn(context.auth.userId);
 
         return context.db.insert("cells", {
@@ -58,5 +55,4 @@ export const register = mutation({
             name: arguments_.name,
             status: "active",
         });
-    },
-});
+    });

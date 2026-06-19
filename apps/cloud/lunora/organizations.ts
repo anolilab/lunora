@@ -21,13 +21,10 @@ const assertSignedIn = (userId: null | string): string => {
 };
 
 /** List all organizations (platform-admin surface). `.global()` → D1 facade. */
-export const list = query({
-    args: {},
-    handler: async (context): Promise<OrganizationRow[]> => {
-        const { page } = await context.db.organizations.findMany();
+export const list = query.query(async ({ ctx: context }): Promise<OrganizationRow[]> => {
+    const { page } = await context.db.organizations.findMany();
 
-        return page as unknown as OrganizationRow[];
-    },
+    return page as unknown as OrganizationRow[];
 });
 
 /**
@@ -35,13 +32,10 @@ export const list = query({
  * we read through the facade and match in memory — org volume is tiny, and the
  * `by_slug` unique index still enforces correctness on insert.
  */
-export const getBySlug = query({
-    args: { slug: v.string() },
-    handler: async (context, { slug }): Promise<OrganizationRow | null> => {
-        const { page } = await context.db.organizations.findMany();
+export const getBySlug = query.input({ slug: v.string() }).query(async ({ ctx: context, args: { slug } }): Promise<OrganizationRow | null> => {
+    const { page } = await context.db.organizations.findMany();
 
-        return (page as unknown as OrganizationRow[]).find((organization) => organization.slug === slug) ?? null;
-    },
+    return (page as unknown as OrganizationRow[]).find((organization) => organization.slug === slug) ?? null;
 });
 
 /**
@@ -49,14 +43,14 @@ export const getBySlug = query({
  * record the action in the audit log. Slug uniqueness is enforced by the
  * `by_slug` global (D1) unique index.
  */
-export const create = mutation({
-    args: {
+export const create = mutation
+    .input({
         cellId: v.id("cells"),
         name: v.string(),
         plan: v.optional(v.union(v.literal("free"), v.literal("pro"), v.literal("enterprise"))),
         slug: v.string(),
-    },
-    handler: async (context, arguments_): Promise<Id<"organizations">> => {
+    })
+    .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"organizations">> => {
         const userId = assertSignedIn(context.auth.userId);
         const now = Date.now();
 
@@ -84,5 +78,4 @@ export const create = mutation({
         });
 
         return organizationId;
-    },
-});
+    });
