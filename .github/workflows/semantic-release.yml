@@ -101,6 +101,15 @@
               # files: in package.json to publish, and those typically include dist/.
               "run": "pnpm run build:packages"
 
+            # The vis git hooks (commitlint, secret scan, staged lint) are installed
+            # by the `prepare` script during install. They must NOT run on
+            # multi-semantic-release's machine-generated `chore(release): …` commits
+            # — commitlint rejects their long, changelog-bearing headers (the
+            # release aborted on `@lunora/analytics`'s 108-char header). Disable
+            # hooks for the rest of this job.
+            - "name": "Disable git hooks for release commits"
+              "run": "git config core.hooksPath /dev/null"
+
             - "name": "Multi semantic release"
               "env":
                   "GITHUB_TOKEN": "${{ secrets.SEMANTIC_RELEASE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}"
