@@ -5,7 +5,7 @@ import { NotFound } from "@/pages/not-found";
 
 import { routeTree } from "./routeTree.gen";
 
-// eslint-disable-next-line import/prefer-default-export, @typescript-eslint/explicit-module-boundary-types
+// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export const getRouter = () =>
     createTanStackRouter({
         defaultErrorComponent: DefaultCatchBoundary,

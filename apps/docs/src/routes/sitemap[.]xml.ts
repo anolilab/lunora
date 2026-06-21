@@ -15,14 +15,14 @@ const staticRoutes = [
     { changefreq: "yearly", path: "/code-of-conduct", priority: 0.3 },
 ];
 
-function generateSitemap(): string {
+const generateSitemap = (): string => {
     const urls: string[] = [];
 
     for (const route of staticRoutes) {
         urls.push(`  <url>
     <loc>${SITE_URL}${route.path}</loc>
     <changefreq>${route.changefreq}</changefreq>
-    <priority>${route.priority}</priority>
+    <priority>${String(route.priority)}</priority>
   </url>`);
     }
 
@@ -54,11 +54,12 @@ function generateSitemap(): string {
   </url>`);
     }
 
+    // eslint-disable-next-line no-secrets/no-secrets -- XML prolog literal, not a secret
     return `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
 ${urls.join("\n")}
 </urlset>`;
-}
+};
 
 export const Route = createFileRoute("/sitemap.xml")({
     server: {

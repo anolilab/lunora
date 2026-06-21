@@ -1,17 +1,20 @@
 import { useLayoutEffect, useState } from "react";
 
-function useWindowSize() {
+const useWindowSize = (): { height: number | undefined; width: number | undefined } => {
     const [size, setSize] = useState<{
-        height: null | number;
-        width: null | number;
+        height: number | undefined;
+        width: number | undefined;
     }>({
-        height: null,
-        width: null,
+        height: undefined,
+        width: undefined,
     });
 
     useLayoutEffect(() => {
-        if (globalThis.window === undefined) {
-            return;
+        // `"window" in globalThis` sidesteps both the typeof-undefined and the
+        // always-false (lib.dom narrows `window` to non-optional) lints while still
+        // guarding the SSR pass where there is no window.
+        if (!("window" in globalThis)) {
+            return undefined;
         }
 
         const handleResize = () => {
@@ -31,6 +34,6 @@ function useWindowSize() {
     }, []);
 
     return size;
-}
+};
 
 export default useWindowSize;

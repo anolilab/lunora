@@ -22,7 +22,7 @@ const escapeXml = (value: string): string =>
         return "&quot;";
     });
 
-function generateFeed(): string {
+const generateFeed = (): string => {
     const items = listBlogPosts()
         .map((post) => {
             const link = `${SITE_URL}/blog/${post.slug}`;
@@ -52,7 +52,7 @@ ${selfLink}
 ${items}
   </channel>
 </rss>`;
-}
+};
 
 export const Route = createFileRoute("/blog/rss.xml")({
     server: {

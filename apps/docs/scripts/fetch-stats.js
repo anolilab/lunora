@@ -18,7 +18,7 @@
  * Usage: node scripts/fetch-stats.js
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -80,6 +80,7 @@ const loadCache = () => {
 /**
  * Returns the first day of the month of the last fetch (YYYY-MM-DD),
  * so we re-fetch that (potentially partial) month plus any new months.
+ * @param cache
  */
 const getCacheCutoffDate = (cache) => {
     if (!cache?.fetchedAt) {
@@ -87,12 +88,10 @@ const getCacheCutoffDate = (cache) => {
     }
 
     const lastFetched = new Date(cache.fetchedAt);
-    return `${lastFetched.toISOString().substring(0, 7)}-01`;
+    return `${lastFetched.toISOString().slice(0, 7)}-01`;
 };
 
-const toDateString = (date) => {
-    return date.toISOString().split("T")[0];
-};
+const toDateString = (date) => date.toISOString().split("T")[0];
 
 const fetchWithRetry = async (url, maxRetries = 5) => {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -141,6 +140,8 @@ const fetchPackageDownloads = async (npmName, period) => {
  *
  * If a cutoffDate is provided, only fetches from that date to now.
  * npm API limits range queries to 18 months max.
+ * @param npmName
+ * @param cutoffDate
  */
 const fetchPackageMonthlyChart = async (npmName, cutoffDate) => {
     const now = new Date();
@@ -154,7 +155,7 @@ const fetchPackageMonthlyChart = async (npmName, cutoffDate) => {
 
         if (data?.downloads) {
             for (const day of data.downloads) {
-                const month = day.day.substring(0, 7);
+                const month = day.day.slice(0, 7);
 
                 if (!dailyByMonth[month]) {
                     dailyByMonth[month] = 0;
@@ -167,11 +168,14 @@ const fetchPackageMonthlyChart = async (npmName, cutoffDate) => {
 
     return Object.keys(dailyByMonth)
         .sort()
-        .map((month) => ({ month, downloads: dailyByMonth[month] }));
+        .map((month) => {
+            return { month, downloads: dailyByMonth[month] };
+        });
 };
 
 /**
  * Build 18-month windows going back ~5 years from now (full history).
+ * @param now
  */
 const buildFullHistoryWindows = (now) => {
     const windows = [];
@@ -193,6 +197,8 @@ const buildFullHistoryWindows = (now) => {
 
 /**
  * Build 18-month windows covering the range [startDate, endDate].
+ * @param startDate
+ * @param endDate
  */
 const buildWindows = (startDate, endDate) => {
     const windows = [];
@@ -219,6 +225,8 @@ const buildWindows = (startDate, endDate) => {
 /**
  * Merge cached monthly chart data with newly fetched data.
  * New data overwrites cached months (since partial months get re-fetched).
+ * @param cached
+ * @param fresh
  */
 const mergeMonthlyChart = (cached, fresh) => {
     const byMonth = {};
@@ -235,7 +243,9 @@ const mergeMonthlyChart = (cached, fresh) => {
 
     return Object.keys(byMonth)
         .sort()
-        .map((month) => ({ month, downloads: byMonth[month] }));
+        .map((month) => {
+            return { month, downloads: byMonth[month] };
+        });
 };
 
 const fetchRepoStars = async (repo) => {
@@ -254,7 +264,7 @@ const fetchRepoContributors = async (repo) => {
                 const match = /page=(\d+)>; rel="last"/.exec(linkHeader);
 
                 if (match) {
-                    return parseInt(match[1], 10);
+                    return Number.parseInt(match[1], 10);
                 }
             } else {
                 const data = await response.json();
@@ -338,7 +348,7 @@ const main = async () => {
     };
 
     mkdirSync(dirname(OUTPUT_PATH), { recursive: true });
-    writeFileSync(OUTPUT_PATH, JSON.stringify(stats, null, 4) + "\n");
+    writeFileSync(OUTPUT_PATH, `${JSON.stringify(stats, null, 4)}\n`);
 
     const weeklySum = Object.values(weeklyDownloads).reduce((a, b) => a + b, 0);
     const totalSum = Object.values(totalDownloads).reduce((a, b) => a + b, 0);

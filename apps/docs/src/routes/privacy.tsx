@@ -339,7 +339,6 @@ const RouteComponent = () => (
     </ContentPage>
 );
 
-// eslint-disable-next-line import/prefer-default-export -- TanStack Start file-based routing requires `export const Route`
 export const Route = createFileRoute("/privacy")({
     component: RouteComponent,
     head: () => {

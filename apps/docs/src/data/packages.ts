@@ -32,7 +32,7 @@ const categoryColors: Record<string, AccentColor> = {
 
 export const packages: PackageInfo[] = [
     {
-        accentColor: categoryColors["Core Runtime"]!,
+        accentColor: categoryColors["Core Runtime"],
         category: "Core Runtime",
         description: "D1 adapter for .global() tables; wraps the Sessions API for read-your-writes.",
         docsPath: "/docs/packages/d1",
@@ -42,7 +42,7 @@ export const packages: PackageInfo[] = [
         slug: "d1",
     },
     {
-        accentColor: categoryColors["Core Runtime"]!,
+        accentColor: categoryColors["Core Runtime"],
         category: "Core Runtime",
         description: "ShardDO (SQLite, OCC, hibernated WebSocket subscriptions) and SessionDO.",
         docsPath: "/docs/packages/do",
@@ -52,7 +52,7 @@ export const packages: PackageInfo[] = [
         slug: "do",
     },
     {
-        accentColor: categoryColors["Core Runtime"]!,
+        accentColor: categoryColors["Core Runtime"],
         category: "Core Runtime",
         description: "Unscoped umbrella — one install for the base packages (server, values, runtime, do, client) via subpaths, plus the lunora CLI bin.",
         docsPath: "/docs/packages/lunorash",
@@ -62,7 +62,7 @@ export const packages: PackageInfo[] = [
         slug: "lunorash",
     },
     {
-        accentColor: categoryColors["Core Runtime"]!,
+        accentColor: categoryColors["Core Runtime"],
         category: "Core Runtime",
         description: "Worker entry: RPC router, shard resolver, query coordinator.",
         docsPath: "/docs/packages/runtime",
@@ -72,7 +72,7 @@ export const packages: PackageInfo[] = [
         slug: "runtime",
     },
     {
-        accentColor: categoryColors["Core Runtime"]!,
+        accentColor: categoryColors["Core Runtime"],
         category: "Core Runtime",
         description: "Authoring API: defineSchema, defineTable, query, mutation, action.",
         docsPath: "/docs/packages/server",
@@ -82,7 +82,7 @@ export const packages: PackageInfo[] = [
         slug: "server",
     },
     {
-        accentColor: categoryColors["Core Runtime"]!,
+        accentColor: categoryColors["Core Runtime"],
         category: "Core Runtime",
         description: "Internal dialect-parameterized SQL store core for Lunora .global() backends (D1, PlanetScale)",
         docsPath: "/docs/packages/sql-store",
@@ -92,7 +92,7 @@ export const packages: PackageInfo[] = [
         slug: "sql-store",
     },
     {
-        accentColor: categoryColors["Core Runtime"]!,
+        accentColor: categoryColors["Core Runtime"],
         category: "Core Runtime",
         description: "v.* validators and return-type inference.",
         docsPath: "/docs/packages/values",
@@ -102,7 +102,7 @@ export const packages: PackageInfo[] = [
         slug: "values",
     },
     {
-        accentColor: categoryColors["Client & UI"]!,
+        accentColor: categoryColors["Client & UI"],
         category: "Client & UI",
         description: "Browser SDK: WebSocket transport, optimistic updates, offline queue.",
         docsPath: "/docs/packages/client",
@@ -112,7 +112,7 @@ export const packages: PackageInfo[] = [
         slug: "client",
     },
     {
-        accentColor: categoryColors["Client & UI"]!,
+        accentColor: categoryColors["Client & UI"],
         category: "Client & UI",
         description: "useQuery / useMutation / useSubscription / useAuth hooks.",
         docsPath: "/docs/packages/react",
@@ -122,7 +122,7 @@ export const packages: PackageInfo[] = [
         slug: "react",
     },
     {
-        accentColor: categoryColors["Client & UI"]!,
+        accentColor: categoryColors["Client & UI"],
         category: "Client & UI",
         description: "Live queries, optimistic mutations, reactive loaders for SolidJS.",
         docsPath: "/docs/packages/solid",
@@ -132,7 +132,7 @@ export const packages: PackageInfo[] = [
         slug: "solid",
     },
     {
-        accentColor: categoryColors["Client & UI"]!,
+        accentColor: categoryColors["Client & UI"],
         category: "Client & UI",
         description: "Local admin UI for your schema, data, logs, and advisors.",
         docsPath: "/docs/packages/studio",
@@ -142,7 +142,7 @@ export const packages: PackageInfo[] = [
         slug: "studio",
     },
     {
-        accentColor: categoryColors["Client & UI"]!,
+        accentColor: categoryColors["Client & UI"],
         category: "Client & UI",
         description: "Live stores, optimistic mutations, reactive loaders.",
         docsPath: "/docs/packages/svelte",
@@ -152,7 +152,7 @@ export const packages: PackageInfo[] = [
         slug: "svelte",
     },
     {
-        accentColor: categoryColors["Client & UI"]!,
+        accentColor: categoryColors["Client & UI"],
         category: "Client & UI",
         description: "defineCollections wires Lunora queries/mutations into live, indexed client collections + a durable offline outbox.",
         docsPath: "/docs/packages/db",
@@ -162,7 +162,7 @@ export const packages: PackageInfo[] = [
         slug: "db",
     },
     {
-        accentColor: categoryColors["Client & UI"]!,
+        accentColor: categoryColors["Client & UI"],
         category: "Client & UI",
         description: "Live composables, optimistic mutations, reactive loaders.",
         docsPath: "/docs/packages/vue",
@@ -172,7 +172,7 @@ export const packages: PackageInfo[] = [
         slug: "vue",
     },
     {
-        accentColor: categoryColors["Build & Tooling"]!,
+        accentColor: categoryColors["Build & Tooling"],
         category: "Build & Tooling",
         description: "Astro integration: single-worker composition plus reactive-loader server helpers.",
         docsPath: "/docs/packages/astro",
@@ -182,7 +182,7 @@ export const packages: PackageInfo[] = [
         slug: "astro",
     },
     {
-        accentColor: categoryColors["Build & Tooling"]!,
+        accentColor: categoryColors["Build & Tooling"],
         category: "Build & Tooling",
         description: "Vite plugin over @cloudflare/vite-plugin — codegen, wrangler validator, error overlay.",
         docsPath: "/docs/packages/vite",
@@ -192,7 +192,7 @@ export const packages: PackageInfo[] = [
         slug: "vite",
     },
     {
-        accentColor: categoryColors["Codegen"]!,
+        accentColor: categoryColors["Codegen"],
         category: "Codegen",
         description: "Emits _generated/{api,server,dataModel}.ts from your schema.ts.",
         docsPath: "/docs/packages/codegen",
@@ -202,7 +202,7 @@ export const packages: PackageInfo[] = [
         slug: "codegen",
     },
     {
-        accentColor: categoryColors["CLI"]!,
+        accentColor: categoryColors["CLI"],
         category: "CLI",
         description: "Subcommands: init, dev, deploy, codegen, run, reset, migrate.",
         docsPath: "/docs/packages/cli",
@@ -212,7 +212,7 @@ export const packages: PackageInfo[] = [
         slug: "cli",
     },
     {
-        accentColor: categoryColors["Dev Tools"]!,
+        accentColor: categoryColors["Dev Tools"],
         category: "Dev Tools",
         description: "Shared CLI + Vite config/scaffolding layer (wrangler validator, .dev.vars grammar).",
         docsPath: "/docs/packages/config",
@@ -222,7 +222,7 @@ export const packages: PackageInfo[] = [
         slug: "config",
     },
     {
-        accentColor: categoryColors["Dev Tools"]!,
+        accentColor: categoryColors["Dev Tools"],
         category: "Dev Tools",
         description: "In-memory harness for queries/mutations/actions plus E2E mail-catcher helpers.",
         docsPath: "/docs/packages/testing",
@@ -232,7 +232,7 @@ export const packages: PackageInfo[] = [
         slug: "testing",
     },
     {
-        accentColor: categoryColors["Advisor"]!,
+        accentColor: categoryColors["Advisor"],
         category: "Advisor",
         description: "Schema & query lints (splinter-style advisors) feeding the Studio Advisors table.",
         docsPath: "/docs/packages/advisor",
@@ -242,7 +242,7 @@ export const packages: PackageInfo[] = [
         slug: "advisor",
     },
     {
-        accentColor: categoryColors["Add-ons"]!,
+        accentColor: categoryColors["Add-ons"],
         category: "Add-ons",
         description: "Workers AI helper on the Vercel AI SDK — ctx.ai with generateText / streamText / embed.",
         docsPath: "/docs/packages/ai",
@@ -252,7 +252,7 @@ export const packages: PackageInfo[] = [
         slug: "ai",
     },
     {
-        accentColor: categoryColors["Add-ons"]!,
+        accentColor: categoryColors["Add-ons"],
         category: "Add-ons",
         description: "Analytics Engine bindings for usage and event metrics.",
         docsPath: "/docs/packages/analytics",
@@ -262,7 +262,7 @@ export const packages: PackageInfo[] = [
         slug: "analytics",
     },
     {
-        accentColor: categoryColors["Add-ons"]!,
+        accentColor: categoryColors["Add-ons"],
         category: "Add-ons",
         description: "Auth built on better-auth, D1-backed: email/password, OAuth, passkeys, 2FA, organizations.",
         docsPath: "/docs/packages/auth",
@@ -272,7 +272,7 @@ export const packages: PackageInfo[] = [
         slug: "auth",
     },
     {
-        accentColor: categoryColors["Add-ons"]!,
+        accentColor: categoryColors["Add-ons"],
         category: "Add-ons",
         description: "Browser Rendering — Playwright on Cloudflare Workers.",
         docsPath: "/docs/packages/browser",
@@ -282,7 +282,7 @@ export const packages: PackageInfo[] = [
         slug: "browser",
     },
     {
-        accentColor: categoryColors["Add-ons"]!,
+        accentColor: categoryColors["Add-ons"],
         category: "Add-ons",
         description: "Cloudflare Containers: defineContainer → generated container DOs + typed ctx.containers.",
         docsPath: "/docs/packages/container",
@@ -292,7 +292,7 @@ export const packages: PackageInfo[] = [
         slug: "container",
     },
     {
-        accentColor: categoryColors["Add-ons"]!,
+        accentColor: categoryColors["Add-ons"],
         category: "Add-ons",
         description: "Connect an external Postgres/MySQL database via Cloudflare Hyperdrive (ctx.sql).",
         docsPath: "/docs/packages/hyperdrive",
@@ -302,7 +302,7 @@ export const packages: PackageInfo[] = [
         slug: "hyperdrive",
     },
     {
-        accentColor: categoryColors["Add-ons"]!,
+        accentColor: categoryColors["Add-ons"],
         category: "Add-ons",
         description: "Cloudflare Images transforms and typed delivery.",
         docsPath: "/docs/packages/images",
@@ -312,7 +312,7 @@ export const packages: PackageInfo[] = [
         slug: "images",
     },
     {
-        accentColor: categoryColors["Add-ons"]!,
+        accentColor: categoryColors["Add-ons"],
         category: "Add-ons",
         description: "Typed Workers KV namespaces.",
         docsPath: "/docs/packages/kv",
@@ -322,7 +322,7 @@ export const packages: PackageInfo[] = [
         slug: "kv",
     },
     {
-        accentColor: categoryColors["Add-ons"]!,
+        accentColor: categoryColors["Add-ons"],
         category: "Add-ons",
         description: "Resend adapter, TSX templates, queue-backed sends.",
         docsPath: "/docs/packages/mail",
@@ -332,7 +332,7 @@ export const packages: PackageInfo[] = [
         slug: "mail",
     },
     {
-        accentColor: categoryColors["Add-ons"]!,
+        accentColor: categoryColors["Add-ons"],
         category: "Add-ons",
         description: "Model Context Protocol server exposing a Lunora deployment to AI agents.",
         docsPath: "/docs/packages/mcp",
@@ -342,7 +342,7 @@ export const packages: PackageInfo[] = [
         slug: "mcp",
     },
     {
-        accentColor: categoryColors["Add-ons"]!,
+        accentColor: categoryColors["Add-ons"],
         category: "Add-ons",
         description: "Payment provider integration (Stripe) with typed actions and webhooks.",
         docsPath: "/docs/packages/payment",
@@ -352,7 +352,7 @@ export const packages: PackageInfo[] = [
         slug: "payment",
     },
     {
-        accentColor: categoryColors["Add-ons"]!,
+        accentColor: categoryColors["Add-ons"],
         category: "Add-ons",
         description: "Token-bucket / fixed-window / sliding-window limiting with pluggable stores and middleware.",
         docsPath: "/docs/packages/ratelimit",
@@ -362,7 +362,7 @@ export const packages: PackageInfo[] = [
         slug: "ratelimit",
     },
     {
-        accentColor: categoryColors["Add-ons"]!,
+        accentColor: categoryColors["Add-ons"],
         category: "Add-ons",
         description: "runAfter / runAt plus Cron Triggers via SchedulerDO.",
         docsPath: "/docs/packages/scheduler",
@@ -372,7 +372,7 @@ export const packages: PackageInfo[] = [
         slug: "scheduler",
     },
     {
-        accentColor: categoryColors["Add-ons"]!,
+        accentColor: categoryColors["Add-ons"],
         category: "Add-ons",
         description: "Snaplet-style deterministic seeding introspected from defineSchema.",
         docsPath: "/docs/packages/seed",
@@ -382,7 +382,7 @@ export const packages: PackageInfo[] = [
         slug: "seed",
     },
     {
-        accentColor: categoryColors["Add-ons"]!,
+        accentColor: categoryColors["Add-ons"],
         category: "Add-ons",
         description: "R2 typed buckets and signed URLs.",
         docsPath: "/docs/packages/storage",
@@ -392,7 +392,7 @@ export const packages: PackageInfo[] = [
         slug: "storage",
     },
     {
-        accentColor: categoryColors["Add-ons"]!,
+        accentColor: categoryColors["Add-ons"],
         category: "Add-ons",
         description: "Cloudflare Vectorize adapter: typed vector indexes and similarity search.",
         docsPath: "/docs/packages/vectors",
@@ -402,7 +402,7 @@ export const packages: PackageInfo[] = [
         slug: "vectors",
     },
     {
-        accentColor: categoryColors["Add-ons"]!,
+        accentColor: categoryColors["Add-ons"],
         category: "Add-ons",
         description: "Durable, multi-step workflows wired into the worker entry.",
         docsPath: "/docs/packages/workflow",

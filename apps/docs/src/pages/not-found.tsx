@@ -9,7 +9,6 @@ import SpaceBackdrop from "@/components/sections/space-backdrop";
 
 const SPOTLIGHT = "radial-gradient(45% 40% at 32% 10%, rgba(255,255,255,0.12), transparent 70%)";
 
-// eslint-disable-next-line import/prefer-default-export
 export const NotFound: FC<PropsWithChildren<NotFoundRouteProps>> = () => (
     <section
         className="relative flex min-h-[100svh] flex-col overflow-hidden bg-[#0e0e11] px-6 pt-32 pb-14 sm:px-10 lg:px-14"

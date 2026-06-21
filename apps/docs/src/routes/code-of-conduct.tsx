@@ -18,7 +18,7 @@ const loader = createServerFn({
     method: "GET",
 }).handler(async () => {
     const filePath = resolve("src/content/code-of-conduct.md");
-    const source = readFileSync(filePath, "utf-8");
+    const source = readFileSync(filePath, "utf8");
 
     const result = await compiler.compile({ source });
 

@@ -5,13 +5,11 @@ import * as icons from "lucide-static";
 export const source = loader({
     baseUrl: "/docs",
     icon(icon) {
-        if (!icon) {
-            return;
-        }
-
-        if (icon in icons) {
+        if (icon && icon in icons) {
             return icons[icon as keyof typeof icons];
         }
+
+        return undefined;
     },
     source: docs.toFumadocsSource(),
 });

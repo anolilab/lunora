@@ -8,7 +8,10 @@ const ACCENT_COLORS: Record<string, string> = {
     "sky-sapphire": "#0284C7",
 };
 
-function generateOgSvg(title: string, description: string, accentColor: string): string {
+const escapeXml = (text: string): string =>
+    text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&apos;");
+
+const generateOgSvg = (title: string, description: string, accentColor: string): string => {
     const accent = ACCENT_COLORS[accentColor] ?? "#4F46E5";
     const truncatedDesc = description.length > 120 ? `${description.slice(0, 117)}...` : description;
 
@@ -20,11 +23,7 @@ function generateOgSvg(title: string, description: string, accentColor: string):
   <text x="80" y="560" font-family="system-ui, sans-serif" font-size="20" fill="#666666">lunora.sh</text>
   <circle cx="1100" cy="540" r="30" fill="${accent}" opacity="0.3"/>
 </svg>`;
-}
-
-function escapeXml(text: string): string {
-    return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&apos;");
-}
+};
 
 export const Route = createFileRoute("/api/og")({
     server: {

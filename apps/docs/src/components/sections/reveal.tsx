@@ -7,7 +7,7 @@ import type { FC, ReactNode } from "react";
  * Scroll-triggered fade-up. Respects `prefers-reduced-motion` (renders static).
  * Use `delay` to stagger siblings. See marketing/design-tokens/DESIGN.md §5.
  */
-const Reveal: FC<{ as?: "div" | "li" | "section"; className?: string; children: ReactNode; delay?: number }> = ({
+const Reveal: FC<{ as?: "div" | "li" | "section"; children: ReactNode; className?: string; delay?: number }> = ({
     as = "div",
     children,
     className,

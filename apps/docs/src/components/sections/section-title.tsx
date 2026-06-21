@@ -29,7 +29,7 @@ const SectionTitle: FC<{
         >
             {title}
         </h2>
-        {description && (
+        {description ? (
             <div
                 className={clsx("text-wrap-balance mt-2 text-base/7", mode === "dark" ? "text-white/50" : "text-gray-500", {
                     "pl-20": position === "right",
@@ -38,7 +38,7 @@ const SectionTitle: FC<{
             >
                 {description}
             </div>
-        )}
+        ) : null}
     </div>
 );
 

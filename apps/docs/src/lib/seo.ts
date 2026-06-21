@@ -14,7 +14,7 @@ interface SeoOptions {
     title: string;
 }
 
-export function createSeoHead(options: SeoOptions) {
+export const createSeoHead = (options: SeoOptions): { links: Record<string, string>[]; meta: Record<string, string>[]; title: string } => {
     const { canonical, description = DEFAULT_DESCRIPTION, noindex = false, ogImage = DEFAULT_OG_IMAGE, ogType = "website", path, title } = options;
 
     const fullTitle = title === SITE_NAME ? title : `${title} - ${SITE_NAME}`;
@@ -45,10 +45,8 @@ export function createSeoHead(options: SeoOptions) {
     const links: Record<string, string>[] = [{ href: url, rel: "canonical" }];
 
     return { links, meta, title: fullTitle };
-}
+};
 
-export function createJsonLd(data: Record<string, unknown>): string {
-    return JSON.stringify({ "@context": "https://schema.org", ...data });
-}
+export const createJsonLd = (data: Record<string, unknown>): string => JSON.stringify({ "@context": "https://schema.org", ...data });
 
 export { DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE, SITE_NAME, SITE_URL };

@@ -10,14 +10,14 @@
  * Usage:
  *   STUDIO_URL=http://localhost:5174/__lunora node scripts/studio-shots.mjs
  */
-import { createRequire } from "node:module";
 import { mkdirSync, readdirSync } from "node:fs";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 const pnpmDir = fileURLToPath(new URL("../../../node_modules/.pnpm/", import.meta.url));
 const pwPkg = readdirSync(pnpmDir)
-    .filter((d) => /^playwright@/.test(d))
+    .filter((d) => d.startsWith("playwright@"))
     .sort()
     .pop();
 const { chromium } = require(`${pnpmDir}${pwPkg}/node_modules/playwright`);
@@ -40,8 +40,8 @@ mkdirSync(OUT_DIR, { recursive: true });
 const browser = await chromium.launch();
 const page = await browser.newPage({ deviceScaleFactor: 2, viewport: { height: 900, width: 1440 } });
 
-await page.goto(STUDIO_URL, { timeout: 30000, waitUntil: "networkidle" });
-await page.locator(".lunora-studio-root").first().waitFor({ timeout: 30000 });
+await page.goto(STUDIO_URL, { timeout: 30_000, waitUntil: "networkidle" });
+await page.locator(".lunora-studio-root").first().waitFor({ timeout: 30_000 });
 
 // Switch to dark mode (the root toggles a `.dark` class; default is light).
 const root = page.locator(".lunora-studio-root").first();
@@ -67,7 +67,7 @@ const stripBanner = () =>
 
 for (const shot of SHOTS) {
     try {
-        await page.getByText(shot.label, { exact: true }).first().click({ timeout: 10000 });
+        await page.getByText(shot.label, { exact: true }).first().click({ timeout: 10_000 });
         await page.waitForLoadState("networkidle").catch(() => {});
         await page.waitForTimeout(900);
         await stripBanner();

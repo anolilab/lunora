@@ -27,7 +27,7 @@ import {
     X,
 } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
+import type { MouseEvent as ReactMouseEvent, ReactElement, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import lunoraLogoRaw from "@/assets/lunora_logo.svg?raw";
@@ -48,9 +48,11 @@ import { cn } from "@/lib/utils";
 
 const card = (id: string): string => `https://images.unsplash.com/${id}?q=80&w=900&auto=format&fit=crop`;
 
+const TRAILING_ZERO_DECIMAL = /\.0$/;
+
 const formatStars = (count: number): string => {
     if (count >= 1000) {
-        return `${(count / 1000).toFixed(1).replace(/\.0$/, "")}k`;
+        return `${(count / 1000).toFixed(1).replace(TRAILING_ZERO_DECIMAL, "")}k`;
     }
 
     return count > 0 ? String(count) : "GitHub";
@@ -136,7 +138,7 @@ const Logo = ({ light, pathname }: { light: boolean; pathname: string }) => {
 
     useEffect(() => {
         if (!isOpen) {
-            return;
+            return undefined;
         }
 
         const handleOutsideClick = (event: MouseEvent) => {
@@ -174,7 +176,7 @@ const Logo = ({ light, pathname }: { light: boolean; pathname: string }) => {
                     <li>
                         <button
                             className={cn(itemClass, "w-full cursor-pointer rounded-none")}
-                            onClick={() => navigator.clipboard.writeText(lunoraLogoRaw)}
+                            onClick={() => void navigator.clipboard.writeText(lunoraLogoRaw)}
                             type="button"
                         >
                             <LunoraLogo className="h-4 w-4" title="Lunora" /> Copy Logo as SVG
@@ -304,7 +306,7 @@ const SearchButton = ({ light }: { light: boolean }) => {
     );
 };
 
-const Navbar = () => {
+const Navbar = (): ReactElement => {
     const { pathname } = useLocation();
     const reduceMotion = useReducedMotion();
     const [light, setLight] = useState(false);

@@ -17,7 +17,6 @@ const RouteComponent = () => {
     return <BlogOverview page={page ?? 1} posts={posts} />;
 };
 
-// eslint-disable-next-line import/prefer-default-export -- TanStack Start file-based routing requires `export const Route`
 export const Route = createFileRoute("/blog/")({
     component: RouteComponent,
     validateSearch: (search: Record<string, unknown>): { page?: number } => {

@@ -110,23 +110,31 @@ const HowItWorks: FC = () => {
             return undefined;
         }
 
-        const id = setInterval(() => {
-            setProgress((previous) => Math.min(100, previous + STEP_INCREMENT));
-        }, STEP_MS);
+        // Reaching the end advances to the next step and resets the bar — done in the
+        // timer tick (the source of the change) rather than in a reactive effect on
+        // `progress`, which would chain state updates.
+        const advance = (previous: number): number => {
+            const next = previous + STEP_INCREMENT;
+
+            if (next >= 100) {
+                setActive((current) => (current + 1) % STEPS.length);
+
+                return 0;
+            }
+
+            return next;
+        };
+
+        const tick = (): void => {
+            setProgress(advance);
+        };
+
+        const id = setInterval(tick, STEP_MS);
 
         return () => {
             clearInterval(id);
         };
     }, [reduceMotion]);
-
-    useEffect(() => {
-        if (progress < 100) {
-            return;
-        }
-
-        setActive((previous) => (previous + 1) % STEPS.length);
-        setProgress(0);
-    }, [progress]);
 
     const select = (index: number) => {
         setActive(index);

@@ -11,7 +11,7 @@
  *
  * Usage: node scripts/check-doc-imports.mjs   (exit 1 on any violation)
  */
-import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -28,33 +28,36 @@ for (const pkg of readdirSync(PKGS)) {
 /** Known exports of the app-local generated modules (not resolvable on disk). */
 const GENERATED = {
     "@/lunora/_generated/server": new Set([
-        "query",
-        "mutation",
         "action",
-        "internalQuery",
-        "internalMutation",
-        "internalAction",
-        "v",
-        "definePolicy",
-        // common type-only exports
-        "QueryCtx",
-        "MutationCtx",
         "ActionCtx",
         "DataModel",
+        "definePolicy",
         "Doc",
         "Id",
+        "internalAction",
+        "internalMutation",
+        "internalQuery",
+        "mutation",
+        "MutationCtx",
+        "query",
+        // common type-only exports
+        "QueryCtx",
+        "v",
     ]),
-    "@/lunora/_generated/api": new Set(["api", "internal", "FunctionReference"]),
+    "@/lunora/_generated/api": new Set(["api", "FunctionReference", "internal"]),
 };
 
 // Umbrella `lunorash/<sub>` re-exports the base packages.
-const UMBRELLA = new Set(["server", "values", "runtime", "do", "client"]);
+const UMBRELLA = new Set(["client", "do", "runtime", "server", "values"]);
 
 // Subpath → source entry file (relative to a package's src/).
 const SUBPATH_ENTRY = { "": "index", plugins: "plugins", server: "server", worker: "worker", testing: "testing", do: "do", bridge: "bridge", client: "client" };
 
-/** Collect exported names from a TS source file. Returns null if it can't be
- *  validated confidently (missing file, or `export *` makes the set open). */
+/**
+ * Collect exported names from a TS source file. Returns null if it can't be
+ *  validated confidently (missing file, or `export *` makes the set open).
+ * @param srcFile
+ */
 function exportsOf(srcFile) {
     if (!existsSync(srcFile)) return null;
 
@@ -75,13 +78,16 @@ function exportsOf(srcFile) {
         }
     }
     // export const/function/class/type/interface/enum NAME
-    for (const m of text.matchAll(/export\s+(?:declare\s+)?(?:const|function|class|type|interface|enum)\s+([A-Za-z0-9_$]+)/g)) {
+    for (const m of text.matchAll(/export\s+(?:declare\s+)?(?:const|function|class|type|interface|enum)\s+([\w$]+)/g)) {
         names.add(m[1]);
     }
     return names;
 }
 
-/** Resolve a module specifier to its allowed export names, or null to skip. */
+/**
+ * Resolve a module specifier to its allowed export names, or null to skip.
+ * @param spec
+ */
 function allowedExports(spec) {
     if (GENERATED[spec]) return GENERATED[spec];
 

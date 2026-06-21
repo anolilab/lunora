@@ -1,24 +1,12 @@
-declare module "@icons-pack/react-simple-icons/icons/SiAstro.mjs";
-declare module "@icons-pack/react-simple-icons/icons/SiBun.mjs";
-declare module "@icons-pack/react-simple-icons/icons/SiCloudflare.mjs";
-declare module "@icons-pack/react-simple-icons/icons/SiCloudflarepages.mjs";
-declare module "@icons-pack/react-simple-icons/icons/SiCloudflareworkers.mjs";
-declare module "@icons-pack/react-simple-icons/icons/SiDeno.mjs";
-declare module "@icons-pack/react-simple-icons/icons/SiSolid.mjs";
-declare module "@icons-pack/react-simple-icons/icons/SiSvelte.mjs";
-declare module "@icons-pack/react-simple-icons/icons/SiVuedotjs.mjs";
-declare module "@icons-pack/react-simple-icons/icons/SiDiscord.mjs";
-declare module "@icons-pack/react-simple-icons/icons/SiExpress.mjs";
-declare module "@icons-pack/react-simple-icons/icons/SiGithub.mjs";
-declare module "@icons-pack/react-simple-icons/icons/SiGooglecloud.mjs";
-declare module "@icons-pack/react-simple-icons/icons/SiNestjs.mjs";
-declare module "@icons-pack/react-simple-icons/icons/SiNetlify.mjs";
-declare module "@icons-pack/react-simple-icons/icons/SiNextdotjs.mjs";
-declare module "@icons-pack/react-simple-icons/icons/SiNodedotjs.mjs";
-declare module "@icons-pack/react-simple-icons/icons/SiReact.mjs";
-declare module "@icons-pack/react-simple-icons/icons/SiRemix.mjs";
-declare module "@icons-pack/react-simple-icons/icons/SiTypescript.mjs";
-declare module "@icons-pack/react-simple-icons/icons/SiVercel.mjs";
-declare module "@icons-pack/react-simple-icons/icons/SiVite.mjs";
-declare module "@icons-pack/react-simple-icons/icons/SiX.mjs";
+// The `@icons-pack/react-simple-icons/icons/*.mjs` deep imports ship sibling
+// `*.d.ts` files, but the explicit `.mjs` specifier under bundler resolution
+// doesn't pick them up — so type the default export here as an SVG component to
+// keep icon assignments type-safe instead of `any`.
+declare module "@icons-pack/react-simple-icons/icons/*.mjs" {
+    import type { ComponentType, SVGProps } from "react";
+
+    const icon: ComponentType<SVGProps<SVGSVGElement> & { color?: string; size?: number | string; title?: string }>;
+    export default icon;
+}
+
 declare module "fumadocs-mdx:collections/browser";

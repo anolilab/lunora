@@ -2,11 +2,11 @@ import { createFileRoute, notFound } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import type * as PageTree from "fumadocs-core/page-tree";
 import browserCollections from "fumadocs-mdx:collections/browser";
+import { Step, Steps } from "fumadocs-ui/components/steps";
+import { Tab, Tabs } from "fumadocs-ui/components/tabs";
 import { DocsLayout } from "fumadocs-ui/layouts/notebook";
 import defaultMdxComponents from "fumadocs-ui/mdx";
 import { DocsBody, DocsDescription, DocsPage, DocsTitle } from "fumadocs-ui/page";
-import { Step, Steps } from "fumadocs-ui/components/steps";
-import { Tab, Tabs } from "fumadocs-ui/components/tabs";
 import type { CSSProperties } from "react";
 import { useMemo } from "react";
 
@@ -40,7 +40,7 @@ export const Route = createFileRoute("/docs/$")({
 
         return { ...data, slugs: slugs.join("/") };
     },
-    notFoundComponent: (props) => <NotFound {...props}>The documentation page you're looking for doesn't exist or may have been moved.</NotFound>,
+    notFoundComponent: (props) => <NotFound {...props}>The documentation page you&apos;re looking for doesn&apos;t exist or may have been moved.</NotFound>,
     head: ({ loaderData }) => {
         if (!loaderData?.title) {
             return {};
@@ -199,36 +199,38 @@ const Page = () => {
     );
 };
 
-function transformPageTree(root: PageTree.Root): PageTree.Root {
+const transformPageTree = (root: PageTree.Root): PageTree.Root => {
     // Returns a PageTree.Node (not the input's narrowed type): the flatten branch
     // can turn a folder into a page, so the contract is Node → Node.
-    function mapNode(item: PageTree.Node): PageTree.Node {
-        if (typeof item.icon === "string") {
-            item = {
-                ...item,
-                icon: (
-                    <span
-                        dangerouslySetInnerHTML={{
-                            __html: item.icon,
-                        }}
-                    />
-                ),
-            };
-        }
+    const mapNode = (node: PageTree.Node): PageTree.Node => {
+        const item =
+            typeof node.icon === "string"
+                ? {
+                      ...node,
+                      icon: (
+                          <span
+                              // eslint-disable-next-line react/no-danger -- fumadocs page-tree icons are trusted inline SVG strings from our own content
+                              dangerouslySetInnerHTML={{
+                                  __html: node.icon,
+                              }}
+                          />
+                      ),
+                  }
+                : node;
 
         if (item.type !== "folder") {
             return item;
         }
 
         const index = item.index ? (mapNode(item.index) as PageTree.Item) : undefined;
-        const children = item.children.map(mapNode);
+        const children = item.children.map((child) => mapNode(child));
 
         // Flatten a folder that only wraps its own index page (e.g. the
         // per-package "Server" → "@lunora/server" folders) into a single link,
         // keeping the folder's clean name. fumadocs lists the index both as
         // `index` and as a child, so they dedupe to one URL. Folders with extra
         // pages (auth) or separators/subfolders (Packages) are left untouched.
-        const pages = [index, ...children].filter((node): node is PageTree.Item => node?.type === "page");
+        const pages = [index, ...children].filter((entry): entry is PageTree.Item => entry?.type === "page");
         const hasNonPageChild = children.some((child) => child.type !== "page");
 
         if (!hasNonPageChild && new Set(pages.map((page) => page.url)).size === 1 && pages[0]) {
@@ -240,11 +242,11 @@ function transformPageTree(root: PageTree.Root): PageTree.Root {
             index,
             children,
         };
-    }
+    };
 
     return {
         ...root,
-        children: root.children.map(mapNode),
+        children: root.children.map((child) => mapNode(child)),
         fallback: root.fallback ? transformPageTree(root.fallback) : undefined,
     };
-}
+};
