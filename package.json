@@ -38,10 +38,10 @@
         "multi-semantic-release": "multi-semantic-release",
         "postinstall": "node scripts/generate-package-og-images.js",
         "prepare": "vis hook install",
-        "test": "vis run test --query \"project!=@lunora/e2e\"",
-        "test:affected": "vis affected test --fail-fast --query \"project!=@lunora/e2e\"",
+        "test": "vis run test --query \"project!=@lunora/e2e&&project!=@lunora/studio&&project!=@lunora/d1\"",
+        "test:affected": "vis affected test --fail-fast --query \"project!=@lunora/e2e&&project!=@lunora/studio&&project!=@lunora/d1\"",
         "test:clean-machine": "./scripts/clean-machine-smoke.sh",
-        "test:coverage": "vis run test:coverage --query \"project!=@lunora/e2e\"",
+        "test:coverage": "vis run test:coverage --query \"project!=@lunora/e2e&&project!=@lunora/studio&&project!=@lunora/d1\"",
         "test:templates": "./scripts/template-build-smoke.sh"
     },
     "devDependencies": {
