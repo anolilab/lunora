@@ -1,6 +1,6 @@
 {
     "name": "@lunora/server",
-    "version": "0.0.0",
+    "version": "1.0.0-alpha.1",
     "description": "Server primitives for Lunora: defineSchema, defineTable, query, mutation, and action",
     "keywords": [
         "backend",
@@ -74,8 +74,8 @@
         "test:bench": "vitest bench --run --config vitest.bench.config.ts"
     },
     "dependencies": {
-        "@lunora/scheduler": "workspace:*",
-        "@lunora/values": "workspace:*",
+        "@lunora/scheduler": "1.0.0-alpha.1",
+        "@lunora/values": "1.0.0-alpha.1",
         "drizzle-orm": "catalog:drizzle",
         "hono": "catalog:http"
     },
