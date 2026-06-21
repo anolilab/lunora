@@ -24,7 +24,7 @@
         "strategy":
             "fail-fast": false
             "matrix":
-                "node_version": ["22.15", "24.10"]
+                "node_version": ["22.15", "24.11"]
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -124,7 +124,7 @@
         "strategy":
             "fail-fast": false
             "matrix":
-                "node_version": ["22.15", "24.10"]
+                "node_version": ["22.15", "24.11"]
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -198,9 +198,9 @@
               "env":
                   "LUNORA_WORKERD_TESTS": "1"
 
-            # Upload coverage on main/alpha pushes only, with Node 22.14.
+            # Upload coverage on main/alpha pushes only, with Node 22.15.
             - "name": "Upload coverage to Codecov"
-              "if": "github.event_name == 'push' && matrix.node_version == '22.14' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/alpha')"
+              "if": "github.event_name == 'push' && matrix.node_version == '22.15' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/alpha')"
               "uses": "codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7" # v5.5.1
               "with":
                   "token": "${{ secrets.CODECOV_TOKEN }}"
@@ -214,7 +214,7 @@
         "strategy":
             "fail-fast": false
             "matrix":
-                "node_version": ["22.15", "24.10"]
+                "node_version": ["22.15", "24.11"]
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
