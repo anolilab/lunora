@@ -120,6 +120,12 @@ function discoverPackages() {
         // Features from metadata (empty array if not curated yet)
         const features = meta.features || [];
 
+        // Only link to a generated docs page when the package actually ships a
+        // docs/ folder (copy-package-docs.js only emits pages for those). Without
+        // this guard a docless package (e.g. sql-store) gets a /docs/packages/<slug>
+        // link that the docs-site prerender 404s on, failing the build.
+        const hasDocs = existsSync(join(pkgPath, "docs"));
+
         packages.push({
             slug,
             npmName,
@@ -127,7 +133,7 @@ function discoverPackages() {
             description,
             category,
             accentColor: categoryColors[category] || "sky-sapphire",
-            docsPath: `/docs/packages/${slug}`,
+            ...(hasDocs ? { docsPath: `/docs/packages/${slug}` } : {}),
             features,
         });
     }
@@ -199,7 +205,7 @@ export interface PackageInfo {
     accentColor: AccentColor;
     category: string;
     description: string;
-    docsPath: string;
+    docsPath?: string;
     features: string[];
     name: string;
     npmName: string;
@@ -221,8 +227,7 @@ ${packages
         (p) => `    {
         accentColor: categoryColors[${JSON.stringify(p.category)}]!,
         category: ${JSON.stringify(p.category)},
-        description: ${JSON.stringify(p.description)},
-        docsPath: ${JSON.stringify(p.docsPath)},
+        description: ${JSON.stringify(p.description)},${p.docsPath ? `\n        docsPath: ${JSON.stringify(p.docsPath)},` : ""}
         features: ${JSON.stringify(p.features)},
         name: ${JSON.stringify(p.name)},
         npmName: ${JSON.stringify(p.npmName)},

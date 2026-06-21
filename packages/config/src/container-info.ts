@@ -34,7 +34,13 @@ const discoverContainerInfo = (projectRoot: string, schemaDirectory: string): Di
     }
 
     try {
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+        // skipFileDependencyResolution: container discovery only AST-walks
+        // containers.ts and resolves the local `defineContainer` import specifier
+        // (which lives in this file). Without this flag ts-morph eagerly loads the
+        // imported module's declarations (@lunora/container, …); from a scaffold/
+        // temp workdir where those aren't resolvable it can stall for tens of
+        // seconds in CI — manifesting as a deploy-test timeout.
+        const project = new Project({ skipAddingFilesFromTsConfig: true, skipFileDependencyResolution: true, useInMemoryFileSystem: false });
 
         return { containers: discoverContainers(project, join(projectRoot, schemaDirectory)) };
     } catch (error: unknown) {

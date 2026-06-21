@@ -203,10 +203,12 @@ const PackageDetail: FC = () => {
                             </div>
                             <CopyButton text={installCommand} />
                         </div>
-                        <Pill primary to={pkg.docsPath}>
-                            Get started
-                            <ChevronRight className="size-4" />
-                        </Pill>
+                        {pkg.docsPath ? (
+                            <Pill primary to={pkg.docsPath}>
+                                Get started
+                                <ChevronRight className="size-4" />
+                            </Pill>
+                        ) : null}
                     </div>
                 </Reveal>
             </section>
@@ -302,10 +304,12 @@ const PackageDetail: FC = () => {
                         title="Ready to get started?"
                     />
                     <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-                        <Pill primary to={pkg.docsPath}>
-                            Read the docs
-                            <ChevronRight className="size-4" />
-                        </Pill>
+                        {pkg.docsPath ? (
+                            <Pill primary to={pkg.docsPath}>
+                                Read the docs
+                                <ChevronRight className="size-4" />
+                            </Pill>
+                        ) : null}
                         <Pill to="/packages">Explore all packages</Pill>
                     </div>
                 </div>

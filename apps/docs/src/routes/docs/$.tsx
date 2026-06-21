@@ -4,6 +4,7 @@ import type * as PageTree from "fumadocs-core/page-tree";
 import browserCollections from "fumadocs-mdx:collections/browser";
 import { Step, Steps } from "fumadocs-ui/components/steps";
 import { Tab, Tabs } from "fumadocs-ui/components/tabs";
+import { TypeTable } from "fumadocs-ui/components/type-table";
 import { DocsLayout } from "fumadocs-ui/layouts/notebook";
 import defaultMdxComponents from "fumadocs-ui/mdx";
 import { DocsBody, DocsDescription, DocsPage, DocsTitle } from "fumadocs-ui/page";
@@ -121,6 +122,7 @@ const clientLoader = browserCollections.docs.createClientLoader({
                             Steps,
                             Tab,
                             Tabs,
+                            TypeTable,
                         }}
                     />
                 </DocsBody>
