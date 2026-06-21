@@ -56,7 +56,7 @@ catalogs:
   build:
     "@babel/core": ^8.0.1
     "@babel/preset-react": ^8.0.1
-    "@visulima/packem": 2.0.0-alpha.90
+    "@visulima/packem": 2.0.0-alpha.93
     "babel-plugin-react-compiler": 1.0.0
     "babel-preset-solid": ^1.9.12
     esbuild: ^0.28.1
@@ -99,7 +99,7 @@ catalogs:
     "@commitlint/cli": ^21.0.2
     "@commitlint/config-conventional": ^21.0.2
     cz-conventional-changelog: ^3.3.0
-    "@visulima/vis": 1.0.0-alpha.41
+    "@visulima/vis": 1.0.0-alpha.43
     "@visulima/tabular": 4.0.0-alpha.14
   test:
     "@codspeed/vitest-plugin": 5.6.0
@@ -140,7 +140,7 @@ catalogs:
     "@cloudflare/vite-plugin": 1.42.0
     "@tailwindcss/cli": ^4.3.1
     "@tailwindcss/vite": ^4.3.1
-    "@visulima/vite-overlay": 2.0.0-alpha.34
+    "@visulima/vite-overlay": 2.0.0-alpha.35
     es-module-lexer: ^2.1.0
     jsonc-parser: ^3.3.1
     tailwindcss: ^4.3.1
@@ -196,7 +196,7 @@ catalogs:
     remotion: 4.0.481
     culori: 4.0.2
   mail:
-    "@visulima/email": 1.0.0-alpha.37
+    "@visulima/email": 1.0.0-alpha.41
     "@react-email/render": 2.0.9
     "postal-mime": 2.7.4
   mcp:
@@ -352,7 +352,7 @@ peerDependencyRules:
     "rollup": ">=4.60.1"
     "@csstools/postcss-slow-plugins": ">=2"
     "@bomb.sh/tab": ">=0.0.15"
-    "@visulima/pail": "4.0.0-alpha.21"
+    "@visulima/pail": "4.0.0-alpha.22"
 
 # pnpm v11 refuses to install when transitive deps want to run post-install
 # scripts unless the workspace explicitly approves them. Re-run
@@ -446,16 +446,16 @@ minimumReleaseAgeExclude:
   - postcss@8.5.10
   - tmp@0.2.6
   - lodash@4.17.23
-  - '@visulima/vis-binding-darwin-arm64@1.0.0-alpha.41'
-  - '@visulima/vis-binding-darwin-x64@1.0.0-alpha.41'
-  - '@visulima/vis-binding-linux-arm64-gnu@1.0.0-alpha.41'
-  - '@visulima/vis-binding-linux-arm64-musl@1.0.0-alpha.41'
-  - '@visulima/vis-binding-linux-x64-gnu@1.0.0-alpha.41'
-  - '@visulima/vis-binding-linux-x64-musl@1.0.0-alpha.41'
-  - '@visulima/vis-binding-win32-arm64-msvc@1.0.0-alpha.41'
-  - '@visulima/vis-binding-win32-x64-msvc@1.0.0-alpha.41'
-  - '@visulima/vis@1.0.0-alpha.41'
-  - '@visulima/email@1.0.0-alpha.37'
+  - '@visulima/vis-binding-darwin-arm64@1.0.0-alpha.43'
+  - '@visulima/vis-binding-darwin-x64@1.0.0-alpha.43'
+  - '@visulima/vis-binding-linux-arm64-gnu@1.0.0-alpha.43'
+  - '@visulima/vis-binding-linux-arm64-musl@1.0.0-alpha.43'
+  - '@visulima/vis-binding-linux-x64-gnu@1.0.0-alpha.43'
+  - '@visulima/vis-binding-linux-x64-musl@1.0.0-alpha.43'
+  - '@visulima/vis-binding-win32-arm64-msvc@1.0.0-alpha.43'
+  - '@visulima/vis-binding-win32-x64-msvc@1.0.0-alpha.43'
+  - '@visulima/vis@1.0.0-alpha.43'
+  - '@visulima/email@1.0.0-alpha.41'
   - esbuild@0.28.1
   - js-yaml@4.1.2
   - '@opentelemetry/core@2.8.0'
