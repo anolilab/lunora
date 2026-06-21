@@ -3021,6 +3021,27 @@ importers:
 
   tests/vis-templates:
     devDependencies:
+      '@lunora/codegen':
+        specifier: workspace:*
+        version: link:../../packages/codegen
+      '@lunora/container':
+        specifier: workspace:*
+        version: link:../../packages/container
+      '@lunora/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@lunora/react':
+        specifier: workspace:*
+        version: link:../../packages/react
+      '@lunora/scheduler':
+        specifier: workspace:*
+        version: link:../../packages/scheduler
+      '@lunora/values':
+        specifier: workspace:*
+        version: link:../../packages/values
+      '@lunora/workflow':
+        specifier: workspace:*
+        version: link:../../packages/workflow
       '@types/node':
         specifier: catalog:types
         version: 25.9.3

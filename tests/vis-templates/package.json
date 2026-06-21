@@ -10,6 +10,13 @@
         "test": "vitest run"
     },
     "devDependencies": {
+        "@lunora/codegen": "workspace:*",
+        "@lunora/container": "workspace:*",
+        "@lunora/db": "workspace:*",
+        "@lunora/react": "workspace:*",
+        "@lunora/scheduler": "workspace:*",
+        "@lunora/values": "workspace:*",
+        "@lunora/workflow": "workspace:*",
         "@types/node": "catalog:types",
         "ts-morph": "catalog:tooling",
         "typescript": "catalog:tsc",
