@@ -1,6 +1,6 @@
 {
     "name": "@lunora/codegen",
-    "version": "0.0.0",
+    "version": "1.0.0-alpha.1",
     "description": "Code generator for Lunora: emits _generated/{api,server,dataModel}.ts from your schema",
     "keywords": [
         "cloudflare",
@@ -58,17 +58,17 @@
         "test:bench": "vitest bench --run --config vitest.bench.config.ts"
     },
     "dependencies": {
-        "@lunora/advisor": "workspace:*",
-        "@lunora/container": "workspace:*",
-        "@lunora/scheduler": "workspace:*",
-        "@lunora/values": "workspace:*",
-        "@lunora/workflow": "workspace:*",
+        "@lunora/advisor": "1.0.0-alpha.1",
+        "@lunora/container": "1.0.0-alpha.1",
+        "@lunora/scheduler": "1.0.0-alpha.1",
+        "@lunora/values": "1.0.0-alpha.1",
+        "@lunora/workflow": "1.0.0-alpha.1",
         "ts-morph": "catalog:tooling"
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/do": "workspace:*",
-        "@lunora/server": "workspace:*",
+        "@lunora/do": "1.0.0-alpha.1",
+        "@lunora/server": "1.0.0-alpha.1",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
