@@ -1,0 +1,42 @@
+# Consumed by dorny/paths-filter in test.yml / lint.yml to skip jobs when no
+# relevant files changed. Keep the globs broad — a false "changed" only costs a
+# CI run; a false "unchanged" skips a gate that should have run.
+
+# Anything that can affect a package's build/test graph.
+packages: &packages
+    - "**/tsconfig*.json"
+    - "pnpm-lock.yaml"
+    - "pnpm-workspace.yaml"
+    - "package.json"
+    - "packages/**"
+    - "apps/**"
+    - "examples/**"
+    - "registry/**"
+    - "tools/**"
+    - "vis.config.ts"
+
+# Lintable source (eslint + tsc).
+frontend_lintable:
+    - "**/*.[tj]{s,sx}"
+    - "**/*.{cts,mts,cjs,mjs}"
+    - "**/tsconfig*.json"
+    - "**/package.json"
+    - "pnpm-lock.yaml"
+
+package_json_lintable:
+    - "**/package.json"
+    - "package.json"
+
+yaml_lintable:
+    - "**/*.yml"
+    - "**/*.yaml"
+
+# E2E exercises the playground app + the runtime/client/do/auth packages.
+e2e:
+    - "apps/playground/**"
+    - "tests/e2e/**"
+    - "packages/**"
+    - "pnpm-lock.yaml"
+
+codecov:
+    - "codecov.yml"

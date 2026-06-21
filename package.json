@@ -20,6 +20,7 @@
     "scripts": {
         "build": "vis run build",
         "build:affected": "vis affected build --fail-fast",
+        "build:affected:packages": "vis affected build --fail-fast --query \"tag=type:package\"",
         "build:packages": "vis run build --query \"tag=type:package\"",
         "clean": "vis clean --empty-packages",
         "commit": "git-cz",
