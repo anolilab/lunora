@@ -63,6 +63,10 @@ const authOptions = (env: Env): LunoraAuthOptions => {
 
     return {
         baseURL: env.AUTH_URL,
+        // The E2E suite signs up many users in quick succession; better-auth's
+        // built-in rate limiter would 429 them. Disable it only for the E2E run
+        // (normal dev/prod keep better-auth's default rate limiting).
+        rateLimit: env.LUNORA_E2E === "true" ? { enabled: false } : undefined,
         emailAndPassword: {
             enabled: true,
             // Forgot-password mail routes through @lunora/mail; in dev (and the
