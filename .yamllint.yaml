@@ -5,6 +5,12 @@
     .docker/
     vendor/
     node_modules/
+    .playwright-mcp/
+    .agents/
+    .claude/
+    .deepsec/
+    .vis/
+    dist/
     .yarnrc.yml
     .yarn/
     .pnpm-lock.yaml

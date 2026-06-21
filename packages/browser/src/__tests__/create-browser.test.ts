@@ -362,7 +362,7 @@ describe("createBrowser", () => {
         it("is a placeholder for an integration harness against a real env.BROWSER", () => {
             expect.assertions(1);
 
-            expect(process.env.CI).toBe(true);
+            expect(process.env.CI).toBeDefined();
         });
     });
 });

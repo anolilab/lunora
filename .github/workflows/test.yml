@@ -2,9 +2,9 @@
 
 "name": "Tests"
 
-# Tests run on PRs (and the merge queue), not on push: a push to a release
-# branch only happens via a merged PR that already ran this workflow, so a
-# push trigger would just re-run the same suite a second time.
+# PRs + the merge queue only — never `push`. A push to a release branch only
+# happens via a merged PR that already ran this suite, so a push trigger would
+# just re-run everything a second time. Modeled on visulima/visulima.
 "on": # yamllint disable-line rule:truthy
     "pull_request":
         "types": ["opened", "synchronize", "reopened"]
@@ -20,14 +20,14 @@
     "contents": "read" # to fetch code (actions/checkout)
 
 "jobs":
-    "typecheck":
-        "name": "Typecheck (node-${{ matrix.node_version }})"
+    "files-changed":
+        "name": "Detect what files changed"
         "runs-on": "ubuntu-latest"
-        "timeout-minutes": 20
-        "strategy":
-            "fail-fast": false
-            "matrix":
-                "node_version": ["22.15", "24.11"]
+        "timeout-minutes": 5
+        "outputs":
+            "packages": "${{ steps.changes.outputs.packages || steps.changes_retry.outputs.packages }}"
+            "e2e": "${{ steps.changes.outputs.e2e || steps.changes_retry.outputs.e2e }}"
+            "codecov": "${{ steps.changes.outputs.codecov || steps.changes_retry.outputs.codecov }}"
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -38,180 +38,34 @@
               "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
               "with":
                   "persist-credentials": false
-                  # Number of commits to fetch. 0 indicates all history for all branches and tags.
-                  # Pulls all commits (needed for `vis affected` base/head SHA resolution)
-                  "fetch-depth": 0
-              "env":
-                  "GIT_COMMITTER_NAME": "GitHub Actions Shell"
-                  "GIT_AUTHOR_NAME": "GitHub Actions Shell"
-                  "EMAIL": "github-actions[bot]@users.noreply.github.com"
 
-            - "name": "Setup pnpm"
-              "uses": "pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093" # v6.0.8
+            # dorny/paths-filter occasionally 401s on the rotating GITHUB_TOKEN;
+            # fall back to a retry whose outputs the job reads via `||`.
+            - "name": "Check for file changes"
+              "id": "changes"
+              "continue-on-error": true
+              "uses": "dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d" # v4.0.1
               "with":
-                  "version": "11.5.3"
-                  "run_install": false
+                  "token": "${{ github.token }}"
+                  "filters": ".github/file-filters.yml"
 
-            - "name": "Use Node.js ${{ matrix.node_version }}"
-              "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e" # v6.4.0
-              "with":
-                  "node-version": "${{ matrix.node_version }}"
-
-            - "name": "Resolve pnpm store path"
-              "id": "pnpm-store"
+            - "name": "Wait before retrying path filter"
+              "if": "steps.changes.outcome == 'failure'"
               "shell": "bash"
-              "run": |
-                  echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+              "run": "sleep 30"
 
-            - "name": "Restore pnpm + vis caches"
-              "id": "pnpm-cache"
-              "uses": "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae" # v5.0.5
+            - "name": "Check for file changes (retry)"
+              "if": "steps.changes.outcome == 'failure'"
+              "id": "changes_retry"
+              "uses": "dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d" # v4.0.1
               "with":
-                  "path": |
-                      ${{ steps.pnpm-store.outputs.path }}
-                      .vis/cache
-                  "key": "pnpm-vis-${{ runner.os }}-node${{ matrix.node_version }}-${{ hashFiles('pnpm-lock.yaml') }}"
-                  "restore-keys": |
-                      pnpm-vis-${{ runner.os }}-node${{ matrix.node_version }}-
-                      pnpm-vis-${{ runner.os }}-
-
-            - "name": "Install dependencies"
-              "run": "pnpm install --frozen-lockfile"
-
-            # Only write back to the shared cache from trusted refs (push events).
-            # PRs (including forks) restore the cache but never write to it.
-            - "name": "Save pnpm + vis caches"
-              "if": "(github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && steps.pnpm-cache.outputs.cache-hit != 'true'"
-              "uses": "actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae" # v5.0.5
-              "with":
-                  "path": |
-                      ${{ steps.pnpm-store.outputs.path }}
-                      .vis/cache
-                  "key": "${{ steps.pnpm-cache.outputs.cache-primary-key }}"
-
-            - "name": "Typecheck (affected) on PRs"
-              "if": "github.event_name == 'pull_request'"
-              "run": "pnpm run lint:affected:types"
-
-            # The affected typecheck above never covers registry/ (it isn't a vis
-            # project), so gate the shipped registry items explicitly on PRs. The
-            # push path covers them via `lint:types`, which chains this script.
-            - "name": "Typecheck registry items on PRs"
-              "if": "github.event_name == 'pull_request'"
-              "run": "pnpm run lint:types:registry"
-
-            - "name": "Typecheck (all) on push / dispatch"
-              "if": "github.event_name != 'pull_request'"
-              "run": "pnpm run lint:types"
-
-            # Always typecheck the examples explicitly, on every event.
-            # The examples (`@lunora-example/*`) are vis projects and the affected
-            # graph normally covers them, but a PR that only touches example
-            # source must never be able to slip a type error through (two latent
-            # bugs — a PUT upload URL minted from a mutation, and a broken
-            # procedure import — previously got in this way). `lint:types` runs
-            # `tsc --noEmit` per example, which does NOT build the upstream
-            # `@lunora/*` packages, so build the package dist first (the examples
-            # import from it). Examples track committed `_generated/`, so no
-            # codegen is required here.
-            - "name": "Build packages for example typecheck"
-              "run": "pnpm run build:packages"
-
-            - "name": "Typecheck examples"
-              "run": 'pnpm --filter "@lunora-example/*" run lint:types'
+                  "token": "${{ github.token }}"
+                  "filters": ".github/file-filters.yml"
 
     "test":
         "name": "Test (node-${{ matrix.node_version }})"
-        "runs-on": "ubuntu-latest"
-        # Full coverage run across all packages (workerd suites included) under
-        # vis's concurrent execution can run long; 30 min was cancelling the job
-        # mid-suite.
-        "timeout-minutes": 50
-        "strategy":
-            "fail-fast": false
-            "matrix":
-                "node_version": ["22.15", "24.11"]
-        "steps":
-            - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
-              "with":
-                  "egress-policy": "audit"
-
-            - "name": "Git checkout"
-              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
-              "with":
-                  "persist-credentials": false
-                  "fetch-depth": 0
-              "env":
-                  "GIT_COMMITTER_NAME": "GitHub Actions Shell"
-                  "GIT_AUTHOR_NAME": "GitHub Actions Shell"
-                  "EMAIL": "github-actions[bot]@users.noreply.github.com"
-
-            - "name": "Setup pnpm"
-              "uses": "pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093" # v6.0.8
-              "with":
-                  "version": "11.5.3"
-                  "run_install": false
-
-            - "name": "Use Node.js ${{ matrix.node_version }}"
-              "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e" # v6.4.0
-              "with":
-                  "node-version": "${{ matrix.node_version }}"
-
-            - "name": "Resolve pnpm store path"
-              "id": "pnpm-store"
-              "shell": "bash"
-              "run": |
-                  echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
-
-            - "name": "Restore pnpm + vis caches"
-              "id": "pnpm-cache"
-              "uses": "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae" # v5.0.5
-              "with":
-                  "path": |
-                      ${{ steps.pnpm-store.outputs.path }}
-                      .vis/cache
-                  "key": "pnpm-vis-${{ runner.os }}-node${{ matrix.node_version }}-${{ hashFiles('pnpm-lock.yaml') }}"
-                  "restore-keys": |
-                      pnpm-vis-${{ runner.os }}-node${{ matrix.node_version }}-
-                      pnpm-vis-${{ runner.os }}-
-
-            - "name": "Install dependencies"
-              "run": "pnpm install --frozen-lockfile"
-
-            - "name": "Save pnpm + vis caches"
-              "if": "(github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && steps.pnpm-cache.outputs.cache-hit != 'true'"
-              "uses": "actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae" # v5.0.5
-              "with":
-                  "path": |
-                      ${{ steps.pnpm-store.outputs.path }}
-                      .vis/cache
-                  "key": "${{ steps.pnpm-cache.outputs.cache-primary-key }}"
-
-            # Affected projects only, with coverage — one run per PR/merge_group.
-            #
-            # workerd is intentionally OFF (no LUNORA_WORKERD_TESTS). Two reasons:
-            # (1) the v8 coverage provider collects via node:inspector, which the
-            # @cloudflare/vitest-pool-workers runtime doesn't implement ("The
-            # Session method is not implemented"), erroring the coverage run; and
-            # (2) the workerd-pool suites (runtime, do, client, scheduler, d1)
-            # currently fail several assertions AND leave the pool process alive,
-            # hanging the job ~44 min until the timeout. They have never passed in
-            # CI — TODO(workerd-ci): fix them in a dedicated workerd-capable job
-            # and re-enable LUNORA_WORKERD_TESTS there.
-            - "name": "Run affected tests with coverage"
-              "run": "pnpm run test:affected:coverage"
-
-            - "name": "Upload coverage to Codecov"
-              "if": "matrix.node_version == '22.15' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository)"
-              "uses": "codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7" # v5.5.1
-              "with":
-                  "token": "${{ secrets.CODECOV_TOKEN }}"
-                  "fail_ci_if_error": false
-                  "verbose": true
-
-    "build":
-        "name": "Build (node-${{ matrix.node_version }})"
+        "if": "needs.files-changed.outputs.packages == 'true'"
+        "needs": "files-changed"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 30
         "strategy":
@@ -228,70 +82,59 @@
               "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
               "with":
                   "persist-credentials": false
+                  # Full history so `vis affected` can resolve the PR base.
                   "fetch-depth": 0
               "env":
                   "GIT_COMMITTER_NAME": "GitHub Actions Shell"
                   "GIT_AUTHOR_NAME": "GitHub Actions Shell"
                   "EMAIL": "github-actions[bot]@users.noreply.github.com"
 
-            - "name": "Setup pnpm"
-              "uses": "pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093" # v6.0.8
-              "with":
-                  "version": "11.5.3"
-                  "run_install": false
-
-            - "name": "Use Node.js ${{ matrix.node_version }}"
-              "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e" # v6.4.0
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
               "with":
                   "node-version": "${{ matrix.node_version }}"
+                  "cache-prefix": "test"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
 
-            - "name": "Resolve pnpm store path"
-              "id": "pnpm-store"
+            # `vis affected` builds upstream deps only via dependsOn; build the
+            # affected packages explicitly so their dist exists for the test run
+            # (workerd-pool suites stay off — see below).
+            - "name": "Build affected packages"
+              "run": "pnpm run build:affected:packages"
+
+            # workerd is intentionally OFF (no LUNORA_WORKERD_TESTS): the v8
+            # coverage provider collects via node:inspector, which the
+            # @cloudflare/vitest-pool-workers runtime does not implement, and the
+            # workerd-pool suites currently hang the runner. They run in a
+            # dedicated job once fixed. studio/d1/playground are excluded in the
+            # `test*` scripts for the same hang reason.
+            - "name": "Run affected tests"
               "shell": "bash"
               "run": |
-                  echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+                  if [ "${{ matrix.node_version }}" = "22.15" ]; then
+                      pnpm run test:affected:coverage
+                  else
+                      pnpm run test:affected
+                  fi
 
-            - "name": "Restore pnpm + vis caches"
-              "id": "pnpm-cache"
-              "uses": "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae" # v5.0.5
+            - "name": "Upload coverage to Codecov"
+              "if": "matrix.node_version == '22.15' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository)"
+              "continue-on-error": true
+              "uses": "codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7" # v5.5.1
               "with":
-                  "path": |
-                      ${{ steps.pnpm-store.outputs.path }}
-                      .vis/cache
-                  "key": "pnpm-vis-${{ runner.os }}-node${{ matrix.node_version }}-${{ hashFiles('pnpm-lock.yaml') }}"
-                  "restore-keys": |
-                      pnpm-vis-${{ runner.os }}-node${{ matrix.node_version }}-
-                      pnpm-vis-${{ runner.os }}-
-
-            - "name": "Install dependencies"
-              "run": "pnpm install --frozen-lockfile"
-
-            - "name": "Save pnpm + vis caches"
-              "if": "(github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && steps.pnpm-cache.outputs.cache-hit != 'true'"
-              "uses": "actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae" # v5.0.5
-              "with":
-                  "path": |
-                      ${{ steps.pnpm-store.outputs.path }}
-                      .vis/cache
-                  "key": "${{ steps.pnpm-cache.outputs.cache-primary-key }}"
-
-            - "name": "Build affected packages on PR"
-              "if": "github.event_name == 'pull_request'"
-              "run": "pnpm run build:affected"
-
-            - "name": "Build all packages on push / dispatch"
-              "if": "github.event_name != 'pull_request'"
-              "run": "pnpm run build:packages"
+                  "token": "${{ secrets.CODECOV_TOKEN }}"
+                  "fail_ci_if_error": false
 
     "e2e":
         "name": "E2E (Playwright + Miniflare)"
-        # PR-only — push/dispatch already exercise the unit-test matrix and the
-        # E2E run takes ~30s on a warm runner which would otherwise lengthen
-        # every merge. CI_E2E_SKIP can be set as a repo variable to disable
-        # without a code change if the suite goes flaky.
-        "if": "github.event_name == 'pull_request' && vars.CI_E2E_SKIP != 'true'"
+        "if": "needs.files-changed.outputs.e2e == 'true' && vars.CI_E2E_SKIP != 'true'"
+        "needs": "files-changed"
         "runs-on": "ubuntu-latest"
-        "timeout-minutes": 20
+        "timeout-minutes": 30
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -303,25 +146,29 @@
               "with":
                   "persist-credentials": false
                   "fetch-depth": 0
+              "env":
+                  "GIT_COMMITTER_NAME": "GitHub Actions Shell"
+                  "GIT_AUTHOR_NAME": "GitHub Actions Shell"
+                  "EMAIL": "github-actions[bot]@users.noreply.github.com"
 
-            - "name": "Setup pnpm"
-              "uses": "pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093" # v6.0.8
-              "with":
-                  "version": "11.5.3"
-                  "run_install": false
-
-            - "name": "Use Node.js 22.14"
-              "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e" # v6.4.0
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
               "with":
                   "node-version": "22.15"
+                  "cache-prefix": "e2e"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
 
-            - "name": "Install dependencies"
-              "run": "pnpm install --frozen-lockfile"
+            # The E2E global setup boots the playground's Vite dev server, which
+            # imports lunorash / @lunora/* from their built dist and runs the
+            # `lunora` CLI bin — so the packages must be built first.
+            - "name": "Build packages"
+              "run": "pnpm run build:packages"
 
             - "name": "Install Playwright browsers"
-              # The cache key includes the playwright version so we don't
-              # invalidate on unrelated dep changes. The image already has
-              # Firefox/Chromium system deps so we don't need --with-deps.
               "run": "pnpm --filter @lunora/e2e exec playwright install chromium firefox"
 
             - "name": "Run E2E suite"
@@ -338,74 +185,15 @@
                   "path": "tests/e2e/playwright-report"
                   "retention-days": 7
 
-    "template-build-smoke":
-        "name": "Template scaffold+install+build smoke"
-        # Runs on push to tracked branches and on workflow_dispatch. Skipped on
-        # PRs — the matrix takes 15–25 min and is better suited to post-merge CI
-        # than per-PR gating. Run `pnpm run test:templates` locally before a PR
-        # that touches templates/* or packages/cli/src/commands/init/*.
-        "if": "github.event_name == 'push' || github.event_name == 'workflow_dispatch'"
+    # Single required check: green when every dependent job passed or was
+    # skipped (so a no-package-change PR with all jobs skipped still passes).
+    "test-required-check":
+        "name": "Check Test Run"
+        "needs": ["files-changed", "test", "e2e"]
+        "if": "always()"
         "runs-on": "ubuntu-latest"
-        "timeout-minutes": 30
+        "timeout-minutes": 5
         "steps":
-            - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
-              "with":
-                  "egress-policy": "audit"
-
-            - "name": "Git checkout"
-              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
-              "with":
-                  "persist-credentials": false
-                  "fetch-depth": 0
-              "env":
-                  "GIT_COMMITTER_NAME": "GitHub Actions Shell"
-                  "GIT_AUTHOR_NAME": "GitHub Actions Shell"
-                  "EMAIL": "github-actions[bot]@users.noreply.github.com"
-
-            - "name": "Setup pnpm"
-              "uses": "pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093" # v6.0.8
-              "with":
-                  "version": "11.5.3"
-                  "run_install": false
-
-            - "name": "Use Node.js 22.15"
-              "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e" # v6.4.0
-              "with":
-                  "node-version": "22.15"
-
-            - "name": "Resolve pnpm store path"
-              "id": "pnpm-store"
-              "shell": "bash"
-              "run": |
-                  echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
-
-            - "name": "Restore pnpm + vis caches"
-              "id": "pnpm-cache"
-              "uses": "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae" # v5.0.5
-              "with":
-                  "path": |
-                      ${{ steps.pnpm-store.outputs.path }}
-                      .vis/cache
-                  "key": "pnpm-vis-${{ runner.os }}-node22.15-${{ hashFiles('pnpm-lock.yaml') }}"
-                  "restore-keys": |
-                      pnpm-vis-${{ runner.os }}-node22.15-
-                      pnpm-vis-${{ runner.os }}-
-
-            - "name": "Install dependencies"
-              "run": "pnpm install --frozen-lockfile"
-
-            - "name": "Save pnpm + vis caches"
-              "if": "steps.pnpm-cache.outputs.cache-hit != 'true'"
-              "uses": "actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae" # v5.0.5
-              "with":
-                  "path": |
-                      ${{ steps.pnpm-store.outputs.path }}
-                      .vis/cache
-                  "key": "${{ steps.pnpm-cache.outputs.cache-primary-key }}"
-
-            - "name": "Build all packages"
-              "run": "pnpm run build:packages"
-
-            - "name": "Run template scaffold+install+build matrix"
-              "run": "pnpm run test:templates"
+            - "name": "Fail if a dependency failed or was cancelled"
+              "if": "contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')"
+              "run": "echo 'A dependent job failed or was cancelled.' && exit 1"
