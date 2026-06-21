@@ -21,6 +21,7 @@ overrides:
   astro@<6.4.6: ^6.4.6
   dompurify@<=3.4.10: ^3.4.11
   esbuild@>=0.27.3 <0.28.1: ^0.28.1
+  js-yaml@<=4.1.1: ^4.1.2
   # Scope to the 4.x line only: a bare `js-yaml@<=4.1.1` also matches the
   # js-yaml@3.x that gray-matter depends on and force-upgrades it to 4.x,
   # which removed `yaml.safeLoad` (gray-matter calls it) and breaks the docs
