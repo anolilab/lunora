@@ -2,11 +2,14 @@
 
 "name": "Tests"
 
+# Tests run on PRs (and the merge queue), not on push: a push to a release
+# branch only happens via a merged PR that already ran this workflow, so a
+# push trigger would just re-run the same suite a second time.
 "on": # yamllint disable-line rule:truthy
-    "push":
-        "branches": ["main", "alpha", "next", "beta"]
     "pull_request":
         "types": ["opened", "synchronize", "reopened"]
+        "branches": ["main", "alpha", "next", "beta"]
+    "merge_group": # yamllint disable-line rule:empty-values
     "workflow_dispatch": # yamllint disable-line rule:empty-values
 
 "concurrency":
@@ -78,7 +81,7 @@
             # Only write back to the shared cache from trusted refs (push events).
             # PRs (including forks) restore the cache but never write to it.
             - "name": "Save pnpm + vis caches"
-              "if": "github.event_name == 'push' && steps.pnpm-cache.outputs.cache-hit != 'true'"
+              "if": "(github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && steps.pnpm-cache.outputs.cache-hit != 'true'"
               "uses": "actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae" # v5.0.5
               "with":
                   "path": |
@@ -177,7 +180,7 @@
               "run": "pnpm install --frozen-lockfile"
 
             - "name": "Save pnpm + vis caches"
-              "if": "github.event_name == 'push' && steps.pnpm-cache.outputs.cache-hit != 'true'"
+              "if": "(github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && steps.pnpm-cache.outputs.cache-hit != 'true'"
               "uses": "actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae" # v5.0.5
               "with":
                   "path": |
@@ -185,31 +188,22 @@
                       .vis/cache
                   "key": "${{ steps.pnpm-cache.outputs.cache-primary-key }}"
 
-            # TODO(workerd-ci): the workerd-pool integration suites (runtime,
-            # do, client, scheduler, d1) currently both FAIL several assertions
-            # and leave the pool process alive after the run, hanging the job for
-            # ~44 min until the timeout cancels it. They have never passed in CI.
-            # Until they're fixed in a dedicated workerd-capable job, keep them
-            # off so the unit/integration (node) suites can gate PRs. Re-enable
-            # by restoring `LUNORA_WORKERD_TESTS: "1"` once the suites are green.
-            - "name": "Run affected tests on PR"
-              "if": "github.event_name == 'pull_request'"
-              "run": "pnpm run test:affected"
+            # Affected projects only, with coverage — one run per PR/merge_group.
+            #
+            # workerd is intentionally OFF (no LUNORA_WORKERD_TESTS). Two reasons:
+            # (1) the v8 coverage provider collects via node:inspector, which the
+            # @cloudflare/vitest-pool-workers runtime doesn't implement ("The
+            # Session method is not implemented"), erroring the coverage run; and
+            # (2) the workerd-pool suites (runtime, do, client, scheduler, d1)
+            # currently fail several assertions AND leave the pool process alive,
+            # hanging the job ~44 min until the timeout. They have never passed in
+            # CI — TODO(workerd-ci): fix them in a dedicated workerd-capable job
+            # and re-enable LUNORA_WORKERD_TESTS there.
+            - "name": "Run affected tests with coverage"
+              "run": "pnpm run test:affected:coverage"
 
-            # NOTE: workerd is intentionally OFF here. The v8 coverage provider
-            # collects via node:inspector, which the @cloudflare/vitest-pool-workers
-            # runtime does not implement ("The Session method is not implemented"),
-            # so a coverage run with the workerd pool active errors out even though
-            # every test passes. Workerd integration suites are exercised (without
-            # coverage) on the PR `test:affected` run above; the coverage run here
-            # covers the node-env tests only.
-            - "name": "Run all tests with coverage on push / dispatch"
-              "if": "github.event_name != 'pull_request'"
-              "run": "pnpm run test:coverage"
-
-            # Upload coverage on main/alpha pushes only, with Node 22.15.
             - "name": "Upload coverage to Codecov"
-              "if": "github.event_name == 'push' && matrix.node_version == '22.15' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/alpha')"
+              "if": "matrix.node_version == '22.15' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository)"
               "uses": "codecov/codecov-action@5a1091511ad55cbe89839c7260b706298ca349f7" # v5.5.1
               "with":
                   "token": "${{ secrets.CODECOV_TOKEN }}"
@@ -273,7 +267,7 @@
               "run": "pnpm install --frozen-lockfile"
 
             - "name": "Save pnpm + vis caches"
-              "if": "github.event_name == 'push' && steps.pnpm-cache.outputs.cache-hit != 'true'"
+              "if": "(github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && steps.pnpm-cache.outputs.cache-hit != 'true'"
               "uses": "actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae" # v5.0.5
               "with":
                   "path": |
