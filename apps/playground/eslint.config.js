@@ -165,11 +165,23 @@ export default createConfig(
     },
     // Lunora function modules: `void expr` marks a validated arg that's
     // intentionally forwarded by the client rather than read server-side.
+    // `ctx` is the canonical Lunora function-context identifier (QueryCtx /
+    // MutationCtx / ActionCtx and the rate-limit key-callback context) — it's
+    // framework API by design, not an accidental abbreviation, so renaming it
+    // to `context` would diverge from every Lunora handler signature.
     {
         files: ["lunora/**/*.ts"],
         rules: {
             "no-void": "off",
             "sonarjs/void-use": "off",
+            "unicorn/prevent-abbreviations": [
+                "error",
+                {
+                    allowList: {
+                        ctx: true,
+                    },
+                },
+            ],
         },
     },
     // Worker server code: `null` is the contract for `Response.json(...)` error

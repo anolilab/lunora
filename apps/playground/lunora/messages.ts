@@ -15,12 +15,13 @@ const limits = { send: { kind: "token bucket", period: 60_000, rate: 30 } } sati
  * schema means the runtime routes this query to exactly the channel's DO —
  * no fan-out, full real-time subscriptions.
  */
-export const list = query.input({ channelId: v.id("channels"), limit: v.optional(v.number()) }).query(async ({ args, ctx }): Promise<Doc<"messages">[]> => {
-    return ctx.db
-        .query("messages")
-        .withIndex("by_channel_created", (q) => q.eq("channelId", args.channelId))
-        .take(args.limit ?? 50);
-});
+export const list = query.input({ channelId: v.id("channels"), limit: v.optional(v.number()) }).query(
+    async ({ args, ctx }): Promise<Doc<"messages">[]> =>
+        ctx.db
+            .query("messages")
+            .withIndex("by_channel_created", (q) => q.eq("channelId", args.channelId))
+            .take(args.limit ?? 50),
+);
 
 /**
  * Send a message into a channel. Broadcasts a delta to every subscriber on
@@ -51,7 +52,7 @@ export const send = mutation
     // a single anonymous client can't exhaust a shared bucket for everyone. The
     // final `"anonymous"` literal only applies when neither is known (e.g. local
     // dev without an IP).
-    .use(dbRateLimit(limits, "send", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anonymous" }))
+    .use(dbRateLimit(limits, "send", { key: (context) => context.auth.userId ?? context.ip ?? "anonymous" }))
     .mutation(async ({ args, ctx }): Promise<Id<"messages">> => {
         const { channelId, createdAt, id, text } = args;
 
