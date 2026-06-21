@@ -58,6 +58,9 @@
         },
         "./package.json": "./package.json"
     },
+    "publishConfig": {
+        "access": "public"
+    },
     "scripts": {
         "test:bench": "vitest bench --run --config vitest.bench.config.ts",
         "build": "pnpm exec packem build --development",

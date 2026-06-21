@@ -45,6 +45,9 @@
         },
         "./package.json": "./package.json"
     },
+    "publishConfig": {
+        "access": "public"
+    },
     "scripts": {
         "build": "packem build --development",
         "build:prod": "packem build --production",

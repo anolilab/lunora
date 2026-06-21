@@ -49,6 +49,9 @@
         "./theme.css": "./src/theme.css",
         "./package.json": "./package.json"
     },
+    "publishConfig": {
+        "access": "public"
+    },
     "scripts": {
         "dev": "pnpm --filter @lunora/studio-app dev",
         "dev:mock": "pnpm --filter @lunora/studio-app dev --open /mock.html",
