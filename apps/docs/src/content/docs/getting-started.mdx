@@ -7,6 +7,13 @@ The fastest way to start a Lunora project is the official template. It wires
 up Vite, the codegen plugin, a starter schema, and a working Worker entrypoint,
 all pointing at a `wrangler.jsonc` you can deploy straight to your own account.
 
+<Callout type="warn">
+    Lunora is in **alpha**. Install from the `@alpha` dist-tag (the commands
+    below already do) and expect breaking changes until the first stable
+    release. The npm package is `lunorash` — the unscoped `lunora` name is taken
+    on npm — but the CLI binary it installs is still `lunora`.
+</Callout>
+
 ## Requirements
 
 - **Node** `^22.14.0 || >=24.10.0`
@@ -24,19 +31,19 @@ Create a project from the official template:
 <Tabs items={["pnpm", "npm", "yarn", "bun"]}>
 
 ```bash tab="pnpm"
-pnpm dlx lunora init my-app
+pnpm dlx lunorash@alpha init my-app
 ```
 
 ```bash tab="npm"
-npx lunora init my-app
+npx lunorash@alpha init my-app
 ```
 
 ```bash tab="yarn"
-yarn dlx lunora init my-app
+yarn dlx lunorash@alpha init my-app
 ```
 
 ```bash tab="bun"
-bunx lunora init my-app
+bunx lunorash@alpha init my-app
 ```
 
 </Tabs>
