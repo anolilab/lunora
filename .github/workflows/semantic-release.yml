@@ -4,12 +4,9 @@
 
 "on": # yamllint disable-line rule:truthy
     "push":
-        # `main` is intentionally excluded: it must exist as a git branch so
-        # semantic-release has a valid release branch (otherwise the alpha
-        # prerelease run errors with ERELEASEBRANCHES), but we are not cutting
-        # stable releases yet — only alpha prereleases publish. Re-add "main"
-        # here when stable releases are wanted.
-        "branches": ["alpha", "next", "beta"]
+        # main → stable releases; alpha/next/beta → prereleases (per the
+        # @anolilab/semantic-release-preset branches config).
+        "branches": ["main", "alpha", "next", "beta"]
     "workflow_dispatch": # yamllint disable-line rule:empty-values
 
 "concurrency":
