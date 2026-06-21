@@ -406,6 +406,12 @@ minimumReleaseAgeExclude:
   - '@lingui/conf@6.3.0'
   - '@lingui/core@6.3.0'
   - '@lingui/message-utils@6.3.0'
+  # Lunora's own packages — always excluded (a permanent name glob, unlike the
+  # version-pinned third-party entries here which age out). The release job's
+  # post-publish `pnpm install --lockfile-only` re-resolves versions published
+  # seconds earlier; without this it fails ERR_PNPM_NO_MATURE_MATCHING_VERSION.
+  - '@lunora/*'
+  - 'lunorash'
   - '@next/env@16.2.9'
   - '@next/swc-darwin-arm64@16.2.9'
   - '@next/swc-darwin-x64@16.2.9'
