@@ -1,15 +1,19 @@
 <div align="center">
 
-<img src="./apps/docs/public/lunora-lockup.svg" alt="Lunora" width="360" />
+<img src="./.github/assets/lunora.svg" alt="Lunora" width="150" />
 
-**Type-safe real-time backend on your own Cloudflare account. Vite-first.**
+<h1>Lunora</h1>
+
+**Type-safe, real-time backend on your own Cloudflare account. Vite-first.**
+
+[**Documentation**](https://lunora.sh/docs) · [**Website**](https://lunora.sh) · [**Packages**](https://lunora.sh/packages) · [**Quick start**](#quick-start)
 
 [![License: FSL-1.1-Apache-2.0](https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg)](./LICENSE.md)
-[![Status: alpha](https://img.shields.io/badge/status-v1.0.0--alpha.1-blueviolet.svg)](#status)
-[![Node](https://img.shields.io/badge/node-%5E22.14%20%7C%7C%20%3E%3D24.10-brightgreen.svg)](./.nvmrc)
+[![Status](https://img.shields.io/badge/status-alpha-blueviolet.svg)](#status)
+[![Node](https://img.shields.io/badge/node-%5E22.15%20%7C%7C%20%3E%3D24.11-brightgreen.svg)](./package.json)
 [![pnpm](https://img.shields.io/badge/pnpm-11.5.3-f69220.svg)](./package.json)
 [![CI](https://github.com/anolilab/lunora/actions/workflows/test.yml/badge.svg?branch=alpha)](https://github.com/anolilab/lunora/actions/workflows/test.yml)
-[![@lunora/cli](https://img.shields.io/npm/v/@lunora/cli?label=%40lunora%2Fcli)](https://www.npmjs.com/package/@lunora/cli)
+[![npm: lunorash](https://img.shields.io/npm/v/lunorash/alpha?label=lunorash%40alpha&color=cb3837)](https://www.npmjs.com/package/lunorash)
 
 </div>
 
@@ -24,10 +28,12 @@ It is **Vite-first**: the dev loop, codegen, and client bindings plug into a Vit
 ## Quick start
 
 ```bash
-pnpm dlx lunorash init my-app
+pnpm dlx lunorash@alpha init my-app
 cd my-app
 pnpm dev
 ```
+
+> **Alpha:** the npm package is **`lunorash`** (the unscoped `lunora` name is taken on npm); the CLI binary it installs is still **`lunora`**. Install from the `@alpha` dist-tag and expect breaking changes until the first stable release.
 
 Three visible files in a fresh app:
 
