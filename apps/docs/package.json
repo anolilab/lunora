@@ -7,6 +7,7 @@
     "type": "module",
     "scripts": {
         "build": "node scripts/generate-packages.js && node scripts/copy-package-docs.js && node scripts/check-doc-imports.mjs && node scripts/fetch-stats.js && vite build",
+        "codegen": "fumadocs-mdx",
         "copy-docs": "node scripts/copy-package-docs.js",
         "dev": "node scripts/generate-packages.js && node scripts/copy-package-docs.js && vite dev",
         "lint:doc-imports": "node scripts/check-doc-imports.mjs",
@@ -15,7 +16,7 @@
         "lint:prettier": "prettier --config=prettier.config.js --check .",
         "lint:prettier:fix": "prettier --config=prettier.config.js --write .",
         "lint:secrets": "secretlint **/*",
-        "lint:types": "tsc --project tsconfig.json --noEmit",
+        "lint:types": "fumadocs-mdx && tsc --project tsconfig.json --noEmit",
         "serve": "vite preview",
         "start": "node .output/server/index.mjs"
     },

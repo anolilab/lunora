@@ -1,4 +1,17 @@
 {
     "name": "lunora",
-    "tags": ["type:package", "category:runtime"]
+    "tags": ["type:package", "category:runtime"],
+    "targets": {
+        "test": {
+            "cache": true,
+            "dependsOn": ["build", "^build"],
+            "inputs": ["testing", "^production", "{projectRoot}/vite.config.ts", "{projectRoot}/vitest.config.ts"]
+        },
+        "test:coverage": {
+            "cache": true,
+            "dependsOn": ["build", "^build"],
+            "inputs": ["testing", "^production", "{projectRoot}/vite.config.ts", "{projectRoot}/vitest.config.ts"],
+            "outputs": ["{projectRoot}/coverage"]
+        }
+    }
 }

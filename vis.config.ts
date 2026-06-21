@@ -74,6 +74,9 @@ export default defineConfig({
         },
         "test:coverage": {
             cache: true,
+            // Mirror `test`: build upstream @lunora/* deps so coverage runs resolve
+            // their dist entries (vitest imports the built package, not src).
+            dependsOn: ["^build"],
             inputs: ["testing", "^production", "{projectRoot}/vite.config.ts", "{projectRoot}/vitest.config.ts"],
             outputs: ["{projectRoot}/coverage"],
         },

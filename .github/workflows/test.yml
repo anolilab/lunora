@@ -66,7 +66,7 @@
               "with":
                   "path": |
                       ${{ steps.pnpm-store.outputs.path }}
-                      .vis
+                      .vis/cache
                   "key": "pnpm-vis-${{ runner.os }}-node${{ matrix.node_version }}-${{ hashFiles('pnpm-lock.yaml') }}"
                   "restore-keys": |
                       pnpm-vis-${{ runner.os }}-node${{ matrix.node_version }}-
@@ -83,7 +83,7 @@
               "with":
                   "path": |
                       ${{ steps.pnpm-store.outputs.path }}
-                      .vis
+                      .vis/cache
                   "key": "${{ steps.pnpm-cache.outputs.cache-primary-key }}"
 
             - "name": "Typecheck (affected) on PRs"
@@ -164,7 +164,7 @@
               "with":
                   "path": |
                       ${{ steps.pnpm-store.outputs.path }}
-                      .vis
+                      .vis/cache
                   "key": "pnpm-vis-${{ runner.os }}-node${{ matrix.node_version }}-${{ hashFiles('pnpm-lock.yaml') }}"
                   "restore-keys": |
                       pnpm-vis-${{ runner.os }}-node${{ matrix.node_version }}-
@@ -179,7 +179,7 @@
               "with":
                   "path": |
                       ${{ steps.pnpm-store.outputs.path }}
-                      .vis
+                      .vis/cache
                   "key": "${{ steps.pnpm-cache.outputs.cache-primary-key }}"
 
             - "name": "Run affected tests on PR"
@@ -254,7 +254,7 @@
               "with":
                   "path": |
                       ${{ steps.pnpm-store.outputs.path }}
-                      .vis
+                      .vis/cache
                   "key": "pnpm-vis-${{ runner.os }}-node${{ matrix.node_version }}-${{ hashFiles('pnpm-lock.yaml') }}"
                   "restore-keys": |
                       pnpm-vis-${{ runner.os }}-node${{ matrix.node_version }}-
@@ -269,7 +269,7 @@
               "with":
                   "path": |
                       ${{ steps.pnpm-store.outputs.path }}
-                      .vis
+                      .vis/cache
                   "key": "${{ steps.pnpm-cache.outputs.cache-primary-key }}"
 
             - "name": "Build affected packages on PR"
@@ -383,7 +383,7 @@
               "with":
                   "path": |
                       ${{ steps.pnpm-store.outputs.path }}
-                      .vis
+                      .vis/cache
                   "key": "pnpm-vis-${{ runner.os }}-node22.15-${{ hashFiles('pnpm-lock.yaml') }}"
                   "restore-keys": |
                       pnpm-vis-${{ runner.os }}-node22.15-
@@ -398,7 +398,7 @@
               "with":
                   "path": |
                       ${{ steps.pnpm-store.outputs.path }}
-                      .vis
+                      .vis/cache
                   "key": "${{ steps.pnpm-cache.outputs.cache-primary-key }}"
 
             - "name": "Build all packages"

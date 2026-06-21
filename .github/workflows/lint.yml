@@ -60,7 +60,7 @@
               "with":
                   "path": |
                       ${{ steps.pnpm-store.outputs.path }}
-                      .vis
+                      .vis/cache
                   "key": "pnpm-vis-lint-${{ runner.os }}-node22.14-${{ hashFiles('pnpm-lock.yaml') }}"
                   "restore-keys": |
                       pnpm-vis-lint-${{ runner.os }}-node22.14-
@@ -75,7 +75,7 @@
               "with":
                   "path": |
                       ${{ steps.pnpm-store.outputs.path }}
-                      .vis
+                      .vis/cache
                   "key": "${{ steps.pnpm-cache.outputs.cache-primary-key }}"
 
             - "name": "Lint (eslint, affected) on PR"
