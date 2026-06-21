@@ -1,0 +1,13 @@
+{
+    "$schema": "../schema/registry-item.schema.json",
+    "name": "auth-magic-link",
+    "title": "Auth — Magic link",
+    "description": "Passwordless magic-link sign-in for Lunora auth. Wires better-auth's magicLink plugin on top of the base `auth` item and delivers the sign-in link through @lunora/mail (captured into the studio Mail tab in dev).",
+    "docs": "Add `magicLinkPlugin` to your auth instance's `plugins` array in lunora/auth/index.ts: `import { magicLinkPlugin } from \"./magic-link.js\"` then `plugins: [magicLinkPlugin(env)]`. The link is emailed via @lunora/mail using MAIL_FROM (already set by the base auth item); in dev it lands in the studio Mail tab, for production delivery run `lunora add email` (SEND_EMAIL binding) or set RESEND_API_KEY. Trigger it client-side with `authClient.signIn.magicLink({ email })`.",
+    "requires": ["auth"],
+    "deps": {
+        "@lunora/auth": "workspace:*",
+        "@lunora/mail": "workspace:*"
+    },
+    "files": [{ "from": "magic-link.ts", "to": "lunora/auth/magic-link.ts", "merge": "create-or-skip" }]
+}

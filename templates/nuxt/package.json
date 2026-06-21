@@ -1,0 +1,26 @@
+{
+    "name": "{{name}}",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "dev": "lunora dev",
+        "build": "nuxt build",
+        "preview": "nuxt preview",
+        "codegen": "lunora codegen",
+        "deploy:lunora": "wrangler deploy --config wrangler.lunora.jsonc",
+        "deploy:nuxt": "nuxt build && wrangler deploy --config wrangler.jsonc",
+        "deploy": "pnpm run deploy:lunora && pnpm run deploy:nuxt"
+    },
+    "dependencies": {
+        "@lunora/vue": "^0.0.0",
+        "lunorash": "^0.0.0",
+        "nuxt": "^4.4.8",
+        "vue": "^3.5.38"
+    },
+    "devDependencies": {
+        "@lunora/vite": "^0.0.0",
+        "typescript": "^6.0.3",
+        "wrangler": "^4.100.0"
+    }
+}

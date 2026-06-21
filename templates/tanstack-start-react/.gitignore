@@ -1,0 +1,9 @@
+node_modules
+.output
+.vinxi
+dist
+.wrangler
+.lunora/
+.lunora-cache
+lunora/_generated
+src/routeTree.gen.ts

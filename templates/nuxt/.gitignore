@@ -1,0 +1,9 @@
+node_modules
+.output
+.nuxt
+.nitro
+dist
+.wrangler
+.lunora/
+.lunora-cache
+lunora/_generated

@@ -1,0 +1,101 @@
+---
+title: Getting started
+description: Scaffold a Lunora app and run the dev loop in under a minute.
+---
+
+The fastest way to start a Lunora project is the official template. It wires
+up Vite, the codegen plugin, a starter schema, and a working Worker entrypoint,
+all pointing at a `wrangler.jsonc` you can deploy straight to your own account.
+
+## Requirements
+
+- **Node** `^22.14.0 || >=24.10.0`
+- **pnpm** `>=10.32.1`
+- A Cloudflare account (the Free plan works for development)
+
+<Steps>
+
+<Step>
+
+### Scaffold
+
+Create a project from the official template:
+
+<Tabs items={["pnpm", "npm", "yarn", "bun"]}>
+
+```bash tab="pnpm"
+pnpm dlx lunora init my-app
+```
+
+```bash tab="npm"
+npx lunora init my-app
+```
+
+```bash tab="yarn"
+yarn dlx lunora init my-app
+```
+
+```bash tab="bun"
+bunx lunora init my-app
+```
+
+</Tabs>
+
+Then install and start the dev loop:
+
+```bash
+cd my-app
+pnpm install
+pnpm dev
+```
+
+The CLI lays down the standard layout:
+
+```text
+my-app/
+├── lunora/
+│   ├── schema.ts          # defineSchema / defineTable
+│   ├── messages.ts        # query / mutation / action
+│   └── _generated/        # codegen output (don't edit)
+├── src/
+│   ├── server/index.ts    # createWorker + ShardDO subclass
+│   └── client/main.tsx    # LunoraProvider + your React app
+├── wrangler.jsonc         # DO + D1 + R2 bindings
+└── vite.config.ts         # lunora() Vite plugin
+```
+
+</Step>
+
+<Step>
+
+### Run
+
+`pnpm dev` boots Vite and Wrangler in one terminal. Edits to `lunora/schema.ts`
+trigger codegen and a typed-API hot reload within ~200 ms.
+
+<Callout type="info">
+    Throw inside a handler and the `@visulima/vite-overlay` integration shows a mapped source frame pointing at your code, not the bundle.
+</Callout>
+
+</Step>
+
+<Step>
+
+### Deploy
+
+```bash
+pnpm lunora deploy
+```
+
+This calls `wrangler deploy`, runs pending D1 migrations, and publishes the
+Worker. Everything lives on your account, reachable through your own
+`*.workers.dev` hostname or a custom domain.
+
+</Step>
+
+</Steps>
+
+## See also
+
+- [Concepts: schema](/docs/concepts/schema)
+- [Deployment](/docs/deployment)

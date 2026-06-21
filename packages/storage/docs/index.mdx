@@ -1,0 +1,170 @@
+---
+title: "@lunora/storage"
+description: R2-backed object storage with worker-signed and S3 presigned URLs.
+---
+
+`@lunora/storage` wraps a Cloudflare R2 binding with a typed API (`upload`,
+`download`, `delete`, `list`, `getMetadata`, multipart) and two URL schemes: a
+worker-signed URL the browser uses to upload/download through your Worker (so
+your app gates the request), and a native S3 presigned URL that hits R2
+directly.
+
+## Wiring
+
+Declare the bucket on your app. The builder calls `createStorage` for you and
+exposes the result as `ctx.storage` in every handler — and the same declaration
+backs the studio file browser.
+
+```ts
+// lunora/app.ts — defineApp is emitted by codegen into _generated/app
+import { defineApp } from "@/lunora/_generated/app";
+
+export default defineApp<Env>()
+    .shard((env) => env.SHARD)
+    .storage({
+        bucket: (env) => env.FILES,
+        // Extra named buckets, reached via ctx.storage.bucket("avatars").
+        buckets: { avatars: (env) => env.AVATARS },
+        publicBaseUrl: (env) => env.PUBLIC_STORAGE_BASE_URL,
+        signingSecret: (env) => env.STORAGE_SECRET,
+    })
+    .build();
+```
+
+`ctx.storage` is a narrower projection of the API below: `query` and `mutation`
+handlers get a read-only surface (`download`, `getMetadata`, `getSignedUrl`,
+`getUrl`, `list`), and only `action` handlers get the full read/write surface
+(`store`, `delete`, `generateUploadUrl`, multipart, presigned). On `ctx.storage`,
+`download(key)` resolves to the `ReadableStream` directly.
+
+Build the full `Storage` outside a handler — or to use the object-level reads,
+ranged downloads, and multipart shown below — with
+`createStorage({ bucket, publicBaseUrl?, signingSecret?, s3? })`. The examples
+that follow use such an instance, named `storage`.
+
+## Direct upload from an action
+
+Minting an upload URL is a write capability, so it lives on an `action`. A
+`query` or `mutation` only gets the read-only projection — no
+`generateUploadUrl`, `store`, `upload`, or `delete`.
+
+```ts
+import { action, v } from "@/lunora/_generated/server";
+
+export const uploadAvatar = action.input({ key: v.string(), contentType: v.string() }).action(async ({ ctx, args: { key, contentType } }) => {
+    const scopedKey = `avatars/${ctx.auth.userId ?? "anonymous"}/${key}`;
+
+    // PUT URL with the Content-Type pinned into the HMAC — the client must
+    // upload with exactly this Content-Type or verification fails.
+    const url = await ctx.storage.generateUploadUrl(scopedKey, { contentType, expiresInSeconds: 60 });
+
+    return { key: scopedKey, url };
+});
+```
+
+<Callout type="warn">
+    Client-supplied keys can address peer data. Always namespace keys with a per-tenant prefix (`scopeKey(userId, key)` or a manual `` `users/${userId}/${key}`
+    ``). `validateKey` blocks `..`, NUL bytes, and leading `/`, but it does not enforce tenancy.
+</Callout>
+
+## Reading
+
+On a `createStorage` instance, `download` returns an R2 object whose `body` is a
+`ReadableStream` (or `null` when the object is absent). Read it with
+`arrayBuffer()` / `text()`, or stream `body` straight into a `Response`.
+
+```ts
+const object = await storage.download("avatars/abc.png");
+
+if (object) {
+    const bytes = await object.arrayBuffer();
+    // or: return new Response(object.body, { headers: { "content-type": object.httpMetadata?.contentType ?? "" } });
+}
+```
+
+Pass `{ range }` to stream only a byte window — R2 resolves the range
+server-side, so the unwanted bytes never reach the Worker:
+
+```ts
+const head = await storage.download(key, { range: { offset: 0, length: 1024 } });
+```
+
+`getMetadata(key)` reads size/content-type/sha256/upload time without fetching
+the body (an R2 HEAD), returning `null` when the object is absent.
+
+`list(prefix?, { cursor, limit, delimiter })` paginates: echo `cursor` back for
+the next page while `truncated` is true. The cursor is opaque — treat it as a
+string, don't parse it.
+
+```ts
+let cursor: string | undefined;
+do {
+    const page = await storage.list("avatars/", { cursor, limit: 100 });
+    // ...use page.objects
+    cursor = page.truncated ? page.cursor : undefined;
+} while (cursor);
+```
+
+## Signed URLs
+
+A worker-signed URL resolves back through your Worker, so the request still
+passes your auth/policy/rate-limit gates before the body is served. The Worker
+route handling `GET /storage/:key` calls `verifySignedUrl` to check the
+signature and expiry:
+
+```ts
+import { verifySignedUrl } from "@lunora/storage";
+
+const result = await verifySignedUrl(request.url, env.STORAGE_SECRET);
+
+if (!result.valid) {
+    // Do NOT echo result.reason to the client — "expired" vs "bad_signature"
+    // is a signing oracle. It is for server logs only.
+    return new Response("Forbidden", { status: 403 });
+}
+// result.key / result.method / result.contentType are now trusted.
+```
+
+`getSignedUrl(key, { method, expiresInSeconds, contentType })` mints the URL.
+`expiresInSeconds` must be positive and at most 7 days. For a `PUT` URL,
+`contentType` is baked into the signature so the upload is only valid with that
+exact `Content-Type`; it is ignored for `GET`. `generateUploadUrl` is the
+Convex-compatible alias for a `PUT` signed URL.
+
+## Presigned URLs (direct to R2)
+
+`getPresignedUrl(key, { method, expiresInSeconds })` mints a native S3 presigned
+URL (SigV4) that hits R2 directly, bypassing the Worker. Use it for large
+transfers where you don't need per-request app gating. It needs R2 S3 API
+credentials, passed as `s3` to `createStorage`:
+
+```ts
+const storage = createStorage({
+    bucket: env.FILES,
+    s3: {
+        accountId: env.R2_ACCOUNT_ID,
+        accessKeyId: env.R2_ACCESS_KEY_ID,
+        secretAccessKey: env.R2_SECRET_ACCESS_KEY,
+        bucket: "files",
+    },
+});
+
+const url = await storage.getPresignedUrl("exports/report.csv", { method: "GET", expiresInSeconds: 900 });
+```
+
+## Large objects (multipart)
+
+For very large objects use R2's native multipart upload: `createMultipartUpload`
+returns a handle whose `uploadPart` / `complete` / `abort` you drive yourself.
+Persist `uploadId` to resume across requests with `resumeMultipartUpload`.
+
+```ts
+const multipart = await storage.createMultipartUpload("videos/clip.mp4", { contentType: "video/mp4" });
+const part = await multipart.uploadPart(1, chunk);
+await multipart.complete([part]);
+```
+
+## See also
+
+- [@lunora/server](/docs/packages/server)
+- [Architecture](/docs/architecture)

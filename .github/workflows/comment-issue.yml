@@ -1,0 +1,69 @@
+"name": "Comment Issue"
+
+"on": # yamllint disable-line rule:truthy
+    "issues":
+        "types":
+            - "labeled"
+
+"permissions":
+    "contents": "read"
+
+"jobs":
+    "add-comment-for-user-interest":
+        "if": "github.event.label.name == 's: waiting for user interest'"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 30
+        "permissions":
+            "issues": "write"
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Add Comment For User Interest"
+              "uses": "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3" # v9.0.0
+              "with":
+                  "script": |
+                      github.rest.issues.createComment({
+                          issue_number: context.issue.number,
+                          owner: context.repo.owner,
+                          repo: context.repo.repo,
+                          body: `**Thank you for your feature proposal.**
+
+                          We marked it as "waiting for user interest" for now to gather some feedback from our community:
+
+                          - If you would like to see this feature be implemented, please react to the description with an up-vote (:+1:).
+                          - If you have a suggestion or want to point out some special cases that need to be considered, please leave a comment, so we are aware about them.
+
+                          We would also like to hear about other community members' use cases for the feature to give us a better understanding of their potential implicit or explicit requirements.
+
+                          We will start the implementation based on:
+
+                          - the number of votes (:+1:) and comments
+                          - the relevance for the ecosystem
+                          - availability of alternatives and workarounds
+                          - and the complexity of the requested feature
+
+                          We do this because:
+
+                          - There are plenty of frameworks/tools out there and we would like to ensure that every method can cover all or almost all of them.
+                          - Every feature we add to Visulima has "costs" associated to it:
+                              - initial costs: design, implementation, reviews, documentation
+                              - running costs: awareness of the feature itself, more complex module structure, increased bundle size, more work during refactors
+
+                          ---
+
+                          [View more issues which are waiting for user interest](https://github.com/visulima/visulima/issues?q=is%3Aissue+is%3Aopen+label%3A%22s%3A+waiting+for+user+interest%22+)`,
+                      })
+
+            - "name": "React to Issue"
+              "uses": "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3" # v9.0.0
+              "with":
+                  "script": |
+                      github.rest.reactions.createForIssue({
+                          issue_number: context.issue.number,
+                          owner: context.repo.owner,
+                          repo: context.repo.repo,
+                          content: "+1",
+                      });

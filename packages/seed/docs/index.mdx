@@ -1,0 +1,166 @@
+---
+title: "@lunora/seed"
+description: "Deterministic, schema-driven seeding: realistic fake data generated from defineSchema."
+---
+
+`@lunora/seed` fills a Lunora database with realistic fake data derived from your `defineSchema`. It reads every table, maps each column to a generator (field-name aware — a `string` column named `email` becomes an email, `firstName` a first name), inserts foreign-key parents before their children, and lets you override any value.
+
+Generation is deterministic. The same `seed` value and schema always produce the same rows and ids, so fixtures are reproducible across runs and machines. It is built on a vendored, input-hashed generator (a rebuilt [`copycat`](https://github.com/supabase-community/copycat)) over [`@faker-js/faker`](https://fakerjs.dev).
+
+## Install
+
+```sh
+pnpm add @lunora/seed
+```
+
+`@lunora/server` and `@lunora/values` are peer dependencies (you already have them in a Lunora app).
+
+## Three ways to seed
+
+| You want to…                                 | Use                                                            |
+| -------------------------------------------- | -------------------------------------------------------------- |
+| Generate rows in memory, write them yourself | `seedPlan` (from `@lunora/seed`)                               |
+| Populate a `lunoraTest` harness              | `seed` (from `@lunora/seed/testing`)                           |
+| Author one table at a time, with types       | `createSeedClient` (from `@lunora/seed`, or `_generated/seed`) |
+| Seed a running dev worker                    | `lunora seed` (CLI)                                            |
+
+## `seedPlan` — the pure core
+
+`seedPlan(schema, options)` returns one `TablePlan` per seeded table (`{ table, rows }`), ordered so a table's FK parents come first. It performs no I/O — every adapter (test harness, CLI, client) builds on it.
+
+```ts
+import { seedPlan } from "@lunora/seed";
+
+import schema from "./lunora/schema";
+
+const plan = seedPlan(schema, {
+    counts: { posts: 30, users: 10 },
+    overrides: {
+        users: { email: (ctx) => `user${ctx.index}@example.com` },
+    },
+    seed: 1,
+});
+
+// plan === [{ rows: [...], table: "users" }, { rows: [...], table: "posts" }]
+// Every post.authorId points at a generated user; each row carries an explicit `_id`.
+```
+
+### `SeedOptions`
+
+<TypeTable
+    type={{
+        counts: { type: "Record<string, number>", description: "Rows per table; missing tables use defaultCount." },
+        defaultCount: { type: "number", default: "10", description: "Count for a selected table absent from counts." },
+        only: { type: "string[]", description: "Restrict seeding to these tables; transitive FK parents are pulled in automatically." },
+        overrides: {
+            type: "SeedOverrides",
+            description: "Per-table, per-field static values or functions of the row context. Field _id overrides the primary key.",
+        },
+        existingIds: {
+            type: "Record<string, string[]>",
+            description: "Ids already in the store; FKs may resolve to these, and a covered parent is not re-seeded.",
+        },
+        indexOffset: {
+            type: "Record<string, number>",
+            description: "Per-table absolute index base, so successive batches of the same table never collide ids.",
+        },
+        seed: { type: "number", default: "0", description: "Deterministic mapping selector — same seed yields identical rows." },
+    }}
+/>
+
+An override function receives an `OverrideContext`: `{ field, index, row, store, table }`. `row` is the row built so far; `store` is a read-only view of every table's rows generated this run (use it to copy a value from the parent row a foreign key points at). Returning `undefined` defers to the generator, so a partial row that omits a field still gets a generated value.
+
+## `seed` — populate a test harness
+
+`@lunora/seed/testing` runs `seedPlan` and inserts every row into a [`lunoraTest`](/docs/packages/testing) harness in FK order, preserving the planned `_id`s. It returns the inserted ids keyed by table, for assertions.
+
+```ts
+import { seed } from "@lunora/seed/testing";
+import { lunoraTest } from "@lunora/testing";
+
+import schema from "./lunora/schema";
+
+const harness = lunoraTest(schema);
+const ids = await seed(harness, schema, { counts: { posts: 20, users: 5 } });
+
+expect(ids.users).toHaveLength(5);
+```
+
+## `createSeedClient` — typed, one table at a time
+
+For a Snaplet-style DX, `createSeedClient` exposes each table as a method. Call it with a count, an inclusive range, explicit partial rows, or a count callback. Foreign keys connect to rows seeded earlier in the run, FK parents are seeded automatically, and state accumulates on `$store` / `$ids` (clear it with `$reset()`).
+
+```ts
+import { createSeedClient } from "@lunora/seed";
+
+import schema from "./lunora/schema";
+
+const seed = createSeedClient(schema, { seed: 1 });
+
+const { users } = await seed.users(5);
+const { posts } = await seed.posts((x) => x([10, 20])); // a deterministic count in [10, 20]
+
+// Explicit partial rows — omitted columns are still generated:
+await seed.users([{ name: "Alice" }, { email: "bob@example.com", name: "Bob" }]);
+
+// Per-field overrides for one call:
+await seed.posts(3, { overrides: { title: (ctx) => `Post ${ctx.index}` } });
+
+seed.$ids.users; // every user id generated this run
+seed.$reset(); // clear store/ids to drive a fresh run
+```
+
+### Generated, project-bound client
+
+When `@lunora/seed` is a declared dependency, codegen emits `_generated/seed.ts` — a `createSeedClient` with your schema and `InsertModel` already bound, so every table method is fully typed without passing a type argument.
+
+```ts
+import { createSeedClient } from "@/lunora/_generated/seed";
+
+const seed = createSeedClient({ seed: 1 });
+const { users } = await seed.users(5); // columns typed from InsertModel
+```
+
+Without codegen, pass the type yourself: `createSeedClient<InsertModel>(schema)`.
+
+### `SeedClientOptions`
+
+<TypeTable
+    type={{
+        defaultCount: { type: "number", default: "10", description: "Row count when a table call passes no spec." },
+        seed: { type: "number", default: "0", description: "Deterministic mapping selector." },
+        persist: {
+            type: "(table, rows) => Promise<void> | void",
+            description: "Called with each generated batch (parents first). The client is pure when omitted.",
+        },
+    }}
+/>
+
+Because every row carries an explicit `_id`, `$ids` is known whether or not you persist. A `persist` hook lets you write batches into the test harness or an admin import as they are generated.
+
+## `lunora seed` — seed a running worker
+
+Generates from `lunora/schema.ts` and bulk-inserts through the worker's admin endpoint.
+
+```bash
+lunora seed                              # every table, default count (10)
+lunora seed --table posts --count 100    # one table; FK parents seeded automatically
+lunora seed --seed 42                    # reproducible run
+lunora seed --dry-run                    # print the NDJSON, insert nothing
+lunora seed --reset                      # wipe local .wrangler/state first (local dev only)
+```
+
+Other flags: `--batch-size` (rows per HTTP request, default 500), `--url` (worker URL, default `http://localhost:8787`), `--prod` (requires an explicit `--url`), `--token` / `LUNORA_ADMIN_TOKEN` (admin bearer; prefer the env var), `--yes` (skip the non-local confirmation prompt).
+
+<Callout type="warn">`--reset` clears local `.wrangler/state` only — it cannot be combined with `--prod` or a remote `--url`.</Callout>
+
+## Limitations
+
+- `.unique()` columns are not enforced. Each value is hashed independently, so a unique column over a small value space (a bounded integer, a boolean, a short enum) can collide across rows. Strings such as emails and uuids are effectively unique in practice. Colliding rows are rejected by the import path rather than overwritten.
+- Seeding is deterministic by design. Re-running with the same `seed` regenerates identical `_id`s, which the import path skips as conflicts. Use a different `seed` for fresh rows, or `--reset` to wipe local state first.
+
+## Related
+
+- [`@lunora/server`](/docs/packages/server) — defines the `defineSchema` that seeding introspects.
+- [`@lunora/testing`](/docs/packages/testing) — the in-memory harness `@lunora/seed/testing` seeds.
+- [`@lunora/cli`](/docs/packages/cli) — ships the `lunora seed` command.

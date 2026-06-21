@@ -1,0 +1,11 @@
+"name": "Dependency review"
+"on":
+    "pull_request":
+        "branches": ["main", "alpha", "next", "beta"]
+"permissions": {}
+"jobs":
+    "dependency-review":
+        "permissions":
+            "contents": "read"
+            "pull-requests": "write"
+        "uses": "anolilab/workflows/.github/workflows/dependency-review.yml@045a2d464dad0661a570c8a3c19f4b32bf9efad9" # v15.3.0+

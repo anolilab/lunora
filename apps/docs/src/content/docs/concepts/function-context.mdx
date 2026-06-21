@@ -1,0 +1,121 @@
+---
+title: Function context
+description: The ctx object passed to every query, mutation, and action — and what each kind is allowed to do with it.
+---
+
+Every Lunora function receives a `ctx` as the first argument of its handler.
+`ctx` is the only way a function reaches anything outside itself: the database,
+auth, storage, the scheduler, and any add-on surfaces. The function kind decides
+which `ctx` you get, and the kind constrains what `ctx` can do. A `query` cannot
+write; an `action` cannot transact against the database.
+
+```ts
+import { mutation, query } from "@/lunora/_generated/server";
+
+export const list = query.query(async ({ ctx }) => {
+    return ctx.db.query("messages").take(50); // read-only
+});
+
+export const send = mutation.mutation(async ({ ctx, args }) => {
+    if (!ctx.auth.userId) throw new Error("must be signed in");
+    await ctx.db.insert("messages", args); // transactional write
+});
+```
+
+## The three context types
+
+| Context       | Function kind | `ctx.db`         | Side effects                                       |
+| ------------- | ------------- | ---------------- | -------------------------------------------------- |
+| `QueryCtx`    | `query`       | `DatabaseReader` | none — pure reads                                  |
+| `MutationCtx` | `mutation`    | `DatabaseWriter` | transactional writes against one shard             |
+| `ActionCtx`   | `action`      | `DatabaseWriter` | unrestricted — `fetch`, external APIs, composition |
+
+### `QueryCtx`
+
+Read-only. `ctx.db` is a `DatabaseReader` (`get`, `query`, `normalizeId`, plus
+the `ctx.db.system` reader for `_scheduled_functions` / `_storage`). Storage
+and vectors are present but read-only (`ReadOnlyStorage`, `VectorSearchReader`).
+A query may compose other **queries** with `ctx.runQuery`, observing the same
+transaction snapshot. There is no `runMutation`/`runAction`, because a query is
+not allowed to write.
+
+### `MutationCtx`
+
+Reads plus transactional writes. `ctx.db` is a `DatabaseWriter` (`insert`,
+`patch`, `replace`, `delete` on top of the reader surface), running inside one
+shard's transactional scope. Adds `ctx.scheduler` (enqueue deferred work) and
+`ctx.workflows` (start/inspect durable workflows), and upgrades `ctx.vectors`
+to the mutating `VectorSearch`. `ctx.storage` stays read-only — R2 writes are a
+side effect reserved for actions. A mutation can compose other mutations and
+queries (`ctx.runMutation`, `ctx.runQuery`), both reusing the same `db` writer.
+
+### `ActionCtx`
+
+The escape hatch. An action can do anything a Worker can: it gets `ctx.fetch`
+(the standard `fetch`) for calling external APIs, the full read/write
+`ctx.storage` (`store`, `delete`, `generateUploadUrl`), `ctx.scheduler`,
+`ctx.workflows`, and the mutating `ctx.vectors`. It composes other functions of
+every kind: `ctx.runQuery`, `ctx.runMutation`, `ctx.runAction`. An action's
+`ctx.db` writes are **not** part of a single mutation transaction. Do
+transactional reads and writes inside a `mutation` and call it from the action.
+
+## Surfaces on every `ctx`
+
+These are present regardless of kind:
+
+- **`ctx.auth`** — the authenticated identity. `ctx.auth.userId` is the verified
+  user id or `null`; `ctx.auth.getIdentity()` resolves the full claim set.
+  Populated by `@lunora/auth` when a session is present.
+- **`ctx.log`** — a structured, function-attributed logger (`log`, `info`,
+  `warn`, `error`, `debug`). A drop-in for `console`, except each line is tagged
+  with the function path and routed to your observability sink or the dev
+  terminal.
+- **`ctx.ip`** — the caller's trusted `CF-Connecting-IP`, or `undefined` for a
+  live-subscription re-run, a server-initiated dispatch, or non-Cloudflare
+  hosting. Useful as a rate-limit key for anonymous traffic.
+
+## ctx field matrix
+
+| Field         | `QueryCtx`       | `MutationCtx`    | `ActionCtx`        |
+| ------------- | ---------------- | ---------------- | ------------------ |
+| `db`          | `DatabaseReader` | `DatabaseWriter` | `DatabaseWriter`\* |
+| `auth`        | ✓                | ✓                | ✓                  |
+| `log`         | ✓                | ✓                | ✓                  |
+| `ip`          | ✓                | ✓                | ✓                  |
+| `storage`     | read-only        | read-only        | read/write         |
+| `vectors`     | read-only        | read/write       | read/write         |
+| `scheduler`   | —                | ✓                | ✓                  |
+| `workflows`   | —                | ✓                | ✓                  |
+| `fetch`       | —                | —                | ✓                  |
+| `runQuery`    | ✓                | ✓                | ✓                  |
+| `runMutation` | —                | ✓                | ✓                  |
+| `runAction`   | —                | —                | ✓                  |
+
+\* An action's `ctx.db` is not transactional — see above.
+
+## Add-on surfaces (codegen-wired)
+
+Opt-in packages attach extra surfaces onto `ctx` through codegen. When a
+project uses one, the generated `_generated/server.ts` widens the context type
+so the surface is typed and present at runtime. Add-ons that wire a `ctx`
+surface include:
+
+- `@lunora/ai` → `ctx.ai` (action context)
+- `@lunora/analytics` → `ctx.analytics`
+- `@lunora/kv` → `ctx.kv`
+- `@lunora/hyperdrive` → `ctx.sql` (action context)
+- `@lunora/browser` → `ctx.browser` (action context)
+- `@lunora/images` → `ctx.images`
+- `@lunora/container` → `ctx.containers`
+
+The base `QueryCtx` / `MutationCtx` / `ActionCtx` in `@lunora/server` do not
+declare these; they appear only after codegen detects the add-on. Middleware
+can also augment `ctx` for downstream handlers (see
+[Middleware](/docs/concepts/middleware)).
+
+## See also
+
+- [Queries & mutations](/docs/concepts/queries-mutations)
+- [Actions](/docs/concepts/actions)
+- [API: @lunora/server](/docs/packages/server)
+- [API: @lunora/ratelimit](/docs/packages/ratelimit)

@@ -1,0 +1,14 @@
+{
+    "extends": "../../tsconfig.base.json",
+    "compilerOptions": {
+        "outDir": "dist",
+        "rootDir": ".",
+        "moduleResolution": "bundler",
+        "types": ["node", "@playwright/test"],
+        "lib": ["DOM", "DOM.Iterable", "ES2024"],
+        "noUncheckedIndexedAccess": false,
+        "noEmit": true
+    },
+    "include": ["**/*.ts", "playwright.config.ts", "globalSetup.ts", "globalTeardown.ts"],
+    "exclude": ["node_modules", "dist", "playwright-report", "test-results"]
+}

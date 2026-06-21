@@ -1,0 +1,92 @@
+{
+    "name": "@lunora/svelte",
+    "version": "0.0.0",
+    "description": "Svelte adapter for Lunora — live stores, optimistic mutations, and reactive loaders",
+    "license": "FSL-1.1-Apache-2.0",
+    "homepage": "https://lunora.sh",
+    "bugs": {
+        "url": "https://github.com/anolilab/lunora/issues"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/anolilab/lunora.git",
+        "directory": "packages/svelte"
+    },
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
+    },
+    "keywords": [
+        "lunora",
+        "cloudflare",
+        "workers",
+        "durable-objects",
+        "svelte",
+        "stores",
+        "realtime",
+        "optimistic-updates"
+    ],
+    "type": "module",
+    "sideEffects": false,
+    "main": "./dist/index.mjs",
+    "module": "./dist/index.mjs",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.mjs"
+        },
+        "./server": {
+            "types": "./dist/server.d.ts",
+            "import": "./dist/server.mjs"
+        },
+        "./worker": {
+            "types": "./dist/worker.d.ts",
+            "import": "./dist/worker.mjs"
+        },
+        "./package.json": "./package.json"
+    },
+    "files": [
+        "dist",
+        "README.md",
+        "LICENSE.md",
+        "__assets__"
+    ],
+    "scripts": {
+        "build": "pnpm exec packem build --development",
+        "build:prod": "pnpm exec packem build --production",
+        "lint:eslint": "eslint .",
+        "lint:eslint:fix": "eslint . --fix",
+        "lint:prettier": "prettier --check .",
+        "lint:prettier:fix": "prettier --write .",
+        "lint:types": "tsc --noEmit",
+        "test": "vitest run",
+        "test:coverage": "vitest run --coverage"
+    },
+    "dependencies": {
+        "@lunora/client": "workspace:*",
+        "@lunora/ratelimit": "workspace:*",
+        "@lunora/runtime": "workspace:*"
+    },
+    "devDependencies": {
+        "@types/node": "catalog:types",
+        "@visulima/packem": "catalog:build",
+        "@vitest/coverage-v8": "catalog:test",
+        "esbuild": "catalog:build",
+        "rollup-plugin-svelte": "catalog:build",
+        "svelte": "catalog:frontend",
+        "typescript": "catalog:tsc",
+        "vitest": "catalog:test"
+    },
+    "peerDependencies": {
+        "svelte": "^5.0.0"
+    },
+    "peerDependenciesMeta": {
+        "svelte": {
+            "optional": false
+        }
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    }
+}

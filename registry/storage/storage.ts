@@ -1,0 +1,217 @@
+/**
+ * Storage functions — added by `lunora registry add storage`.
+ *
+ * This file is YOURS: it's a normal Lunora module, copied into your project so
+ * you own and edit it. Re-export the functions you want from your `lunora/`
+ * entry (or rely on file-based discovery) so codegen picks them up — they
+ * surface in the generated `api` as `storage/generateUploadUrl`,
+ * `storage/getDownloadUrl`, `storage/deleteObject`, `storage/listObjects`
+ * (i.e. `api.storage.generateUploadUrl` and friends).
+ *
+ *   - **generateUploadUrl** (action) — mint a short-lived signed `PUT` URL the
+ *     browser can upload directly to (R2 never proxies bytes through the Worker).
+ *   - **getDownloadUrl** (action) — mint a short-lived signed `GET` URL for a
+ *     stored object. Gate the matching `GET /storage/:key` route in your Worker
+ *     with {@link verifySignedUrl} before streaming the R2 body.
+ *   - **deleteObject** (mutation) — delete a stored object by key.
+ *   - **listObjects** (query) — list stored objects under an optional prefix.
+ *
+ * Every key is scoped per-tenant with {@link scopeKey} so a client-supplied key
+ * can't address another user's data (IDOR). Edit the scope to match your tenancy
+ * model (per-user shown here via `ctx.auth.userId`).
+ *
+ * **Auth required by default.** Lunora queries/mutations/actions are public RPC,
+ * so every handler here fails closed for unauthenticated callers via
+ * {@link requireOwner} — otherwise an anonymous client could share a single
+ * `public/` namespace and read/overwrite/delete other anonymous users' objects.
+ * If you genuinely want a public namespace, do it deliberately and keep
+ * destructive/mutating ops (`deleteObject`, `generateUploadUrl`) authenticated.
+ *
+ * Bindings + env used (declared in this item's registry.json, applied to
+ * wrangler.jsonc / .dev.vars on add):
+ *   - `env.UPLOADS`                 — the R2 bucket binding.
+ *   - `env.STORAGE_SIGNING_SECRET`  — HMAC secret for signed URLs (secret).
+ *   - `env.STORAGE_PUBLIC_BASE_URL` — public base URL fronting the bucket.
+ */
+import { env } from "cloudflare:workers";
+
+import { createStorage, scopeKey } from "@lunora/storage";
+import type { Storage } from "@lunora/storage";
+import { action, mutation, query, v } from "./_generated/server.js";
+
+/** The R2 bucket binding type `createStorage` expects. */
+type StorageBucket = Parameters<typeof createStorage>[0]["bucket"];
+
+/**
+ * Read a required string env var/secret or throw a clear, actionable error.
+ * (`cloudflare:workers`' `env` values are typed `unknown`, so we narrow here —
+ * a missing `STORAGE_SIGNING_SECRET` fails loudly instead of producing an opaque
+ * HMAC error deep in `@lunora/storage`.)
+ */
+const requireEnv = (name: string): string => {
+    const value = env[name];
+
+    if (typeof value !== "string" || value === "") {
+        throw new Error(`@lunora/storage registry item: missing env var \`${name}\` — set it in .dev.vars (and \`wrangler secret put ${name}\` for secrets).`);
+    }
+
+    return value;
+};
+
+/**
+ * Build a {@link Storage} bound to the R2 bucket + signing config from the
+ * Worker env. Cheap to construct, so we make one per call rather than holding a
+ * module-global (keeps it correct under per-isolate env injection). Throws with
+ * a clear message if the `UPLOADS` binding or the signing config is missing.
+ */
+const makeStorage = (): Storage => {
+    const bucket = env.UPLOADS as StorageBucket | undefined;
+
+    if (!bucket) {
+        throw new Error("@lunora/storage registry item: missing R2 binding `UPLOADS` — add it to wrangler.jsonc (see the README).");
+    }
+
+    return createStorage({
+        bucket,
+        publicBaseUrl: requireEnv("STORAGE_PUBLIC_BASE_URL"),
+        signingSecret: requireEnv("STORAGE_SIGNING_SECRET"),
+    });
+};
+
+/**
+ * Per-tenant key prefix: one folder per authenticated user, so a client-supplied
+ * `key` is always namespaced under the caller (no cross-user IDOR).
+ *
+ * Fails closed for unauthenticated callers instead of bucketing them into a
+ * shared `public/` namespace. A shared anonymous prefix would let any anonymous
+ * client read, overwrite, or delete every other anonymous client's objects, so
+ * we require an authenticated identity. If you want a public namespace, add a
+ * separate, read-only public path — never wire `deleteObject` /
+ * `generateUploadUrl` to a shared anonymous prefix.
+ */
+const requireOwner = (userId: string | null): string => {
+    if (userId === null || userId === undefined) {
+        throw new Error(
+            "@lunora/storage registry item: this endpoint requires an authenticated user. Pass `resolveIdentity` to `createWorker` (see the auth registry item), or add a deliberate public path.",
+        );
+    }
+
+    return userId;
+};
+
+/**
+ * Content-Types a client may request for a direct upload. The browser PUTs
+ * straight to R2 with the `Content-Type` pinned into the signed URL, so this
+ * allowlist is the only place to reject it — `@lunora/storage`'s server-side
+ * `upload()` allowlist is never in the path for direct uploads. Deliberately
+ * excludes types a browser may render inline (`text/html`, `image/svg+xml`, …)
+ * to avoid stored-XSS if you ever serve these objects same-origin. Edit to taste,
+ * and when serving objects set `X-Content-Type-Options: nosniff` +
+ * `Content-Disposition: attachment` (or serve from a cookieless object host).
+ */
+const ALLOWED_UPLOAD_CONTENT_TYPES: ReadonlySet<string> = new Set(["application/pdf", "image/gif", "image/jpeg", "image/png", "image/webp", "text/plain"]);
+
+/**
+ * Mint a short-lived signed `PUT` URL the client uploads directly to. The key is
+ * scoped to the caller, so two users uploading `"avatar.png"` never collide.
+ * `contentType` is required and must be in {@link ALLOWED_UPLOAD_CONTENT_TYPES}
+ * — it's pinned into the signature, so an unconstrained value would let a caller
+ * store renderable HTML/SVG (stored-XSS risk when served same-origin).
+ */
+export const generateUploadUrl = action({
+    args: {
+        contentType: v.string(),
+        expiresInSeconds: v.optional(v.number()),
+        key: v.string(),
+    },
+    handler: async (ctx, { contentType, expiresInSeconds, key }): Promise<{ key: string; url: string }> => {
+        if (!ALLOWED_UPLOAD_CONTENT_TYPES.has(contentType)) {
+            throw new Error(
+                `@lunora/storage registry item: content type \`${contentType}\` is not allowed — permitted: ${[...ALLOWED_UPLOAD_CONTENT_TYPES].join(", ")}. Edit ALLOWED_UPLOAD_CONTENT_TYPES to widen.`,
+            );
+        }
+
+        const scoped = scopeKey(requireOwner(ctx.auth.userId), key);
+        const url = await makeStorage().generateUploadUrl(scoped, { contentType, expiresInSeconds });
+
+        return { key: scoped, url };
+    },
+});
+
+/**
+ * Mint a short-lived signed `GET` URL for a stored object. Verify it in your
+ * Worker's `GET /storage/:key` route with {@link verifySignedUrl} before
+ * streaming the R2 body.
+ */
+export const getDownloadUrl = action({
+    args: {
+        expiresInSeconds: v.optional(v.number()),
+        key: v.string(),
+    },
+    handler: async (ctx, { expiresInSeconds, key }): Promise<{ key: string; url: string }> => {
+        const scoped = scopeKey(requireOwner(ctx.auth.userId), key);
+        const url = await makeStorage().getSignedUrl(scoped, { expiresInSeconds, method: "GET" });
+
+        return { key: scoped, url };
+    },
+});
+
+/** Delete a stored object owned by the caller. */
+export const deleteObject = mutation({
+    args: { key: v.string() },
+    handler: async (ctx, { key }): Promise<{ ok: true }> => {
+        const scoped = scopeKey(requireOwner(ctx.auth.userId), key);
+        await makeStorage().delete(scoped);
+
+        return { ok: true as const };
+    },
+});
+
+/** A single listed object as returned by `listObjects`. */
+interface StorageObject {
+    /** Object key, relative to the caller's tenant prefix. */
+    key: string;
+    /** Hex-encoded SHA-256 of the body, when R2 carries a checksum. */
+    sha256?: string;
+    /** Body length in bytes. */
+    size: number;
+}
+
+/**
+ * List the caller's stored objects under an optional sub-prefix. Read-only, so
+ * it's a query. Returns the R2 page cursor + `truncated` flag for pagination;
+ * keys are returned relative to the caller's tenant prefix.
+ */
+export const listObjects = query({
+    args: {
+        cursor: v.optional(v.string()),
+        limit: v.optional(v.number()),
+        prefix: v.optional(v.string()),
+    },
+    handler: async (ctx, { cursor, limit, prefix }): Promise<{ cursor?: string; objects: StorageObject[]; truncated?: boolean }> => {
+        const base = requireOwner(ctx.auth.userId);
+        const scopedPrefix = prefix === undefined ? `${base}/` : `${scopeKey(base, prefix)}`;
+        const stripLength = `${base}/`.length;
+
+        const page = await makeStorage().list(scopedPrefix, { cursor, limit });
+
+        return {
+            cursor: page.cursor,
+            objects: page.objects.map((object) => {
+                const item: StorageObject = {
+                    key: object.key.slice(stripLength),
+                    size: object.size,
+                };
+
+                if (object.sha256 !== undefined) {
+                    item.sha256 = object.sha256;
+                }
+
+                return item;
+            }),
+            truncated: page.truncated,
+        };
+    },
+});
+
+export type { StorageObject };

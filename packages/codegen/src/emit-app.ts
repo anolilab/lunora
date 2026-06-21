@@ -1,0 +1,761 @@
+/* eslint-disable no-secrets/no-secrets -- emitted builder source: the string fragments are framework API type names (e.g. "SchedulerDeclaration<Env>"), not credentials. */
+import { GENERATED_HEADER } from "./emit";
+
+/** Which capability methods the generated `defineApp` builder exposes — one flag per package-backed feature the app actually uses. */
+interface EmitAppOptions {
+    /** App uses `@lunora/ai` / `ctx.ai` → emit `.ai()` (override the Workers AI binding backing `ctx.ai`). */
+    hasAi: boolean;
+    /** App uses `@lunora/analytics` / `ctx.analytics` → emit `.analytics()` (override the dataset backing `ctx.analytics`). */
+    hasAnalytics: boolean;
+    /** App depends on `@lunora/auth` → emit `.auth()` + the lazy build/migrate dance. */
+    hasAuth: boolean;
+    /** App uses `@lunora/browser` / `ctx.browser` → emit `.browser()`. */
+    hasBrowser: boolean;
+    /** App depends on a worker-composition framework adapter (`@lunora/astro`/`@lunora/svelte`/`@lunora/vue`) → emit `.buildFrameworkWorker(host)`. */
+    hasFramework: boolean;
+    /** Schema declares **D1-backed** `.global()` tables → emit `.global()` (D1 ctx-db + studio introspector + cross-shard relations). */
+    hasGlobal: boolean;
+    /** App uses `@lunora/hyperdrive` / `ctx.sql` → emit `.hyperdrive()`. */
+    hasHyperdrive: boolean;
+    /** Schema declares **Hyperdrive-backed** `.global({ backend: "hyperdrive" })` tables → emit `.hyperdriveGlobal()` (reactive Postgres/MySQL ctx-db over Hyperdrive). */
+    hasHyperdriveGlobal: boolean;
+    /** App uses `@lunora/images` / `ctx.images` → emit `.images()`. */
+    hasImages: boolean;
+    /** App uses `@lunora/kv` / `ctx.kv` → emit `.kv()`. */
+    hasKv: boolean;
+    /** App uses `@lunora/payment` / `ctx.payments` → emit `.payment()`. */
+    hasPayments: boolean;
+    /** App imports `@lunora/scheduler` / declares crons → emit `.scheduler()`. */
+    hasScheduler: boolean;
+    /** App uses `@lunora/storage` → emit `.storage()` (DO `ctx.storage` + studio file browser). */
+    hasStorage: boolean;
+    /** Schema declares vector indexes → emit `.vectors()` (the Vectorize index map backing `ctx.vectors`). */
+    hasVectors: boolean;
+    /** App declares Cloudflare Workflows (`defineWorkflow`) → wire `options.workflowsClient` so the studio's workflow-instance proxy can reach the CF REST API. */
+    hasWorkflow: boolean;
+    /** Project depends on the unscoped `lunorash` umbrella → import the runtime via `lunorash/runtime` instead of `@lunora/runtime`. */
+    useUmbrella: boolean;
+    /** An OpenAPI spec is emitted (`openapi.ts`) → wire `openApiSpec` into the worker. */
+    wantsOpenApi: boolean;
+    /** An OpenRPC spec is emitted (`openrpc.ts`) → wire `openRpcSpec` into the worker. */
+    wantsOpenRpc: boolean;
+}
+
+/**
+ * The long-tail `ctx.*` capabilities wired straight through to the generated
+ * `createShardDO` config — binding-backed ones (ai/kv/analytics/images/browser)
+ * are OPTIONAL overrides (the shard already auto-resolves the conventional
+ * `env.AI`/`env.KV`/… binding), while `vectors` / `hyperdrive` / `payment`
+ * need explicit construction. Each method's parameter is derived from the
+ * generated config type, so no per-capability type imports are needed.
+ * `[flag, methodName, configKey, doc]`.
+ */
+const LONG_TAIL: ReadonlyArray<readonly [keyof EmitAppOptions, string, string, string]> = [
+    ["hasAi", "ai", "ai", "Override the Workers AI binding backing `ctx.ai` (defaults to `env.AI`)."],
+    ["hasAnalytics", "analytics", "analytics", "Override the Analytics Engine dataset backing `ctx.analytics` (defaults to `env.ANALYTICS`)."],
+    ["hasBrowser", "browser", "browser", "Override the Browser Rendering binding backing `ctx.browser` (defaults to `env.BROWSER`)."],
+    [
+        "hasHyperdrive",
+        "hyperdrive",
+        "sql",
+        "Wire the Hyperdrive SQL client backing `ctx.sql` — build it with `createHyperdrive` + `fromPostgresJs`/`fromNodePg`/`fromMysql2`.",
+    ],
+    ["hasImages", "images", "images", "Override the Images binding backing `ctx.images` (defaults to `env.IMAGES`)."],
+    ["hasKv", "kv", "kv", "Override the Workers KV binding backing `ctx.kv` (defaults to `env.KV`)."],
+    ["hasPayments", "payment", "payment", "Wire the payment options backing `ctx.payments`."],
+    ["hasVectors", "vectors", "vectors", "Wire the Vectorize index map backing `ctx.vectors`."],
+];
+
+/** Whether any long-tail (`shardExtras`-backed) capability method is emitted. */
+const hasAnyLongTail = (options: EmitAppOptions): boolean => LONG_TAIL.some(([flag]) => options[flag]);
+
+/** Import lines — only what the enabled capabilities need. Add-ons via `@lunora/*`; the runtime via the umbrella subpath when the app depends on `lunora`. */
+const buildImportLines = (options: EmitAppOptions): string[] => {
+    const { hasAuth, hasFramework, hasGlobal, hasHyperdriveGlobal, hasScheduler, hasStorage, hasWorkflow, useUmbrella, wantsOpenApi, wantsOpenRpc } = options;
+    const runtimeModule = useUmbrella ? "lunorash/runtime" : "@lunora/runtime";
+
+    const runtimeTypeImports = ["ExecutionContextLike", "LunoraWorker", "Route", "ScheduledControllerLike", "ShardNamespaceLike", "WorkerOptions"];
+
+    if (hasGlobal) {
+        runtimeTypeImports.push("GlobalIntrospector");
+    }
+
+    if (hasFramework) {
+        runtimeTypeImports.push("FrameworkHostHandler");
+    }
+
+    const runtimeValueImports = [
+        ...(hasGlobal || hasHyperdriveGlobal ? ["createCrossShardRelationCapabilities"] : []),
+        "createWorker",
+        ...(hasFramework ? ["withFrameworkWorker"] : []),
+    ].join(", ");
+
+    return [
+        ...(hasAuth
+            ? [
+                  `import type { LunoraAuth, LunoraAuthOptions } from "@lunora/auth";`,
+                  `import { createAuth, createAuthAdmin, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";`,
+              ]
+            : []),
+        ...(hasGlobal
+            ? [
+                  `import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";`,
+                  `import { createD1CtxDb, facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "@lunora/d1";`,
+              ]
+            : []),
+        ...(hasHyperdriveGlobal
+            ? [
+                  `import type { HyperdriveEngine } from "@lunora/hyperdrive/global";`,
+                  `import { createHyperdriveGlobalCtxDb } from "@lunora/hyperdrive/global";`,
+                  `import type { SqlCtxDbOptions, SqlExec } from "@lunora/sql-store";`,
+              ]
+            : []),
+        ...(hasScheduler
+            ? [`import type { DurableObjectNamespaceLike } from "@lunora/scheduler";`, `import { createScheduler } from "@lunora/scheduler";`]
+            : []),
+        ...(hasStorage
+            ? [`import type { R2BucketLike, Storage } from "@lunora/storage";`, `import { createBucketStorage, createStorage } from "@lunora/storage";`]
+            : []),
+        ...(hasWorkflow ? [`import { createWorkflowsRestClient } from "@lunora/workflow";`] : []),
+        `import type { ${[...runtimeTypeImports].toSorted((a, b) => a.localeCompare(b)).join(", ")} } from "${runtimeModule}";`,
+        `import { ${runtimeValueImports} } from "${runtimeModule}";`,
+        ``,
+        ...(hasGlobal || hasHyperdriveGlobal ? [`import schema from "../schema.js";`] : []),
+        `import { LUNORA_CRONS } from "./crons.js";`,
+        `import { LUNORA_FUNCTIONS } from "./functions.js";`,
+        ...(wantsOpenApi ? [`import { openApiSpec } from "./openapi.js";`] : []),
+        ...(wantsOpenRpc ? [`import { openRpcSpec } from "./openrpc.js";`] : []),
+        `import { createShardDO } from "./shard.js";`,
+    ];
+};
+
+/** Per-capability declaration interfaces (the shapes the fluent methods accept). */
+const buildDeclarationBlocks = (options: EmitAppOptions): string[] => [
+    ...(options.hasStorage
+        ? [
+              `/** \`.storage(...)\` declaration — one bucket (required) plus optional extra named buckets and signed-URL config. Backs \`ctx.storage\` AND the studio file browser. */
+interface StorageDeclaration<Env> {
+    /** The default R2 bucket binding (the bare \`ctx.storage\`). */
+    bucket: Selector<Env, R2BucketLike>;
+    /** Extra named buckets, reached via \`ctx.storage.bucket("name")\` and the studio's bucket picker. */
+    buckets?: Record<string, Selector<Env, R2BucketLike>>;
+    /** Public base URL signed/public object URLs resolve against. */
+    publicBaseUrl?: Selector<Env, string>;
+    /** HMAC secret for signed URLs. */
+    signingSecret?: Selector<Env, string>;
+}`,
+          ]
+        : []),
+    ...(options.hasScheduler
+        ? [
+              `/** \`.scheduler(...)\` declaration — the \`SchedulerDO\` namespace plus the worker origin its callbacks dispatch back to. Backs \`ctx.scheduler\` AND the studio's scheduled-jobs view. */
+interface SchedulerDeclaration<Env> {
+    /** The \`SchedulerDO\` namespace binding (typically \`env.SCHEDULER\`). */
+    namespace: Selector<Env, DurableObjectNamespaceLike & ShardNamespaceLike>;
+    /** The worker origin the \`SchedulerDO\` dispatches HTTP job callbacks back to. */
+    origin?: Selector<Env, string>;
+}`,
+          ]
+        : []),
+    ...(options.hasGlobal
+        ? [
+              `/** \`.global(...)\` declaration — the D1 binding backing \`.global()\` tables. Backs cross-tenant \`ctx.db\` reads/writes AND the studio's global data browser. */
+interface GlobalDeclaration<Env> {
+    /** The D1 binding (typically \`env.DB\`). */
+    d1: Selector<Env, D1DatabaseLike>;
+    /** The worker origin used to fan reverse cross-backend relations across shards. Without it, such a relation throws a clear error. */
+    origin?: Selector<Env, string>;
+}`,
+          ]
+        : []),
+    ...(options.hasHyperdriveGlobal
+        ? [
+              `/** \`.hyperdriveGlobal(...)\` declaration — backs \`.global({ backend: "hyperdrive" })\` tables on a Postgres/MySQL database via Hyperdrive. Stays reactive: the writer is injected as \`globalDb\` and the broadcast hook drives live queries. */
+interface HyperdriveGlobalDeclaration<Env> {
+    /** The Hyperdrive engine — selects the Postgres or MySQL dialect. */
+    engine: HyperdriveEngine;
+    /** Build the \`SqlExec\` from \`env\` — e.g. \`buildPgExec(fromPostgresJs(postgres(env.HYPERDRIVE.connectionString)))\`. Cache the driver on the DO instance; rebuild lazily after hibernation. */
+    exec: (env: Env) => SqlExec;
+    /** The worker origin used to fan reverse cross-backend relations across shards. Without it, such a relation throws a clear error. */
+    origin?: Selector<Env, string>;
+}`,
+          ]
+        : []),
+    ...(options.hasAuth
+        ? [
+              `/** \`.auth(...)\` declaration — better-auth options plus the D1 binding its SQL adapter reads. The builder owns the lazy build + \`ensureMigrated\` dance and wires \`authHandler\` / \`resolveIdentity\` / \`authAdmin\`. */
+interface AuthDeclaration<Env> {
+    /** The D1 binding the auth SQL adapter is wired over (via \`lunoraD1Adapter\`). */
+    d1: Selector<Env, unknown>;
+    /** Build the better-auth options from \`env\` (secret, plugins, email/password, …). */
+    options: (env: Env) => LunoraAuthOptions;
+}`,
+          ]
+        : []),
+];
+
+/** Builder instance fields (private state recorded by the fluent methods). */
+const buildFieldLines = (options: EmitAppOptions): string[] => [
+    `    private adminToken?: Selector<Env, string>;`,
+    ...(options.hasAuth ? [`    private authDeclaration?: AuthDeclaration<Env>;`] : []),
+    `    private readonly extendFns: ((env: Env) => Partial<WorkerOptions>)[] = [];`,
+    ...(options.hasGlobal ? [`    private globalDeclaration?: GlobalDeclaration<Env>;`] : []),
+    ...(options.hasHyperdriveGlobal ? [`    private hyperdriveGlobalDeclaration?: HyperdriveGlobalDeclaration<Env>;`] : []),
+    `    private readonly routeMap: Record<string, Route> = {};`,
+    ...(options.hasScheduler ? [`    private schedulerDeclaration?: SchedulerDeclaration<Env>;`] : []),
+    ...(hasAnyLongTail(options) ? [`    private readonly shardExtras: Partial<ShardConfig> = {};`] : []),
+    `    private shardSelector?: Selector<Env, ShardNamespaceLike>;`,
+    ...(options.hasStorage ? [`    private storageDeclaration?: StorageDeclaration<Env>;`] : []),
+];
+
+/** Long-tail capability methods — thin pass-throughs into the generated `createShardDO` config. */
+const buildLongTailMethods = (options: EmitAppOptions): string[] =>
+    LONG_TAIL.filter(([flag]) => options[flag]).map(
+        ([, name, key, document_]) => `    /** ${document_} */
+    public ${name}(factory: NonNullable<ShardConfig["${key}"]>): this {
+        this.shardExtras.${key} = factory;
+
+        return this;
+    }`,
+    );
+
+/** Fluent capability methods (always-on ones plus the feature-gated ones). */
+const buildMethodBlocks = (options: EmitAppOptions): string[] => [
+    `    /** Bearer token gating the \`/_lunora/admin/*\` endpoints the studio calls. */
+    public admin(selector: Selector<Env, string>): this {
+        this.adminToken = selector;
+
+        return this;
+    }`,
+    ...(options.hasAuth
+        ? [
+              `    /** Wire better-auth — the builder lazily builds the instance, runs \`ensureMigrated\`, and dispatches \`/api/auth/*\` inside the worker (instrumented for the auth-failure SLO). */
+    public auth(declaration: AuthDeclaration<Env>): this {
+        this.authDeclaration = declaration;
+
+        return this;
+    }`,
+          ]
+        : []),
+    `    /** Escape hatch — merge raw \`WorkerOptions\` (anything not yet sugared) over the derived options at build time. */
+    public extend(fn: (env: Env) => Partial<WorkerOptions>): this {
+        this.extendFns.push(fn);
+
+        return this;
+    }`,
+    ...(options.hasGlobal
+        ? [
+              `    /** Back \`.global()\` (cross-tenant) tables with D1 — wires \`ctx.db\` routing, the studio global browser, and reverse cross-shard relations. */
+    public global(declaration: GlobalDeclaration<Env>): this {
+        this.globalDeclaration = declaration;
+
+        return this;
+    }`,
+          ]
+        : []),
+    ...(options.hasHyperdriveGlobal
+        ? [
+              `    /** Back \`.global({ backend: "hyperdrive" })\` tables with a Postgres/MySQL database via Hyperdrive — wires reactive \`ctx.db\` routing through the shared store core. */
+    public hyperdriveGlobal(declaration: HyperdriveGlobalDeclaration<Env>): this {
+        this.hyperdriveGlobalDeclaration = declaration;
+
+        return this;
+    }`,
+          ]
+        : []),
+    `    /** Cloudflare Email Routing entry — exposes the top-level \`email\` handler. */
+    public onEmail(handler: (env: Env) => (message: unknown, env: unknown, context: ExecutionContextLike) => Promise<void>): this {
+        this.emailHandler = handler;
+
+        return this;
+    }`,
+    `    /** Mount a custom HTTP route (e.g. an asset-serving or test endpoint). Key is \`"METHOD path"\`, \`"path"\`, or a path prefix matched by the runtime. */
+    public route(key: string, handler: Route): this {
+        this.routeMap[key] = handler;
+
+        return this;
+    }`,
+    ...(options.hasScheduler
+        ? [
+              `    /** Wire the \`SchedulerDO\` — backs \`ctx.scheduler\` and the studio's scheduled-jobs view. */
+    public scheduler(declaration: SchedulerDeclaration<Env>): this {
+        this.schedulerDeclaration = declaration;
+
+        return this;
+    }`,
+          ]
+        : []),
+    `    /** The shard Durable Object namespace (typically \`env.SHARD\`) — required: every app routes RPC + WebSocket traffic through it. */
+    public shard(selector: Selector<Env, ShardNamespaceLike>): this {
+        this.shardSelector = selector;
+
+        return this;
+    }`,
+    ...(options.hasStorage
+        ? [
+              `    /** Wire R2 storage — backs \`ctx.storage\` (incl. multi-bucket) and the studio file browser, from one declaration. */
+    public storage(declaration: StorageDeclaration<Env>): this {
+        this.storageDeclaration = declaration;
+
+        return this;
+    }`,
+          ]
+        : []),
+    ...buildLongTailMethods(options),
+];
+
+/** The body of the `createShardDO({ ... })` call — the DO-side capability factories. */
+const buildShardFactoryBody = (options: EmitAppOptions): string => {
+    const entries = [
+        ...(options.hasGlobal
+            ? [
+                  `            ...(this.globalDeclaration
+                ? {
+                      d1: (rawEnv: Record<string, unknown>, request?: { identity?: Record<string, unknown>; userId?: string | null }) => {
+                          const env = rawEnv as Env;
+                          const database = this.globalDeclaration?.d1(env);
+
+                          if (!database) {
+                              return undefined;
+                          }
+
+                          const origin = this.globalDeclaration?.origin?.(env);
+                          const crossShard = origin
+                              ? createCrossShardRelationCapabilities({ identity: request?.identity, origin, userId: request?.userId ?? undefined })
+                              : undefined;
+
+                          return createD1CtxDb({
+                              ...(crossShard ? { crossShardCounter: crossShard.crossShardCounter, crossShardReader: crossShard.crossShardReader } : {}),
+                              auth: { identity: request?.identity ?? null, userId: request?.userId ?? null },
+                              exec: buildExec(database),
+                              schema: schema as unknown as D1CtxDbOptions["schema"],
+                          });
+                      },
+                  }
+                : {}),`,
+              ]
+            : []),
+        ...(options.hasHyperdriveGlobal
+            ? [
+                  `            ...(this.hyperdriveGlobalDeclaration
+                ? {
+                      hyperdriveGlobal: (rawEnv: Record<string, unknown>, request?: { identity?: Record<string, unknown>; userId?: string | null }) => {
+                          const env = rawEnv as Env;
+                          const exec = this.hyperdriveGlobalDeclaration?.exec(env) as SqlExec | undefined;
+
+                          if (!exec) {
+                              return undefined;
+                          }
+
+                          const origin = this.hyperdriveGlobalDeclaration?.origin?.(env);
+                          const crossShard = origin
+                              ? createCrossShardRelationCapabilities({ identity: request?.identity, origin, userId: request?.userId ?? undefined })
+                              : undefined;
+
+                          return createHyperdriveGlobalCtxDb({
+                              ...(crossShard ? { crossShardCounter: crossShard.crossShardCounter, crossShardReader: crossShard.crossShardReader } : {}),
+                              auth: { identity: request?.identity ?? null, userId: request?.userId ?? null },
+                              engine: this.hyperdriveGlobalDeclaration?.engine as HyperdriveEngine,
+                              exec,
+                              schema: schema as unknown as SqlCtxDbOptions["schema"],
+                          });
+                      },
+                  }
+                : {}),`,
+              ]
+            : []),
+        ...(options.hasScheduler
+            ? [
+                  `            ...(this.schedulerDeclaration
+                ? {
+                      scheduler: (rawEnv: Record<string, unknown>) => {
+                          const env = rawEnv as Env;
+                          const namespace = this.schedulerDeclaration?.namespace(env);
+                          const origin = this.schedulerDeclaration?.origin?.(env);
+
+                          return namespace && origin ? createScheduler({ namespace, originUrl: origin }) : undefined;
+                      },
+                  }
+                : {}),`,
+              ]
+            : []),
+        ...(options.hasStorage
+            ? [`            ...(this.storageDeclaration ? { storage: (rawEnv: Record<string, unknown>) => this.resolveStorage(rawEnv as Env) } : {}),`]
+            : []),
+        ...(hasAnyLongTail(options) ? [`            ...this.shardExtras,`] : []),
+    ];
+
+    return entries.length > 0 ? `\n${entries.join("\n")}\n        ` : "";
+};
+
+/** The per-capability blocks of `buildWorkerOptions` (the worker-side fan-out). */
+const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
+    ...(options.hasScheduler
+        ? [
+              `        if (this.schedulerDeclaration) {
+            options.schedulerDO = this.schedulerDeclaration.namespace(env);
+        }`,
+          ]
+        : []),
+    ...(options.hasWorkflow
+        ? [
+              // Resolve the Workflows REST client from the request env so the studio's
+              // \`/_lunora/admin/workflows*\` proxy can read instance/step state; returns
+              // undefined (→ "not configured") until the CF account id + API token are set.
+              `        options.workflowsClient = (workflowEnv) => {
+            const source = workflowEnv as Record<string, unknown>;
+            const accountId = source["CLOUDFLARE_ACCOUNT_ID"];
+            const apiToken = source["CLOUDFLARE_API_TOKEN"];
+
+            return typeof accountId === "string" && accountId !== "" && typeof apiToken === "string" && apiToken !== ""
+                ? createWorkflowsRestClient({ accountId, apiToken })
+                : undefined;
+        };`,
+          ]
+        : []),
+    ...(options.hasGlobal
+        ? [
+              `        if (this.globalDeclaration) {
+            const database = this.globalDeclaration.d1(env);
+
+            if (database) {
+                options.d1 = database;
+                options.globalIntrospector = buildGlobalIntrospector(database);
+            }
+        }`,
+          ]
+        : []),
+    ...(options.hasStorage
+        ? [
+              `        if (this.storageDeclaration) {
+            Object.assign(options, this.buildStorageAdmin(env));
+        }`,
+          ]
+        : []),
+    ...(options.hasAuth
+        ? [
+              `        if (this.authDeclaration) {
+            options.authHandler = (request) => {
+                const auth = getAuth();
+
+                return auth ? handleAuthRequest(auth, request) : Promise.resolve(undefined);
+            };
+            options.resolveIdentity = async (request) => {
+                const auth = getAuth();
+
+                if (!auth) {
+                    return null;
+                }
+
+                const session = await auth.api.getSession({ headers: (request as Request).headers });
+
+                return session?.user?.id ? { userId: session.user.id } : null;
+            };
+            const authInstance = getAuth();
+
+            options.authAdmin = authInstance ? createAuthAdmin(authInstance) : undefined;
+        }`,
+          ]
+        : []),
+];
+
+/** The `shardDO` + spec fields the worker always (or conditionally) carries. */
+const buildBaseWorkerOptions = (options: EmitAppOptions): string[] => [
+    `            cronJobs: LUNORA_CRONS,`,
+    `            functions: LUNORA_FUNCTIONS,`,
+    ...(options.wantsOpenApi ? [`            openApiSpec,`] : []),
+    ...(options.wantsOpenRpc ? [`            openRpcSpec,`] : []),
+    `            routes: this.routeMap,`,
+    `            shardDO: this.shardSelector?.(env) ?? (undefined as unknown as ShardNamespaceLike),`,
+];
+
+/** The storage resolver + studio-admin deriver (private builder methods, DO + worker sides). */
+const buildStorageHelpers = (hasStorage: boolean): string =>
+    hasStorage
+        ? `
+    /** Resolve the storage capability (single or multi-bucket) for the DO side. */
+    private resolveStorage(env: Env): Storage | undefined {
+        const declaration = this.storageDeclaration;
+
+        if (!declaration) {
+            return undefined;
+        }
+
+        const defaultBucket = declaration.bucket(env);
+
+        if (!defaultBucket) {
+            return undefined;
+        }
+
+        const make = (bucket: R2BucketLike): Storage =>
+            createStorage({ bucket, publicBaseUrl: declaration.publicBaseUrl?.(env), signingSecret: declaration.signingSecret?.(env) });
+        const extraEntries = Object.entries(declaration.buckets ?? {})
+            .map(([name, selector]) => [name, selector(env)] as const)
+            .filter((entry): entry is [string, R2BucketLike] => Boolean(entry[1]));
+
+        if (extraEntries.length === 0) {
+            return make(defaultBucket);
+        }
+
+        const map: Record<string, Storage> = { default: make(defaultBucket) };
+
+        for (const [name, bucket] of extraEntries) {
+            map[name] = make(bucket);
+        }
+
+        return createBucketStorage(map, { default: "default" });
+    }
+
+    /** Derive the studio file-browser admin functions from the same buckets \`.storage()\` declared. */
+    private buildStorageAdmin(env: Env): Partial<WorkerOptions> {
+        const declaration = this.storageDeclaration;
+
+        if (!declaration) {
+            return {};
+        }
+
+        const defaultBucket = declaration.bucket(env);
+
+        if (!defaultBucket) {
+            return {};
+        }
+
+        const make = (bucket: R2BucketLike): Storage =>
+            createStorage({ bucket, publicBaseUrl: declaration.publicBaseUrl?.(env), signingSecret: declaration.signingSecret?.(env) });
+        const buckets: Record<string, Storage> = { default: make(defaultBucket) };
+
+        for (const [name, selector] of Object.entries(declaration.buckets ?? {})) {
+            const bucket = selector(env);
+
+            if (bucket) {
+                buckets[name] = make(bucket);
+            }
+        }
+
+        const pick = (name?: string): Storage => buckets[name !== undefined && name !== "" ? name : "default"] ?? buckets.default;
+        const hasSigning = Boolean(declaration.publicBaseUrl?.(env) && declaration.signingSecret?.(env));
+
+        return {
+            storageBuckets: Object.keys(buckets),
+            storageDelete: (key: string, opts?: { bucket?: string }) => pick(opts?.bucket).delete(key),
+            storageList: (prefix?: string, opts?: { bucket?: string; cursor?: string; limit?: number }) => pick(opts?.bucket).list(prefix, opts),
+            storageSignedUrl: hasSigning
+                ? (key: string, opts?: { bucket?: string; expiresInSeconds?: number }) => pick(opts?.bucket).getSignedUrl(key, { expiresInSeconds: opts?.expiresInSeconds })
+                : undefined,
+            storageUpload: (key: string, body: ArrayBuffer, opts?: { bucket?: string; contentType?: string }) => pick(opts?.bucket).upload(key, body, opts),
+        };
+    }
+`
+        : "";
+
+/** The D1 `exec` adapter + global-table introspector (module-level helpers, DO/worker shared). */
+const buildGlobalHelpers = (hasGlobal: boolean): string =>
+    hasGlobal
+        ? `
+/** Adapt the raw D1 binding to \`@lunora/d1\`'s \`D1Exec\` (reads via \`all\`, writes via \`run\`). */
+const buildExec = (database: D1DatabaseLike): D1Exec => ({
+    all: async (sql, parameters) => {
+        const result = await database
+            .prepare(sql)
+            .bind(...parameters)
+            .all<Record<string, unknown>>();
+
+        return result.results;
+    },
+    run: async (sql, parameters) => {
+        await database
+            .prepare(sql)
+            .bind(...parameters)
+            .run();
+    },
+});
+
+/** Introspect \`.global()\` (D1-backed) tables for the studio's global data browser. */
+const buildGlobalIntrospector = (database: D1DatabaseLike): GlobalIntrospector => {
+    const exec = buildExec(database);
+
+    return {
+        facetColumn: (options) => facetGlobalColumn(exec, schema as never, options),
+        listTables: () => listGlobalTables(exec, schema as never),
+        readTablePage: (options) => readGlobalTablePage(exec, schema as never, options),
+    };
+};
+`
+        : "";
+
+/** The `export type { ... }` list — only the declaration types that were emitted. */
+const buildExportedTypes = (options: EmitAppOptions): string =>
+    [
+        ...(options.hasAuth ? ["AuthDeclaration"] : []),
+        "ComposedApp",
+        ...(options.hasGlobal ? ["GlobalDeclaration"] : []),
+        ...(options.hasScheduler ? ["SchedulerDeclaration"] : []),
+        "Selector",
+        ...(options.hasStorage ? ["StorageDeclaration"] : []),
+    ]
+        .toSorted((a, b) => a.localeCompare(b))
+        .join(", ");
+
+/**
+ * Emit `_generated/app.ts` — a fluent, feature-specialized worker-composition
+ * builder. Only the methods for capabilities THIS app uses are emitted, so the
+ * builder's type surface (IntelliSense) lists exactly what can be configured.
+ *
+ * Each capability declaration is fanned into BOTH runtime surfaces: the DO-side
+ * `createShardDO(...)` factory that backs `ctx.*`, and the worker-side
+ * `createWorker(...)` options that back the studio/admin endpoints — so storage
+ * / scheduler / global are declared once instead of twice. The builder is pure
+ * sugar over the public `createWorker` / `createShardDO`; both stay usable.
+ *
+ * Lives in generated code (not `@lunora/runtime`, which is dependency-free) so
+ * it can import the add-on packages the app installed (`@lunora/auth`,
+ * `@lunora/storage`, …) directly.
+ */
+const emitApp = (options: EmitAppOptions): string => {
+    const { hasAuth } = options;
+
+    const declarationBlocks = buildDeclarationBlocks(options);
+    const workerOptionLines = buildWorkerOptionLines(options);
+
+    // The auth lazy-init dance is woven through `build()` and `buildWorkerOptions`.
+    const authState = hasAuth ? `        let auth: LunoraAuth | null = null;\n` : "";
+    const ensureAuthBlock = hasAuth
+        ? `
+        const ensureAuth = async (env: Env): Promise<void> => {
+            if (!this.authDeclaration || auth) {
+                return;
+            }
+
+            auth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(this.authDeclaration.d1(env) as never) });
+            // Apply the better-auth schema lazily on first request (raw-D1 Kysely
+            // migrator). For production run the migrate command ahead of deploy.
+            await ensureMigrated(createAuth({ ...this.authDeclaration.options(env), database: this.authDeclaration.d1(env) as never }));
+        };
+`
+        : "";
+    const ensureAuthCall = hasAuth ? `\n                await ensureAuth(env);` : "";
+    const getAuthArgument = hasAuth ? `() => auth` : `() => null`;
+    const getAuthParameter = hasAuth ? `getAuth: () => LunoraAuth | null` : `_getAuth: () => null`;
+
+    // The underlying `LunoraWorker` factory. With a framework adapter present,
+    // `.buildFrameworkWorker(host)` passes a host and composition routes through
+    // `withFrameworkWorker` (the host serves everything but `/_lunora/*`);
+    // otherwise it's a standalone `createWorker`.
+    const buildWorkerLine = options.hasFramework
+        ? `        const buildWorker = (env: Env): LunoraWorker =>
+            host ? withFrameworkWorker(host, (hostEnv) => this.buildWorkerOptions(hostEnv as Env, ${getAuthArgument})) : createWorker(this.buildWorkerOptions(env, ${getAuthArgument}));`
+        : `        const buildWorker = (env: Env): LunoraWorker => createWorker(this.buildWorkerOptions(env, ${getAuthArgument}));`;
+    const assembleParameter = options.hasFramework ? `host?: FrameworkHostHandler` : ``;
+
+    // Public terminals: always `build()`; `.buildFrameworkWorker(host)` only when
+    // a worker-composition framework adapter is a dependency.
+    const buildTerminals = `    /** Materialise the standalone Cloudflare worker + \`ShardDO\` class. */
+    public build(): ComposedApp {
+        return this.assemble();
+    }${
+        options.hasFramework
+            ? `
+
+    /** Compose Lunora's realtime plane INTO a meta-framework's Cloudflare handler (SvelteKit/Astro/Nuxt). The framework \`host\` serves everything except the reserved \`/_lunora/*\` endpoints; pass the adapter-emitted worker (e.g. SvelteKit's \`_worker.js\`, Astro's \`handle\`). */
+    public buildFrameworkWorker(host: FrameworkHostHandler): ComposedApp {
+        return this.assemble(host);
+    }`
+            : ``
+    }`;
+
+    return `${GENERATED_HEADER}${buildImportLines(options).join("\n")}
+
+/** Read a value off the per-request \`env\`. Returns \`undefined\` to leave the capability unconfigured (its \`ctx.*\`/admin surface stays a clear-error stub). */
+type Selector<Env, T> = (env: Env) => T | undefined;
+${hasAnyLongTail(options) ? `\n/** The generated \`createShardDO\` config — the long-tail \`.ai()\` / \`.kv()\` / … methods pass straight through to it. */\ntype ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;\n` : ""}
+${declarationBlocks.join("\n\n")}${declarationBlocks.length > 0 ? "\n\n" : ""}/** The composed app: a Cloudflare module worker (\`fetch\` / \`scheduled\` / optional \`email\`) plus the \`ShardDO\` class binding. */
+interface ComposedApp extends LunoraWorker {
+    /** Cloudflare Email Routing entry — present only when \`.onEmail(...)\` was configured. */
+    email?: (message: unknown, env: unknown, context: ExecutionContextLike) => Promise<void>;
+    /** The generated shard Durable Object class — re-export it as a named export so wrangler can bind it. */
+    ShardDO: ReturnType<typeof createShardDO>;
+}
+
+/**
+ * Fluent worker-composition builder. Records each capability declaration, then
+ * \`.build()\` fans them into the DO-side \`createShardDO\` factory and the
+ * worker-side \`createWorker\` options — constructing the worker lazily on the
+ * first request so per-isolate singletons are built once.
+ */
+class AppBuilder<Env extends Record<string, unknown>> {
+${buildFieldLines(options).join("\n")}
+
+    private emailHandler?: (env: Env) => (message: unknown, env: unknown, context: ExecutionContextLike) => Promise<void>;
+
+${buildMethodBlocks(options).join("\n\n")}
+
+${buildTerminals}
+
+    /** Build the shard DO + compose the worker (standalone or framework-hosted), wrapping the lazy per-isolate singletons + auth init. */
+    private assemble(${assembleParameter}): ComposedApp {
+        const ShardDO = createShardDO({${buildShardFactoryBody(options)}});
+
+        // Per-isolate singletons: the worker (and auth instance) are expensive to
+        // build, so the first request constructs them and every later request on
+        // the same isolate reuses them.
+        let worker: LunoraWorker | null = null;
+${authState}${ensureAuthBlock}
+${buildWorkerLine}
+
+        const composed: ComposedApp = {
+            ShardDO,
+            fetch: async (request: Request, rawEnv: unknown, context: ExecutionContextLike): Promise<Response> => {
+                const env = rawEnv as Env;${ensureAuthCall}
+                worker ??= buildWorker(env);
+
+                return worker.fetch(request, rawEnv, context);
+            },
+            scheduled: async (controller: ScheduledControllerLike, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {
+                worker ??= buildWorker(rawEnv as Env);
+
+                return worker.scheduled(controller, rawEnv, context);
+            },
+            serverQuery: (request, rawEnv, reference, args, options) => {
+                worker ??= buildWorker(rawEnv as Env);
+
+                return worker.serverQuery(request, rawEnv, reference, args, options);
+            },
+        };
+
+        if (this.emailHandler) {
+            const handler = this.emailHandler;
+
+            composed.email = (message, rawEnv, context) => handler(rawEnv as Env)(message, rawEnv, context);
+        }
+
+        return composed;
+    }
+${buildStorageHelpers(options.hasStorage)}
+    /** Fan the recorded declarations into the worker-side \`createWorker\` options. */
+    private buildWorkerOptions(env: Env, ${getAuthParameter}): WorkerOptions {
+        const options: WorkerOptions = {
+${buildBaseWorkerOptions(options).join("\n")}
+        };
+
+        if (this.adminToken) {
+            options.adminToken = this.adminToken(env);
+        }
+
+${workerOptionLines.join("\n\n")}${workerOptionLines.length > 0 ? "\n\n" : ""}        for (const fn of this.extendFns) {
+            Object.assign(options, fn(env));
+        }
+
+        return options;
+    }
+}
+${buildGlobalHelpers(options.hasGlobal)}
+/** Start composing the app. Chain the capability methods, then \`.build()\`. */
+const defineApp = <Env extends Record<string, unknown>>(): AppBuilder<Env> => new AppBuilder<Env>();
+
+export { AppBuilder, defineApp };
+export type { ${buildExportedTypes(options)} };
+`;
+};
+
+export { emitApp };
+export type { EmitAppOptions };

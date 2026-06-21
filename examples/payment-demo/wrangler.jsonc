@@ -1,0 +1,19 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "lunora-example-payment-demo",
+    "main": "src/server/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        // Payment state rides the app's ShardDO via `ctx.db` — there is NO separate
+        // payment Durable Object. The `paymentTables` are merged into `lunora/schema.ts`.
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    // Secrets are NOT declared here — `vars` ship in the deployed config and are
+    // visible in the dashboard. `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET`
+    // live in `.dev.vars` for local dev (see `.dev.vars.example`, auto-loaded by
+    // `wrangler dev` / the Vite plugin) and are pushed to production with
+    // `wrangler secret put STRIPE_SECRET_KEY` (or `lunora env push`).
+}

@@ -1,0 +1,76 @@
+import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
+import { createQuerySubscription } from "@lunora/client/query";
+import type { MaybeRefOrGetter, Ref } from "vue";
+import { onScopeDispose, ref, toValue, watch } from "vue";
+
+import { useLunora } from "./lunora-provider";
+import type { UseQueryOptions } from "./types";
+
+interface UseSubscriptionResult<T> {
+    data: Ref<T | undefined>;
+    error: Ref<Error | undefined>;
+}
+
+/**
+ * Subscribe to a reactive server push stream. Returns `{ data, error }` refs
+ * that update whenever the server emits a new value. Passing `"skip"` as `args`
+ * (or a ref/getter that resolves to `"skip"`) tears down the subscription
+ * without unmounting.
+ *
+ * Unlike `useQuery`, which tracks the full reactive cache, `useSubscription`
+ * owns a single lightweight subscription and is suitable for ephemeral,
+ * high-frequency streams.
+ */
+const useSubscription = <F extends FunctionReference>(
+    function_: F,
+    args: MaybeRefOrGetter<ArgsOf<F> | "skip">,
+    options: UseQueryOptions = {},
+): UseSubscriptionResult<ReturnOf<F>> => {
+    const client = useLunora();
+    const data = ref<ReturnOf<F> | undefined>(undefined) as Ref<ReturnOf<F> | undefined>;
+    const error = ref<Error | undefined>(undefined);
+
+    watch(
+        () => toValue(args),
+        (currentArgs, _previous, onCleanup) => {
+            if (currentArgs === "skip") {
+                data.value = undefined;
+                error.value = undefined;
+                return;
+            }
+
+            const unsubscribe = createQuerySubscription(
+                client,
+                function_,
+                currentArgs,
+                {
+                    onData: (value: ReturnOf<F>) => {
+                        data.value = value;
+                        error.value = undefined;
+                    },
+                    onError: (subscriptionError) => {
+                        error.value = new Error(subscriptionError.message);
+                        data.value = undefined;
+                    },
+                    onReset: () => {
+                        data.value = undefined;
+                    },
+                },
+                { shardKey: options.shardKey },
+            );
+
+            onCleanup(unsubscribe);
+        },
+        { immediate: true },
+    );
+
+    onScopeDispose(() => {
+        data.value = undefined;
+        error.value = undefined;
+    });
+
+    return { data, error };
+};
+
+export type { UseSubscriptionResult };
+export { useSubscription };

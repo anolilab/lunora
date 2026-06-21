@@ -1,0 +1,73 @@
+{
+    "name": "@lunora/advisor",
+    "version": "0.0.0",
+    "description": "Schema & query lints (splinter-style advisors) for Lunora, feeding the Studio Advisors view",
+    "license": "FSL-1.1-Apache-2.0",
+    "homepage": "https://lunora.sh",
+    "bugs": {
+        "url": "https://github.com/anolilab/lunora/issues"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/anolilab/lunora.git",
+        "directory": "packages/advisor"
+    },
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
+    },
+    "keywords": [
+        "lunora",
+        "cloudflare",
+        "workers",
+        "durable-objects",
+        "lint",
+        "advisor",
+        "schema",
+        "splinter"
+    ],
+    "type": "module",
+    "sideEffects": false,
+    "main": "./dist/index.mjs",
+    "module": "./dist/index.mjs",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.mjs"
+        },
+        "./package.json": "./package.json"
+    },
+    "files": [
+        "dist",
+        "README.md",
+        "LICENSE.md",
+        "__assets__"
+    ],
+    "scripts": {
+        "build": "pnpm exec packem build --development",
+        "build:prod": "pnpm exec packem build --production",
+        "lint:eslint": "eslint .",
+        "lint:eslint:fix": "eslint . --fix",
+        "lint:prettier": "prettier --check .",
+        "lint:prettier:fix": "prettier --write .",
+        "lint:types": "tsc --noEmit",
+        "test": "vitest run",
+        "test:coverage": "vitest run --coverage"
+    },
+    "dependencies": {
+        "@lunora/server": "workspace:*"
+    },
+    "devDependencies": {
+        "@lunora/values": "workspace:*",
+        "@types/node": "catalog:types",
+        "@visulima/packem": "catalog:build",
+        "@vitest/coverage-v8": "catalog:test",
+        "esbuild": "catalog:build",
+        "typescript": "catalog:tsc",
+        "vitest": "catalog:test"
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    }
+}

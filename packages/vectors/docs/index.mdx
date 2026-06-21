@@ -1,0 +1,268 @@
+---
+title: "@lunora/vectors"
+description: Cloudflare Vectorize adapter — typed vector indexes and similarity search.
+---
+
+`@lunora/vectors` is the Cloudflare [Vectorize](https://developers.cloudflare.com/vectorize/)
+adapter for Lunora. Declare typed vector indexes alongside your regular tables,
+keep them automatically in sync on every write, and run similarity search from
+any function handler via `ctx.vectors`. You bring your own embedder; the adapter
+handles the Vectorize binding plumbing, batching, concurrency limits, and delete
+propagation.
+
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```bash tab="pnpm"
+pnpm add @lunora/vectors
+```
+
+```bash tab="npm"
+npm install @lunora/vectors
+```
+
+```bash tab="yarn"
+yarn add @lunora/vectors
+```
+
+```bash tab="bun"
+bun add @lunora/vectors
+```
+
+</Tabs>
+
+When your schema declares at least one vector index, codegen imports
+`@lunora/vectors` into the generated server and wires a typed `ctx.vectors` onto
+your query, mutation, and action contexts.
+
+## Declaring an index
+
+A vector index always names a source of text to embed. There are two ways to
+declare one.
+
+### Inline on a table — `.vectorize(field, options)`
+
+The common case: embed a single string column. Chain `.vectorize` off
+`defineTable`. The `index` is the logical name (it must match a `vectorize`
+binding in `wrangler.jsonc`); `embed` is your own embedder.
+
+```ts
+// lunora/schema.ts
+import { defineSchema, defineTable, v } from "lunorash/server";
+import { embed } from "../app/embed"; // your own embedder
+
+export default defineSchema({
+    docs: defineTable({
+        title: v.string(),
+        body: v.string(),
+        workspaceId: v.id("workspaces"),
+    })
+        .shardBy("workspaceId")
+        .vectorize("body", {
+            index: "docs-body",
+            dimensions: 1024,
+            metric: "cosine",
+            embed,
+            metadata: ["title", "workspaceId"], // fields mirrored into Vectorize metadata for filtering
+        }),
+});
+```
+
+| Option       | Type                                          | Notes                                                                  |
+| ------------ | --------------------------------------------- | ---------------------------------------------------------------------- |
+| `index`      | `string`                                      | Logical index name; must match a `vectorize` binding's `index_name`.   |
+| `dimensions` | `number`                                      | Vector dimension — must match the Vectorize index and your embedder.   |
+| `metric`     | `"cosine" \| "euclidean" \| "dot-product"`    | Distance metric.                                                       |
+| `embed`      | `(input: string) => number[] \| Promise<...>` | Your embedder. Called at write time on the source field's value.       |
+| `metadata`   | `string[]` (optional)                         | Table fields copied into Vectorize metadata so you can filter on them. |
+
+The source field must hold a string. A non-string column (e.g. a JSON object)
+throws a descriptive error rather than embedding `"[object Object]"` — use a
+standalone index with `select` instead.
+
+### Standalone — `defineVectorIndex(options)`
+
+When the embedded text is derived from multiple columns or a computation, use
+the standalone form and pass it to `defineSchema`'s second argument, keyed by
+index name.
+
+```ts
+import { defineSchema, defineTable, defineVectorIndex, v } from "lunorash/server";
+import { embed } from "../app/embed";
+
+const tables = {
+    docs: defineTable({
+        title: v.string(),
+        body: v.string(),
+        workspaceId: v.id("workspaces"),
+    }).shardBy("workspaceId"),
+};
+
+export default defineSchema(tables, {
+    "docs-fulltext": defineVectorIndex({
+        dimensions: 1024,
+        metric: "cosine",
+        embed,
+        source: {
+            table: "docs",
+            select: (row) => `${row.title}\n\n${row.body}`,
+        },
+        metadata: (row) => ({ workspaceId: row.workspaceId }),
+    }),
+});
+```
+
+## Automatic write sync
+
+You never upsert vectors by hand for declared indexes. On every `insert`,
+`update`, or `delete` to a table that sources a vector index, the adapter:
+
+- **insert / update** — embeds the source (the field for inline indexes, or
+  `select(row)` for standalone ones) and upserts under the row's id. If an
+  inline source field is cleared to null/undefined, the stale vector is deleted.
+- **delete** — removes the row's id from every index sourced from that table.
+
+The sync runs inline within the mutation. Because Vectorize is external and
+non-transactional, upserts/deletes are keyed by row id (idempotent), and a
+fan-out failure triggers a best-effort compensating delete before the error is
+re-thrown. The authoritative recovery is re-running the (idempotent) write.
+
+<Callout type="warn">
+    **Tenant isolation.** Vectorize indexes are account-global and shared by every shard. In a multi-tenant / sharded app you **must** scope writes and queries
+    with a `namespace` (the shard/tenant key) — without it, one tenant's vectors are queryable by another (ids and scores leak existence and semantic similarity
+    even when no metadata is indexed). The adapter emits a one-time-per-index dev warning on any namespace-less sync. A genuinely single-tenant app suppresses
+    it with `allowSharedNamespace: true` on the sync hook.
+</Callout>
+
+## `ctx.vectors`
+
+The function context exposes the bridged search surface:
+
+| Method                    | Returns                      | Use                                                   |
+| ------------------------- | ---------------------------- | ----------------------------------------------------- |
+| `query(index, input)`     | `{ count, matches }`         | Similarity search.                                    |
+| `upsert(index, input)`    | `void`                       | Manually upsert one vector.                           |
+| `upsertNow(index, input)` | `void`                       | Alias of `upsert` (writes inline; no deferred queue). |
+| `getByIds(index, ids)`    | `{ id, values, metadata }[]` | Fetch stored vectors by id.                           |
+| `deleteByIds(index, ids)` | `void`                       | Remove vectors by id.                                 |
+
+### Similarity search
+
+`query` takes either a precomputed `vector` or an `input` plus an `embed`
+function to embed it. `topK` is capped at 100 — but at 20 when you also ask for
+full metadata (`returnMetadata: "all"`), which Vectorize limits separately.
+`filter` and `namespace` scope the search.
+
+```ts
+// lunora/searchDocs.ts
+import { query, v } from "@/lunora/_generated/server";
+import { embed } from "../app/embed";
+
+export const searchDocs = query.input({ q: v.string(), workspaceId: v.id("workspaces") }).query(async ({ ctx, args: { q, workspaceId } }) => {
+    const { matches } = await ctx.vectors.query("docs-body", {
+        input: q,
+        embed,
+        topK: 10,
+        namespace: workspaceId,
+        filter: { workspaceId },
+    });
+
+    return matches.map((m) => ({ id: m.id, score: m.score, ...m.metadata }));
+});
+```
+
+Each match has `id`, `score`, and (by default) the index's indexed `metadata`.
+The query input accepts:
+
+| Field            | Type                                          | Notes                                                                 |
+| ---------------- | --------------------------------------------- | --------------------------------------------------------------------- |
+| `vector`         | `number[]`                                    | A precomputed query vector.                                           |
+| `input`          | `string`                                      | Text to embed via `embed` (when `vector` is omitted).                 |
+| `embed`          | `(input: string) => number[] \| Promise<...>` | Embedder for `input`.                                                 |
+| `topK`           | `number`                                      | Number of matches (1–100; 1–20 with `returnMetadata: "all"`).         |
+| `filter`         | `Record<string, unknown>`                     | Metadata filter.                                                      |
+| `namespace`      | `string`                                      | Scope to a namespace (tenant/shard key).                              |
+| `returnMetadata` | `"none" \| "indexed" \| "all"`                | How much stored metadata each match carries. Defaults to `"indexed"`. |
+
+You must pass either `vector` or both `input` and `embed`.
+
+## Binding & config wiring
+
+Each declared index needs a matching `vectorize` binding in `wrangler.jsonc`,
+where `index_name` equals the index name from your schema. `@lunora/vite`
+validates this — a declared index with no matching binding fails the build.
+
+```jsonc
+// wrangler.jsonc
+{
+    "vectorize": [{ "binding": "DOCS_BODY", "index_name": "docs-body" }],
+}
+```
+
+When a schema declares vector indexes, the generated `createShardDO(config)`
+factory accepts a `vectors` thunk mapping each index name to its Vectorize
+binding. Wire it from the worker entry:
+
+```ts
+import { createShardDO } from "./_generated/server";
+
+export const ShardDO = createShardDO({
+    vectors: (env) => ({
+        "docs-body": env.DOCS_BODY,
+    }),
+});
+```
+
+Omit the thunk and `ctx.vectors` throws a descriptive "no vectors configured"
+error on first use.
+
+## RAG with `@lunora/ai`
+
+Pair the adapter with [`@lunora/ai`](/docs/packages/ai) for embeddings: embed with
+the AI SDK, store and search with `ctx.vectors`. Embedding is a non-deterministic
+external call, so it lives on **action** contexts.
+
+```ts
+import { action, v } from "@/lunora/_generated/server";
+import { embed as aiEmbed } from "@lunora/ai";
+
+export const semanticSearch = action.input({ q: v.string(), workspaceId: v.id("workspaces") }).action(async ({ ctx, args: { q, workspaceId } }) => {
+    const { embedding } = await aiEmbed({
+        model: ctx.ai.embeddingModel("@cf/baai/bge-base-en-v1.5"),
+        value: q,
+    });
+
+    const { matches } = await ctx.vectors.query("docs-body", {
+        vector: embedding,
+        topK: 5,
+        namespace: workspaceId,
+    });
+
+    return matches.map((m) => m.id);
+});
+```
+
+## Building the adapter directly
+
+Outside a generated context — in a Durable Object, queue, or scheduled handler —
+build the search surface from raw bindings. `createVectors` returns the full
+`LunoraVectors` client (including `upsertMany` and `describe`);
+`createContextVectors` bridges it to the `ctx.vectors` shape; `createVectorSyncHook`
+builds the write-sync hook from your schema.
+
+```ts
+import { createContextVectors, createVectors } from "@lunora/vectors";
+
+const lunora = createVectors({ indexes: { "docs-body": env.DOCS_BODY } });
+const vectors = createContextVectors(lunora);
+```
+
+## Studio
+
+The [Lunora Studio](/docs/packages/studio#database) has a **Vectors** panel under
+Database to browse Vectorize indexes and run similarity searches against them.
+
+## See also
+
+- [@lunora/ai](/docs/packages/ai) — embeddings and RAG.
+- [Lunora Studio](/docs/packages/studio#database) — the Vectors panel.
+- [@lunora/server](/docs/packages/server)

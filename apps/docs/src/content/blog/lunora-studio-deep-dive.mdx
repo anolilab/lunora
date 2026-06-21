@@ -1,0 +1,32 @@
+---
+title: "Lunora Studio: your backend, in the open"
+description: A local admin UI for your schema, data, SQL, logs, and time-travel — running against your live edge database.
+publishedAt: 2026-06-12
+author: Daniel Bannert
+category: Updates
+image: /og-default.jpg
+tags:
+    - studio
+    - dx
+    - announcement
+---
+
+Every Lunora app ships with **Studio** — a local admin UI for your schema, data, SQL, logs, and
+time-travel, running against your live edge database. No extra setup, no separate dashboard to host.
+
+## See your data as it changes
+
+Studio subscribes to the same live queries your app does, so the data view updates in realtime as
+mutations land. It is the fastest way to understand what your backend is actually doing.
+
+## Rewind any shard
+
+Because every shard is a SQLite database with point-in-time history, Studio lets you rewind to any
+moment in the last 30 days and inspect — or restore — past state.
+
+## Advisors built in
+
+Schema and query lints surface unindexed foreign keys, duplicate indexes, and other footguns before
+they reach production, right inside the Advisors table.
+
+Studio is included with every project — run `lunora dev` and open it alongside your app.

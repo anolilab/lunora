@@ -1,0 +1,193 @@
+---
+title: "@lunora/react"
+description: React 18+/19 hooks built on @lunora/client, with React Server Component data loading.
+---
+
+`@lunora/react` ships the official React bindings. It's a thin layer over
+`@lunora/client` that maps the cache to `useSyncExternalStore`, so
+concurrent React works correctly out of the box. The hooks live in the package
+root (a client boundary); server-side data loading for React Server Components /
+the Next.js App Router lives in [`@lunora/react/server`](#server-components-nextjs-app-router).
+
+```tsx
+import { LunoraClient } from "lunorash/client";
+import { LunoraProvider, useMutation, useQuery } from "@lunora/react";
+import { api } from "@/lunora/_generated/api";
+
+const client = new LunoraClient({ url: import.meta.env.VITE_LUNORA_URL });
+
+const Root = () => (
+    <LunoraProvider client={client}>
+        <Chat channelId="general" />
+    </LunoraProvider>
+);
+```
+
+## `<LunoraProvider client={...}>`
+
+Mounts the shared `LunoraClient` for the subtree. Required at the root.
+
+## `useQuery(fn, args, options?)`
+
+Subscribes to a query. Returns `T | undefined` (undefined until the first
+response). Pass `"skip"` for `args` to short-circuit (no network call).
+Multiple `useQuery` calls with identical args share a single underlying
+network call via the in-memory cache.
+
+```tsx
+const messages = useQuery(api.messages.list, { channelId });
+const profile = useQuery(api.users.me, signedIn ? {} : "skip");
+```
+
+## `useMutation(fn)`
+
+Returns a callable with a `.pending` property:
+
+```tsx
+const send = useMutation(api.messages.send);
+await send({ channelId, text }, { optimistic: (current) => [...(current ?? []), draft] });
+```
+
+## `useSubscription(fn, args)`
+
+Lower-level. Surfaces `{ data, error }` so you can render error states
+without a separate `useState`.
+
+## `useAuth()`
+
+Returns `{ user, token, setToken(next) }`. Call `setToken(jwt)` after a
+sign-in flow; subsequent RPC calls carry the token automatically.
+
+## Server Components (Next.js App Router)
+
+Every hook in `@lunora/react` calls `useState`/`useEffect` and owns a live
+WebSocket — they're **client-only**, and each module declares `"use client"`.
+Use them inside your own Client Components (the examples below mark
+`"use client"` on the files that call them).
+
+Server-side data loading lives in a separate, server-safe entry,
+**`@lunora/react/server`**. It opens no socket and touches no browser globals,
+so it's safe to call from a Server Component. There are two ways to render with
+data already present on the first paint.
+
+### 1. Prefetch + hydrate the TanStack cache
+
+Run the query on the server, `dehydrate` the `QueryClient`, and wrap the client
+subtree in `HydrationBoundary`. The client `useQuery` reads the value out of the
+hydrated cache (same key, no loading flash) and a live subscription attaches on
+mount.
+
+```tsx title="app/posts/page.tsx (Server Component)"
+import { createServerClient, prefetchQuery, dehydrate, HydrationBoundary } from "@lunora/react/server";
+import { QueryClient } from "@tanstack/react-query";
+import { cookies } from "next/headers";
+import { api } from "@/lunora/_generated/api";
+import { PostList } from "./post-list";
+
+export default async function PostsPage() {
+    const client = createServerClient({
+        url: process.env.LUNORA_URL!,
+        token: (await cookies()).get("session")?.value,
+    });
+
+    const queryClient = new QueryClient();
+    await prefetchQuery(queryClient, client, api.posts.list, {});
+
+    return (
+        <HydrationBoundary state={dehydrate(queryClient)}>
+            <PostList />
+        </HydrationBoundary>
+    );
+}
+```
+
+```tsx title="app/posts/post-list.tsx (Client Component)"
+"use client";
+
+import { useQuery } from "@lunora/react";
+import { api } from "@/lunora/_generated/api";
+
+export function PostList() {
+    // Reads the server-prefetched value from cache on the first render, then
+    // updates live as the WS subscription pushes changes.
+    const posts = useQuery(api.posts.list, {});
+
+    return (
+        <ul>
+            {posts?.map((p) => (
+                <li key={p._id}>{p.title}</li>
+            ))}
+        </ul>
+    );
+}
+```
+
+Drop the `await` before `prefetchQuery` for fire-and-forget prefetch when you
+don't need the data on the very first paint.
+
+### 2. Preload an explicit token
+
+When you'd rather thread one resolved value to one component without a
+`HydrationBoundary`, `preloadQuery` returns a serializable token you pass as a
+prop. The client reads it with `usePreloadedQuery`.
+
+```tsx title="Server Component"
+import { createServerClient, preloadQuery } from "@lunora/react/server";
+import { api } from "@/lunora/_generated/api";
+import { Post } from "./post";
+
+export default async function PostPage({ params }: { params: Promise<{ id: string }> }) {
+    const { id } = await params;
+    const client = createServerClient({ url: process.env.LUNORA_URL! });
+    const preloaded = await preloadQuery(client, api.posts.get, { id });
+
+    return <Post preloaded={preloaded} />;
+}
+```
+
+```tsx title="Client Component"
+"use client";
+
+import { usePreloadedQuery } from "@lunora/react";
+import type { Preloaded } from "@lunora/react/server";
+
+export function Post({ preloaded }: { preloaded: Preloaded<{ title: string }> }) {
+    const post = usePreloadedQuery(preloaded); // server value first, then live
+    return <h1>{post.title}</h1>;
+}
+```
+
+### Providers
+
+Mount `LunoraProvider` once in a Client Component near the root. It creates (or
+reuses) the TanStack `QueryClient` that `HydrationBoundary` hydrates into.
+
+```tsx title="app/providers.tsx"
+"use client";
+
+import { LunoraClient } from "lunorash/client";
+import { LunoraProvider } from "@lunora/react";
+import { useState } from "react";
+
+export function Providers({ children }: { children: React.ReactNode }) {
+    const [client] = useState(() => new LunoraClient({ url: process.env.NEXT_PUBLIC_LUNORA_URL! }));
+    return <LunoraProvider client={client}>{children}</LunoraProvider>;
+}
+```
+
+### `@lunora/react/server` reference
+
+- **`createServerClient({ url, token?, fetch? })`** — a request-scoped,
+  HTTP-only `LunoraClient`. Build one **per request** so a user's `token`
+  (and any cookies forwarded via `fetch`) never leak across requests.
+- **`prefetchQuery(queryClient, client, fn, args, { shardKey? }?)`** — runs the
+  query and seeds `queryClient` under the key the client hooks use.
+- **`preloadQuery(client, fn, args, { shardKey? }?)`** — runs the query and
+  returns a serializable `Preloaded` token for `usePreloadedQuery`.
+- **`dehydrate` / `HydrationBoundary`** — re-exported from
+  `@tanstack/react-query` for convenience.
+
+## See also
+
+- [@lunora/client](/docs/packages/client)
+- [Add-on: auth](/docs/packages/auth)

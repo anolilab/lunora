@@ -1,0 +1,4 @@
+# Golden codegen fixtures: these must byte-match the emitter's raw output, so
+# Prettier must NOT reformat them (the root .prettierignore isn't seen when
+# Prettier runs with this package as its cwd).
+__tests__/fixtures

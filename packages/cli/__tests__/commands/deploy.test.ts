@@ -1,0 +1,691 @@
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { runDeployCommand } from "../../src/commands/deploy/handler";
+import type { FetchLike } from "../../src/commands/run/handler";
+import type { Logger } from "../../src/util/logger";
+import { createRecordingSpawner } from "../../src/util/spawn";
+
+/** Run async `body` while capturing everything written to `process.stdout`. */
+const captureStdout = async (body: () => Promise<void>): Promise<string> => {
+    let captured = "";
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
+        captured += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+
+        return true;
+    });
+
+    try {
+        await body();
+    } finally {
+        spy.mockRestore();
+    }
+
+    return captured;
+};
+
+const here = dirname(fileURLToPath(import.meta.url));
+const fixtureRoot = join(here, "..", "..", "..", "codegen", "__tests__", "fixtures", "simple");
+
+const VALID_WRANGLER = `{
+    "name": "lunora-app",
+    "main": "src/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
+    },
+    "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "real-db-id-abc123" }]
+}
+`;
+
+const silentLogger = (): { errors: string[]; infos: string[]; logger: Logger; warns: string[] } => {
+    const errors: string[] = [];
+    const infos: string[] = [];
+    const warns: string[] = [];
+
+    return {
+        errors,
+        infos,
+        logger: {
+            error: (message) => errors.push(message),
+            info: (message) => infos.push(message),
+            success: () => {},
+            warn: (message) => warns.push(message),
+        },
+        warns,
+    };
+};
+
+let workdir: string;
+
+describe("lunora deploy", () => {
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "lunora-cli-deploy-"));
+        cpSync(join(fixtureRoot, "lunora"), join(workdir, "lunora"), { recursive: true });
+    });
+
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
+
+    describe("lunora deploy", () => {
+        it("runs codegen, validates wrangler, then spawns `pnpm exec wrangler deploy`", async () => {
+            expect.assertions(5);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, logger, spawner });
+
+            expect(result.code).toBe(0);
+            expect(result.validation.problems).toEqual([]);
+            expect(calls).toHaveLength(1);
+
+            const args = calls[0]?.descriptor.args.join(" ") ?? "";
+
+            expect(args).toContain("wrangler");
+            expect(args).toContain("deploy");
+        });
+
+        it("--preview uploads a version (wrangler versions upload), not a live deploy", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, logger, preview: true, spawner });
+
+            expect(result.code).toBe(0);
+
+            const args = calls[0]?.descriptor.args.join(" ") ?? "";
+
+            expect(args).toContain("wrangler versions upload");
+            expect(args).not.toContain("wrangler deploy");
+        });
+
+        it("skipCodegen (the --prebuilt path) deploys without running codegen", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            // Remove the schema so codegen would fail if it ran — skipCodegen must bypass it.
+            rmSync(join(workdir, "lunora"), { force: true, recursive: true });
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, logger, skipCodegen: true, spawner });
+
+            expect(result.code).toBe(0);
+            expect(calls).toHaveLength(1);
+        });
+
+        it("blocks the deploy when containers build from a Dockerfile but Docker is unavailable", async () => {
+            expect.assertions(3);
+
+            const wranglerWithContainer = VALID_WRANGLER.replace(
+                '"durable_objects":',
+                `"containers": [{ "class_name": "TranscoderContainer", "image": "./containers/transcoder/Dockerfile", "max_instances": 2 }],
+    "durable_objects":`,
+            );
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWithContainer, "utf8");
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { errors, logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, dockerAvailable: () => false, logger, spawner });
+
+            expect(result.code).toBe(1);
+            expect(calls).toHaveLength(0);
+            expect(errors.join(" ")).toContain("no Docker-compatible engine");
+        });
+
+        it("does not require Docker when the container image is a registry reference", async () => {
+            expect.assertions(1);
+
+            const wranglerWithRegistryContainer = VALID_WRANGLER.replace(
+                '"durable_objects":',
+                `"observability": { "enabled": true },
+    "containers": [{ "class_name": "TranscoderContainer", "image": "docker.io/acme/transcoder:1.4", "max_instances": 2 }],
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "TranscoderContainer"] }],
+    "durable_objects": {
+        "bindings": [
+            { "name": "SHARD", "class_name": "ShardDO" },
+            { "name": "CONTAINER_TRANSCODER", "class_name": "TranscoderContainer" }
+        ]
+    },
+    "unused_durable_objects":`,
+            );
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWithRegistryContainer, "utf8");
+
+            const { spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, dockerAvailable: () => false, logger, spawner });
+
+            expect(result.code).toBe(0);
+        });
+
+        it("builds + pushes a Railpack { build } container before wrangler deploy", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            writeFileSync(
+                join(workdir, "lunora", "containers.ts"),
+                `import { defineContainer } from "@lunora/container";
+export const worker = defineContainer({ image: { build: "./services/worker" } });
+`,
+                "utf8",
+            );
+            mkdirSync(join(workdir, "services", "worker"), { recursive: true });
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, dockerAvailable: () => true, logger, railpackAvailable: () => true, spawner });
+
+            expect(result.code).toBe(0);
+            // railpack build → wrangler containers push → wrangler deploy.
+            expect(calls.map((call) => call.descriptor.command)).toStrictEqual(["railpack", "pnpm", "pnpm"]);
+            expect(calls[0]?.descriptor.args).toStrictEqual(["build", "./services/worker", "--name", "lunora-worker:build"]);
+        });
+
+        it("blocks the deploy when a { build } container needs Railpack but it is unavailable", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            writeFileSync(
+                join(workdir, "lunora", "containers.ts"),
+                `import { defineContainer } from "@lunora/container";
+export const worker = defineContainer({ image: { build: "./services/worker" } });
+`,
+                "utf8",
+            );
+            mkdirSync(join(workdir, "services", "worker"), { recursive: true });
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, dockerAvailable: () => true, logger, railpackAvailable: () => false, spawner });
+
+            expect(result.code).toBe(1);
+            expect(calls).toHaveLength(0);
+        });
+
+        it("blocks deploy when a Railpack build directory is missing", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            writeFileSync(
+                join(workdir, "lunora", "containers.ts"),
+                `import { defineContainer } from "@lunora/container";
+export const worker = defineContainer({ image: { build: "./services/worker" } });
+`,
+                "utf8",
+            );
+            // NOTE: ./services/worker is deliberately NOT created.
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { errors, logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, dockerAvailable: () => true, logger, railpackAvailable: () => true, spawner });
+
+            expect(result.code).toBe(1);
+            expect(calls).toHaveLength(0);
+            expect(errors.join(" ")).toContain("build directory");
+        });
+
+        it("blocks deploy when a container's Dockerfile is missing", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            writeFileSync(
+                join(workdir, "lunora", "containers.ts"),
+                `import { defineContainer } from "@lunora/container";
+export const transcoder = defineContainer({ image: "./containers/transcoder" });
+`,
+                "utf8",
+            );
+            // NOTE: ./containers/transcoder/Dockerfile is deliberately NOT created.
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { errors, logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, dockerAvailable: () => true, logger, spawner });
+
+            expect(result.code).toBe(1);
+            expect(calls).toHaveLength(0);
+            expect(errors.join(" ")).toContain("Dockerfile");
+        });
+
+        it("bundles src/worker.ts as the deploy entry for class-B composition when present", async () => {
+            expect.assertions(3);
+
+            // Class-B (SvelteKit/Astro): the framework's CF adapter owns wrangler
+            // `main`, so the composed worker lives at src/worker.ts and must be
+            // passed positionally to override `main`.
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            mkdirSync(join(workdir, "src"), { recursive: true });
+            writeFileSync(join(workdir, "src", "worker.ts"), "export default { fetch() {} };\nexport const ShardDO = class {};", "utf8");
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { infos, logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, logger, spawner });
+
+            expect(result.code).toBe(0);
+
+            const args = calls[0]?.descriptor.args ?? [];
+
+            expect(args).toContain("src/worker.ts");
+            expect(infos.some((line) => line.includes("class-B composition"))).toBe(true);
+        });
+
+        it("does not add a positional entry when src/worker.ts is absent (class-A/C)", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, logger, spawner });
+
+            expect(result.code).toBe(0);
+            // exec wrangler deploy — three args, no positional entry path
+            expect(calls[0]?.descriptor.args).toStrictEqual(["exec", "wrangler", "deploy"]);
+        });
+
+        it("forwards --env to wrangler", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+
+            await runDeployCommand({ cwd: workdir, env: "production", logger, spawner });
+
+            const args = calls[0]?.descriptor.args ?? [];
+
+            expect(args).toContain("--env");
+            expect(args).toContain("production");
+        });
+
+        it("forwards --temporary to wrangler", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+
+            await runDeployCommand({ cwd: workdir, logger, spawner, temporary: true });
+
+            const args = calls[0]?.descriptor.args ?? [];
+
+            expect(args).toContain("--temporary");
+        });
+
+        it("omits --temporary by default", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+
+            await runDeployCommand({ cwd: workdir, logger, spawner });
+
+            const args = calls[0]?.descriptor.args ?? [];
+
+            expect(args).not.toContain("--temporary");
+        });
+
+        it("auto-provisions missing bindings from inference, then blocks on D1 placeholder", async () => {
+            expect.assertions(5);
+
+            // A worker entry that exports ShardDO triggers binding inference.
+            // The simple fixture has .global() tables so reconcile will write the
+            // DB binding with the placeholder database_id — which must then BLOCK
+            // the deploy with a clear error.
+            mkdirSync(join(workdir, "src", "server"), { recursive: true });
+            writeFileSync(join(workdir, "src", "server", "index.ts"), "export const ShardDO = class {};\nexport default { fetch() {} };", "utf8");
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
+    "name": "x",
+    "main": "src/server/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"]
+}`,
+                "utf8",
+            );
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { errors, logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, logger, spawner });
+
+            // Bindings were written into wrangler.jsonc by reconcile
+            const written = readFileSync(join(workdir, "wrangler.jsonc"), "utf8");
+
+            expect(written).toContain("ShardDO");
+            expect(written).toContain('"DB"');
+
+            // But deploy is blocked on the placeholder — wrangler is never spawned
+            expect(result.code).toBe(1);
+            expect(calls).toHaveLength(0);
+            expect(errors.some((line) => line.includes("placeholder database_id") || line.includes("wrangler d1 create"))).toBe(true);
+        });
+
+        it("proceeds when D1 binding has a real database_id (not the placeholder)", async () => {
+            expect.assertions(3);
+
+            // Wrangler already has all bindings, including a real D1 database_id.
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, logger, spawner });
+
+            expect(result.code).toBe(0);
+            expect(calls).toHaveLength(1);
+            expect(result.error).toBeUndefined();
+        });
+
+        it("aborts when wrangler has a problem inference cannot fix", async () => {
+            expect.assertions(3);
+
+            // A stale compatibility_date is outside what reconcile touches, so
+            // even after binding provisioning the validator must still abort.
+            // We pre-write the SHARD binding and a real DB id so the D1
+            // placeholder check is not triggered before the validator runs.
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
+    "name": "x",
+    "main": "src/index.ts",
+    "compatibility_date": "2020-01-01",
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
+    },
+    "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "real-id-xyz" }]
+}`,
+                "utf8",
+            );
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { errors, logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, logger, spawner });
+
+            expect(result.code).toBe(1);
+            expect(calls).toHaveLength(0);
+            expect(errors.some((line) => line.includes("compatibility_date"))).toBe(true);
+        });
+
+        it("blocks deploy when D1 binding has placeholder database_id", async () => {
+            expect.assertions(4);
+
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
+    "name": "lunora-app",
+    "main": "src/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
+    },
+    "d1_databases": [{ "binding": "DB", "database_name": "lunora-app", "database_id": "<replace-with-d1-create-id>" }]
+}`,
+                "utf8",
+            );
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { errors, logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, logger, spawner });
+
+            expect(result.code).toBe(1);
+            expect(calls).toHaveLength(0);
+            expect(errors.some((line) => line.includes("placeholder database_id"))).toBe(true);
+            expect(errors.some((line) => line.includes("wrangler d1 create"))).toBe(true);
+        });
+
+        it("does not run migrations when --migrate is not set", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, logger, spawner });
+
+            // Only one spawn call (wrangler deploy); no migration RPC calls
+            expect(result.code).toBe(0);
+            expect(calls).toHaveLength(1);
+        });
+
+        it("skips migration phase when deploy fails (non-zero exit)", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+            // A spawner that simulates a failed deploy
+            const { spawner: failingSpawner } = createRecordingSpawner(1);
+            const { logger, infos } = silentLogger();
+
+            const result = await runDeployCommand({
+                cwd: workdir,
+                logger,
+                migrate: true,
+                migrateToken: "test-token",
+                migrateUrl: "https://my-worker.workers.dev",
+                migrateYes: true,
+                spawner: failingSpawner,
+            });
+
+            expect(result.code).toBe(1);
+            // No migration info messages — migration phase was skipped
+            expect(infos.some((line) => line.includes("--migrate"))).toBe(false);
+        });
+
+        it("--migrate: blocks before deploy when production migration confirmation is missing", async () => {
+            expect.assertions(4);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { errors, logger } = silentLogger();
+
+            const result = await runDeployCommand({
+                cwd: workdir,
+                logger,
+                migrate: true,
+                migrateToken: "test-token",
+                migrateUrl: "https://my-worker.workers.dev",
+                spawner,
+            });
+
+            expect(result.code).toBe(1);
+            expect(result.descriptor).toBeUndefined();
+            expect(calls).toHaveLength(0);
+            expect(errors.some((line) => line.includes("--migrate-yes"))).toBe(true);
+        });
+
+        it("--migrate: blocks before deploy when the worker migration URL is missing", async () => {
+            expect.assertions(4);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { errors, logger } = silentLogger();
+
+            const result = await runDeployCommand({
+                cwd: workdir,
+                logger,
+                migrate: true,
+                migrateToken: "test-token",
+                migrateYes: true,
+                spawner,
+            });
+
+            expect(result.code).toBe(1);
+            expect(result.descriptor).toBeUndefined();
+            expect(calls).toHaveLength(0);
+            expect(errors.some((line) => line.includes("--migrate-url"))).toBe(true);
+        });
+
+        it("--migrate: runs all declared migrations after a successful deploy", async () => {
+            expect.assertions(4);
+
+            // Write a migrations.ts so discoverMigrations finds at least one id
+            const lunoraDirectory = join(workdir, "lunora");
+            const migrationsFile = join(lunoraDirectory, "migrations.ts");
+
+            writeFileSync(
+                migrationsFile,
+                `import { defineMigration } from "@lunora/server";
+
+export const backfillNames = defineMigration({
+    id: "backfill-names",
+    table: "users",
+    up: (doc) => doc,
+});
+`,
+                "utf8",
+            );
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+            const { calls, spawner } = createRecordingSpawner();
+
+            // Provide a fetch stub so runMigrateDataCommand succeeds without a
+            // real worker. The RPC endpoint returns a 200 JSON body.
+            const fetchStub: FetchLike = () =>
+                Promise.resolve({
+                    ok: true,
+                    text: () => Promise.resolve(JSON.stringify({ status: "ok" })),
+                } as Response);
+
+            const { infos, logger } = silentLogger();
+
+            const result = await runDeployCommand({
+                cwd: workdir,
+                fetchImpl: fetchStub,
+                logger,
+                migrate: true,
+                migrateToken: "test-token",
+                migrateUrl: "https://my-worker.workers.dev",
+                migrateYes: true,
+                spawner,
+            });
+
+            // Deploy succeeded
+            expect(result.code).toBe(0);
+            // wrangler deploy was spawned exactly once
+            expect(calls).toHaveLength(1);
+            // Migration log messages emitted
+            expect(infos.some((line) => line.includes("--migrate"))).toBe(true);
+            expect(infos.some((line) => line.includes("backfill-names"))).toBe(true);
+        });
+
+        describe("--format json", () => {
+            it("emits a single parseable JSON document with the structured result", async () => {
+                expect.assertions(4);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const stdout = await captureStdout(async () => {
+                    await runDeployCommand({ cwd: workdir, format: "json", logger, spawner });
+                });
+
+                const parsed = JSON.parse(stdout) as { code: number; descriptor: { args: string[] } | null; validation: { problems: unknown[] } };
+
+                expect(parsed.code).toBe(0);
+                expect(parsed).toHaveProperty("validation");
+                expect(parsed.validation.problems).toEqual([]);
+                expect(parsed.descriptor?.args).toContain("deploy");
+            });
+
+            it("routes the spawned wrangler's stdout to stderr so it can't corrupt the JSON document", async () => {
+                // Regression: `wrangler deploy` inherits stdio; without redirection
+                // its progress + deployed-URL output interleaves with the JSON on
+                // stdout and breaks `lunora deploy --format json | jq`.
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                await captureStdout(async () => {
+                    await runDeployCommand({ cwd: workdir, format: "json", logger, spawner });
+                });
+
+                expect(calls[0]?.descriptor.stdoutToStderr).toBe(true);
+
+                // Pretty mode keeps wrangler's output inherited on stdout.
+                const pretty = createRecordingSpawner();
+
+                await runDeployCommand({ cwd: workdir, logger, spawner: pretty.spawner });
+
+                expect(pretty.calls[0]?.descriptor.stdoutToStderr).toBe(false);
+            });
+
+            it("serializes the error into the JSON document when validation fails", async () => {
+                expect.assertions(2);
+
+                // No wrangler.jsonc → validation failure, deploy never spawns.
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const stdout = await captureStdout(async () => {
+                    await runDeployCommand({ cwd: workdir, format: "json", logger, spawner });
+                });
+
+                const parsed = JSON.parse(stdout) as { code: number; error?: string };
+
+                expect(parsed.code).toBe(1);
+                expect(parsed.error).toBeDefined();
+            });
+
+            it("rejects an unknown --format the same way logs does", async () => {
+                expect.assertions(5);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { errors, logger } = silentLogger();
+
+                const stdout = await captureStdout(async () => {
+                    const result = await runDeployCommand({ cwd: workdir, format: "yaml", logger, spawner });
+
+                    expect(result.code).toBe(1);
+                    expect(result.error).toBeDefined();
+                });
+
+                expect(stdout).toBe("");
+                expect(errors.some((line) => line.includes('unknown --format "yaml" — expected pretty | json'))).toBe(true);
+                expect(calls).toHaveLength(0);
+            });
+        });
+    });
+});

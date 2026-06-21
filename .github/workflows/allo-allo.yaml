@@ -1,0 +1,22 @@
+"name": "AlloAllo"
+
+"on": # yamllint disable-line rule:truthy
+    "issues":
+        "types":
+            - "opened"
+    "pull_request_target":
+        "branches":
+            - "main"
+        "types":
+            - "opened"
+            - "closed"
+
+"permissions":
+    "contents": "read"
+
+"jobs":
+    "allo-allo":
+        "uses": "anolilab/workflows/.github/workflows/allo-allo.yml@3c54b71af67bdd990513c4a17fa2fde078db7b74" # main
+        "with":
+            "target-repo": "anolilab/lunora"
+            "onboarding-lead": "prisis"

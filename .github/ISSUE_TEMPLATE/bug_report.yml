@@ -1,0 +1,143 @@
+"name": "\U0001F41E Bug report"
+"description": "Report an issue with Lunora"
+"labels": ["s: pending triage", "c: bug"]
+"body":
+    - "type": "markdown"
+      "attributes":
+          "value": |
+              Thanks for taking the time to fill out this bug report!
+
+              If you are unsure whether your problem is a bug or not, you can check the following:
+
+              - open a new [discussion](https://github.com/anolilab/lunora/discussions) and ask your question there
+              - use [StackOverflow using the tag `lunora`](https://stackoverflow.com/questions/tagged/lunora)
+
+    - "type": "checkboxes"
+      "id": "checkboxes"
+      "attributes":
+          "label": "Pre-Checks"
+          "description": "Before submitting the issue, please make sure you do the following"
+          "options":
+              - "label": "Follow our [Code of Conduct](https://github.com/anolilab/lunora/blob/main/.github/CODE_OF_CONDUCT.md)."
+                "required": true
+              - "label": "Read the [Contributing Guidelines](https://github.com/anolilab/lunora/blob/main/.github/CONTRIBUTING.md)."
+                "required": true
+              - "label": "Check that there isn't [already an issue](https://github.com/anolilab/lunora/issues) that reports the same bug to avoid creating a duplicate."
+                "required": true
+              - "label": "Make sure this is a Lunora issue and not a problem with Cloudflare Workers, Wrangler, or another upstream dependency."
+                "required": true
+              - "label": "Check that this is a concrete bug. For Q&A open a [GitHub Discussion](https://github.com/anolilab/lunora/discussions)."
+                "required": true
+              - "label": "The provided reproduction is a [minimal reproducible example](https://stackoverflow.com/help/minimal-reproducible-example) of the bug."
+                "required": true
+              - "label": "I am willing to provide a PR."
+
+    - "type": "textarea"
+      "id": "bug-description"
+      "attributes":
+          "label": "Describe the bug"
+          "description": "A clear and concise description of what the bug is."
+          "placeholder": "I am doing ... What I expect is ... What actually happens is ..."
+      "validations":
+          "required": true
+
+    - "type": "textarea"
+      "id": "reproduction"
+      "attributes":
+          "label": "Minimal reproduction"
+          "description": |
+              A link to a git repository, gist, or `apps/playground` branch that reproduces the issue. [What's a minimum reproduction?](https://jmcdo29.github.io/wtf-is-a-minimum-reproduction)
+              Alternatively, paste the code directly here with [markdown code blocks](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/creating-and-highlighting-code-blocks).
+          "placeholder": "https://github.com/... or ``` code ```"
+
+    - "type": "dropdown"
+      "id": "affected-package"
+      "attributes":
+          "label": "Affected package(s)"
+          "description": "Which Lunora package(s) does this bug affect?"
+          "multiple": true
+          "options":
+              - "@lunora/cli"
+              - "@lunora/codegen"
+              - "@lunora/config"
+              - "@lunora/runtime"
+              - "@lunora/server"
+              - "@lunora/client"
+              - "@lunora/react"
+              - "@lunora/d1"
+              - "@lunora/do"
+              - "@lunora/storage"
+              - "@lunora/values"
+              - "@lunora/auth"
+              - "@lunora/mail"
+              - "@lunora/scheduler"
+              - "@lunora/vite"
+              - "apps/playground"
+              - "apps/docs"
+              - "Unsure"
+      "validations":
+          "required": true
+
+    - "type": "textarea"
+      "id": "additional-context"
+      "attributes":
+          "label": "Additional context"
+          "description": |
+              Anything else relevant? Worker logs, wrangler output, browser console errors, etc.
+              **Tip:** You can attach images, recordings, or log files by clicking this area to highlight it and then dragging files in.
+
+    - "type": "textarea"
+      "id": "environment-info"
+      "attributes":
+          "label": "Environment info"
+          "description": "Please run the commands below and paste the output. Helps us reproduce on the right runtime."
+          "render": "shell"
+          "placeholder": |
+              # Node version
+              $ node --version
+              v22.x.x
+
+              # pnpm version
+              $ pnpm --version
+              10.32.1
+
+              # Wrangler version
+              $ npx wrangler --version
+              wrangler 4.x.x
+
+              # OS
+              $ uname -a
+
+              # Lunora package versions (from the affected workspace)
+              $ pnpm ls --depth 0 | grep "@lunora/"
+      "validations":
+          "required": true
+
+    - "type": "dropdown"
+      "id": "runtime"
+      "attributes":
+          "label": "Where does the bug occur?"
+          "multiple": true
+          "options":
+              - "Cloudflare Workers (production)"
+              - "Wrangler dev (local)"
+              - "Miniflare / workerd (vitest pool)"
+              - "Vite dev server"
+              - "Build / codegen step"
+              - "CLI command"
+      "validations":
+          "required": true
+
+    - "type": "dropdown"
+      "id": "package-manager"
+      "attributes":
+          "label": "Used package manager"
+          "description": "Lunora officially supports pnpm; other managers are best-effort."
+          "options":
+              - "pnpm"
+              - "npm"
+              - "yarn"
+              - "bun"
+              - "other"
+      "validations":
+          "required": true

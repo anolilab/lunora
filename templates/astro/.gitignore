@@ -1,0 +1,8 @@
+node_modules
+.astro
+dist
+.output
+.wrangler
+.lunora/
+.lunora-cache
+lunora/_generated

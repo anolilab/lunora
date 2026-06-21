@@ -1,0 +1,147 @@
+import type { TableDefinition } from "@lunora/server";
+import { defineTable } from "@lunora/server";
+import type { ColumnValidator, Validator } from "@lunora/values";
+import { v } from "@lunora/values";
+import { getAuthTables } from "better-auth/db";
+
+import type { LunoraAuthOptions } from "./create-auth";
+
+/**
+ * The better-auth field-attribute shape we read, derived from `getAuthTables`'s
+ * own return type rather than hand-mirrored — so if better-auth renames a field
+ * we depend on (`references.model`, `type`, …) this module fails to compile
+ * instead of silently mis-mapping every column.
+ */
+type AuthFieldAttribute = ReturnType<typeof getAuthTables>[string]["fields"][string];
+
+/** The validator for a field's `type`, before `nullable`/`unique` modifiers. */
+const baseValidator = (attribute: AuthFieldAttribute): Validator => {
+    // A foreign-key field is typed as the referenced table's id regardless of
+    // its raw `string` storage type.
+    if (attribute.references) {
+        return v.id(attribute.references.model);
+    }
+
+    const { type } = attribute;
+
+    // A `type` that is an array of string literals is a better-auth enum; Lunora
+    // has no literal validator, so it widens to `string` (the stored type).
+    if (Array.isArray(type)) {
+        return v.string();
+    }
+
+    switch (type) {
+        case "boolean": {
+            return v.boolean();
+        }
+        case "date": {
+            return v.date();
+        }
+        case "number": {
+            return v.number();
+        }
+        case "number[]": {
+            return v.array(v.number());
+        }
+        case "string": {
+            return v.string();
+        }
+        case "string[]": {
+            return v.array(v.string());
+        }
+        // "json" and anything unrecognised: keep the row shape permissive rather
+        // than fail schema generation on a plugin's exotic column type.
+        default: {
+            return v.any();
+        }
+    }
+};
+
+/**
+ * Map one better-auth field attribute to a Lunora validator. `required: false`
+ * becomes `.nullable()` (the column is optional/absent), `unique` becomes
+ * `.unique()`, and a `references` to another model becomes a typed `v.id(model)`
+ * so the foreign key is type-checked end-to-end. Defaults are intentionally
+ * **not** mapped to `.default()`: better-auth fills them in its own write layer
+ * (its `defaultValue` is documented as not a DB-level default), so mirroring
+ * them would double up.
+ */
+const fieldValidator = (attribute: AuthFieldAttribute): Validator => {
+    // The `v.*` factories all return `ColumnValidator`; the cast recovers the
+    // chainable modifier surface (`.nullable()`/`.unique()`) erased by typing
+    // `baseValidator` to the common `Validator` so its switch arms unify.
+    let validator = baseValidator(attribute) as ColumnValidator<unknown, unknown>;
+
+    if (attribute.required === false) {
+        validator = validator.nullable();
+    }
+
+    if (attribute.unique === true) {
+        validator = validator.unique();
+    }
+
+    return validator;
+};
+
+/**
+ * Derive Lunora table definitions from a better-auth config — the bridge that
+ * makes the **full** better-auth plugin ecosystem first-class Lunora data.
+ *
+ * better-auth's own `getAuthTables(options)` already merges every configured
+ * plugin's `schema` into one table map (core `user`/`session`/`account`/
+ * `verification`, plus whatever the plugins on `options.plugins` add —
+ * `organization`/`member`/`invitation`/`team`/`teamMember` from the
+ * organization plugin, `role`/`banned`/… columns from admin, `passkey`,
+ * `twoFactor`, `jwks`, …). This walks that map and emits an equivalent
+ * `defineTable` for each, so adding a plugin to `options.plugins` automatically
+ * surfaces its tables in the Lunora schema — no hand-written table definitions
+ * to keep in sync.
+ *
+ * Spread the result into `defineSchema` alongside your app tables (the keys are
+ * better-auth's real table names — `user`, `session`, … — left **unprefixed**
+ * because better-auth's adapter addresses them by exactly those names). Because
+ * the names are unprefixed, do **not** declare an app table that reuses one of
+ * better-auth's reserved names in the same `defineSchema` — JS spread order
+ * would let the later key win silently (unlike the plugin-extension path, which
+ * throws on collision):
+ *
+ * ```ts
+ * import { authTables } from "@lunora/auth";
+ * const authOptions = { emailAndPassword: { enabled: true }, plugins: [organization(), admin()] };
+ * export const schema = defineSchema({
+ *     ...authTables(authOptions),
+ *     todos: defineTable({ title: v.string() }),
+ * });
+ * ```
+ *
+ * Scope: this emits the table **shapes** (columns + types + nullability +
+ * uniqueness + FK ids). It deliberately does not carry better-auth's
+ * `defaultValue`/`onUpdate` (filled by better-auth's own write layer), `index`
+ * hints, or `bigint` precision (`bigint` fields map to `v.number()`). Those only
+ * matter once better-auth's writes are routed through Lunora's ORM — a separate
+ * adapter follow-up; today the auth rows are still written by better-auth's D1
+ * adapter and these tables make them typed + queryable via `ctx.db`.
+ */
+const authTables = (options: LunoraAuthOptions): Record<string, TableDefinition> => {
+    const tables = getAuthTables(options);
+    const schema: Record<string, TableDefinition> = {};
+
+    for (const table of Object.values(tables)) {
+        const shape: Record<string, Validator> = {};
+
+        for (const [fieldKey, attribute] of Object.entries(table.fields)) {
+            // better-auth lets a field override its stored column via `fieldName`;
+            // the adapter reads/writes that name, so the Lunora column must match.
+            shape[attribute.fieldName ?? fieldKey] = fieldValidator(attribute);
+        }
+
+        // better-auth owns these rows — they're written by its adapter, never by
+        // a hand-written `ctx.db.insert(...)`. Mark them externally-managed so the
+        // advisor's `table_without_insert` lint doesn't flag every auth table.
+        schema[table.modelName] = defineTable(shape).externallyManaged();
+    }
+
+    return schema;
+};
+
+export default authTables;

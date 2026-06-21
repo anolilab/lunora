@@ -1,0 +1,172 @@
+---
+title: Authentication
+description: How ctx.auth threads the signed-in user through queries, mutations, and actions — and feeds row-level security.
+---
+
+Authentication in Lunora is two halves that meet at `ctx.auth`. On the server,
+[`@lunora/auth`](/docs/packages/auth) resolves the inbound session and stamps a
+verified identity onto every function context. In your functions you read that
+identity off `ctx.auth` (the same shape inside a `query`, a `mutation`, and an
+`action`) and use it to authorize work. Nothing else in a handler needs to know
+_how_ the caller proved who they are.
+
+```ts
+import { mutation, v } from "@/lunora/_generated/server";
+
+export const send = mutation.input({ channelId: v.id("channels"), text: v.string() }).mutation(async ({ ctx, args }) => {
+    if (!ctx.auth.userId) throw new Error("must be signed in");
+    await ctx.db.insert("messages", { ...args, userId: ctx.auth.userId });
+});
+```
+
+## `ctx.auth` inside functions
+
+Every function context (`QueryCtx`, `MutationCtx`, and `ActionCtx`) carries an
+`auth` handle with the resolved caller:
+
+- `ctx.auth.userId` — the verified user id, or `null` when the request is
+  anonymous. This is the value to branch on for "is someone signed in?".
+- `ctx.auth.getIdentity()` — resolves the raw identity claims (the better-auth
+  session payload) as a record, or `null` when unauthenticated. Reach for it when
+  you need more than the id (email, name, roles, custom claims).
+
+```ts
+import { query } from "@/lunora/_generated/server";
+
+export const me = query.query(async ({ ctx }) => {
+    if (!ctx.auth.userId) return null;
+    const identity = await ctx.auth.getIdentity();
+    return { id: ctx.auth.userId, email: identity?.email };
+});
+```
+
+The identity is **server-resolved and trusted**; it is not a value the client
+hands you in `args`. On an HTTP call it comes from the session the request
+carries. On a live subscription it is the identity stamped at the WebSocket
+upgrade and replayed on every re-run, so a long-lived socket can never drift to a
+different user (see [real-time](/docs/concepts/realtime)).
+
+## `@lunora/auth` on the server
+
+`@lunora/auth` is built on [better-auth](https://better-auth.com): `createAuth`
+configures a better-auth instance and Lunora forwards requests to it. Out of the
+box that gives you:
+
+- **Email / password** — PBKDF2-SHA-256 hashing that runs in WebCrypto, no Node
+  polyfills.
+- **OAuth** — GitHub and Google social providers (real code → token → userinfo
+  exchanges, with `id_token` signatures verified against the provider's JWKS),
+  plus any other provider via `genericOAuth`.
+- **Passkeys / WebAuthn, 2FA, magic-link, email-OTP, admin, organization, and
+  more** — curated better-auth plugins re-exported from
+  [`@lunora/auth/plugins`](/docs/packages/auth/plugins), so you don't chase deep
+  import paths.
+
+```ts
+// lunora/auth.ts
+import { createAuth } from "@lunora/auth";
+import { passkey } from "@lunora/auth/plugins";
+
+export const buildAuth = (env: { AUTH_SECRET: string; DB: unknown }) =>
+    createAuth({
+        database: env.DB as never,
+        emailAndPassword: { enabled: true },
+        plugins: [passkey()],
+        secret: env.AUTH_SECRET,
+    });
+```
+
+User records live in D1; session lifecycle lives in a dedicated `SessionDO`. The
+full configuration surface (providers, rate limiting, migrations, the studio
+user dashboard) is in the [package reference](/docs/packages/auth).
+
+## Routing `/api/auth/*`
+
+`handleAuthRequest(auth, request)` is the single entry point that routes every
+auth endpoint under `/api/auth/*` (sign-up, sign-in, OAuth callbacks, session
+refresh, and each enabled plugin's routes). Call it at the top of your worker's
+`fetch`; it returns a `Response` for an auth request and a falsy value otherwise,
+so you fall through to the Lunora worker for everything else:
+
+```ts
+// src/server/index.ts
+import { ensureMigrated, handleAuthRequest } from "@lunora/auth";
+
+import { buildAuth } from "../../lunora/auth";
+
+export default {
+    async fetch(request, env, ctx) {
+        const auth = buildAuth(env);
+        await ensureMigrated(auth);
+
+        const authResponse = await handleAuthRequest(auth, request);
+        if (authResponse) return authResponse;
+
+        return worker.fetch(request, env, ctx);
+    },
+};
+```
+
+Because the routes are mounted, the browser talks to better-auth directly. Your
+functions never implement sign-in; they only _read_ the resolved `ctx.auth`.
+
+## The client side
+
+On the client, identity is a token carried on the shared `LunoraClient`. After a
+sign-in flow against `/api/auth/*` you hand the resulting token to the client and
+every subsequent RPC carries it in the `Authorization` header.
+
+In React, [`@lunora/react`](/docs/packages/react)'s `useAuth` wraps this:
+
+```tsx
+import { useAuth } from "@lunora/react";
+
+function Account() {
+    const { user, token, setToken } = useAuth();
+
+    if (!user) return <SignInForm onToken={setToken} />;
+    return (
+        <div>
+            <span>{user.email}</span>
+            <button onClick={() => setToken(null)}>Sign out</button>
+        </div>
+    );
+}
+```
+
+`setToken(jwt)` makes every later query/mutation/subscription authenticate as
+that user; `setToken(null)` signs out. `user` is resolved from better-auth's
+`get-session` endpoint and refetched whenever the token changes. The value is
+shared across every mounted `useAuth`, so a sign-in in one component re-renders
+the rest. Outside React, the underlying primitives are
+`client.setAuthToken(token)` / `getAuthToken()` / `onAuthTokenChange(fn)` on the
+`LunoraClient`.
+
+## Feeding row-level security
+
+`ctx.auth` is also the input to authorization. An ad-hoc `if (!ctx.auth.userId)`
+check works for one-off guards, but the systematic answer is
+[row-level security](/docs/concepts/rls): a policy's `when(...)` receives
+`auth.userId`, `auth.roles`, and `auth.can(permission)` and returns a predicate
+that decides which rows a procedure may read or write.
+
+```ts
+import { definePolicy } from "./_generated/server";
+
+// "you only ever see messages you sent"
+definePolicy({ table: "messages", on: "read", when: ({ auth }) => ({ userId: auth.userId }) });
+```
+
+Wiring the same resolved identity into RLS keeps authorization out of every
+handler body and applies it uniformly, including over live queries, which
+re-evaluate the policy under the socket's verified identity on each push.
+
+## See also
+
+- [Queries & mutations](/docs/concepts/queries-mutations) — the `ctx` shape these
+  functions run under.
+- [Row-level security](/docs/concepts/rls) — turning `ctx.auth` into per-row
+  authorization.
+- [Real-time](/docs/concepts/realtime) — how identity is stamped on a live socket.
+- [@lunora/auth](/docs/packages/auth) — full server configuration.
+- [@lunora/auth plugins](/docs/packages/auth/plugins) — passkeys, org, admin, 2FA, and more.

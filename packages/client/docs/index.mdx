@@ -1,0 +1,114 @@
+---
+title: "@lunora/client"
+description: Framework-agnostic browser/edge client.
+---
+
+`@lunora/client` is the framework-agnostic SDK. React, Vue, Solid and Svelte
+adapters wrap it. You only depend on it directly when writing a custom
+adapter or driving Lunora from a Node/Bun script.
+
+```ts
+import { LunoraClient } from "lunorash/client";
+
+import { api } from "@/lunora/_generated/api";
+
+const client = new LunoraClient({ url: "https://app.example.workers.dev" });
+
+const messages = await client.query(api.messages.list, { channelId: "general" });
+await client.mutation(api.messages.send, { channelId: "general", text: "hi" });
+
+// Live subscription — returns an unsubscribe function.
+const unsubscribe = client.subscribe(api.messages.list, { channelId: "general" }, (next) => {
+    console.log("new value", next);
+});
+```
+
+## Wire protocol
+
+- **Queries / mutations / actions** — `POST /_lunora/rpc`, JSON body
+  `{ functionPath, args, shardKey? }`. Response: `{ result }` or `{ error }`.
+- **Subscriptions** — single multiplexed WebSocket at `/_lunora/ws`. The
+  client sends `subscribe` / `unsubscribe` / `connect` / `ack` / `stream`
+  frames; the server pushes `delta` (and `resume`) frames back, each tagged
+  with the originating subscription `id`.
+
+## Reconnect & bookmarks
+
+Reconnect uses decorrelated-jitter backoff (`reconnect` option). The client
+keeps a per-session monotonic bookmark in `BookmarkStorage` (in-memory by
+default), sent on the `x-d1-bookmark` request header of each HTTP RPC and
+refreshed from the response, giving D1 read-your-writes consistency across
+replicas. When a durable `queryCache` is configured, a re-`subscribe` also
+carries the last `sinceSeq` / `sinceEpoch` cursor so the server can resume from
+where the cache left off instead of re-sending a full snapshot.
+
+## Offline queue
+
+Mutations issued while disconnected land in `OfflineQueue` — a bounded FIFO
+(default `maxItems: 1000`, oldest rejected with `OFFLINE_QUEUE_OVERFLOW` on
+overflow). They replay in submission order once the socket reconnects. Each
+mutation carries a stable idempotency id, so a write that committed before the
+client lost the ack is deduplicated by the server on replay rather than
+applied twice. The queue lives in memory by default; for durability across a
+reload pass a `persistence` adapter:
+
+```ts
+import { LunoraClient, createIndexedDbPersistence, createAsyncStoragePersistence } from "lunorash/client";
+
+// Browser:
+new LunoraClient({ url, persistence: createIndexedDbPersistence() });
+
+// React Native / Expo (any async key/value store):
+import AsyncStorage from "@react-native-async-storage/async-storage";
+new LunoraClient({ url, persistence: createAsyncStoragePersistence({ storage: AsyncStorage }) });
+```
+
+See [Offline-first](/docs/concepts/offline-first) for the full reads + writes story.
+
+## Optimistic updates
+
+`client.mutation(fn, args, { optimistic: (current) => next })` patches the
+matching subscription's cache immediately and rolls back if the server rejects
+the call. To patch several subscribed queries from one mutation, pass
+`optimisticUpdate` instead — it receives an `OptimisticLocalStore` over the
+live cache, and every write is rolled back atomically on failure.
+
+## Auth
+
+`client.setAuthToken(jwt)` stamps an `Authorization: Bearer <jwt>` header on
+every HTTP RPC and clears the in-memory offline queue's writes from the
+previous identity. It does **not** touch the WebSocket — that token is fixed
+at upgrade time and lives in the URL. To rotate live WS auth call
+`client.setWsToken(token)`, which closes the open shard sockets so they
+reconnect with the new credential.
+
+`getCurrentUser()` resolves the signed-in user from better-auth's
+`get-session` route (returns `null` when signed out), and `onAuthTokenChange`
+fires whenever the bearer changes. The `@lunora/client/auth` subpath wraps
+these into a shared per-client identity store (single in-flight fetch, fan-out
+to every mounted hook) that the framework adapters consume.
+
+## SSR preloading
+
+`@lunora/client/ssr` runs a query once on the server and captures the result in
+a serializable `Preloaded` token. Embed the token in the rendered HTML and hand
+it to `usePreloadedQuery` on the client: the first render shows the server value
+with no loading flash, then a live subscription takes over. The SSR client only
+needs a `fetch` that can reach the worker — no in-process Durable Object access.
+
+```ts
+import { createServerClient, preloadQuery, serializePreloaded } from "lunorash/client/ssr";
+
+import { api } from "@/lunora/_generated/api";
+
+const client = createServerClient({ url: "https://app.example.workers.dev" });
+const preloaded = await preloadQuery(client, api.messages.list, { channelId: "general" });
+
+// Embed `serializePreloaded(preloaded)` in HTML; rehydrate with usePreloadedQuery on the client.
+```
+
+## See also
+
+- [@lunora/react](/docs/packages/react)
+- [Concepts: real-time](/docs/concepts/realtime)
+- [Offline-first](/docs/concepts/offline-first)

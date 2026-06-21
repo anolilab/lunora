@@ -1,0 +1,19 @@
+"name": "CodeQL"
+"on":
+    "push":
+        "branches": ["main", "alpha", "next", "beta"]
+    "pull_request":
+        "branches": ["main", "alpha", "next", "beta"]
+    "schedule":
+        - "cron": "0 0 * * 1"
+"permissions": {}
+"jobs":
+    "codeql":
+        "permissions":
+            "security-events": "write"
+            "actions": "read"
+            "contents": "read"
+        "uses": "anolilab/workflows/.github/workflows/codeql.yml@045a2d464dad0661a570c8a3c19f4b32bf9efad9" # v15.3.0+
+        "with":
+            "languages": "[\"javascript-typescript\"]"
+            "branches": "[\"main\", \"alpha\", \"next\", \"beta\"]"

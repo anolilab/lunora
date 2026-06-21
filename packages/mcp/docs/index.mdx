@@ -1,0 +1,156 @@
+---
+title: "@lunora/mcp"
+description: A Model Context Protocol server that exposes a Lunora deployment to AI agents.
+---
+
+`@lunora/mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
+server that exposes a deployed Lunora app to AI agents. It registers tools for
+introspecting a deployment (`lunora_list_functions`, `lunora_list_tables`,
+`lunora_get_function_schema`) and invoking its functions (`lunora_run_query`,
+`lunora_run_mutation`, `lunora_run_action`), each backed by
+[`@lunora/client`](/docs/packages/client) over HTTP RPC.
+
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```bash tab="pnpm"
+pnpm add @lunora/mcp
+```
+
+```bash tab="npm"
+npm install @lunora/mcp
+```
+
+```bash tab="yarn"
+yarn add @lunora/mcp
+```
+
+```bash tab="bun"
+bun add @lunora/mcp
+```
+
+</Tabs>
+
+The server is transport-agnostic. The shipped `lunora-mcp` binary speaks
+JSON-RPC over **stdio** — the transport MCP clients use when they spawn a
+process — or you can build a server with `createLunoraMcpServer` and connect
+any transport yourself.
+
+## The `lunora-mcp` binary
+
+MCP clients spawn the `lunora-mcp` binary and talk to it over stdio.
+Configuration comes from the environment, so the spawn config stays a plain
+`{ command, env }`:
+
+- `LUNORA_URL` (**required**) — base URL of the deployed Worker.
+- `LUNORA_ADMIN_TOKEN` (optional) — bearer token sent on every RPC.
+
+```jsonc
+{
+    "mcpServers": {
+        "lunora": {
+            "command": "lunora-mcp",
+            "env": {
+                "LUNORA_URL": "https://app.example.workers.dev",
+                "LUNORA_ADMIN_TOKEN": "...",
+            },
+        },
+    },
+}
+```
+
+<Callout type="info">
+    The binary exits non-zero if `LUNORA_URL` is missing or the transport fails to connect, so the spawning client surfaces a startup failure immediately.
+</Callout>
+
+## Exposed tools
+
+Each tool maps onto a method `LunoraClient` already provides. `TOOL_DEFINITIONS`
+is the registered tool surface; `callTool` dispatches a call against a client.
+
+| Tool                         | Input                                | What it does                                                                            |
+| ---------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------- |
+| `lunora_list_functions`      | _none_                               | Lists the deployment's public functions (queries, mutations, actions) with their kinds. |
+| `lunora_list_tables`         | _none_                               | Lists the deployment's `.global()` tables with their row counts.                        |
+| `lunora_get_function_schema` | `functionPath`                       | Returns one function's argument descriptors and kind, so a caller can build valid args. |
+| `lunora_run_query`           | `functionPath`, `args?`, `shardKey?` | Runs a query and returns its result. Read-only.                                         |
+| `lunora_run_mutation`        | `functionPath`, `args?`, `shardKey?` | Runs a mutation and returns its result. Writes data.                                    |
+| `lunora_run_action`          | `functionPath`, `args?`, `shardKey?` | Runs an action and returns its result. May call external services.                      |
+
+The three run-tools share one input schema:
+
+- `functionPath` (**required**, string) — a function reference, e.g.
+  `"messages:send"`.
+- `args` (object) — the arguments object passed to the function. Anything that
+  isn't a plain object (including arrays) is coerced to an empty bag.
+- `shardKey` (string) — an optional shard key when the function is
+  [`.shardBy()`](/docs/concepts/sharding)-partitioned.
+
+Results are returned as MCP `content` text — the function's return value JSON,
+or the JSON `null` literal for a void-returning mutation/action. Unknown tools
+and thrown errors come back as `isError` tool results (not rejections), so the
+calling model sees the failure as tool output.
+
+### Recommended agent flow
+
+An agent discovers the surface before it calls anything:
+
+1. `lunora_list_functions` — discover the available paths and their kinds.
+2. `lunora_get_function_schema` — fetch the argument descriptors for one path.
+3. `lunora_run_query` / `lunora_run_mutation` / `lunora_run_action` — call the
+   function with a well-formed `args` object.
+
+`lunora_get_function_schema` returns `{ path, kind, args }`, where `kind` is
+`"query"`, `"mutation"`, or `"action"` and `args` is an array of argument
+descriptors (`name`, `kind`, `optional`, and optionally `element` or `table`).
+It returns an `isError` result if the path doesn't exist.
+
+## Building a server programmatically
+
+`createLunoraMcpServer` returns a transport-agnostic MCP `Server`. Pass a `url`
+(and optional `token`), and the tools dispatch against a `LunoraClient` built
+from them:
+
+```ts
+import { createLunoraMcpServer } from "@lunora/mcp";
+
+const server = createLunoraMcpServer({ url: "https://app.example.workers.dev", token: "..." });
+
+await server.connect(myTransport);
+```
+
+For the common stdio case, `connectStdio` builds the server and connects it over
+a `StdioServerTransport` in one step:
+
+```ts
+import { connectStdio } from "@lunora/mcp";
+
+await connectStdio({ url: process.env.LUNORA_URL, token: process.env.LUNORA_ADMIN_TOKEN });
+```
+
+`LunoraMcpServerOptions` accepts either a `url` (with optional `token` and
+`fetch`) or a pre-built `client` — the latter is the injection point for tests.
+You must supply one or the other; passing neither throws.
+
+## Auth and admin gating
+
+The `token` (sourced from `LUNORA_ADMIN_TOKEN` for the binary) is set as the
+client's auth token and sent as a bearer token on **every** RPC the tools make.
+Gating is enforced by your deployment: the tools call ordinary queries,
+mutations, and actions, so whatever auth those functions require applies
+unchanged. Run-tools open no WebSocket — every call is plain HTTP RPC — so the
+server is safe to run as a short-lived stdio process.
+
+## Connecting an MCP client
+
+Any MCP client that can spawn a stdio server works. With the `mcpServers` config
+above, an agent like Claude can call `lunora_list_functions` to discover the
+deployment's surface, then `lunora_run_query` / `lunora_run_mutation` /
+`lunora_run_action` to invoke it — passing `functionPath` (e.g.
+`"messages:list"`), an `args` object, and an optional `shardKey`.
+
+## See also
+
+- [@lunora/client](/docs/packages/client) — the HTTP RPC client backing every tool
+- [@lunora/server](/docs/packages/server) — defines the queries, mutations, and actions the tools call
+- [@lunora/cli](/docs/packages/cli) — deploy the app the server introspects
+- [Sharding](/docs/concepts/sharding) — the `shardKey` the run-tools accept

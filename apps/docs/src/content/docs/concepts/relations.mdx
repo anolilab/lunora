@@ -1,0 +1,190 @@
+---
+title: Relations
+description: Modeling many-to-one and one-to-many relationships with the one / many relation descriptors, foreign-key columns and indexed reads.
+---
+
+A **relation** wires one table to another. Lunora has no join engine and no
+separate association table. A relation is a typed pointer built on a
+**foreign-key column**: a `v.id("table")` field on the holding table that
+stores the `_id` of a row in the target table. You declare relations on the
+[schema](/docs/concepts/schema) with `.relations((r) => …)`, so codegen and the
+runtime read the same descriptors that the typed client is generated against.
+
+```ts
+// lunora/schema.ts
+import { defineSchema, defineTable, v } from "lunorash/server";
+
+export default defineSchema({
+    users: defineTable({
+        email: v.string().unique(),
+        name: v.string(),
+    })
+        .global()
+        .index("by_email", ["email"], { unique: true }),
+
+    posts: defineTable({
+        authorId: v.id("users"), // the foreign-key column
+        title: v.string(),
+        body: v.string(),
+    })
+        .index("by_author", ["authorId"]) // index the FK so reads hit an index
+        .relations((r) => ({
+            author: r.one("users", { field: "authorId" }),
+        })),
+});
+```
+
+## The two descriptors
+
+`.relations((r) => …)` returns a map of named accessors. Each accessor is
+built with one of two descriptors on the `r` builder:
+
+| Descriptor            | Cardinality | Where the FK lives                                                                                 | Signature                           |
+| --------------------- | ----------- | -------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| `r.one(table, opts)`  | many-to-one | on **this** table — `opts.field` points at `table`.`references`                                    | `{ field, references?, onDelete? }` |
+| `r.many(table, opts)` | one-to-many | on the **target** table — `opts.field` is the column over there matching this table's `references` | `{ field, references? }`            |
+
+- **`field`** (required) — the name of the foreign-key column.
+- **`references`** — the target column the FK points at. Defaults to `_id`;
+  set it when the FK references a different unique column, such as a `slug`.
+- **`onDelete`** — `one` only; controls what happens to holder rows when the
+  referenced parent is deleted (`"cascade"`, `"set null"`, `"restrict"`). See
+  [Constraints](/docs/concepts/constraints#foreign-key-integrity).
+
+A `one` and a `many` are usually declared as two ends of the same link. The
+post holds the FK and names its `author`; the user names the inverse
+`posts` collection:
+
+```ts
+export default defineSchema({
+    users: defineTable({
+        email: v.string().unique(),
+        name: v.string(),
+    }).relations((r) => ({
+        // inverse: the FK lives on `posts`, matching this table's `_id`
+        posts: r.many("posts", { field: "authorId" }),
+    })),
+
+    posts: defineTable({
+        authorId: v.id("users"),
+        title: v.string(),
+    })
+        .index("by_author", ["authorId"])
+        .relations((r) => ({
+            author: r.one("users", { field: "authorId", onDelete: "cascade" }),
+        })),
+});
+```
+
+### `references` — pointing at a non-`_id` column
+
+When the foreign key references a unique business key instead of the row id,
+set `references`. The FK column then stores that value, not an `_id`:
+
+```ts
+orders: defineTable({
+    customerSlug: v.string(),
+    total: v.number(),
+}).relations((r) => ({
+    customer: r.one("customers", { field: "customerSlug", references: "slug" }),
+}));
+```
+
+### Self-referential relations
+
+A relation may target its own table — both the `one` (parent) and `many`
+(children) ends share one FK column:
+
+```ts
+categories: defineTable({
+    parentId: v.id("categories"),
+    name: v.string(),
+})
+    .index("by_parent", ["parentId"])
+    .relations((r) => ({
+        children: r.many("categories", { field: "parentId" }),
+        parent: r.one("categories", { field: "parentId" }),
+    }));
+```
+
+`.relations()` chains alongside `.index()`, `.shardBy()`, `.global()` and the
+rest of the table builder, and returns the same builder instance.
+
+## Index your foreign keys
+
+A relation is only a declaration; it does not create an index. Reading
+children by their parent (`WHERE authorId = …`) is a table scan unless the FK
+column is covered by an index. Always pair an FK with an `.index(...)` over
+that column. Lead with the FK field, and add `_creationTime` after it when you
+also want to order the children:
+
+```ts
+posts: defineTable({
+    authorId: v.id("users"),
+    title: v.string(),
+})
+    .index("by_author", ["authorId", "_creationTime"])
+    .relations((r) => ({ author: r.one("users", { field: "authorId" }) }));
+```
+
+<Callout type="info">
+    **Advisors flag this for you.** The static lint `unindexed_foreign_key` walks every declared relation and reports any FK column that no index leads with,
+    since the read that follows the relation would scan. It surfaces in the [Studio Advisors table](/docs/concepts/advisors); fix it by adding an index whose
+    first field is the FK column.
+</Callout>
+
+## Querying across a relation
+
+There are two ways to read related rows; both go through the indexed FK.
+
+**Follow the FK explicitly with `withIndex`.** Resolve the parent id, then read
+the children off the index you declared:
+
+```ts
+import { query, v } from "@/lunora/_generated/server";
+
+export const postsByAuthor = query.input({ authorId: v.id("users") }).query(async ({ ctx, args: { authorId } }) => {
+    return ctx.db
+        .query("posts")
+        .withIndex("by_author", (q) => q.eq("authorId", authorId))
+        .order("desc")
+        .take(50);
+});
+```
+
+To go the other direction (child → parent), read the FK off the child and
+`get` the parent by id:
+
+```ts
+const post = await ctx.db.get(postId);
+const author = post && (await ctx.db.get(post.authorId));
+```
+
+**Load related rows declaratively with `with`.** The typed table accessor's
+`findMany` / `findFirst` take a `with` argument that hydrates the named
+relations in one call: `one` accessors come back as a single row (or `null`),
+`many` accessors as an array:
+
+```ts
+const postsWithAuthors = await ctx.db.posts.findMany({
+    with: { author: true },
+});
+//    ^? each row carries `author: Doc<"users"> | null`
+
+const userWithPosts = await ctx.db.users.findFirst({
+    with: { posts: true },
+});
+//    ^? carries `posts: Doc<"posts">[]`
+```
+
+The hydration is driven by the same FK + index, so the same advice applies:
+keep the FK indexed or the loader scans.
+
+## See also
+
+- [Schema](/docs/concepts/schema) — declaring tables, validators and indexes
+- [Indexes](/docs/concepts/indexes) — how `.index(...)` and `withIndex` work
+- [Queries & mutations](/docs/concepts/queries-mutations) — reading and writing rows
+- [Constraints](/docs/concepts/constraints#foreign-key-integrity) — `onDelete` and FK integrity
+- [@lunora/values](/docs/packages/values) — the `v.id("table")` validator
+- [@lunora/server](/docs/packages/server) — `defineSchema` / `defineTable`

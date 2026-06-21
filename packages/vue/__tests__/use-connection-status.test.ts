@@ -1,0 +1,84 @@
+import type { ConnectionStatus, LunoraClient, Unsubscribe } from "@lunora/client";
+import { describe, expect, it } from "vitest";
+import { createApp, effectScope } from "vue";
+
+import { LUNORA_INJECTION_KEY } from "../src/lunora-provider";
+import useConnectionStatus from "../src/use-connection-status";
+
+/**
+ * Minimal stand-in exposing just the connection-status surface the composable
+ * touches. Records listeners so a test can drive transitions and assert the
+ * listener is released when the owning effect scope stops.
+ */
+const makeFake = (initial: ConnectionStatus) => {
+    let current = initial;
+    const listeners = new Set<(status: ConnectionStatus) => void>();
+
+    const client = {
+        connectionStatus: () => current,
+        onConnectionStatus: (listener: (status: ConnectionStatus) => void): Unsubscribe => {
+            listeners.add(listener);
+
+            return () => {
+                listeners.delete(listener);
+            };
+        },
+    } as unknown as LunoraClient;
+
+    return {
+        client,
+        emit: (status: ConnectionStatus) => {
+            current = status;
+
+            for (const listener of listeners) {
+                listener(status);
+            }
+        },
+        listenerCount: () => listeners.size,
+    };
+};
+
+/** Run `fn` with `client` injected and inside an effect scope we can stop. */
+const withProvidedScope = <T>(client: LunoraClient, fn: () => T): { result: T; stop: () => void } => {
+    const app = createApp({});
+
+    app.provide(LUNORA_INJECTION_KEY, client);
+
+    const scope = effectScope();
+    const result = app.runWithContext(() => scope.run(fn) as T);
+
+    return {
+        result,
+        stop: () => {
+            scope.stop();
+        },
+    };
+};
+
+describe(useConnectionStatus, () => {
+    it("exposes the current status and updates on every transition", () => {
+        const fake = makeFake("idle");
+        const { result: status } = withProvidedScope(fake.client, () => useConnectionStatus());
+
+        expect(status.value).toBe("idle");
+
+        fake.emit("connecting");
+
+        expect(status.value).toBe("connecting");
+
+        fake.emit("connected");
+
+        expect(status.value).toBe("connected");
+    });
+
+    it("releases the status listener when the scope stops", () => {
+        const fake = makeFake("connected");
+        const { stop } = withProvidedScope(fake.client, () => useConnectionStatus());
+
+        expect(fake.listenerCount()).toBe(1);
+
+        stop();
+
+        expect(fake.listenerCount()).toBe(0);
+    });
+});

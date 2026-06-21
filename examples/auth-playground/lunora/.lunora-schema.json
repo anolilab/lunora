@@ -1,0 +1,38 @@
+{
+    "migrationIds": [],
+    "tables": {
+        "documents": {
+            "fields": {
+                "organizationId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "ownerId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "title": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "body": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "createdAt": {
+                    "kind": "number",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_org_created": {
+                    "fields": ["organizationId", "createdAt"],
+                    "unique": false
+                }
+            },
+            "relations": {},
+            "shardMode": "root"
+        }
+    },
+    "version": 1
+}

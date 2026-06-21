@@ -1,0 +1,22 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+
+/* Shared shadcn theme tokens — single source of truth in the library, so this
+   dev app and the shipped library CSS stay in lockstep. Imported by relative
+   path (not the package specifier) to sidestep the source alias this app maps
+   `@lunora/studio` to, matching the relative `@source` below. */
+@import "../../../packages/studio/src/theme.css";
+
+/* The studio UI lives in the @lunora/studio library and ships as compiled
+   JS, which Tailwind's source detection skips. Scan its source so every utility
+   class the panels use is generated into this app's stylesheet, with live HMR
+   while developing the studio here. */
+@source "../../../packages/studio/src";
+
+/* This dev app upgrades the system stack to Geist (the library CSS stays
+   asset-free). Overrides the --font-sans imported from theme.css. */
+@theme inline {
+    --font-sans: "Geist Variable", sans-serif;
+}

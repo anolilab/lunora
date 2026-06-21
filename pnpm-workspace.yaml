@@ -1,0 +1,461 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+  - "examples/*"
+  - "marketing/*"
+  - "tests/*"
+  - "!*/__test__/**"
+  - "!*/__tests__/**"
+
+autoInstallPeers: true
+
+minimumReleaseAge: 1440
+
+blockExoticSubdeps: true
+
+# Force a single React across the tree. @visulima/tui (a vis dependency) and its
+# react-reconciler pin react@19.2.6 while everything else uses 19.2.7; the two
+# copies crash vis's TUI renderer ("Invalid hook call" / useContext on null).
+overrides:
+  lodash@<=4.17.23: ^4.17.24
+  lodash@>=4.0.0 <=4.17.22: ^4.17.23
+  lodash@>=4.0.0 <=4.17.23: ^4.17.24
+  postcss@<8.5.10: ^8.5.10
+  react: 19.2.7
+  react-dom: 19.2.7
+  tmp@<0.2.6: ^0.2.6
+  tmp@<=0.2.3: ^0.2.4
+
+catalogs:
+  ai:
+    # Vercel AI SDK v6 core + Cloudflare's official Workers AI provider. The
+    # provider peers `ai ^6.0.0` / `@ai-sdk/provider ^3.0.0`. Workers AI is the
+    # zero-config default; the `@ai-sdk/*` providers below are optional
+    # bring-your-own (declared as optional peers on @lunora/ai) so an app stays
+    # Workers-AI-only unless it opts into another provider.
+    #
+    # EXACT-pinned (no caret): v6 shipped inside the 1440-minute maturity window,
+    # so each version is allow-listed by exact name@version in
+    # `minimumReleaseAgeExclude` below. A caret would let pnpm drift to a newer
+    # patch that is NOT excluded and would then be gated. To bump: update the
+    # version here AND its matching exclude entry together.
+    ai: 6.0.208
+    workers-ai-provider: 3.2.0
+    "@ai-sdk/anthropic": 3.0.85
+    "@ai-sdk/openai": 3.0.73
+  build:
+    "@babel/core": ^8.0.1
+    "@babel/preset-react": ^8.0.1
+    "@visulima/packem": 2.0.0-alpha.90
+    "babel-plugin-react-compiler": 1.0.0
+    "babel-preset-solid": ^1.9.12
+    esbuild: ^0.28.1
+    "rollup-plugin-svelte": ^7.2.3
+    "unplugin-vue": ^7.2.0
+  dev:
+    "@anolilab/semantic-release-pnpm": ^8.1.15
+    "@anolilab/semantic-release-preset": ^13.4.16
+    "@total-typescript/ts-reset": ^0.6.1
+    "@tsconfig/node24": ^24.0.4
+    cross-env: ^10.1.0
+  lint:
+    "@anolilab/eslint-config": 27.0.10
+    "@anolilab/prettier-config": 10.0.1
+    "@eslint-react/eslint-plugin": 5.9.0
+    "@ospm/eslint-plugin-react-unhookify": ^1.0.2
+    eslint: 10.5.0
+    eslint-plugin-jsx-a11y: ^6.10.2
+    eslint-plugin-react: ^7.37.5
+    eslint-plugin-react-compiler: ^19.1.0-rc.2
+    eslint-plugin-react-hooks: 7.1.1
+    eslint-plugin-react-perf: ^3.3.3
+    eslint-plugin-react-refresh: 0.5.3
+    "@tanstack/eslint-plugin-query": 5.101.0
+    eslint-plugin-react-you-might-not-need-an-effect: 1.0.1
+    eslint-plugin-testing-library: 7.16.2
+    eslint-plugin-validate-jsx-nesting: ^0.1.1
+    husky: ^9.1.7
+    prettier: 3.8.4
+    prettier-plugin-svelte: 4.1.1
+  node:
+    fast-glob: ^3.3.3
+    rimraf: 6.1.3
+  prod:
+    "@anolilab/commitlint-config": 10.0.1
+    "@anolilab/multi-semantic-release": ^4.4.4
+    "@anolilab/textlint-config": 13.0.2
+    "@commitlint/cli": ^21.0.2
+    "@commitlint/config-conventional": ^21.0.2
+    cz-conventional-changelog: ^3.3.0
+    "@visulima/vis": 1.0.0-alpha.41
+    "@visulima/tabular": 4.0.0-alpha.14
+  test:
+    "@codspeed/vitest-plugin": 5.6.0
+    "@vitest/coverage-v8": 4.1.9
+    "@vitest/ui": 4.1.9
+    fake-indexeddb: 6.2.5
+    vitest: 4.1.9
+  tsc:
+    typescript: 6.0.3
+  types:
+    "@standard-schema/spec": 1.1.0
+    "@types/node": 25.9.3
+  cloudflare:
+    "@cloudflare/containers": ^0.3.7
+    # Exact-pinned (no caret): the Browser Rendering surface (`@lunora/browser`) tracks a
+    # verified-good Playwright-on-Workers release; bumps are vetted against a live worker.
+    "@cloudflare/playwright": 1.3.0
+    "@cloudflare/vitest-pool-workers": ^0.16.17
+    "@cloudflare/workers-types": ^4.20260617.1
+    miniflare: ^4.20260617.0
+    wrangler: ^4.102.0
+  e2e:
+    "@playwright/test": ^1.61.0
+    playwright: ^1.61.0
+  tooling:
+    ts-morph: ^28.0.0
+  vite:
+    # Exact-pinned (no caret). 1.40.0 regressed the dev runner — `getWorkerEntryExportTypes`
+    # threw "Cannot read properties of undefined (reading 'string')" while evaluating the
+    # Worker entry. We've moved past it to 1.40.1, a verified-good release. Held EXACT (not a
+    # caret) for two reasons: the upstream changelog never named a fix for that crash, and
+    # 1.40.2 drags in too-fresh transitive deps (wrangler@4.100.0 → miniflare/workerd dated
+    # 2026-06-11) that trip the minimumReleaseAge gate — 1.40.1's wrangler@4.99.0 chain is
+    # aged-in and matches the catalog's `wrangler: ^4.99.0`. To bump: try the new version
+    # locally, run a `pnpm --filter "@lunora/vite" dev` smoke against a template, confirm the
+    # dev runner boots without the getWorkerEntryExportTypes crash AND that its transitive
+    # wrangler/miniflare/workerd are past the release-age window, then update this pin.
+    "@cloudflare/vite-plugin": 1.42.0
+    "@tailwindcss/cli": ^4.3.1
+    "@tailwindcss/vite": ^4.3.1
+    "@visulima/vite-overlay": 2.0.0-alpha.34
+    es-module-lexer: ^2.1.0
+    jsonc-parser: ^3.3.1
+    tailwindcss: ^4.3.1
+    tw-animate-css: ^1.4.0
+    vite: ^8.0.16
+  data:
+    "@faker-js/faker": ^10.5.0
+  i18n:
+    "@lingui/core": ^6.4.0
+    "@lingui/message-utils": ^6.4.0
+  ui:
+    "@base-ui/react": 1.6.0
+    "@fontsource-variable/geist": ^5.2.9
+    "@hugeicons/core-free-icons": ^4.2.1
+    "@hugeicons/react": ^1.1.7
+    class-variance-authority: ^0.7.1
+    clsx: ^2.1.1
+    shadcn: ^4.11.0
+    tailwind-merge: ^3.6.0
+  frontend:
+    html-to-image: ^1.11.13
+    motion: ^12.40.0
+    recharts: ^3.8.1
+    "@solidjs/testing-library": ^0.8.10
+    "@tanstack/db": ^0.6.8
+    "@tanstack/offline-transactions": ^1.0.33
+    "@tanstack/react-db": ^0.1.86
+    "@tanstack/react-query": ^5.101.0
+    "@tanstack/react-router": ^1.170.16
+    "@tanstack/react-table": ^8.21.3
+    "@tanstack/react-virtual": ^3.14.3
+    "@testing-library/dom": ^10.4.1
+    "@testing-library/jest-dom": ^6.9.1
+    "@testing-library/react": ^16.3.2
+    "@types/react": ^19.2.17
+    "@types/react-dom": ^19.2.3
+    "@xyflow/react": ^12.11.0
+    jsdom: ^29.1.1
+    react: ^19.2.7
+    react-dom: ^19.2.7
+    solid-js: ^1.9.13
+    svelte: ^5.56.3
+    vite-plugin-solid: ^2.11.12
+    vue: ^3.5.38
+  # Remotion video stack (marketing/videos and any future video packages). Keep
+  # every @remotion/* entry on the same version so `remotion upgrade` is a
+  # single-catalog bump.
+  video:
+    "@remotion/cli": 4.0.481
+    "@remotion/google-fonts": 4.0.481
+    "@remotion/media": 4.0.481
+    "@remotion/tailwind-v4": 4.0.481
+    remotion: 4.0.481
+    culori: 4.0.2
+  mail:
+    "@visulima/email": 1.0.0-alpha.37
+    "@react-email/render": 2.0.9
+    "postal-mime": 2.7.4
+  mcp:
+    "@modelcontextprotocol/sdk": ^1.29.0
+  # Docs site (apps/docs) — TanStack Start + Vite + fumadocs marketing/docs app.
+  # Isolated catalog so the heavy web stack (three.js, fumadocs 17, radix, …)
+  # never perturbs the framework packages' version pins.
+  web:
+    "@anolilab/eslint-config": 27.0.10
+    "@anolilab/prettier-config": 10.0.1
+    "@babel/core": 8.0.1
+    "@eslint-react/eslint-plugin": 5.9.0
+    "@eslint/css": 1.3.0
+    "@fuma-comment/react": 1.4.2
+    "@fumadocs/mdx-remote": 1.4.10
+    "@icons-pack/react-simple-icons": 13.13.0
+    "@netlify/vite-plugin-tanstack-start": 1.3.16
+    "@radix-ui/react-icons": 1.3.2
+    "@radix-ui/react-presence": ^1.1.6
+    "@radix-ui/react-slot": ^1.3.0
+    "@react-three/fiber": 9.6.1
+    "@rolldown/plugin-babel": 0.2.3
+    "@secretlint/secretlint-rule-preset-recommend": 13.0.2
+    "@tailwindcss/vite": 4.3.1
+    "@tanstack/eslint-plugin-router": 1.162.0
+    "@tanstack/react-router": 1.170.16
+    "@tanstack/react-router-devtools": 1.167.0
+    "@tanstack/react-start": 1.168.26
+    "@tanstack/react-virtual": 3.14.3
+    "@testing-library/jest-dom": 6.9.1
+    "@testing-library/react": 16.3.2
+    "@types/babel__core": ^7.20.5
+    "@types/mdx": ^2.0.14
+    "@types/node": 25.9.3
+    "@types/react": 19.2.17
+    "@types/react-dom": 19.2.3
+    "@types/three": 0.184.1
+    "@unpic/react": 1.0.2
+    "@vidstack/react": 1.12.13
+    "@vitejs/plugin-react": 6.0.2
+    "@vitest/ui": 4.1.9
+    babel-plugin-react-compiler: 1.0.0
+    class-variance-authority: 0.7.1
+    clsx: 2.1.1
+    cmdk: ^1.1.1
+    date-fns: ^4.4.0
+    embla-carousel-react: 8.6.0
+    eslint: 10.5.0
+    eslint-plugin-jsx-a11y: ^6.10.2
+    eslint-plugin-react: ^7.37.5
+    eslint-plugin-react-compiler: 19.1.0-rc.2
+    eslint-plugin-react-hooks: ^7.1.1
+    eslint-plugin-react-perf: ^3.3.3
+    eslint-plugin-react-refresh: 0.5.3
+    eslint-plugin-react-you-might-not-need-an-effect: 1.0.1
+    eslint-plugin-testing-library: 7.16.2
+    eslint-plugin-validate-jsx-nesting: ^0.1.1
+    eslint-plugin-zod: 4.7.0
+    fast-glob: ^3.3.3
+    fumadocs-core: 16.10.4
+    fumadocs-mdx: 15.0.12
+    fumadocs-twoslash: 3.2.0
+    fumadocs-ui: 16.10.4
+    gray-matter: ^4.0.3
+    happy-dom: 20.10.6
+    lucide-react: 1.21.0
+    lucide-static: 1.21.0
+    media-icons: 1.1.5
+    motion: 12.40.0
+    next-themes: ^0.4.6
+    posthog-js: 1.390.2
+    prettier: 3.8.4
+    radix-ui: ^1.6.0
+    react: 19.2.7
+    react-dom: 19.2.7
+    react-hook-inview: 4.5.1
+    react-icon-cloud: 4.1.7
+    react-remove-scroll: 2.7.2
+    rimraf: 6.1.3
+    secretlint: 13.0.2
+    semantic-release: 25.0.5
+    shiki: ^4.2.0
+    tailwind-csstree: 0.3.3
+    tailwind-merge: 3.6.0
+    tailwindcss: 4.3.1
+    tailwindcss-animate: 1.0.7
+    three: 0.184.0
+    typescript: 6.0.3
+    unplugin-fonts: 2.0.0
+    use-count-up: 3.0.1
+    vite: 8.0.16
+    vite-imagetools: 10.0.1
+    vite-plugin-svgr: 5.2.0
+    vitest: 4.1.9
+    zod: 4.4.3
+  auth:
+    "@better-auth/passkey": ^1.6.19
+    "better-auth": ^1.6.19
+  drizzle:
+    drizzle-orm: ^0.45.2
+  http:
+    hono: ^4.12.26
+  redact:
+    "@visulima/redact": 3.0.0-alpha.14
+
+preferWorkspacePackages: true
+
+saveExact: true
+
+saveWorkspaceProtocol: true
+
+sharedWorkspaceLockfile: true
+
+strictPeerDependencies: false
+
+# Acknowledged peer-dependency drift. This monorepo deliberately runs its
+# tooling AHEAD of what most plugins declare in their peer ranges (eslint 10,
+# TypeScript 6, vite 8, prettier 3.8.x, babel 8, rollup 4.6x, …). Every entry
+# below is a peer whose installed version is intentional and verified-working;
+# `allowedVersions` tells pnpm to stop warning rather than us downgrading the
+# tooling to satisfy a stale plugin range. The remaining handful (marked,
+# rollup, @csstools/postcss-slow-plugins, @bomb.sh/tab, @visulima/pail) are
+# deep @visulima prerelease transitives where forcing a bump would risk the
+# `minimumReleaseAge` gate or skew the vis toolchain — they're warnings only
+# (strictPeerDependencies is false). Bump the matching range when the real
+# installed version moves; prereleases are pinned exact on purpose.
+peerDependencyRules:
+  allowedVersions:
+    # @anolilab/commitlint-config peers an older @commitlint/cli range
+    "@commitlint/cli": ">=21"
+    # @anolilab/eslint-config (+ @anolilab/prettier-config) pin exact plugin
+    # versions; we track a newer minor/patch of each.
+    "@eslint-react/eslint-plugin": ">=5.7.10"
+    "@tanstack/eslint-plugin-query": ">=5.100.14"
+    "@tanstack/eslint-plugin-router": ">=1.161.6"
+    "eslint-plugin-react-refresh": ">=0.5.2"
+    "eslint-plugin-react-you-might-not-need-an-effect": ">=0.10.0"
+    "@eslint/css": ">=1.2.0"
+    "eslint-plugin-zod": ">=3.12.0"
+    "tailwind-csstree": ">=0.3.2"
+    "prettier": ">=3.8.3"
+    # typescript-eslint sub-package skew (plugin wants a newer parser patch).
+    "@typescript-eslint/parser": ">=8.59.1"
+    # Core tooling run ahead of every plugin's declared peer range.
+    "eslint": ">=9.11.0"
+    "typescript": ">=5.6.2"
+    "vite": ">=4.2.0"
+    "@babel/core": ">=7"
+    "tailwindcss": ">=3"
+    "babel-plugin-react-compiler": ">=1.0.0"
+    # @visulima prerelease transitives (packem / cerebro / tui internals).
+    "marked": ">=15"
+    "rollup": ">=4.60.1"
+    "@csstools/postcss-slow-plugins": ">=2"
+    "@bomb.sh/tab": ">=0.0.15"
+    "@visulima/pail": "4.0.0-alpha.21"
+
+# pnpm v11 refuses to install when transitive deps want to run post-install
+# scripts unless the workspace explicitly approves them. Re-run
+# `pnpm approve-builds` to repopulate this list when a new package joins.
+allowBuilds:
+  '@parcel/watcher': true
+  core-js: false
+  esbuild: true
+  msgpackr-extract: true
+  msw: false
+  rs-module-lexer: true
+  sharp: true
+  unrs-resolver: true
+  vue-demi: false
+  workerd: true
+
+# Only versions that are currently within the `minimumReleaseAge` window need to
+# live here; once a version ages past the cutoff its entry becomes dead weight.
+#
+# IMPORTANT: keep ONE entry per package name. pnpm's version-policy matcher stops
+# at the first rule whose name matches and only honours THAT rule's versions, so a
+# second line for the same package is silently ignored (it shadows, it does not
+# merge). To allow several versions of one package, use a union on a single line:
+#   - 'better-auth@1.6.13 || 1.6.14'
+# When bumping a dependency, UPDATE its existing line — do not append a new one.
+minimumReleaseAgeExclude:
+  - '@ai-sdk/anthropic@3.0.83'
+  - '@ai-sdk/gateway@3.0.128'
+  - '@ai-sdk/openai@3.0.70'
+  - '@ai-sdk/provider-utils@4.0.28'
+  - '@better-auth/core@1.6.16'
+  - '@better-auth/drizzle-adapter@1.6.16'
+  - '@better-auth/kysely-adapter@1.6.16'
+  - '@better-auth/memory-adapter@1.6.16'
+  - '@better-auth/mongo-adapter@1.6.16'
+  - '@better-auth/passkey@1.6.16'
+  - '@better-auth/prisma-adapter@1.6.16'
+  - '@better-auth/telemetry@1.6.16'
+  - '@better-fetch/fetch@1.2.2'
+  - '@cloudflare/vite-plugin@1.40.1'
+  - '@cloudflare/vitest-pool-workers@0.16.12'
+  - '@cloudflare/workers-types@4.20260616.1'
+  - '@eslint-react/ast@5.8.17'
+  - '@eslint-react/core@5.8.17'
+  - '@eslint-react/eslint@5.8.17'
+  - '@eslint-react/eslint-plugin@5.8.17'
+  - '@eslint-react/jsx@5.8.17'
+  - '@eslint-react/shared@5.8.17'
+  - '@eslint-react/var@5.8.17'
+  - '@lingui/babel-plugin-lingui-macro@6.3.0'
+  - '@lingui/conf@6.3.0'
+  - '@lingui/core@6.3.0'
+  - '@lingui/message-utils@6.3.0'
+  - '@next/env@16.2.9'
+  - '@next/swc-darwin-arm64@16.2.9'
+  - '@next/swc-darwin-x64@16.2.9'
+  - '@next/swc-linux-arm64-gnu@16.2.9'
+  - '@next/swc-linux-arm64-musl@16.2.9'
+  - '@next/swc-linux-x64-gnu@16.2.9'
+  - '@next/swc-linux-x64-musl@16.2.9'
+  - '@next/swc-win32-arm64-msvc@16.2.9'
+  - '@next/swc-win32-x64-msvc@16.2.9'
+  - '@tanstack/eslint-plugin-query@5.101.0'
+  - '@tanstack/query-core@5.101.0'
+  - '@tanstack/react-query@5.101.0'
+  - '@tanstack/react-virtual@3.14.2'
+  - '@tanstack/virtual-core@3.17.0'
+  - '@types/react@19.2.16'
+  - 'ai@6.0.202'
+  - 'better-auth@1.6.16'
+  - 'deslop-js@0.0.21'
+  - 'eslint-plugin-react-dom@5.8.17'
+  - 'eslint-plugin-react-jsx@5.8.17'
+  - 'eslint-plugin-react-naming-convention@5.8.17'
+  - 'eslint-plugin-react-rsc@5.8.17'
+  - 'eslint-plugin-react-web-api@5.8.17'
+  - 'eslint-plugin-react-x@5.8.17'
+  - 'eslint-plugin-react-you-might-not-need-an-effect@1.0.0'
+  - 'fumadocs-mdx@15.0.11'
+  - 'miniflare@4.20260601.0'
+  - 'next@16.2.9'
+  - 'oxlint-plugin-react-doctor@0.5.1'
+  - 'react@19.2.7'
+  - 'react-doctor@0.5.1'
+  - 'react-dom@19.2.7'
+  - 'tsx@4.22.4'
+  - 'vite@8.0.16'
+  - 'wrangler@4.97.0'
+  - tmp@0.2.4
+  - lodash@4.17.24
+  - postcss@8.5.10
+  - tmp@0.2.6
+  - lodash@4.17.23
+  - '@visulima/vis-binding-darwin-arm64@1.0.0-alpha.41'
+  - '@visulima/vis-binding-darwin-x64@1.0.0-alpha.41'
+  - '@visulima/vis-binding-linux-arm64-gnu@1.0.0-alpha.41'
+  - '@visulima/vis-binding-linux-arm64-musl@1.0.0-alpha.41'
+  - '@visulima/vis-binding-linux-x64-gnu@1.0.0-alpha.41'
+  - '@visulima/vis-binding-linux-x64-musl@1.0.0-alpha.41'
+  - '@visulima/vis-binding-win32-arm64-msvc@1.0.0-alpha.41'
+  - '@visulima/vis-binding-win32-x64-msvc@1.0.0-alpha.41'
+  - '@visulima/vis@1.0.0-alpha.41'
+  - '@visulima/email@1.0.0-alpha.37'
+
+# recast@0.23.11 loads `@babel/parser` via a bare (phantom) require, so pnpm
+# hands it the hoisted @babel/parser@8.0.0. recast's parser plugin list is
+# Babel-7-era (importAssertions, decimal, recordAndTuple syntaxType, the
+# "minimal" pipeline proposal, …), all of which Babel 8 rejects — which surfaced
+# as `"pipelineOperator" requires "proposal"` (and then more) while @remotion/
+# studio-server parses files for its editable-sequence-props codemod. Give recast
+# its own Babel 7 parser so the whole 7-era list is accepted at once.
+packageExtensions:
+  recast@0.23.11:
+    dependencies:
+      "@babel/parser": "^7.24.1"
+
+patchedDependencies:
+  recast@0.23.11: patches/recast@0.23.11.patch

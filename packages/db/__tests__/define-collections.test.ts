@@ -1,0 +1,255 @@
+/* eslint-disable no-underscore-dangle -- `_id`/`_creationTime` are Lunora document fields the fixtures mirror */
+import type { OfflineExecutor } from "@tanstack/offline-transactions";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { defineCollections } from "../src";
+
+/** A fake `FunctionReference` — `defineCollections` only forwards it to the client. */
+const ref = (name: string) => ({ __lunoraRef: name }) as never;
+
+const usersList = ref("users:list");
+const messagesList = ref("messages:list");
+const messagesSend = ref("messages:send");
+
+interface SubscribeCall {
+    args: { channelId?: string };
+    cb: (rows: unknown[]) => void;
+    onError?: (error: { code?: string; message: string }) => void;
+    ref: unknown;
+    unsubscribe: ReturnType<typeof vi.fn>;
+}
+
+/** A mock `LunoraClient` recording every `subscribe`, with a configurable `mutation`. */
+const makeClient = (mutation: () => Promise<unknown> = async () => "server-id") => {
+    const subscribes: SubscribeCall[] = [];
+    const mutationMock = vi.fn<(reference: unknown, args: Record<string, unknown>) => Promise<unknown>>(mutation);
+    const client = {
+        mutation: mutationMock,
+        subscribe: vi.fn<
+            (
+                reference: unknown,
+                args: { channelId?: string },
+                cb: (rows: unknown[]) => void,
+                options?: { onError?: (error: { code?: string; message: string }) => void },
+            ) => () => void
+        >((reference, args, cb, options) => {
+            const unsubscribe = vi.fn<() => void>();
+
+            subscribes.push({ args, cb, onError: options?.onError, ref: reference, unsubscribe });
+
+            return unsubscribe;
+        }),
+    };
+
+    return { client: client as never, mutation: mutationMock, subscribes };
+};
+
+// The slice of the returned data layer this test reads (the public types are
+// inferred from the binding; here we only need a structural view).
+interface TestCollection {
+    get: (key: string) => Record<string, unknown> | undefined;
+    size: number;
+    subscribeChanges: (cb: () => void) => { unsubscribe: () => void };
+}
+interface TestDb {
+    actions: { messages: (input: { channelId: string; text: string }) => { id: string } };
+    collections: { messages: TestCollection; users: TestCollection };
+    executor: OfflineExecutor;
+    scope: { messages: (args?: { channelId: string }) => void };
+}
+
+const executors: OfflineExecutor[] = [];
+
+const build = (client: never): TestDb => {
+    const database = defineCollections(client, {
+        messages: {
+            insert: {
+                mutation: messagesSend,
+                optimistic: (input: { channelId: string; text: string }, id) => {
+                    return { _creationTime: 0, _id: id, channelId: input.channelId, text: input.text };
+                },
+                toArgs: (row) => {
+                    return { channelId: row.channelId, id: row._id, text: row.text };
+                },
+            },
+            list: messagesList,
+            scopeBy: "channelId",
+        },
+        users: { list: usersList },
+    }) as unknown as TestDb;
+
+    executors.push(database.executor);
+
+    return database;
+};
+
+/** Let a microtask (collection sync / optimistic apply) flush. */
+const flush = () =>
+    new Promise((resolve) => {
+        setTimeout(resolve, 0);
+    });
+
+describe(defineCollections, () => {
+    afterEach(() => {
+        for (const executor of executors.splice(0)) {
+            executor.dispose();
+        }
+    });
+
+    it("subscribes a static collection to its list query and syncs the rows in", async () => {
+        const { client, subscribes } = makeClient();
+        const database = build(client);
+
+        const subscription = database.collections.users.subscribeChanges(() => {});
+        await flush();
+
+        const call = subscribes.find((s) => s.ref === usersList);
+
+        expect(call).toBeDefined();
+        expect(call?.args).toStrictEqual({});
+
+        // Server snapshot arrives → the collection reflects it.
+        call?.cb([
+            { _id: "u1", name: "Ann" },
+            { _id: "u2", name: "Bob" },
+        ]);
+        await flush();
+
+        expect(database.collections.users.size).toBe(2);
+        expect(database.collections.users.get("u1")).toMatchObject({ name: "Ann" });
+
+        subscription.unsubscribe();
+    });
+
+    it("leaves a scoped collection unsubscribed until scope(), then re-points and detaches", async () => {
+        const { client, subscribes } = makeClient();
+        const database = build(client);
+        const messagesOf = (channelId: string) => subscribes.find((s) => s.ref === messagesList && s.args.channelId === channelId);
+
+        database.collections.messages.subscribeChanges(() => {});
+        await flush();
+
+        // Scoped: nothing subscribed yet.
+        expect(subscribes.filter((s) => s.ref === messagesList)).toHaveLength(0);
+
+        database.scope.messages({ channelId: "c1" });
+
+        expect(messagesOf("c1")).toBeDefined();
+
+        // Re-point: the previous subscription is torn down, the new one opened.
+        database.scope.messages({ channelId: "c2" });
+
+        expect(messagesOf("c1")?.unsubscribe).toHaveBeenCalledTimes(1);
+        expect(messagesOf("c2")).toBeDefined();
+
+        // Detach: the current subscription is torn down.
+        database.scope.messages();
+
+        expect(messagesOf("c2")?.unsubscribe).toHaveBeenCalledTimes(1);
+    });
+
+    it("optimistically inserts an action's row into its collection", async () => {
+        // Keep the send in-flight so the optimistic row isn't superseded/settled
+        // before we assert (on settle, with no synced row to supersede it, the
+        // optimistic entry would drop — that reconcile-on-ack path is covered e2e).
+        const { client } = makeClient(
+            () =>
+                new Promise(() => {
+                    /* never settles */
+                }),
+        );
+        const database = build(client);
+
+        database.collections.messages.subscribeChanges(() => {});
+        database.scope.messages({ channelId: "c1" });
+        await database.executor.waitForInit();
+        await flush();
+
+        const { id } = database.actions.messages({ channelId: "c1", text: "hi" });
+        await flush();
+
+        expect(database.collections.messages.get(id)).toMatchObject({ channelId: "c1", text: "hi" });
+    });
+
+    it("replaces synced rows when re-pointing a scoped collection and clears them on detach", async () => {
+        const { client, subscribes } = makeClient();
+        const database = build(client);
+        const messagesOf = (channelId: string) => subscribes.find((s) => s.ref === messagesList && s.args.channelId === channelId);
+
+        database.collections.messages.subscribeChanges(() => {});
+        await flush();
+
+        // Sync the first channel's rows in.
+        database.scope.messages({ channelId: "c1" });
+        messagesOf("c1")?.cb([{ _creationTime: 0, _id: "m1", channelId: "c1", text: "from c1" }]);
+        await flush();
+
+        expect(database.collections.messages.size).toBe(1);
+        expect(database.collections.messages.get("m1")).toMatchObject({ text: "from c1" });
+
+        // Re-point: the old channel's rows are diffed out, the new channel's in.
+        database.scope.messages({ channelId: "c2" });
+        messagesOf("c2")?.cb([{ _creationTime: 0, _id: "m2", channelId: "c2", text: "from c2" }]);
+        await flush();
+
+        expect(database.collections.messages.get("m1")).toBeUndefined();
+        expect(database.collections.messages.get("m2")).toMatchObject({ text: "from c2" });
+        expect(database.collections.messages.size).toBe(1);
+
+        // Detach: the synced rows are cleared.
+        database.scope.messages();
+        await flush();
+
+        expect(database.collections.messages.size).toBe(0);
+    });
+
+    it("forwards the client-generated id to the mutation as the clientId (idempotency key)", async () => {
+        const { client, mutation } = makeClient();
+        const database = build(client);
+
+        database.collections.messages.subscribeChanges(() => {});
+        database.scope.messages({ channelId: "c1" });
+        await database.executor.waitForInit();
+        await flush();
+
+        const { id } = database.actions.messages({ channelId: "c1", text: "hi" });
+
+        // Let the outbox drain the queued write.
+        await vi.waitFor(() => {
+            expect(mutation).toHaveBeenCalledTimes(1);
+        });
+
+        // `toArgs` maps the optimistic row's `_id` onto the mutation's `id` arg, so
+        // a retry replays the same clientId and the server can dedupe it.
+        expect(mutation).toHaveBeenCalledWith(messagesSend, { channelId: "c1", id, text: "hi" });
+    });
+
+    it("surfaces a failed subscription via onError and does not leave the collection stuck loading", async () => {
+        const { client, subscribes } = makeClient();
+        const onError = vi.fn<(error: { code?: string; message: string }) => void>();
+
+        const database = defineCollections(client, {
+            users: { list: usersList, onError },
+        }) as unknown as { collections: { users: TestCollection & { status: string } }; executor: OfflineExecutor };
+
+        executors.push(database.executor);
+
+        database.collections.users.subscribeChanges(() => {});
+        await flush();
+
+        // The static subscription must be opened with an onError handler.
+        const call = subscribes.find((s) => s.ref === usersList);
+
+        expect(call).toBeDefined();
+        expect(call?.onError).toBeTypeOf("function");
+        expect(database.collections.users.status).toBe("loading");
+
+        // The server rejects the subscription.
+        call?.onError?.({ code: "forbidden", message: "denied" });
+        await flush();
+
+        // The user's onError fired and the collection left `loading` (not stuck).
+        expect(onError).toHaveBeenCalledWith({ code: "forbidden", message: "denied" });
+        expect(database.collections.users.status).not.toBe("loading");
+    });
+});

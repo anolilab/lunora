@@ -1,0 +1,29 @@
+{
+    "name": "{{name}}",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "dev": "lunora dev",
+        "build": "lunora codegen && vite build",
+        "preview": "vite preview",
+        "codegen": "lunora codegen",
+        "deploy": "lunora deploy"
+    },
+    "dependencies": {
+        "@lunora/solid": "^0.0.0",
+        "@tanstack/solid-router": "^1.170.15",
+        "@tanstack/solid-start": "^1.168.25",
+        "lunorash": "^0.0.0",
+        "solid-js": "^1.9.13"
+    },
+    "devDependencies": {
+        "@cloudflare/vite-plugin": "^1.40.2",
+        "@cloudflare/workers-types": "^4.20260610.1",
+        "@lunora/vite": "^0.0.0",
+        "typescript": "^6.0.3",
+        "vite": "^8.0.16",
+        "vite-plugin-solid": "^2.11.12",
+        "wrangler": "^4.100.0"
+    }
+}

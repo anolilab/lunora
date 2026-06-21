@@ -1,0 +1,181 @@
+---
+title: "@lunora/values"
+description: The validator runtime — v.*, Validator, Infer, Id, ValidationError, and JSON Schema export.
+---
+
+`@lunora/values` is the validator runtime behind Lunora: the `v.*` factories and
+the TypeScript inference (`Infer`) that pairs with them. `@lunora/server`
+re-exports the `v` namespace, so in application code you usually import it from
+there. Import this package directly only when you write a shared validators
+library, generate JSON Schema, or test validation in isolation.
+
+```ts
+import { type Infer, v, ValidationError } from "@lunora/values";
+
+const message = v.object({
+    channelId: v.id("channels"),
+    text: v.string(),
+    pinned: v.optional(v.boolean()),
+});
+
+type Message = Infer<typeof message>;
+//   ^? { channelId: Id<"channels">; text: string; pinned?: boolean }
+
+const parsed = message.parse(input); // throws ValidationError on mismatch
+
+const result = message.safeParse(input);
+if (!result.ok) {
+    console.error(result.error.path, result.error.expected);
+}
+```
+
+Each validator also implements [Standard Schema](https://standardschema.dev)
+v1 (`vendor: "lunora"`), so tools that accept a Standard Schema can consume a
+Lunora validator directly.
+
+## Validator factory (`v.*`)
+
+| Factory                | Accepts                       | Notes                                                  |
+| ---------------------- | ----------------------------- | ------------------------------------------------------ |
+| `v.string()`           | `string`                      | UTF-8 text                                             |
+| `v.number()`           | `number`                      | Finite only — `NaN`/`±Infinity` throw                  |
+| `v.boolean()`          | `boolean`                     | `true` / `false`                                       |
+| `v.null()`             | `null`                        | Only `null`                                            |
+| `v.bigint()`           | `bigint`                      | Stored as INTEGER (int64) in D1                        |
+| `v.bytes()`            | `ArrayBuffer`                 | Binary; stored as BLOB. A `Uint8Array` is rejected     |
+| `v.any()`              | anything                      | Escape hatch — no runtime check                        |
+| `v.id(table)`          | `Id<table>`                   | Branded id string for the given table                  |
+| `v.literal(value)`     | exact `value`                 | `string` / `number` / `boolean` / `bigint` / `null`    |
+| `v.array(inner)`       | `Array<Infer<inner>>`         | Homogeneous array                                      |
+| `v.object(shape)`      | `{ ...shape }`                | Plain object; declared keys parsed, extra keys ignored |
+| `v.union(a, b, ...)`   | any member                    | Tries members in order; needs ≥ 1 member               |
+| `v.optional(inner)`    | `Infer<inner>` \| `undefined` | Marks a field optional (missing/`undefined`)           |
+| `v.record(key, value)` | `Record<key, value>`          | Map-style; `key` validator must produce a `string`     |
+| `v.timestamp()`        | `number`                      | Epoch milliseconds; pair with `.defaultNow()`          |
+| `v.date()`             | `number`                      | Calendar date as epoch ms; pair with `.defaultNow()`   |
+| `v.storage(bucket?)`   | `string`                      | An R2 object key; ties the data model to a bucket      |
+| `v.from(schema)`       | inferred from `schema`        | Wrap a Standard Schema validator. **Args-only**        |
+
+Every factory returns a `Validator` with `parse(value)` (throws
+[`ValidationError`](#validationerror)) and `safeParse(value)` (returns
+`{ ok: true, value } | { ok: false, error }`).
+
+<Callout type="warn">
+    `v.from(...)` validators are **args-only** — pass them to `query`/`mutation`/`action` args, never to a `defineTable` column. `defineTable` rejects them
+    (anywhere in the column, including nested) because a Standard Schema value has no SQL column type. The wrapped `validate` must be synchronous; an async
+    result throws.
+</Callout>
+
+## Column modifiers
+
+Inside `defineTable`, the same factories carry a chainable column API (these are
+inert in args position):
+
+```ts
+import { defineTable, v } from "@lunora/server";
+
+export const users = defineTable({
+    name: v.string(),
+    email: v.string().unique(),
+    role: v.optional(v.union(v.literal("admin"), v.literal("member"))),
+    bio: v.string().nullable(), // widens the read type to `string | null`
+    createdAt: v.timestamp().defaultNow(),
+    // SERVER-trusted: overwritten on every write from the request auth, so it is
+    // never client-controllable.
+    ownerId: v.string().serverDefault(({ auth }) => auth.userId),
+});
+```
+
+- `.default(value)` / `.$defaultFn(() => value)` — fill an absent field; the field becomes optional on insert.
+- `.$onUpdateFn(() => value)` — recompute on every patch/replace.
+- `.serverDefault(({ auth }) => value)` — stamp server-side on every write, overwriting any client value.
+- `.nullable()` — allow SQL `NULL`; widens select/insert to include `null`.
+- `.unique()` — synthesize a UNIQUE index.
+- `.$type<T>()` — retype select/insert without changing runtime parsing.
+- `.defaultNow()` — `v.timestamp()` / `v.date()` only; defaults to `Date.now()`.
+
+## Refinements and metadata
+
+`.check()` adds a predicate that runs after parsing; `.meta()` attaches JSON
+Schema metadata with no parsing effect. Both chain.
+
+```ts
+const slug = v
+    .string()
+    .check((s) => s.length > 0, { message: "non-empty", schema: { minLength: 1 } })
+    .meta({ description: "URL slug" });
+```
+
+The `schema` fragment and `description` flow into the JSON Schema emitted by
+[`toJsonSchema`](#json-schema).
+
+## `Id<TableName>`
+
+A nominally-typed string brand. `lunora/_generated/dataModel.ts` re-exports `Id`
+so you can type your own helpers:
+
+```ts
+import type { Id } from "@/lunora/_generated/dataModel";
+
+const acl = (userId: Id<"users">) => {
+    /* ... */
+};
+```
+
+`Id<T>` carries the table name only at compile time. Use `v.id("users")` when
+you also need the runtime check.
+
+## `Infer<T>`
+
+Given a `Validator`, expand it to the inferred TypeScript type:
+
+```ts
+type T = Infer<typeof v.object({ foo: v.string() })>;
+//   ^? { foo: string }
+```
+
+For columns, `InferSelect<T>` / `InferInsert<T>` give the read and write types
+separately (insert types may be optional via `.default()`/`.$defaultFn()`/`v.optional`).
+
+## `ValidationError`
+
+Thrown by `parse(value)` and surfaced by `query` / `mutation` / `action` when
+the input shape doesn't match the declared args. It carries:
+
+- `path: ValidationPath` — `(string | number)[]` from the root to the offending field, e.g. `["users", 0, "email"]`.
+- `expected: string` / `received: string` — the expected shape and a short description of what arrived.
+
+Helpers: `formatPath(path)` renders a path as `users[0].email` (`<root>` when
+empty), and `describeValue(value)` produces the short summary used in messages.
+
+## `ValidatorKind`
+
+String union of every supported kind (`"string" | "number" | … | "from"`),
+useful for switch-based reflection. `@lunora/codegen` uses it to map validators
+to SQL types.
+
+## JSON Schema
+
+`toJsonSchema(validator)` converts one validator to a JSON Schema node (Draft
+2020-12 / OpenAPI 3.1). `argsToJsonSchema(argsMap)` converts a function's arg map
+to a single object schema, marking non-`optional` args as `required`.
+
+```ts
+import { argsToJsonSchema, v } from "@lunora/values";
+
+const schema = argsToJsonSchema({ id: v.id("users"), limit: v.optional(v.number()) });
+//   ^? { type: "object", properties: {...}, required: ["id"] }
+```
+
+## Validator maps
+
+`parseValidatorMap(validators, source, label)` validates each declared field of
+`source` through its validator, re-wrapping any `ValidationError` with a
+`<label>.<key>:` prefix. It is the shared arg/field parser used by the procedure
+builder, the HTTP route builder, and reusable workflow steps. `InferValidatorMap<A>`
+gives the object type of such a map (optional validators become optional keys).
+
+## See also
+
+- [@lunora/server](/docs/packages/server)
+- [Concepts: schema](/docs/concepts/schema)

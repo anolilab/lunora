@@ -1,0 +1,226 @@
+/**
+ * Phase 4 verification gate: `lunora()` composes cleanly with the framework
+ * plugins Cloudflare's vite plugin officially advertises — TanStack Start and
+ * React Router v7.
+ *
+ * Booting `createServer` for each framework would force us to depend on the
+ * real packages (and their transitive trees). Instead we run Vite's
+ * `resolveConfig`, which drives the full plugin pipeline (`configResolved`,
+ * plugin ordering, name collision detection) against shape-faithful stand-ins
+ * for each framework's plugin export. If our hooks would clash with theirs,
+ * `resolveConfig` is where it surfaces.
+ */
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import type { Plugin } from "vite";
+import { resolveConfig } from "vite";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import { lunora } from "../src/index";
+
+const LUNORA_WRANGLER_ERROR = /\[lunora\] wrangler/;
+
+const SCHEMA = `import { defineSchema, defineTable, v } from "@lunora/server";
+
+export const schema = defineSchema({
+    messages: defineTable({
+        channelId: v.id("channels"),
+        text: v.string(),
+    }).shardBy("channelId"),
+});
+`;
+
+const VALID_WRANGLER = `{
+    "name": "lunora-framework-app",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["web_socket_auto_reply_to_close"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
+    }
+}
+`;
+
+/**
+ * Shape-faithful stand-in for `@tanstack/start`'s vite plugin. The real
+ * plugin contributes multiple sub-plugins; we model the entrypoint plus one
+ * sub-plugin so name-uniqueness assertions are meaningful.
+ */
+const tanstackStartLike = (): ReadonlyArray<Plugin> => [
+    {
+        configResolved() {},
+        enforce: "pre",
+        name: "tanstack-start",
+    },
+    {
+        configureServer() {},
+        name: "tanstack-start:router",
+    },
+];
+
+/**
+ * Shape-faithful stand-in for `@react-router/dev/vite`'s plugin. RR7 ships a
+ * single named plugin; we model that.
+ */
+const reactRouterLike = (): Plugin => {
+    return {
+        configResolved() {},
+        configureServer() {},
+        enforce: "pre",
+        name: "react-router",
+    };
+};
+
+let workdir: string;
+
+describe("framework-compose", () => {
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "lunora-vite-framework-"));
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
+        writeFileSync(join(workdir, "lunora", "schema.ts"), SCHEMA, "utf8");
+        writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+    });
+
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
+
+    describe("lunora() framework composition", () => {
+        it("composes with a TanStack-Start-shaped plugin and resolveConfig succeeds", async () => {
+            expect.hasAssertions();
+
+            const lunoraPlugins = lunora({
+                cloudflare: false,
+                overlay: false,
+                projectRoot: workdir,
+                validateWrangler: true,
+            });
+
+            const resolved = await resolveConfig(
+                {
+                    configFile: false,
+                    plugins: [...tanstackStartLike(), ...lunoraPlugins],
+                    root: workdir,
+                },
+                "serve",
+            );
+
+            const names = resolved.plugins.map((plugin) => plugin.name);
+
+            expect(names).toContain("tanstack-start");
+            expect(names).toContain("tanstack-start:router");
+            expect(names).toContain("lunora:codegen");
+            expect(names).toContain("lunora:wrangler-validator");
+
+            // Plugin names must remain unique — Vite would otherwise warn loudly.
+            expect(new Set(names).size).toBe(names.length);
+        });
+
+        it("composes with a React-Router-v7-shaped plugin and resolveConfig succeeds", async () => {
+            expect.hasAssertions();
+
+            const lunoraPlugins = lunora({
+                cloudflare: false,
+                overlay: false,
+                projectRoot: workdir,
+                validateWrangler: true,
+            });
+
+            const resolved = await resolveConfig(
+                {
+                    configFile: false,
+                    plugins: [reactRouterLike(), ...lunoraPlugins],
+                    root: workdir,
+                },
+                "serve",
+            );
+
+            const names = resolved.plugins.map((plugin) => plugin.name);
+
+            expect(names).toContain("react-router");
+            expect(names).toContain("lunora:codegen");
+            expect(names).toContain("lunora:wrangler-validator");
+            expect(new Set(names).size).toBe(names.length);
+        });
+
+        it("wires the framework-compose plugin into the resolved pipeline for a class-A project", async () => {
+            expect.hasAssertions();
+
+            // A class-A signature (`@tanstack/react-start`) in package.json drives
+            // `detectFramework` → class A, which is what arms the compose plugin's
+            // virtual-entry resolver. We keep `cloudflare: false` so the heavy CF
+            // plugin doesn't boot a worker here; the compose plugin is still added
+            // to the pipeline (it is a normal Vite plugin), proving it participates
+            // in the same `resolveConfig`/dev pipeline that drives HMR.
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({ devDependencies: { "@tanstack/react-start": "^1.0.0" }, name: "class-a-app" }),
+                "utf8",
+            );
+
+            const lunoraPlugins = lunora({
+                cloudflare: false,
+                overlay: false,
+                projectRoot: workdir,
+                validateWrangler: true,
+            });
+
+            const resolved = await resolveConfig(
+                {
+                    configFile: false,
+                    plugins: [...tanstackStartLike(), ...lunoraPlugins],
+                    root: workdir,
+                },
+                "serve",
+            );
+
+            const names = resolved.plugins.map((plugin) => plugin.name);
+
+            // The compose plugin is present alongside the framework + the rest of
+            // the Lunora pipeline. Because the composed worker is an ordinary
+            // module entry resolved by this plugin, `@cloudflare/vite-plugin` HMRs
+            // it exactly like a hand-written entry (PLAN4 M5 risk #5) — no special
+            // dev path is introduced.
+            expect(names).toContain("lunora:framework-compose");
+            expect(names).toContain("tanstack-start");
+            expect(new Set(names).size).toBe(names.length);
+        });
+
+        it("wranglerValidator configResolved still fires inside a framework pipeline", async () => {
+            expect.assertions(1);
+
+            // Drop a wrangler.jsonc that is *missing* the SHARD binding — the
+            // validator must throw during configResolved even when wrapped by
+            // framework plugins. This guards against accidental hook-order bugs
+            // (e.g. a framework plugin swallowing our throw).
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
+                "name": "lunora-framework-app",
+                "compatibility_date": "2026-04-07"
+            }
+            `,
+                "utf8",
+            );
+
+            const lunoraPlugins = lunora({
+                cloudflare: false,
+                overlay: false,
+                projectRoot: workdir,
+                validateWrangler: true,
+            });
+
+            await expect(
+                resolveConfig(
+                    {
+                        configFile: false,
+                        plugins: [...tanstackStartLike(), ...lunoraPlugins],
+                        root: workdir,
+                    },
+                    "serve",
+                ),
+            ).rejects.toThrow(LUNORA_WRANGLER_ERROR);
+        });
+    });
+});

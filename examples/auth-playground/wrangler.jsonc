@@ -1,0 +1,23 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "lunora-example-auth-playground",
+    "main": "src/server/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+    },
+    "d1_databases": [
+        // Auth identity, sessions, organizations, members live in D1 — better-auth
+        // discovers the schema across every configured plugin and runs migrations
+        // against this binding via `ensureMigrated` / `compileMigrationsSql`.
+        { "binding": "DB", "database_name": "lunora-auth-playground", "database_id": "REPLACE_WITH_D1_ID" },
+    ],
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    // Secrets are NOT declared here — `vars` ship in the deployed config and are
+    // visible in the dashboard. `AUTH_SECRET` lives in `.dev.vars` for local dev
+    // (see `.dev.vars.example`, auto-loaded by `wrangler dev` / the Vite plugin)
+    // and is pushed to production with `wrangler secret put AUTH_SECRET` (or
+    // `lunora env push`).
+}

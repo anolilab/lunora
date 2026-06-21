@@ -1,0 +1,78 @@
+{
+    "name": "@lunora/sql-store",
+    "version": "0.0.0",
+    "license": "FSL-1.1-Apache-2.0",
+    "description": "Internal dialect-parameterized SQL store core for Lunora .global() backends (D1, PlanetScale)",
+    "homepage": "https://lunora.sh",
+    "bugs": {
+        "url": "https://github.com/anolilab/lunora/issues"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/anolilab/lunora.git",
+        "directory": "packages/sql-store"
+    },
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
+    },
+    "keywords": [
+        "lunora",
+        "cloudflare",
+        "sql",
+        "sqlite",
+        "postgres",
+        "mysql",
+        "dialect",
+        "orm"
+    ],
+    "files": [
+        "dist",
+        "README.md",
+        "LICENSE.md",
+        "__assets__"
+    ],
+    "type": "module",
+    "sideEffects": false,
+    "main": "./dist/index.mjs",
+    "module": "./dist/index.mjs",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.mjs"
+        },
+        "./dialect": {
+            "types": "./dist/dialect.d.ts",
+            "import": "./dist/dialect.mjs"
+        },
+        "./package.json": "./package.json"
+    },
+    "scripts": {
+        "build": "pnpm exec packem build --development",
+        "build:prod": "pnpm exec packem build --production",
+        "lint:eslint": "eslint .",
+        "lint:eslint:fix": "eslint . --fix",
+        "lint:prettier": "prettier --check .",
+        "lint:prettier:fix": "prettier --write .",
+        "lint:types": "tsc --noEmit",
+        "test": "vitest run",
+        "test:coverage": "vitest run --coverage"
+    },
+    "dependencies": {
+        "@lunora/do": "workspace:*",
+        "drizzle-orm": "catalog:drizzle"
+    },
+    "devDependencies": {
+        "@cloudflare/workers-types": "catalog:cloudflare",
+        "@types/node": "catalog:types",
+        "@visulima/packem": "catalog:build",
+        "@vitest/coverage-v8": "catalog:test",
+        "esbuild": "catalog:build",
+        "typescript": "catalog:tsc",
+        "vitest": "catalog:test"
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    }
+}

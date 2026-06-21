@@ -1,0 +1,16 @@
+{
+    "name": "Lunora",
+    "short_name": "Lunora",
+    "description": "The type-safe, real-time backend for Cloudflare Workers + Durable Objects, with a Vite-first DX.",
+    "start_url": "/",
+    "display": "browser",
+    "background_color": "#0a0a0a",
+    "theme_color": "#4F46E5",
+    "icons": [
+        {
+            "src": "/favicon.svg",
+            "sizes": "any",
+            "type": "image/svg+xml"
+        }
+    ]
+}

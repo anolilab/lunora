@@ -1,0 +1,13 @@
+diff --git a/parsers/_babel_options.js b/parsers/_babel_options.js
+index d8fa77b7b0c6cfe6f9e27f570c8f7bd2c1e3141d..a2a83c0849ac7ea1db10c9a56bf06e68232f1347 100644
+--- a/parsers/_babel_options.js
++++ b/parsers/_babel_options.js
+@@ -39,7 +39,7 @@ function getBabelOptions(options) {
+             [
+                 "pipelineOperator",
+                 {
+-                    proposal: "minimal",
++                    proposal: "fsharp",
+                 },
+             ],
+             [

@@ -1,0 +1,74 @@
+---
+title: "@lunora/browser"
+description: Cloudflare Browser Rendering for Lunora — ctx.browser (action-only) for headless screenshots, PDFs, HTML scraping, and arbitrary page evaluation.
+---
+
+`@lunora/browser` provides a `ctx.browser` helper for Cloudflare Browser Rendering. It is **action-only**: browser navigation is non-deterministic network I/O, so codegen wires it onto `ActionCtx` exclusively — the same class as `ctx.ai` / `ctx.fetch`. A `ctx.browser` call in a query or mutation is a type error.
+
+`@cloudflare/playwright` is an optional peer dependency (the chromium-protocol shim). Install both:
+
+```sh
+pnpm add @lunora/browser @cloudflare/playwright
+```
+
+Add the binding to your `wrangler.jsonc` (the Vite plugin / CLI infers and reconciles it automatically when it sees a `@lunora/browser` import):
+
+```jsonc
+{
+    "browser": { "binding": "BROWSER" },
+}
+```
+
+## Usage
+
+```ts
+import { action, v } from "@/lunora/_generated/server";
+
+export const screenshotPage = action.input({ url: v.string() }).action(async ({ args: { url }, ctx }) => {
+    // ctx.browser is wired automatically — action context only.
+    const png = await ctx.browser.screenshot(url, { fullPage: true });
+
+    const { key } = await ctx.storage.store(`shots/${crypto.randomUUID()}.png`, png.buffer, { contentType: "image/png" });
+
+    return ctx.storage.getUrl(key);
+});
+```
+
+Outside a Lunora action (worker entry, DO, queue handler), build the helper directly:
+
+```ts
+import { launch } from "@cloudflare/playwright";
+import { createBrowser } from "@lunora/browser";
+
+const browser = createBrowser({ binding: env.BROWSER, launch });
+
+const png = await browser.screenshot("https://example.com", { fullPage: true });
+const pdf = await browser.pdf("https://example.com", { format: "A4", printBackground: true });
+const html = await browser.content("https://example.com");
+const title = await browser.scrape("https://example.com", () => document.title);
+```
+
+## API reference
+
+### `createBrowser(options)`
+
+| Option                | Type                 | Notes                                                                                       |
+| --------------------- | -------------------- | ------------------------------------------------------------------------------------------- |
+| `binding`             | `BrowserBindingLike` | `env.BROWSER` — the Browser Rendering binding. Required.                                    |
+| `launch`              | `BrowserLaunchLike`  | `import { launch } from "@cloudflare/playwright"`. Required (injected by codegen).          |
+| `timeoutMs`           | `number`             | Factory-level navigation timeout (ms). Clamped to 120 000. Default 30 000.                  |
+| `allowPrivateTargets` | `boolean`            | Opt in to navigating private/internal hosts (loopback, RFC1918, link-local). Default false. |
+
+### `Browser`
+
+| Method       | Signature                                    | Notes                                                                           |
+| ------------ | -------------------------------------------- | ------------------------------------------------------------------------------- |
+| `screenshot` | `(url, options?) → Promise<Uint8Array>`      | PNG or JPEG. Options: `fullPage`, `type`, `viewport`, `timeoutMs`, `waitUntil`. |
+| `pdf`        | `(url, options?) → Promise<Uint8Array>`      | Options: `format`, `printBackground`, `viewport`, `timeoutMs`, `waitUntil`.     |
+| `content`    | `(url, options?) → Promise<string>`          | Returns the page's serialized HTML.                                             |
+| `scrape`     | `(url, fn, options?) → Promise<T>`           | Evaluates `fn` in page context; result must be serializable.                    |
+| `launch`     | `(fn: (browser) => Promise<T>) → Promise<T>` | Low-level escape hatch: runs `fn` with the raw Playwright browser.              |
+
+### URL safety (SSRF guard)
+
+Every navigation URL is validated before the browser is launched: non-`http(s)` schemes, embedded credentials, and private/internal targets (loopback, RFC1918, link-local, CGNAT, `localhost`/`*.internal`/`*.local`) are rejected by default. IPv4-mapped IPv6 and octal/hex encodings are normalized first. Set `allowPrivateTargets: true` only when every URL is trusted.

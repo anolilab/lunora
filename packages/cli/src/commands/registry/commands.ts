@@ -1,0 +1,323 @@
+/**
+ * The four registry command orchestrators — thin shells over the manifest /
+ * resolve / reconcile / apply / catalog modules: `add`, `list`, `view`, and
+ * `build`. Plus the small plan/report renderers they share.
+ */
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+
+import { join } from "@visulima/path";
+
+import type { Logger } from "../../util/logger";
+import { confirmDepMutation } from "./apply";
+import { buildRegistryIndex, collectCatalog } from "./catalog";
+import reconcileItems from "./reconcile";
+import { readManifest, resolveItemDirectory, resolvePlan, resolveRegistryRoot, sourceGateError } from "./resolve";
+import type { AddCommandOptions, AddCommandResult, RegistryManifest } from "./types";
+import { emptyResult } from "./types";
+
+/** Render the human-readable plan for one item. */
+const printPlan = (logger: Logger, manifest: RegistryManifest): void => {
+    const label = manifest.title ?? manifest.description;
+
+    logger.info(`plan: ${manifest.name}${label ? ` — ${label}` : ""}`);
+
+    for (const file of manifest.files) {
+        logger.info(`  file  ${file.to}  (${file.merge})`);
+    }
+
+    for (const [dep, range] of Object.entries(manifest.deps ?? {})) {
+        logger.info(`  dep   ${dep}@${range}`);
+    }
+
+    for (const [dep, range] of Object.entries(manifest.devDependencies ?? {})) {
+        logger.info(`  dev   ${dep}@${range}`);
+    }
+
+    for (const binding of manifest.bindings ?? []) {
+        // Render the concrete value so a reviewer can audit what gets written into
+        // wrangler.jsonc (e.g. an attempt to set an exec/entrypoint key) before it
+        // is applied — a bare key path hides the payload.
+        logger.info(`  bind  ${binding.path.join(".")} = ${JSON.stringify(binding.value)}`);
+    }
+
+    for (const variable of manifest.envVars ?? []) {
+        // Show non-secret values; secrets are scaffolded as empty placeholders so
+        // there is nothing to leak.
+        const valueSuffix = variable.secret ? " (secret)" : ` = ${JSON.stringify(variable.value ?? "")}`;
+
+        logger.info(`  env   ${variable.name}${valueSuffix}`);
+    }
+};
+
+/** Emit the `--json` plan snapshot for the resolved items to stdout. */
+const printJsonPlan = (items: ReadonlyArray<{ manifest: RegistryManifest }>): void => {
+    const planSnapshot = items.map(({ manifest }) => {
+        return {
+            // Include the concrete value so a JSON-plan consumer can audit the
+            // mutation (not just the key path) before it is applied.
+            bindings: (manifest.bindings ?? []).map((binding) => {
+                return { path: binding.path.join("."), value: binding.value };
+            }),
+            deps: Object.keys(manifest.deps ?? {}),
+            devDependencies: Object.keys(manifest.devDependencies ?? {}),
+            envVars: (manifest.envVars ?? []).map((variable) => {
+                return { name: variable.name, ...(variable.secret ? { secret: true } : { value: variable.value ?? "" }) };
+            }),
+            files: manifest.files.map((file) => {
+                return { merge: file.merge, to: file.to };
+            }),
+            name: manifest.name,
+            requires: manifest.requires ?? [],
+            title: manifest.title,
+        };
+    });
+
+    process.stdout.write(`${JSON.stringify({ items: planSnapshot }, undefined, 2)}\n`);
+};
+
+/** Print the post-reconcile report: summary, next steps, and per-item `docs` guidance. */
+const reportAddResult = (
+    items: ReadonlyArray<{ manifest: RegistryManifest }>,
+    deps: ReadonlyArray<string>,
+    written: number,
+    skipped: number,
+    logger: Logger,
+): void => {
+    logger.success(`add complete: ${String(written)} written, ${String(skipped)} skipped`);
+    logger.info("next steps:");
+    logger.info("  lunora codegen   # regenerate _generated/ so the new tables/functions appear");
+
+    if (deps.length > 0) {
+        logger.info("  pnpm install     # install newly-added dependencies");
+    }
+
+    for (const { manifest } of items) {
+        if (manifest.docs) {
+            logger.info(`${manifest.name}: ${manifest.docs}`);
+        }
+    }
+};
+
+/** `lunora registry list`: enumerate available registry items (local `--from` or remote). */
+const runListCommand = async (options: AddCommandOptions): Promise<AddCommandResult> => {
+    const empty = emptyResult();
+    const gate = sourceGateError("list", options);
+
+    if (gate) {
+        options.logger.error(gate);
+
+        return { ...empty, code: 1 };
+    }
+
+    let cleanup: () => void = () => {};
+
+    try {
+        const resolved = await resolveRegistryRoot(options);
+
+        cleanup = resolved.cleanup;
+
+        const items = collectCatalog(resolved.root);
+
+        if (options.json) {
+            process.stdout.write(`${JSON.stringify(items, undefined, 2)}\n`);
+
+            return empty;
+        }
+
+        options.logger.info(`available registry items (${String(items.length)}):`);
+
+        for (const item of items) {
+            options.logger.info(`  ${item.name}${item.description ? ` — ${item.description}` : ""}`);
+        }
+
+        return empty;
+    } catch (error) {
+        options.logger.error(`list failed: ${error instanceof Error ? error.message : String(error)}`);
+
+        return { ...empty, code: 1 };
+    } finally {
+        cleanup();
+    }
+};
+
+/** `lunora registry add` (one or more item names): scaffold items into the project. */
+const runAddCommand = async (options: AddCommandOptions): Promise<AddCommandResult> => {
+    const cwd = options.cwd ?? process.cwd();
+    const empty = emptyResult();
+
+    if (options.list) {
+        return runListCommand(options);
+    }
+
+    if (options.names.length === 0) {
+        options.logger.error("add requires at least one item name. Usage: lunora registry add <name> [...names]");
+
+        return { ...empty, code: 1 };
+    }
+
+    const gate = sourceGateError("add", options);
+
+    if (gate) {
+        options.logger.error(gate);
+
+        return { ...empty, code: 1 };
+    }
+
+    let cleanups: (() => void)[] = [];
+
+    try {
+        const { cleanups: planCleanups, items } = await resolvePlan(options.names, options);
+
+        cleanups = planCleanups;
+
+        // --- Plan ---
+        for (const { manifest } of items) {
+            printPlan(options.logger, manifest);
+        }
+
+        if (options.json) {
+            printJsonPlan(items);
+        }
+
+        if (options.dryRun) {
+            options.logger.info("dry-run: stopping before any files are written");
+
+            return empty;
+        }
+
+        // --- Diff preview: show file-level changes, mutate nothing ---
+        if (options.diff) {
+            reconcileItems(items, cwd, options.logger, { diff: true });
+            options.logger.info("diff: preview only — re-run without --diff to apply");
+
+            return empty;
+        }
+
+        // --- Confirm package.json mutation (if any item adds deps) ---
+        if (!(await confirmDepMutation(items, options))) {
+            return { ...empty, code: 1 };
+        }
+
+        // --- Reconcile ---
+        const { bindings, deps, skipped, written } = reconcileItems(items, cwd, options.logger, { overwrite: options.overwrite });
+
+        reportAddResult(items, deps, written.length, skipped.length, options.logger);
+
+        return { bindings, code: 0, deps, skipped, written };
+    } catch (error) {
+        options.logger.error(`add failed: ${error instanceof Error ? error.message : String(error)}`);
+
+        return { ...empty, code: 1 };
+    } finally {
+        for (const cleanup of cleanups) {
+            cleanup();
+        }
+    }
+};
+
+/**
+ * `lunora registry view` — inspect a registry item without installing it:
+ * print its plan (files / deps / env vars) followed by the full contents of each
+ * file it would scaffold. Resolves only the named item — no `requires` expansion.
+ */
+const runRegistryViewCommand = async (options: AddCommandOptions): Promise<AddCommandResult> => {
+    const empty = emptyResult();
+
+    if (options.names.length === 0) {
+        options.logger.error("view requires an item name. Usage: lunora registry view <name>");
+
+        return { ...empty, code: 1 };
+    }
+
+    const gate = sourceGateError("view", options);
+
+    if (gate) {
+        options.logger.error(gate);
+
+        return { ...empty, code: 1 };
+    }
+
+    const cleanups: (() => void)[] = [];
+
+    try {
+        for (const name of options.names) {
+            // eslint-disable-next-line no-await-in-loop -- each item is fetched + printed before the next; cleanup ordering depends on it
+            const { cleanup, directory } = await resolveItemDirectory(name, options);
+
+            cleanups.push(cleanup);
+
+            const manifest = readManifest(directory, name);
+
+            printPlan(options.logger, manifest);
+
+            for (const file of manifest.files) {
+                options.logger.info(`--- ${file.to} (${file.merge}) ---`);
+
+                const content = readFileSync(join(directory, file.from), "utf8");
+
+                for (const line of content.split("\n")) {
+                    options.logger.info(line);
+                }
+            }
+        }
+
+        return empty;
+    } catch (error) {
+        options.logger.error(`view failed: ${error instanceof Error ? error.message : String(error)}`);
+
+        return { ...empty, code: 1 };
+    } finally {
+        for (const cleanup of cleanups) {
+            cleanup();
+        }
+    }
+};
+
+/**
+ * `lunora registry build` — regenerate `index.json` from the item directories
+ * (the catalog `list` reads). With `--check`, verify the committed index matches
+ * instead of rewriting it (exits non-zero on drift) — a CI guard.
+ */
+// eslint-disable-next-line @typescript-eslint/require-await -- uniform async command contract; the body (buildRegistryIndex) is synchronous
+const runBuildIndexCommand = async (options: AddCommandOptions): Promise<AddCommandResult> => {
+    const empty = emptyResult();
+    const root = options.from;
+
+    if (root === undefined) {
+        options.logger.error("registry build requires --from <registry root>");
+
+        return { ...empty, code: 1 };
+    }
+
+    if (!existsSync(root)) {
+        options.logger.error(`registry root not found: ${root}`);
+
+        return { ...empty, code: 1 };
+    }
+
+    const index = buildRegistryIndex(root);
+    const outputPath = options.out ?? join(root, "index.json");
+
+    if (options.check) {
+        const current = existsSync(outputPath) ? (JSON.parse(readFileSync(outputPath, "utf8")) as { items?: unknown }) : { items: [] };
+        // Compare normalized item arrays so formatting/comment differences don't matter.
+        const drift = JSON.stringify(current.items ?? []) !== JSON.stringify(index.items);
+
+        if (drift) {
+            options.logger.error(`registry: ${outputPath} is stale — run \`lunora registry build\` to regenerate it`);
+
+            return { ...empty, code: 1 };
+        }
+
+        options.logger.success(`registry: ${outputPath} is up to date (${String(index.items.length)} items)`);
+
+        return empty;
+    }
+
+    writeFileSync(outputPath, `${JSON.stringify({ $schema: "./schema/registry.schema.json", ...index }, undefined, 4)}\n`, "utf8");
+    options.logger.success(`registry: wrote ${outputPath} (${String(index.items.length)} items)`);
+
+    return empty;
+};
+
+export { runAddCommand, runBuildIndexCommand, runListCommand, runRegistryViewCommand };

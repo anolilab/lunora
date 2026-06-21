@@ -1,0 +1,371 @@
+---
+title: "@lunora/container"
+description: Deploy Docker containers alongside your Lunora app, called from actions over ctx.containers.
+---
+
+`@lunora/container` runs [Cloudflare Containers](https://developers.cloudflare.com/containers/)
+as part of a Lunora app: declare a container with `defineContainer`, and codegen
+emits the container-enabled Durable Object class while `lunora dev` / `lunora deploy`
+reconcile the `wrangler.jsonc` wiring. `wrangler deploy` builds the image with
+your local Docker engine and pushes it to Cloudflare's registry — there is no
+separate container platform to sign up for.
+
+Reach for a container when a job doesn't fit the Workers runtime: an existing
+binary (ffmpeg, headless Chrome, a Python ML model), a long-running process, or
+anything that needs a full filesystem.
+
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```bash tab="pnpm"
+pnpm add @lunora/container
+```
+
+```bash tab="npm"
+npm install @lunora/container
+```
+
+```bash tab="yarn"
+yarn add @lunora/container
+```
+
+```bash tab="bun"
+bun add @lunora/container
+```
+
+</Tabs>
+
+<Callout type="warn">
+    Containers require the **Workers Paid** plan. Images must target **`linux/amd64`** — on Apple Silicon, build with `--platform linux/amd64` (the scaffolded
+    Dockerfile does this for you). See [Limits](/docs/limits).
+</Callout>
+
+## Declare a container
+
+Containers live in `lunora/containers.ts`. Scaffold one — definition plus a
+starter Dockerfile under `containers/<name>/` — with:
+
+```sh
+pnpm vis generate lunora-container --name=transcoder
+```
+
+```ts
+// lunora/containers.ts
+import { defineContainer } from "@lunora/container";
+
+export const transcoder = defineContainer({
+    image: "./containers/transcoder", // directory with a Dockerfile, or { registry: "docker.io/acme/transcoder:1.4" }
+    defaultPort: 8080,
+    instanceType: "standard-1", // lite | basic | standard-1..4 | { vcpu, memoryMib, diskMb }
+    maxInstances: 5, // cap concurrent running instances (and the .any() pool)
+    sleepAfter: "5m", // idle timeout — instances scale to zero
+    secrets: ["TRANSCODER_API_KEY"], // Worker secrets forwarded into the container env
+});
+```
+
+`image` is either a **local path** (a directory containing a `Dockerfile`, or a
+path to the Dockerfile itself) that `wrangler deploy` builds and pushes, or a
+**pre-built registry reference** (`{ registry }`) from the Cloudflare Registry,
+Docker Hub, or Amazon ECR.
+
+Re-export the generated classes from your worker entry — wrangler requires every
+container's class to be exported by the deployed Worker:
+
+```ts
+// src/server/index.ts
+export * from "../../lunora/_generated/containers";
+```
+
+`lunora dev` reminds you if this is missing, and reconciles the rest of
+`wrangler.jsonc` automatically: the `containers[]` entry, the `CONTAINER_*`
+Durable Object binding, the SQLite migration, and `observability.enabled` (so
+container logs are captured).
+
+## Call a container from an action
+
+Container calls are external I/O, so — like `ctx.fetch` and `ctx.ai` —
+`ctx.containers` lives on **actions**, never queries or mutations. Codegen types
+one handle per declared container.
+
+```ts
+import { action, v } from "@/lunora/_generated/server";
+
+export const transcode = action.input({ videoId: v.id("videos") }).action(async ({ ctx, args: { videoId } }) => {
+    // One instance per entity — same id always routes to the same container.
+    const response = await ctx.containers.transcoder.get(videoId).fetch("/transcode", {
+        method: "POST",
+        body: JSON.stringify({ videoId }),
+    });
+
+    return response.json();
+});
+```
+
+### Routing: `.get(name)` vs `.any()`
+
+- **`.get(name)`** — one container instance per name. Use it for stateful,
+  per-entity work: a sandbox per user, a room per game, a worker per job id. The
+  same name always reaches the same instance.
+- **`.any(count?)`** — a random instance from a fixed pool (defaults to
+  `maxInstances`, else 3). Use it for stateless, interchangeable work where any
+  instance can serve the request.
+- **`.pool(options?)`** — like `.any()`, but resilient: each `fetch` picks a
+  random instance and, on a thrown error or a retryable response (`5xx` by
+  default), retries on a freshly-picked instance with exponential backoff.
+
+```ts
+// Stateless pool — load-balanced across instances.
+const probe = await ctx.containers.transcoder.any().fetch("/healthz");
+
+// Resilient: rides over a single cold/unhealthy instance.
+const result = await ctx.containers.transcoder
+    .pool({ attempts: 3, backoffMs: 100, retryOn: (response) => response.status >= 500 })
+    .fetch("/transcode", { method: "POST", body });
+```
+
+`fetch` accepts a path string (resolved against the container) or a full
+`Request`, and proxies WebSocket upgrades — a real-time stream to a container
+works the same as any other `fetch`.
+
+### Managing a named instance
+
+The `.get(name)` handle also exposes lifecycle control, for the per-entity
+pattern where you manage an instance rather than wait for `sleepAfter`:
+
+```ts
+const sandbox = ctx.containers.codeRunner.get(userId);
+
+await sandbox.start({ envVars: { SESSION: userId } }); // explicit start (optional per-instance env)
+const state = await sandbox.getState(); // inspect runtime state
+await sandbox.stop(); // stop (can restart on next request)
+await sandbox.destroy(); // tear down and discard the ephemeral disk
+```
+
+`.any()` and `.pool()` return fetch-only handles — lifecycle control is for
+named instances you own.
+
+<Callout type="warn">
+    Cloudflare has no built-in autoscaling yet: pools are a fixed size and `.any()`/`.pool()` pick uniformly, ignoring location. `.pool()` is the recommended
+    call for stateless work until then; for batch work, drive instances from a [scheduler](/docs/packages/scheduler) cron or `runAfter`.
+</Callout>
+
+## Calling Lunora from inside a container
+
+Container code calls back into your app's functions with the bridge client
+(any JS runtime — Node, Bun, Deno), over the Worker's HTTP RPC endpoint — so a
+container reads/writes app state through the same queries/mutations the browser
+uses, instead of reaching into a database directly.
+
+```ts
+import { createContainerBridge } from "@lunora/container/bridge";
+
+const lunora = createContainerBridge({ baseUrl: process.env.LUNORA_URL, token: process.env.LUNORA_TOKEN });
+
+const pending = await lunora.query("jobs:listPending", { limit: 10 });
+await lunora.mutation("jobs:markDone", { id: pending[0].id });
+```
+
+For full type-safety, pass a generated `api` reference to `run()` — args and
+result are inferred from it:
+
+```ts
+import { api } from "../lunora/_generated/api";
+
+const job = await lunora.run(api.jobs.next, { queue: "transcode" }); // typed args + result
+```
+
+The `token` is a bearer your Worker's `resolveIdentity` recognizes — forward it
+as a container `secret`, never bake it into the image. Non-JS containers can
+`POST /_lunora/rpc` with `{ functionPath, args }` directly (same contract).
+
+### Securing the bridge
+
+The bridge sends its token as `Authorization: Bearer <token>`. Your Worker's
+`resolveIdentity` is what validates it and maps it to the identity the called
+functions run as — without that check, anyone who reaches `/_lunora/rpc` runs as
+whatever identity you return. Validate the bearer against a Worker secret and
+return `null` for anything that doesn't match (an unrecognised request runs
+anonymously and fails your functions' own authorization checks):
+
+```ts
+// in your worker options (createWorker / withLunora)
+resolveIdentity: (request, env) => {
+    const header = request.headers.get("authorization");
+    const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
+
+    // Compare against a Worker secret you also forward to the container.
+    if (!token || token !== env.LUNORA_CONTAINER_TOKEN) {
+        return null; // anonymous — function-level authorization still applies
+    }
+
+    return { userId: "container:transcoder" }; // identity the bridge calls run as
+},
+```
+
+Generate the token once, set it with `wrangler secret put LUNORA_CONTAINER_TOKEN`
+for production (and in `.dev.vars` locally), and pass the same value to the
+container as a `secret` so it can send it back. Never bake it into the image.
+
+## Building with Railpack (no Dockerfile)
+
+Point `image` at a `{ build }` source directory and Lunora builds the image
+with [Railpack](https://railpack.com) — Railway's Dockerfile-less builder —
+instead of you writing a Dockerfile:
+
+```ts
+export const transcoder = defineContainer({
+    image: { build: "./services/transcoder" }, // Railpack detects the stack and builds it
+    defaultPort: 8080,
+});
+```
+
+On `lunora deploy`, each `{ build }` container is built with Railpack and
+pushed to the Cloudflare Registry (under a deterministic `lunora-<name>:build`
+tag) before the Worker deploys. This needs the `railpack` CLI **and** a running
+BuildKit instance reachable via `BUILDKIT_HOST`, e.g.:
+
+```bash
+docker run --rm --privileged -d --name buildkit moby/buildkit
+export BUILDKIT_HOST=docker-container://buildkit
+```
+
+`lunora deploy` preflights both and stops with setup directions if either is
+missing. The Dockerfile path remains the zero-extra-deps default — Railpack is
+purely opt-in.
+
+## Lifecycle logs
+
+The generated container classes emit a structured event on **start**, **stop**,
+and **error**, tagged with the container name and per-instance id (the
+container's `CLOUDFLARE_DURABLE_OBJECT_ID`). `lunora dev` surfaces them inline
+with your `ctx.log` and RPC lines:
+
+```text
+[lunora] container:transcoder#a1b2c3d4  start
+[lunora] container:transcoder#a1b2c3d4  error  exited unexpectedly
+```
+
+The same events also appear in the Studio **Logs** panel: each lifecycle
+transition is best-effort pushed into the root shard's log buffer under the
+`container:<name>` source, so a crash-looping container shows up next to your
+function logs without leaving the dashboard. The push is best-effort by design —
+if it can't reach the shard, the `lunora dev` terminal above remains the source
+of truth.
+
+## Advisories
+
+Two [advisor](/docs/packages/studio) lints flag container cost/security footguns
+in the Studio **Advisors** table and at codegen time:
+
+- **`container_oversized_instance`** — a large `standard-3`/`standard-4` (or
+  large custom) instance, whose provisioned memory + disk are billed while any
+  instance runs.
+- **`container_public_internet`** — `enableInternet` left at the default
+  (enabled); set it explicitly (`false` to close egress, `true` to opt in).
+
+## Configuration
+
+| Field            | Purpose                                                                                      |
+| ---------------- | -------------------------------------------------------------------------------------------- |
+| `image`          | Local Dockerfile path/directory, or `{ registry }` for a pre-built image. **Required.**      |
+| `defaultPort`    | Port the container listens on; `fetch` targets it. Must be `EXPOSE`d for local dev.          |
+| `instanceType`   | `lite` \| `basic` \| `standard-1..4`, or a custom `{ vcpu, memoryMib, diskMb }`.             |
+| `maxInstances`   | Cap on concurrently running instances (and the default `.any()` pool size).                  |
+| `sleepAfter`     | Idle timeout before an instance sleeps, e.g. `"5m"`, `"30s"`, or seconds. Default `"10m"`.   |
+| `env`            | Static environment variables baked into the container.                                       |
+| `secrets`        | Names of Worker secrets forwarded into the container env at start.                           |
+| `enableInternet` | Whether the container may open outbound connections. Default `true` — note egress is billed. |
+
+### Secrets and environment
+
+`env` holds static values; `secrets` names Worker secrets — managed exactly like
+every other Lunora secret. List them in `.dev.vars` for local dev and
+`wrangler secret put` for production (see [Deployment](/docs/deployment#secrets)).
+A declared secret that isn't set fails fast at container start with a directed
+error, rather than launching the container without it.
+
+```ts
+export const worker = defineContainer({
+    image: "./containers/worker",
+    env: { LOG_LEVEL: "info" },
+    secrets: ["STRIPE_API_KEY"], // resolved from env.STRIPE_API_KEY at start
+});
+```
+
+## Dockerfile
+
+The scaffolded Dockerfile encodes the platform's requirements:
+
+```dockerfile
+# linux/amd64 is required — keep it explicit so Apple Silicon builds don't
+# produce an arm64 image that fails at deploy.
+FROM --platform=linux/amd64 node:22-slim
+
+WORKDIR /app
+COPY . .
+
+# Local dev needs the listening port EXPOSEd (production exposes all ports).
+EXPOSE 8080
+
+# Exec form (not shell form) so SIGTERM reaches the process — Cloudflare sends
+# SIGTERM on rollouts and gives 15 minutes before SIGKILL.
+ENTRYPOINT ["node", "server.mjs"]
+```
+
+Disk is **ephemeral** — every (re)start gives a fresh filesystem. For
+persistence, write to [`@lunora/storage`](/docs/packages/storage) (R2).
+
+## Local development
+
+`lunora dev` (and `vite dev`) build and run containers locally through the
+Cloudflare Vite plugin, so a Docker-compatible engine (Docker Desktop, Colima)
+must be running — Lunora warns up front if it isn't. A few things differ from
+production:
+
+- **Container code is not hot-reloaded.** Edit the Worker and it reloads; press
+  `r` to rebuild the container.
+- **Ports must be `EXPOSE`d** in the Dockerfile (production exposes all ports).
+- **`vite dev` can't pull from the Cloudflare Registry** — use a local
+  Dockerfile, `FROM`-ing a registry image if you need one.
+
+## Testing
+
+`ctx.containers` has a Docker-free test double, so action tests stay fast and
+deterministic — `createContainerTestContext` maps each container to a `fetch`
+handler that plays the container:
+
+```ts
+import { createContainerTestContext } from "@lunora/container";
+
+const containers = createContainerTestContext({
+    transcoder: async (request, { name }) => new Response(JSON.stringify({ ok: true, name })),
+});
+
+// Inject `containers` as ctx.containers when exercising the action.
+```
+
+Run the real container behind `lunora dev` for integration tests; keep those in
+a Docker-enabled CI job, separate from the default unit-test matrix.
+
+## CLI
+
+Manage images and instances with `lunora containers` — thin wrappers over
+`wrangler containers` with a Docker preflight on the build/push paths:
+
+```bash
+lunora containers build ./containers/transcoder --tag transcoder:v1 --push
+lunora containers push transcoder:v1
+lunora containers images list
+lunora containers images delete transcoder:v1
+```
+
+Splitting build/push from `lunora deploy` lets CI build the image in one job and
+deploy in another. `lunora deploy` itself runs a Docker preflight and stops with
+an actionable message when a Dockerfile-built container is declared but no engine
+is available.
+
+## See also
+
+- [Deployment](/docs/deployment)
+- [Limits](/docs/limits)
+- [@lunora/scheduler](/docs/packages/scheduler)
+- [@lunora/storage](/docs/packages/storage)

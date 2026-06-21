@@ -1,0 +1,23 @@
+{
+    "name": "lunora-e2e",
+    "tags": ["type:tests", "category:e2e"],
+    "targets": {
+        "e2e": {
+            "cache": false,
+            "inputs": [
+                "default",
+                "{projectRoot}/playwright.config.ts",
+                "{projectRoot}/tests/**/*",
+                "{projectRoot}/fixtures/**/*",
+                "{projectRoot}/globalSetup.ts",
+                "{projectRoot}/globalTeardown.ts"
+            ],
+            "command": "playwright test"
+        },
+        "lint:types": {
+            "cache": true,
+            "inputs": ["default", "{projectRoot}/tsconfig.json"],
+            "command": "tsc --noEmit"
+        }
+    }
+}

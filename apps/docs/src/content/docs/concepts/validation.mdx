@@ -1,0 +1,145 @@
+---
+title: Validation
+description: The v.* validators that type your columns and parse query / mutation / action inputs and outputs end to end.
+---
+
+A **validator** is a single runtime object that does two jobs at once: it
+parses a value at runtime (throwing `ValidationError` on a mismatch) and it
+carries the TypeScript type that value infers to. The same `v.*` validators
+describe your storage columns and guard the boundary of every function. One
+declaration drives both the database shape and the function's contract, and the
+inferred types flow all the way to the generated client.
+
+```ts
+// In schema.ts — table + column definitions:
+import { defineSchema, defineTable, v } from "lunorash/server";
+
+// In a query/mutation/action — the typed builders + v:
+import { mutation, query, v } from "@/lunora/_generated/server";
+```
+
+Validators come from [`@lunora/values`](/docs/packages/values); `@lunora/server`
+re-exports the `v` namespace for schema files. Inside `query` / `mutation` /
+`action` files, import `v` (and the builders) from the generated
+`@/lunora/_generated/server` instead — its `v.id(...)` is branded to your tables.
+
+## Job 1 — column types in `defineTable`
+
+Each key of a `defineTable({...})` shape is a column, and its value is the
+validator for that column. The validator decides the SQL column type, the
+read/write type, and whether `null` is accepted:
+
+```ts
+// lunora/schema.ts
+import { defineSchema, defineTable, v } from "lunorash/server";
+
+export default defineSchema({
+    messages: defineTable({
+        channelId: v.id("channels"), // branded FK
+        text: v.string(),
+        pinned: v.optional(v.boolean()),
+        reactions: v.array(v.string()),
+    }),
+});
+```
+
+Column validators also carry the [constraint](/docs/concepts/constraints)
+modifiers (`.unique()`, `.nullable()`, `.default(…)`), and `v.id("table")` is
+the foreign-key type used by [relations](/docs/concepts/relations).
+
+## Job 2 — argument and return validation
+
+The `query` / `mutation` / `action` builders take their input contract from
+`.input({...})` — a map of field name to validator. The runtime parses the
+incoming `args` through it before your handler runs, so a malformed call
+fails with `ValidationError` and never reaches your code. Inside the handler,
+`args` is fully typed from those validators:
+
+```ts
+import { mutation, v } from "@/lunora/_generated/server";
+
+export const send = mutation
+    .input({
+        channelId: v.id("channels"),
+        text: v.string(),
+        pinned: v.optional(v.boolean()),
+    })
+    .mutation(async ({ ctx, args }) => {
+        // args: { channelId: Id<"channels">; text: string; pinned?: boolean }
+        return ctx.db.insert("messages", { ...args, userId: ctx.auth.userId });
+    });
+```
+
+`.input(...)` is chainable and additive: call it more than once and the maps
+merge. The terminal method (`.query()`, `.mutation()`, `.action()`) takes the
+handler and marks the function kind.
+
+### Validating the return value with `.output(...)`
+
+`.output(validator)` parses the handler's result through a validator before it
+leaves the server, and **narrows the function's return type to `Infer<V>`**.
+Without it the return type is whatever your handler infers; with it the
+declared validator is the contract:
+
+```ts
+export const getProfile = query
+    .input({ userId: v.id("users") })
+    .output(v.object({ id: v.id("users"), name: v.string() }))
+    .query(async ({ ctx, args }) => {
+        const user = await ctx.db.get(args.userId);
+        return { id: user._id, name: user.name };
+    });
+```
+
+<Callout type="info">
+    `.output()` does not apply to streaming/subscription chunks — each chunk is yielded as-is. Use it for the single resolved value of a `query` / `mutation` /
+    `action`.
+</Callout>
+
+## Return-type inference to the client
+
+Codegen emits a typed `api` object from your function exports. The client's
+`useQuery` / `useMutation` (and the bare client calls) read the inferred input
+and output types straight off that `api`, so the same validators that parse on
+the server type the client call site. Pass the wrong `args` shape, or use the
+result as the wrong type, and it's a compile error in the browser. There is no
+second schema to keep in sync: the validator is the contract on both ends.
+
+## Common validators
+
+| Validator              | Accepts                       | Notes                                    |
+| ---------------------- | ----------------------------- | ---------------------------------------- |
+| `v.string()`           | `string`                      | UTF-8 text                               |
+| `v.number()`           | `number`                      | Finite JS number; `NaN` throws           |
+| `v.boolean()`          | `boolean`                     | `true` / `false`                         |
+| `v.null()`             | `null`                        | Only `null`                              |
+| `v.bigint()`           | `bigint`                      | Stored lossless as INTEGER in D1         |
+| `v.bytes()`            | `ArrayBuffer` / `Uint8Array`  | Binary (BLOB in D1)                      |
+| `v.id(table)`          | `Id<table>`                   | Branded foreign-key id                   |
+| `v.literal(value)`     | exact `value`                 | String / number / boolean / null literal |
+| `v.array(inner)`       | `Array<Infer<inner>>`         | Homogeneous array                        |
+| `v.object(shape)`      | `{ ...shape }`                | Extra keys throw                         |
+| `v.union(a, b, ...)`   | any member                    | Discriminated by `kind` when present     |
+| `v.record(key, value)` | `Record<key, value>`          | Map-style object                         |
+| `v.optional(inner)`    | `Infer<inner>` \| `undefined` | Makes a field optional                   |
+| `v.any()`              | anything                      | Escape hatch — disables runtime checks   |
+
+Compose them freely — `v.array(v.object({ ... }))`, `v.union(v.literal("a"),
+v.literal("b"))`, `v.optional(v.id("users"))` — for both columns and function
+contracts.
+
+## ValidationError
+
+When a value fails to parse, `.validate(value)` throws `ValidationError`. It
+carries the `path` to the offending field (rendered via `formatPath` as
+`args.<field>.<sub>`) plus a short `describeValue(value)` summary, so the
+boundary failure points at exactly which input was wrong. See
+[`@lunora/values`](/docs/packages/values#validationerror).
+
+## See also
+
+- [Schema](/docs/concepts/schema) — declaring tables and column validators
+- [Indexes](/docs/concepts/indexes) — accelerating the reads your handlers run
+- [Queries & mutations](/docs/concepts/queries-mutations) — the function kinds and `ctx`
+- [@lunora/values](/docs/packages/values) — the full `v.*` reference, `Infer` and `Id`
+- [@lunora/server](/docs/packages/server) — `query` / `mutation` / `action` builders

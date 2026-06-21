@@ -1,0 +1,126 @@
+---
+title: File storage
+description: Typed R2 buckets exposed as ctx.storage — uploading, serving via signed URLs, and deleting files from your functions.
+---
+
+[`@lunora/storage`](/docs/packages/storage) wraps Cloudflare R2 in a typed
+surface and threads it onto every function context as `ctx.storage`. A
+file is addressed by a string **key** you choose; the bucket and signing secret
+are configured once and never appear in a handler. As with everything else in
+Lunora, _which_ operations you can reach depends on the kind of function you're
+in.
+
+```ts
+import { action, v } from "@/lunora/_generated/server";
+
+export const importLogo = action.input({ key: v.string() }).action(async ({ ctx, args: { key } }) => {
+    const upstream = await ctx.fetch("https://example.com/logo.png");
+    await ctx.storage.store(key, await upstream.arrayBuffer(), { contentType: "image/png" });
+    return ctx.storage.getUrl(key);
+});
+```
+
+## Which contexts expose what
+
+`ctx.storage` is **read-only inside a `query` or a `mutation`**, and the **full
+read/write surface inside an `action`**. The split is deliberate: queries are
+pure reads, and mutations run inside a transactional scope. Neither is allowed
+to perform a side-effectful R2 write or delete, because those can't participate
+in the transaction or be rolled back. Both can still read existing objects and
+mint signed URLs, since signing is an HMAC computation with no R2 round-trip.
+
+| Operation                  | Query | Mutation | Action |
+| -------------------------- | :---: | :------: | :----: |
+| `download` / `getMetadata` |   ✓   |    ✓     |   ✓    |
+| `getUrl` / `getSignedUrl`  |   ✓   |    ✓     |   ✓    |
+| `generateUploadUrl`        |   —   |    —     |   ✓    |
+| `store`                    |   —   |    —     |   ✓    |
+| `delete`                   |   —   |    —     |   ✓    |
+
+In short: serve and inspect files from anywhere; mint a **direct-upload** URL or
+write and delete bytes only from an action.
+
+## Uploading
+
+The browser-friendly pattern is a **signed upload URL**: an action mints a
+short-lived `PUT` URL, the browser uploads straight to R2 (your Worker never
+proxies the bytes), and a follow-up mutation records the key in your database.
+
+```ts
+import { action, v } from "@/lunora/_generated/server";
+
+export const requestUpload = action.input({ key: v.string(), contentType: v.string() }).action(async ({ ctx, args: { key, contentType } }) => {
+    if (!ctx.auth.userId) throw new Error("must be signed in");
+    const url = await ctx.storage.generateUploadUrl(`avatars/${ctx.auth.userId}/${key}`, {
+        contentType,
+        expiresInSeconds: 60,
+    });
+    return { url };
+});
+```
+
+When the bytes already live server-side (fetched in the same action, generated,
+or transformed), upload them directly with `store`, which also enforces optional
+`maxSize` / `allowedContentTypes` guards:
+
+```ts
+await ctx.storage.store(key, body, { allowedContentTypes: ["image/png", "image/jpeg"], maxSize: 5_000_000 });
+```
+
+## Serving files
+
+`getUrl(key)` returns a stable public URL against the configured base. For
+private objects, `getSignedUrl(key, { expiresInSeconds })` returns a short-lived
+URL that grants access without exposing the bucket. Because signing is
+HMAC-only, you can hand one out from a `query` to feed a `<img src>` reactively:
+
+```ts
+import { query, v } from "@/lunora/_generated/server";
+
+export const avatarUrl = query.input({ key: v.string() }).query(async ({ ctx, args: { key } }) => {
+    if (!(await ctx.storage.getMetadata(key))) return null;
+    return ctx.storage.getSignedUrl(key, { expiresInSeconds: 300 });
+});
+```
+
+To stream the body through your Worker instead, `download(key)` returns the
+`ReadableStream` (or `null` when the object is absent), and `getMetadata(key)`
+returns the size, content-type, sha256, and any custom metadata without fetching
+the body.
+
+## Named buckets
+
+Select a non-default bucket with `ctx.storage.bucket("name")`; the returned
+accessor scopes every operation to that bucket and keeps the same read-only /
+full split as the bare `ctx.storage`. Bucket names are typed when you declare
+them in your schema, so a typo is a compile error.
+
+```ts
+await ctx.storage.bucket("exports").store(key, csv, { contentType: "text/csv" }); // action
+const stream = await ctx.storage.bucket("exports").download(key); // any context
+```
+
+## Deleting
+
+`delete(key)` removes an object and is **action-only**, for the same reason
+writes are:
+
+```ts
+import { action, v } from "@/lunora/_generated/server";
+
+export const removeAttachment = action.input({ key: v.string() }).action(async ({ ctx, args: { key } }) => {
+    await ctx.storage.delete(key);
+});
+```
+
+A common shape is a mutation that deletes the database row and schedules an
+action to delete the underlying object, keeping the byte-level side-effect out
+of the transaction (see [scheduling](/docs/concepts/scheduling)).
+
+## See also
+
+- [Queries & mutations](/docs/concepts/queries-mutations) — the contexts each
+  storage surface attaches to.
+- [Scheduling](/docs/concepts/scheduling) — deferring a delete or upload from a mutation.
+- [Actions](/docs/concepts/actions) — where the full read/write surface lives.
+- [@lunora/storage](/docs/packages/storage) — bucket configuration and signed-URL internals.

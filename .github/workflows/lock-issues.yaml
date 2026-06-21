@@ -1,0 +1,17 @@
+"name": "Lock inactive issues and pull requests"
+
+"on": # yamllint disable-line rule:truthy
+    "schedule":
+        - "cron": "0 * * * *"
+
+"permissions":
+    "contents": "read"
+    "discussions": "write"
+    "issues": "write"
+    "pull-requests": "write"
+
+"jobs":
+    "lock-closed":
+        "uses": "anolilab/workflows/.github/workflows/lock-closed.yml@3c54b71af67bdd990513c4a17fa2fde078db7b74" # main
+        "with":
+            "target-repo": "anolilab/lunora"

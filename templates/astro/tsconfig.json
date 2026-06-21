@@ -1,0 +1,11 @@
+{
+    "extends": "astro/tsconfigs/strict",
+    "compilerOptions": {
+        "jsx": "react-jsx",
+        "jsxImportSource": "react",
+        "moduleResolution": "bundler",
+        "types": ["@cloudflare/workers-types", "astro/client"]
+    },
+    "include": ["src/**/*", "lunora/**/*", "astro.config.mjs"],
+    "exclude": ["dist"]
+}

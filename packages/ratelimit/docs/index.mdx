@@ -1,0 +1,262 @@
+---
+title: "@lunora/ratelimit"
+description: Token-bucket, fixed-window, and sliding-window rate limiting as procedure middleware.
+---
+
+`@lunora/ratelimit` enforces named rate limits over a pluggable store. You build
+one `RateLimiter` per app from a config map, then either attach the `rateLimit`
+middleware to a procedure's `.use(...)` chain or call `limiter.limit(...)`
+directly. On rejection the middleware throws a structural `LunoraError` that the
+runtime maps to `429 Too Many Requests` (or `403 Forbidden` for a deny-list hit),
+carrying `retryAfter` in milliseconds.
+
+```ts
+import { RateLimiter, rateLimit } from "@lunora/ratelimit";
+
+import { mutation } from "./_generated/server";
+
+const limiter = new RateLimiter({
+    config: {
+        login: { kind: "fixed window", period: 60_000, rate: 5 },
+        send: { kind: "token bucket", period: 1_000, rate: 10, capacity: 20 },
+    },
+});
+
+export const send = mutation.use(rateLimit(limiter, "send", { key: (ctx) => ctx.auth.userId })).mutation(async ({ ctx }) => {
+    // …
+});
+```
+
+Like [row-level security](/docs/concepts/rls) and [data masking](/docs/concepts/masking),
+it rides the `.use(...)` chain and is **opt-in per procedure** — a bare
+`query`/`mutation` is never rate-limited.
+
+## Algorithms
+
+Each named limit declares a `kind`. Pick by the burst behavior you want:
+
+| `kind`             | Behavior                                                                                                                            | Pick it when                                                         |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `"token bucket"`   | Tokens refill continuously at `rate / period` per ms up to `capacity`; a fresh key starts full, so a burst is allowed.              | You want smooth throughput that tolerates short bursts (API calls).  |
+| `"fixed window"`   | `rate` tokens granted at the start of each window aligned to `start + n * period`. With `capacity > rate`, unused tokens roll over. | You want a hard cap per discrete window (e.g. 5 logins per minute).  |
+| `"sliding window"` | A weighted estimate blending the current and previous window's counts; always caps at `rate` per `period`.                          | You want fixed-window's simplicity without its boundary-burst spike. |
+
+```ts
+const limiter = new RateLimiter({
+    config: {
+        api: { kind: "token bucket", period: 1_000, rate: 10 },
+        login: { kind: "fixed window", period: 60_000, rate: 5 },
+        search: { kind: "sliding window", period: 10_000, rate: 30 },
+    },
+});
+```
+
+## Limit config
+
+Each entry in the config map is a `RateLimitConfig`:
+
+| Field      | Type            | Default | Notes                                                                                                                        |
+| ---------- | --------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `kind`     | `RateLimitKind` | —       | `"token bucket"`, `"fixed window"`, or `"sliding window"`. Required.                                                         |
+| `rate`     | `number`        | —       | Tokens granted per `period`. Required; must be a positive number.                                                            |
+| `period`   | `number`        | —       | Window/refill period in milliseconds. Required; must be a positive number.                                                   |
+| `capacity` | `number`        | `rate`  | Rollover ceiling. Caps a token-bucket burst; for fixed windows enables cross-window rollover. Ignored by sliding windows.    |
+| `shards`   | `number`        | `1`     | Split a hot limit across N independent sub-buckets. Positive integer; `1` is equivalent to unset. See [Sharding](#sharding). |
+| `start`    | `number`        | `0`     | Phase offset in epoch ms for windowed algorithms — windows align to `start + n * period`. Ignored by token buckets.          |
+
+<Callout type="info">
+The constructor validates every config up front: a non-positive `period` or
+`rate`, a negative `capacity`, or a non-integer/`< 1` `shards` throws at
+construction rather than corrupting accounting later.
+</Callout>
+
+## Consuming a limit
+
+`limiter.limit(name, args)` consumes capacity and returns a `RateLimitStatus`
+(`{ ok, reason?, retryAfter }`). `limiter.check(name, args)` peeks without
+consuming. `limiter.reset(name, { key })` clears accounting for a pair (e.g. on a
+successful login).
+
+```ts
+const status = await limiter.limit("send", { key: userId });
+
+if (!status.ok) {
+    // status.retryAfter is milliseconds until the request would succeed.
+    // status.reason is "rate" or "deny".
+}
+
+await limiter.reset("login", { key: userId }); // clear on success
+```
+
+Per-call `RateLimitArgs`:
+
+| Option    | Type      | Default | Notes                                                                                                                                                            |
+| --------- | --------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `key`     | `string`  | —       | Sub-key isolating the limit (per user/team/IP). Omit for a global limit.                                                                                         |
+| `count`   | `number`  | `1`     | Units to consume. Must be a positive integer.                                                                                                                    |
+| `reserve` | `boolean` | `false` | Permit now and reserve future capacity (the stored value goes negative); `retryAfter` reports when the debt clears. Rejected only when `count` exceeds capacity. |
+| `throws`  | `boolean` | `false` | Throw `RateLimitError` instead of returning a failing status.                                                                                                    |
+
+## Procedure middleware
+
+`rateLimit(limiter, name, options)` returns a `Middleware` you attach with
+`.use(...)`. The first argument is a `LimiterResolver` — either a fixed
+`RateLimiter` or a `(ctx) => RateLimiter` that binds a context-derived limiter at
+call time (handy for an ORM-backed store, see [Stores](#pluggable-stores)).
+
+```ts
+import { RateLimiter, rateLimit, createDbStore } from "@lunora/ratelimit";
+
+import { mutation } from "./_generated/server";
+
+const config = { send: { kind: "token bucket", period: 1_000, rate: 10 } } as const;
+
+export const send = mutation
+    .use(
+        rateLimit((ctx) => new RateLimiter({ config, store: createDbStore({ db: ctx.db }) }), "send", {
+            key: (ctx) => ctx.auth.userId,
+        }),
+    )
+    .mutation(async ({ ctx, args }) => {
+        // …
+    });
+```
+
+For the common DB-backed case, `dbRateLimit(config, name, options)` is shorthand
+for the resolver above — it builds the per-call `RateLimiter` + `createDbStore`
+for you:
+
+```ts
+import { dbRateLimit } from "@lunora/ratelimit";
+
+import { mutation } from "./_generated/server";
+
+const config = { send: { kind: "token bucket", period: 1_000, rate: 10 } } satisfies RateLimitConfigMap;
+
+export const send = mutation.use(dbRateLimit(config, "send", { key: (ctx) => ctx.auth.userId ?? "anonymous" })).mutation(async ({ ctx, args }) => {
+    // …
+});
+```
+
+Pass `options.store` to point at a non-default backing table/index/key column;
+the rest of `options` matches `rateLimit`'s.
+
+`RateLimitMiddlewareOptions`:
+
+| Option     | Type                           | Default | Notes                                                                        |
+| ---------- | ------------------------------ | ------- | ---------------------------------------------------------------------------- |
+| `key`      | `(ctx) => string \| undefined` | —       | Sub-key derived from context. Omit for a global limit.                       |
+| `count`    | `number`                       | `1`     | Units to consume per call.                                                   |
+| `message`  | `string`                       | —       | Override the error message thrown on rejection.                              |
+| `failOpen` | `boolean`                      | `false` | Behavior when the limiter itself throws (store unavailable, etc). See below. |
+
+<Callout type="warn">
+    **Failure policy:** the middleware **fails closed by default** — if resolving or invoking the limiter throws, it logs via `console.error` and rejects with
+    `503`. This is the safer default for security-sensitive limits (auth, account creation). Set `failOpen: true` only when degraded availability is preferable
+    to refusal — a failing limiter then admits every request.
+</Callout>
+
+## Deny list
+
+A `denyList` passed to the constructor short-circuits before any token
+accounting: a matching `key` is denied with `reason: "deny"` and
+`retryAfter: Infinity` (the middleware maps this to `403 Forbidden`).
+
+```ts
+const limiter = new RateLimiter({
+    config: { api: { kind: "token bucket", period: 1_000, rate: 10 } },
+    denyList: ["198.51.100.7", "abuser@example.com"],
+});
+```
+
+The list is consulted as-is. If you also pass a `normalize` function (applied to
+every incoming `key` for case-folding, trimming, or canonicalizing IPs/emails),
+both the normalized and raw form are checked — but normalize your deny-list
+entries up front to be safe.
+
+## Sharding
+
+For a high-volume limit where a single hot key contends on one bucket/Durable
+Object, set `shards: N`. The limiter splits the limit into N independent
+sub-buckets, each enforcing `rate / shards` (and `capacity / shards`). A request
+is routed to a shard by a deterministic hash of `(name, key)`, so the same key
+always lands on the same shard — its effective throughput is exactly
+`rate / shards`, while aggregate throughput across many distinct keys approaches
+`rate` as keys spread uniformly.
+
+```ts
+const limiter = new RateLimiter({
+    config: {
+        ingest: { kind: "token bucket", period: 1_000, rate: 10_000, shards: 16 },
+    },
+});
+```
+
+Reserve sharding for limits where contention actually bites; leave it unset (one
+bucket) otherwise.
+
+## Pluggable stores
+
+Persistence is a `RateLimitStore` (`get`/`set`/`delete`, sync or async). Three
+are shipped:
+
+| Factory                   | Backing                                                            | Use when                                                             |
+| ------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------- |
+| `createMemoryStore()`     | An in-process `Map`. The default when no `store` is given.         | Single-DO/process limits where state needn't survive eviction.       |
+| `createSqlStore({ sql })` | `state.storage.sql` (workerd `SqlStorage`, also `node:sqlite`).    | Durable per-DO state that survives hibernation — you have raw SQL.   |
+| `createDbStore({ db })`   | A Lunora table via `ctx.db` (the ORM writer on a mutation/action). | Durable per-DO limits inside a procedure, where there is no raw SQL. |
+
+`createSqlStore` creates its table (default `_lunora_rate_limits`) if missing.
+`createDbStore` expects a table you declare in your schema with a key column and
+its index (defaults: table `rateLimits`, index `by_key`, key column `key`):
+
+```ts
+import { defineTable, v } from "lunorash/server";
+
+export const rateLimits = defineTable({
+    key: v.string(),
+    ts: v.number(),
+    value: v.number(),
+    prev: v.optional(v.number()),
+}).index("by_key", ["key"]);
+```
+
+<Callout type="info">
+    Inside a Durable Object the input gate serializes the limiter's read-modify-write against storage, so both SQL- and ORM-backed stores are atomic against
+    concurrent calls without an explicit transaction. Driving `createSqlStore` outside a DO, you own serialization yourself.
+</Callout>
+
+## Plugin form
+
+`ratelimitPlugin(limiter)` packages the limiter as a first-party `Plugin` that
+exposes the resolved `RateLimiter` under `ctx.api.ratelimit`, so a handler can
+call `limit()`/`check()`/`reset()` programmatically instead of (or alongside) the
+enforcing middleware. Install its middleware with one `.use(...)`:
+
+```ts
+import { RateLimiter, ratelimitPlugin } from "@lunora/ratelimit";
+
+import { mutation } from "./_generated/server";
+
+const limiter = new RateLimiter({
+    config: { send: { kind: "token bucket", period: 60_000, rate: 5, capacity: 5 } },
+});
+
+export const send = mutation.use(ratelimitPlugin(limiter).middleware!).mutation(async ({ ctx }) => {
+    const status = await ctx.api.ratelimit.limit("send", { key: ctx.auth.userId });
+
+    if (!status.ok) {
+        throw new Error("slow down");
+    }
+    // …
+});
+```
+
+The plugin ships no schema extension — persistence is whatever store the limiter
+was built with — so it is middleware-only and skipped by the plugin schema fold.
+
+## See also
+
+- [Row-level security](/docs/concepts/rls) — the row-path `.use(...)` companion.
+- [Data masking](/docs/concepts/masking) — the column-path `.use(...)` companion.
+- [@lunora/server](/docs/packages/server) — the procedure builder whose `.use()` chain the middleware rides.

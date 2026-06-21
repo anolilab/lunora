@@ -1,0 +1,169 @@
+---
+title: React
+description: Use Lunora with React — a provider, live useQuery/useMutation hooks, and the SSR-seed → live reactive-loader handoff.
+---
+
+`@lunora/react` is the official React binding. It's a thin layer over
+[`@lunora/client`](/docs/packages/client) that maps the live cache to
+`useSyncExternalStore`, so concurrent React works correctly out of the box. It is
+the **reference adapter**: the only one verified end-to-end through the full
+live-loader path (see [Bring your framework](/docs/frameworks/bring-your-framework)).
+
+This page is the task-oriented guide; for the full hook reference see
+[`@lunora/react`](/docs/packages/react).
+
+<Callout type="info">**Bring your framework. Your loaders are live.**</Callout>
+
+## Install
+
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```sh tab="pnpm"
+pnpm add @lunora/react
+```
+
+```sh tab="npm"
+npm install @lunora/react
+```
+
+```sh tab="yarn"
+yarn add @lunora/react
+```
+
+```sh tab="bun"
+bun add @lunora/react
+```
+
+</Tabs>
+
+## Provide the client
+
+Create one `LunoraClient` and mount it for the subtree with `<LunoraProvider>`.
+This is required at the root.
+
+```tsx title="src/main.tsx"
+import { LunoraClient } from "lunorash/client";
+import { LunoraProvider } from "@lunora/react";
+
+import { api } from "@/lunora/_generated/api";
+
+const client = new LunoraClient({ url: import.meta.env.VITE_LUNORA_URL });
+
+export const Root = () => (
+    <LunoraProvider client={client}>
+        <Chat channelId="general" />
+    </LunoraProvider>
+);
+```
+
+## Live queries
+
+`useQuery(fn, args)` subscribes to a query and re-renders on every server delta.
+It returns `T | undefined` (undefined until the first response). Pass `"skip"` as
+`args` to short-circuit with no network call. Components that pass identical args
+share one underlying subscription.
+
+```tsx
+import { useQuery } from "@lunora/react";
+
+import { api } from "@/lunora/_generated/api";
+
+function Messages({ channelId }: { channelId: string }) {
+    const messages = useQuery(api.messages.list, { channelId });
+    const profile = useQuery(api.users.me, channelId ? {} : "skip");
+
+    return (
+        <ul>
+            {messages?.map((m) => (
+                <li key={m._id}>{m.text}</li>
+            ))}
+        </ul>
+    );
+}
+```
+
+`useSubscription(fn, args)` is the lower-level form that surfaces
+`{ data, error }` so you can render error states inline.
+
+## Mutations
+
+`useMutation(fn)` returns a callable with a `.pending` flag. You pass optimistic
+updates per call, and they roll back automatically if the server rejects.
+
+```tsx
+import { useMutation } from "@lunora/react";
+
+import { api } from "@/lunora/_generated/api";
+
+function Composer({ channelId }: { channelId: string }) {
+    const send = useMutation(api.messages.send);
+
+    return (
+        <button
+            disabled={send.pending}
+            onClick={() => void send({ channelId, text: "hi" }, { optimistic: (current) => [...(current ?? []), { _id: "tmp", text: "hi" }] })}
+        >
+            Send
+        </button>
+    );
+}
+```
+
+## Auth
+
+`useAuth()` returns `{ user, token, setToken(next) }`. Call `setToken(jwt)` after
+a sign-in flow, and every subsequent RPC carries the token automatically.
+
+## Reactive loaders
+
+Render with data already present on the first paint, then go live. Run the query
+on the server with the socket-free `@lunora/react/server` entry, then either
+hydrate the TanStack cache or thread an explicit `Preloaded` token.
+
+```tsx title="app/posts/page.tsx (Server Component)"
+import { createServerClient, dehydrate, HydrationBoundary, prefetchQuery } from "@lunora/react/server";
+import { QueryClient } from "@tanstack/react-query";
+
+import { api } from "@/lunora/_generated/api";
+import { PostList } from "./post-list";
+
+export default async function PostsPage() {
+    const client = createServerClient({ url: process.env.LUNORA_URL! });
+    const queryClient = new QueryClient();
+
+    await prefetchQuery(queryClient, client, api.posts.list, {});
+
+    return (
+        <HydrationBoundary state={dehydrate(queryClient)}>
+            <PostList />
+        </HydrationBoundary>
+    );
+}
+```
+
+On the client, `useQuery(api.posts.list, {})` reads the prefetched value from cache
+on first render (no loading flash), then a live subscription attaches on mount. To
+thread a single value without a `HydrationBoundary`, use `preloadQuery` on the
+server and read it with `usePreloadedQuery` on the client. See
+[Reactive loaders](/docs/frameworks/reactive-loaders) for the full handoff and
+[`@lunora/react`](/docs/packages/react#server-components-nextjs-app-router) for the
+server reference.
+
+<Callout type="warn">
+    Create a `createServerClient` **per request**. The bearer token and forwarded cookies are per-user, so a shared module-level client would leak identity.
+</Callout>
+
+## One worker, one deploy
+
+With **TanStack Start**, Lunora owns the worker entry (a class-A framework in
+[Bring your framework](/docs/frameworks/bring-your-framework)), so the realtime
+plane and your SSR share one worker with no extra wiring. On the Next.js App
+Router, load data through `@lunora/react/server` as above. See
+[Deploy your framework](/docs/frameworks/deploy) for the one-worker deploy story.
+
+## See also
+
+- [@lunora/react](/docs/packages/react) — the full hook + server reference
+- [Bring your framework](/docs/frameworks/bring-your-framework) — the class-A/B/C composition matrix
+- [Reactive loaders](/docs/frameworks/reactive-loaders) — the SSR-seed → live handoff
+- [Real-time](/docs/concepts/realtime) — how subscriptions and deltas work

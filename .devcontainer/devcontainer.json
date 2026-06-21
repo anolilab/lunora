@@ -1,0 +1,57 @@
+{
+    "$schema": "https://raw.githubusercontent.com/devcontainers/spec/main/schemas/devContainer.schema.json",
+    "name": "Lunora",
+    "image": "mcr.microsoft.com/devcontainers/typescript-node:22",
+    "features": {
+        "ghcr.io/devcontainers-contrib/features/pnpm:2": {
+            "version": "10.32.1"
+        },
+        "ghcr.io/devcontainers/features/github-cli:1": {},
+        "ghcr.io/devcontainers/features/git:1": {}
+    },
+    "remoteEnv": {
+        "PNPM_HOME": "/home/node/.local/share/pnpm",
+        "PATH": "/home/node/.local/share/pnpm:${containerEnv:PATH}"
+    },
+    "postCreateCommand": "pnpm install --frozen-lockfile && pnpm add -g wrangler@catalog:cloudflare || pnpm add -g wrangler",
+    "forwardPorts": [5173, 8787, 3000, 4173],
+    "portsAttributes": {
+        "5173": {
+            "label": "Vite dev server",
+            "onAutoForward": "notify"
+        },
+        "8787": {
+            "label": "Wrangler dev (workerd)",
+            "onAutoForward": "notify"
+        },
+        "3000": {
+            "label": "Docs (Next.js)",
+            "onAutoForward": "notify"
+        },
+        "4173": {
+            "label": "Vite preview",
+            "onAutoForward": "silent"
+        }
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "dbaeumer.vscode-eslint",
+                "esbenp.prettier-vscode",
+                "bradlc.vscode-tailwindcss",
+                "unifiedjs.vscode-mdx",
+                "vitest.explorer",
+                "editorconfig.editorconfig",
+                "mikestead.dotenv",
+                "redhat.vscode-yaml"
+            ],
+            "settings": {
+                "eslint.useFlatConfig": true,
+                "editor.defaultFormatter": "esbenp.prettier-vscode",
+                "editor.formatOnSave": true,
+                "typescript.tsdk": "node_modules/typescript/lib"
+            }
+        }
+    },
+    "remoteUser": "node"
+}

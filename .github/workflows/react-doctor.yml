@@ -1,0 +1,35 @@
+"name": "React Doctor"
+
+"on":
+    "pull_request":
+        "branches": ["main"]
+
+"permissions":
+    "contents": "read"
+    "pull-requests": "write"
+
+"jobs":
+    "react-doctor":
+        "runs-on": "ubuntu-latest"
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
+              "with":
+                  # diff mode (below) compares against the base branch, which needs
+                  # full history — a shallow clone (default depth 1) makes the diff fail.
+                  "fetch-depth": 0
+                  "persist-credentials": false
+            # NOTE(security): SHA-pinned to the commit behind the react-doctor@0.5.6
+            # tagged release (resolved via `gh api repos/millionco/react-doctor/git/refs/tags/...`).
+            # Bump deliberately by re-resolving the tag's commit SHA.
+            # Also note: pinning this action SHA does not fully pin the tool if the action
+            # internally runs `npx -y react-doctor@latest`; verify and pin that version too.
+            - "uses": "millionco/react-doctor@15238de7019167e740c9fc08b800d9732c2ab477" # react-doctor@0.5.6
+              "with":
+                  "github-token": "${{ secrets.GITHUB_TOKEN }}"
+                  "diff": "main"

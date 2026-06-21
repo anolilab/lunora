@@ -1,0 +1,113 @@
+---
+title: Actions
+description: Non-deterministic functions for external APIs and side effects — the action builder and its ActionCtx.
+---
+
+An **action** runs outside Lunora's transaction. A `query` reads only and a
+`mutation` does transactional reads and writes, but an action can `fetch()` a
+third-party API, send an email, talk to a queue, or drive an AI model. Two
+things give way in return: actions are not reactive (clients don't auto-subscribe
+to them), and they have no transactional `db` for reading or writing your tables.
+
+```ts
+import { action, v } from "@/lunora/_generated/server";
+import { api, internal } from "@/lunora/_generated/api";
+
+export const syncWithStripe = action.input({ customerId: v.string() }).action(async ({ ctx, args }) => {
+    // 1. Read current state via a query (no direct ctx.db).
+    const customer = await ctx.runQuery(internal.customers.byStripeId, { stripeId: args.customerId });
+
+    // 2. Talk to the outside world.
+    const response = await ctx.fetch(`https://api.stripe.com/v1/customers/${args.customerId}`);
+    const remote = await response.json();
+
+    // 3. Persist the result through a mutation.
+    await ctx.runMutation(internal.customers.applyStripeSync, { id: customer._id, remote });
+});
+```
+
+## When to use an action vs a mutation
+
+| You need to…                                                  | Use        |
+| ------------------------------------------------------------- | ---------- |
+| Read/write your own tables transactionally                    | `mutation` |
+| Call an external HTTP API (`fetch`)                           | `action`   |
+| Send email, enqueue jobs, run a non-deterministic side effect | `action`   |
+| Drive an AI model, browser, or BYO database                   | `action`   |
+
+A mutation runs inside the shard's transaction, so its `ctx.db` writes commit
+atomically and broadcast reactive deltas. An action runs in the worker (the
+action runtime), outside that transaction, so it can do unbounded I/O without
+holding the shard open. Reach for a mutation first, and promote to an action only
+when you need a side effect a mutation can't safely perform.
+
+## `ActionCtx`
+
+The handler receives `ctx: ActionCtx`. Its surface (from `@lunora/server`):
+
+- `ctx.fetch` — the platform `fetch`, for outbound HTTP.
+- `ctx.runQuery(ref, args)` / `ctx.runMutation(ref, args)` / `ctx.runAction(ref, args)` — call other functions (see below).
+- `ctx.scheduler` — `runAfter` / `runAt` to defer follow-up work.
+- `ctx.storage` — the full read/write R2 surface (`store`, `delete`, `download`, `generateUploadUrl`, `getSignedUrl`, …).
+- `ctx.vectors` — query and `upsert` Vectorize indexes.
+- `ctx.workflows` — start / inspect durable workflows.
+- `ctx.auth` — the resolved identity (`ctx.auth.userId`, `ctx.auth.getIdentity()`).
+- `ctx.log` — structured, function-attributed logger.
+- `ctx.ip` — the caller's IP (`undefined` for server-initiated dispatch).
+
+There is no transactional `ctx.db` reader/writer the way a mutation has one. An
+action reaches your data through `runQuery` and `runMutation`, each of which
+forwards to the owning shard and runs as its own transaction.
+
+## Calling queries and mutations from an action
+
+Use the generated references (`api.*` for public functions, `internal.*` for
+internal ones) so the call is fully typed and the argument validators are
+enforced:
+
+```ts
+import { action, v } from "@/lunora/_generated/server";
+import { api, internal } from "@/lunora/_generated/api";
+
+export const importContacts = action.input({ url: v.string() }).action(async ({ ctx, args }) => {
+    const response = await ctx.fetch(args.url);
+    const rows = (await response.json()) as { email: string; name: string }[];
+
+    for (const row of rows) {
+        // Each runMutation is its own shard transaction — not atomic across rows.
+        await ctx.runMutation(internal.contacts.upsert, row);
+    }
+
+    return { imported: rows.length };
+});
+```
+
+`runQuery` from an action returns a point-in-time snapshot, not a live
+subscription, so re-call it if you need fresh data. Each `runMutation` is its
+own transaction. A partial failure mid-loop does not roll back the mutations
+that already committed.
+
+## Scheduling follow-up work
+
+`ctx.scheduler` enqueues a deferred call against the `SchedulerDO`. Schedule
+another function (typically an internal one) to run later:
+
+```ts
+export const startDripCampaign = action.input({ userId: v.id("users") }).action(async ({ ctx, args }) => {
+    await ctx.runMutation(internal.email.queueWelcome, args);
+
+    // Send the day-2 follow-up later, off the request path.
+    await ctx.scheduler.runAfter(2 * 24 * 60 * 60 * 1000, internal.email.sendFollowUp, args);
+});
+```
+
+`runAfter(delayMs, ref, args)` fires after a delay; `runAt(timestampMs, ref, args)`
+fires at an absolute time. Both return a job id you can later `ctx.scheduler.cancel(id)`.
+
+## See also
+
+- [Queries & mutations](/docs/concepts/queries-mutations)
+- [Internal functions](/docs/concepts/internal-functions)
+- [HTTP endpoints](/docs/concepts/http-endpoints)
+- [API: @lunora/server](/docs/packages/server)
+- [API: @lunora/scheduler](/docs/packages/scheduler)

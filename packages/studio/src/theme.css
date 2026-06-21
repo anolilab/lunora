@@ -1,0 +1,59 @@
+/* Studio theme entry. The shadcn token set (color, surface, sidebar, chart,
+   status) comes from the canonical Lunora "Luna + Aurora" tokens in
+   marketing/design-tokens — the single source of truth shared with the docs
+   site and videos, so the palette never drifts. See
+   ../../../marketing/design-tokens/DESIGN.md.
+
+   On top of those tokens this file applies the Lunora design language to the
+   studio's instrument-panel surfaces (the lunora-design skill): SHARP corners
+   (the radius scale collapses to 0 — Tailwind v4's rounded-* utilities are
+   theme-driven, so every panel/card/button goes square) and FLAT depth (shadow
+   scale → none; separation comes from value steps + hairline borders, never
+   drop shadows). The dev app defaults to the dark Night theme.
+
+   Imported by both the library's compiled `styles.css` and the standalone
+   `apps/studio` dev app, so both stay in lockstep. The shared `--font-sans`
+   prefers Geist with a full system fallback chain, so the compiled library CSS
+   still renders anywhere; the dev app upgrades it to the bundled Geist Variable.
+   Contains no `@import "tailwindcss"` or `@source` — those belong to each
+   consumer's entry, which establishes the Tailwind context this file relies on. */
+@import "../../../marketing/design-tokens/tokens.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Lunora design-language overrides for the studio surface. */
+@theme inline {
+    /* Sharp chrome: collapse the whole radius scale. Tailwind v4 maps rounded-sm
+       … rounded-4xl onto these vars, so every structural corner goes square.
+       (rounded-full is untouched — avatars, status dots, and toggles stay round.) */
+    --radius-sm: 0px;
+    --radius-md: 0px;
+    --radius-lg: 0px;
+    --radius-xl: 0px;
+    --radius-2xl: 0px;
+    --radius-3xl: 2px;
+    --radius-4xl: 4px;
+
+    /* Flat: no drop shadows. Depth is value step + one hairline. shadow-* all
+       resolve to nothing, so existing shadow utilities quietly go flat. */
+    --shadow-2xs: 0 0 #0000;
+    --shadow-xs: 0 0 #0000;
+    --shadow-sm: 0 0 #0000;
+    --shadow: 0 0 #0000;
+    --shadow-md: 0 0 #0000;
+    --shadow-lg: 0 0 #0000;
+    --shadow-xl: 0 0 #0000;
+    --shadow-2xl: 0 0 #0000;
+}
+
+@layer base {
+    * {
+        @apply border-border outline-ring/50;
+    }
+    body {
+        @apply bg-background text-foreground;
+    }
+    html {
+        @apply font-sans;
+    }
+}

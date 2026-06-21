@@ -1,0 +1,8 @@
+.source
+.tmp-external-docs
+.tanstack/tmp
+.netlify
+public/assets
+
+!src/data
+src/content/docs/packages

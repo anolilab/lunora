@@ -1,0 +1,74 @@
+---
+title: "@lunora/analytics"
+description: Cloudflare Analytics Engine for Lunora — typed writeDataPoint helper, named-field track(), and a SQL-API read client wired as ctx.analytics.
+---
+
+`@lunora/analytics` wraps Cloudflare Analytics Engine with a type-safe write client and a REST SQL-API read client. Importing it in a `lunora/` source auto-reconciles the `analytics_engine_datasets` binding and wires `ctx.analytics` onto every context (QueryCtx, MutationCtx, ActionCtx). Writes are fire-and-forget; the SQL client reads data out-of-band via Cloudflare's REST endpoint.
+
+```sh
+pnpm add @lunora/analytics
+```
+
+## Usage
+
+### Write side (`ctx.analytics`)
+
+`ctx.analytics` is available in queries, mutations, and actions once any `lunora/` source imports `@lunora/analytics`. Use `track` for named-field telemetry or `writeDataPoint` for the raw positional layout.
+
+```ts
+import { mutation } from "@/lunora/_generated/server";
+import { v } from "@lunora/values";
+
+export const send = mutation.input({ roomId: v.id("rooms") }).mutation(async ({ args: { roomId }, ctx }) => {
+    // named-field path — returns the column mapping for the read side
+    ctx.analytics.track("function_call", {
+        dimensions: { fn: "messages:send", shard: roomId },
+        index: "messages:send",
+        metrics: { durationMs: 12 },
+    });
+});
+```
+
+AE caps a data point at **20 blobs, 20 doubles, and 1 index**. `writeDataPoint` (and `track`) throw on overflow so misuse surfaces in dev rather than silently dropping columns.
+
+### Read side (SQL API)
+
+The binding has no read path — data is queried out-of-band through the REST SQL endpoint. Use `createAnalyticsSqlClient` with an account-scoped API token (Analytics Read scope). The token is a secret — never a binding and never auto-scaffolded.
+
+```ts
+import { createAnalyticsSqlClient } from "@lunora/analytics";
+
+const sql = createAnalyticsSqlClient({
+    accountId: env.CLOUDFLARE_ACCOUNT_ID,
+    apiToken: env.CLOUDFLARE_API_TOKEN, // Analytics Read scope — a secret, not a binding
+});
+
+const result = await sql.query("SELECT blob1 AS fn, count() AS calls FROM ANALYTICS GROUP BY fn");
+// result.rows → [{ fn: "messages:send", calls: 42 }, …]
+// result.columns → [{ name: "fn", type: "String" }, …]
+```
+
+## API reference
+
+### `createAnalytics(binding)`
+
+Wraps an `AnalyticsEngineDataset` binding in an `AnalyticsClient`. Used internally by codegen; call directly when you need write access outside a Lunora handler.
+
+### `AnalyticsClient`
+
+| Method           | Signature                      | Notes                                                                                                             |
+| ---------------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `track`          | `(name, event?) → TrackSchema` | Maps `{ dimensions, metrics, index }` to positional blobs/doubles/index1; `blob1` is reserved for the event name. |
+| `writeDataPoint` | `(event) → void`               | Raw positional write. Throws `RangeError` if blobs > 20, doubles > 20, or indexes > 1.                            |
+
+### `createAnalyticsSqlClient(config)`
+
+Builds an `AnalyticsSqlClient` that POSTs raw SQL text to the account's `analytics_engine/sql` endpoint.
+
+| Option      | Type           | Notes                                                                   |
+| ----------- | -------------- | ----------------------------------------------------------------------- |
+| `accountId` | `string`       | Cloudflare account id that owns the dataset.                            |
+| `apiToken`  | `string`       | API token with Analytics Engine read scope. A secret — never a binding. |
+| `fetch`     | `typeof fetch` | Optional — inject a fake in tests to avoid network calls.               |
+
+`query(sql)` returns `{ columns, rows, rowCount }`. Throws `AnalyticsSqlError` (carrying `.status`) on a non-2xx response.

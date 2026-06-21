@@ -1,0 +1,76 @@
+{
+    "name": "@lunora/mcp",
+    "version": "0.0.0",
+    "description": "Model Context Protocol server exposing a Lunora deployment to AI agents",
+    "license": "FSL-1.1-Apache-2.0",
+    "homepage": "https://lunora.sh",
+    "bugs": {
+        "url": "https://github.com/anolilab/lunora/issues"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/anolilab/lunora.git",
+        "directory": "packages/mcp"
+    },
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
+    },
+    "keywords": [
+        "lunora",
+        "cloudflare",
+        "workers",
+        "durable-objects",
+        "mcp",
+        "model-context-protocol",
+        "ai-agents",
+        "llm"
+    ],
+    "bin": {
+        "lunora-mcp": "./dist/bin.mjs"
+    },
+    "files": [
+        "dist",
+        "__assets__",
+        "README.md",
+        "LICENSE.md"
+    ],
+    "type": "module",
+    "sideEffects": false,
+    "main": "./dist/index.mjs",
+    "module": "./dist/index.mjs",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.mjs"
+        },
+        "./package.json": "./package.json"
+    },
+    "scripts": {
+        "build": "packem build --development",
+        "build:prod": "packem build --production",
+        "lint:eslint": "eslint .",
+        "lint:eslint:fix": "eslint . --fix",
+        "lint:prettier": "prettier --check .",
+        "lint:prettier:fix": "prettier --write .",
+        "lint:types": "tsc --noEmit",
+        "test": "vitest run",
+        "test:coverage": "vitest run --coverage"
+    },
+    "dependencies": {
+        "@lunora/client": "workspace:*",
+        "@modelcontextprotocol/sdk": "catalog:mcp"
+    },
+    "devDependencies": {
+        "@types/node": "catalog:types",
+        "@visulima/packem": "catalog:build",
+        "@vitest/coverage-v8": "catalog:test",
+        "esbuild": "catalog:build",
+        "typescript": "catalog:tsc",
+        "vitest": "catalog:test"
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    }
+}

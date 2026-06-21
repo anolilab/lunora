@@ -1,0 +1,25 @@
+{
+    "name": "{{name}}",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "dev": "lunora dev",
+        "build": "vite build",
+        "codegen": "lunora codegen",
+        "deploy": "lunora deploy"
+    },
+    "dependencies": {
+        "@lunora/react": "^0.0.0",
+        "lunorash": "^0.0.0",
+        "react": "^19.2.7",
+        "react-dom": "^19.2.7"
+    },
+    "devDependencies": {
+        "@cloudflare/workers-types": "^4.20260611.1",
+        "@lunora/vite": "^0.0.0",
+        "typescript": "^6.0.3",
+        "vite": "^8.0.16",
+        "wrangler": "^4.100.0"
+    }
+}

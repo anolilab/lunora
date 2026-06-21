@@ -1,0 +1,183 @@
+---
+title: "@lunora/scheduler"
+description: Durable Object-backed scheduling for Lunora — runAfter/runAt, code-first cron jobs, and bounded-concurrency workpools.
+---
+
+`@lunora/scheduler` ships a `SchedulerDO` you mount once per app. It stores
+pending invocations sorted by scheduled time and fires them via HTTP on the DO
+alarm. On top of that it gives you deferred jobs (`runAfter`/`runAt`), code-first
+cron jobs, and two workpool flavours for bounded-concurrency background work.
+
+## Deferred jobs
+
+Inside a mutation or action, schedule a function by path through `ctx.scheduler`
+(codegen wires this surface):
+
+```ts
+import { mutation, v } from "@/lunora/_generated/server";
+
+export const requestExport = mutation.input({ workspaceId: v.id("workspaces") }).mutation(async ({ ctx, args: { workspaceId } }) => {
+    const id = await ctx.scheduler.runAfter(5 * 60_000, "exports:run", { workspaceId });
+
+    return id;
+});
+```
+
+`ctx.scheduler` exposes `runAfter`, `runAt`, `cancel`, `get`, and `list`.
+`runAfter`/`runAt` take the function **path** as a string (e.g. `"exports:run"`)
+and return the job id.
+
+Under the hood `ctx.scheduler.runAfter` POSTs to the SchedulerDO's `/schedule`
+endpoint with `functionPath`, `args`, `scheduledFor`, and an `originUrl` it can
+call back into.
+
+### Standalone scheduler
+
+Outside a Lunora function — a plain Worker, a test — build the client yourself
+with `createScheduler`. This surface takes a typed **function reference** (from
+`_generated/api`) instead of a path:
+
+```ts
+import { createScheduler } from "@lunora/scheduler";
+
+import { api } from "@/lunora/_generated/api";
+
+const scheduler = createScheduler({
+    namespace: env.SCHEDULER, // SchedulerDO binding
+    originUrl: "https://app.acme.test", // where the DO dispatches back
+});
+
+const { id, scheduledFor } = await scheduler.runAfter(5 * 60_000, api.email.sendReminder, { userId: "u-1" });
+await scheduler.runAt(new Date("2026-06-01T12:00:00Z"), api.cleanup.run, { older: 30 });
+await scheduler.cancel(id);
+```
+
+Pass `instanceName` to isolate a tenant's jobs into a separate DO instance.
+
+Per-job `RunOptions` cover `shardKey` (routing hint) and `retry` — a retry
+policy with `maxAttempts` (default 5), `backoff` (`"exponential"` | `"linear"`),
+`baseMs` (default 30_000), and an optional `maxMs` ceiling. On exhaustion the job
+is parked under a dead-letter key rather than dropped.
+
+## Cron jobs
+
+Declare recurring jobs code-first in `lunora/crons.ts` with `cronJobs()`. Codegen
+discovers the file, compiles each schedule to a cron expression, emits the
+`wrangler.jsonc` `triggers.crons` array, and wires the runtime dispatch map — you
+never edit wrangler by hand:
+
+```ts
+import { cronJobs } from "@lunora/scheduler";
+
+import { internal } from "@/lunora/_generated/api";
+
+const crons = cronJobs();
+
+crons.interval("clear presence", { minutes: 30 }, internal.presence.clear, {});
+crons.daily("send digest", { hourUTC: 9, minuteUTC: 0 }, internal.email.digest, {});
+crons.weekly("weekly report", { dayOfWeek: "monday", hourUTC: 8, minuteUTC: 0 }, internal.reports.weekly, {});
+crons.monthly("monthly invoice", { day: 1, hourUTC: 0, minuteUTC: 0 }, internal.billing.invoice, {});
+crons.cron("custom", "0 * * * *", internal.foo.bar, {});
+
+export default crons;
+```
+
+Each method takes a unique `name`, a schedule, a target, and optional `args`.
+Names must be unique within one `cronJobs()` registry. The target may be a
+function reference (a one-shot dispatch) or a durable workflow reference
+(`workflows.<name>`) — a workflow target starts a fresh workflow instance on each
+fire, and its `args` are type-checked against the workflow's `params`.
+
+<Callout type="info">
+    `interval` takes exactly one of `{seconds | minutes | hours}`. `daily`, `weekly`, and `monthly` schedule at a fixed UTC wall-clock time. Use `.cron` for the
+    raw 5- or 6-field grammar when the ergonomic forms don't fit.
+</Callout>
+
+### Imperative cron triggers
+
+If you'd rather emit a `wrangler.jsonc` fragment yourself, `createCronTrigger`
+returns the snippet and dispatcher metadata for a single recurring function:
+
+```ts
+import { createCronTrigger } from "@lunora/scheduler";
+
+import { internal } from "@/lunora/_generated/api";
+
+const trigger = createCronTrigger({
+    schedule: "0 3 * * *",
+    fn: internal.cleanup.cleanupOldMessages,
+});
+
+// trigger.crons        → ["0 3 * * *"]
+// trigger.wranglerJsonc → the JSON snippet to paste under triggers.crons
+// trigger.dispatcher    → { functionPath, args }
+```
+
+Both surfaces validate the expression eagerly via `cron-parser`, so a malformed
+schedule throws at authoring time. `isValidCronExpression` /
+`assertValidCronExpression` are exported if you need the check standalone.
+
+## Workpools
+
+For bounded-concurrency background work, `createWorkpool` builds a named logical
+pool inside the same `SchedulerDO` — no extra binding. The DO dispatches at most
+`maxConcurrency` of the pool's jobs at once and queues the rest durably, draining
+as the runtime reports completions:
+
+```ts
+import { createWorkpool } from "@lunora/scheduler";
+
+import { internal } from "@/lunora/_generated/api";
+
+const pool = createWorkpool({
+    namespace: env.SCHEDULER,
+    originUrl: "https://app.acme.test",
+    maxConcurrency: 5,
+    name: "stripe-sync",
+});
+
+const { id } = await pool.enqueue(internal.stripe.sync, { invoiceId }, { retry: { maxAttempts: 3 } });
+const { inFlight, queued, maxConcurrency } = await pool.status();
+await pool.cancel(id);
+```
+
+Reach for the DO-backed `createWorkpool` when you need a hard concurrency cap,
+per-job cancellation, or per-job status. When you only want to rate-limit
+fire-and-forget work, `createQueueWorkpool` leans on Cloudflare Queues instead —
+concurrency, retries, and dead-lettering are configured on the consumer in
+`wrangler.jsonc` (`max_concurrency`, `max_retries`, `dead_letter_queue`):
+
+```ts
+import { createQueueConsumer, createQueueWorkpool, httpDispatcher } from "@lunora/scheduler";
+
+import { internal } from "@/lunora/_generated/api";
+
+// Producer (inside an action / Worker).
+const queue = createQueueWorkpool({ queue: env.JOBS });
+await queue.enqueue(internal.images.optimize, { key: "u-1/avatar.png" });
+
+// Consumer (your Worker's queue() handler).
+export const queueHandler = createQueueConsumer({
+    dispatch: httpDispatcher({ originUrl: "https://app.acme.test", adminToken: env.LUNORA_ADMIN_TOKEN }),
+});
+```
+
+The Queues-backed pool has no hard concurrency cap, per-job cancel, or per-job
+status — that's the trade for letting Cloudflare own retries and backoff.
+
+<Callout type="warn">
+    Neither workpool is for multi-step orchestration. Reach for Cloudflare Workflows (`@lunora/workflow`) when you need durable `step.do` / `step.sleep` /
+    `step.waitForEvent`.
+</Callout>
+
+## Dispatch contract
+
+When the alarm fires the DO POSTs to `${originUrl}/_lunora/scheduler/dispatch`
+with `{ functionPath, args, shardKey, scheduledFor, id }`. The runtime unwraps
+that and runs the function exactly as if it were an RPC call.
+
+## See also
+
+- [@lunora/server](/docs/packages/server) — `ctx.scheduler`
+- [@lunora/workflow](/docs/packages/workflow) — durable multi-step workflows
+- [Architecture](/docs/architecture)

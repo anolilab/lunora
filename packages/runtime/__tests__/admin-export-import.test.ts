@@ -1,0 +1,958 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { ExecutionContextLike, ShardingInfo } from "../src/create-worker";
+import { createWorker } from "../src/create-worker";
+import type { ShardNamespaceLike } from "../src/resolve-shard";
+
+const fakeContext: ExecutionContextLike = {
+    passThroughOnException: () => undefined,
+    waitUntil: () => undefined,
+};
+
+const noopNamespace: ShardNamespaceLike = {
+    get: () => {
+        return { fetch: async () => new Response("not used", { status: 200 }) };
+    },
+    idFromName: (name) => {
+        return { __name: name };
+    },
+};
+
+const ADMIN_TOKEN = "admin-bear";
+
+/**
+ * A chunked request body that streams just over the 1 MiB `MAX_BODY_BYTES`
+ * cap with no `Content-Length`, so only the byte-budgeted reader can reject it.
+ */
+const oversizedStream = (): ReadableStream<Uint8Array> => {
+    const chunk = new Uint8Array(256 * 1024).fill(120); // 'x'
+    let sent = 0;
+
+    return new ReadableStream<Uint8Array>({
+        pull(controller) {
+            if (sent >= 5) {
+                controller.close();
+
+                return;
+            }
+
+            sent += 1;
+            controller.enqueue(chunk); // 5 × 256 KiB = 1.25 MiB > 1 MiB cap
+        },
+    });
+};
+
+describe("createWorker — admin export endpoint", () => {
+    it("rejects without a configured admin token (403)", async () => {
+        expect.assertions(1);
+
+        const worker = createWorker({
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/export", {
+                body: JSON.stringify({ tables: ["users"] }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(403);
+    });
+
+    it("rejects without an authorization header (403)", async () => {
+        expect.assertions(1);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(new Request("https://app.example/_lunora/admin/export", { method: "POST" }), {}, fakeContext);
+
+        expect(response.status).toBe(403);
+    });
+
+    it("rejects non-POST (405)", async () => {
+        expect.assertions(1);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(new Request("https://app.example/_lunora/admin/export"), {}, fakeContext);
+
+        expect(response.status).toBe(405);
+    });
+
+    it("streams NDJSON from orchestrateExport", async () => {
+        expect.assertions(4);
+
+        const orchestrateExport = vi.fn<(namespace: unknown, request: { tables: ReadonlyArray<string> }) => Promise<unknown>>(async (_namespace, _request) => {
+            return {
+                failed: 0,
+                ok: 1,
+                shards: [
+                    {
+                        rows: [
+                            { doc: { _id: "u1", email: "a@b.com" }, table: "users" },
+                            { doc: { _id: "u2", email: "c@d.com" }, table: "users" },
+                        ],
+                        shardKey: "__root__",
+                    },
+                ],
+            };
+        });
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: orchestrateExport as never,
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/export", {
+                body: JSON.stringify({ tables: ["users"] }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+        expect(response.headers.get("content-type")).toBe("application/x-ndjson");
+
+        const text = await response.text();
+        const lines = text.trim().split("\n");
+
+        expect(lines).toHaveLength(2);
+        expect(JSON.parse(lines[0]!)).toEqual({ doc: { _id: "u1", email: "a@b.com" }, table: "users" });
+    });
+
+    it("streams D1 globals when exportGlobals is configured", async () => {
+        expect.assertions(2);
+
+        const orchestrateExport = vi.fn<(namespace: unknown, request: { tables: ReadonlyArray<string> }) => Promise<unknown>>(async (_namespace, _request) => {
+            return {
+                failed: 0,
+                ok: 0,
+                shards: [],
+            };
+        });
+
+        const exportGlobals = vi.fn<() => AsyncGenerator<{ doc: Record<string, unknown>; table: string }>>(async function* globalsIter() {
+            yield { doc: { _id: "g1" }, table: "settings" };
+            yield { doc: { _id: "g2" }, table: "settings" };
+        });
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            exportGlobals: exportGlobals as never,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: orchestrateExport as never,
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            resolveTableSharding: (table: string): ShardingInfo | undefined =>
+                table === "settings" ? { mode: { kind: "global" } } : { mode: { kind: "root" } },
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/export", {
+                body: JSON.stringify({ tables: ["settings"] }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        const text = await response.text();
+        const lines = text.trim().split("\n");
+
+        expect(lines).toHaveLength(2);
+        expect(JSON.parse(lines[0]!)).toMatchObject({ table: "settings" });
+    });
+});
+
+describe("createWorker — admin import endpoint", () => {
+    let captured: { batches: { rows: { doc: Record<string, unknown>; table: string }[]; shardKey: string; startLine?: number }[] } | null;
+    let orchestrateImport: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+        captured = null;
+        orchestrateImport = vi.fn<(namespace: unknown, request: { batches: Exclude<typeof captured, null>["batches"] }) => Promise<unknown>>(
+            async (_namespace: unknown, request: { batches: typeof captured extends null ? never : Exclude<typeof captured, null>["batches"] }) => {
+                captured = { batches: request.batches };
+
+                const inserted: Record<string, number> = {};
+
+                for (const batch of request.batches) {
+                    for (const row of batch.rows) {
+                        inserted[row.table] = (inserted[row.table] ?? 0) + 1;
+                    }
+                }
+
+                return {
+                    conflicts: 0,
+                    errors: [],
+                    failed: 0,
+                    inserted,
+                    ok: request.batches.length,
+                    shards: request.batches.map((batch) => {
+                        return { result: { conflicts: 0, errors: [], inserted: {} }, shardKey: batch.shardKey };
+                    }),
+                };
+            },
+        );
+    });
+
+    it("rejects without an admin bearer (403)", async () => {
+        expect.assertions(1);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: orchestrateImport as never,
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(new Request("https://app.example/_lunora/admin/import", { method: "POST" }), {}, fakeContext);
+
+        expect(response.status).toBe(403);
+    });
+
+    it("buckets rows by shard and forwards via orchestrateImport", async () => {
+        expect.assertions(5);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: orchestrateImport as never,
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            resolveTableSharding: (table: string): ShardingInfo | undefined =>
+                table === "messages" ? { mode: { field: "channelId", kind: "shardBy" } } : { mode: { kind: "root" } },
+            shardDO: noopNamespace,
+        });
+
+        const ndjson = [
+            JSON.stringify({ doc: { _id: "u1", email: "a@b.com" }, table: "users" }),
+            JSON.stringify({ doc: { _id: "m1", channelId: "c1", text: "hi" }, table: "messages" }),
+            JSON.stringify({ doc: { _id: "m2", channelId: "c2", text: "yo" }, table: "messages" }),
+            JSON.stringify({ doc: { _id: "u2", email: "c@d.com" }, table: "users" }),
+        ].join("\n");
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/import", {
+                body: ndjson,
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/x-ndjson" },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+
+        const body: { errors: unknown[]; inserted: Record<string, number> } = await response.json();
+
+        expect(body.inserted).toEqual({ messages: 2, users: 2 });
+        expect(orchestrateImport).toHaveBeenCalledTimes(1);
+
+        // 3 buckets: __root__ (users), c1 (m1), c2 (m2).
+        expect(captured!.batches).toHaveLength(3);
+
+        const shardKeys = captured!.batches.map((batch) => batch.shardKey).toSorted((a, b) => a.localeCompare(b));
+
+        expect(shardKeys).toEqual(["__root__", "c1", "c2"]);
+    });
+
+    it("reports malformed JSON rows in `errors` but continues", async () => {
+        expect.assertions(3);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: orchestrateImport as never,
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const ndjson = [
+            JSON.stringify({ doc: { _id: "u1", email: "a@b.com" }, table: "users" }),
+            "not-json",
+            JSON.stringify({ doc: { _id: "u2", email: "c@d.com" }, table: "users" }),
+        ].join("\n");
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/import", {
+                body: ndjson,
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        const body: { errors: { code: string; line: number }[]; inserted: Record<string, number> } = await response.json();
+
+        expect(body.inserted).toEqual({ users: 2 });
+        expect(body.errors).toHaveLength(1);
+        expect(body.errors[0]).toMatchObject({ code: "BAD_ROW", line: 2 });
+    });
+
+    it("attributes row errors to the physical source line across blank lines", async () => {
+        expect.assertions(3);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: orchestrateImport as never,
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        // Leading blank line (line 1) + interior blank line (line 4). The bad
+        // row sits on physical line 5; counting only non-blank lines would
+        // mis-report it as line 3.
+        const ndjson = [
+            "",
+            JSON.stringify({ doc: { _id: "u1", email: "a@b.com" }, table: "users" }),
+            JSON.stringify({ doc: { _id: "u2", email: "c@d.com" }, table: "users" }),
+            "",
+            "not-json",
+        ].join("\n");
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/import", {
+                body: ndjson,
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        const body: { errors: { code: string; line: number }[]; inserted: Record<string, number> } = await response.json();
+
+        expect(body.inserted).toEqual({ users: 2 });
+        expect(body.errors).toHaveLength(1);
+        expect(body.errors[0]).toMatchObject({ code: "BAD_ROW", line: 5 });
+    });
+
+    it("routes global-table rows through importGlobals", async () => {
+        expect.assertions(3);
+
+        const importGlobals = vi.fn<(request: { rows: { doc: Record<string, unknown>; table: string }[] }) => Promise<unknown>>(async (request) => {
+            return {
+                conflicts: 0,
+                errors: [],
+                inserted: { settings: request.rows.length },
+            };
+        });
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            importGlobals: importGlobals as never,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: orchestrateImport as never,
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            resolveTableSharding: (table: string): ShardingInfo | undefined =>
+                table === "settings" ? { mode: { kind: "global" } } : { mode: { kind: "root" } },
+            shardDO: noopNamespace,
+        });
+
+        const ndjson = [
+            JSON.stringify({ doc: { _id: "g1", value: "v" }, table: "settings" }),
+            JSON.stringify({ doc: { _id: "g2", value: "v" }, table: "settings" }),
+        ].join("\n");
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/import", {
+                body: ndjson,
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        const body: { inserted: Record<string, number> } = await response.json();
+
+        expect(body.inserted).toEqual({ settings: 2 });
+        expect(importGlobals).toHaveBeenCalledTimes(1);
+        expect(orchestrateImport).not.toHaveBeenCalled();
+    });
+
+    it("attributes the true physical line to interspersed global rows", async () => {
+        expect.assertions(1);
+
+        let capturedRows: { doc: Record<string, unknown>; line: number; table: string }[] = [];
+        const importGlobals = vi.fn<(request: { rows: { doc: Record<string, unknown>; line: number; table: string }[] }) => Promise<unknown>>(
+            async (request) => {
+                capturedRows = request.rows;
+
+                return { conflicts: 0, errors: [], inserted: { settings: request.rows.length } };
+            },
+        );
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            importGlobals: importGlobals as never,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: orchestrateImport as never,
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            resolveTableSharding: (table: string): ShardingInfo | undefined =>
+                table === "settings" ? { mode: { kind: "global" } } : { mode: { kind: "root" } },
+            shardDO: noopNamespace,
+        });
+
+        // Global row on line 1, a shard row on line 2, a second global row on line
+        // 3 — the second global row's true source line is 3, not 2.
+        const ndjson = [
+            JSON.stringify({ doc: { _id: "g1" }, table: "settings" }),
+            JSON.stringify({ doc: { _id: "s1" }, table: "messages" }),
+            JSON.stringify({ doc: { _id: "g2" }, table: "settings" }),
+        ].join("\n");
+
+        await worker.fetch(
+            new Request("https://app.example/_lunora/admin/import", {
+                body: ndjson,
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(capturedRows.map((row) => row.line)).toEqual([1, 3]);
+    });
+
+    it("reports global rows as errors when importGlobals is not configured", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: orchestrateImport as never,
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            resolveTableSharding: (table: string): ShardingInfo | undefined =>
+                table === "settings" ? { mode: { kind: "global" } } : { mode: { kind: "root" } },
+            shardDO: noopNamespace,
+        });
+
+        const ndjson = JSON.stringify({ doc: { _id: "g1" }, table: "settings" });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/import", {
+                body: ndjson,
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        const body: { errors: { code: string }[] } = await response.json();
+
+        expect(body.errors).toHaveLength(1);
+        expect(body.errors[0]!.code).toBe("GLOBAL_NOT_CONFIGURED");
+    });
+});
+
+describe("import streaming — large body", () => {
+    it("handles a 10k-row NDJSON body without crashing", async () => {
+        expect.hasAssertions();
+
+        const orchestrateImport = vi.fn<(namespace: unknown, request: { batches: { rows: { table: string }[]; shardKey: string }[] }) => Promise<unknown>>(
+            async (_namespace, request) => {
+                const inserted: Record<string, number> = {};
+
+                for (const batch of request.batches) {
+                    for (const row of batch.rows) {
+                        inserted[row.table] = (inserted[row.table] ?? 0) + 1;
+                    }
+                }
+
+                return {
+                    conflicts: 0,
+                    errors: [],
+                    failed: 0,
+                    inserted,
+                    ok: request.batches.length,
+                    shards: [],
+                };
+            },
+        );
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: orchestrateImport as never,
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const lines: string[] = [];
+
+        for (let index = 0; index < 10_000; index += 1) {
+            lines.push(JSON.stringify({ doc: { _id: `u${String(index)}`, email: `u${String(index)}@x.io` }, table: "users" }));
+        }
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/import", {
+                body: lines.join("\n"),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        const body: { inserted: Record<string, number> } = await response.json();
+
+        expect(body.inserted).toEqual({ users: 10_000 });
+    });
+
+    it("export response body is consumable as a stream", async () => {
+        expect.hasAssertions();
+
+        const rows: { doc: Record<string, unknown>; table: string }[] = [];
+
+        for (let index = 0; index < 10_000; index += 1) {
+            rows.push({ doc: { _id: `u${String(index)}`, email: `u${String(index)}@x.io` }, table: "users" });
+        }
+
+        const orchestrateExport = vi.fn<() => Promise<unknown>>(async () => {
+            return {
+                failed: 0,
+                ok: 1,
+                shards: [{ rows, shardKey: "__root__" }],
+            };
+        });
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: orchestrateExport as never,
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/export", {
+                body: JSON.stringify({ tables: ["users"] }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        // Read the body incrementally — the test crashes if the runtime
+        // materialises a 10k-row body in memory and the `for await` was added
+        // for nothing.
+        let lineCount = 0;
+        const reader = response.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+            // eslint-disable-next-line no-await-in-loop -- streaming reader: each chunk must be read sequentially
+            const { done, value } = await reader.read();
+
+            if (done) {
+                break;
+            }
+
+            buffer += decoder.decode(value, { stream: true });
+
+            let newlineIndex = buffer.indexOf("\n");
+
+            while (newlineIndex !== -1) {
+                lineCount += 1;
+                buffer = buffer.slice(newlineIndex + 1);
+                newlineIndex = buffer.indexOf("\n");
+            }
+        }
+
+        // Count any trailing (newline-less) final line without an `if`.
+        lineCount += Number(buffer.trim().length > 0);
+
+        expect(lineCount).toBe(10_000);
+    });
+});
+
+describe("admin sync (CDC streaming export)", () => {
+    it("returns per-shard pages plus the global page and forwards the cursor map", async () => {
+        expect.assertions(4);
+
+        const orchestrateCdcSync = vi.fn<
+            (
+                namespace: unknown,
+                request: { cursors?: Record<string, number> },
+            ) => Promise<{
+                failed: number;
+                ok: number;
+                shards: { changes: { id: string; op: string; seq: number }[]; cursor: number; shardKey: string }[];
+            }>
+        >(async (_namespace, _request) => {
+            return {
+                failed: 0,
+                ok: 1,
+                shards: [{ changes: [{ id: "m1", op: "insert", seq: 5 }], cursor: 5, shardKey: "c1" }],
+            };
+        });
+        const syncGlobals = vi.fn<() => Promise<{ changes: { id: string; op: string; seq: number }[]; cursor: number }>>(async () => {
+            return { changes: [{ id: "u1", op: "insert", seq: 2 }], cursor: 2 };
+        });
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync,
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+            syncGlobals,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/sync", {
+                body: JSON.stringify({ cursors: { c1: 4 }, globalCursor: 1, tables: ["messages"] }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+
+        const body = await response.json<{ global: { cursor: number }; shards: { cursor: number; shardKey: string }[] }>();
+
+        expect(body.shards[0]).toMatchObject({ cursor: 5, shardKey: "c1" });
+        expect(body.global.cursor).toBe(2);
+        // The caller's per-shard cursor map reaches the coordinator verbatim.
+        expect(orchestrateCdcSync.mock.calls[0]?.[1]).toMatchObject({ cursors: { c1: 4 } });
+    });
+
+    it("omits the global page when syncGlobals is not configured", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: async () => {
+                    return { failed: 0, ok: 0, shards: [] };
+                },
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/sync", {
+                body: JSON.stringify({}),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        const body = await response.json<{ global?: unknown }>();
+
+        expect(response.status).toBe(200);
+        expect(body.global).toBeUndefined();
+    });
+
+    it("rejects an over-cap chunked body with 413", async () => {
+        expect.assertions(1);
+
+        const orchestrateCdcSync = vi.fn<() => never>();
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync,
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/sync", {
+                // Streamed body has no Content-Length, so the header fast-path
+                // can't see the size — the byte-budgeted reader must catch it.
+                body: oversizedStream(),
+                // @ts-expect-error -- duplex is required by the fetch spec for a streaming body but missing from the lib types here
+                duplex: "half",
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(413);
+    });
+});
+
+describe("admin apply (CDC replay)", () => {
+    it("replays per-shard batches plus globals and sums the applied counts", async () => {
+        expect.assertions(3);
+
+        const orchestrateApplyCdc = vi.fn<
+            (namespace: unknown, request: { batches: ReadonlyArray<unknown> }) => Promise<{ applied: number; failed: number; ok: number }>
+        >(async (_namespace, request) => {
+            return { applied: request.batches.length, failed: 0, ok: request.batches.length };
+        });
+        const applyGlobals = vi.fn<() => Promise<number>>(async () => 2);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            applyGlobals,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc,
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/apply", {
+                body: JSON.stringify({
+                    batches: [
+                        { changes: [{ id: "a" }], shardKey: "c1" },
+                        { changes: [{ id: "b" }], shardKey: "c2" },
+                    ],
+                    globalChanges: [{ id: "g" }],
+                }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+
+        const body = await response.json<{ applied: number }>();
+
+        // 2 shard batches (mock returns batches.length) + 2 globals.
+        expect(body.applied).toBe(4);
+        expect(applyGlobals).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects an over-cap chunked body with 413", async () => {
+        expect.assertions(1);
+
+        const orchestrateApplyCdc = vi.fn<() => never>();
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc,
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_lunora/admin/apply", {
+                body: oversizedStream(),
+                // @ts-expect-error -- duplex is required by the fetch spec for a streaming body but missing from the lib types here
+                duplex: "half",
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(413);
+    });
+});

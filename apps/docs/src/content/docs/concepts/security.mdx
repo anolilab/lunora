@@ -1,0 +1,216 @@
+---
+title: Security
+description: Lunora's secure-by-default posture — the protections you get for free, how to opt out, and the advisor lints that catch the gaps.
+---
+
+Lunora is **secure by default**. The edge protections, auth-cookie hardening, and
+input guards described below are on the moment you run `createWorker`. You don't
+opt _in_ to them, you opt _out_. Every layer can be disabled individually for the
+rare case that needs it, and the [advisors](/docs/concepts/advisors) flag the
+gaps that defaults can't close on their own (a public mutation with no rate
+limit, a `v.any()` argument, a secret checked into source).
+
+This page covers the framework defaults, the public helpers, and the full
+security advisor catalog with remediation.
+
+## The HTTP edge
+
+The worker's top-level `fetch` is the single choke point every response passes
+through: RPC, auth, admin, `httpRoute` handlers, and the SSR fallback alike.
+Three layers are applied there, all on by default and configured through the
+`security` option on `createWorker`. None ever overwrites a header or decision an
+inner handler already made; defaults _fill in_, they never clobber.
+
+### Baseline response headers
+
+Added to every response when the inner handler didn't set them:
+
+| Header                       | Default                                                                   |
+| ---------------------------- | ------------------------------------------------------------------------- |
+| `Strict-Transport-Security`  | `max-age=31536000; includeSubDomains` (HTTPS responses only)              |
+| `X-Content-Type-Options`     | `nosniff`                                                                 |
+| `X-Frame-Options`            | `SAMEORIGIN`                                                              |
+| `Referrer-Policy`            | `strict-origin-when-cross-origin`                                         |
+| `Permissions-Policy`         | a minimal deny list (camera, microphone, geolocation, payment, …)         |
+| `Cross-Origin-Opener-Policy` | `same-origin`                                                             |
+| `Content-Security-Policy`    | `default-src 'none'; frame-ancestors 'none'; …` on **non-HTML** responses |
+
+The CSP default is applied only to non-HTML (API/JSON) responses, so an SSR page
+is never broken by a policy it didn't opt into. Pass a `csp` string to apply your
+own policy to HTML too:
+
+```ts
+createWorker({
+    security: {
+        headers: {
+            csp: "default-src 'self'; script-src 'self' 'unsafe-inline'",
+            hsts: { maxAge: 63072000, preload: true },
+        },
+    },
+});
+```
+
+Set `headers: false` to disable the layer entirely, or any individual field to
+`false` to omit just that header.
+
+### CORS — deny cross-origin by default
+
+Cross-origin requests are denied unless you name an allowlist. There is no
+wildcard fallback:
+
+```ts
+createWorker({
+    security: {
+        cors: {
+            allowedOrigins: ["https://app.example.com"], // or a predicate
+            allowCredentials: true,
+        },
+    },
+});
+```
+
+When you don't pass `security.cors` in code, the worker falls back to env config:
+`LUNORA_ALLOWED_ORIGINS` is a comma-separated allowlist and
+`LUNORA_CORS_ALLOW_CREDENTIALS` (`true`/`on`/`1`) opts credentials in. This lets a
+deployment set its origins through wrangler `vars` without a code change. Code
+config always wins — an explicit `security.cors` ignores the env vars entirely.
+
+A `*` wildcard combined with credentials is rejected: browsers refuse the
+combination and it defeats the allowlist. Set in code it throws at construction;
+set through the env vars the worker keeps serving the allowlist but **silently
+drops credentials** (it can't throw in the request path), and the
+[`@lunora/config`](#config-time-validation) validator catches the same mistake at
+build time. Preflight (`OPTIONS`) is answered automatically for allowlisted origins.
+
+### CSRF / origin guard
+
+State-changing, **cookie-authenticated** requests whose `Origin`/`Referer` is
+neither same-origin nor allowlisted are rejected with `403`. The guard is scoped
+deliberately to cookie-bearing browser requests, the only vector a cross-site
+forgery can ride. Bearer-token and server-to-server traffic (no `Cookie` header)
+is exempt, as are safe methods (`GET`/`HEAD`/`OPTIONS`).
+
+```ts
+createWorker({
+    security: {
+        csrf: { trustedOrigins: ["https://admin.example.com"] }, // or `false` to disable
+    },
+});
+```
+
+### Body cap
+
+Request bodies are capped at 1 MiB before they reach a handler, so an oversized
+upload can't exhaust the worker's memory. This is always on.
+
+## Auth, cookies, and secrets
+
+`createAuth` (`@lunora/auth`) hardens better-auth's defaults unless you override
+them:
+
+- **Cookie attributes** — `httpOnly: true`, `sameSite: "lax"`, `path: "/"` are
+  filled in when you don't supply `advanced.defaultCookieAttributes`.
+- **Secure cookies** — `useSecureCookies` is forced on for an HTTPS `baseURL`.
+- **Auth secret strength** — `AUTH_SECRET` shorter than 32 characters logs a
+  warning (not a throw, so dev isn't blocked) pointing at `openssl rand -hex 32`.
+  A missing secret still throws.
+
+## Protecting public procedures
+
+`protectPublic` (`@lunora/server`) is thin sugar that chains the recommended
+guards — a rate limit, then a CAPTCHA — into one `.use()`-able middleware. It is
+the recommended wrapper for any public mutation that creates users, sends mail,
+or consumes credits:
+
+```ts
+import { protectPublic } from "lunorash/server";
+import { rateLimit } from "@lunora/ratelimit";
+import { verifyTurnstileMiddleware } from "@lunora/auth";
+
+export const signUp = mutation
+    .use(
+        protectPublic({
+            rateLimit: rateLimit(limiter, "signup"),
+            captcha: verifyTurnstileMiddleware({ secret: env.TURNSTILE_SECRET_KEY, token: (c) => c.args.captchaToken }),
+        }),
+    )
+    .mutation(async ({ ctx, args }) => {
+        /* ... */
+    });
+```
+
+The rate limit runs first (the cheapest gate, shedding obvious floods before the
+Turnstile round-trip). Omitted fields are skipped; an empty bundle passes
+through unchanged.
+
+## Advisor catalog
+
+Every protection above has a matching [advisor](/docs/concepts/advisors) lint, so
+an app that opts out, or never opted in, is warned at build time. The static
+lints run on every `lunora dev` save and on deploy.
+
+| Lint                                     | Level | Remediation                                                                           |
+| ---------------------------------------- | ----- | ------------------------------------------------------------------------------------- |
+| `hardcoded_secret`                       | error | Rotate the leaked value and move it to a `wrangler secret` / binding, never source.   |
+| `sql_injection_risk`                     | error | Pass request input through a bound `ctx.sql` placeholder, never string concatenation. |
+| `rls_uncovered_table`                    | warn  | Add `.use(rls(...))` to the public procedure, matching the policy used elsewhere.     |
+| `mask_uncovered_pii_column`              | warn  | Add `.use(mask(...))` so the public read redacts the same columns as elsewhere.       |
+| `auth_api_call_without_headers`          | warn  | Pass `headers` to `ctx.authApi.<method>(...)` so better-auth authorizes the session.  |
+| `public_mutation_without_ratelimit`      | warn  | Wrap the public write with `protectPublic({ rateLimit })` or attach `rateLimit(...)`. |
+| `user_creating_mutation_without_captcha` | warn  | Add `verifyTurnstile` / `protectPublic({ captcha })` to the user-creating procedure.  |
+| `public_arg_uses_any`                    | warn  | Replace the `v.any()` argument with a concrete validator.                             |
+| `admin_route_without_guard`              | warn  | Reference an auth/admin guard in the privileged `httpRoute` handler.                  |
+| `unbounded_string_arg`                   | info  | Add a max-length `.check` to the public string argument.                              |
+| `container_public_internet`              | info  | Set `enableInternet: false` on the container if it needs no outbound egress.          |
+
+### Deployment-level findings
+
+A second set is computed at runtime from the Worker `env` and surfaces in the
+Studio's **Security Advisor** panel. These observe the live deployment rather
+than the source, so they only fire once a `LUNORA_ADMIN_TOKEN` gates
+introspection:
+
+| Finding                     | Level   | Fires when                                                                                |
+| --------------------------- | ------- | ----------------------------------------------------------------------------------------- |
+| `admin-token-weak`          | warn    | `LUNORA_ADMIN_TOKEN` is set but shorter than 24 chars.                                    |
+| `auth-secret-weak`          | warn    | `AUTH_SECRET` / `BETTER_AUTH_SECRET` is set but shorter than 32 chars.                    |
+| `ws-gate-open`              | error\* | `LUNORA_WS_BEARER` is unset, so live admin subscriptions need no credential.              |
+| `cors-wildcard-credentials` | error   | `LUNORA_ALLOWED_ORIGINS` includes `*` while `LUNORA_CORS_ALLOW_CREDENTIALS` is on.        |
+| `security-headers-disabled` | warn    | `LUNORA_SECURITY_HEADERS` is off on a production worker.                                  |
+| `csrf-disabled`             | warn    | `LUNORA_SECURITY_CSRF` is off on a production worker.                                     |
+| `cookies-insecure`          | warn    | `BETTER_AUTH_URL` is a plaintext `http://` origin on a production worker.                 |
+| `dev-args-unredacted`       | warn    | The worker reports a dev environment, so the request log keeps un-redacted args/identity. |
+
+<small>\* downgraded to `info` on a local dev worker, where an open gate is expected.</small>
+
+The `LUNORA_SECURITY_HEADERS` and `LUNORA_SECURITY_CSRF` env vars are the
+env-level opt-outs for the corresponding `security` layers; setting either to
+`off`/`false`/`0` relaxes the secure default. Code config always wins: an explicit
+`security.headers` / `security.csrf` in `createWorker` overrides the env knob, so
+the audit and the running worker never disagree.
+
+## Config-time validation
+
+`@lunora/config`'s wrangler validator (run by the CLI and Vite plugin on every
+build) rejects the wildcard-CORS-with-credentials combination when it is driven
+through wrangler `vars`:
+
+```jsonc
+{
+    "vars": {
+        "LUNORA_ALLOWED_ORIGINS": "*",
+        "LUNORA_CORS_ALLOW_CREDENTIALS": "true", // ← build fails here
+    },
+}
+```
+
+This is the build-time twin of the runtime construction throw, so the
+misconfiguration surfaces before you deploy.
+
+## See also
+
+- [Advisors](/docs/concepts/advisors) — the full lint catalog and how findings surface.
+- [Row-level security](/docs/concepts/rls) — per-row authorization.
+- [Data masking](/docs/concepts/masking) — per-field redaction.
+- [Rate limiting](/docs/packages/ratelimit) — the limiter `protectPublic` chains.
+- [Auth](/docs/packages/auth) — sessions, cookies, and Turnstile verification.

@@ -1,0 +1,18 @@
+{
+    "extends": "../../tsconfig.base.json",
+    "compilerOptions": {
+        "outDir": "dist",
+        "rootDir": ".",
+        "moduleResolution": "bundler",
+        "jsx": "react-jsx",
+        "types": ["node", "vite/client"],
+        "lib": ["DOM", "DOM.Iterable", "ES2024"],
+        "noUncheckedIndexedAccess": false,
+        "declaration": false,
+        "paths": {
+            "@/*": ["./src/*"]
+        }
+    },
+    "include": ["src/**/*", "vite.config.ts"],
+    "exclude": ["node_modules", "dist"]
+}

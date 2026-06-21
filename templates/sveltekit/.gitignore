@@ -1,0 +1,8 @@
+node_modules
+.svelte-kit
+.output
+dist
+.wrangler
+.lunora/
+.lunora-cache
+lunora/_generated

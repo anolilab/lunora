@@ -1,0 +1,53 @@
+{
+    "name": "@lunora/playground",
+    "version": "0.0.0",
+    "private": true,
+    "license": "FSL-1.1-Apache-2.0",
+    "type": "module",
+    "sideEffects": false,
+    "scripts": {
+        "build": "vite build",
+        "codegen": "node node_modules/lunorash/dist/bin.mjs codegen",
+        "deploy": "wrangler deploy",
+        "dev": "vite",
+        "lint:eslint": "eslint .",
+        "lint:eslint:fix": "eslint . --fix",
+        "lint:types": "node node_modules/lunorash/dist/bin.mjs codegen && tsc --noEmit",
+        "test": "vitest run"
+    },
+    "dependencies": {
+        "@lunora/auth": "workspace:*",
+        "@lunora/d1": "workspace:*",
+        "@lunora/db": "workspace:*",
+        "@lunora/mail": "workspace:*",
+        "@lunora/ratelimit": "workspace:*",
+        "@lunora/react": "workspace:*",
+        "@lunora/scheduler": "workspace:*",
+        "@lunora/storage": "workspace:*",
+        "@lunora/studio": "workspace:*",
+        "@lunora/vite": "workspace:*",
+        "@lunora/workflow": "workspace:*",
+        "@tanstack/db": "catalog:frontend",
+        "@tanstack/offline-transactions": "catalog:frontend",
+        "@tanstack/react-db": "catalog:frontend",
+        "better-auth": "catalog:auth",
+        "lunorash": "workspace:*",
+        "react": "catalog:frontend",
+        "react-dom": "catalog:frontend"
+    },
+    "devDependencies": {
+        "@cloudflare/workers-types": "catalog:cloudflare",
+        "@lunora/codegen": "workspace:*",
+        "@lunora/config": "workspace:*",
+        "@types/node": "catalog:types",
+        "@types/react": "catalog:frontend",
+        "@types/react-dom": "catalog:frontend",
+        "typescript": "catalog:tsc",
+        "vite": "catalog:vite",
+        "vitest": "catalog:test",
+        "wrangler": "catalog:cloudflare"
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    }
+}

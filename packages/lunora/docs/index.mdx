@@ -1,0 +1,115 @@
+---
+title: "lunora"
+description: "The Lunora umbrella package — one install for the server authoring API, worker runtime, Durable Objects, and the lunora CLI, exposed through lunorash/* subpaths."
+---
+
+`lunorash` is the umbrella package for the base of a Lunora app. It re-exports
+the server authoring API, the worker runtime, the Durable Objects, the values
+suite, and the browser client through subpaths, and ships the `lunora` CLI
+binary. Depend on it instead of wiring up `@lunora/server`, `@lunora/values`,
+`@lunora/runtime`, `@lunora/do`, `@lunora/client`, and `@lunora/cli`
+separately.
+
+<Callout type="info">
+    The npm name is `lunorash` because the unscoped `lunora` name is taken on npm. The CLI binary and the import subpaths stay `lunora` / `lunorash/*`.
+</Callout>
+
+## Install
+
+```sh
+pnpm add lunorash
+```
+
+Framework adapters (`@lunora/react`, `@lunora/vue`, `@lunora/solid`,
+`@lunora/svelte`, `@lunora/astro`), the Vite plugin (`@lunora/vite`), and
+add-ons (`@lunora/auth`, `@lunora/mail`, `@lunora/storage`, …) stay as separate
+installs.
+
+## Subpaths
+
+| Import                         | Re-exports                   | Use                                                        |
+| ------------------------------ | ---------------------------- | ---------------------------------------------------------- |
+| `lunorash` / `lunorash/server` | `@lunora/server`             | `defineSchema`, `defineTable`, `initLunora`, `cronJobs`, … |
+| `lunorash/server/types`        | `@lunora/server/types`       | server context and data-model types                        |
+| `lunorash/server/data-model`   | `@lunora/server/data-model`  | data-model type helpers                                    |
+| `lunorash/server/drizzle`      | `@lunora/server/drizzle`     | the Drizzle table builders                                 |
+| `lunorash/server/rls/testing`  | `@lunora/server/rls/testing` | RLS policy test helpers                                    |
+| `lunorash/values`              | `@lunora/values`             | the `v.*` validator suite                                  |
+| `lunorash/runtime`             | `@lunora/runtime`            | `createWorker`, `composeWorker`, the query coordinator     |
+| `lunorash/do`                  | `@lunora/do`                 | `ShardDO` / `SessionDO`                                    |
+| `lunorash/client`              | `@lunora/client`             | the browser SDK (`LunoraClient`, `preloadQuery`, …)        |
+
+The default entry (`lunorash`) mirrors `lunorash/server`, so
+`import { defineSchema } from "lunorash"` works out of the box.
+
+## Authoring a schema
+
+```ts
+// lunora/schema.ts
+import { defineSchema, defineTable } from "lunorash/server";
+import { v } from "lunorash/values";
+
+export default defineSchema({
+    messages: defineTable({
+        body: v.string(),
+        author: v.id("users"),
+    }).index("by_author", ["author"]),
+});
+```
+
+## Procedure builders come from codegen, not the package
+
+The `query`, `mutation`, `action`, `internalQuery`, `internalMutation`,
+`internalAction`, and `definePolicy` builders are emitted into your app's
+`_generated/server` module by `lunora codegen` — they are typed against your
+schema, so they are not exported from `lunorash/server`.
+
+```ts
+// lunora/messages.ts
+import { query, mutation } from "@/lunora/_generated/server";
+import { v } from "lunorash/values";
+
+export const list = query({
+    args: { author: v.id("users") },
+    handler: async (ctx, { author }) =>
+        ctx.db
+            .query("messages")
+            .withIndex("by_author", (q) => q.eq("author", author))
+            .collect(),
+});
+
+export const send = mutation({
+    args: { body: v.string(), author: v.id("users") },
+    handler: async (ctx, { body, author }) => ctx.db.insert("messages", { body, author }),
+});
+```
+
+When a project depends on `lunorash`, codegen emits `lunorash/*` imports in the
+`_generated/*` files (including `lunorash/client` for `FunctionReference`)
+instead of `@lunora/*`. Projects on the granular `@lunora/*` packages are
+unchanged.
+
+## Worker entry
+
+```ts
+// src/worker.ts
+import { createWorker } from "lunorash/runtime";
+
+export { ShardDO } from "lunorash/do";
+
+export default createWorker({ shardDO: (env) => env.SHARD });
+```
+
+## CLI
+
+The `lunora` binary delegates to `@lunora/cli`, so installing `lunorash` alone
+gives you the full CLI:
+
+```sh
+pnpm exec lunora dev
+pnpm exec lunora codegen
+pnpm exec lunora deploy
+```
+
+See the [getting started guide](/docs/getting-started) and the
+[concepts](/docs/concepts/schema) section for the full authoring model.

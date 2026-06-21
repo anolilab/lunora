@@ -1,0 +1,49 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "lunora-playground",
+    "main": "src/server/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [
+            { "name": "SHARD", "class_name": "ShardDO" },
+            { "name": "SCHEDULER", "class_name": "SchedulerDO" },
+        ],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] }],
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    // Cloudflare Workflows are NOT Durable Objects — they live in their own
+    // `workflows[]` array with no migration entry. `class_name` must be exported
+    // by the worker entry (see `ChannelWelcomeWorkflow` in src/server/index.ts).
+    // `lunora dev` auto-reconciles this from `lunora/workflows.ts`.
+    "workflows": [{ "binding": "WORKFLOW_CHANNEL_WELCOME", "class_name": "ChannelWelcomeWorkflow", "name": "channel-welcome" }],
+    "d1_databases": [
+        {
+            "binding": "DB",
+            "database_name": "lunora-playground",
+            "database_id": "<replace-with-d1-create-id>",
+        },
+    ],
+    "r2_buckets": [
+        {
+            "binding": "FILES",
+            "bucket_name": "lunora-playground-files",
+        },
+        // Second bucket demonstrating multi-bucket ctx.storage + the studio file
+        // browser's bucket picker (ctx.storage.bucket("avatars")).
+        {
+            "binding": "AVATARS",
+            "bucket_name": "lunora-playground-avatars",
+        },
+    ],
+    "vars": {
+        "PUBLIC_STORAGE_BASE_URL": "https://files.example.com",
+        // REPLACE before deploying to production — both point at the Worker's
+        // own origin so the SchedulerDO can dispatch HTTP callbacks back into it.
+        // `LUNORA_ORIGIN_URL` is the binding the SchedulerDO reads (SSRF-safe);
+        // `LUNORA_WORKER_ORIGIN` is the origin the app passes to `createScheduler`.
+        // Pointing at localhost in production silently breaks scheduled jobs.
+        "LUNORA_WORKER_ORIGIN": "http://localhost:8787",
+        "LUNORA_ORIGIN_URL": "http://localhost:8787",
+    },
+}

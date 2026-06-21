@@ -1,0 +1,26 @@
+{
+    "//": "Type-checks the shipped registry items (registry/<item>/*.ts) against the workspace packages they import. Not a build — `noEmit`. Run via the root `lint:types:registry` script, which builds all packages first (`build:packages`) so every `@lunora/*` dist exists regardless of caller. `@lunora/*` maps to each package's built declarations (not src) so items are checked exactly as a consumer sees them, without recompiling package internals (which would pull Cloudflare-Workers globals from DO-backed packages). `bundler` resolution lets an item's `./schema.js` specifier resolve to its sibling `.ts`.",
+    "extends": "../tsconfig.base.json",
+    "compilerOptions": {
+        "noEmit": true,
+        "moduleResolution": "bundler",
+        "types": ["node"],
+        "paths": {
+            "@lunora/auth/plugins": ["../packages/auth/dist/plugins.d.ts"],
+            "@lunora/*": ["../packages/*/dist/index.d.ts"],
+            "better-auth/plugins/generic-oauth": ["../packages/auth/node_modules/better-auth/dist/plugins/generic-oauth/index.d.mts"]
+        }
+    },
+    "// exclude": "Function templates that import the per-app builders (`mutation`/`query`/`action`/`internal*`) from `./_generated/server` — the path codegen emits in a real project — can't be checked here: that relative path only exists after codegen, and ambient declarations can't stub a relative specifier (same reason `crons/crons.ts`, which imports `./_generated/api`, is excluded). Items that import only published `@lunora/*` surfaces stay in and are checked against the mapped dist declarations above.",
+    "exclude": [
+        "**/node_modules/**",
+        "crons/crons.ts",
+        "crons/jobs.ts",
+        "backup/backup.ts",
+        "mail/mail.ts",
+        "presence/presence.ts",
+        "ratelimit/ratelimit.ts",
+        "storage/storage.ts"
+    ],
+    "include": ["**/*.ts"]
+}

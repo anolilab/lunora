@@ -1,0 +1,132 @@
+---
+title: HTTP endpoints
+description: Public HTTP routes with httpAction and the Hono-based httpRouter.
+---
+
+Queries, mutations, and actions are reached through Lunora's typed client over
+the RPC/WebSocket transport. Sometimes you need a plain HTTP endpoint instead:
+an inbound webhook, an OAuth callback, a REST surface for a non-Lunora client, a
+file download. That's what `httpAction` and `httpRouter` are for.
+
+`httpRouter()` returns a [Hono](https://hono.dev) app, so the full Hono surface
+(middleware, path params, `.route()` composition) is available. You mount it on
+the worker via `createWorker({ httpRouter: app })`, and the runtime injects a
+per-request `HttpActionCtx` that your handlers read.
+
+```ts
+// lunora/http.ts
+import { httpAction, httpRouter } from "lunorash/server";
+import { cors } from "hono/cors";
+import { api } from "@/lunora/_generated/api";
+
+const app = httpRouter();
+
+app.use("*", cors());
+
+app.post(
+    "/webhook/stripe",
+    httpAction(async (ctx, request) => {
+        const event = await request.json();
+        await ctx.runMutation(api.billing.applyStripeEvent, { event });
+
+        return new Response("ok", { status: 200 });
+    }),
+);
+
+app.get(
+    "/users/:id",
+    httpAction(async (ctx, request) => {
+        const id = new URL(request.url).pathname.split("/").pop()!;
+        const user = await ctx.runQuery(api.users.get, { id });
+
+        return user ? Response.json(user) : new Response("Not Found", { status: 404 });
+    }),
+);
+
+export default app;
+```
+
+## `httpAction`
+
+`httpAction(handler)` wraps a `(ctx, request) => Response` function into a Hono
+handler. You get the underlying `Request` and return a raw `Response`, so you
+own status codes, headers, and body. Mount it with any Hono verb:
+`app.post(path, httpAction(fn))`, `app.all(path, httpAction(fn))`.
+
+## `HttpActionCtx`
+
+HTTP actions run in the worker (the "action runtime"), separate from the
+transactional store. The context is therefore a narrower view of `ActionCtx`. It
+carries:
+
+- `ctx.auth` — the resolved caller identity.
+- `ctx.fetch` — outbound HTTP.
+- `ctx.runQuery` / `ctx.runMutation` / `ctx.runAction` — reach the data layer; these forward to the owning shard.
+
+An HTTP action has no direct `ctx.db`, `ctx.scheduler`, `ctx.storage`, or
+`ctx.vectors`. Go through `runQuery` / `runMutation` / `runAction` to read or
+write your tables. (To stream a stored R2 object straight from a handler,
+`serveStorageObject(ctx, key, request)` is the purpose-built helper.)
+
+## Typed routes with `httpRoute`
+
+For a JSON REST surface, the `httpRoute` builder gives you validated query
+params, body, and path params plus an optional `.output()` schema. It compiles
+down to the same handler type as `httpAction`, so the two are interchangeable
+when mounted:
+
+```ts
+import { httpRoute, httpRouter, v } from "lunorash/server";
+import { api } from "@/lunora/_generated/api";
+
+export const listTodos = httpRoute
+    .get("/api/todos")
+    .searchParams({ limit: v.number(), q: v.optional(v.string()) })
+    .output(v.array(v.object({ id: v.string(), text: v.string() })))
+    .handler(async ({ ctx, searchParams }) => ctx.runQuery(api.todos.list, searchParams));
+
+export const getTodo = httpRoute
+    .get("/api/todos/:id")
+    .params({ id: v.string() })
+    .handler(async ({ ctx, params }) => ctx.runQuery(api.todos.get, params));
+
+const app = httpRouter();
+
+app.get("/api/todos", listTodos);
+app.get("/api/todos/:id", getTodo);
+```
+
+`.searchParams()`, `.body()`, and `.params()` accumulate validator maps that
+decode the URL query, JSON body, and Hono path params into the handler's typed
+`searchParams` / `body` / `params`. Query-string values arrive as strings and are
+coerced to the declared scalar kind (`?limit=5` satisfies `v.number()`). A
+decode failure surfaces as a `400`, a result that violates `.output()` is a
+`500`, and a handler that returns `undefined` produces a `204`.
+
+For Server-Sent Events, swap the terminal `.handler()` for `.stream()`. The
+handler is then an async generator whose yielded chunks become SSE `data:`
+frames, with the client's disconnect wired through to an `AbortSignal`.
+
+## How routes mount in the worker
+
+`httpRouter()` pre-wires a middleware that lifts the runtime-injected request
+context onto `c.var.lunora`, where both `httpAction` and `httpRoute` read it.
+Pass the app to `createWorker`, which supplies that context on every request:
+
+```ts
+import { createWorker } from "@lunora/runtime";
+import app from "./http";
+
+export default createWorker({ httpRouter: app /* …other options */ });
+```
+
+The lifting middleware throws if the context is absent, so this only trips when
+the router is run outside the runtime. The misconfiguration surfaces loudly
+rather than leaving `c.var.lunora` silently `undefined`.
+
+## See also
+
+- [Actions](/docs/concepts/actions)
+- [Internal functions](/docs/concepts/internal-functions)
+- [Queries & mutations](/docs/concepts/queries-mutations)
+- [API: @lunora/server](/docs/packages/server)

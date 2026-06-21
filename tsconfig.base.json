@@ -1,0 +1,58 @@
+{
+    "$schema": "https://json.schemastore.org/tsconfig",
+    "compilerOptions": {
+        "isolatedModules": true,
+        "lib": ["DOM", "DOM.Iterable", "ES2024"],
+        "module": "ESNext",
+        "target": "ES2024",
+        "tsBuildInfoFile": ".tsbuildinfo",
+        "moduleDetection": "force",
+        "verbatimModuleSyntax": true,
+
+        "strict": true,
+        "strictNullChecks": true,
+        "strictBindCallApply": true,
+        "strictFunctionTypes": true,
+        "strictPropertyInitialization": true,
+        "stripInternal": true,
+        "noImplicitAny": true,
+        "noImplicitThis": true,
+
+        "noUnusedLocals": true,
+        "noUnusedParameters": true,
+        "noImplicitOverride": true,
+        "noImplicitReturns": true,
+        "noUncheckedIndexedAccess": true,
+        "noPropertyAccessFromIndexSignature": false,
+        "noFallthroughCasesInSwitch": true,
+        "exactOptionalPropertyTypes": false,
+        "useUnknownInCatchVariables": true,
+
+        "esModuleInterop": true,
+
+        "declaration": true,
+        "allowJs": true,
+        "removeComments": true,
+        "incremental": true,
+
+        "inlineSources": false,
+
+        "allowUnusedLabels": false,
+        "allowUnreachableCode": false,
+
+        "checkJs": true,
+        "skipLibCheck": true,
+        "forceConsistentCasingInFileNames": true
+    },
+    "exclude": [
+        "**/dist/**",
+        "**/node_modules/**",
+        "**/build/**",
+        "scripts/**/*",
+        "verify-node-version.cjs",
+        "examples/**",
+        "**/coverage/**",
+        "vitest.config.ts",
+        "**/__fixtures__/**"
+    ]
+}

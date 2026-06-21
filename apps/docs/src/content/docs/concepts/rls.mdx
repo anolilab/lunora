@@ -1,0 +1,232 @@
+---
+title: Row-level security
+description: Server-side authorization that decides which rows a procedure can read or write.
+---
+
+Row-level security (RLS) controls **which rows** a caller can see and change.
+Where [data masking](/docs/concepts/masking) decides _which fields_ within a row
+come back redacted, RLS decides _which rows_ a procedure returns or is allowed to
+write. Both are server-side, both attach to a procedure's `.use(...)` chain, and
+both are **opt-in per procedure**: a bare `query`/`mutation` sees an unwrapped
+`ctx.db` and no policy applies, even if another procedure guards the same table.
+
+```ts
+import { definePolicy, definePolicies, rls } from "lunorash/server";
+
+import { query } from "./_generated/server";
+
+// "you only see documents you own"
+const ownDocuments = definePolicy({
+    table: "documents",
+    on: "read",
+    when: ({ auth }) => ({ ownerId: auth.userId }),
+});
+
+export const listDocuments = query.use(rls(definePolicies([ownDocuments]))).query(async ({ ctx }) => ctx.db.findMany("documents"));
+```
+
+## Policies
+
+A **policy** is a pure function bound to a `table` and an operation (`on`). At
+request time the middleware calls its `when(...)` with the request context and
+uses the return value to decide access:
+
+| `when` returns | On a `read`                                                                 | On a write (`insert` / `update` / `delete`)                                   |
+| -------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `WhereInput`   | AND-merged into every query on the table — non-matching rows are invisible. | Evaluated against the candidate/pre-write row; a mismatch throws `FORBIDDEN`. |
+| `true`         | No predicate merged — unrestricted.                                         | The row is allowed.                                                           |
+| `false`        | The table matches **zero** rows.                                            | The operation throws `FORBIDDEN`.                                             |
+| `undefined`    | This policy opts out (useful when branching on roles).                      | This policy opts out.                                                         |
+
+The `on` operations are `read` (covers `get` / `findFirst` / `findMany` /
+`query` / `count`), `insert`, `update`, and `delete`. A `WhereInput` predicate
+uses the same operator set as the query compiler —
+`eq`/`ne`/`in`/`notIn`/`lt`/`lte`/`gt`/`gte`/`isNull`/`contains` plus
+`AND`/`OR`/`NOT`.
+
+```ts
+const documentPolicies = definePolicies([
+    // read: only your own documents
+    definePolicy({ table: "documents", on: "read", when: ({ auth }) => ({ ownerId: auth.userId }) }),
+    // insert: you can only create documents you own
+    definePolicy({ table: "documents", on: "insert", when: ({ auth, row }) => row?.ownerId === auth.userId }),
+    // delete: only the owner may delete
+    definePolicy({ table: "documents", on: "delete", when: ({ auth, row }) => row?.ownerId === auth.userId }),
+]);
+```
+
+### The policy context
+
+`when` receives a context with:
+
+- `auth.userId` — the resolved caller id (`null` when unauthenticated).
+- `auth.roles` — the request's role list (from better-auth claims today).
+- `auth.can(permission)` — whether any of those roles grants a named permission
+  (see below). Fails closed for unknown roles.
+- `auth.identity` — the raw identity claims.
+- `row` — present only on **write** policies; the candidate document on
+  `insert`, the pre-write row on `update`/`delete`.
+- `ctx` — the full procedure context the middleware closed over.
+
+## Permissions and roles
+
+Rather than enumerate role strings inside every policy, declare a named
+**permission**, grant it through a **role**, register the roles with the
+middleware, and check it with `auth.can(...)`:
+
+```ts
+import { definePermission, defineRole, definePolicy, definePolicies, rls } from "lunorash/server";
+
+import { mutation } from "./_generated/server";
+
+const deletePosts = definePermission("posts:delete");
+const admin = defineRole("admin", { permissions: [deletePosts] });
+
+const canDelete = definePolicy({
+    table: "posts",
+    on: "delete",
+    when: ({ auth }) => auth.can(deletePosts),
+});
+
+export const removePost = mutation.use(rls(definePolicies([canDelete]), { roles: [admin] })).mutation(async ({ ctx, args }) => ctx.db.delete(args.id));
+```
+
+The middleware unions the permissions of every role in `auth.roles` at request
+time. A role **not** passed in `rls(..., { roles })` grants nothing — `auth.can`
+is conservative and fails closed for unknown roles. Permissions and roles are
+shared with [data masking](/docs/concepts/masking), which checks the same
+`auth.can(...)` view.
+
+## Relation predicates
+
+A policy predicate can cross a relation. Alongside the flat column operators, a
+`when` decision may return a Prisma-style **relation predicate** (`is`/`isNot`
+on a to-one relation, `some`/`none`/`every` on a to-many), which the `@lunora/do`
+pre-resolver resolves (a batched semijoin, or a correlated `EXISTS` when the
+related table is co-located on the same shard) before the read runs:
+
+```ts
+// "you can read a post when its author is in your org"
+definePolicy({
+    table: "posts",
+    on: "read",
+    when: ({ ctx }) => ({ author: { is: { orgId: ctx.orgId } } }),
+});
+
+// "you can read an org row when it has at least one member that is you"
+definePolicy({
+    table: "orgs",
+    on: "read",
+    when: ({ auth }) => ({ members: { some: { userId: auth.userId } } }),
+});
+```
+
+The child read is itself filtered by the child table's own read policy, so a
+relation predicate can never widen visibility past what the caller could read
+directly (`every` therefore means "every child _the caller can read_ matches").
+
+Relation predicates are a **read-policy** capability. A write policy evaluates a
+single in-memory candidate row and has no fetcher, so a relation predicate in an
+`insert`/`update`/`delete` decision throws `RELATION_PREDICATE_UNSUPPORTED`; use
+a flat column check (or a read policy) instead. `rank`/`rankPage` likewise
+reject them: their `where` only pins a partition, so a relation predicate there
+would silently drop. They are also bounded: an overly broad `some: {}` that
+collects more than `maxRelationKeys` child keys fails closed with a descriptive
+error rather than silently truncating the `IN (...)` set (a same-shard `EXISTS`
+push-down lifts this cap, since it needs no key list).
+
+### Typed authoring
+
+Import `definePolicy` from your generated `./_generated/server` (rather than
+`@lunora/server`) to get a relation-aware authoring surface bound to your
+schema: `table` autocompletes to a real table name and the `when` predicate
+type-checks against the table's columns **and** its declared relations.
+
+```ts
+import { definePolicy } from "./_generated/server";
+
+// `author` autocompletes; a typo or an unknown relation is a compile error.
+definePolicy({ table: "posts", on: "read", when: ({ ctx }) => ({ author: { is: { orgId: ctx.orgId } } }) });
+```
+
+It is runtime-identical to `@lunora/server`'s `definePolicy` — only the types
+narrow, so the `rls()` chain discovers a policy authored either way the same.
+
+## What's covered, what isn't
+
+- **Reads are AND-merged.** Every `get`, `findFirst`/`findMany`, and the
+  `query().withIndex().order().collect()/first()/take()/paginate()` chain folds
+  the policy predicate in, so a non-matching row is invisible, not an error.
+- **Writes throw on denial.** `insert`, `patch`/`replace`, and `delete` evaluate
+  the candidate/pre-write row and throw `FORBIDDEN` (HTTP 403) on a mismatch.
+- **`count` is unsupported on a restricted table.** It throws
+  `COUNT_RLS_UNSUPPORTED` (HTTP 422), because a count over a row-filtered table
+  would leak the size of rows you can't see.
+- **Nested `with` reads inherit the child's read policy.** A row hydrated through
+  a `with` clause is filtered by the related table's own `read` policy — the same
+  `baseWhere` a direct read of that table would get is threaded down every `with`
+  level (and into `_count`), so `findMany({ with: { child: true } })` can't return
+  child rows the caller couldn't read directly. (Column-level **masking** is the
+  boundary that still draws at the wrapped facade; see below.)
+- **It's opt-in.** Only procedures whose chain includes `.use(rls(...))` are
+  guarded. The [`rls_uncovered_table`](/docs/concepts/advisors) advisor warns
+  when a **public** procedure reads or writes a table that's RLS-protected
+  elsewhere but skips the middleware, leaving an authorization gap.
+
+### RLS over live queries
+
+A subscription re-runs its query server-side on every relevant write, then
+pushes the new result down the socket. That re-run evaluates RLS under the
+**socket's own verified identity** — the `userId`/identity stamped at WebSocket
+upgrade, unforgeable and carried by the connection, not a per-request claim — so
+an `rls()`/`ctx.auth`-scoped live query returns the subscriber's rows over the
+live channel exactly as it does on the initial HTTP fetch.
+
+A relation-predicate policy keeps working live because the semijoin's child
+fetch stamps a **read dependency on the child table**: a write to the related
+table invalidates the subscription and triggers the re-run, so
+`{ author: { is: … } }` refreshes when an _author_ changes, not only when a
+_post_ does. The same holds on the same-shard `EXISTS` fast path (the subquery
+stamps the child) and for a global (D1) child (a conservative table-level
+dependency is stamped, since D1 has no per-row reactive tracker).
+
+## Testing policies
+
+Policies are pure functions, so you can assert their behaviour in a plain unit
+test, with no Worker, Durable Object, or live socket. `expectPolicy(policies)`
+from `@lunora/server/rls/testing` evaluates them through the **same** primitives
+the `rls()` middleware runs at request time, so a green test means the policy
+behaves identically in production:
+
+```ts
+import { definePolicies, definePolicy } from "lunorash/server";
+import { expectPolicy } from "lunorash/server/rls/testing";
+
+const policies = definePolicies([
+    definePolicy({ table: "docs", on: "read", when: ({ auth }) => ({ ownerId: auth.userId }) }),
+    definePolicy({ table: "docs", on: "insert", when: ({ auth, row }) => row?.ownerId === auth.userId }),
+]);
+
+const ada = expectPolicy(policies).as({ userId: "ada" });
+
+ada.can("read", "docs", { ownerId: "ada" }); // true  — her row is visible
+ada.cannot("read", "docs", { ownerId: "linus" }); // true  — filtered out
+ada.can("insert", "docs", { ownerId: "ada" }); // true
+ada.cannot("insert", "docs", { ownerId: "x" }); // true  — write denied
+```
+
+`.as(identity)` binds a caller (`userId` / `roles` / `identity`, all optional;
+an omitted identity is the anonymous caller). For `read`, `.can(...)` answers
+"is this row visible?" (the effective read `baseWhere` matches it); for writes
+it answers allow/deny exactly as the middleware would, including default-DENY on
+a participating table with no policy for the op. Pass the `roles` registry via
+`expectPolicy(policies, { roles })` to resolve `auth.can(...)`, and a `ctx` to
+back any `ctx`-reading policy. For an `update` WITH CHECK, pass the post-image as
+the fourth argument: `can("update", "docs", oldRow, nextRow)`.
+
+## See also
+
+- [Data masking](/docs/concepts/masking) — column-level redaction, the read-path
+  companion that shares roles/permissions with RLS.
+- [Advisors](/docs/concepts/advisors) — the `rls_uncovered_table` lint.
+- [Studio](/docs/packages/studio#advisors) — the RLS Policies panel.

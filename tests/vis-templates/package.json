@@ -1,0 +1,21 @@
+{
+    "name": "@lunora/vis-templates-tests",
+    "version": "0.0.0",
+    "private": true,
+    "description": "Unit tests for the lunora-* vis generators that live at /.vis/templates/.",
+    "type": "module",
+    "sideEffects": false,
+    "scripts": {
+        "lint:types": "tsc --noEmit",
+        "test": "vitest run"
+    },
+    "devDependencies": {
+        "@types/node": "catalog:types",
+        "ts-morph": "catalog:tooling",
+        "typescript": "catalog:tsc",
+        "vitest": "catalog:test"
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    }
+}

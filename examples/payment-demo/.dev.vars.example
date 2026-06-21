@@ -1,0 +1,11 @@
+# Local dev secrets for the payment-demo worker (gitignored as `.dev.vars`).
+# `lunora dev` / the Vite dev server offer to generate `.dev.vars` from this file
+# on first run. Or by hand:
+#
+#   cp .dev.vars.example .dev.vars   # then fill in
+#
+# Get these from the Stripe dashboard (test mode): the secret key and the
+# signing secret for your `POST /payment/webhook` endpoint.
+
+STRIPE_SECRET_KEY="sk_test_replace_me"
+STRIPE_WEBHOOK_SECRET="whsec_replace_me"

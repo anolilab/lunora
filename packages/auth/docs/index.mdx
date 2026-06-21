@@ -1,0 +1,210 @@
+---
+title: "@lunora/auth"
+description: A thin better-auth wrapper for Lunora — email/password, OAuth, plugins, D1-backed.
+---
+
+`@lunora/auth` is a thin wrapper around [better-auth](https://better-auth.com)
+that runs on your own Cloudflare account. `createAuth(options)` is
+`betterAuth(options)` with a few Cloudflare-friendly defaults; user and session
+records live in D1, and there is no external auth service to boot. better-auth
+owns the actual behaviour — sign-in flows, password hashing (scrypt), OAuth,
+sessions — and this package adds the Cloudflare wiring: a D1 adapter, a
+`/api/auth/*` router, schema migrations, a `ctx.authApi` middleware, an admin
+surface for the studio, and standalone Turnstile helpers.
+
+```ts
+import { createAuth, lunoraD1Adapter } from "@lunora/auth";
+import { passkey } from "@lunora/auth/plugins";
+
+export const auth = createAuth({
+    secret: env.AUTH_SECRET,
+    database: lunoraD1Adapter(env.DB),
+    emailAndPassword: { enabled: true },
+    plugins: [passkey()],
+});
+```
+
+`createAuth` is a thin wrapper over better-auth. It requires `secret` up front, so
+a misconfigured deployment fails loudly at setup. Curated plugins (passkeys, 2FA,
+magic-link, organization, and more) are re-exported from
+[`@lunora/auth/plugins`](/docs/packages/auth/plugins).
+
+## Mount the routes
+
+`handleAuthRequest(auth, request)` serves every auth endpoint under `/api/auth/*`
+(sign-up, sign-in, OAuth callbacks, session refresh, and each plugin's routes).
+Call it at the top of your worker's `fetch`. It returns a `Response` for an auth
+request and a falsy value otherwise, so you fall through to the Lunora worker for
+everything else:
+
+```ts
+import { ensureMigrated, handleAuthRequest } from "@lunora/auth";
+
+export default {
+    async fetch(request, env, ctx) {
+        await ensureMigrated(auth);
+
+        const response = await handleAuthRequest(auth, request);
+        if (response) return response;
+
+        // … hand off to your Lunora worker
+    },
+};
+```
+
+## Read `ctx.auth` in functions
+
+The runtime resolves the inbound session and populates `ctx.auth` on every
+`query` / `mutation` / `action`. It carries the verified identity:
+
+- `ctx.auth.userId` is the signed-in user's id, or `null` for an anonymous
+  request. A truthy check narrows it to `string` and doubles as your "is signed
+  in" guard.
+- `ctx.auth.getIdentity()` resolves the decoded identity claims, or `null` when
+  anonymous.
+
+```ts
+if (!ctx.auth.userId) throw new Error("must be signed in");
+const identity = await ctx.auth.getIdentity();
+```
+
+## Sessions
+
+Sessions are better-auth's, stored in the `session` table on the same D1
+database as the `user` / `account` / `verification` tables. better-auth writes
+the session cookie and validates it on each request; `createAuth` applies a
+secure-by-default cookie posture on top — `httpOnly`, `sameSite: "lax"`,
+`path: "/"`, and `useSecureCookies` forced on for an HTTPS `baseURL` (the
+`process.env.NODE_ENV` heuristic better-auth uses to decide this is unreliable
+on Workers).
+
+Tune session lifetime and rotation through the `session` field, a
+`SessionPolicy` (a typed alias for better-auth's `session` option).
+`createAuth` validates the durations and forwards them verbatim, and
+`sessionPresets` gives you ready-made trade-offs:
+
+```ts
+import { createAuth, lunoraD1Adapter, sessionPresets } from "@lunora/auth";
+
+export const auth = createAuth({
+    secret: env.AUTH_SECRET,
+    database: lunoraD1Adapter(env.DB),
+    // 7-day absolute expiry, rotated once per day; override individual fields.
+    session: { ...sessionPresets.rolling, freshAge: 60 * 5 },
+});
+```
+
+The presets are `rolling` (7-day expiry, daily rotation), `strict` (1-hour
+expiry, 15-minute rotation), and `longLived` (30-day expiry, daily rotation).
+The underlying fields are `expiresIn`, `updateAge`, `freshAge`,
+`disableSessionRefresh`, and `cookieCache` — see better-auth's `session` option
+for the full list.
+
+## OAuth providers
+
+OAuth is entirely better-auth's. Built-in social providers run through its
+`socialProviders` config, and anything else goes through the `genericOAuth`
+plugin (re-exported from `@lunora/auth/plugins`). `createAuth` forwards
+`socialProviders` unchanged — the code/token/userinfo exchange, PKCE, and
+`id_token` verification are all better-auth's:
+
+```ts
+import { createAuth, lunoraD1Adapter } from "@lunora/auth";
+
+export const auth = createAuth({
+    secret: env.AUTH_SECRET,
+    database: lunoraD1Adapter(env.DB),
+    socialProviders: {
+        github: { clientId: env.GITHUB_CLIENT_ID, clientSecret: env.GITHUB_CLIENT_SECRET },
+        google: { clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET },
+    },
+});
+```
+
+Callbacks are served under `/api/auth/callback/<provider>` by
+`handleAuthRequest`. For providers beyond the built-in list, add
+`genericOAuth({ config: [...] })` to `plugins`.
+
+## Background tasks (waitUntil)
+
+better-auth runs some work _after_ sending the response — most importantly the
+password-reset email, whose background send keeps reset responses constant-time
+(so the response doesn't reveal whether the account exists). On Cloudflare
+Workers a promise not handed to `ctx.waitUntil` can be cancelled the moment the
+response returns, dropping that send. Wire the per-request `ctx.waitUntil` into
+better-auth's background handler:
+
+```ts
+const auth = createAuth({
+    secret: env.AUTH_SECRET,
+    database: lunoraD1Adapter(env.DB),
+    advanced: {
+        backgroundTasks: { handler: (promise) => ctx.waitUntil(promise) },
+    },
+});
+```
+
+`createAuth` can't set this for you — `ctx.waitUntil` is per-request, but
+`createAuth` runs once at worker setup.
+
+## Rate limiting
+
+`/api/auth/*` is **rate-limited by default**. better-auth enables rate
+limiting automatically, but only when `NODE_ENV === "production"` — a check
+that is unreliable on Cloudflare Workers, where there is no Node
+`process.env` at request time. So `createAuth` defaults `rateLimit.enabled`
+to `true` whenever you don't set it explicitly, ensuring auth endpoints are
+throttled on real deployments (and in dev) rather than silently wide open.
+
+The defaults are better-auth's: a 10-second window with a max of 100
+requests per IP, plus stricter per-path rules for sensitive endpoints
+(sign-in, sign-up, etc.). Configure it through the `rateLimit` option, which
+is forwarded to better-auth verbatim:
+
+```ts
+export const auth = createAuth({
+    secret: env.AUTH_SECRET,
+    rateLimit: {
+        window: 60, // seconds
+        max: 100, // requests per window per IP
+        customRules: {
+            "/sign-in/email": { window: 10, max: 5 },
+        },
+    },
+});
+```
+
+To turn rate limiting off — for example when you front auth with your own
+limiter (see [`@lunora/ratelimit`](/docs/packages/ratelimit)) — pass an
+explicit flag; an explicit `enabled` value always wins over the default:
+
+```ts
+export const auth = createAuth({
+    secret: env.AUTH_SECRET,
+    rateLimit: { enabled: false },
+});
+```
+
+## Password hashing
+
+Password hashing is better-auth's, not Lunora's — by default it hashes with
+scrypt (no Node polyfills needed on Workers). To swap the algorithm, pass
+`emailAndPassword.password: { hash, verify }` to `createAuth`; it forwards to
+better-auth unchanged.
+
+## Calling the plugin API from procedures
+
+`@lunora/auth/middleware` exports `withAuthPlugins(auth)`, a Lunora middleware
+that mounts the full better-auth endpoint surface on `ctx.authApi` (typed
+against whatever plugins your instance loaded). Because `ctx.authApi` is the
+privileged surface (`banUser`, `setRole`, impersonation, …), the middleware
+installs a runtime guard by default: a call that omits `headers` throws
+`LunoraAuthHeadersError` instead of running as a trusted server-to-server
+invocation. See [plugins](/docs/packages/auth/plugins#the-withauthplugins-middleware)
+for the full pattern and the `withoutHeaders()` escape hatch.
+
+## See also
+
+- [@lunora/auth plugins](/docs/packages/auth/plugins) — passkeys, org, admin, 2FA, and the studio dashboard.
+- [Getting started](/docs/getting-started)
+- [@lunora/server](/docs/packages/server)

@@ -1,0 +1,68 @@
+---
+title: Real-time
+description: How subscriptions, deltas, and hibernation fit together.
+---
+
+Every Lunora `query` doubles as a subscription. Calling `useQuery(api.x.y, args)`
+in React opens a multiplexed WebSocket to your Worker, registers the query
+with the resolving Durable Object, and re-renders the component whenever a
+matching mutation broadcasts a delta.
+
+```tsx
+import { api } from "@/lunora/_generated/api";
+import { useMutation, useQuery } from "@lunora/react";
+
+export const Chat = ({ channelId }: { channelId: string }) => {
+    const messages = useQuery(api.messages.list, { channelId });
+    const send = useMutation(api.messages.send);
+
+    if (!messages) return <p>Loading…</p>;
+    return (
+        <ul>
+            {messages.map((m) => (
+                <li key={m._id}>{m.text}</li>
+            ))}
+        </ul>
+    );
+};
+```
+
+## Hibernation
+
+Subscriptions are stored on the WebSocket via `state.serializeAttachment(...)`.
+When the Durable Object hibernates (no traffic for ~10s) the WebSocket is
+suspended without losing the subscription registry; the next message wakes
+it up and re-routes deltas exactly where they were going.
+
+This is why your DO bill drops to near-zero between bursts: idle subscribers
+pay for storage, not compute.
+
+## Delta routing
+
+A mutation that writes to `messages` calls `this.broadcastDelta({ table: "messages", ... })`.
+Each socket carries a `SocketAttachment` mapping `subId → SubscriptionQuery`.
+Only sockets with a registered subscription whose `query.table` matches
+receive the delta, scoped further by index predicate.
+
+## Reconnect
+
+The client (`@lunora/client`) uses exponential backoff with jitter and
+**resumes by bookmark**: it sends the last delta sequence it acknowledged so
+the server can replay anything that was missed during the disconnect.
+
+## Why no MQTT / Pub/Sub
+
+Real-time fan-out in Lunora is entirely Durable-Object-based: hibernated
+WebSocket subscriptions on `ShardDO`, type-safe and integrated end-to-end with
+your queries, with no external broker to run. Cloudflare **Pub/Sub** (an MQTT
+broker) is therefore a non-goal. It is in beta with gated onboarding and no
+Worker binding, and the only capability it adds over the DO path is native-MQTT
+device ingest (IoT clients speaking MQTT directly), a narrow niche. We'll
+revisit only if Pub/Sub reaches GA and a concrete need to ingest from
+native-MQTT devices appears; until then there is nothing to configure.
+
+## See also
+
+- [Sharding](/docs/concepts/sharding)
+- [API: @lunora/react](/docs/packages/react)
+- [Deployment](/docs/deployment) — platform config & non-goals

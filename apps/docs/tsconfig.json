@@ -1,0 +1,25 @@
+{
+    "compilerOptions": {
+        "target": "ES2023",
+        "jsx": "react-jsx",
+        "lib": ["ES2023", "DOM", "DOM.Iterable"],
+        "allowJs": true,
+        "allowSyntheticDefaultImports": true,
+        "skipLibCheck": true,
+        "esModuleInterop": true,
+        "strict": true,
+        "forceConsistentCasingInFileNames": true,
+        "module": "ESNext",
+        "moduleResolution": "Bundler",
+        "resolveJsonModule": true,
+        "isolatedModules": true,
+        "noEmit": true,
+        "paths": {
+            "fumadocs-mdx:collections/*": ["./.source/*"],
+            "@/*": ["./src/*"]
+        },
+        "types": ["vite/client", "vitest/globals", "@testing-library/jest-dom", "unplugin-fonts/client", "vite-plugin-svgr/client"]
+    },
+    "include": ["**/*.ts", "**/*.tsx"],
+    "exclude": ["node_modules"]
+}

@@ -1,0 +1,15 @@
+{
+    "$schema": "../schema/registry-item.schema.json",
+    "name": "crons",
+    "title": "Crons",
+    "description": "Code-first cron starter for Lunora — a lunora/crons.ts that declares recurring jobs with cronJobs() (interval / daily / weekly / monthly / raw cron) plus an illustrative internal function they fire, discovered by codegen and synced into wrangler.jsonc.",
+    "docs": "Edit lunora/crons.ts to register your jobs against internal.* function refs, then run `lunora codegen` — codegen lifts the schedules into wrangler's triggers.crons and a dispatcher map the Worker's scheduled() handler consumes. The shipped lunora/crons/jobs.ts is an example internal mutation; point the sample job at your own internal function and delete it.",
+    "requires": [],
+    "deps": {
+        "@lunora/server": "workspace:*"
+    },
+    "files": [
+        { "from": "crons.ts", "to": "lunora/crons.ts", "merge": "create-or-skip" },
+        { "from": "jobs.ts", "to": "lunora/crons/jobs.ts", "merge": "create-or-skip" }
+    ]
+}

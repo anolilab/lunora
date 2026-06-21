@@ -1,0 +1,242 @@
+/**
+ * Lunora "Luna + Aurora" design tokens.
+ *
+ * Single source of truth for color, surface, type, and radius across docs,
+ * Studio, and videos. Intent lives in ./DESIGN.md; consumable values live here
+ * (this file) and in ./tokens.ts (JS).
+ *
+ * Plain shared file — no package, just `@import` it by relative path AFTER
+ * `@import "tailwindcss";`. Examples:
+ *   apps/docs/src/styles:        @import "../../../../marketing/design-tokens/tokens.css";
+ *   packages/studio/src:         @import "../../../marketing/design-tokens/tokens.css";
+ *
+ * Shape: conventional shadcn — `:root` is the LIGHT (day) theme, `.dark` is the
+ * NIGHT theme. Apps that want dark-by-default force the `.dark` class (docs uses
+ * fumadocs `forcedTheme: "dark"`).
+ *
+ * Identity: nocturnal · luminous · precise. Cool blue-violet neutrals (hue ~240),
+ * a single aurora ribbon (cyan → violet → rose) used sparingly, sharp corners on
+ * structural chrome. Avoid: pure neutral grays, generic dark-mode blue (#3b82f6),
+ * warm/amber *accents* (amber is data-status only), rounded glassy cards.
+ */
+
+@layer base {
+  :root {
+    /* ── Brand constants (mode-independent) ──
+       Night & moonlight neutrals — cool blue-violet cast (hue ~240). */
+    --dark-coal: #0e0e11; /* eclipse — page/body base */
+    --coal: hsl(240 14% 6%); /* midnight */
+    --surface-raised: hsl(240 14% 9%); /* panels, popovers, consoles */
+    --stone: hsl(228 12% 86%); /* muted moonlight */
+    --ivory: hsl(228 32% 97%); /* moonlight panel */
+    --moonlight: hsl(228 30% 96%); /* primary text on night */
+
+    /* Aurora ramp — light, not paint. cyan = info/active · violet = primary · rose = emphasis. */
+    --aurora-cyan: hsl(186 84% 56%);
+    --aurora-violet: hsl(256 72% 68%);
+    --aurora-rose: hsl(330 80% 64%);
+    /* Legacy aliases — predate the aurora naming; kept so existing usages re-skin for free. */
+    --sky-sapphire: var(--aurora-cyan);
+    --royal-amethyst: var(--aurora-violet);
+    --crimson-energy: var(--aurora-rose);
+    /* The signature gradient — reach for it only on THE focal moment. */
+    --aurora-ribbon: linear-gradient(
+      to right,
+      var(--aurora-cyan),
+      var(--aurora-violet),
+      var(--aurora-rose)
+    );
+
+    /* ── Semantic (shadcn) — LIGHT / day: Ivory paper, Coal ink ── */
+    --background: hsl(228 32% 97%);
+    --foreground: hsl(240 14% 10%);
+    --card: hsl(0 0% 100%);
+    --card-foreground: hsl(240 14% 10%);
+    --popover: hsl(0 0% 100%);
+    --popover-foreground: hsl(240 14% 10%);
+    --primary: hsl(240 14% 12%);
+    --primary-foreground: hsl(228 32% 97%);
+    --secondary: hsl(228 16% 93%);
+    --secondary-foreground: hsl(240 14% 14%);
+    --muted: hsl(228 16% 93%);
+    --muted-foreground: hsl(235 9% 42%);
+    --accent: hsl(228 16% 93%);
+    --accent-foreground: hsl(240 14% 14%);
+    --destructive: hsl(0 72% 45%);
+    --destructive-foreground: hsl(0 0% 100%);
+    --border: hsl(228 16% 88%);
+    --input: hsl(228 16% 88%);
+    --ring: hsl(256 72% 68%); /* aurora violet focus ring */
+    --radius: 0.5rem;
+
+    /* Sidebar (light) — gentle gray canvas, white active pill */
+    --sidebar: hsl(228 22% 94%);
+    --sidebar-foreground: hsl(235 12% 28%);
+    --sidebar-primary: hsl(240 14% 12%);
+    --sidebar-primary-foreground: hsl(228 32% 97%);
+    --sidebar-accent: hsl(0 0% 100%);
+    --sidebar-accent-foreground: hsl(240 14% 12%);
+    --sidebar-border: hsl(228 16% 88%);
+    --sidebar-ring: hsl(256 72% 68%);
+
+    /* Charts (light) — aurora-led ramp */
+    --chart-1: hsl(256 72% 60%);
+    --chart-2: hsl(186 84% 42%);
+    --chart-3: hsl(330 80% 56%);
+    --chart-4: hsl(235 12% 50%);
+    --chart-5: hsl(235 10% 70%);
+
+    /* Data status (semantics, not decoration). Amber appears here only — never as
+       a brand accent. Darkened for light mode so colored text clears WCAG AA
+       (≥4.5) on its own pale `/10` tint. */
+    --success: hsl(160 60% 28%);
+    --warning: hsl(38 92% 29%);
+    --info: hsl(186 84% 26%);
+    --error: hsl(0 72% 45%);
+
+    /* Shadow scale (mode-independent) — used by Studio's dashboard surfaces. */
+    --shadow-2xs: 0 1px 3px 0px hsl(240 14% 4% / 0.05);
+    --shadow-xs: 0 1px 3px 0px hsl(240 14% 4% / 0.05);
+    --shadow-sm: 0 1px 3px 0px hsl(240 14% 4% / 0.1), 0 1px 2px -1px hsl(240 14% 4% / 0.1);
+    --shadow: 0 1px 3px 0px hsl(240 14% 4% / 0.1), 0 1px 2px -1px hsl(240 14% 4% / 0.1);
+    --shadow-md: 0 1px 3px 0px hsl(240 14% 4% / 0.1), 0 2px 4px -1px hsl(240 14% 4% / 0.1);
+    --shadow-lg: 0 1px 3px 0px hsl(240 14% 4% / 0.1), 0 4px 6px -1px hsl(240 14% 4% / 0.1);
+    --shadow-xl: 0 1px 3px 0px hsl(240 14% 4% / 0.1), 0 8px 10px -1px hsl(240 14% 4% / 0.1);
+    --shadow-2xl: 0 1px 3px 0px hsl(240 14% 4% / 0.25);
+  }
+
+  .dark {
+    /* ── Semantic (shadcn) — NIGHT: the docs site's charcoal look ──
+       Eclipse base (#0e0e11), moonlight text, subtle dark fills, and — the key
+       to the clean docs aesthetic — WHITE-ALPHA HAIRLINE borders instead of
+       chunky mid-gray. Depth = value step + hairline, never a heavy gray block. */
+    --background: hsl(240 10% 6%); /* eclipse #0e0e11 — docs page base */
+    --foreground: hsl(228 30% 96%); /* moonlight */
+    --card: hsl(240 12% 8%); /* subtle raised surface */
+    --card-foreground: hsl(228 30% 96%);
+    --popover: hsl(240 13% 9%);
+    --popover-foreground: hsl(228 30% 96%);
+    --primary: hsl(228 32% 97%); /* moonlight CTA */
+    --primary-foreground: hsl(240 20% 8%);
+    --secondary: hsl(240 9% 13%); /* subtle dark fill (was a too-light 16.9% gray) */
+    --secondary-foreground: hsl(228 30% 96%);
+    --muted: hsl(240 9% 13%);
+    --muted-foreground: hsl(228 12% 64%); /* cool muted moonlight */
+    --accent: hsl(240 9% 15%); /* hover surface */
+    --accent-foreground: hsl(228 30% 96%);
+    --destructive: hsl(0 72% 60%);
+    --destructive-foreground: hsl(228 30% 96%);
+    --border: hsl(0 0% 100% / 0.08); /* hairline — the docs look */
+    --input: hsl(0 0% 100% / 0.12);
+    --ring: hsl(256 72% 68%); /* aurora violet focus */
+
+    /* Sidebar (dark) — outer frame sits at the eclipse base; panels lift via --card. */
+    --sidebar: hsl(240 10% 5%);
+    --sidebar-foreground: hsl(228 16% 70%);
+    --sidebar-primary: hsl(228 32% 97%);
+    --sidebar-primary-foreground: hsl(240 20% 8%);
+    --sidebar-accent: hsl(240 9% 13%);
+    --sidebar-accent-foreground: hsl(228 30% 96%);
+    --sidebar-border: hsl(0 0% 100% / 0.08);
+    --sidebar-ring: hsl(256 72% 68%);
+
+    /* Charts (dark) — aurora-led ramp */
+    --chart-1: hsl(256 72% 68%);
+    --chart-2: hsl(186 84% 56%);
+    --chart-3: hsl(330 80% 64%);
+    --chart-4: hsl(228 12% 65%);
+    --chart-5: hsl(228 12% 45%);
+
+    /* Data status (dark) */
+    --success: hsl(160 60% 45%);
+    --warning: hsl(38 92% 55%);
+    --info: hsl(186 84% 56%);
+    --error: hsl(0 72% 60%);
+  }
+}
+
+/* Expose the tokens as Tailwind v4 theme values (utilities + font/radius/shadow
+   vars). `inline` so utilities resolve the CSS variables above at use-site,
+   keeping the `.dark` overrides working. */
+@theme inline {
+  --font-sans: "Geist Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+    Consolas, monospace;
+  --font-display: "Geist Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-heading: "Geist Sans", ui-sans-serif, system-ui, sans-serif;
+
+  /* Brand colors → text-aurora-violet, bg-coal, border-ivory, … */
+  --color-dark-coal: var(--dark-coal);
+  --color-coal: var(--coal);
+  --color-surface-raised: var(--surface-raised);
+  --color-stone: var(--stone);
+  --color-ivory: var(--ivory);
+  --color-moonlight: var(--moonlight);
+  --color-aurora-cyan: var(--aurora-cyan);
+  --color-aurora-violet: var(--aurora-violet);
+  --color-aurora-rose: var(--aurora-rose);
+  --color-sky-sapphire: var(--sky-sapphire);
+  --color-royal-amethyst: var(--royal-amethyst);
+  --color-crimson-energy: var(--crimson-energy);
+
+  /* Semantic (shadcn) */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* Sidebar */
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Charts + status */
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+  --color-error: var(--error);
+
+  /* Shadow scale */
+  --shadow-2xs: var(--shadow-2xs);
+  --shadow-xs: var(--shadow-xs);
+  --shadow-sm: var(--shadow-sm);
+  --shadow: var(--shadow);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+  --shadow-xl: var(--shadow-xl);
+  --shadow-2xl: var(--shadow-2xl);
+
+  /* Radius scale — sharp by default; these drive the dense-data exceptions. */
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 16px);
+  --radius-4xl: calc(var(--radius) + 24px);
+}

@@ -1,0 +1,69 @@
+import type { LanguageModel } from "ai";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { AiBindingLike, WorkersAiProviderLike } from "../src/types";
+
+/**
+ * Capture what `createAi` hands to `createWorkersAI` when it builds the provider
+ * from a binding. The real provider is opaque, so we mock the module and assert
+ * the binding + gateway are threaded through — the construction seam the
+ * provider-from-binding and gateway-routing paths both rely on.
+ */
+const createWorkersAI = vi.fn<(options: Record<string, unknown>) => WorkersAiProviderLike>((): WorkersAiProviderLike => {
+    const provider = ((modelId: string) => ({ __model: modelId }) as unknown as LanguageModel) as WorkersAiProviderLike;
+
+    provider.textEmbeddingModel = (modelId: string) => ({ __embeddingModel: modelId }) as never;
+
+    return provider;
+});
+
+// String specifier (not the `import(...)` form): the typed-import overload would
+// check the factory's return against the real module's exports, and our
+// intentionally-narrow `WorkersAiProviderLike` mock doesn't implement the full
+// `WorkersAI` surface. The string form mocks the module without that constraint.
+// eslint-disable-next-line vitest/prefer-import-in-mock -- typed-import overload rejects the narrow mock provider
+vi.mock("workers-ai-provider", () => {
+    return { createWorkersAI };
+});
+
+const { default: createAi } = await import("../src/create-ai");
+
+const fakeBinding = (): AiBindingLike => {
+    return {
+        run: async () => {
+            return {};
+        },
+    };
+};
+
+describe("provider construction from a binding", () => {
+    beforeEach(() => {
+        createWorkersAI.mockClear();
+    });
+
+    it("threads the binding through createWorkersAI", () => {
+        const binding = fakeBinding();
+
+        createAi({ binding });
+
+        expect(createWorkersAI).toHaveBeenCalledTimes(1);
+        expect(createWorkersAI).toHaveBeenCalledWith({ binding, gateway: undefined });
+    });
+
+    it("threads the AI Gateway config through createWorkersAI", () => {
+        const binding = fakeBinding();
+        const gateway = { cacheTtl: 60, id: "my-gateway" };
+
+        createAi({ binding, gateway });
+
+        expect(createWorkersAI).toHaveBeenCalledWith({ binding, gateway });
+    });
+
+    it("does not call createWorkersAI when a provider is supplied", () => {
+        const provider = ((modelId: string) => ({ __model: modelId }) as unknown as LanguageModel) as WorkersAiProviderLike;
+
+        createAi({ provider });
+
+        expect(createWorkersAI).not.toHaveBeenCalled();
+    });
+});

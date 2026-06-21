@@ -1,0 +1,31 @@
+{
+    "$schema": "../schema/registry-item.schema.json",
+    "name": "auth-auth0",
+    "title": "Auth — Auth0",
+    "description": "Sign in with Auth0 for Lunora auth. Wires Auth0 as an OIDC provider via better-auth's genericOAuth plugin, on top of the base `auth` item.",
+    "docs": "Add `auth0` to your auth instance's `plugins` array in lunora/auth/index.ts: `import { auth0 } from \"./auth0.js\"` then `plugins: [auth0(env)]`. Create a Regular Web Application in the Auth0 studio, set the Allowed Callback URL to `<BETTER_AUTH_URL>/api/auth/oauth2/callback/auth0`, and fill in AUTH0_CLIENT_ID / AUTH0_CLIENT_SECRET / AUTH0_DOMAIN.",
+    "requires": ["auth"],
+    "deps": {
+        "@lunora/auth": "workspace:*",
+        "better-auth": "^1.6.14"
+    },
+    "envVars": [
+        {
+            "name": "AUTH0_CLIENT_ID",
+            "description": "Client ID from your Auth0 Regular Web Application.",
+            "secret": true
+        },
+        {
+            "name": "AUTH0_CLIENT_SECRET",
+            "description": "Client Secret from your Auth0 Regular Web Application.",
+            "secret": true
+        },
+        {
+            "name": "AUTH0_DOMAIN",
+            "description": "Your Auth0 tenant domain, e.g. your-tenant.us.auth0.com (no scheme). The provider discovers endpoints from `https://<domain>/.well-known/openid-configuration`.",
+            "value": "your-tenant.us.auth0.com",
+            "secret": false
+        }
+    ],
+    "files": [{ "from": "auth0.ts", "to": "lunora/auth/auth0.ts", "merge": "create-or-skip" }]
+}

@@ -1,0 +1,103 @@
+---
+title: "@lunora/server"
+description: Authoring API — defineSchema, query, mutation, action, validators.
+---
+
+`@lunora/server` is the authoring-side package. It provides `defineSchema`,
+`defineTable`, the `v.*` validators, and `initLunora`. The typed
+`query` / `mutation` / `action` builders are emitted by codegen, so you import
+them from the generated `_generated/server`:
+
+```ts
+// schema + validators from the package:
+import { defineSchema, defineTable, v } from "lunorash/server";
+// typed builders from codegen:
+import { action, mutation, query } from "@/lunora/_generated/server";
+```
+
+Codegen also re-exports `v` from `_generated/server` with `v.id(...)` narrowed
+to your real table names. Use the package's `v` in `schema.ts` (the table names
+aren't known there yet) and the generated `v` in your function files to get
+table-name autocomplete. The two are identical at runtime.
+
+## `defineSchema(tables)`
+
+Build the application schema. Returns a `Schema<T>` object consumed by
+codegen and the runtime.
+
+## `defineTable(shape)`
+
+Create a `TableBuilder`. Fluent methods:
+
+- `.global({ backend? })` — store in D1 (cross-shard) instead of a Durable Object
+- `.shardBy(field)` — partition by the named field
+- `.index(name, fields, { unique? })` — secondary index
+- `.searchIndex(name, { field, filterFields? })` — full-text index
+- `.public()` — exempt this table from `.rls("required")` (when secure-by-default is on)
+
+## Validators (`v.*`)
+
+```ts
+v.string();
+v.number();
+v.boolean();
+v.null();
+v.bytes();
+v.literal("admin");
+v.id("users");
+v.array(v.string());
+v.object({ k: v.number() });
+v.union(v.string(), v.number());
+v.optional(v.string());
+```
+
+A validator throws `ValidationError` on mismatch. The runtime wraps thrown
+errors in an `args.<field>` path for fast debugging.
+
+## `query / mutation / action`
+
+```ts
+export const send = mutation.input({ channelId: v.id("channels"), text: v.string() }).mutation(async ({ ctx, args }) => {
+    /* ... */
+});
+```
+
+Each returns a `RegisteredQuery | RegisteredMutation | RegisteredAction`
+with a uniform `{ kind, args, handler }` shape consumed by codegen.
+
+## `ctx` shape
+
+`QueryCtx`, `MutationCtx`, and `ActionCtx` share `auth`, `scheduler`, and
+`storage`. `MutationCtx.db` extends `QueryCtx.db` with mutating methods;
+`ActionCtx` drops `db` entirely — actions must read/write via mutations or
+queries called through `ctx.runQuery` / `ctx.runMutation`.
+
+### Client-supplied ids
+
+By default `ctx.db.insert(table, doc)` mints a fresh row id and **ignores** any
+client-chosen `_id`. To let the caller choose it — which an optimistic client
+needs so it can key a row before the server responds — pass a UUID via the
+options:
+
+```ts
+ctx.db.insert("messages", doc, { clientId });
+```
+
+`clientId` is validated for shape (a v1–v8 UUID) and still subject to the
+primary-key uniqueness constraint, so a client can't collide with, overwrite, or
+forge a peer row. This is the mechanism [`@lunora/db`](/docs/packages/db#client-generated-ids)
+uses to reconcile an optimistic row with its persisted server row.
+
+## Subpaths
+
+- `@lunora/server/rls/testing` — `expectPolicy(policies)`, an in-process RLS
+  harness that evaluates the same logic the `rls()` middleware runs (no Worker
+  or Durable Object needed).
+- `@lunora/server/drizzle` — drizzle's SQLite schema-definition surface, used by
+  the generated `_generated/drizzle.*` files.
+- `@lunora/server/data-model` / `@lunora/server/types` — type-only helpers.
+
+## See also
+
+- [@lunora/client](/docs/packages/client)
+- [Concepts: schema](/docs/concepts/schema)

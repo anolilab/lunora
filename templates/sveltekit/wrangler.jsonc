@@ -1,0 +1,33 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    // SINGLE worker for SvelteKit + Lunora realtime (PLAN4 §3, class-B).
+    //
+    // `main` points at `.svelte-kit/cloudflare/_worker.js` — the handler
+    // `@sveltejs/adapter-cloudflare` emits during `vite build`. The adapter
+    // overwrites whatever `main` points at, so it MUST be the adapter's own
+    // output path (its default) — NOT `src/worker.ts`, which the adapter would
+    // clobber. `src/worker.ts` imports that emitted handler, wraps it with
+    // `withLunora` (mounting Lunora realtime under `/_lunora/*`), and re-exports
+    // `ShardDO`. `lunora deploy` bundles `src/worker.ts` as the deploy entry
+    // (overriding `main`), so the one deployed Worker carries both planes.
+    "name": "{{name}}",
+    "main": ".svelte-kit/cloudflare/_worker.js",
+    "compatibility_date": "2026-06-10",
+    // `nodejs_als` is required by @sveltejs/adapter-cloudflare (SvelteKit's
+    // server runtime uses AsyncLocalStorage, e.g. getRequestEvent()).
+    "compatibility_flags": ["nodejs_compat", "nodejs_als"],
+    // SvelteKit's adapter writes its SSR worker, client assets, and an
+    // `.assetsignore` (which excludes `_worker.js` from being served) under
+    // `.svelte-kit/cloudflare`. The `ASSETS` binding is how the emitted handler
+    // serves those static files; Lunora realtime is dispatched in
+    // `src/worker.ts` before SvelteKit ever sees the request.
+    "assets": {
+        "directory": ".svelte-kit/cloudflare",
+        "binding": "ASSETS",
+    },
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
+}

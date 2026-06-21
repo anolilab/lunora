@@ -1,0 +1,77 @@
+---
+title: Limits
+description: Cloudflare ceilings you should keep in your head.
+---
+
+Lunora's design choices are driven by Cloudflare's per-primitive limits.
+Knowing these numbers helps you predict when to opt into `.shardBy()`
+or `.global()`.
+
+## Durable Objects
+
+| Limit                | Value           | Implication                                          |
+| -------------------- | --------------- | ---------------------------------------------------- |
+| SQLite size / DO     | **10 GB**       | Plan to shard before you cross 1 GB                  |
+| Sustained req/s / DO | **~1 000**      | Hot DO = sharding signal                             |
+| CPU per request      | **30 s**        | Long tasks → action + scheduler, not mutation        |
+| WebSockets / DO      | **~32 000**     | Hibernated, this is generous; pre-hibernate, less so |
+| DOs / account        | **Unlimited**   | Sharding is free of administrative overhead          |
+| Storage tx           | **128 KB / op** | Batch large writes via `ctx.db.insertMany`           |
+
+## D1
+
+| Limit                         | Value                        | Implication                               |
+| ----------------------------- | ---------------------------- | ----------------------------------------- |
+| Database size                 | **10 GB**                    | Use for global indexes, not bulk data     |
+| Databases / account           | **50 000** (1 TB total Paid) | Each app gets its own                     |
+| Queries per Worker invocation | **1 000**                    | Watch your query fan-out in fan-out reads |
+| Bookmark window               | **~24 h**                    | Sessions API consistency window           |
+
+## R2
+
+| Limit       | Value    | Implication                               |
+| ----------- | -------- | ----------------------------------------- |
+| Object size | **5 TB** | Practically unlimited                     |
+| Egress      | **Free** | Critical — design around direct downloads |
+| Class A ops | metered  | Bulk-list judiciously                     |
+
+## Workers
+
+| Limit           | Value                           | Implication                                         |
+| --------------- | ------------------------------- | --------------------------------------------------- |
+| Bundle size     | **10 MB**                       | Lazy-load big deps; avoid bundling unused providers |
+| CPU per request | **30 s**                        | Same envelope as DO                                 |
+| Subrequests     | **50** (Free) / **1000** (Paid) | Fan-out reads are a Paid-plan optimisation          |
+| Env var size    | **5 KB** total                  | Use D1 or KV for config above that                  |
+
+## Containers
+
+Requires the **Workers Paid** plan. Images must be `linux/amd64`.
+
+| Limit                | Value                                   | Implication                                             |
+| -------------------- | --------------------------------------- | ------------------------------------------------------- |
+| Instance types       | `lite` → `standard-4`                   | Or custom up to **4 vCPU / 12 GiB / 20 GB disk**        |
+| Disk                 | **ephemeral**                           | Persist to R2 (`@lunora/storage`), not local disk       |
+| Concurrent / account | **1 500 vCPU / 6 TiB mem / 30 TB disk** | Raisable via support                                    |
+| Registry storage     | **50 GB / account**                     | Prune old images with `lunora containers images delete` |
+| Autoscaling          | **none yet**                            | Fixed pools; `.any()` picks uniformly                   |
+
+Billing is **active-CPU** based: instances scale to zero on `sleepAfter` and
+cost nothing idle. **Egress is billed** (~$0.025/GB NA+EU, more elsewhere),
+unlike R2, which is free. See the
+[Containers pricing docs](https://developers.cloudflare.com/containers/pricing/).
+
+## When Lunora warns you
+
+The runtime emits warnings (and the dev overlay shows a banner) when:
+
+- the `__root__` DO crosses **1 GB** of SQLite
+- a single DO is sustaining **>700 req/s**
+- a fan-out query touches more than **100 shards** in one invocation
+
+These warnings fire well below the hard ceiling, so you have time to react.
+
+## See also
+
+- [Sharding](/docs/concepts/sharding)
+- [Deployment](/docs/deployment)

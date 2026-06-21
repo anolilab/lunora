@@ -1,0 +1,64 @@
+"name": "\U0001F680 New feature proposal"
+"description": "Propose a new feature for Lunora"
+"labels": ["s: pending triage", "c: feature", "s: waiting for user interest"]
+"body":
+    - "type": "markdown"
+      "attributes":
+          "value": "Thanks for your interest in Lunora and for taking the time to write this up!"
+
+    - "type": "textarea"
+      "id": "feature-description"
+      "attributes":
+          "label": "Clear and concise description of the problem"
+          "description": "As a developer using @lunora/* on Cloudflare Workers I want [goal / wish] so that [benefit]. If you intend to submit a PR for this issue, tell us in the description. Thanks!"
+      "validations":
+          "required": true
+
+    - "type": "dropdown"
+      "id": "affected-package"
+      "attributes":
+          "label": "Affected package(s)"
+          "description": "Which Lunora package(s) would this feature live in?"
+          "multiple": true
+          "options":
+              - "@lunora/cli"
+              - "@lunora/codegen"
+              - "@lunora/config"
+              - "@lunora/runtime"
+              - "@lunora/server"
+              - "@lunora/client"
+              - "@lunora/react"
+              - "@lunora/d1"
+              - "@lunora/do"
+              - "@lunora/storage"
+              - "@lunora/values"
+              - "@lunora/auth"
+              - "@lunora/mail"
+              - "@lunora/scheduler"
+              - "@lunora/vite"
+              - "apps/playground"
+              - "apps/docs"
+              - "New package"
+              - "Unsure"
+      "validations":
+          "required": true
+
+    - "type": "textarea"
+      "id": "suggested-solution"
+      "attributes":
+          "label": "Suggested solution"
+          "description": "In package [xy] we could provide the following implementation... If the feature touches Durable Objects, D1, R2, KV, or the codegen pipeline, please call that out."
+      "validations":
+          "required": true
+
+    - "type": "textarea"
+      "id": "alternative"
+      "attributes":
+          "label": "Alternative"
+          "description": "Clear and concise description of any alternative solutions or features you've considered (including any Cloudflare-native primitives that already cover the use case)."
+
+    - "type": "textarea"
+      "id": "additional-context"
+      "attributes":
+          "label": "Additional context"
+          "description": "Any other context about the feature request here — RFC links, prior art in other frameworks, performance considerations, etc."

@@ -1,0 +1,12 @@
+---
+title: "@lunora/config"
+description: "Internal shared CLI + Vite config layer: wrangler.jsonc validation, binding inference, and .dev.vars scaffolding."
+---
+
+`@lunora/config` is the config and scaffolding layer shared by [`@lunora/cli`](https://www.npmjs.com/package/@lunora/cli) and [`@lunora/vite`](https://www.npmjs.com/package/@lunora/vite). It holds the `wrangler.jsonc` validator, binding inference and reconciliation, the `.dev.vars` grammar plus auto-scaffolder, and interactive prompt helpers — so the CLI and the Vite plugin agree on every check.
+
+<Callout type="warn">
+    This package is internal. Depend on `@lunora/cli` or `@lunora/vite` and let them call into it; the export surface here is not a stable public API.
+</Callout>
+
+It is published for transparency. For the user-facing flows it powers, see the [deployment guide](/docs/deployment) and the [getting started guide](/docs/getting-started).

@@ -1,0 +1,16 @@
+{
+    "name": "lunora-docs-app",
+    "tags": ["type:app", "category:docs"],
+    "targets": {
+        "lint:eslint": {
+            "cache": true,
+            "inputs": ["default", "{workspaceRoot}/eslint.config.js"],
+            "command": "eslint src"
+        },
+        "lint:eslint:fix": {
+            "cache": true,
+            "inputs": ["default", "{workspaceRoot}/eslint.config.js"],
+            "command": "eslint src --fix"
+        }
+    }
+}

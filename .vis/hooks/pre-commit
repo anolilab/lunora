@@ -1,0 +1,41 @@
+#!/bin/sh
+set -e
+
+# The hook should exit with non-zero status after issuing
+# an appropriate message if it wants to stop the commit.
+
+echo --------------------------------------------
+echo Starting Git hook: pre-commit
+
+pnpm exec vis secrets --staged
+pnpm exec vis staged
+
+# react-doctor hook start
+# react-doctor is per-project: `--staged` builds a temp project from the staged
+# files and resolves React from the *current directory's* package.json. Run from
+# the monorepo root it dies with "No React dependency found", so scan each
+# React-bearing package that actually has staged files, from inside that package.
+# Advisory only — a finding never blocks the commit (the vis runner puts
+# node_modules/.bin on PATH and runs us under `sh -e`, hence the guarded call).
+# Always use the workspace-pinned binary (absolute path: safe after `cd`, and
+# never an accidental global install of a different version).
+react_doctor="$(git rev-parse --show-toplevel)/node_modules/.bin/react-doctor"
+
+if [ -x "$react_doctor" ]; then
+  git diff --cached --name-only --diff-filter=ACMR \
+    | sed -n -E 's#^((packages|apps)/[^/]+)/.*#\1#p' \
+    | sort -u \
+    | while IFS= read -r project; do
+        [ -f "$project/package.json" ] || continue
+        grep -qE '"react":' "$project/package.json" || continue
+        if ! ( cd "$project" && "$react_doctor" --staged --fail-on warning ); then
+          printf '%s\n' \
+            "React Doctor flagged staged regressions in $project (advisory — commit not blocked)." \
+            "Inspect / fix: (cd $project && react-doctor --staged --fail-on warning)" >&2
+        fi
+      done
+fi
+# react-doctor hook end
+
+echo Finished Git hook: pre-commit
+echo --------------------------------------------

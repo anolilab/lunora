@@ -1,0 +1,134 @@
+<!-- START_PACKAGE_OG_IMAGE_PLACEHOLDER -->
+
+<a href="https://www.anolilab.com/open-source" align="center">
+
+  <img src="__assets__/package-og.svg" alt="auth" />
+
+</a>
+
+<h3 align="center">Auth for Lunora — a thin better-auth wrapper: email/password, OAuth, plugins, D1-backed</h3>
+
+<!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
+
+<br />
+
+<div align="center">
+
+[![typescript-image][typescript-badge]][typescript-url]
+[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![npm version][npm-version-badge]][npm-version]
+[![npm downloads][npm-downloads-badge]][npm-downloads]
+[![PRs Welcome][prs-welcome-badge]][prs-welcome]
+
+</div>
+
+---
+
+<div align="center">
+    <p>
+        <sup>
+            Daniel Bannert's open source work is supported by the community on <a href="https://github.com/sponsors/prisis">GitHub Sponsors</a>
+        </sup>
+    </p>
+</div>
+
+---
+
+Authentication for Lunora, built as a thin wrapper around [better-auth](https://better-auth.com). `createAuth` is `betterAuth` with a few Cloudflare-friendly defaults; the package backs the user/session store on D1, re-exports the better-auth plugins under `@lunora/auth/plugins`, and adds a `ctx.authApi` middleware plus standalone Turnstile helpers. It runs on your own Cloudflare account — there is no external auth service.
+
+Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+
+## Install
+
+```sh
+npm install @lunora/auth
+```
+
+```sh
+yarn add @lunora/auth
+```
+
+```sh
+pnpm add @lunora/auth
+```
+
+## Usage
+
+```ts
+import { createAuth, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
+
+const auth = createAuth({
+    secret: env.AUTH_SECRET,
+    // Prefer lunoraD1Adapter over passing raw env.DB — the raw binding makes
+    // better-auth resolve its Kysely adapter via a dynamic import that hangs
+    // under @cloudflare/vite-plugin's dev runner.
+    database: lunoraD1Adapter(env.DB),
+    emailAndPassword: { enabled: true },
+});
+
+// In your Worker's fetch handler, route /api/auth/* to better-auth and fall
+// through to the Lunora worker for everything else:
+export default {
+    async fetch(request, env, ctx) {
+        await ensureMigrated(auth); // idempotent schema sync; dev/small deploys
+
+        const authResponse = await handleAuthRequest(auth, request);
+        if (authResponse) return authResponse;
+
+        // … hand off to your Lunora worker
+    },
+};
+```
+
+The runtime resolves the inbound session and stamps `ctx.auth` on every `query` / `mutation` / `action`: `ctx.auth.userId` is the signed-in user's id (or `null` when anonymous), and `ctx.auth.getIdentity()` resolves the decoded claims.
+
+### Plugins & CAPTCHA
+
+better-auth's plugin factories are re-exported from `@lunora/auth/plugins` (so you don't need better-auth's deep import paths): `admin`, `anonymous`, `bearer`, `captcha`, `createAccessControl`, `customSession`, `deviceAuthorization`, `emailOTP`, `genericOAuth`, `haveIBeenPwned`, `jwt`, `magicLink`, `mcp`, `multiSession`, `oAuthProxy`, `oidcProvider`, `oneTimeToken`, `organization`, `passkey`, `phoneNumber`, `siwe`, `twoFactor`, `username`, and `withMcpAuth`.
+
+For Cloudflare Turnstile on the **auth flow**, use the `captcha` plugin (`captcha({ provider: "cloudflare-turnstile", secretKey: env.TURNSTILE_SECRET_KEY })`); it reads the token from the `x-captcha-response` header. For **non-auth** procedures, the package root also exports standalone helpers — `verifyTurnstile` (pure `siteverify`) and `verifyTurnstileMiddleware` (a `.use()` middleware that takes the token from the function args).
+
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/auth)**.
+
+## Related
+
+- [`@lunora/server`](https://www.npmjs.com/package/@lunora/server) — define the queries and mutations that read `ctx.auth`.
+- [`@lunora/studio`](https://www.npmjs.com/package/@lunora/studio) — admin user dashboard, wired with `createAuthAdmin(auth)`.
+- [`@lunora/mail`](https://www.npmjs.com/package/@lunora/mail) — send better-auth's verification / reset / magic-link emails.
+
+## Supported Node.js Versions
+
+Libraries in this ecosystem make the best effort to track [Node.js' release schedule](https://github.com/nodejs/release#release-schedule).
+Here's [a post on why we think this is important](https://medium.com/the-node-js-collection/maintainers-should-consider-following-node-js-release-schedule-ab08ed4de71a).
+
+## Contributing
+
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/lunora/issues) and check our [Contributing](https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md) guidelines.
+
+> **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
+
+## Credits
+
+- [Daniel Bannert](https://github.com/prisis)
+- [All Contributors](https://github.com/anolilab/lunora/graphs/contributors)
+
+## Made with ❤️ at Anolilab
+
+This is an open source project and will always remain free to use. If you think it's cool, please star it 🌟. [Anolilab](https://www.anolilab.com/open-source) is a Development and AI Studio. Contact us at [hello@anolilab.com](mailto:hello@anolilab.com) if you need any help with these technologies or just want to say hi!
+
+## License
+
+The Lunora auth package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+
+<!-- badges -->
+
+[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@lunora/auth?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@lunora/auth
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@lunora/auth?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@lunora/auth
+[prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
+[prs-welcome]: https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md
+[typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
+[typescript-url]: https://www.typescriptlang.org/

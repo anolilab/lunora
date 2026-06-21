@@ -1,0 +1,122 @@
+# Logs
+# Anchored to the repo-root log-output dir + `*.log` files, NOT the bare token
+# `logs` — that matched any path component named `logs` and hid source folders
+# (`packages/cli/src/commands/logs/`, `packages/studio/src/features/logs/`),
+# which then needed a growing list of `!`-negations to claw back.
+/logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Diagnostic reports (https://nodejs.org/api/report.html)
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage
+coverage/
+ts-coverage
+*.lcov
+
+# Dependency directories
+node_modules/
+jspm_packages/
+
+# TypeScript v1 declaration files
+typings/
+
+# TypeScript cache
+*.tsbuildinfo
+.tsbuildinfo
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# dotenv environment variables file
+.env
+.env.test
+
+# misc
+.DS_Store
+*.pem
+.tmp
+
+# JetBrains
+.idea
+
+# JetBrains IDE
+/.idea
+
+# Optional textlint cache
+.textlintcache
+
+# vis (task-runner) cache + run history.
+# Templates under .vis/templates/ are checked in — vis discovers native
+# templates from there for `vis generate`.
+.vis/*
+!.vis/templates/
+# Committed git hooks live at .vis/hooks/<stage> (moved from .vis-hooks).
+# The generated dispatcher under .vis/hooks/_/ stays out of version control.
+!.vis/hooks/
+.vis/hooks/_/
+.task-runner/
+
+# Package build output
+dist
+dist/
+
+# Next.js / TanStack Start
+.next/
+
+# Fumadocs generated source
+.source/
+
+# Vercel deployment metadata
+.vercel/
+
+# Wrangler local state
+.wrangler/
+
+# Local dev secrets (Cloudflare Workers) — never commit; keep the example.
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+
+# Playwright artifacts
+test-results/
+playwright-report/
+
+# Claude
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+
+.playwright-mcp
+
+.codex
+
+# Local git worktrees (Agent tool isolation)
+.worktrees/
+.claude/worktrees/
+
+# Scratch e2e debug scripts (local only — not part of the Playwright suite)
+tests/e2e/debug-*.mjs
+tests/e2e/diag*.mjs
+tests/e2e/experiment.mjs
+tests/e2e/validate-studio.mjs
+.claude/projects/-Users-daniel-bannert-Projects-lunora/memory/

@@ -1,0 +1,41 @@
+---
+title: Realtime by default, not as an afterthought
+description: How Lunora turns every query into a live subscription, with optimistic updates and an offline queue baked in.
+publishedAt: 2026-06-18
+author: Daniel Bannert
+category: Engineering
+image: /og-default.jpg
+tags:
+    - engineering
+    - realtime
+    - durable-objects
+---
+
+Realtime is usually bolted onto a backend after the fact — a separate websocket server, a pub/sub
+bus, and a pile of glue code to keep clients in sync. Lunora takes a different stance: **every query
+is a subscription**.
+
+## One mental model
+
+When a client reads data with `useQuery`, it subscribes once. Any mutation that touches the
+underlying tables re-runs the affected queries and pushes the new result to every subscribed client.
+
+```ts
+const messages = useQuery(api.messages.list, { roomId });
+const send = useMutation(api.messages.send);
+```
+
+No channels to wire up, no cache to invalidate by hand.
+
+## Optimistic and offline-ready
+
+Mutations apply optimistically on the client and reconcile when the server confirms. If the network
+drops, writes are queued durably and retried — keyed by a client id so they never duplicate.
+
+## Powered by Durable Objects
+
+Each shard is a SQLite database running inside a Durable Object at the edge, with optimistic
+concurrency control and hibernated websocket subscriptions. That is what makes live updates cheap
+and consistent without a central server.
+
+This is just the start — follow along on the [blog](/blog) as we go deeper on the internals.

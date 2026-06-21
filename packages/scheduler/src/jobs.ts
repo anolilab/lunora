@@ -1,0 +1,296 @@
+/**
+ * Code-first cron definitions — the Lunora equivalent of Convex's `cronJobs()`.
+ *
+ * Instead of hand-pasting a wrangler.jsonc `triggers.crons` array, users declare
+ * crons in a `lunora/crons.ts` file:
+ *
+ * ```ts
+ * import { cronJobs } from "@lunora/scheduler";
+ * import { internal } from "./_generated/api.js";
+ *
+ * const crons = cronJobs();
+ * crons.interval("clear presence", { minutes: 30 }, internal.presence.clear, {});
+ * crons.daily("send digest", { hourUTC: 9, minuteUTC: 0 }, internal.email.digest, {});
+ * crons.cron("custom", "0 * * * *", internal.foo.bar, {});
+ * export default crons;
+ * ```
+ *
+ * A job's target may be a function reference (a one-shot dispatch, above) or a
+ * durable workflow — passing the generated `workflows.&lt;name>` reference starts a
+ * fresh, multi-step, retried workflow INSTANCE on each fire, and the args are
+ * type-checked against the workflow's `params`:
+ *
+ * ```ts
+ * import { workflows } from "./_generated/api";
+ * crons.daily("nightly digest", { hourUTC: 9, minuteUTC: 0 }, workflows.digestPipeline, { region: "eu" });
+ * ```
+ *
+ * `@lunora/codegen` discovers the registered jobs and emits both the
+ * wrangler.jsonc schedule array and a dispatcher map the runtime's
+ * `scheduled()` handler consumes — the user never edits wrangler by hand.
+ */
+import type { CronTarget, CronTargetArgs } from "./types";
+import { isWorkflowReference } from "./types";
+import { assertValidCronExpression } from "./validate-cron";
+
+/** Sub-day recurrence. Exactly one unit must be provided. */
+interface IntervalSchedule {
+    hours?: number;
+    minutes?: number;
+    seconds?: number;
+}
+
+/** Daily recurrence at a fixed UTC wall-clock time. */
+interface DailySchedule {
+    /** 0–23. */
+    hourUTC: number;
+    /** 0–59. */
+    minuteUTC: number;
+}
+
+/** Weekly recurrence at a fixed UTC time on a given weekday. */
+interface WeeklySchedule extends DailySchedule {
+    /** Long weekday name, case-insensitive (e.g. `"monday"`). */
+    dayOfWeek: "friday" | "monday" | "saturday" | "sunday" | "thursday" | "tuesday" | "wednesday";
+}
+
+/** Monthly recurrence at a fixed UTC time on a given day-of-month. */
+interface MonthlySchedule extends DailySchedule {
+    /** 1–31. */
+    day: number;
+}
+
+/**
+ * One registered cron job, normalized to a compiled cron expression. Shared
+ * verbatim with `@lunora/codegen` (which lifts the same fields out of the AST)
+ * and the runtime dispatcher — keep the shape stable across all three.
+ */
+interface CronJob {
+    /** Args forwarded to the function (or, for a workflow target, used as its `params`) on each fire. */
+    args: Record<string, unknown>;
+    /** Compiled standard cron expression, e.g. `"0 9 * * *"`. */
+    cron: string;
+
+    /**
+     * `__lunoraRef` of the target function. Present for a function target;
+     * absent when the job targets a workflow ({@link CronJob.workflow} instead).
+     */
+    functionPath?: string;
+    /** Human-readable identifier — must be unique within one `cronJobs()`. */
+    name: string;
+
+    /**
+     * Set when the job targets a durable workflow rather than a function: the
+     * workflow's stable name (`defineWorkflow({ name })`) when one was declared,
+     * otherwise `""`. `@lunora/codegen` statically resolves the concrete
+     * `lunora/workflows.ts` export + its `WORKFLOW_*` binding for the emitted
+     * dispatch map, so this authoring-time value is informational only.
+     */
+    workflow?: string;
+}
+
+const WEEKDAY_INDEX: Record<WeeklySchedule["dayOfWeek"], number> = {
+    friday: 5,
+    monday: 1,
+    saturday: 6,
+    sunday: 0,
+    thursday: 4,
+    tuesday: 2,
+    wednesday: 3,
+};
+
+/** Validate an integer in `[min, max]` and return it as a cron field string. */
+const field = (value: number, label: string, min: number, max: number): string => {
+    if (!Number.isInteger(value) || value < min || value > max) {
+        throw new Error(`@lunora/scheduler: cronJobs ${label} must be an integer in [${min.toFixed(0)}, ${max.toFixed(0)}], got ${String(value)}`);
+    }
+
+    return value.toFixed(0);
+};
+
+/**
+ * Compile an `{ seconds | minutes | hours }` interval into a cron expression.
+ * Exactly one unit is allowed; the value is rendered as a stepped wildcard
+ * (`star-slash-n`) in the corresponding cron field.
+ */
+const compileInterval = (schedule: IntervalSchedule): string => {
+    const units = (["seconds", "minutes", "hours"] as const).filter((unit) => schedule[unit] !== undefined);
+
+    if (units.length !== 1) {
+        throw new Error(`@lunora/scheduler: interval schedule must specify exactly one of { seconds, minutes, hours }`);
+    }
+
+    const unit = units[0] as "hours" | "minutes" | "seconds";
+    const value = schedule[unit] as number;
+
+    if (unit === "seconds") {
+        return `*/${field(value, "interval.seconds", 1, 59)} * * * * *`;
+    }
+
+    if (unit === "minutes") {
+        return `*/${field(value, "interval.minutes", 1, 59)} * * * *`;
+    }
+
+    return `0 */${field(value, "interval.hours", 1, 23)} * * *`;
+};
+
+const compileDaily = (schedule: DailySchedule): string => {
+    const minute = field(schedule.minuteUTC, "daily.minuteUTC", 0, 59);
+    const hour = field(schedule.hourUTC, "daily.hourUTC", 0, 23);
+
+    return `${minute} ${hour} * * *`;
+};
+
+const compileWeekly = (schedule: WeeklySchedule): string => {
+    const index = WEEKDAY_INDEX[schedule.dayOfWeek] as number | undefined;
+
+    if (index === undefined) {
+        throw new Error(`@lunora/scheduler: weekly schedule has invalid dayOfWeek "${schedule.dayOfWeek}"`);
+    }
+
+    const minute = field(schedule.minuteUTC, "weekly.minuteUTC", 0, 59);
+    const hour = field(schedule.hourUTC, "weekly.hourUTC", 0, 23);
+
+    return `${minute} ${hour} * * ${index.toFixed(0)}`;
+};
+
+const compileMonthly = (schedule: MonthlySchedule): string => {
+    const day = field(schedule.day, "monthly.day", 1, 31);
+    const minute = field(schedule.minuteUTC, "monthly.minuteUTC", 0, 59);
+    const hour = field(schedule.hourUTC, "monthly.hourUTC", 0, 23);
+
+    return `${minute} ${hour} ${day} * *`;
+};
+
+/** The ergonomic builder methods, excluding the raw `.cron` escape hatch. */
+type CronScheduleKind = "daily" | "interval" | "monthly" | "weekly";
+
+/** The ergonomic schedule kinds as a runtime set (codegen reads this to detect cron builder methods). */
+const CRON_SCHEDULE_KINDS: ReadonlySet<CronScheduleKind> = new Set<CronScheduleKind>(["daily", "interval", "monthly", "weekly"]);
+
+/**
+ * Compile one of the ergonomic schedule forms into a standard cron expression.
+ * Exposed as a pure function so `@lunora/codegen` can reuse the exact same
+ * compilation when it statically lifts a `crons.{kind}(...)` call out of the
+ * AST — codegen imports this directly (no duplicated mirror).
+ */
+const compileCronSchedule = (kind: CronScheduleKind, schedule: DailySchedule | IntervalSchedule | MonthlySchedule | WeeklySchedule): string => {
+    switch (kind) {
+        case "daily": {
+            return compileDaily(schedule as DailySchedule);
+        }
+        case "interval": {
+            return compileInterval(schedule as IntervalSchedule);
+        }
+        case "monthly": {
+            return compileMonthly(schedule as MonthlySchedule);
+        }
+        case "weekly": {
+            return compileWeekly(schedule as WeeklySchedule);
+        }
+        default: {
+            throw new Error(`@lunora/scheduler: unknown cron schedule kind "${String(kind)}"`);
+        }
+    }
+};
+
+/**
+ * Builder returned by {@link cronJobs}. Each method registers one recurring
+ * job; the compiled expression is validated immediately so authoring mistakes
+ * surface at definition time rather than at codegen.
+ */
+interface CronJobsBuilder {
+    /**
+     * Raw cron expression escape hatch (5- or 6-field, full cron-parser grammar).
+     * The target may be a function (`internal.file.fn`) or a durable workflow
+     * (`workflows.&lt;name>`); a workflow's `args` are inferred from its `params`.
+     */
+    cron: <T extends CronTarget>(name: string, cronExpr: string, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
+    /** Daily at `hourUTC:minuteUTC` (UTC). The target may be a function or a durable workflow (`workflows.&lt;name>`). */
+    daily: <T extends CronTarget>(name: string, schedule: DailySchedule, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
+    /** Every `{ seconds | minutes | hours }`. The target may be a function or a durable workflow (`workflows.&lt;name>`). */
+    interval: <T extends CronTarget>(name: string, schedule: IntervalSchedule, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
+    /** Snapshot of the registered jobs, in declaration order. */
+    jobs: () => ReadonlyArray<CronJob>;
+    /** Monthly on `day` at `hourUTC:minuteUTC` (UTC). The target may be a function or a durable workflow (`workflows.&lt;name>`). */
+    monthly: <T extends CronTarget>(name: string, schedule: MonthlySchedule, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
+    /** Weekly on `dayOfWeek` at `hourUTC:minuteUTC` (UTC). The target may be a function or a durable workflow (`workflows.&lt;name>`). */
+    weekly: <T extends CronTarget>(name: string, schedule: WeeklySchedule, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
+}
+
+/**
+ * Create a code-first cron registry. The returned builder is chainable;
+ * codegen discovers a `lunora/crons.ts` default export by AST, not a runtime
+ * brand.
+ */
+const cronJobs = (): CronJobsBuilder => {
+    const jobs: CronJob[] = [];
+    const seen = new Set<string>();
+
+    const register = (name: string, cron: string, target: CronTarget, args: Record<string, unknown> | undefined): void => {
+        if (typeof name !== "string" || name.trim() === "") {
+            throw new Error(`@lunora/scheduler: cron job name must be a non-empty string`);
+        }
+
+        if (seen.has(name)) {
+            throw new Error(`@lunora/scheduler: duplicate cron job name "${name}" — names must be unique within one cronJobs()`);
+        }
+
+        // Workflow target — starts a durable workflow INSTANCE per fire (args ⇒
+        // its `params`). The concrete `lunora/workflows.ts` export + `WORKFLOW_*`
+        // binding is resolved statically by `@lunora/codegen`; the builder only
+        // records the optional stable-name override for `.jobs()` introspection.
+        if (isWorkflowReference(target)) {
+            assertValidCronExpression(cron, `cron expression for job "${name}"`);
+
+            seen.add(name);
+            jobs.push({ args: args ?? {}, cron, name, workflow: typeof target.name === "string" ? target.name : "" });
+
+            return;
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the required type
+        if (!target || typeof target.__lunoraRef !== "string") {
+            throw new Error(`@lunora/scheduler: cron job "${name}" requires a function reference (e.g. internal.email.digest) or a workflow reference`);
+        }
+
+        assertValidCronExpression(cron, `cron expression for job "${name}"`);
+
+        seen.add(name);
+        jobs.push({ args: args ?? {}, cron, functionPath: target.__lunoraRef, name });
+    };
+
+    const builder: CronJobsBuilder = {
+        cron(name, cronExpr, function_, args) {
+            register(name, cronExpr, function_, args);
+
+            return builder;
+        },
+        daily(name, schedule, function_, args) {
+            register(name, compileCronSchedule("daily", schedule), function_, args);
+
+            return builder;
+        },
+        interval(name, schedule, function_, args) {
+            register(name, compileCronSchedule("interval", schedule), function_, args);
+
+            return builder;
+        },
+        jobs: () => [...jobs],
+        monthly(name, schedule, function_, args) {
+            register(name, compileCronSchedule("monthly", schedule), function_, args);
+
+            return builder;
+        },
+        weekly(name, schedule, function_, args) {
+            register(name, compileCronSchedule("weekly", schedule), function_, args);
+
+            return builder;
+        },
+    };
+
+    return builder;
+};
+
+export { compileCronSchedule, CRON_SCHEDULE_KINDS, cronJobs };
+export type { CronJob, CronJobsBuilder, CronScheduleKind, DailySchedule, IntervalSchedule, MonthlySchedule, WeeklySchedule };

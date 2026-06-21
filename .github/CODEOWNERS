@@ -1,0 +1,9 @@
+# Catch-all owner — every PR needs a review from one of these accounts.
+*                       @prisis
+
+# Workflow files run with repo credentials. Treat them like the most
+# privileged code in the repo and gate changes on a core maintainer review.
+# (Requires "Require review from Code Owners" in branch protection to enforce.)
+/.github/               @prisis
+/.github/workflows/     @prisis
+/.github/CODEOWNERS     @prisis

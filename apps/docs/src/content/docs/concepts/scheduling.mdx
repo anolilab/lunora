@@ -1,0 +1,116 @@
+---
+title: Scheduling
+description: Defer follow-up work with ctx.scheduler.runAfter / runAt, and run recurring jobs via Cron Triggers.
+---
+
+Not all work should happen inside the request that triggers it. Sending a
+welcome email, expiring a draft, reconciling with Stripe, or sweeping stale rows
+all want to happen _later_: after the mutation commits, on a delay, or on a
+recurring schedule. [`@lunora/scheduler`](/docs/packages/scheduler) covers both
+shapes. Deferred jobs run through `ctx.scheduler`, recurring jobs through Cron
+Triggers, both backed by a `SchedulerDO` you mount once per app.
+
+## Deferring a function
+
+`ctx.scheduler` is available on `MutationCtx` and `ActionCtx` (not on a
+read-only `QueryCtx`). It enqueues a function to run later by path:
+
+- `ctx.scheduler.runAfter(delayMs, functionPath, args?)` — run after a delay.
+- `ctx.scheduler.runAt(timestampMs, functionPath, args?)` — run at an absolute
+  epoch-millisecond time.
+
+Both return the scheduled job's id (a string) so you can track or cancel it. The
+target is referenced as a `"namespace:function"` path string, and it may be a
+mutation or an action. That includes an [internal](/docs/concepts/function-context)
+function that isn't exposed to clients, which is the usual choice for follow-up
+work.
+
+```ts
+import { mutation, v } from "@/lunora/_generated/server";
+
+export const publishPost = mutation.input({ postId: v.id("posts") }).mutation(async ({ ctx, args: { postId } }) => {
+    await ctx.db.patch(postId, { status: "published" });
+
+    // Fire-and-forget follow-up: notify subscribers 30s later.
+    await ctx.scheduler.runAfter(30_000, "notifications:notifySubscribers", { postId });
+});
+```
+
+`runAt` is the same idea pinned to a wall-clock time, e.g. expire a trial at a
+stored deadline:
+
+```ts
+await ctx.scheduler.runAt(trial.endsAt, "billing:expireTrial", { userId });
+```
+
+### Scheduling from a mutation vs. an action
+
+The two contexts schedule identically, but the intent differs:
+
+- From a **mutation**, scheduling moves a side effect _out_ of the transactional
+  read/write scope. A mutation can't call `fetch()` or write to R2, so it
+  schedules an **action** to do that once the write has committed.
+- From an **action**, scheduling chains further async work: retry an external
+  call later, or fan a long job out into stages.
+
+```ts
+import { mutation, v } from "@/lunora/_generated/server";
+
+export const orderPlaced = mutation.input({ orderId: v.id("orders") }).mutation(async ({ ctx, args: { orderId } }) => {
+    await ctx.db.patch(orderId, { state: "placed" });
+    // The action does the external work the mutation isn't allowed to.
+    await ctx.scheduler.runAfter(0, "payments:charge", { orderId });
+});
+```
+
+`runAfter(0, ...)` is the idiomatic "do this right after I commit, but not in my
+transaction" hand-off.
+
+### Inspecting and cancelling
+
+`ctx.scheduler` also exposes `list()`, `get(id)`, and `cancel(id)` for managing
+pending jobs. For example, cancel a scheduled reminder when the user completes
+the action first:
+
+```ts
+const { cancelled } = await ctx.scheduler.cancel(reminderId);
+```
+
+You can also read pending jobs from a query via the `_scheduled_functions`
+[system table](/docs/concepts/function-context) (`ctx.db.system`), which is
+read-only and eventually consistent.
+
+## Recurring jobs (Cron Triggers)
+
+For work on a fixed cadence (nightly cleanups, hourly digests) declare **Cron
+Triggers**. They run on the platform's cron schedule and dispatch a function
+through the same `SchedulerDO`:
+
+```ts
+import { createCronTrigger } from "@lunora/scheduler";
+
+export const triggers = [
+    createCronTrigger({ cron: "0 3 * * *", functionPath: "cleanup:cleanupOldMessages" }),
+    createCronTrigger({ cron: "*/15 * * * *", functionPath: "presence:sweep" }),
+];
+```
+
+The CLI's wrangler validator surfaces a missing or unreachable trigger as an
+error during dev, so a typo'd `functionPath` fails fast rather than silently
+never firing.
+
+## How dispatch works
+
+A scheduled job is stored in the `SchedulerDO` sorted by its fire time and
+dispatched on the DO's alarm. When it fires, the DO calls back into your worker
+and the runtime runs the target function exactly as if it were an RPC: same
+context, same `ctx.db` / `ctx.auth` resolution, same code path. There's no
+separate "background worker" mental model to keep. A scheduled mutation is just
+your mutation, run later.
+
+## See also
+
+- [Queries & mutations](/docs/concepts/queries-mutations): `ctx.scheduler` lives on mutation/action contexts.
+- [Actions](/docs/concepts/actions): the kind of function you typically schedule for external work.
+- [File storage](/docs/concepts/file-storage): a common reason to defer a write out of a mutation.
+- [@lunora/scheduler](/docs/packages/scheduler): `SchedulerDO` setup and the dispatch contract.

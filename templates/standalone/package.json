@@ -1,0 +1,19 @@
+{
+    "name": "{{name}}",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "dev": "lunora dev",
+        "codegen": "lunora codegen",
+        "deploy": "lunora deploy"
+    },
+    "dependencies": {
+        "lunorash": "^0.0.0"
+    },
+    "devDependencies": {
+        "@cloudflare/workers-types": "^4.20260611.1",
+        "typescript": "^6.0.3",
+        "wrangler": "^4.100.0"
+    }
+}

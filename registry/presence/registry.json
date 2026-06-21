@@ -1,0 +1,15 @@
+{
+    "$schema": "../schema/registry-item.schema.json",
+    "name": "presence",
+    "title": "Presence",
+    "description": "Collaborative-awareness presence (who's here + cursors) — a TTL'd room/session table wired into your Lunora schema, with reactive listPresent and a heartbeat upsert.",
+    "docs": "Re-export the functions from lunora/presence/index.ts so codegen emits api.presence.*, then drive them from React with usePresence (see the README). Tune PRESENCE_TTL_MS in lunora/presence/schema.ts.",
+    "requires": [],
+    "deps": {
+        "@lunora/server": "workspace:*"
+    },
+    "files": [
+        { "from": "schema.ts", "to": "lunora/presence/schema.ts", "merge": "schema-extension" },
+        { "from": "presence.ts", "to": "lunora/presence/index.ts", "merge": "create-or-skip" }
+    ]
+}

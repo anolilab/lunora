@@ -1,0 +1,34 @@
+**/.git
+**/.svn
+**/.hg
+
+**/node_modules
+**/.next
+**/dist
+**/__fixtures__
+**/__tests__/fixtures
+
+**/CHANGELOG.md
+
+pnpm-lock.yaml
+pnpm-workspace.yaml
+
+**/tsconfig.json
+**/jsconfig.json
+
+/.nx/cache
+
+# Vendored agent skills (managed by skills-lock.json) — keep upstream content byte-for-byte
+.agents/
+.claude/skills/
+
+# Plop templates contain Handlebars syntax that Prettier cannot parse
+plop/**/*.hbs
+
+# Inherited from upstream — re-run prettier when the templates are Lunora-themed
+.github/commit-convention.md
+.github/workflows/codeql.yml
+tools/get-vitest-config.ts
+# Generated code — produced by codegen (lunora) and fumadocs-mdx (.source); never lint/format
+**/_generated/
+**/.source/

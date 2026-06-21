@@ -1,0 +1,48 @@
+---
+title: Introducing Lunora
+description: A type-safe, real-time backend for Cloudflare Workers and Durable Objects — with a Vite-first developer experience.
+publishedAt: 2026-06-20
+author: Daniel Bannert
+category: Announcements
+image: /og-default.jpg
+tags:
+    - announcement
+    - cloudflare
+    - realtime
+---
+
+We are thrilled to introduce **Lunora** — a type-safe, real-time backend framework built on
+Cloudflare Workers and Durable Objects, with a Vite-first developer experience.
+
+## Why Lunora
+
+Most realtime backends force a trade-off between developer experience and edge performance.
+Lunora removes it. You write plain TypeScript queries, mutations, and actions, and codegen keeps
+your server and client types in perfect lockstep.
+
+```ts
+export default defineSchema({
+    todos: defineTable({
+        text: v.string(),
+        done: v.boolean(),
+    }),
+});
+```
+
+## Realtime by default
+
+Every query is a subscription. Each mutation pushes live updates to all connected clients — with
+optimistic writes and an offline queue handled for you.
+
+```ts
+const todos = useQuery(api.todos.list);
+const add = useMutation(api.todos.add);
+```
+
+## Edge-native and sharded
+
+State lives in SQLite-backed Durable Objects at the edge. Shard by key, or go global to replicate
+reads across regions — all with a single line of configuration.
+
+There is a lot more to share in the weeks ahead. Star the repo, try the quickstart, and let us know
+what you build.

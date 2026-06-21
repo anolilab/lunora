@@ -1,0 +1,32 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://raw.githubusercontent.com/anolilab/lunora/alpha/registry/schema/registry.schema.json",
+    "title": "Lunora registry index",
+    "description": "The catalog (index.json) `lunora list` reads. Generated from the item directories by `lunora registry build`.",
+    "type": "object",
+    "required": ["items"],
+    "additionalProperties": false,
+    "properties": {
+        "$schema": {
+            "type": "string",
+            "description": "Path/URL to this schema for editor validation."
+        },
+        "$comment": {
+            "type": "string"
+        },
+        "items": {
+            "type": "array",
+            "description": "Available registry items.",
+            "items": {
+                "type": "object",
+                "required": ["name"],
+                "additionalProperties": false,
+                "properties": {
+                    "name": { "type": "string", "minLength": 1 },
+                    "title": { "type": "string" },
+                    "description": { "type": "string" }
+                }
+            }
+        }
+    }
+}

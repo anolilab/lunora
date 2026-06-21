@@ -1,0 +1,236 @@
+@import "tailwindcss";
+
+@plugin 'tailwindcss-animate';
+
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+
+/* Canonical Lunora "Luna + Aurora" tokens — neutrals, aurora ramp, shadcn
+   semantic set, fonts, radius (:root + .dark + @theme). Single source of truth;
+   see marketing/design-tokens/DESIGN.md. Docs-only animations, nav tokens, and
+   component CSS stay below. */
+@import "../../../../marketing/design-tokens/tokens.css";
+
+@variant dark (&:where(.dark, .dark *)); /* <body class="dark"> */
+@variant light (&:where(.light, .light *)); /* <body class="light"> */
+
+@theme {
+    /* Fonts, radius, and the color mappings (--color-*) now come from the shared
+       tokens import above. Only docs-specific animations live here. */
+    --transition-property-width: width;
+
+    --animate-move: move 5s linear infinite;
+    --animate-button-shine: button-shine 8s ease-in-out infinite;
+    --animate-border-shine: border-shine var(--duration) infinite linear;
+    --animate-gradient: gradient 8s linear infinite;
+    --animate-shiny-text: shiny-text 8s infinite;
+    --animate-scroll-left: scroll-left 45s linear infinite;
+    --animate-scroll-right: scroll-right 60s linear infinite;
+
+    @keyframes button-shine {
+        from {
+            background-position: 200% 0;
+        }
+        to {
+            background-position: -200% 0;
+        }
+    }
+    @keyframes border-shine {
+        0% {
+            background-position: 0% 0%;
+        }
+        50% {
+            background-position: 100% 100%;
+        }
+        to {
+            background-position: 0% 0%;
+        }
+    }
+
+    @keyframes gradient {
+        to {
+            background-position: var(--bg-size) 0;
+        }
+    }
+
+    @keyframes shiny-text {
+        0%,
+        90%,
+        100% {
+            background-position: calc(-100% - var(--shiny-width)) 0;
+        }
+        30%,
+        60% {
+            background-position: calc(100% + var(--shiny-width)) 0;
+        }
+    }
+
+    @keyframes move {
+        0% {
+            transform: translateX(-200px);
+        }
+        100% {
+            transform: translateX(200px);
+        }
+    }
+
+    @keyframes scroll-left {
+        from {
+            transform: translateX(0);
+        }
+        to {
+            transform: translateX(-50%);
+        }
+    }
+
+    @keyframes scroll-right {
+        from {
+            transform: translateX(-50%);
+        }
+        to {
+            transform: translateX(0);
+        }
+    }
+}
+
+@layer base {
+    :root {
+        /* Color/surface/radius tokens + .dark overrides come from the shared
+           tokens import above. Only docs-specific additions remain here. */
+        interpolate-size: allow-keywords;
+    }
+
+    [data-theme="dark"] {
+        --nav-text-color: #fff;
+        --nav-big-menu-bg: var(--ivory);
+        --nav-big-menu-text: var(--coal);
+        --nav-big-menu-border: hsl(217.9 10.6% 64.9%);
+    }
+    [data-theme="light"] {
+        --nav-text-color: var(--color-gray-700);
+        --nav-big-menu-bg: var(--coal);
+        --nav-big-menu-text: var(--ivory);
+        --nav-big-menu-border: hsl(0 0% 20%);
+    }
+
+    .light {
+        h1,
+        h2,
+        h3,
+        h4,
+        h5,
+        h6 {
+            @apply text-gray-900;
+        }
+
+        @apply text-gray-700;
+    }
+}
+
+#nd-sidebar {
+    background-color: var(--color-dark-coal);
+    border-color: transparent;
+
+    /* The sidebar panel is absolutely pinned to the viewport top, behind the
+       fixed h-16 navbar; drop it below the navbar so its items aren't hidden. */
+    top: 4rem;
+    height: calc(100dvh - 4rem);
+}
+
+/* Docs use the full page width — drop fumadocs' fixed ~1285px frame cap so the
+   sidebar, content, and TOC span edge to edge (paired with --fd-layout-width: 100%). */
+[class*="max-w-[1285px]"] {
+    max-width: none !important;
+}
+
+/* The page article starts at viewport top (under the fixed h-16 navbar); its
+   default top padding (pt-14) is less than the navbar, so the breadcrumb tucks
+   under it. Clear the navbar plus a little breathing room. */
+#nd-page {
+    padding-top: 5rem;
+}
+
+#nd-subnav > div {
+    border-bottom: 0;
+}
+
+html {
+    scroll-behavior: smooth;
+
+    /* Keep in-page anchor targets clear of the fixed external navbar (h-16). */
+    scroll-padding-top: 5rem;
+}
+
+/* Subtle grain texture for depth */
+.grain-overlay::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.03;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+    background-repeat: repeat;
+    z-index: 0;
+}
+
+/* Glow pulse for emphasis elements */
+@keyframes glow-pulse {
+    0%,
+    100% {
+        opacity: 0.4;
+    }
+    50% {
+        opacity: 0.8;
+    }
+}
+
+.animate-glow-pulse {
+    animation: glow-pulse 3s ease-in-out infinite;
+}
+
+/* Staggered fade-in for child elements */
+@keyframes fade-up {
+    from {
+        opacity: 0;
+        transform: translateY(16px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.animate-fade-up {
+    animation: fade-up 0.6s ease-out both;
+}
+
+/* Skip layout/paint for off-screen sections */
+.content-auto {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 600px;
+}
+
+.no-visible-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    -webkit-overflow-scrolling: touch;
+}
+
+.no-visible-scrollbar::-webkit-scrollbar {
+    display: none;
+}
+
+code {
+    counter-reset: step;
+    counter-increment: step 0;
+}
+
+code .line::before {
+    content: counter(step);
+    counter-increment: step;
+    width: 1rem;
+    margin-right: 1.5rem;
+    display: inline-block;
+    text-align: right;
+    color: rgba(115, 138, 148, 0.4);
+}

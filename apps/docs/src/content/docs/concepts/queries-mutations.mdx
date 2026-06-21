@@ -1,0 +1,102 @@
+---
+title: Queries & mutations
+description: query / mutation / action — what each is for and how ctx is shaped.
+---
+
+Lunora exposes three function kinds. Which one you pick depends on the
+side effects you need and the reactivity guarantees the client gets back.
+
+| Kind       | Side effects                  | Reactive                     | Use when                                     |
+| ---------- | ----------------------------- | ---------------------------- | -------------------------------------------- |
+| `query`    | reads only                    | yes — clients auto-subscribe | listing/reading data                         |
+| `mutation` | reads + writes                | broadcasts deltas            | inserts/updates/deletes                      |
+| `action`   | anything, including `fetch()` | no                           | calling external APIs, queues, sending email |
+
+```ts
+import { mutation, query, v } from "@/lunora/_generated/server";
+
+export const list = query.input({ channelId: v.id("channels"), limit: v.optional(v.number()) }).query(async ({ ctx, args: { channelId, limit } }) => {
+    return ctx.db
+        .query("messages")
+        .withIndex("by_channel", (q) => q.eq("channelId", channelId))
+        .order("desc")
+        .take(limit ?? 50);
+});
+
+export const send = mutation.input({ channelId: v.id("channels"), text: v.string() }).mutation(async ({ ctx, args }) => {
+    if (!ctx.auth.userId) throw new Error("must be signed in");
+    await ctx.db.insert("messages", { ...args, userId: ctx.auth.userId });
+});
+```
+
+## `ctx.db`
+
+Inside a `query` you get a read-only `DatabaseReader`. Inside a `mutation`
+you get a `DatabaseWriter` with `insert`, `patch`, `replace` and `delete` (plus
+the batch forms below). Both are typed by your schema, so
+`ctx.db.insert("messages", ...)` errors at compile time if the shape is wrong.
+
+### Batch writes
+
+`insertMany` / `deleteMany` / `patchMany` apply many rows in **one** call —
+saving the network round-trips of a per-row loop while reusing the full single-row
+pipeline for each row (defaults, validators, triggers, RLS, companion/CDC/broadcast).
+Each is available both flat and per-table:
+
+```ts
+// flat
+const ids = await ctx.db.insertMany("messages", [{ body: "a" }, { body: "b" }]);
+await ctx.db.patchMany([{ id: ids[0], patch: { body: "edited" } }]);
+await ctx.db.deleteMany([ids[1]]);
+
+// per-table (scopes every id to this table)
+await ctx.db.messages.deleteMany([ids[0]]);
+```
+
+- **Atomic within a mutation.** The DO runs each mutation in a `BEGIN`/`COMMIT`
+  span, so if any row in a batch throws (a validator, an RLS denial, a conflict),
+  the whole mutation rolls back. The `lunoraTest` harness mirrors this, so your
+  tests see the same all-or-nothing behavior. (Actions have no transaction span —
+  they do external I/O that can't be rolled back — so rows an action writes before
+  a later failure persist.)
+- **Capped** at 500 rows per call by default; pass `options.limit` to raise it, or
+  chunk larger sets yourself. An over-cap call is rejected before any write.
+- `deleteMany` returns `{ deleted }` — the number of ids **requested** (an unknown
+  id is a no-op, not an error). `insertMany` returns the minted ids in input order.
+- The per-table form (`ctx.db.<table>.deleteMany`) scopes every id to that table,
+  the same way `ctx.db.<table>.delete` does — a foreign id resolves to nothing.
+
+### `insertManyUnsafe` — trusted bulk import
+
+For large trusted imports (seed, migration, admin tooling), `ctx.db.insertManyUnsafe`
+writes the whole batch in **one** multi-row `INSERT` and **skips the per-row
+`.check()` validators and `before`/`after` triggers** — that's the "unsafe": it
+trusts the data and bypasses the integrity pipeline for throughput.
+
+```ts
+await ctx.db.insertManyUnsafe("events", rows, { allowExplicitId: true });
+```
+
+It still applies column defaults, maintains all indexes and companions
+(search/aggregate/rank/CDC + live subscriptions), and **still enforces RLS** —
+secure-by-default and your table's insert policy apply exactly as for `insertMany`
+(there is no RLS-bypassing writer). `allowExplicitId` preserves a supplied `_id`.
+Use it only for data you control; reach for `insertMany` for anything user-supplied.
+
+## `ctx.auth`
+
+Carries the verified identity for the request. `ctx.auth.userId` is the signed-in
+user's id, or `null` for an anonymous caller, so a truthy check both narrows it to
+`string` and acts as your "is signed in" guard. For the full decoded claims (email,
+roles, and so on), call `await ctx.auth.getIdentity()`, which returns the identity
+object or `null`.
+
+## `ctx.scheduler`
+
+Available in mutations and actions. `ctx.scheduler.runAfter(ms, fn, args)`
+enqueues a deferred call against the SchedulerDO.
+
+## See also
+
+- [Real-time](/docs/concepts/realtime)
+- [API: @lunora/server](/docs/packages/server)

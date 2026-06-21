@@ -1,0 +1,236 @@
+---
+title: "@lunora/mail"
+description: Transactional email for Lunora — Cloudflare Email Workers or Resend, React templates, queue-backed sends.
+---
+
+`@lunora/mail` wraps `@visulima/email` so you can send transactional email
+from inside an `action`. The default transport is Cloudflare Email Workers;
+Resend is a built-in option, and you can pass any transport you wire
+yourself. It renders React Email templates inline and offloads delivery to a
+Cloudflare Queue.
+
+`createMailer` needs `from` plus exactly one transport: `cloudflareSend` (the
+Cloudflare default), `apiKey` (Resend), or an explicit `transport`. Passing none
+throws.
+
+```ts
+import { createMailer } from "@lunora/mail";
+
+export const mailer = createMailer({
+    apiKey: env.RESEND_API_KEY,
+    from: "Lunora <noreply@lunora.sh>",
+});
+```
+
+Inside a Worker, prefer `createMailerFromEnv(env)`: it reads `MAIL_FROM`,
+captures every send into the studio's Mail inbox in a dev environment, and
+otherwise delivers via a `SEND_EMAIL` binding (pass `cloudflareSend`) or
+`RESEND_API_KEY`.
+
+```ts
+import { createMailerFromEnv } from "@lunora/mail";
+
+const mailer = createMailerFromEnv(env, {
+    cloudflareSend: async (from, to, raw) => {
+        const { EmailMessage } = await import("cloudflare:email");
+
+        await env.SEND_EMAIL.send(new EmailMessage(from, to, raw));
+    },
+});
+```
+
+Pass a custom `transport` to swap providers; pass a Cloudflare `queue`
+binding to enable deferred sends via `mailer.queue(...)`.
+
+## Sending from an action
+
+```ts
+import { action, v } from "@/lunora/_generated/server";
+
+import { mailer } from "./mail";
+
+export const welcomeEmail = action.input({ userId: v.id("users") }).action(async ({ ctx, args: { userId } }) => {
+    const user = await ctx.runQuery("users:get", { userId });
+
+    await mailer.send({
+        to: user.email,
+        subject: "Welcome to Lunora",
+        html: `<p>Hi ${user.name} — your account is ready.</p>`,
+    });
+});
+```
+
+## React Email templates
+
+Pass a `@react-email/components` element through the `react` field. The
+mailer renders it via `renderEmail` (a `@react-email/render` wrapper) and
+fills in `html` + `text` if you didn't provide them yourself:
+
+```tsx
+import Welcome from "../emails/Welcome";
+
+await mailer.send({
+    to: user.email,
+    subject: "Welcome",
+    react: <Welcome name={user.name} />,
+});
+```
+
+## Queueing
+
+`mailer.queue(options)` serialises the rendered payload and hands it to the
+Cloudflare Queue binding you passed as `queue`. React elements are NOT
+structured-cloneable, so the queue body always carries pre-rendered html/
+text — never the original JSX.
+
+A consumer Worker re-hydrates the payload and sends it with
+`consumeQueuedSend(mailer, body)` — it validates the untrusted message body, then
+calls `mailer.send(...)` for you and returns `{ id }`:
+
+```ts
+import { consumeQueuedSend, createMailer } from "@lunora/mail";
+
+export default {
+    queue: async (batch, env) => {
+        const mailer = createMailer({ apiKey: env.RESEND_API_KEY, from: "Acme <noreply@acme.test>" });
+
+        for (const message of batch.messages) {
+            await consumeQueuedSend(mailer, message.body);
+        }
+    },
+};
+```
+
+## Receiving email
+
+`@lunora/mail/inbound` is the inbound counterpart: it turns a Cloudflare [Email
+Worker](https://developers.cloudflare.com/email-routing/email-workers/) delivery
+into a call to one of your Lunora functions. The package never imports
+`cloudflare:email` — the generated worker entry supplies the real binding, and
+the package stays unit-testable in plain Node (exactly like the outbound
+Cloudflare transport).
+
+A Cloudflare Email Worker delivers inbound mail to a top-level `email(message,
+env, ctx)` export — a sibling of `fetch`/`scheduled`. Export one built by
+`createInboundEmailHandler`:
+
+```ts
+import { createInboundEmailHandler, dispatchToLunoraFunction, parseInboundEmail } from "@lunora/mail/inbound";
+
+export const email = createInboundEmailHandler({
+    parse: parseInboundEmail,
+    dispatch: dispatchToLunoraFunction({
+        shard: env.SHARD,
+        functionPath: "inbound:onEmail",
+        shardKey: "__root__",
+    }),
+});
+```
+
+The handler reads `message.raw`, parses it into a normalised `InboundEmail`
+(`{ from, to, subject?, messageId?, inReplyTo?, references?, headers, text?,
+html?, attachments, authentication }`, every header CR/LF-checked), and
+dispatches it. `dispatchToLunoraFunction` posts an RPC envelope to the root shard
+stub — the same admin-RPC-over-shard path the dev mail catcher uses — calling the
+named mutation/action with the parsed message as its args. It needs
+`LUNORA_ADMIN_TOKEN` to authorize the RPC (read from `env` by default). On a
+parse/dispatch failure the handler calls `message.setReject(reason)` so
+Cloudflare bounces or retries rather than silently dropping the mail; override
+`onError` to log/forward/swallow instead.
+
+<Callout type="warn">
+    Inbound mail is untrusted and dispatch is privileged. Cloudflare Email Routing authenticates only the recipient domain, not the sender — `email.from` and
+    the body are trivially spoofable — and `dispatchToLunoraFunction` runs the target function in a system/admin context with RLS bypassed. Never make a trust
+    decision on `email.from`. Gate on the DKIM/SPF/DMARC verdicts in `email.authentication` via the `verify` hook before dispatch, and treat the function input
+    as fully attacker-controlled.
+</Callout>
+
+The receiving function is an ordinary mutation/action (the default `resolveArgs`
+passes the whole `InboundEmail`, so declare the fields you use):
+
+```ts
+import { mutation, v } from "@/lunora/_generated/server";
+
+export const onEmail = mutation
+    .input({
+        from: v.string(),
+        to: v.array(v.string()),
+        subject: v.optional(v.string()),
+        text: v.optional(v.string()),
+    })
+    .mutation(async ({ ctx, args: { from, subject, text } }) => {
+        await ctx.db.insert("inbox", { from, subject: subject ?? "", body: text ?? "" });
+    });
+```
+
+### wrangler config
+
+Inbound delivery is configured in Cloudflare, not by codegen. Add an [Email
+Routing](https://developers.cloudflare.com/email-routing/) rule (dashboard or
+`wrangler`) that routes an address to this Worker. If your function replies or
+forwards, also declare a `send_email` binding:
+
+```jsonc
+{
+    "send_email": [{ "name": "OUTBOUND" }],
+}
+```
+
+Lunora validates the `send_email` binding shape but does not manage routing
+rules — that lifecycle stays in Cloudflare.
+
+## Public API
+
+`@lunora/mail`:
+
+| Export                                | Purpose                                                                                                                                                                                                             |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createMailer(options)`               | Build a `Mailer`. Needs `from` plus one of `cloudflareSend` / `apiKey` / `transport`                                                                                                                                |
+| `createMailerFromEnv(env, options?)`  | Build a `Mailer` from a Worker `env` — captures in dev, else delivers via Cloudflare/Resend                                                                                                                         |
+| `createCloudflareTransport(options)`  | Cloudflare Email Workers transport (single-recipient; rejects `cc`/`bcc`)                                                                                                                                           |
+| `createResendTransport(apiKey, from)` | Resend transport                                                                                                                                                                                                    |
+| `createCaptureTransport(sink)`        | Dev capture transport — persists to a `MailboxSink` instead of delivering                                                                                                                                           |
+| `createCaptureSink(env, rootShard?)`  | `MailboxSink` that records into the studio's root-shard inbox                                                                                                                                                       |
+| `shouldCaptureMail(env)`              | Whether the current env should capture (`LUNORA_MAIL_CAPTURE`, else dev detection)                                                                                                                                  |
+| `renderEmail(element)`                | Render a React Email element to `{ html, text }`                                                                                                                                                                    |
+| `toQueuedPayload(options)`            | Narrow `SendOptions` to its serializable `QueuedSend` (drops `react`)                                                                                                                                               |
+| `consumeQueuedSend(mailer, body)`     | Validate a queued payload and `mailer.send(...)` it; returns `{ id }`                                                                                                                                               |
+| Type-only                             | `Mailer`, `MailTransport`, `SendOptions`, `SendPayload`, `QueueLike`, `LunoraMailOptions`, `QueuedSend`, `CapturedMail`, `MailboxSink`, `CloudflareSend`, `CloudflareTransportOptions`, `FromEnvOptions`, `MailEnv` |
+
+`@lunora/mail/inbound`: `createInboundEmailHandler(options)`,
+`dispatchToLunoraFunction(options)`, `parseInboundEmail(raw)`, and the inbound
+types (`InboundEmail`, `InboundAttachment`, `InboundAuthentication`,
+`InboundEmailHandlerOptions`, `InboundDispatch`, `InboundVerify`, …).
+
+`@lunora/mail/testing` (dev/test-only): `waitForMail(options)`,
+`listCapturedMail(options)`, `extractLink(mail, { match? })`, plus
+`InboxOptions` / `WaitForMailOptions`.
+
+## Testing
+
+For a unit test, build a stub transport — `{ send: async () => ({ id: "stub" }) }`
+is enough — and pass it as `transport`. No network, no API keys.
+
+For end-to-end flows that depend on email (sign-up verification,
+forgot-password, magic links), `@lunora/mail/testing` reads the dev capture
+inbox over the admin RPC so a test can drive "request reset → read the email →
+follow the link" deterministically. It needs the app's base URL and the admin
+token (`LUNORA_ADMIN_TOKEN`):
+
+```ts
+import { extractLink, waitForMail } from "@lunora/mail/testing";
+
+const mail = await waitForMail({
+    baseUrl: "http://localhost:8787",
+    adminToken: process.env.LUNORA_ADMIN_TOKEN!,
+    to: "alice@example.com",
+    subjectMatch: "Reset your password",
+});
+
+const link = extractLink(mail, { match: "/reset-password" });
+```
+
+## See also
+
+- [@lunora/scheduler](/docs/packages/scheduler) — useful for delayed sends
+- [Concepts: queries & mutations](/docs/concepts/queries-mutations)

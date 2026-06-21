@@ -1,0 +1,13 @@
+// Minimal wrangler config used ONLY by `@cloudflare/vitest-pool-workers` to
+// boot the integration test worker. NOT for deployment.
+{
+    "$schema": "../../../../node_modules/wrangler/config-schema.json",
+    "name": "lunora-client-test-worker",
+    "main": "test-worker.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "TestShardDO" }],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TestShardDO"] }],
+}

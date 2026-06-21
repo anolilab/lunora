@@ -1,0 +1,39 @@
+{
+    "name": "@lunora/studio-app",
+    "version": "0.0.0",
+    "private": true,
+    "license": "FSL-1.1-Apache-2.0",
+    "type": "module",
+    "sideEffects": false,
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    },
+    "scripts": {
+        "build": "vite build",
+        "dev": "vite",
+        "lint:eslint": "eslint .",
+        "lint:eslint:fix": "eslint . --fix",
+        "lint:types": "tsc --noEmit",
+        "preview": "vite preview"
+    },
+    "dependencies": {
+        "@fontsource-variable/geist": "catalog:ui",
+        "@lunora/studio": "workspace:*",
+        "motion": "catalog:frontend",
+        "react": "catalog:frontend",
+        "react-dom": "catalog:frontend",
+        "recharts": "catalog:frontend",
+        "shadcn": "catalog:ui"
+    },
+    "devDependencies": {
+        "@tailwindcss/vite": "catalog:vite",
+        "@types/node": "catalog:types",
+        "@types/react": "catalog:frontend",
+        "@types/react-dom": "catalog:frontend",
+        "tailwindcss": "catalog:vite",
+        "tw-animate-css": "catalog:vite",
+        "typescript": "catalog:tsc",
+        "vite": "catalog:vite",
+        "vitest": "catalog:test"
+    }
+}

@@ -1,0 +1,173 @@
+import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf } from "@lunora/client";
+import type { Readable } from "svelte/store";
+import { readable } from "svelte/store";
+
+import { getLunoraClient } from "./context";
+
+/**
+ * `presence` — collaborative-awareness stores, the client half of the
+ * `@lunora/server` `definePresence` preset.
+ *
+ * Drives the heartbeat mutation (on call, interval, and tab re-focus) and
+ * subscribes to the live `listPresent` query for the given room.
+ *
+ * Pass `client` explicitly, or omit it to resolve the ambient client from the
+ * Svelte context.
+ */
+
+/**
+ * A heartbeat mutation reference: takes `{ roomId, sessionId, data? }`.
+ */
+type HeartbeatReference = FunctionReference<"mutation", { data?: Record<string, unknown>; roomId: string; sessionId: string }>;
+
+/**
+ * A listPresent query reference: takes `{ roomId }` and returns the array of
+ * present members.
+ */
+type ListPresentReference = FunctionReference<"query", { roomId: string }>;
+
+interface PresenceOptions<H extends HeartbeatReference, L extends ListPresentReference> {
+    /** Awareness blob for the first heartbeat (selection, cursor, name, color…). */
+    data?: Record<string, unknown>;
+    /** The `api.*` reference for the presence heartbeat mutation. */
+    heartbeat: H;
+    /** Heartbeat cadence in ms. Defaults to 10s. */
+    intervalMs?: number;
+    /** The `api.*` reference for the presence listPresent query. */
+    listPresent: L;
+
+    /**
+     * Stable id for this presence row. Defaults to a fresh per-mount id.
+     * Pass a user/connection id to control deduping across tabs.
+     */
+    sessionId?: string;
+    /** Forwarded to the heartbeat mutation / listPresent subscription when sharding by room. */
+    shardKey?: string;
+}
+
+interface PresenceHandle<L extends ListPresentReference> {
+    /** The present members for the room. `undefined` until the first push. */
+    present: Readable<ReturnOf<L> | undefined>;
+    /** This handle's session id. */
+    sessionId: string;
+    /** Replace the awareness `data` sent with subsequent heartbeats, and heartbeat immediately. */
+    setData: (data: Record<string, unknown> | undefined) => void;
+    /** Stop all heartbeats, remove the visibility listener, and unsubscribe. Call in `onDestroy`. */
+    teardown: () => void;
+}
+
+/** Best-effort unique id for a presence session. */
+const makeSessionId = (): string => {
+    // eslint-disable-next-line n/no-unsupported-features/node-builtins -- crypto is a browser global, not just a Node built-in; guarded for SSR environments
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- same guard as above
+        return crypto.randomUUID();
+    }
+
+    // eslint-disable-next-line sonarjs/pseudo-random -- presence session id, not a credential
+    return `sess-${Math.random().toString(36).slice(2)}-${String(Date.now())}`;
+};
+
+const DEFAULT_INTERVAL_MS = 10_000;
+
+const createPresenceHandle = <H extends HeartbeatReference, L extends ListPresentReference>(
+    client: LunoraClient,
+    roomId: string,
+    options: PresenceOptions<H, L>,
+): PresenceHandle<L> => {
+    const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
+    const sessionId = options.sessionId ?? makeSessionId();
+
+    let latestData: Record<string, unknown> | undefined = options.data;
+
+    const sendHeartbeat = (): void => {
+        const args = {
+            roomId,
+            sessionId,
+            ...(latestData === undefined ? {} : { data: latestData }),
+        } as ArgsOf<H>;
+
+        client.mutation(heartbeat, args, { shardKey }).catch(() => undefined);
+    };
+
+    const setData = (next: Record<string, unknown> | undefined): void => {
+        latestData = next;
+        sendHeartbeat();
+    };
+
+    sendHeartbeat();
+    const intervalHandle = setInterval(sendHeartbeat, intervalMs);
+
+    const onVisible = (): void => {
+        if (typeof document !== "undefined" && document.visibilityState === "visible") {
+            sendHeartbeat();
+        }
+    };
+
+    if (typeof document !== "undefined") {
+        document.addEventListener("visibilitychange", onVisible);
+    }
+
+    // Register connection context so server can drop the row on socket disconnect.
+    // Use the refcounted acquire (not the last-writer-wins setter) so a second
+    // presence store on the same client/shard doesn't clobber this one's context
+    // when either tears down.
+    const releaseConnectionContext = client.acquireConnectionContext({ roomId, sessionId }, { shardKey });
+
+    // Subscribe to the live present-list; expose as a Readable store.
+    const present = readable<ReturnOf<L> | undefined>(undefined, (set) => {
+        const unsubscribe = client.subscribe(
+            listPresent,
+            { roomId } as ArgsOf<L>,
+            (value) => {
+                set(value);
+            },
+            { shardKey },
+        );
+
+        return unsubscribe;
+    });
+
+    const teardown = (): void => {
+        clearInterval(intervalHandle);
+
+        if (typeof document !== "undefined") {
+            document.removeEventListener("visibilitychange", onVisible);
+        }
+
+        releaseConnectionContext();
+    };
+
+    return { present, sessionId, setData, teardown };
+};
+
+/**
+ * Open a live presence handle.
+ *
+ * Pass `client` explicitly, or omit it to resolve the ambient client from the
+ * Svelte context (requires calling inside a component's `&lt;script>` block or
+ * inside a function called during component initialisation).
+ *
+ * Call `teardown()` when the component is destroyed to stop heartbeats and
+ * remove the visibility listener (`onDestroy(handle.teardown)`).
+ */
+export function presence<H extends HeartbeatReference, L extends ListPresentReference>(roomId: string, options: PresenceOptions<H, L>): PresenceHandle<L>;
+export function presence<H extends HeartbeatReference, L extends ListPresentReference>(
+    client: LunoraClient,
+    roomId: string,
+    options: PresenceOptions<H, L>,
+): PresenceHandle<L>;
+export function presence<H extends HeartbeatReference, L extends ListPresentReference>(
+    clientOrRoomId: LunoraClient | string,
+    roomIdOrOptions: PresenceOptions<H, L> | string,
+    maybeOptions?: PresenceOptions<H, L>,
+): PresenceHandle<L> {
+    const hasExplicitClient = typeof clientOrRoomId !== "string";
+    const client = hasExplicitClient ? clientOrRoomId : getLunoraClient();
+    const roomId = (hasExplicitClient ? roomIdOrOptions : clientOrRoomId) as string;
+    const options = (hasExplicitClient ? maybeOptions : roomIdOrOptions) as PresenceOptions<H, L>;
+
+    return createPresenceHandle(client, roomId, options);
+}
+
+export type { HeartbeatReference, ListPresentReference, PresenceHandle, PresenceOptions };

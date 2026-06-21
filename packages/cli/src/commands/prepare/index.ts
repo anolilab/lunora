@@ -1,0 +1,31 @@
+import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
+
+import { API_SPEC_HELP } from "../../util/api-spec";
+
+const prepareCommand: Command = {
+    description: "Run codegen + binding reconcile + wrangler validation (no Vite) — for CI",
+    examples: [["lunora prepare", "Codegen + binding reconcile + validate (CI, before deploy)"]],
+    group: "Deploy",
+    loader: () =>
+        import("./handler").then((m) => {
+            return { default: m.execute as CommandExecute<Toolbox> };
+        }),
+    name: "prepare",
+    options: [
+        { description: "Override the schema-drift gate (proceed even with breaking schema drift and no migration)", name: "allow-schema-drift", type: Boolean },
+        { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
+        {
+            description: "Re-bless the committed schema baseline (lunora/.lunora-schema.json) with the current shape",
+            name: "update-schema-baseline",
+            type: Boolean,
+        },
+    ],
+};
+
+export { prepareCommand };
+
+export type PrepareOptions = CreateOptions<{
+    "allow-schema-drift": boolean | undefined;
+    "api-spec": string | undefined;
+    "update-schema-baseline": boolean | undefined;
+}>;

@@ -1,0 +1,472 @@
+import { randomBytes } from "node:crypto";
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+
+import {
+    DEV_VARS_EXAMPLE_FILE,
+    DEV_VARS_FILE,
+    DEV_VARS_NEWLINE,
+    parseDevVariableEntries,
+    splitDevVariableLine,
+    unquoteDevVariable,
+} from "./dev-variables-format";
+import type { SecretEntry } from "./package-secrets-registry";
+import { secretsForPackages } from "./package-secrets-registry";
+
+/**
+ * Scaffolding `.dev.vars` from `.dev.vars.example`.
+ *
+ * `@cloudflare/vite-plugin` (and `wrangler dev`) load `.dev.vars` automatically,
+ * but the file is gitignored — so a fresh clone has none, and the worker throws
+ * the moment it reads a required secret (e.g. `AUTH_SECRET is required`). Rather
+ * than make every contributor hand-copy the example and run `openssl` by hand,
+ * `lunora dev` and the Vite plugin offer to generate it: we read the committed
+ * `.dev.vars.example`, fill in the secret-looking placeholders with real random
+ * values, and keep everything else (comments, non-secret URLs) verbatim.
+ *
+ * The planner is pure: it turns the two file contents into the text to write.
+ * The orchestrator (`ensureDevVariables`) wraps it with file I/O + a prompt.
+ * The `.dev.vars` line grammar itself lives in {@link ./dev-variables-format}.
+ */
+
+/** Bytes of entropy per generated secret — 32 bytes → 64 hex chars (matches `openssl rand -hex 32`). */
+const SECRET_BYTES = 32;
+
+/** A key whose value is a secret we should generate rather than copy from the example. */
+const SECRET_KEY = /(?:KEY|PASSWORD|SECRET|TOKEN)$/u;
+
+/**
+ * Markers that flag a value as a fill-me-in placeholder rather than a usable
+ * default. We only replace these — a secret-like key the example already pins to
+ * a real value (rare, but e.g. a shared dev token) is left untouched. The list
+ * leans toward catching the common placeholder conventions: missing one means a
+ * `*_SECRET` ships verbatim (a worthless secret the user might even push to
+ * prod), which is worse than the bounded, locally-recoverable cost of a false hit.
+ *
+ * Matching is **whole-token**, not raw substring (see {@link isPlaceholderValue}):
+ * a marker matches only when it stands alone — bounded by the string edges or a
+ * non-alphanumeric neighbour — so `todoist.com` / `examples-of-x` are NOT hits.
+ * Markers ending in `-`/`_` (e.g. `your-`, `your_`) are **prefix** markers: their
+ * trailing `-`/`_` is itself the boundary, so they match `your-key`, `your_token`, …
+ * When adding a marker, keep this in mind: a plain word matches only as a whole
+ * token, a `-`/`_`-terminated one matches as a prefix.
+ */
+const PLACEHOLDER_MARKERS = [
+    "replace",
+    "openssl",
+    "changeme",
+    "change-me",
+    "change_me",
+    "change-this",
+    "change_this",
+    "your-",
+    "your_",
+    "example",
+    "placeholder",
+    "todo",
+    "fill-me",
+    "fill_me",
+    "fill-in",
+    "fill_in",
+    "xxx",
+];
+
+/** RegExp metacharacters escaped before a marker is spliced into a dynamic pattern. */
+const REGEXP_SPECIAL_CHARS = /[.*+?^${}()|[\]\\]/gu;
+
+/** A marker that ends in an alphanumeric char needs an explicit trailing word boundary. */
+const MARKER_ENDS_ALPHANUMERIC = /[a-z0-9]$/u;
+
+/**
+ * Whether an (already-unquoted) value looks like a fill-me-in placeholder —
+ * empty, angle-bracketed, or containing a known marker — rather than a real
+ * value. Used both when scaffolding (which values to regenerate) and by
+ * `lunora env doctor` (which set values are still unfilled).
+ */
+const isPlaceholderValue = (value: string): boolean => {
+    const normalised = value.trim().toLowerCase();
+
+    if (normalised === "") {
+        return true;
+    }
+
+    if (normalised.startsWith("<") && normalised.endsWith(">")) {
+        return true;
+    }
+
+    return PLACEHOLDER_MARKERS.some((marker) => {
+        const escaped = marker.replaceAll(REGEXP_SPECIAL_CHARS, String.raw`\$&`);
+        // A marker must stand alone: bounded on the left by a string edge or a
+        // non-alphanumeric char. On the right we require the same boundary *unless*
+        // the marker already ends in a non-alphanumeric char (a `-`/`_` prefix
+        // marker like `your-`), whose own terminator is the boundary. This stops
+        // `todoist` / `examples-of-x` matching while keeping `todo`, `change-me`,
+        // and the `your-`/`your_` prefixes working.
+        const needsTrailingBoundary = MARKER_ENDS_ALPHANUMERIC.test(marker);
+        const pattern = needsTrailingBoundary ? `(^|[^a-z0-9])${escaped}([^a-z0-9]|$)` : `(^|[^a-z0-9])${escaped}`;
+
+        return new RegExp(pattern, "u").test(normalised);
+    });
+};
+
+const isPlaceholder = (rawValue: string): boolean => isPlaceholderValue(unquoteDevVariable(rawValue.trim()));
+
+/** Default secret generator — 64 hex chars, like `openssl rand -hex 32`. */
+const defaultRandomHex = (bytes: number): string => randomBytes(bytes).toString("hex");
+
+/**
+ * The fresh secret to substitute for an example `key=value` entry, or `undefined`
+ * when the example value should be used as-is (non-secret key, or a value the
+ * example already pins to something real). The single rule both the full-file
+ * generate and the missing-key augment share.
+ */
+const generatedSecretFor = (key: string, rawValue: string, randomHex: (bytes: number) => string): string | undefined =>
+    SECRET_KEY.test(key) && isPlaceholder(rawValue) ? randomHex(SECRET_BYTES) : undefined;
+
+/**
+ * The outcome of planning a scaffold — a discriminated union so the orchestrator
+ * never has to re-derive whether `content` is present.
+ *
+ * `exists`: `.dev.vars` is already there; nothing to do.
+ * `no-example`: nothing to scaffold from (stay silent — the project may not use secrets).
+ * `generate`: write `content`, a copy of the example with secret-looking placeholders replaced by fresh random hex (`generatedKeys` lists which).
+ */
+type ScaffoldPlan = { content: string; generatedKeys: string[]; status: "generate" } | { status: "exists" } | { status: "no-example" };
+
+/** Decide whether (and what) to scaffold. Pure — given the current state of the two files. */
+const planDevVariablesScaffold = (input: {
+    devVarsExists: boolean;
+    exampleContent: string | undefined;
+    /** Injectable for deterministic tests; defaults to `crypto.randomBytes`. */
+    randomHex?: (bytes: number) => string;
+}): ScaffoldPlan => {
+    if (input.devVarsExists) {
+        return { status: "exists" };
+    }
+
+    if (input.exampleContent === undefined) {
+        return { status: "no-example" };
+    }
+
+    const randomHex = input.randomHex ?? defaultRandomHex;
+    const generatedKeys: string[] = [];
+
+    const lines = input.exampleContent.split(DEV_VARS_NEWLINE).map((line) => {
+        const parsed = splitDevVariableLine(line);
+        const secret = parsed ? generatedSecretFor(parsed.key, parsed.value, randomHex) : undefined;
+
+        if (!parsed || secret === undefined) {
+            return line;
+        }
+
+        generatedKeys.push(parsed.key);
+
+        return `${parsed.key}="${secret}"`;
+    });
+
+    return { content: lines.join("\n"), generatedKeys, status: "generate" };
+};
+
+interface AugmentPlan {
+    /** The `.dev.vars` lines to append, in example order. */
+    additions: string[];
+    /** The subset of `missingKeys` whose values were freshly generated. */
+    generatedKeys: string[];
+    /** Keys present in the example but absent from the current `.dev.vars`. */
+    missingKeys: string[];
+}
+
+/**
+ * Plan how to top up an existing `.dev.vars` from the example: every example key
+ * not already present becomes an appended line (secret placeholders filled with
+ * fresh random hex, other values copied). Pure — no I/O. Empty `missingKeys`
+ * means the file is already complete.
+ */
+const planDevVariablesAugment = (input: {
+    exampleContent: string;
+    existingContent: string;
+    /** Injectable for deterministic tests; defaults to `crypto.randomBytes`. */
+    randomHex?: (bytes: number) => string;
+}): AugmentPlan => {
+    const randomHex = input.randomHex ?? defaultRandomHex;
+    const present = new Set(parseDevVariableEntries(input.existingContent).map((entry) => entry.key));
+
+    const additions: string[] = [];
+    const generatedKeys: string[] = [];
+    const missingKeys: string[] = [];
+
+    for (const line of input.exampleContent.split(DEV_VARS_NEWLINE)) {
+        const parsed = splitDevVariableLine(line);
+
+        if (!parsed || present.has(parsed.key)) {
+            continue;
+        }
+
+        const secret = generatedSecretFor(parsed.key, parsed.value, randomHex);
+
+        missingKeys.push(parsed.key);
+
+        if (secret === undefined) {
+            additions.push(`${parsed.key}="${unquoteDevVariable(parsed.value)}"`);
+        } else {
+            generatedKeys.push(parsed.key);
+            additions.push(`${parsed.key}="${secret}"`);
+        }
+    }
+
+    return { additions, generatedKeys, missingKeys };
+};
+
+interface EnsureDevVariablesDeps {
+    /**
+     * Ask the user to confirm generating the file. Return `true` to generate.
+     * Consumers pass a TTY-aware prompt; in non-interactive contexts they should
+     * resolve `false` (we then report `"declined"` and the caller can hint).
+     */
+    confirm: (message: string) => Promise<boolean>;
+    cwd: string;
+    /** Emit a human-facing line (success / hint). */
+    info: (message: string) => void;
+    /** Injectable for tests; defaults to `crypto.randomBytes` hex. */
+    randomHex?: (bytes: number) => string;
+    /** Generate without prompting (e.g. a `--yes` flag). */
+    yes?: boolean;
+}
+
+// Distinct from `ScaffoldPlan["status"]` on purpose: the plan is pre-prompt,
+// the result is post-prompt. `generated` = wrote a fresh file, `augmented` =
+// topped up an existing one, `declined` = user said no.
+// `skipped-exists` = another process created `.dev.vars` between our existence
+// check and the atomic rename (a create-race), so we left its file untouched.
+type EnsureDevVariablesStatus = "augmented" | "declined" | "exists" | "generated" | "no-example" | "skipped-exists";
+
+interface EnsureDevVariablesResult {
+    /** Keys appended to an existing file, when `status` is `"augmented"`. */
+    addedKeys: string[];
+    /** Keys whose values were freshly generated, when `status` is `"generated"`/`"augmented"`. */
+    generatedKeys: string[];
+    status: EnsureDevVariablesStatus;
+}
+
+/** `" (generated A, B)"` for a log line, or `""` when nothing was generated. */
+const generatedSuffix = (keys: string[]): string => (keys.length > 0 ? ` (generated ${keys.join(", ")})` : "");
+
+/**
+ * Atomically create `.dev.vars`: write the content to a sibling temp file with
+ * exclusive-create (`wx`), then `rename` it over the target. The rename is atomic
+ * within one filesystem, so a concurrent `lunora dev` / Vite dev server can never
+ * observe a half-written file or clobber a peer's freshly generated secrets. The
+ * temp lives in the same directory so the rename never crosses devices (`EXDEV`).
+ * On any failure the temp file is removed before the error propagates.
+ */
+const atomicCreateDevVariables = (path: string, content: string): void => {
+    const temporaryPath = `${path}.tmp-${String(process.pid)}`;
+
+    try {
+        // `mode: 0o600` so the freshly generated secrets are owner-only, not
+        // world-readable on a shared host (Node otherwise defaults to 0o666 →
+        // 0o644 under the usual umask). `rename` preserves the temp file's mode.
+        writeFileSync(temporaryPath, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
+        renameSync(temporaryPath, path);
+    } catch (error) {
+        rmSync(temporaryPath, { force: true });
+
+        throw error;
+    }
+};
+
+/**
+ * Append lines to an existing `.dev.vars`, atomically and owner-only.
+ *
+ * Mirrors {@link atomicCreateDevVariables}: build the full new content, write it
+ * to a sibling temp file (`mode: 0o600`), then `rename` over the target. The
+ * read happens immediately before the write so a concurrent peer's appends are
+ * picked up rather than clobbered — a plain read-modify-write would race two
+ * `lunora dev` / Vite processes into last-writer-wins (the exact scenario the
+ * create path defends against). A trailing newline is inserted only if needed.
+ */
+const appendDevVariables = (path: string, additions: string[]): void => {
+    const existing = readFileSync(path, "utf8");
+    const separator = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+    const content = `${existing}${separator}${additions.join("\n")}\n`;
+
+    const temporaryPath = `${path}.tmp-${String(process.pid)}`;
+
+    try {
+        writeFileSync(temporaryPath, content, { encoding: "utf8", mode: 0o600 });
+        renameSync(temporaryPath, path);
+    } catch (error) {
+        rmSync(temporaryPath, { force: true });
+
+        throw error;
+    }
+};
+
+/**
+ * Reconcile the project's `.dev.vars` with its `.dev.vars.example`:
+ *
+ * - file missing → offer to generate it (secret placeholders auto-filled);
+ * - file present but missing keys the example lists → offer to append them;
+ * - file present and complete → nothing to do.
+ *
+ * Prompts via `confirm` (skipped when `yes`); never overwrites existing values.
+ * Returns what happened so the caller can tailor any follow-up. Shared by
+ * `lunora dev` and the `@lunora/vite` dev server. All side effects funnel
+ * through `confirm`/`info`/`randomHex`.
+ */
+const ensureDevVariables = async (deps: EnsureDevVariablesDeps): Promise<EnsureDevVariablesResult> => {
+    const devVariablesPath = join(deps.cwd, DEV_VARS_FILE);
+    const examplePath = join(deps.cwd, DEV_VARS_EXAMPLE_FILE);
+
+    if (!existsSync(examplePath)) {
+        return { addedKeys: [], generatedKeys: [], status: "no-example" };
+    }
+
+    const exampleContent = readFileSync(examplePath, "utf8");
+
+    // File missing entirely → offer to generate the whole thing.
+    if (!existsSync(devVariablesPath)) {
+        const plan = planDevVariablesScaffold({ devVarsExists: false, exampleContent, randomHex: deps.randomHex });
+
+        if (plan.status !== "generate") {
+            return { addedKeys: [], generatedKeys: [], status: "no-example" };
+        }
+
+        const proceed =
+            deps.yes === true || (await deps.confirm(`No ${DEV_VARS_FILE} found. Generate it from ${DEV_VARS_EXAMPLE_FILE} (secrets auto-filled)?`));
+
+        if (!proceed) {
+            deps.info(`Skipped — copy ${DEV_VARS_EXAMPLE_FILE} to ${DEV_VARS_FILE} and fill it in when you're ready.`);
+
+            return { addedKeys: [], generatedKeys: [], status: "declined" };
+        }
+
+        // Re-check right before the write: another process may have created the
+        // file since the `existsSync` above. If so, bail rather than overwrite the
+        // peer's (possibly secret-bearing) file.
+        if (existsSync(devVariablesPath)) {
+            return { addedKeys: [], generatedKeys: [], status: "skipped-exists" };
+        }
+
+        atomicCreateDevVariables(devVariablesPath, plan.content);
+        deps.info(`Created ${DEV_VARS_FILE}${generatedSuffix(plan.generatedKeys)}.`);
+
+        return { addedKeys: [], generatedKeys: plan.generatedKeys, status: "generated" };
+    }
+
+    // File present → top up any keys the example lists but the file lacks.
+    const augment = planDevVariablesAugment({ existingContent: readFileSync(devVariablesPath, "utf8"), exampleContent, randomHex: deps.randomHex });
+
+    if (augment.missingKeys.length === 0) {
+        return { addedKeys: [], generatedKeys: [], status: "exists" };
+    }
+
+    const list = augment.missingKeys.join(", ");
+    const proceed =
+        deps.yes === true ||
+        (await deps.confirm(`${DEV_VARS_FILE} is missing ${String(augment.missingKeys.length)} key(s) from ${DEV_VARS_EXAMPLE_FILE} (${list}). Add them?`));
+
+    if (!proceed) {
+        deps.info(`Skipped — add ${list} to ${DEV_VARS_FILE} when you're ready.`);
+
+        return { addedKeys: [], generatedKeys: [], status: "declined" };
+    }
+
+    appendDevVariables(devVariablesPath, augment.additions);
+    deps.info(`Updated ${DEV_VARS_FILE} — added ${list}${generatedSuffix(augment.generatedKeys)}.`);
+
+    return { addedKeys: augment.missingKeys, generatedKeys: augment.generatedKeys, status: "augmented" };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Package-aware .dev.vars.example scaffolding
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The block of text that represents a single {@link SecretEntry} in a
+ * `.dev.vars.example` file: a comment block (description + docs URL) followed
+ * by the `KEY="&lt;placeholder>"` assignment.
+ *
+ * Written through the dev-variables-format grammar so the format stays
+ * consistent with every other reader/writer. The value is always a placeholder
+ * — this function never writes a real secret.
+ */
+const secretEntryBlock = (entry: SecretEntry): string => {
+    const lines: string[] = [`# ${entry.description}`, `# Docs: ${entry.docsUrl}`, `${entry.key}="${entry.placeholderValue}"`];
+
+    return lines.join("\n");
+};
+
+/**
+ * Build the text that should be merged into `.dev.vars.example` for the given
+ * set of package names. Only entries whose key is not already present in
+ * `existingKeys` are included (additive / idempotent). Returns an empty string
+ * when there is nothing to add.
+ *
+ * The output is grouped by package with a blank-line separator so the file
+ * reads cleanly when multiple packages each contribute several keys.
+ *
+ * **Safety invariant:** this function never writes a real secret — every value
+ * in the output is the entry's `placeholderValue`.
+ */
+const buildPackageSecretsBlock = (packageNames: ReadonlyArray<string>, existingKeys: ReadonlySet<string>): string => {
+    const entries = secretsForPackages(packageNames).filter((entry) => !existingKeys.has(entry.key));
+
+    if (entries.length === 0) {
+        return "";
+    }
+
+    return entries.map((entry) => secretEntryBlock(entry)).join("\n\n");
+};
+
+/**
+ * Write (or update) `.dev.vars.example` so that it contains the secrets
+ * required by `packageNames`. Existing lines are never removed or rewritten;
+ * new entries are appended (with a blank-line separator after existing content).
+ *
+ * Idempotent: re-running with the same `packageNames` does not duplicate keys
+ * already in the file. Returns the list of keys that were actually appended.
+ *
+ * **Safety invariant:** only placeholder values are written — no real secrets.
+ */
+const ensureDevVariablesExample = (cwd: string, packageNames: ReadonlyArray<string>): string[] => {
+    const examplePath = join(cwd, DEV_VARS_EXAMPLE_FILE);
+    const existing = existsSync(examplePath) ? readFileSync(examplePath, "utf8") : "";
+    const existingKeys = new Set(parseDevVariableEntries(existing).map((entry) => entry.key));
+
+    const block = buildPackageSecretsBlock(packageNames, existingKeys);
+
+    if (block === "") {
+        return [];
+    }
+
+    const separator = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+    const newContent = `${existing}${separator}\n${block}\n`;
+
+    const temporaryPath = `${examplePath}.tmp-${String(process.pid)}`;
+
+    try {
+        // `.dev.vars.example` is committed and public — no need for 0o600.
+        writeFileSync(temporaryPath, newContent, { encoding: "utf8" });
+        renameSync(temporaryPath, examplePath);
+    } catch (error) {
+        rmSync(temporaryPath, { force: true });
+
+        throw error;
+    }
+
+    // Return the keys we actually added.
+    return secretsForPackages(packageNames)
+        .filter((entry) => !existingKeys.has(entry.key))
+        .map((entry) => entry.key);
+};
+
+export type { AugmentPlan, EnsureDevVariablesDeps, EnsureDevVariablesResult, EnsureDevVariablesStatus, ScaffoldPlan };
+export {
+    buildPackageSecretsBlock,
+    ensureDevVariables,
+    ensureDevVariablesExample as ensureDevVarsExample,
+    isPlaceholderValue,
+    planDevVariablesAugment,
+    planDevVariablesScaffold,
+};

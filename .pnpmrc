@@ -1,0 +1,24 @@
+# PNPM Configuration for Monorepo Performance and Reliability
+
+# Node linker - isolated provides better package isolation in monorepos
+node-linker=isolated
+
+# Peer dependency handling
+strict-peer-dependencies=false
+auto-install-peers=true
+
+# Dependency resolution - prefer highest compatible versions
+resolution-mode=highest
+
+# Script execution
+enable-pre-post-scripts=true
+
+# Git checks - disabled for development workflow flexibility
+git-checks=false
+
+# Shell emulator for cross-platform compatibility
+shell-emulator=true
+
+# Registry settings for faster installs
+fetch-timeout=60000
+network-concurrency=16

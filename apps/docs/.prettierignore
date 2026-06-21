@@ -1,0 +1,14 @@
+.gitkeep
+.env*
+*.ico
+*.lock
+dist
+CHANGELOG.md
+coverage
+node_modules
+.eslintcache
+
+src/content/**
+
+**/tsconfig.json
+**/jsconfig.json

@@ -1,0 +1,136 @@
+---
+title: "@lunora/astro"
+description: "Astro integration: single-worker composition plus reactive-loader server helpers."
+---
+
+`@lunora/astro` owns two server-side seams for running Lunora inside an Astro app on Cloudflare. Astro is multi-framework at the UI layer, so this package is not a reactive runtime — reactivity comes from whichever island adapter you hydrate with (`@lunora/react`, `@lunora/solid`, `@lunora/svelte`, `@lunora/vue`).
+
+- **Single-worker composition** — `withLunora` wraps the Worker `@astrojs/cloudflare` emits so Lunora realtime (`/_lunora/rpc`, `/_lunora/ws`, `/_lunora/admin/*`) is mounted inside it. One worker, one deploy.
+- **Reactive-loader server helpers** — `@lunora/astro/server` re-exports the framework-neutral SSR contract (`createServerClient`, `preloadQuery`, `serializePreloaded`, `getServerSession`) for use in `.astro` frontmatter and server endpoints.
+
+## Install
+
+```sh
+pnpm add @lunora/astro
+```
+
+`astro` is an optional peer dependency (`^6.0.0`) — the host app provides it.
+
+## Composition
+
+Add the `lunora` integration to `astro.config`, then wrap the Cloudflare adapter's SSR handler in `src/worker.ts`.
+
+<Steps>
+<Step>
+
+Register the integration:
+
+```ts title="astro.config.mjs"
+import cloudflare from "@astrojs/cloudflare";
+import { defineConfig } from "astro/config";
+import { lunora } from "@lunora/astro";
+
+export default defineConfig({
+    output: "server",
+    adapter: cloudflare(),
+    integrations: [lunora()],
+});
+```
+
+</Step>
+<Step>
+
+Compose the worker. On Astro 6 / `@astrojs/cloudflare` v13 the adapter no longer emits a `dist/_worker.js` bundle — import `handle` (the adapter's built-in SSR fetch function) and wrap it:
+
+```ts title="src/worker.ts"
+import { handle } from "@astrojs/cloudflare/handler";
+import { withLunora } from "@lunora/astro";
+
+// `SHARD` lives on `env` (per request), so pass an `(env) => options` factory.
+export default withLunora(
+    (request, env, ctx) => handle(request, env, ctx),
+    (env) => ({ shardDO: env.SHARD }),
+);
+```
+
+</Step>
+<Step>
+
+Point wrangler at the composed entry:
+
+```jsonc title="wrangler.jsonc"
+{
+    "main": "src/worker.ts",
+}
+```
+
+</Step>
+</Steps>
+
+`withLunora` reserves `/_lunora/rpc`, `/_lunora/ws`, `/_lunora/admin/*` (plus any auth/explicit `routes`) for Lunora; everything else delegates to Astro's SSR handler. The two dispatch flows share one worker but never collide, and an Astro render that throws is isolated as a plain 500.
+
+### `withLunora`
+
+```ts
+withLunora(host, optionsInput);
+```
+
+- `host` — Astro's emitted Cloudflare handler, either a bare `fetch` function or a `{ fetch }` object (a `scheduled` on the object is preserved when Lunora configures no cron surface).
+- `optionsInput` — Lunora worker options minus `httpRouter`, or an `(env) => options` factory so per-request bindings like `env.SHARD` wire in. Returns a `{ fetch, scheduled, serverQuery }` worker.
+
+<Callout type="info">
+    `withLunora` is the Astro-named alias for the shared `withFrameworkWorker` from `@lunora/runtime` — the same composer behind `@lunora/svelte/worker` and
+    `@lunora/vue/worker`.
+</Callout>
+
+### `lunora(options)`
+
+The `astro.config` integration object (`{ name, hooks }`). The only option is `serverEntry` (default `"src/worker.ts"`), the module that calls `withLunora` and is the composed worker's `export default`.
+
+## Server helpers
+
+`@lunora/astro/server` opens no WebSocket and touches no browser globals, so it is safe to import from `.astro` frontmatter or a server endpoint. Build a request-scoped client, preload a query, then serialize the token for an island.
+
+```astro title="src/pages/index.astro"
+---
+import { createServerClient, preloadQuery, serializePreloaded } from "@lunora/astro/server";
+import { api } from "../lunora/_generated/api";
+
+const client = createServerClient({ url: Astro.url.origin + "/_lunora/rpc" });
+const preloaded = await preloadQuery(client, api.messages.list, {});
+---
+
+<my-island data-preloaded={serializePreloaded(preloaded)}></my-island>
+```
+
+On the client, deserialize and hand the token to your island adapter's `hydratePreloaded` for the SSR-seed-to-live handoff:
+
+```ts
+import { hydratePreloaded } from "@lunora/react";
+import { deserializePreloaded } from "@lunora/astro/server";
+
+const preloaded = deserializePreloaded(el.dataset.preloaded);
+const initial = hydratePreloaded(preloaded); // seeds the first paint, then goes live
+```
+
+Re-exported from `@lunora/astro/server`:
+
+| Export                 | Use                                                                                         |
+| ---------------------- | ------------------------------------------------------------------------------------------- |
+| `createServerClient`   | Build a request-scoped client (`{ url, token?, fetch? }`). One per request.                 |
+| `preloadQuery`         | Run a query server-side → a serializable `Preloaded` token.                                 |
+| `preloadedQueryResult` | Read the value out of a `Preloaded` token.                                                  |
+| `serializePreloaded`   | Serialize a `Preloaded` token to a string for an island attribute.                          |
+| `deserializePreloaded` | Parse a serialized token back on the client.                                                |
+| `getServerSession`     | Resolve the current session from a headers source (`Request`/`Headers`) + an auth instance. |
+
+<Callout type="warn">
+    Create a `createServerClient` per request rather than sharing a module-level instance — the bearer token is request-scoped, and a shared client would leak
+    one request's auth into another.
+</Callout>
+
+## Related
+
+- [`@lunora/runtime`](/docs/packages/runtime) — the Worker runtime `withLunora` composes with.
+- [`@lunora/client`](/docs/packages/client) — the browser SDK; `@lunora/astro/server` re-exports its `/ssr` contract.
+- [`@lunora/react`](/docs/packages/react), [`@lunora/solid`](/docs/packages/solid), [`@lunora/svelte`](/docs/packages/svelte), [`@lunora/vue`](/docs/packages/vue) — island adapters that ship `hydratePreloaded`.
