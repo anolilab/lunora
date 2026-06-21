@@ -18,7 +18,7 @@ const InstallCommand: FC = () => {
     const [copied, setCopied] = useState(false);
 
     const copy = () => {
-        void navigator.clipboard.writeText("npx lunora init my-app");
+        void navigator.clipboard.writeText("npx lunorash@alpha init my-app");
         setCopied(true);
         setTimeout(() => {
             setCopied(false);
@@ -32,7 +32,7 @@ const InstallCommand: FC = () => {
             type="button"
         >
             <span className="text-white/30 select-none">$</span>
-            npx lunora init my-app
+            npx lunorash@alpha init my-app
             {copied ? <Check className="size-4 text-emerald-400" /> : <Copy className="size-3.5 text-white/35 transition-colors group-hover:text-white/60" />}
         </button>
     );
