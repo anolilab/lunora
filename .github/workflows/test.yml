@@ -195,11 +195,16 @@
                   # loopback to `cloudflare:test-internal`; GitHub runners can.
                   "LUNORA_WORKERD_TESTS": "1"
 
+            # NOTE: workerd is intentionally OFF here. The v8 coverage provider
+            # collects via node:inspector, which the @cloudflare/vitest-pool-workers
+            # runtime does not implement ("The Session method is not implemented"),
+            # so a coverage run with the workerd pool active errors out even though
+            # every test passes. Workerd integration suites are exercised (without
+            # coverage) on the PR `test:affected` run above; the coverage run here
+            # covers the node-env tests only.
             - "name": "Run all tests with coverage on push / dispatch"
               "if": "github.event_name != 'pull_request'"
               "run": "pnpm run test:coverage"
-              "env":
-                  "LUNORA_WORKERD_TESTS": "1"
 
             # Upload coverage on main/alpha pushes only, with Node 22.15.
             - "name": "Upload coverage to Codecov"
