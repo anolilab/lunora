@@ -120,7 +120,10 @@
     "test":
         "name": "Test (node-${{ matrix.node_version }})"
         "runs-on": "ubuntu-latest"
-        "timeout-minutes": 30
+        # Full coverage run across all packages (workerd suites included) under
+        # vis's concurrent execution can run long; 30 min was cancelling the job
+        # mid-suite.
+        "timeout-minutes": 50
         "strategy":
             "fail-fast": false
             "matrix":
