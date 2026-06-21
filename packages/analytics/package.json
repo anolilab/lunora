@@ -1,6 +1,6 @@
 {
     "name": "@lunora/analytics",
-    "version": "0.0.0",
+    "version": "1.0.0-alpha.1",
     "description": "Cloudflare Analytics Engine for Lunora: typed writeDataPoint helper and SQL-API read client",
     "keywords": [
         "analytics",
