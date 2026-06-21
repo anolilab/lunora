@@ -92,7 +92,9 @@ const sendAuthEmail = async (env: AuthEnv, message: { subject: string; text: str
         if (!isDevEnvironment(fullEnv)) {
             // Production with no mailer configured — never log the link (it's a
             // bearer credential). Fail loudly so the deploy gets mail wired up.
-            throw new Error("auth: mail is not configured (`MAIL_FROM` unset) — run `lunora add email` before deploying. Refusing to log auth links in production.");
+            throw new Error(
+                "auth: mail is not configured (`MAIL_FROM` unset) — run `lunora add email` before deploying. Refusing to log auth links in production.",
+            );
         }
 
         // Dev only — surface the link so the flow still works. Run `lunora add email`.

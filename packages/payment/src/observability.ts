@@ -15,7 +15,14 @@ export type PaymentEvent =
     | { id: string; kind: "payment" | "subscription"; provider: ProviderId; type: "reconcile.drift" }
     | { provider: ProviderId; referenceId?: string; sessionId?: string; type: "payment.failed" }
     | { provider: ProviderId; referenceId?: string; subscriptionId?: string; type: "subscription.past_due" }
-    | { failedPayments: number; failedSubscriptions: number; provider: ProviderId; type: "reconcile.completed"; updatedPayments: number; updatedSubscriptions: number }
+    | {
+          failedPayments: number;
+          failedSubscriptions: number;
+          provider: ProviderId;
+          type: "reconcile.completed";
+          updatedPayments: number;
+          updatedSubscriptions: number;
+      }
     | { featureId: string; provider: ProviderId; referenceId: string; type: "usage.report_failed" };
 
 export type PaymentObserver = (event: PaymentEvent) => void;

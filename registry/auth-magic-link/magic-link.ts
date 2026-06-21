@@ -77,7 +77,9 @@ const sendPluginEmail = async (env: MagicLinkEnv, message: { subject: string; te
 
     if (typeof fullEnv["MAIL_FROM"] !== "string") {
         if (!isDevEnvironment(fullEnv)) {
-            throw new Error("auth: mail is not configured (`MAIL_FROM` unset) — run `lunora add email` before deploying. Refusing to log sign-in links in production.");
+            throw new Error(
+                "auth: mail is not configured (`MAIL_FROM` unset) — run `lunora add email` before deploying. Refusing to log sign-in links in production.",
+            );
         }
 
         // Dev only — surface the link so the flow still works. Run `lunora add email`.

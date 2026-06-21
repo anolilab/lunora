@@ -79,7 +79,9 @@ const sendPluginEmail = async (env: EmailOtpEnv, message: { subject: string; tex
 
     if (typeof fullEnv["MAIL_FROM"] !== "string") {
         if (!isDevEnvironment(fullEnv)) {
-            throw new Error("auth: mail is not configured (`MAIL_FROM` unset) — run `lunora add email` before deploying. Refusing to log OTP codes in production.");
+            throw new Error(
+                "auth: mail is not configured (`MAIL_FROM` unset) — run `lunora add email` before deploying. Refusing to log OTP codes in production.",
+            );
         }
 
         // Dev only — surface the OTP so the flow still works. Run `lunora add email`.

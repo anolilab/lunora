@@ -5,9 +5,8 @@ import { describe, expect, it, vi } from "vitest";
 import { auth } from "../src/auth";
 
 const createAuthFakeClient = () => {
-     
     let token: string | null = null;
-     
+
     let currentUser: User | null = null;
     const tokenListeners = new Set<(t: string | null) => void>();
 

@@ -32,3 +32,15 @@ tools/get-vitest-config.ts
 # Generated code — produced by codegen (lunora) and fumadocs-mdx (.source); never lint/format
 **/_generated/
 **/.source/
+
+# Generated route tree (TanStack Router) — rewritten on every build
+**/*.gen.ts
+
+# Package docs copied + sanitized from packages/*/docs by copy-package-docs.js
+apps/docs/src/content/docs/packages/
+
+# Build artifacts (Remotion video bundles) — not source
+marketing/videos/build/
+
+# deepsec security tool working directory — vendored, scanned, not ours to format
+.deepsec/

@@ -25,9 +25,8 @@ const useAuth = (): UseAuthResult => {
     const client = useLunora();
     const store = getIdentityStore(client);
 
-     
     const tokenRef = ref<string | null>(client.getAuthToken());
-     
+
     const userRef = ref<User | null>(store.getUser());
 
     const onTokenChange = (): void => {

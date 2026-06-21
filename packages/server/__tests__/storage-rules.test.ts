@@ -218,7 +218,11 @@ describe("storageRules — write/delete path", () => {
         // signed URL for another tenant's key must be denied by the write rule,
         // not allowed by the permissive read rule.
         const readAll = defineStorageRule<TestContext>({ bucket: "avatars", on: "read", when: () => true });
-        const ownWrites = defineStorageRule<TestContext>({ bucket: "avatars", on: "write", when: ({ auth, key }) => key.startsWith(`user/${auth.userId ?? ""}/`) });
+        const ownWrites = defineStorageRule<TestContext>({
+            bucket: "avatars",
+            on: "write",
+            when: ({ auth, key }) => key.startsWith(`user/${auth.userId ?? ""}/`),
+        });
 
         const fake = createFakeStorage();
         const handler = lunora.action

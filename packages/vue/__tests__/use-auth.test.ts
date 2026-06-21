@@ -7,9 +7,8 @@ import { useAuth } from "../src/use-auth";
 
 /** A minimal fake client exercising only the auth surface. */
 const createAuthFakeClient = () => {
-     
     let token: string | null = null;
-     
+
     let currentUser: User | null = null;
     const tokenListeners = new Set<(t: string | null) => void>();
 

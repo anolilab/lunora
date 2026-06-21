@@ -187,7 +187,9 @@ const applyBindings = (bindings: ReadonlyArray<RegistryBinding>, projectRoot: st
         const root = binding.path[0];
 
         if (root === undefined || !ALLOWED_BINDING_ROOTS.has(root)) {
-            logger.warn(`skipping binding "${binding.path.join(".")}" — only resource bindings (${[...ALLOWED_BINDING_ROOTS].join(", ")}) may be written, not exec/entrypoint keys`);
+            logger.warn(
+                `skipping binding "${binding.path.join(".")}" — only resource bindings (${[...ALLOWED_BINDING_ROOTS].join(", ")}) may be written, not exec/entrypoint keys`,
+            );
 
             continue;
         }

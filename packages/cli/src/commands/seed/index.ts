@@ -23,7 +23,11 @@ const seedCommand: Command = {
         { description: "Rows per HTTP request (default 500)", name: "batch-size", type: Number },
         { description: "Target production — requires an explicit --url", name: "prod", type: Boolean },
         { description: "Worker URL (default http://localhost:8787)", name: "url", type: String },
-        { description: "Admin bearer token (prefer LUNORA_ADMIN_TOKEN; --token is visible to other local processes via the process table)", name: "token", type: String },
+        {
+            description: "Admin bearer token (prefer LUNORA_ADMIN_TOKEN; --token is visible to other local processes via the process table)",
+            name: "token",
+            type: String,
+        },
         { description: "Skip the confirmation prompt when seeding a non-local/production target", name: "yes", type: Boolean },
     ],
 };
