@@ -1,31 +1,29 @@
 {
     "name": "@lunora/d1",
     "version": "0.0.0",
-    "license": "FSL-1.1-Apache-2.0",
     "description": "D1 adapter for Lunora .global() tables, wrapping the Sessions API for read-your-writes",
+    "keywords": [
+        "cloudflare",
+        "d1",
+        "durable-objects",
+        "lunora",
+        "migrations",
+        "sessions-api",
+        "sqlite",
+        "workers"
+    ],
     "homepage": "https://lunora.sh",
-    "bugs": {
-        "url": "https://github.com/anolilab/lunora/issues"
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
     },
     "repository": {
         "type": "git",
         "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/d1"
     },
-    "author": {
-        "name": "Daniel Bannert",
-        "email": "d.bannert@anolilab.de"
-    },
-    "keywords": [
-        "lunora",
-        "cloudflare",
-        "workers",
-        "durable-objects",
-        "d1",
-        "sessions-api",
-        "sqlite",
-        "migrations"
-    ],
     "files": [
         "dist",
         "README.md",
@@ -68,9 +66,9 @@
     "devDependencies": {
         "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
+        "@codspeed/vitest-plugin": "catalog:test",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
-        "@codspeed/vitest-plugin": "catalog:test",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "typescript": "catalog:tsc",

@@ -1,31 +1,29 @@
 {
     "name": "@lunora/auth",
     "version": "0.0.0",
-    "license": "FSL-1.1-Apache-2.0",
     "description": "Auth for Lunora — a thin better-auth wrapper: email/password, OAuth, plugins, D1-backed",
+    "keywords": [
+        "auth",
+        "better-auth",
+        "cloudflare",
+        "durable-objects",
+        "lunora",
+        "oauth",
+        "session",
+        "workers"
+    ],
     "homepage": "https://lunora.sh",
-    "bugs": {
-        "url": "https://github.com/anolilab/lunora/issues"
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
     },
     "repository": {
         "type": "git",
         "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/auth"
     },
-    "author": {
-        "name": "Daniel Bannert",
-        "email": "d.bannert@anolilab.de"
-    },
-    "keywords": [
-        "lunora",
-        "cloudflare",
-        "workers",
-        "durable-objects",
-        "auth",
-        "better-auth",
-        "oauth",
-        "session"
-    ],
     "files": [
         "dist",
         "__assets__",

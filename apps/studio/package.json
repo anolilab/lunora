@@ -5,9 +5,6 @@
     "license": "FSL-1.1-Apache-2.0",
     "type": "module",
     "sideEffects": false,
-    "engines": {
-        "node": "^22.15.0 || >=24.11.0"
-    },
     "scripts": {
         "build": "vite build",
         "dev": "vite",
@@ -35,5 +32,8 @@
         "typescript": "catalog:tsc",
         "vite": "catalog:vite",
         "vitest": "catalog:test"
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
     }
 }

@@ -1,31 +1,29 @@
 {
     "name": "@lunora/studio",
     "version": "0.0.0",
-    "license": "FSL-1.1-Apache-2.0",
     "description": "The Lunora Studio: a local admin UI for your schema, data, logs, and advisors",
+    "keywords": [
+        "admin-ui",
+        "cloudflare",
+        "dashboard",
+        "durable-objects",
+        "lunora",
+        "react",
+        "studio",
+        "workers"
+    ],
     "homepage": "https://lunora.sh",
-    "bugs": {
-        "url": "https://github.com/anolilab/lunora/issues"
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
     },
     "repository": {
         "type": "git",
         "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/studio"
     },
-    "author": {
-        "name": "Daniel Bannert",
-        "email": "d.bannert@anolilab.de"
-    },
-    "keywords": [
-        "lunora",
-        "cloudflare",
-        "workers",
-        "durable-objects",
-        "studio",
-        "admin-ui",
-        "react",
-        "dashboard"
-    ],
     "files": [
         "dist",
         "src/theme.css",
@@ -68,21 +66,21 @@
     },
     "dependencies": {
         "@base-ui/react": "catalog:ui",
-        "html-to-image": "catalog:frontend",
-        "@lunora/advisor": "workspace:*",
-        "@lunora/analytics": "workspace:*",
-        "@lunora/client": "workspace:*",
-        "@lunora/react": "workspace:*",
         "@hugeicons/core-free-icons": "catalog:ui",
         "@hugeicons/react": "catalog:ui",
         "@lingui/core": "catalog:i18n",
         "@lingui/message-utils": "catalog:i18n",
+        "@lunora/advisor": "workspace:*",
+        "@lunora/analytics": "workspace:*",
+        "@lunora/client": "workspace:*",
+        "@lunora/react": "workspace:*",
         "@tanstack/react-router": "catalog:frontend",
         "@tanstack/react-table": "catalog:frontend",
         "@tanstack/react-virtual": "catalog:frontend",
         "@xyflow/react": "catalog:frontend",
         "class-variance-authority": "catalog:ui",
         "clsx": "catalog:ui",
+        "html-to-image": "catalog:frontend",
         "motion": "catalog:frontend",
         "recharts": "catalog:frontend",
         "tailwind-merge": "catalog:ui"

@@ -1,33 +1,31 @@
 {
     "name": "@lunora/cli",
     "version": "0.0.0",
-    "license": "FSL-1.1-Apache-2.0",
     "description": "The Lunora CLI: init, dev, deploy, codegen, run, reset, and migrate commands",
+    "keywords": [
+        "agent-skills",
+        "cli",
+        "cloudflare",
+        "codegen",
+        "deploy",
+        "durable-objects",
+        "lunora",
+        "tanstack-intent",
+        "vite",
+        "workers"
+    ],
     "homepage": "https://lunora.sh",
-    "bugs": {
-        "url": "https://github.com/anolilab/lunora/issues"
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
     },
     "repository": {
         "type": "git",
         "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/cli"
     },
-    "author": {
-        "name": "Daniel Bannert",
-        "email": "d.bannert@anolilab.de"
-    },
-    "keywords": [
-        "lunora",
-        "cloudflare",
-        "workers",
-        "durable-objects",
-        "cli",
-        "codegen",
-        "deploy",
-        "vite",
-        "tanstack-intent",
-        "agent-skills"
-    ],
     "bin": {
         "lunora": "./dist/bin.mjs"
     },
@@ -82,9 +80,9 @@
         "ts-morph": "catalog:tooling"
     },
     "devDependencies": {
+        "@codspeed/vitest-plugin": "catalog:test",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
-        "@codspeed/vitest-plugin": "catalog:test",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "typescript": "catalog:tsc",

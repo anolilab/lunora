@@ -1,31 +1,29 @@
 {
     "name": "@lunora/testing",
     "version": "0.0.0",
-    "license": "FSL-1.1-Apache-2.0",
     "description": "Testing toolkit for Lunora: an in-memory harness for queries, mutations, and actions",
+    "keywords": [
+        "cloudflare",
+        "durable-objects",
+        "e2e",
+        "lunora",
+        "mail",
+        "playwright",
+        "testing",
+        "workers"
+    ],
     "homepage": "https://lunora.sh",
-    "bugs": {
-        "url": "https://github.com/anolilab/lunora/issues"
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
     },
     "repository": {
         "type": "git",
         "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/testing"
     },
-    "author": {
-        "name": "Daniel Bannert",
-        "email": "d.bannert@anolilab.de"
-    },
-    "keywords": [
-        "lunora",
-        "cloudflare",
-        "workers",
-        "durable-objects",
-        "testing",
-        "e2e",
-        "mail",
-        "playwright"
-    ],
     "files": [
         "dist",
         "README.md",

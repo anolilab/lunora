@@ -1,31 +1,29 @@
 {
     "name": "@lunora/vite",
     "version": "0.0.0",
-    "license": "FSL-1.1-Apache-2.0",
     "description": "The Lunora Vite plugin: codegen, type sync, wrangler validation, and an error overlay over @cloudflare/vite-plugin",
+    "keywords": [
+        "cloudflare",
+        "codegen",
+        "durable-objects",
+        "lunora",
+        "vite",
+        "vite-plugin",
+        "workers",
+        "wrangler"
+    ],
     "homepage": "https://lunora.sh",
-    "bugs": {
-        "url": "https://github.com/anolilab/lunora/issues"
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
     },
     "repository": {
         "type": "git",
         "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/vite"
     },
-    "author": {
-        "name": "Daniel Bannert",
-        "email": "d.bannert@anolilab.de"
-    },
-    "keywords": [
-        "lunora",
-        "cloudflare",
-        "workers",
-        "durable-objects",
-        "vite",
-        "vite-plugin",
-        "codegen",
-        "wrangler"
-    ],
     "files": [
         "dist",
         "__assets__",
@@ -55,9 +53,9 @@
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
+        "@cloudflare/vite-plugin": "catalog:vite",
         "@lunora/codegen": "workspace:*",
         "@lunora/config": "workspace:*",
-        "@cloudflare/vite-plugin": "catalog:vite",
         "@visulima/vite-overlay": "catalog:vite",
         "jsonc-parser": "catalog:vite",
         "ts-morph": "catalog:tooling"

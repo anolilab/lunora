@@ -2,9 +2,9 @@
     "name": "@lunora/marketing-videos",
     "version": "0.0.0",
     "private": true,
-    "type": "module",
     "description": "Launch and release videos for Lunora, built with Remotion + remocn",
     "license": "UNLICENSED",
+    "type": "module",
     "sideEffects": [
         "*.css"
     ],

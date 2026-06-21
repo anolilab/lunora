@@ -1,31 +1,29 @@
 {
     "name": "@lunora/react",
     "version": "0.0.0",
-    "license": "FSL-1.1-Apache-2.0",
     "description": "React hooks for Lunora: useQuery, useMutation, useSubscription, and useAuth",
+    "keywords": [
+        "cloudflare",
+        "durable-objects",
+        "hooks",
+        "lunora",
+        "react",
+        "realtime",
+        "usequery",
+        "workers"
+    ],
     "homepage": "https://lunora.sh",
-    "bugs": {
-        "url": "https://github.com/anolilab/lunora/issues"
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
     },
     "repository": {
         "type": "git",
         "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/react"
     },
-    "author": {
-        "name": "Daniel Bannert",
-        "email": "d.bannert@anolilab.de"
-    },
-    "keywords": [
-        "lunora",
-        "cloudflare",
-        "workers",
-        "durable-objects",
-        "react",
-        "hooks",
-        "usequery",
-        "realtime"
-    ],
     "files": [
         "dist",
         "README.md",
@@ -67,6 +65,7 @@
     "devDependencies": {
         "@babel/core": "catalog:build",
         "@babel/preset-react": "catalog:build",
+        "@codspeed/vitest-plugin": "catalog:test",
         "@tanstack/react-query": "catalog:frontend",
         "@testing-library/dom": "catalog:frontend",
         "@testing-library/react": "catalog:frontend",
@@ -74,7 +73,6 @@
         "@types/react": "catalog:frontend",
         "@types/react-dom": "catalog:frontend",
         "@visulima/packem": "catalog:build",
-        "@codspeed/vitest-plugin": "catalog:test",
         "@vitest/coverage-v8": "catalog:test",
         "babel-plugin-react-compiler": "catalog:build",
         "esbuild": "catalog:build",

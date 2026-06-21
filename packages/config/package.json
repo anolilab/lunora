@@ -1,31 +1,29 @@
 {
     "name": "@lunora/config",
     "version": "0.0.0",
-    "license": "FSL-1.1-Apache-2.0",
     "description": "Internal shared CLI + Vite config layer for Lunora: wrangler.jsonc validation, binding inference, and .dev.vars scaffolding",
+    "keywords": [
+        "bindings",
+        "cloudflare",
+        "config",
+        "dev-vars",
+        "durable-objects",
+        "lunora",
+        "workers",
+        "wrangler"
+    ],
     "homepage": "https://lunora.sh",
-    "bugs": {
-        "url": "https://github.com/anolilab/lunora/issues"
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
     },
     "repository": {
         "type": "git",
         "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/config"
     },
-    "author": {
-        "name": "Daniel Bannert",
-        "email": "d.bannert@anolilab.de"
-    },
-    "keywords": [
-        "lunora",
-        "cloudflare",
-        "workers",
-        "durable-objects",
-        "wrangler",
-        "config",
-        "dev-vars",
-        "bindings"
-    ],
     "files": [
         "dist",
         "__assets__",

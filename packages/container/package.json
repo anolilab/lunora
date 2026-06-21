@@ -2,27 +2,31 @@
     "name": "@lunora/container",
     "version": "0.0.0",
     "description": "Cloudflare Containers for Lunora: defineContainer, generated Container DO classes, and the ctx.containers action surface",
-    "license": "FSL-1.1-Apache-2.0",
+    "keywords": [
+        "cloudflare",
+        "containers",
+        "docker",
+        "durable-objects",
+        "lunora",
+        "workers"
+    ],
     "homepage": "https://lunora.sh",
-    "bugs": {
-        "url": "https://github.com/anolilab/lunora/issues"
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
     },
     "repository": {
         "type": "git",
         "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/container"
     },
-    "author": {
-        "name": "Daniel Bannert",
-        "email": "d.bannert@anolilab.de"
-    },
-    "keywords": [
-        "lunora",
-        "cloudflare",
-        "workers",
-        "containers",
-        "docker",
-        "durable-objects"
+    "files": [
+        "dist",
+        "README.md",
+        "LICENSE.md",
+        "__assets__"
     ],
     "type": "module",
     "sideEffects": false,
@@ -44,12 +48,6 @@
         },
         "./package.json": "./package.json"
     },
-    "files": [
-        "dist",
-        "README.md",
-        "LICENSE.md",
-        "__assets__"
-    ],
     "scripts": {
         "build": "pnpm exec packem build --development",
         "build:prod": "pnpm exec packem build --production",

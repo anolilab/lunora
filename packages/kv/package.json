@@ -1,27 +1,25 @@
 {
     "name": "@lunora/kv",
     "version": "0.0.0",
-    "license": "FSL-1.1-Apache-2.0",
     "description": "Typed Workers KV for Lunora: JSON helpers and ctx.kv",
+    "keywords": [
+        "cloudflare",
+        "kv",
+        "lunora",
+        "workers"
+    ],
     "homepage": "https://lunora.sh",
-    "bugs": {
-        "url": "https://github.com/anolilab/lunora/issues"
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
     },
     "repository": {
         "type": "git",
         "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/kv"
     },
-    "author": {
-        "name": "Daniel Bannert",
-        "email": "d.bannert@anolilab.de"
-    },
-    "keywords": [
-        "lunora",
-        "cloudflare",
-        "workers",
-        "kv"
-    ],
     "files": [
         "dist",
         "README.md",

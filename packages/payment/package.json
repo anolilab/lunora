@@ -1,32 +1,30 @@
 {
     "name": "@lunora/payment",
     "version": "0.0.0",
-    "license": "FSL-1.1-Apache-2.0",
     "description": "Provider-agnostic payments for Lunora: Stripe-first adapter, webhook sync, and subscription/payment state machine",
+    "keywords": [
+        "billing",
+        "cloudflare",
+        "durable-objects",
+        "lunora",
+        "payment",
+        "stripe",
+        "subscriptions",
+        "webhooks",
+        "workers"
+    ],
     "homepage": "https://lunora.sh",
-    "bugs": {
-        "url": "https://github.com/anolilab/lunora/issues"
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
     },
     "repository": {
         "type": "git",
         "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/payment"
     },
-    "author": {
-        "name": "Daniel Bannert",
-        "email": "d.bannert@anolilab.de"
-    },
-    "keywords": [
-        "lunora",
-        "cloudflare",
-        "workers",
-        "durable-objects",
-        "payment",
-        "billing",
-        "stripe",
-        "subscriptions",
-        "webhooks"
-    ],
     "files": [
         "dist",
         "__assets__",

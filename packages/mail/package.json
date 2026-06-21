@@ -1,31 +1,29 @@
 {
     "name": "@lunora/mail",
     "version": "0.0.0",
-    "license": "FSL-1.1-Apache-2.0",
     "description": "Email for Lunora: Resend adapter, TSX templates, and queue-backed sends",
+    "keywords": [
+        "cloudflare",
+        "durable-objects",
+        "email",
+        "lunora",
+        "mail",
+        "react-email",
+        "resend",
+        "workers"
+    ],
     "homepage": "https://lunora.sh",
-    "bugs": {
-        "url": "https://github.com/anolilab/lunora/issues"
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
     },
     "repository": {
         "type": "git",
         "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/mail"
     },
-    "author": {
-        "name": "Daniel Bannert",
-        "email": "d.bannert@anolilab.de"
-    },
-    "keywords": [
-        "lunora",
-        "cloudflare",
-        "workers",
-        "durable-objects",
-        "email",
-        "mail",
-        "resend",
-        "react-email"
-    ],
     "files": [
         "dist",
         "__assets__",
@@ -71,10 +69,10 @@
     },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",
+        "@codspeed/vitest-plugin": "catalog:test",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
         "@visulima/packem": "catalog:build",
-        "@codspeed/vitest-plugin": "catalog:test",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "react": "catalog:frontend",

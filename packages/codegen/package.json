@@ -1,31 +1,29 @@
 {
     "name": "@lunora/codegen",
     "version": "0.0.0",
-    "license": "FSL-1.1-Apache-2.0",
     "description": "Code generator for Lunora: emits _generated/{api,server,dataModel}.ts from your schema",
+    "keywords": [
+        "cloudflare",
+        "codegen",
+        "durable-objects",
+        "lunora",
+        "schema",
+        "ts-morph",
+        "type-safe",
+        "workers"
+    ],
     "homepage": "https://lunora.sh",
-    "bugs": {
-        "url": "https://github.com/anolilab/lunora/issues"
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
     },
     "repository": {
         "type": "git",
         "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/codegen"
     },
-    "author": {
-        "name": "Daniel Bannert",
-        "email": "d.bannert@anolilab.de"
-    },
-    "keywords": [
-        "lunora",
-        "cloudflare",
-        "workers",
-        "durable-objects",
-        "codegen",
-        "schema",
-        "type-safe",
-        "ts-morph"
-    ],
     "files": [
         "dist",
         "__assets__",
@@ -65,11 +63,11 @@
         "ts-morph": "catalog:tooling"
     },
     "devDependencies": {
+        "@codspeed/vitest-plugin": "catalog:test",
         "@lunora/do": "workspace:*",
         "@lunora/server": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
-        "@codspeed/vitest-plugin": "catalog:test",
         "@vitest/coverage-v8": "catalog:test",
         "drizzle-orm": "catalog:drizzle",
         "esbuild": "catalog:build",

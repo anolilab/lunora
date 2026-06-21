@@ -1,31 +1,29 @@
 {
     "name": "@lunora/hyperdrive",
     "version": "0.0.0",
-    "license": "FSL-1.1-Apache-2.0",
     "description": "Bring-your-own Postgres/MySQL for Lunora via Cloudflare Hyperdrive: a driver-agnostic, action-only ctx.sql",
+    "keywords": [
+        "cloudflare",
+        "database",
+        "hyperdrive",
+        "lunora",
+        "mysql",
+        "postgres",
+        "sql",
+        "workers"
+    ],
     "homepage": "https://lunora.sh",
-    "bugs": {
-        "url": "https://github.com/anolilab/lunora/issues"
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
     },
     "repository": {
         "type": "git",
         "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/hyperdrive"
     },
-    "author": {
-        "name": "Daniel Bannert",
-        "email": "d.bannert@anolilab.de"
-    },
-    "keywords": [
-        "lunora",
-        "cloudflare",
-        "workers",
-        "hyperdrive",
-        "postgres",
-        "mysql",
-        "sql",
-        "database"
-    ],
     "files": [
         "dist",
         "README.md",
@@ -64,6 +62,18 @@
         "@lunora/sql-store": "workspace:*",
         "drizzle-orm": "catalog:drizzle"
     },
+    "devDependencies": {
+        "@cloudflare/workers-types": "catalog:cloudflare",
+        "@electric-sql/pglite": "0.3.16",
+        "@types/node": "catalog:types",
+        "@visulima/packem": "catalog:build",
+        "@vitest/coverage-v8": "catalog:test",
+        "esbuild": "catalog:build",
+        "mysql-memory-server": "1.14.1",
+        "mysql2": "^3.11.0",
+        "typescript": "catalog:tsc",
+        "vitest": "catalog:test"
+    },
     "peerDependencies": {
         "mysql2": "*",
         "pg": "*",
@@ -79,18 +89,6 @@
         "postgres": {
             "optional": true
         }
-    },
-    "devDependencies": {
-        "@cloudflare/workers-types": "catalog:cloudflare",
-        "@electric-sql/pglite": "0.3.16",
-        "@types/node": "catalog:types",
-        "@visulima/packem": "catalog:build",
-        "@vitest/coverage-v8": "catalog:test",
-        "esbuild": "catalog:build",
-        "mysql-memory-server": "1.14.1",
-        "mysql2": "^3.11.0",
-        "typescript": "catalog:tsc",
-        "vitest": "catalog:test"
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"

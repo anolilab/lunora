@@ -1,31 +1,29 @@
 {
     "name": "@lunora/client",
     "version": "0.0.0",
-    "license": "FSL-1.1-Apache-2.0",
     "description": "Lunora browser SDK: WebSocket transport, optimistic updates, and an offline mutation queue",
+    "keywords": [
+        "cloudflare",
+        "durable-objects",
+        "lunora",
+        "offline-queue",
+        "optimistic-updates",
+        "realtime",
+        "websocket",
+        "workers"
+    ],
     "homepage": "https://lunora.sh",
-    "bugs": {
-        "url": "https://github.com/anolilab/lunora/issues"
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
     },
     "repository": {
         "type": "git",
         "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/client"
     },
-    "author": {
-        "name": "Daniel Bannert",
-        "email": "d.bannert@anolilab.de"
-    },
-    "keywords": [
-        "lunora",
-        "cloudflare",
-        "workers",
-        "durable-objects",
-        "websocket",
-        "optimistic-updates",
-        "offline-queue",
-        "realtime"
-    ],
     "files": [
         "dist",
         "README.md",
@@ -73,13 +71,13 @@
         "test:coverage": "vitest run --coverage"
     },
     "devDependencies": {
-        "@lunora/do": "workspace:*",
-        "@lunora/runtime": "workspace:*",
         "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
+        "@codspeed/vitest-plugin": "catalog:test",
+        "@lunora/do": "workspace:*",
+        "@lunora/runtime": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
-        "@codspeed/vitest-plugin": "catalog:test",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "fake-indexeddb": "catalog:test",

@@ -1,31 +1,29 @@
 {
     "name": "@lunora/server",
     "version": "0.0.0",
-    "license": "FSL-1.1-Apache-2.0",
     "description": "Server primitives for Lunora: defineSchema, defineTable, query, mutation, and action",
+    "keywords": [
+        "backend",
+        "cloudflare",
+        "durable-objects",
+        "lunora",
+        "mutation",
+        "query",
+        "schema",
+        "workers"
+    ],
     "homepage": "https://lunora.sh",
-    "bugs": {
-        "url": "https://github.com/anolilab/lunora/issues"
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
     },
     "repository": {
         "type": "git",
         "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/server"
     },
-    "author": {
-        "name": "Daniel Bannert",
-        "email": "d.bannert@anolilab.de"
-    },
-    "keywords": [
-        "lunora",
-        "cloudflare",
-        "workers",
-        "durable-objects",
-        "schema",
-        "query",
-        "mutation",
-        "backend"
-    ],
     "files": [
         "dist",
         "README.md",
@@ -79,9 +77,9 @@
         "hono": "catalog:http"
     },
     "devDependencies": {
+        "@codspeed/vitest-plugin": "catalog:test",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
-        "@codspeed/vitest-plugin": "catalog:test",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "typescript": "catalog:tsc",

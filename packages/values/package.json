@@ -1,31 +1,29 @@
 {
     "name": "@lunora/values",
     "version": "0.0.0",
-    "license": "FSL-1.1-Apache-2.0",
     "description": "Validators for Lunora: the v.* validator suite with end-to-end return-type inference",
+    "keywords": [
+        "cloudflare",
+        "durable-objects",
+        "lunora",
+        "schema",
+        "standard-schema",
+        "type-inference",
+        "validation",
+        "workers"
+    ],
     "homepage": "https://lunora.sh",
-    "bugs": {
-        "url": "https://github.com/anolilab/lunora/issues"
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
     },
     "repository": {
         "type": "git",
         "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/values"
     },
-    "author": {
-        "name": "Daniel Bannert",
-        "email": "d.bannert@anolilab.de"
-    },
-    "keywords": [
-        "lunora",
-        "cloudflare",
-        "workers",
-        "durable-objects",
-        "validation",
-        "schema",
-        "type-inference",
-        "standard-schema"
-    ],
     "files": [
         "dist",
         "README.md",
@@ -57,10 +55,10 @@
         "test:bench": "vitest bench --run --config vitest.bench.config.ts"
     },
     "devDependencies": {
+        "@codspeed/vitest-plugin": "catalog:test",
         "@standard-schema/spec": "catalog:types",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
-        "@codspeed/vitest-plugin": "catalog:test",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "typescript": "catalog:tsc",
