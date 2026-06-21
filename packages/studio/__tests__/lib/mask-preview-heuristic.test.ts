@@ -23,10 +23,10 @@ describe("isSensitiveColumnName", () => {
         "card_number",
         "cvv",
         // prefixed / suffixed variants split on word boundaries
-        "user_password",
-        "userPassword",
-        "stripe_api_key",
-        "hashedPassword",
+        "user_password", // gitleaks:allow -- column-name test fixture, not a secret
+        "userPassword", // gitleaks:allow -- column-name test fixture, not a secret
+        "stripe_api_key", // gitleaks:allow -- column-name test fixture, not a secret
+        "hashedPassword", // gitleaks:allow -- column-name test fixture, not a secret
     ])("matches the sensitive name %s", (name) => {
         expect.assertions(1);
 
