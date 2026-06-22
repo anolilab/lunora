@@ -1,11 +1,12 @@
 import { existsSync } from "node:fs";
 
-import { findWranglerFile, promptSelect } from "@lunora/config";
+import { findWranglerFile } from "@lunora/config";
 import { join } from "@visulima/path";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
+import { tuiSelect } from "../../util/tui-prompts";
 import { runAddCommand } from "../registry";
 import type { FeatureItem, NormalizedFeature } from "./features";
 import { AUTH_PROVIDER_OPTIONS, DEFAULT_AUTH_ITEM, EMAIL_ITEM, normalizeFeature, promptAuthProvider } from "./features";
@@ -73,7 +74,7 @@ const resolveAuthItem = async (options: AddFeatureOptions): Promise<FeatureItem>
         return DEFAULT_AUTH_ITEM;
     }
 
-    const select = options.promptSelect ?? ((message, choices, settings): Promise<FeatureItem | undefined> => promptSelect(message, choices, settings));
+    const select = options.promptSelect ?? ((message, choices, settings): Promise<FeatureItem | undefined> => tuiSelect(message, choices, settings));
 
     return promptAuthProvider(select);
 };

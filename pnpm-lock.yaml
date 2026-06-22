@@ -1726,6 +1726,9 @@ importers:
       '@visulima/spinner':
         specifier: 1.0.0-alpha.4
         version: 1.0.0-alpha.4
+      '@visulima/tui':
+        specifier: 1.0.0-alpha.26
+        version: 1.0.0-alpha.26(@shikijs/langs@4.2.0)(@shikijs/themes@4.2.0)(@visulima/tabular@4.0.0-alpha.14)(marked@15.0.12)(react-reconciler@0.33.0(react@19.2.7))(react@19.2.7)(shiki@4.2.0)(ws@8.21.0)
       giget:
         specifier: 3.3.0
         version: 3.3.0
@@ -1735,6 +1738,12 @@ importers:
       magic-string:
         specifier: ^0.30.21
         version: 0.30.21
+      react:
+        specifier: 19.2.7
+        version: 19.2.7
+      react-reconciler:
+        specifier: ^0.33.0
+        version: 0.33.0(react@19.2.7)
       ts-morph:
         specifier: catalog:tooling
         version: 28.0.0
@@ -1745,6 +1754,9 @@ importers:
       '@types/node':
         specifier: catalog:types
         version: 25.9.3
+      '@types/react':
+        specifier: catalog:frontend
+        version: 19.2.17
       '@visulima/packem':
         specifier: catalog:build
         version: 2.0.0-alpha.93(71ce2228c958524ff93c9efebcb44d7b)

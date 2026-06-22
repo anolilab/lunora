@@ -80,14 +80,18 @@
         "@visulima/pail": "4.0.0-alpha.22",
         "@visulima/path": "3.0.0-alpha.13",
         "@visulima/spinner": "1.0.0-alpha.4",
+        "@visulima/tui": "1.0.0-alpha.26",
         "giget": "3.3.0",
         "jsonc-parser": "catalog:vite",
         "magic-string": "^0.30.21",
+        "react": "catalog:frontend",
+        "react-reconciler": "^0.33.0",
         "ts-morph": "catalog:tooling"
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
         "@types/node": "catalog:types",
+        "@types/react": "catalog:frontend",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",

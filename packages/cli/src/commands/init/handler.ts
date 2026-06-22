@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-import { isInteractive, promptMultiSelect, promptSelect } from "@lunora/config";
+import { isInteractive } from "@lunora/config";
 import { walkSync } from "@visulima/fs";
 import { basename, dirname, join, relative, resolve } from "@visulima/path";
 import { downloadTemplate } from "giget";
@@ -16,6 +16,7 @@ import { detectFramework } from "../../util/detect-framework";
 import type { Logger } from "../../util/logger";
 import { patchViteConfig } from "../../util/patch-vite-config";
 import { resolveDistTag, resolveSourceRef } from "../../util/source-ref";
+import { tuiMultiSelect, tuiSelect } from "../../util/tui-prompts";
 import type { FeatureItem } from "../add/features";
 import { runAddCommand } from "../registry";
 import type { InitOptions } from "./index";
@@ -594,8 +595,8 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
         apply,
         interactive,
         logger: options.logger,
-        multiSelect: options.prompt?.multiSelect ?? ((message, choices, settings) => promptMultiSelect(message, choices, settings)),
-        select: options.prompt?.select ?? ((message, choices, settings): Promise<FeatureItem | undefined> => promptSelect(message, choices, settings)),
+        multiSelect: options.prompt?.multiSelect ?? ((message, choices, settings) => tuiMultiSelect(message, choices, settings)),
+        select: options.prompt?.select ?? ((message, choices, settings): Promise<FeatureItem | undefined> => tuiSelect(message, choices, settings)),
     });
 };
 
