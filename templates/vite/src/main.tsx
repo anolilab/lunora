@@ -1,40 +1,28 @@
-import { LunoraProvider, useMutation, useQuery } from "@lunora/react";
-import { StrictMode, useState } from "react";
+import "./index.css";
+
+import { LunoraProvider } from "@lunora/react";
+import { LunoraClient } from "lunorash/client";
+import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
-const channelId = "channel:demo" as const;
+import { App } from "./App.js";
 
-const Chat = () => {
-    const data = useQuery("messages:list", { channelId });
-    const send = useMutation("messages:send");
-    const [draft, setDraft] = useState("");
-
-    return (
-        <div style={{ fontFamily: "system-ui", padding: 24 }}>
-            <h1>{"{{name}}"}</h1>
-            <pre>{JSON.stringify(data, undefined, 2)}</pre>
-            <form
-                onSubmit={(event) => {
-                    event.preventDefault();
-                    send({ channelId, text: draft });
-                    setDraft("");
-                }}
-            >
-                <input onChange={(event) => setDraft(event.target.value)} placeholder="Say something" value={draft} />
-                <button type="submit">Send</button>
-            </form>
-        </div>
-    );
-};
+// `@lunora/vite` runs the Worker on the same origin as Vite, so default to
+// `location.origin`. Point `VITE_LUNORA_URL` at a deployed Worker to develop
+// the client against production data.
+const url = (import.meta.env.VITE_LUNORA_URL as string | undefined) ?? globalThis.location.origin;
+const client = new LunoraClient({ url });
 
 const root = document.querySelector("#root");
 
-if (root) {
-    createRoot(root).render(
-        <StrictMode>
-            <LunoraProvider url={globalThis.location.origin}>
-                <Chat />
-            </LunoraProvider>
-        </StrictMode>,
-    );
+if (!root) {
+    throw new Error("missing #root mount node");
 }
+
+createRoot(root).render(
+    <StrictMode>
+        <LunoraProvider client={client}>
+            <App />
+        </LunoraProvider>
+    </StrictMode>,
+);

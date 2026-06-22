@@ -35,7 +35,7 @@ describe("lunora init", () => {
 
     describe("lunora init", () => {
         it("vite template scaffolds expected files", async () => {
-            expect.assertions(10);
+            expect.assertions(11);
 
             const result = await runInitCommand({
                 cwd: workdir,
@@ -51,8 +51,9 @@ describe("lunora init", () => {
 
             expect(existsSync(join(target, "package.json"))).toBe(true);
             expect(existsSync(join(target, "lunora", "schema.ts"))).toBe(true);
-            expect(existsSync(join(target, "lunora", "messages.ts"))).toBe(true);
+            expect(existsSync(join(target, "lunora", "counter.ts"))).toBe(true);
             expect(existsSync(join(target, "src", "main.tsx"))).toBe(true);
+            expect(existsSync(join(target, "src", "App.tsx"))).toBe(true);
             expect(existsSync(join(target, "vite.config.ts"))).toBe(true);
             expect(existsSync(join(target, "wrangler.jsonc"))).toBe(true);
             expect(existsSync(join(target, "tsconfig.json"))).toBe(true);
@@ -73,11 +74,11 @@ describe("lunora init", () => {
 
             const pkg = readFileSync(join(workdir, "rainbow", "package.json"), "utf8");
             const wrangler = readFileSync(join(workdir, "rainbow", "wrangler.jsonc"), "utf8");
-            const main = readFileSync(join(workdir, "rainbow", "src", "main.tsx"), "utf8");
+            const html = readFileSync(join(workdir, "rainbow", "index.html"), "utf8");
 
             expect(pkg).toContain('"name": "rainbow"');
             expect(wrangler).toContain('"name": "rainbow"');
-            expect(main).toContain("rainbow");
+            expect(html).toContain("<title>rainbow</title>");
         });
 
         it("vite template package.json references the lunora packages (umbrella base)", async () => {

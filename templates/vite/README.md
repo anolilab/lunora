@@ -1,6 +1,8 @@
 # {{name}}
 
-A Lunora app scaffolded by `lunora init`.
+A realtime [Lunora](https://lunora.sh) app — Vite + React on the front, a
+Cloudflare Worker + Durable Object on the back. The starter ships a live,
+shared counter so you can see subscriptions working in seconds.
 
 ## Develop
 
@@ -9,8 +11,37 @@ pnpm install
 pnpm dev
 ```
 
-## Deploy
+Open <http://localhost:5173>. Click the button, then open a second tab — the
+count is stored in a Durable Object and synced to every client over a
+WebSocket, so both tabs update at once.
 
-```bash
-pnpm deploy
+`pnpm dev` runs everything from one process: the Vite dev server (with HMR), the
+Worker, the Lunora Studio, and the codegen watcher.
+
+## Project layout
+
 ```
+lunora/
+  schema.ts        your tables (defineSchema)
+  counter.ts       the get query + increment mutation
+  _generated/      types + typed api, regenerated on save (gitignored)
+src/
+  main.tsx         mounts <LunoraProvider> with a LunoraClient
+  App.tsx          the UI — useQuery / useMutation
+  server.ts        the Worker entry (composed via defineApp)
+wrangler.jsonc     Cloudflare bindings (the SHARD Durable Object)
+```
+
+## Scripts
+
+| Command        | What it does                                             |
+| -------------- | -------------------------------------------------------- |
+| `pnpm dev`     | Vite + Worker + Studio + codegen watch                   |
+| `pnpm build`   | Production build                                         |
+| `pnpm deploy`  | Build, then deploy to Cloudflare (`vite build` + deploy) |
+| `pnpm codegen` | Regenerate `lunora/_generated/`                          |
+
+## Learn more
+
+- Docs: <https://lunora.sh/docs>
+- Add features (`auth`, `mail`, …): `lunora add <name>`

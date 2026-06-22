@@ -4,10 +4,6 @@
     "main": "src/server.ts",
     "compatibility_date": "2026-06-10",
     "compatibility_flags": ["nodejs_compat"],
-    "assets": {
-        "directory": "./dist/client",
-        "not_found_handling": "single-page-application",
-    },
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
     },

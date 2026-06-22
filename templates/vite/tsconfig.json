@@ -9,8 +9,9 @@
         "esModuleInterop": true,
         "skipLibCheck": true,
         "isolatedModules": true,
+        "resolveJsonModule": true,
         "noEmit": true,
-        "types": ["@cloudflare/workers-types"]
+        "types": ["@cloudflare/workers-types", "node", "vite/client"]
     },
-    "include": ["src/**/*", "lunora/**/*"]
+    "include": ["src", "lunora", "vite.config.ts"]
 }

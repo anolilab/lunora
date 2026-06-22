@@ -4,3 +4,10 @@ dist
 .lunora/
 .lunora-cache
 lunora/_generated
+
+# local env + editor
+.env
+.env.*
+!.env.example
+*.local
+.DS_Store

@@ -72,22 +72,22 @@ describe("lunora init smoke", () => {
             expect(existsSync(join(codegenResult.outputDirectory, "api.ts"))).toBe(true);
             expect(existsSync(join(codegenResult.outputDirectory, "server.ts"))).toBe(true);
 
-            // The api surface should at minimum mention the `messages` table the
+            // The api surface should at minimum mention the `counter` table the
             // vite template ships with — proves codegen parsed schema.ts and the
             // function files, not just emitted boilerplate.
             const api = readFileSync(join(codegenResult.outputDirectory, "api.ts"), "utf8");
 
-            expect(api).toContain("messages");
+            expect(api).toContain("counter");
 
             // The discovered FUNCTIONS — not just the table — must surface in the
-            // generated api. The vite template's `lunora/messages.ts` exports a
-            // `list` query and a `send` mutation, both imported from
+            // generated api. The vite template's `lunora/counter.ts` exports a
+            // `get` query and an `increment` mutation, both imported from
             // `./_generated/server`. If that procedure import were broken (the
             // class of bug that previously shipped in a template), codegen would
             // fail to discover these functions and they would be absent here.
             // Asserting both names guards the broken-import regression.
-            expect(api).toContain("list:");
-            expect(api).toContain("send:");
+            expect(api).toContain("get:");
+            expect(api).toContain("increment:");
 
             // 2. Wrangler validator must accept the scaffolded wrangler.jsonc
             //    against the scaffolded schema (SHARD binding, compatibility flag).
