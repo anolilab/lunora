@@ -20,6 +20,7 @@ const ALL_OFF: FeatureUsage = {
     mail: false,
     payments: false,
     pipelines: false,
+    r2sql: false,
     scheduler: false,
     storage: false,
     vectors: false,

@@ -901,6 +901,8 @@ interface EmitServerOptions {
     hasPayments?: boolean;
     /** A `lunora/` source uses `@lunora/pipelines` / `ctx.pipelines` — wires `ctx.pipelines` onto ActionCtx only. */
     hasPipelines?: boolean;
+    /** A `lunora/` source uses `@lunora/r2sql` / `ctx.r2sql` — wires `ctx.r2sql` onto ActionCtx only. */
+    hasR2sql?: boolean;
     schema?: SchemaIR;
     storageRuleBuckets?: ReadonlyArray<string>;
     /** The project depends on the `lunora` umbrella — import base packages via its subpaths. */
@@ -919,6 +921,7 @@ const emitServer = ({
     hasKv = false,
     hasPayments = false,
     hasPipelines = false,
+    hasR2sql = false,
     schema,
     storageRuleBuckets = [],
     useUmbrella = false,
@@ -1033,6 +1036,12 @@ export type Env = CloudflareBindings;`;
     const pipelinesActionField = hasPipelines
         ? `\n    /** Pipelines ingestion sink (durable, R2-backed). Fire-and-forget and batched; do not read it back in-handler. */\n    readonly pipelines: import("@lunora/pipelines").PipelineClient;`
         : "";
+    // `ctx.r2sql` — R2 SQL (serverless query engine over Apache Iceberg tables).
+    // ActionCtx ONLY: external REST I/O, non-deterministic, and non-reactive
+    // (reads are not tracked by Lunora live queries).
+    const r2sqlActionField = hasR2sql
+        ? `\n    /**\n     * R2 SQL over Apache Iceberg tables (window functions, DISTINCT, set operations). Non-deterministic — available only in actions. Reads here are NOT tracked by Lunora live queries.\n     */\n    readonly r2sql: import("@lunora/r2sql").R2SqlClient;`
+        : "";
 
     // Workflows live on BOTH MutationCtx and ActionCtx (a workflow can be kicked
     // off from a mutation or an action — mirrors `ctx.scheduler`). The base
@@ -1130,7 +1139,7 @@ export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${wor
 export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${workflowsOmit}> {
     readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: StorageBase<StorageBucketName>;${aiActionField}${paymentsActionField}${containersActionField}${kvContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${workflowsContextField}
+    readonly storage: StorageBase<StorageBucketName>;${aiActionField}${paymentsActionField}${containersActionField}${kvContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${workflowsContextField}
 }
 
 /**
@@ -1816,6 +1825,66 @@ const browserStub: Browser = {
 };
 
 /**
+ * `ctx.r2sql` (R2 SQL — serverless queries over Apache Iceberg) fragments.
+ * ActionCtx ONLY: R2 SQL has no Workers binding (every query is an HTTPS
+ * round-trip), so it is non-deterministic external I/O and non-reactive, exactly
+ * like `ctx.sql`. Unlike a binding, the client needs an account id + API token +
+ * bucket, so the build resolves them from a `config.r2sql` thunk first, else the
+ * conventional `env.R2_SQL_TOKEN` + `env.R2_SQL_ACCOUNT_ID`/`env.CLOUDFLARE_ACCOUNT_ID`
+ * + `env.R2_SQL_BUCKET`; absent both, every method throws via `r2sqlStub`.
+ */
+/* eslint-disable no-secrets/no-secrets -- the emitted ctx-builder reads conventional R2 SQL env var names (R2_SQL_ACCOUNT_ID / CLOUDFLARE_ACCOUNT_ID), not credentials */
+const emitR2sqlFragments = (hasR2sql: boolean): HelperFragments => {
+    if (!hasR2sql) {
+        return EMPTY_HELPER_FRAGMENTS;
+    }
+
+    const r2sqlMissing = `throw new Error("ctx.r2sql: no R2 SQL credentials found. Set \\\`R2_SQL_TOKEN\\\`, \\\`R2_SQL_ACCOUNT_ID\\\` (or \\\`CLOUDFLARE_ACCOUNT_ID\\\`), and \\\`R2_SQL_BUCKET\\\` in your env/.dev.vars, or pass an \\\`r2sql\\\` config thunk to createShardDO().");`;
+
+    return {
+        build: `
+            const r2sqlEnv = env as Record<string, unknown>;
+            const r2sqlAccountId = (r2sqlEnv.R2_SQL_ACCOUNT_ID ?? r2sqlEnv.CLOUDFLARE_ACCOUNT_ID) as string | undefined;
+            const r2sqlToken = r2sqlEnv.R2_SQL_TOKEN as string | undefined;
+            const r2sqlBucket = r2sqlEnv.R2_SQL_BUCKET as string | undefined;
+            const r2sql: R2SqlClient = config.r2sql
+                ? config.r2sql(env)
+                : r2sqlAccountId && r2sqlToken && r2sqlBucket
+                  ? createR2Sql({ accountId: r2sqlAccountId, apiToken: r2sqlToken, bucket: r2sqlBucket })
+                  : r2sqlStub;
+`,
+        configField: `\n    r2sql?: (env: Record<string, unknown>) => R2SqlClient;`,
+        // ActionCtx-only: attached via the \`ctx.r2sql = r2sql\` assignment in the
+        // \`isAction\` block, never the every-ctx object literal.
+        contextField: "",
+        importLines: [`import type { R2SqlClient } from "@lunora/r2sql";`, `import { createR2Sql } from "@lunora/r2sql";`],
+        stub: `
+const r2sqlStub: R2SqlClient = {
+    describe: async () => {
+        ${r2sqlMissing}
+    },
+    explain: async () => {
+        ${r2sqlMissing}
+    },
+    from: () => {
+        ${r2sqlMissing}
+    },
+    query: async () => {
+        ${r2sqlMissing}
+    },
+    showDatabases: async () => {
+        ${r2sqlMissing}
+    },
+    showTables: async () => {
+        ${r2sqlMissing}
+    },
+};
+`,
+    };
+};
+/* eslint-enable no-secrets/no-secrets */
+
+/**
  * Emit `_generated/containers.ts` — one container-enabled Durable Object class
  * per `defineContainer` export, each a thin subclass of `LunoraContainer`
  * (`@lunora/container/do`) constructed with the user's definition object. The
@@ -2143,6 +2212,8 @@ interface EmitShardOptions {
     /** A `lunora/` source reads `ctx.kv` — wires `ctx.kv` onto every ctx. */
     hasKv?: boolean;
     hasPayments?: boolean;
+    /** A `lunora/` source reads `ctx.r2sql` (R2 SQL) — wires `ctx.r2sql` onto the ActionCtx only. */
+    hasR2sql?: boolean;
     maskMetadata?: MaskMetadataIR;
     rlsMetadata?: RlsMetadataIR;
     schema: SchemaIR;
@@ -2164,6 +2235,7 @@ const emitShard = ({
     hasImages = false,
     hasKv = false,
     hasPayments = false,
+    hasR2sql = false,
     maskMetadata,
     rlsMetadata,
     schema,
@@ -2183,6 +2255,7 @@ const emitShard = ({
     const imagesFragments = emitImagesFragments(hasImages);
     const hyperdriveFragments = emitHyperdriveFragments(hasHyperdrive);
     const browserFragments = emitBrowserFragments(hasBrowser);
+    const r2sqlFragments = emitR2sqlFragments(hasR2sql);
     const {
         build: containersBuild,
         contextField: containersContextField,
@@ -2305,6 +2378,7 @@ const emitShard = ({
         ...imagesFragments.importLines,
         ...hyperdriveFragments.importLines,
         ...browserFragments.importLines,
+        ...r2sqlFragments.importLines,
         ...containerImportLines,
         ...workflowImportLines,
         ...paymentsImports,
@@ -2515,16 +2589,17 @@ ${schema.tables
     // is an `action`, so a query/mutation handler never even has `ctx.sql` on the
     // object (its type already forbids it; this makes the runtime match). Gated
     // behind a single `isAction` check derived from the dispatch registry.
-    const actionOnlyHasAny = hasImages || hasHyperdrive || hasBrowser;
+    const actionOnlyHasAny = hasImages || hasHyperdrive || hasBrowser || hasR2sql;
     const actionOnlyBlock = actionOnlyHasAny
         ? `
             // ActionCtx-only helpers (external, non-deterministic I/O): constructed
             // and attached only for an \`action\` so query/mutation ctx never carry them.
             if (isAction) {
-${imagesFragments.build}${hyperdriveFragments.build}${browserFragments.build}${[
+${imagesFragments.build}${hyperdriveFragments.build}${browserFragments.build}${r2sqlFragments.build}${[
               ...(hasImages ? ["                ctx.images = images;"] : []),
               ...(hasHyperdrive ? ["                ctx.sql = sql;"] : []),
               ...(hasBrowser ? ["                ctx.browser = browser;"] : []),
+              ...(hasR2sql ? ["                ctx.r2sql = r2sql;"] : []),
           ].join("\n")}
             }
 `
@@ -2576,7 +2651,7 @@ export interface ShardDOConfig {
     /** Optional telemetry sink. When supplied, each \`ctx.log.*\` call is forwarded to \`sink.onLog\`. Pass the SAME sink you give \`createWorker({ observability })\` (which drives \`onRpc\`) to route both RPC and log events. */
     observability?: (env: Record<string, unknown>) => LogSink | undefined;
     scheduler?: (env: Record<string, unknown>) => unknown;
-    storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}${aiConfigField}${kvFragments.configField}${analyticsFragments.configField}${imagesFragments.configField}${hyperdriveFragments.configField}${browserFragments.configField}${paymentsConfigField}${d1ConfigField}${hyperdriveGlobalConfigField}
+    storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}${aiConfigField}${kvFragments.configField}${analyticsFragments.configField}${imagesFragments.configField}${hyperdriveFragments.configField}${browserFragments.configField}${r2sqlFragments.configField}${paymentsConfigField}${d1ConfigField}${hyperdriveGlobalConfigField}
 }
 
 const schedulerStub = {
@@ -2614,7 +2689,7 @@ const storageStub = {
         throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
     },
 };
-${globalDatabaseStub}${vectorsStub}${aiStub}${kvFragments.stub}${analyticsFragments.stub}${imagesFragments.stub}${hyperdriveFragments.stub}${browserFragments.stub}${paymentStub}${bindTableHelper}
+${globalDatabaseStub}${vectorsStub}${aiStub}${kvFragments.stub}${analyticsFragments.stub}${imagesFragments.stub}${hyperdriveFragments.stub}${browserFragments.stub}${r2sqlFragments.stub}${paymentStub}${bindTableHelper}
 // Bound in-process \`ctx.run*\` composition depth so a self- or cyclically-
 // referencing call fails loudly with a clear error instead of overflowing the
 // stack. Tracked across the awaited handler chain (one DO invocation is

@@ -39,6 +39,8 @@ interface FeatureUsage {
     payments: boolean;
     /** A `lunora/` source imports `@lunora/pipelines` or reads `ctx.pipelines`. */
     pipelines: boolean;
+    /** A `lunora/` source imports `@lunora/r2sql` or reads `ctx.r2sql`. */
+    r2sql: boolean;
     /** A source imports `@lunora/scheduler` or reads `ctx.scheduler`. */
     scheduler: boolean;
     /** A source imports `@lunora/storage` or reads `ctx.storage`. */
@@ -67,6 +69,7 @@ const PROBES: Record<keyof FeatureUsage, FeatureProbe> = {
     mail: { moduleSpecifier: "@lunora/mail" },
     payments: { contextProperty: "payments", moduleSpecifier: "@lunora/payment" },
     pipelines: { contextProperty: "pipelines", moduleSpecifier: "@lunora/pipelines" },
+    r2sql: { contextProperty: "r2sql", moduleSpecifier: "@lunora/r2sql" },
     scheduler: { contextProperty: "scheduler", moduleSpecifier: "@lunora/scheduler" },
     storage: { contextProperty: "storage", moduleSpecifier: "@lunora/storage" },
     vectors: { contextProperty: "vectors", moduleSpecifier: "@lunora/vectors" },
@@ -144,6 +147,7 @@ const discoverFeatureUsage = (project: Project, lunoraDirectory: string): Featur
         mail: false,
         payments: false,
         pipelines: false,
+        r2sql: false,
         scheduler: false,
         storage: false,
         vectors: false,

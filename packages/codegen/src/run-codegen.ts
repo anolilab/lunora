@@ -310,6 +310,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const hasImages = featureUsage.images;
     const hasAnalytics = featureUsage.analytics;
     const hasPipelines = featureUsage.pipelines;
+    const hasR2sql = featureUsage.r2sql;
 
     // Which optional, package-backed features the studio should show a nav page
     // for. `buildStudioFeatures` OR's the code-usage flags with the schema/project
@@ -346,6 +347,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasKv,
         hasPayments,
         hasPipelines,
+        hasR2sql,
         schema,
         storageRuleBuckets: storageRulesMetadata.rules.map((rule) => rule.bucket),
         useUmbrella,
@@ -362,6 +364,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasImages,
         hasKv,
         hasPayments,
+        hasR2sql,
         maskMetadata,
         rlsMetadata,
         schema,
@@ -408,6 +411,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasImages,
         hasKv,
         hasPayments,
+        hasR2sql,
         hasScheduler: studioFeatures.scheduler,
         hasStorage: studioFeatures.storage,
         hasVectors: schema.vectorIndexes.length > 0,

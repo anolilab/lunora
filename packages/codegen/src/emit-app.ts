@@ -25,6 +25,8 @@ interface EmitAppOptions {
     hasKv: boolean;
     /** App uses `@lunora/payment` / `ctx.payments` → emit `.payment()`. */
     hasPayments: boolean;
+    /** App uses `@lunora/r2sql` / `ctx.r2sql` → emit `.r2sql()`. */
+    hasR2sql: boolean;
     /** App imports `@lunora/scheduler` / declares crons → emit `.scheduler()`. */
     hasScheduler: boolean;
     /** App uses `@lunora/storage` → emit `.storage()` (DO `ctx.storage` + studio file browser). */
@@ -63,6 +65,12 @@ const LONG_TAIL: ReadonlyArray<readonly [keyof EmitAppOptions, string, string, s
     ["hasImages", "images", "images", "Override the Images binding backing `ctx.images` (defaults to `env.IMAGES`)."],
     ["hasKv", "kv", "kv", "Override the Workers KV binding backing `ctx.kv` (defaults to `env.KV`)."],
     ["hasPayments", "payment", "payment", "Wire the payment options backing `ctx.payments`."],
+    [
+        "hasR2sql",
+        "r2sql",
+        "r2sql",
+        "Wire the R2 SQL client backing `ctx.r2sql` — build it with `createR2Sql({ accountId, apiToken, bucket })` (defaults to env `R2_SQL_TOKEN` / `R2_SQL_ACCOUNT_ID` / `R2_SQL_BUCKET`).",
+    ],
     ["hasVectors", "vectors", "vectors", "Wire the Vectorize index map backing `ctx.vectors`."],
 ];
 

@@ -9,6 +9,7 @@ import type { AdvisorMaskProcedure } from "./mask-procedures";
 import type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
 import type { AdvisorProcedureProtection } from "./procedure-protections";
 import type { AdvisorQueryRead } from "./queries";
+import type { AdvisorR2sqlCall } from "./r2sql-calls";
 import type { AdvisorRlsProcedure } from "./rls-procedures";
 import type { AdvisorSchema } from "./schema";
 import type { AdvisorSecretLiteral } from "./secrets";
@@ -176,6 +177,14 @@ export interface LintContext {
      * the query-shaped lints simply find nothing.
      */
     queries?: ReadonlyArray<AdvisorQueryRead>;
+
+    /**
+     * R2 SQL `ctx.r2sql` accesses discovered lexically inside `query`/`mutation`
+     * handler bodies — the `r2sql_outside_action` input. Supplied by the codegen
+     * feeder, which omits `action` handlers (where `ctx.r2sql` is the typed,
+     * intended surface); absent for runtime callers, where the lint finds nothing.
+     */
+    r2sqlCalls?: ReadonlyArray<AdvisorR2sqlCall>;
 
     /**
      * Per-procedure RLS usage discovered in function bodies (the
