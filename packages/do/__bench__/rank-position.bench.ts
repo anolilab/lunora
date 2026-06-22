@@ -1,4 +1,4 @@
-import { bench, describe } from "vitest";
+import { beforeAll, bench, describe } from "vitest";
 
 import createSqliteExec from "../__tests__/_helpers/node-sqlite";
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
@@ -70,14 +70,10 @@ const indexedHarness = createSqliteExec();
 runShardMigrations(indexedHarness.sql, indexedSchema);
 const indexedWriter = createShardContextDatabase({ schema: indexedSchema, sql: indexedHarness.sql });
 
-await seed(indexedWriter);
-
 const scanHarness = createSqliteExec();
 
 runShardMigrations(scanHarness.sql, scanSchema);
 const scanWriter = createShardContextDatabase({ schema: scanSchema, sql: scanHarness.sql });
-
-await seed(scanWriter);
 
 // Median position of the median channel.
 const TARGET_CHANNEL = `c${String(Math.floor(CHANNEL_COUNT / 2))}`;
@@ -85,6 +81,16 @@ const TARGET_INDEX = Math.floor(ROWS_PER_CHANNEL / 2);
 const TARGET_ID = `m-${TARGET_CHANNEL}-${String(TARGET_INDEX).padStart(5, "0")}`;
 
 describe("rank() — indexed vs emulated scan", () => {
+    // Seed in beforeAll: CodSpeed's instrumented runner (@codspeed/vitest-plugin)
+    // runs each bench against the suite's beforeAll/beforeEach hooks but does NOT
+    // pick up module-top-level await state, so a top-level seed leaves the bench
+    // querying an empty DB (→ "row not found"). beforeAll is honored in both the
+    // plain `vitest bench` runner and CodSpeed's analysis runner.
+    beforeAll(async () => {
+        await seed(indexedWriter);
+        await seed(scanWriter);
+    });
+
     bench("indexed: rank() via companion table seek", async () => {
         await indexedWriter.rank("messages", "byChannel", { row: TARGET_ID });
     });

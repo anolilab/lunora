@@ -1,5 +1,5 @@
 import type { DatabaseWriterLike, RankIndexDefinitionLike, SchemaLike, ValidatorLike } from "@lunora/do";
-import { bench, describe } from "vitest";
+import { beforeAll, bench, describe } from "vitest";
 
 import createD1Exec from "../__tests__/_helpers/node-sqlite-d1";
 import { createD1CtxDb as createD1ContextDatabase, runD1RankMigrations } from "../src/d1-ctx-db";
@@ -79,19 +79,25 @@ const seed = async (writer: DatabaseWriterLike): Promise<void> => {
     }
 };
 
-const indexedWriter = await createWriter(indexedSchema);
-
-await seed(indexedWriter);
-
-const scanWriter = await createWriter(scanSchema);
-
-await seed(scanWriter);
-
 const TARGET_CHANNEL = `c${String(Math.floor(CHANNEL_COUNT / 2))}`;
 const TARGET_INDEX = Math.floor(ROWS_PER_CHANNEL / 2);
 const TARGET_ID = `m-${TARGET_CHANNEL}-${String(TARGET_INDEX).padStart(5, "0")}`;
 
+let indexedWriter: DatabaseWriterLike;
+let scanWriter: DatabaseWriterLike;
+
 describe("d1 rank() — indexed vs emulated scan", () => {
+    // Build + seed in beforeAll: CodSpeed's instrumented runner does not pick up
+    // module-top-level await state (async migrations + seed writes), so the
+    // benches would otherwise hit an empty DB. beforeAll is honored by both the
+    // plain `vitest bench` runner and CodSpeed's analysis runner.
+    beforeAll(async () => {
+        indexedWriter = await createWriter(indexedSchema);
+        await seed(indexedWriter);
+        scanWriter = await createWriter(scanSchema);
+        await seed(scanWriter);
+    });
+
     bench("indexed: rank() via companion table seek", async () => {
         await indexedWriter.rank("messages", "byChannel", { row: TARGET_ID });
     });

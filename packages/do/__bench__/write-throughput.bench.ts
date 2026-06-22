@@ -1,4 +1,4 @@
-import { bench, describe } from "vitest";
+import { beforeAll, bench, describe } from "vitest";
 
 import createSqliteExec from "../__tests__/_helpers/node-sqlite";
 import type { AggregateIndexDefinitionLike } from "../src/aggregates";
@@ -85,11 +85,17 @@ let rankCounter = 0;
 
 const seedId = "seed";
 
-await bareWriter.insert("todos", { _id: seedId, projectId: "p1", seq: 1 });
-await aggWriter.insert("todos", { _id: seedId, projectId: "p1", seq: 1 });
-await rankWriter.insert("todos", { _id: seedId, projectId: "p1", seq: 1 });
-
 describe("write throughput — insert/patch/replace/delete", () => {
+    // Seed the patch/replace target in beforeAll: CodSpeed's instrumented runner
+    // does not pick up module-top-level await writes, so a top-level seed would
+    // leave patch/replace hitting a missing row ("document not found: seed").
+    // beforeAll is honored by both the plain `vitest bench` runner and CodSpeed.
+    beforeAll(async () => {
+        await bareWriter.insert("todos", { _id: seedId, projectId: "p1", seq: 1 });
+        await aggWriter.insert("todos", { _id: seedId, projectId: "p1", seq: 1 });
+        await rankWriter.insert("todos", { _id: seedId, projectId: "p1", seq: 1 });
+    });
+
     bench("bare: insert (no triggers, no indexes)", async () => {
         bareCounter += 1;
         await bareWriter.insert("todos", { _id: `b${String(bareCounter)}`, projectId: "p1", seq: bareCounter });

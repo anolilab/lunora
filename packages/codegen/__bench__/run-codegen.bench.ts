@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { bench, describe } from "vitest";
+import { afterAll, beforeAll, bench, describe } from "vitest";
 
 import { runCodegen } from "../src/index";
 
@@ -22,19 +22,37 @@ import { runCodegen } from "../src/index";
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "..", "__tests__", "fixtures", "simple");
 
-let workdir: string;
-
 describe("runCodegen end-to-end (simple fixture)", () => {
+    // The cold run is self-contained (fresh workdir per call), so it survives
+    // CodSpeed's repeated invocation. The warm run needs a primed workdir set up
+    // once — that lives in beforeAll/afterAll rather than the tinybench
+    // `setup`/`teardown` options, which CodSpeed's instrumented runner ignores
+    // (it would otherwise run against a stale, already-removed workdir).
+    let warmWorkdir: string;
+
+    beforeAll(() => {
+        warmWorkdir = mkdtempSync(join(tmpdir(), "lunora-codegen-bench-warm-"));
+        cpSync(join(fixtureRoot, "lunora"), join(warmWorkdir, "lunora"), { recursive: true });
+        // Prime the on-disk output so the bench exercises the `writeIfChanged`
+        // no-op path.
+        runCodegen({ projectRoot: warmWorkdir });
+    });
+
+    afterAll(() => {
+        rmSync(warmWorkdir, { force: true, recursive: true });
+    });
+
     bench(
         "cold run — fresh workdir, full project setup",
         () => {
-            workdir = mkdtempSync(join(tmpdir(), "lunora-codegen-bench-"));
-            cpSync(join(fixtureRoot, "lunora"), join(workdir, "lunora"), { recursive: true });
+            const coldWorkdir = mkdtempSync(join(tmpdir(), "lunora-codegen-bench-"));
+
+            cpSync(join(fixtureRoot, "lunora"), join(coldWorkdir, "lunora"), { recursive: true });
 
             try {
-                runCodegen({ projectRoot: workdir });
+                runCodegen({ projectRoot: coldWorkdir });
             } finally {
-                rmSync(workdir, { force: true, recursive: true });
+                rmSync(coldWorkdir, { force: true, recursive: true });
             }
         },
         { iterations: 20 },
@@ -43,20 +61,8 @@ describe("runCodegen end-to-end (simple fixture)", () => {
     bench(
         "warm run — same workdir, only emit phase changes",
         () => {
-            runCodegen({ projectRoot: workdir });
+            runCodegen({ projectRoot: warmWorkdir });
         },
-        {
-            iterations: 20,
-            setup: () => {
-                workdir = mkdtempSync(join(tmpdir(), "lunora-codegen-bench-warm-"));
-                cpSync(join(fixtureRoot, "lunora"), join(workdir, "lunora"), { recursive: true });
-                // Prime the on-disk output so the second pass exercises the
-                // `writeIfChanged` no-op path.
-                runCodegen({ projectRoot: workdir });
-            },
-            teardown: () => {
-                rmSync(workdir, { force: true, recursive: true });
-            },
-        },
+        { iterations: 20 },
     );
 });
