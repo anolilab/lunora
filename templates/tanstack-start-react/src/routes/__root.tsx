@@ -11,6 +11,13 @@ export const Route = createRootRouteWithContext<RouterContext>()({
         meta: [{ charSet: "utf-8" }, { name: "viewport", content: "width=device-width, initial-scale=1" }, { title: "{{name}}" }],
     }),
     component: RootComponent,
+    notFoundComponent: () => (
+        <main style={{ fontFamily: "system-ui", padding: "3rem", textAlign: "center" }}>
+            <h1>404</h1>
+            <p>This page could not be found.</p>
+            <a href="/">Go home</a>
+        </main>
+    ),
 });
 
 function RootComponent() {

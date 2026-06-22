@@ -4,7 +4,7 @@
     "private": true,
     "type": "module",
     "scripts": {
-        "dev": "lunora dev",
+        "dev": "nuxt dev",
         "build": "nuxt build",
         "preview": "nuxt preview",
         "codegen": "lunora codegen",

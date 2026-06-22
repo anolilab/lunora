@@ -4,7 +4,7 @@
     "private": true,
     "type": "module",
     "scripts": {
-        "dev": "lunora dev",
+        "dev": "vite",
         "build": "lunora codegen && vite build",
         "preview": "vite preview",
         "codegen": "lunora codegen",
