@@ -818,8 +818,6 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
         multiSelect: options.prompt?.multiSelect ?? ((message, choices, settings) => tuiMultiSelect(message, choices, settings)),
         select: options.prompt?.select ?? ((message, choices, settings): Promise<FeatureItem | undefined> => tuiSelect(message, choices, settings)),
     });
-
-    await tuiOutro("you're all set 🎉");
 };
 
 /** The templates offered in the interactive picker (excludes the not-yet-available `next`). */
@@ -973,14 +971,17 @@ const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandR
     const result = options.inPlace === true ? runInPlaceInit(cwd, options.logger) : await scaffoldNewProject(options, cwd);
 
     if (result.code === 0 && result.target !== "") {
-        // New-project path: offer to install dependencies, then print next steps
-        // with the chosen package manager. In-place init keeps its own per-
-        // framework wiring hints and never auto-installs an existing project.
-        const installedManager = options.inPlace === true ? undefined : await maybeOfferInstall(options, result.target);
-
+        // Offer the auth/email extras FIRST — they add dependencies + bindings to
+        // the scaffold's package.json — then install LAST so those newly-added
+        // deps are part of the single install. In-place init keeps its own
+        // per-framework wiring hints and never auto-installs an existing project.
         await maybeOfferExtras(options, result.target);
 
+        const installedManager = options.inPlace === true ? undefined : await maybeOfferInstall(options, result.target);
+
         if (options.inPlace !== true) {
+            // Closing flourish + next steps, after the install so it's truly last.
+            await tuiOutro("you're all set 🎉");
             printNextSteps(options.logger, basename(result.target), installedManager);
         }
     }
