@@ -1,3 +1,9 @@
+## @lunora/ratelimit [1.0.0-alpha.2](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.1...@lunora/ratelimit@1.0.0-alpha.2) (2026-06-22)
+
+### Bug Fixes
+
+* **bench:** seed remaining CodSpeed benches in beforeAll ([0fde66b](https://github.com/anolilab/lunora/commit/0fde66b509a99d09d90c6141e01c12c55ac8f5de))
+
 ## @lunora/ratelimit 1.0.0-alpha.1 (2026-06-21)
 
 ### Features
