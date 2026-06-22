@@ -85,16 +85,26 @@ let rankCounter = 0;
 
 const seedId = "seed";
 
+// The patch/replace target must exist before those benches run. `beforeAll`
+// covers the plain `vitest bench` runner, but CodSpeed's instrumented analysis
+// pass calibrates each bench body WITHOUT running the suite `beforeAll`, leaving
+// the row absent ("document not found: seed"). Seed defensively through a guard
+// that is idempotent: the flag makes it a no-op after the first call (so it
+// never double-inserts when `beforeAll` already ran), and the one-off insert
+// lands in tinybench's discarded warmup iterations, not the measured ones.
+let bareSeeded = false;
+const ensureBareSeed = async () => {
+    if (bareSeeded) {
+        return;
+    }
+
+    bareSeeded = true;
+
+    await bareWriter.insert("todos", { _id: seedId, projectId: "p1", seq: 1 });
+};
+
 describe("write throughput — insert/patch/replace/delete", () => {
-    // Seed the patch/replace target in beforeAll: CodSpeed's instrumented runner
-    // does not pick up module-top-level await writes, so a top-level seed would
-    // leave patch/replace hitting a missing row ("document not found: seed").
-    // beforeAll is honored by both the plain `vitest bench` runner and CodSpeed.
-    beforeAll(async () => {
-        await bareWriter.insert("todos", { _id: seedId, projectId: "p1", seq: 1 });
-        await aggWriter.insert("todos", { _id: seedId, projectId: "p1", seq: 1 });
-        await rankWriter.insert("todos", { _id: seedId, projectId: "p1", seq: 1 });
-    });
+    beforeAll(ensureBareSeed);
 
     bench("bare: insert (no triggers, no indexes)", async () => {
         bareCounter += 1;
@@ -112,10 +122,12 @@ describe("write throughput — insert/patch/replace/delete", () => {
     });
 
     bench("bare: patch (single-field update on seed row)", async () => {
+        await ensureBareSeed();
         await bareWriter.patch(seedId, { seq: bareCounter });
     });
 
     bench("bare: replace (full-row substitute on seed row)", async () => {
+        await ensureBareSeed();
         await bareWriter.replace(seedId, { _id: seedId, projectId: "p1", seq: bareCounter });
     });
 });

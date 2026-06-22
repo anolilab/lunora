@@ -31,6 +31,14 @@ export const getBenchConfig = (options: ViteUserConfig = {}) =>
         plugins: [codspeedPlugin(), ...(options.plugins ?? [])],
         test: {
             environment: "node",
+            // CodSpeed instruments benches under cachegrind (~50-100x slower than
+            // a normal run), so `beforeAll` seeding that finishes in well under a
+            // second locally blows past Vitest's default 10s hook timeout in CI —
+            // surfacing as "Hook timed out in 10000ms" and, when the seed never
+            // lands, downstream "document not found" errors in patch/replace
+            // benches. Give the hooks (and the bench bodies) a generous ceiling.
+            hookTimeout: 300_000,
+            testTimeout: 300_000,
             ...options.test,
             benchmark: {
                 include: ["__bench__/**/*.bench.{ts,tsx}"],
