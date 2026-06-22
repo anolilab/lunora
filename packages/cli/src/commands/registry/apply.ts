@@ -10,17 +10,103 @@ import { join } from "@visulima/path";
 import { applyEdits, modify, parse } from "jsonc-parser";
 
 import type { Logger } from "../../util/logger";
+import { resolveDistTag } from "../../util/source-ref";
 import type { AddCommandOptions, RegistryBinding, RegistryEnvVariable, RegistryManifest } from "./types";
+
+/**
+ * Translate a pnpm `workspace:` protocol range into a publishable one.
+ *
+ * Registry manifests live inside the monorepo and pin sibling `@lunora/*`
+ * packages with `workspace:*` so development resolves to the local checkout.
+ * But `add` writes these ranges into a *consumer's* package.json, where the
+ * workspace protocol is meaningless — pnpm aborts with
+ * `ERR_PNPM_WORKSPACE_PKG_NOT_FOUND`. So when the range carries an explicit
+ * version (`workspace:^1.2.3` → `^1.2.3`) we strip the prefix; the bare alias
+ * forms (`workspace:*` / `^` / `~`) have no version to recover, so they pin to
+ * the CLI's release-channel dist-tag (the packages are independently versioned —
+ * there is no single version to pin to from here, and on a pre-release channel
+ * the `latest` tag is a placeholder, so the channel tag is what actually
+ * resolves to installable code). See {@link resolveDistTag}.
+ */
+const resolveDepRange = (range: string): string => {
+    if (!range.startsWith("workspace:")) {
+        return range;
+    }
+
+    const rest = range.slice("workspace:".length);
+
+    if (rest === "" || rest === "*" || rest === "^" || rest === "~") {
+        return resolveDistTag();
+    }
+
+    return rest;
+};
+
+/**
+ * The base `@lunora/*` packages the unscoped `lunorash` umbrella re-exports
+ * through subpaths (`lunorash/server`, `lunorash/values`, …). A project that
+ * depends on `lunorash` already has these — so a registry item must NOT add them
+ * as separate deps (it would reintroduce a parallel `@lunora/server` next to the
+ * umbrella's, and once the floating channel tag drifts past the version
+ * `lunorash` pins, two copies → two module instances → schema/builder identity
+ * breakage). Add-ons the umbrella does not re-export (`@lunora/auth`,
+ * `@lunora/mail`, framework adapters, …) stay granular `@lunora/*` installs.
+ */
+const UMBRELLA_REEXPORTED_DEPS = new Set(["@lunora/client", "@lunora/do", "@lunora/runtime", "@lunora/server", "@lunora/values"]);
+
+/** Quoted module specifier for an umbrella-re-exported base package (with optional subpath). */
+const UMBRELLA_IMPORT_RE = /(['"])@lunora\/(client|do|runtime|server|values)(\/[^'"]*)?\1/gu;
+
+/**
+ * True when the project at `projectRoot` depends on the `lunorash` umbrella
+ * (in either dependency section). Drives the umbrella-aware add path: such a
+ * project gets base imports/deps routed through `lunorash/*` instead of the
+ * granular `@lunora/*` packages. Returns false when package.json is absent or
+ * unreadable (the safe granular default).
+ */
+const projectUsesUmbrella = (projectRoot: string): boolean => {
+    const packageJsonPath = join(projectRoot, "package.json");
+
+    if (!existsSync(packageJsonPath)) {
+        return false;
+    }
+
+    try {
+        const parsed = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
+            dependencies?: Record<string, string>;
+            devDependencies?: Record<string, string>;
+        };
+
+        return parsed.dependencies?.lunorash !== undefined || parsed.devDependencies?.lunorash !== undefined;
+    } catch {
+        return false;
+    }
+};
+
+/**
+ * Rewrite a registry item's `@lunora/{server,values,runtime,do,client}` import
+ * specifiers to the matching `lunorash/*` umbrella subpath, preserving any
+ * subpath (`@lunora/server/types` → `lunorash/server/types`) and quote style.
+ * Add-on scopes are left untouched. Applied to a copied file only when the
+ * target project depends on the umbrella so the shipped code imports the base
+ * surface from the same package the rest of the app does (one instance).
+ */
+const rewriteUmbrellaImports = (source: string): string =>
+    source.replaceAll(UMBRELLA_IMPORT_RE, (_match, quote: string, base: string, subpath?: string) => `${quote}lunorash/${base}${subpath ?? ""}${quote}`);
 
 /**
  * Add deps to a `package.json` section (`dependencies` or `devDependencies`),
  * structurally so formatting/comments are preserved. Returns the added names.
+ * When `useUmbrella` is set, base packages the `lunorash` umbrella re-exports
+ * ({@link UMBRELLA_REEXPORTED_DEPS}) are skipped — the umbrella already provides
+ * them, and adding a parallel copy risks a second instance.
  */
 const applyDeps = (
     deps: Readonly<Record<string, string>>,
     projectRoot: string,
     logger: Logger,
     section: "dependencies" | "devDependencies" = "dependencies",
+    useUmbrella = false,
 ): ReadonlyArray<string> => {
     const entries = Object.entries(deps);
 
@@ -41,6 +127,14 @@ const applyDeps = (
     const added: string[] = [];
 
     for (const [name, range] of entries) {
+        // The umbrella already re-exports this base package via a `lunorash/*`
+        // subpath — adding it granularly would duplicate the install.
+        if (useUmbrella && UMBRELLA_REEXPORTED_DEPS.has(name)) {
+            logger.info(`dep provided by the lunorash umbrella, skipping: ${name}`);
+
+            continue;
+        }
+
         // A dep already pinned in either section is left as the project has it.
         if (parsed.dependencies?.[name] !== undefined || parsed.devDependencies?.[name] !== undefined) {
             logger.info(`dep already present: ${name}`);
@@ -48,7 +142,7 @@ const applyDeps = (
             continue;
         }
 
-        const edits = modify(text, [section, name], range, {
+        const edits = modify(text, [section, name], resolveDepRange(range), {
             formattingOptions: { insertSpaces: true, tabSize: 4 },
         });
 
@@ -231,17 +325,21 @@ const applyBindings = (bindings: ReadonlyArray<RegistryBinding>, projectRoot: st
     return applied;
 };
 
-/** Apply one item's non-file resources (deps, devDeps, bindings, env vars). Returns the deps + bindings added. */
-const applyItemResources = (manifest: RegistryManifest, cwd: string, logger: Logger): { bindings: string[]; deps: string[] } => {
+/**
+ * Apply one item's non-file resources (deps, devDeps, bindings, env vars).
+ * Returns the deps + bindings added. `useUmbrella` routes base-package deps
+ * through the `lunorash` umbrella (skipping the granular duplicates).
+ */
+const applyItemResources = (manifest: RegistryManifest, cwd: string, logger: Logger, useUmbrella = false): { bindings: string[]; deps: string[] } => {
     const deps: string[] = [];
     const bindings: string[] = [];
 
     if (manifest.deps) {
-        deps.push(...applyDeps(manifest.deps, cwd, logger));
+        deps.push(...applyDeps(manifest.deps, cwd, logger, "dependencies", useUmbrella));
     }
 
     if (manifest.devDependencies) {
-        deps.push(...applyDeps(manifest.devDependencies, cwd, logger, "devDependencies"));
+        deps.push(...applyDeps(manifest.devDependencies, cwd, logger, "devDependencies", useUmbrella));
     }
 
     if (manifest.bindings) {
@@ -305,4 +403,4 @@ const confirmDepMutation = async (items: ReadonlyArray<{ manifest: RegistryManif
     return confirmed;
 };
 
-export { applyBindings, applyDeps, applyEnvVariables, applyItemResources, confirmDepMutation };
+export { applyBindings, applyDeps, applyEnvVariables, applyItemResources, confirmDepMutation, projectUsesUmbrella, resolveDepRange, rewriteUmbrellaImports };

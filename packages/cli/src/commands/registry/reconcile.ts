@@ -12,8 +12,24 @@ import type { Logger } from "../../util/logger";
 import type { RegistryLock } from "../../util/registry-lock";
 import { hashContent, readLock, recordedHash, recordFile, writeLock } from "../../util/registry-lock";
 import renderDiff from "../../util/text-diff";
-import { applyItemResources } from "./apply";
+import { applyItemResources, projectUsesUmbrella, rewriteUmbrellaImports } from "./apply";
 import type { ReconcileOptions, ReconcileOutcome, RegistryFile, ResolvedItem } from "./types";
+
+/** Code files whose `@lunora/*` base imports are rewritten to `lunorash/*` for umbrella projects. */
+const CODE_FILE_RE = /\.[cm]?[jt]sx?$/u;
+
+/**
+ * Read an item's source file, rewriting base `@lunora/*` imports to the
+ * `lunorash/*` umbrella subpaths when the target project uses the umbrella and
+ * the file is code. Non-umbrella projects (and non-code files) get the bytes
+ * verbatim. Centralizes the read so the written content and the lock hash are
+ * always the post-rewrite form (3-way upgrades stay consistent across runs).
+ */
+const readItemFile = (itemDirectory: string, file: RegistryFile, useUmbrella: boolean): string => {
+    const source = readFileSync(join(itemDirectory, file.from), "utf8");
+
+    return useUmbrella && CODE_FILE_RE.test(file.to) ? rewriteUmbrellaImports(source) : source;
+};
 
 /**
  * Reconcile a `schema-extension` file: copy the extension source (if absent)
@@ -27,6 +43,7 @@ const reconcileSchemaExtension = (
     projectRoot: string,
     logger: Logger,
     diff: boolean,
+    useUmbrella: boolean,
 ): ReconcileOutcome => {
     const schemaPath = join(projectRoot, "lunora", "schema.ts");
 
@@ -42,12 +59,13 @@ const reconcileSchemaExtension = (
 
     if (!existsSync(destinationPath)) {
         mkdirSync(dirname(destinationPath), { recursive: true });
-        writeFileSync(destinationPath, readFileSync(join(itemDirectory, file.from), "utf8"), "utf8");
+        writeFileSync(destinationPath, readItemFile(itemDirectory, file, useUmbrella), "utf8");
     }
 
+    const baseModule = useUmbrella ? "lunorash/server" : "@lunora/server";
     const existingSchema = existsSync(schemaPath)
         ? readFileSync(schemaPath, "utf8")
-        : 'import { defineSchema } from "@lunora/server";\n\nexport const schema = defineSchema({});\n';
+        : `import { defineSchema } from "${baseModule}";\n\nexport const schema = defineSchema({});\n`;
 
     const result = insertSchemaExtension(existingSchema, itemKey);
 
@@ -103,9 +121,10 @@ const reconcileWholeFile = (
     logger: Logger,
     lock: RegistryLock,
     reconcileOptions: ReconcileOptions,
+    useUmbrella: boolean,
 ): ReconcileOutcome => {
     const destinationPath = join(projectRoot, file.to);
-    const incoming = readFileSync(join(itemDirectory, file.from), "utf8");
+    const incoming = readItemFile(itemDirectory, file, useUmbrella);
     const exists = existsSync(destinationPath);
     const current = exists ? readFileSync(destinationPath, "utf8") : "";
 
@@ -175,12 +194,13 @@ const reconcileFile = (
     logger: Logger,
     lock: RegistryLock,
     reconcileOptions: ReconcileOptions = {},
+    useUmbrella = false,
 ): ReconcileOutcome => {
     if (file.merge === "schema-extension") {
-        return reconcileSchemaExtension(file, itemKey, itemDirectory, projectRoot, logger, reconcileOptions.diff === true);
+        return reconcileSchemaExtension(file, itemKey, itemDirectory, projectRoot, logger, reconcileOptions.diff === true, useUmbrella);
     }
 
-    return reconcileWholeFile(file, itemKey, itemDirectory, projectRoot, logger, lock, reconcileOptions);
+    return reconcileWholeFile(file, itemKey, itemDirectory, projectRoot, logger, lock, reconcileOptions, useUmbrella);
 };
 
 /** Run the reconcile phase across every resolved item; returns the aggregate outcome. */
@@ -199,11 +219,16 @@ const reconcileItems = (
     // upgrade check). Read once, mutated as files are reconciled, persisted below.
     const lock = readLock(cwd);
 
+    // Route base-package deps + imports through the `lunorash` umbrella when the
+    // target project depends on it, so an add never reintroduces a granular
+    // `@lunora/server` next to the umbrella's copy. Detected once per run.
+    const useUmbrella = projectUsesUmbrella(cwd);
+
     // Sequential by design: reconciling lunora/schema.ts is read-modify-write,
     // so two items extending the schema must not interleave their edits.
     for (const { directory, manifest } of items) {
         for (const file of manifest.files) {
-            const outcome = reconcileFile(file, manifest.name, directory, cwd, logger, lock, reconcileOptions);
+            const outcome = reconcileFile(file, manifest.name, directory, cwd, logger, lock, reconcileOptions, useUmbrella);
 
             (outcome.kind === "written" ? written : skipped).push(outcome.path);
         }
@@ -213,7 +238,7 @@ const reconcileItems = (
             continue;
         }
 
-        const applied = applyItemResources(manifest, cwd, logger);
+        const applied = applyItemResources(manifest, cwd, logger, useUmbrella);
 
         depsAdded.push(...applied.deps);
         bindingsApplied.push(...applied.bindings);

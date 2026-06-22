@@ -126,4 +126,25 @@ const resolveSourceRef = (ref: string | undefined): string => {
     return resolveVersionRef(resolveCliVersion());
 };
 
-export { resolveSourceRef, resolveVersionRef };
+/** npm dist-tag a stable CLI pins sibling `@lunora/*` deps to. */
+const STABLE_DIST_TAG = "latest";
+
+/**
+ * Resolve the npm dist-tag that scaffolded consumer projects should pin sibling
+ * `@lunora/*` dependencies to, derived from the running CLI's own version. This
+ * is the dependency-range analogue of {@link resolveSourceRef}: it keeps a given
+ * CLI release wiring projects to the channel it was published on. A pre-release
+ * CLI (`1.0.0-alpha.1`) pins to its channel tag (`alpha`); the unpublished dev
+ * version (`0.0.0`) also pins to `alpha` (its `latest` is a placeholder); every
+ * stable version pins to `latest`.
+ *
+ * Mirrors {@link resolveVersionRef} but collapses its `main` (stable branch)
+ * result to the `latest` dist-tag, since npm has no `main` channel.
+ */
+const resolveDistTag = (): string => {
+    const ref = resolveVersionRef(resolveCliVersion());
+
+    return ref === STABLE_BRANCH ? STABLE_DIST_TAG : ref;
+};
+
+export { resolveDistTag, resolveSourceRef, resolveVersionRef };

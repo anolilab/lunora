@@ -24,6 +24,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Prerequisite: commit your pnpm-lock.yaml. \`pnpm install --frozen-lockfile\`
+# (below) and the pnpm cache both require it — run \`pnpm install\` locally and
+# commit the lockfile before pushing, or the first CI run fails.
+#
 # Set these repository secrets (Settings → Secrets and variables → Actions):
 #   CLOUDFLARE_API_TOKEN   — a Workers-scoped API token
 #   CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account id
@@ -74,6 +78,10 @@ jobs:
 const GITLAB_CONTENT = `stages:
   - deploy
 
+# Prerequisite: commit your pnpm-lock.yaml. \`pnpm install --frozen-lockfile\`
+# (below) requires it — run \`pnpm install\` locally and commit the lockfile
+# before pushing, or the first pipeline fails.
+#
 # Set these as masked CI/CD variables (Settings → CI/CD → Variables):
 #   CLOUDFLARE_API_TOKEN   — a Workers-scoped API token
 #   CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account id
@@ -176,6 +184,9 @@ const scaffoldCiWorkflow = (projectRoot: string, provider: CiProvider, logger: L
         } else {
             logger.success(`--ci ${provider}: wrote ${spec.file}`);
             logger.info(`--ci ${provider}: set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID as ${spec.secretsHint} to enable deploys.`);
+            logger.info(
+                `--ci ${provider}: run \`pnpm install\` and commit pnpm-lock.yaml before pushing — the pipeline runs \`pnpm install --frozen-lockfile\`.`,
+            );
         }
 
         return result;

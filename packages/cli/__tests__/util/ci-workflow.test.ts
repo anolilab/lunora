@@ -59,6 +59,19 @@ describe("ci-workflow", () => {
         expect(yaml).toContain("$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH");
     });
 
+    it("both providers document the committed-lockfile prerequisite", () => {
+        expect.assertions(2);
+
+        writeCiWorkflow(workdir, "github");
+        writeCiWorkflow(workdir, "gitlab");
+
+        const github = readFileSync(join(workdir, WORKFLOWS.github.file), "utf8");
+        const gitlab = readFileSync(join(workdir, ".gitlab-ci.yml"), "utf8");
+
+        expect(github).toContain("commit your pnpm-lock.yaml");
+        expect(gitlab).toContain("commit your pnpm-lock.yaml");
+    });
+
     it("both providers include a preview job running `lunora deploy --preview`", () => {
         expect.assertions(4);
 

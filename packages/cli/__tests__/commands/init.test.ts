@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { isTemplate, resolveTemplateSource, runInitCommand } from "../../src/commands/init/handler";
 import type { Logger } from "../../src/util/logger";
+import { resolveDistTag } from "../../src/util/source-ref";
 
 const silentLogger = (): Logger => {
     return {
@@ -101,6 +102,33 @@ describe("lunora init", () => {
             expect(pkg).toContain("vite");
             expect(pkg).toContain("wrangler");
             expect(pkg).not.toContain("@lunora/server");
+        });
+
+        it("stamps the template's lunora deps to the CLI release channel, leaving others untouched", async () => {
+            expect.assertions(5);
+
+            await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: silentLogger(),
+                name: "stamped",
+                templateType: "vite",
+            });
+
+            const pkg = JSON.parse(readFileSync(join(workdir, "stamped", "package.json"), "utf8")) as {
+                dependencies: Record<string, string>;
+                devDependencies: Record<string, string>;
+            };
+
+            const tag = resolveDistTag();
+
+            // Lunora-scoped ranges are pinned to the channel; the `^0.0.0` stub is gone.
+            expect(pkg.dependencies.lunorash).toBe(tag);
+            expect(pkg.dependencies["@lunora/react"]).toBe(tag);
+            expect(pkg.devDependencies["@lunora/vite"]).toBe(tag);
+            // Third-party deps keep their template ranges verbatim.
+            expect(pkg.dependencies["react-dom"]).toBe("^19.2.7");
+            expect(pkg.devDependencies.wrangler).toBe("^4.100.0");
         });
 
         it("standalone template scaffolds a worker entry but no frontend files", async () => {

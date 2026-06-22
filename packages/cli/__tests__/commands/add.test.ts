@@ -5,8 +5,10 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { applyDeps, projectUsesUmbrella, resolveDepRange, rewriteUmbrellaImports } from "../../src/commands/registry/apply";
 import { parseManifest, runAddCommand } from "../../src/commands/registry/index";
 import type { Logger } from "../../src/util/logger";
+import { resolveDistTag } from "../../src/util/source-ref";
 
 const makeLogger = (): { lines: string[]; logger: Logger } => {
     const lines: string[] = [];
@@ -55,6 +57,91 @@ describe("lunora add", () => {
 
     afterEach(() => {
         rmSync(workdir, { force: true, recursive: true });
+    });
+
+    describe("resolveDepRange", () => {
+        it("passes plain semver ranges through untouched", () => {
+            expect.assertions(2);
+
+            expect(resolveDepRange("^1.2.3")).toBe("^1.2.3");
+            expect(resolveDepRange("latest")).toBe("latest");
+        });
+
+        it("maps bare workspace aliases to the CLI's release-channel dist-tag", () => {
+            expect.assertions(4);
+
+            // The channel is derived from the running CLI version (`alpha` in this
+            // monorepo) — never the literal `workspace:` protocol or a placeholder.
+            const tag = resolveDistTag();
+
+            expect(resolveDepRange("workspace:*")).toBe(tag);
+            expect(resolveDepRange("workspace:^")).toBe(tag);
+            expect(resolveDepRange("workspace:~")).toBe(tag);
+            expect(resolveDepRange("workspace:")).toBe(tag);
+        });
+
+        it("strips the workspace: prefix from version-bearing ranges", () => {
+            expect.assertions(2);
+
+            expect(resolveDepRange("workspace:^1.2.3")).toBe("^1.2.3");
+            expect(resolveDepRange("workspace:1.2.3")).toBe("1.2.3");
+        });
+    });
+
+    describe("umbrella-aware add", () => {
+        const writeUmbrellaPackageJson = (): void => {
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { lunorash: "alpha" }, name: "demo" }, null, 4), "utf8");
+        };
+
+        it("rewriteUmbrellaImports rewrites base scopes and leaves add-ons", () => {
+            expect.assertions(5);
+
+            expect(rewriteUmbrellaImports('import { x } from "@lunora/server";')).toBe('import { x } from "lunorash/server";');
+            expect(rewriteUmbrellaImports("import { x } from '@lunora/client/query';")).toBe("import { x } from 'lunorash/client/query';");
+            expect(rewriteUmbrellaImports('export * from "@lunora/values";')).toBe('export * from "lunorash/values";');
+            // Add-on scopes the umbrella does not re-export are untouched.
+            expect(rewriteUmbrellaImports('import { auth } from "@lunora/auth";')).toBe('import { auth } from "@lunora/auth";');
+            expect(rewriteUmbrellaImports('import { useQuery } from "@lunora/react";')).toBe('import { useQuery } from "@lunora/react";');
+        });
+
+        it("projectUsesUmbrella detects the lunorash dependency", () => {
+            expect.assertions(2);
+
+            expect(projectUsesUmbrella(workdir)).toBe(false);
+
+            writeUmbrellaPackageJson();
+
+            expect(projectUsesUmbrella(workdir)).toBe(true);
+        });
+
+        it("applyDeps skips umbrella-provided base deps but keeps add-ons", () => {
+            expect.assertions(3);
+
+            writeUmbrellaPackageJson();
+
+            const added = applyDeps({ "@lunora/auth": "workspace:*", "@lunora/server": "workspace:*" }, workdir, makeLogger().logger, "dependencies", true);
+
+            expect(added).toContain("@lunora/auth");
+            expect(added).not.toContain("@lunora/server");
+
+            const pkg = JSON.parse(readFileSync(join(workdir, "package.json"), "utf8")) as { dependencies: Record<string, string> };
+
+            expect(pkg.dependencies["@lunora/server"]).toBeUndefined();
+        });
+
+        it("rewrites copied base imports to lunorash subpaths in an umbrella project", async () => {
+            expect.assertions(2);
+
+            writeUmbrellaPackageJson();
+
+            await runAddCommand({ cwd: workdir, from: registryRoot, logger: makeLogger().logger, names: ["ratelimit"], yes: true });
+
+            // The ratelimit fixture's index.ts imports `@lunora/server`.
+            const copied = readFileSync(join(workdir, "lunora", "ratelimit", "index.ts"), "utf8");
+
+            expect(copied).toContain('from "lunorash/server"');
+            expect(copied).not.toContain('from "@lunora/server"');
+        });
     });
 
     describe("parseManifest", () => {
@@ -245,6 +332,21 @@ describe("lunora add", () => {
             expect(pkg).toContain("@lunora/ratelimit");
             // comment preserved + binding applied.
             expect(wrangler).toContain("RATELIMIT_ENABLED");
+        });
+
+        it("rewrites a manifest's workspace: dep range to a publishable one", async () => {
+            expect.assertions(2);
+
+            // The ratelimit fixture pins `@lunora/ratelimit: workspace:*`. The
+            // workspace protocol is only resolvable inside the monorepo — leaking
+            // it into a consumer's package.json makes `pnpm install` abort with
+            // ERR_PNPM_WORKSPACE_PKG_NOT_FOUND.
+            await runAddCommand({ cwd: workdir, from: registryRoot, logger: makeLogger().logger, names: ["ratelimit"], yes: true });
+
+            const pkg = JSON.parse(readFileSync(join(workdir, "package.json"), "utf8")) as { dependencies: Record<string, string> };
+
+            expect(pkg.dependencies["@lunora/ratelimit"]).toBe(resolveDistTag());
+            expect(JSON.stringify(pkg)).not.toContain("workspace:");
         });
     });
 

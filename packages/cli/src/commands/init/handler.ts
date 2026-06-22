@@ -3,8 +3,9 @@ import { tmpdir } from "node:os";
 
 import { isInteractive, promptMultiSelect, promptSelect } from "@lunora/config";
 import { walkSync } from "@visulima/fs";
-import { dirname, join, relative, resolve } from "@visulima/path";
+import { basename, dirname, join, relative, resolve } from "@visulima/path";
 import { downloadTemplate } from "giget";
+import { applyEdits, modify } from "jsonc-parser";
 
 import type { CiProvider } from "../../util/ci-workflow";
 import { isCiProvider, scaffoldCiWorkflow } from "../../util/ci-workflow";
@@ -14,7 +15,7 @@ import type { DetectedFramework, FrameworkDetection } from "../../util/detect-fr
 import { detectFramework } from "../../util/detect-framework";
 import type { Logger } from "../../util/logger";
 import { patchViteConfig } from "../../util/patch-vite-config";
-import { resolveSourceRef } from "../../util/source-ref";
+import { resolveDistTag, resolveSourceRef } from "../../util/source-ref";
 import type { FeatureItem } from "../add/features";
 import { runAddCommand } from "../registry";
 import type { InitOptions } from "./index";
@@ -155,6 +156,48 @@ const isTextFile = (filePath: string): boolean => {
 
 const substitute = (content: string, name: string): string => content.replaceAll("{{name}}", name);
 
+/** A dependency published from this monorepo: the `lunorash` umbrella or any `@lunora/*` package. */
+const isLunoraDep = (name: string): boolean => name === "lunorash" || name.startsWith("@lunora/");
+
+/**
+ * Rewrite the `@lunora/*` + `lunorash` dependency ranges in a template's
+ * `package.json` to the CLI's release-channel dist-tag.
+ *
+ * Templates pin these at the `^0.0.0` placeholder so the monorepo's own tooling
+ * stays version-agnostic, but that placeholder resolves to an empty stub package
+ * on a consumer machine (and on a pre-release channel the `latest` tag is itself
+ * a placeholder). Stamping each Lunora-scoped range to {@link resolveDistTag}
+ * wires a scaffolded project to the same channel the running CLI shipped on —
+ * the same fix `resolveDepRange` applies to registry-added deps. Non-Lunora deps
+ * (react, vite, wrangler, …) are left untouched. Structural jsonc edits preserve
+ * the file's formatting; a parse failure leaves the text unchanged.
+ */
+const stampLunoraDeps = (packageJsonText: string, distTag: string): string => {
+    let parsed: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+
+    try {
+        parsed = JSON.parse(packageJsonText) as typeof parsed;
+    } catch {
+        return packageJsonText;
+    }
+
+    let text = packageJsonText;
+
+    for (const section of ["dependencies", "devDependencies"] as const) {
+        for (const name of Object.keys(parsed[section] ?? {})) {
+            if (!isLunoraDep(name)) {
+                continue;
+            }
+
+            const edits = modify(text, [section, name], distTag, { formattingOptions: { insertSpaces: true, tabSize: 4 } });
+
+            text = applyEdits(text, edits);
+        }
+    }
+
+    return text;
+};
+
 const collectFiles = (directory: string): ReadonlyArray<string> => {
     const out: string[] = [];
 
@@ -168,6 +211,7 @@ const collectFiles = (directory: string): ReadonlyArray<string> => {
 const copyTemplate = (sourceDirectory: string, target: string, name: string): ReadonlyArray<string> => {
     const files = collectFiles(sourceDirectory);
     const written: string[] = [];
+    const distTag = resolveDistTag();
 
     for (const source of files) {
         const relativePath = relative(sourceDirectory, source);
@@ -176,7 +220,14 @@ const copyTemplate = (sourceDirectory: string, target: string, name: string): Re
         mkdirSync(dirname(destination), { recursive: true });
 
         const raw = readFileSync(source);
-        const text = isTextFile(source) ? substitute(raw.toString("utf8"), name) : undefined;
+        let text = isTextFile(source) ? substitute(raw.toString("utf8"), name) : undefined;
+
+        // Pin the template's `@lunora/*` + `lunorash` placeholder ranges to the
+        // CLI's release channel so the scaffold installs real code, not the
+        // `^0.0.0` stub. Other deps and non-package.json files pass through.
+        if (text !== undefined && basename(source) === "package.json") {
+            text = stampLunoraDeps(text, distTag);
+        }
 
         if (text === undefined) {
             writeFileSync(destination, raw);
