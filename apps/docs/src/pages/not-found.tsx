@@ -7,8 +7,6 @@ import type { FC, PropsWithChildren } from "react";
 
 import SpaceBackdrop from "@/components/sections/space-backdrop";
 
-const SPOTLIGHT = "radial-gradient(45% 40% at 32% 10%, rgba(255,255,255,0.12), transparent 70%)";
-
 export const NotFound: FC<PropsWithChildren<NotFoundRouteProps>> = ({ children }) => (
     <section
         className="relative flex min-h-[100svh] flex-col overflow-hidden bg-[#0e0e11] px-6 pt-32 pb-14 sm:px-10 lg:px-14"
@@ -16,15 +14,6 @@ export const NotFound: FC<PropsWithChildren<NotFoundRouteProps>> = ({ children }
         data-theme="dark"
     >
         <SpaceBackdrop className="absolute inset-0 z-0" id="photo-1708559831534-44c30eb3ab0e" opacity={0.5} />
-        <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0" style={{ background: SPOTLIGHT }} />
-
-        {/* the one focal moment — an oversized ghost 404, data as texture */}
-        <span
-            aria-hidden="true"
-            className="pointer-events-none absolute -bottom-[7vw] left-1/2 z-0 -translate-x-1/2 -translate-y-0 text-[44vw] leading-none font-semibold tracking-tighter text-white/[0.035] select-none"
-        >
-            404
-        </span>
 
         {/* top — error label + return panel */}
         <div className="relative z-10 flex items-start justify-between gap-8">
