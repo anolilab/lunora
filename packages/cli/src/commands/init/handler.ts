@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 import { isInteractive } from "@lunora/config";
@@ -22,6 +22,9 @@ import { runAddCommand } from "../registry";
 import type { InitOptions } from "./index";
 import type { OfferDeps } from "./offer-extras";
 import { offerRegistryExtras } from "./offer-extras";
+import type { OverlayFramework } from "./overlay/adapters";
+import { ADAPTERS, isOverlayFramework } from "./overlay/adapters";
+import { applyLunoraOverlay } from "./overlay/apply";
 
 type Template = "astro" | "next" | "nuxt" | "standalone" | "sveltekit" | "tanstack-start-react" | "tanstack-start-solid" | "vite-react";
 
@@ -60,8 +63,16 @@ interface InitCommandOptions {
      * suppresses it regardless. Has no effect once {@link prompt} is injected.
      */
     interactive?: boolean;
+
     logger: Logger;
     name?: string;
+
+    /**
+     * Local directory holding create-vite bases (one `template-&lt;id>/` subdir per
+     * framework). When set with `vite`, the overlay copies the base from disk
+     * instead of fetching `create-vite` over the network — offline mode + tests.
+     */
+    overlayBaseFrom?: string;
 
     /**
      * Inject the offer's prompts (tests). When set, the offer is treated as
@@ -91,6 +102,14 @@ interface InitCommandOptions {
      */
     source?: string;
     templateType?: Template;
+
+    /**
+     * Scaffold via the **create-vite overlay** for this framework (`react`,
+     * `vue`, `solid`, `svelte`, `vanilla`) instead of a bespoke template: fetch
+     * the official create-vite base and apply the Lunora layer on top. Takes
+     * precedence over `templateType`.
+     */
+    vite?: string;
 
     /** Suppress the offer entirely (the `--yes` flag): scaffold only, print the later-setup hint. */
     yes?: boolean;
@@ -339,6 +358,73 @@ const scaffoldFromRemote = async (options: {
         const message = error instanceof Error ? error.message : String(error);
 
         logger.error(`failed to download template: ${message}`);
+
+        return { code: 1, files: [], target };
+    } finally {
+        rmSync(stagingRoot, { force: true, recursive: true });
+    }
+};
+
+/** Mirror create-vite's dotfile rename — it stores `.gitignore` etc. with a leading `_` and renames on scaffold. */
+const renameCreateViteDotfiles = (directory: string): void => {
+    for (const file of ["_gitignore", "_npmrc", "_gitattributes"]) {
+        const from = join(directory, file);
+
+        if (existsSync(from)) {
+            renameSync(from, join(directory, `.${file.slice(1)}`));
+        }
+    }
+};
+
+/**
+ * Overlay path: scaffold a fresh `create-vite` base for `framework` into
+ * `target`, then apply the Lunora overlay. The base comes from disk
+ * (`overlayBaseFrom`, offline/tests) or `create-vite` over the network.
+ */
+const scaffoldViteOverlay = async (options: {
+    framework: OverlayFramework;
+    logger: Logger;
+    name: string;
+    overlayBaseFrom: string | undefined;
+    target: string;
+}): Promise<InitCommandResult> => {
+    const { framework, logger, name, overlayBaseFrom, target } = options;
+    const adapter = ADAPTERS[framework];
+    const stagingRoot = mkdtempSync(join(tmpdir(), "lunora-vite-base-"));
+
+    try {
+        if (overlayBaseFrom === undefined) {
+            const stagingDirectory = join(stagingRoot, "base");
+            const remote = `github:vitejs/vite/packages/create-vite/template-${adapter.createViteTemplate}#main`;
+
+            await withTuiSpinner(`Fetching the ${adapter.label} (create-vite) base…`, () =>
+                downloadTemplate(remote, { cwd: stagingRoot, dir: stagingDirectory, force: true, install: false, silent: true }),
+            );
+            renameCreateViteDotfiles(stagingDirectory);
+            cpSync(stagingDirectory, target, { recursive: true });
+        } else {
+            const localBase = join(overlayBaseFrom, `template-${adapter.createViteTemplate}`);
+
+            if (!existsSync(localBase)) {
+                logger.error(`create-vite base not found on disk: ${localBase}`);
+
+                return { code: 1, files: [], target };
+            }
+
+            cpSync(localBase, target, { recursive: true });
+        }
+
+        const written = await withTuiSpinner(`Applying the Lunora overlay (${adapter.label})…`, () =>
+            Promise.resolve(applyLunoraOverlay({ adapter, distTag: resolveDistTag(), logger, name, target })),
+        );
+
+        logScaffoldSuccess(logger, written, target, name);
+
+        return { code: 0, files: [...collectFiles(target)], target };
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        logger.error(`failed to scaffold the ${adapter.label} base: ${message}`);
 
         return { code: 1, files: [], target };
     } finally {
@@ -658,6 +744,20 @@ const scaffoldNewProject = async (options: InitCommandOptions, cwd: string): Pro
         }
     }
 
+    // Overlay path: `--vite <framework>` fetches a stock create-vite base and
+    // applies the Lunora layer (no bespoke template). Takes precedence.
+    if (options.vite !== undefined) {
+        if (!isOverlayFramework(options.vite)) {
+            options.logger.error(`init: unknown --vite framework "${options.vite}". Supported: ${Object.keys(ADAPTERS).join(", ")}.`);
+
+            return { code: 1, files: [], target };
+        }
+
+        mkdirSync(target, { recursive: true });
+
+        return scaffoldViteOverlay({ framework: options.vite, logger: options.logger, name, overlayBaseFrom: options.overlayBaseFrom, target });
+    }
+
     // Local-fallback path: `--from /path/to/templates` skips the network and
     // copies straight from disk. Used by the clean-machine smoke + the unit
     // tests; also a working offline mode for end users with a pre-cloned
@@ -743,6 +843,7 @@ const execute: CommandHandler<InitOptions> = defineHandler<InitOptions>(({ argum
         ref: options.ref,
         source: options.source,
         templateType: template,
+        vite: options.vite,
         yes: options.yes === true,
     });
 });

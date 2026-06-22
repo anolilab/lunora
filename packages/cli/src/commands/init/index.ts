@@ -27,6 +27,12 @@ const initCommand: Command = {
             type: String,
         },
         {
+            description:
+                "Scaffold via the create-vite overlay for a framework (react | vue | solid | svelte | vanilla) — official create-vite base + Lunora layer",
+            name: "vite",
+            type: String,
+        },
+        {
             description: "Local templates root to copy from (offline-friendly; expects <type>/ subdirs)",
             name: "from",
             type: String,
@@ -82,5 +88,6 @@ export type InitOptions = CreateOptions<{
     ref: string | undefined;
     source: string | undefined;
     template: string | undefined;
+    vite: string | undefined;
     yes: boolean | undefined;
 }>;
