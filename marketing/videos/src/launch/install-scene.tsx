@@ -9,7 +9,7 @@ import type { TermLine } from "../shared/terminal";
 // workerd), incl. the `__lunora` studio route. Ready time shown snappy for the
 // teaser rather than a cold first-boot.
 const LINES: TermLine[] = [
-    { text: "pnpm dlx lunorash init my-app", kind: "command" },
+    { text: "pnpm dlx lunorash@alpha init my-app", kind: "command" },
     { text: "✓ scaffolded my-app", kind: "success" },
     { text: "cd my-app && pnpm dev", kind: "command" },
     { text: "VITE v8.0.16  ready in 412 ms", kind: "log" },

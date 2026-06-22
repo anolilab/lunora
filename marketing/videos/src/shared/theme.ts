@@ -52,7 +52,7 @@ export const COPY = {
     tagline: "Real-time. End-to-end typed. On your own Cloudflare.",
     outroTagline: "Real-time, typed, and entirely yours.",
     /** Closing call-to-action — the first concrete step, mirrors the install scene. */
-    cta: "pnpm dlx lunorash init",
+    cta: "pnpm dlx lunorash@alpha init",
     /** Kinetic-intro word flashes — one per beat, cut on the music stabs. */
     kinetic: ["REAL-TIME.", "TYPE-SAFE.", "EDGE-NATIVE.", "NO LOCK-IN.", "YOUR CLOUDFLARE."] as string[],
 } as const;

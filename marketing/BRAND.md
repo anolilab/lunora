@@ -106,7 +106,7 @@ account."** From the marketing video (`videos/src/shared/theme.ts`):
 - **Tagline:** _Real-time. End-to-end typed. On your own Cloudflare._
 - **Outro:** _Real-time, typed, and entirely yours._
 - **Eyebrow:** _Built for Cloudflare._
-- **First step / CTA:** `pnpm dlx lunorash init`
+- **First step / CTA:** `pnpm dlx lunorash@alpha init`
 - **Kinetic beats:** REAL-TIME · TYPE-SAFE · EDGE-NATIVE · NO LOCK-IN · YOUR CLOUDFLARE.
 
 ## Lunora Cloud (planned)
