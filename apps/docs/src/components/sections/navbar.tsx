@@ -124,7 +124,7 @@ const menu: NavColumn[] = [
         ],
         navItems: [
             { description: "Managed Lunora — join the waitlist.", href: "/cloud", icon: <Cloud />, title: "Lunora Cloud" },
-            { description: "How Lunora compares to Convex.", href: "/vs/convex", icon: <Scale />, title: "vs Convex" },
+            { description: "vs Convex, Supabase, Firebase, Appwrite.", href: "/compare", icon: <Scale />, title: "Compare" },
             { description: "Admin UI for schema, data, advisors.", href: "/studio", icon: <LayoutDashboard />, title: "Studio" },
             { description: "R2 typed buckets and signed URLs.", href: "/packages/storage", icon: <HardDrive />, title: "Storage" },
             { description: "News, insights, and engineering deep dives.", href: "/blog", icon: <Newspaper />, title: "Blog" },

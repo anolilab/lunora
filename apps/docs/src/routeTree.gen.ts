@@ -15,13 +15,17 @@ import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as LlmsDottxtRouteImport } from './routes/llms[.]txt'
 import { Route as LlmsFullDottxtRouteImport } from './routes/llms-full[.]txt'
 import { Route as ImprintRouteImport } from './routes/imprint'
+import { Route as CompareRouteImport } from './routes/compare'
 import { Route as CodeOfConductRouteImport } from './routes/code-of-conduct'
 import { Route as CloudRouteImport } from './routes/cloud'
 import { Route as ChangelogRouteImport } from './routes/changelog'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as PackagesIndexRouteImport } from './routes/packages/index'
 import { Route as BlogIndexRouteImport } from './routes/blog/index'
+import { Route as VsSupabaseRouteImport } from './routes/vs/supabase'
+import { Route as VsFirebaseRouteImport } from './routes/vs/firebase'
 import { Route as VsConvexRouteImport } from './routes/vs/convex'
+import { Route as VsAppwriteRouteImport } from './routes/vs/appwrite'
 import { Route as PackagesSlugRouteImport } from './routes/packages/$slug'
 import { Route as DocsSplatRouteImport } from './routes/docs/$'
 import { Route as BlogRssDotxmlRouteImport } from './routes/blog/rss[.]xml'
@@ -60,6 +64,11 @@ const ImprintRoute = ImprintRouteImport.update({
   path: '/imprint',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CompareRoute = CompareRouteImport.update({
+  id: '/compare',
+  path: '/compare',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const CodeOfConductRoute = CodeOfConductRouteImport.update({
   id: '/code-of-conduct',
   path: '/code-of-conduct',
@@ -90,9 +99,24 @@ const BlogIndexRoute = BlogIndexRouteImport.update({
   path: '/blog/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const VsSupabaseRoute = VsSupabaseRouteImport.update({
+  id: '/vs/supabase',
+  path: '/vs/supabase',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const VsFirebaseRoute = VsFirebaseRouteImport.update({
+  id: '/vs/firebase',
+  path: '/vs/firebase',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const VsConvexRoute = VsConvexRouteImport.update({
   id: '/vs/convex',
   path: '/vs/convex',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const VsAppwriteRoute = VsAppwriteRouteImport.update({
+  id: '/vs/appwrite',
+  path: '/vs/appwrite',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PackagesSlugRoute = PackagesSlugRouteImport.update({
@@ -136,6 +160,7 @@ export interface FileRoutesByFullPath {
   '/changelog': typeof ChangelogRoute
   '/cloud': typeof CloudRoute
   '/code-of-conduct': typeof CodeOfConductRoute
+  '/compare': typeof CompareRoute
   '/imprint': typeof ImprintRoute
   '/llms-full.txt': typeof LlmsFullDottxtRoute
   '/llms.txt': typeof LlmsDottxtRoute
@@ -148,7 +173,10 @@ export interface FileRoutesByFullPath {
   '/blog/rss.xml': typeof BlogRssDotxmlRoute
   '/docs/$': typeof DocsSplatRoute
   '/packages/$slug': typeof PackagesSlugRoute
+  '/vs/appwrite': typeof VsAppwriteRoute
   '/vs/convex': typeof VsConvexRoute
+  '/vs/firebase': typeof VsFirebaseRoute
+  '/vs/supabase': typeof VsSupabaseRoute
   '/blog/': typeof BlogIndexRoute
   '/packages/': typeof PackagesIndexRoute
   '/llms.mdx/docs/$': typeof LlmsDotmdxDocsSplatRoute
@@ -158,6 +186,7 @@ export interface FileRoutesByTo {
   '/changelog': typeof ChangelogRoute
   '/cloud': typeof CloudRoute
   '/code-of-conduct': typeof CodeOfConductRoute
+  '/compare': typeof CompareRoute
   '/imprint': typeof ImprintRoute
   '/llms-full.txt': typeof LlmsFullDottxtRoute
   '/llms.txt': typeof LlmsDottxtRoute
@@ -170,7 +199,10 @@ export interface FileRoutesByTo {
   '/blog/rss.xml': typeof BlogRssDotxmlRoute
   '/docs/$': typeof DocsSplatRoute
   '/packages/$slug': typeof PackagesSlugRoute
+  '/vs/appwrite': typeof VsAppwriteRoute
   '/vs/convex': typeof VsConvexRoute
+  '/vs/firebase': typeof VsFirebaseRoute
+  '/vs/supabase': typeof VsSupabaseRoute
   '/blog': typeof BlogIndexRoute
   '/packages': typeof PackagesIndexRoute
   '/llms.mdx/docs/$': typeof LlmsDotmdxDocsSplatRoute
@@ -181,6 +213,7 @@ export interface FileRoutesById {
   '/changelog': typeof ChangelogRoute
   '/cloud': typeof CloudRoute
   '/code-of-conduct': typeof CodeOfConductRoute
+  '/compare': typeof CompareRoute
   '/imprint': typeof ImprintRoute
   '/llms-full.txt': typeof LlmsFullDottxtRoute
   '/llms.txt': typeof LlmsDottxtRoute
@@ -193,7 +226,10 @@ export interface FileRoutesById {
   '/blog/rss.xml': typeof BlogRssDotxmlRoute
   '/docs/$': typeof DocsSplatRoute
   '/packages/$slug': typeof PackagesSlugRoute
+  '/vs/appwrite': typeof VsAppwriteRoute
   '/vs/convex': typeof VsConvexRoute
+  '/vs/firebase': typeof VsFirebaseRoute
+  '/vs/supabase': typeof VsSupabaseRoute
   '/blog/': typeof BlogIndexRoute
   '/packages/': typeof PackagesIndexRoute
   '/llms.mdx/docs/$': typeof LlmsDotmdxDocsSplatRoute
@@ -205,6 +241,7 @@ export interface FileRouteTypes {
     | '/changelog'
     | '/cloud'
     | '/code-of-conduct'
+    | '/compare'
     | '/imprint'
     | '/llms-full.txt'
     | '/llms.txt'
@@ -217,7 +254,10 @@ export interface FileRouteTypes {
     | '/blog/rss.xml'
     | '/docs/$'
     | '/packages/$slug'
+    | '/vs/appwrite'
     | '/vs/convex'
+    | '/vs/firebase'
+    | '/vs/supabase'
     | '/blog/'
     | '/packages/'
     | '/llms.mdx/docs/$'
@@ -227,6 +267,7 @@ export interface FileRouteTypes {
     | '/changelog'
     | '/cloud'
     | '/code-of-conduct'
+    | '/compare'
     | '/imprint'
     | '/llms-full.txt'
     | '/llms.txt'
@@ -239,7 +280,10 @@ export interface FileRouteTypes {
     | '/blog/rss.xml'
     | '/docs/$'
     | '/packages/$slug'
+    | '/vs/appwrite'
     | '/vs/convex'
+    | '/vs/firebase'
+    | '/vs/supabase'
     | '/blog'
     | '/packages'
     | '/llms.mdx/docs/$'
@@ -249,6 +293,7 @@ export interface FileRouteTypes {
     | '/changelog'
     | '/cloud'
     | '/code-of-conduct'
+    | '/compare'
     | '/imprint'
     | '/llms-full.txt'
     | '/llms.txt'
@@ -261,7 +306,10 @@ export interface FileRouteTypes {
     | '/blog/rss.xml'
     | '/docs/$'
     | '/packages/$slug'
+    | '/vs/appwrite'
     | '/vs/convex'
+    | '/vs/firebase'
+    | '/vs/supabase'
     | '/blog/'
     | '/packages/'
     | '/llms.mdx/docs/$'
@@ -272,6 +320,7 @@ export interface RootRouteChildren {
   ChangelogRoute: typeof ChangelogRoute
   CloudRoute: typeof CloudRoute
   CodeOfConductRoute: typeof CodeOfConductRoute
+  CompareRoute: typeof CompareRoute
   ImprintRoute: typeof ImprintRoute
   LlmsFullDottxtRoute: typeof LlmsFullDottxtRoute
   LlmsDottxtRoute: typeof LlmsDottxtRoute
@@ -284,7 +333,10 @@ export interface RootRouteChildren {
   BlogRssDotxmlRoute: typeof BlogRssDotxmlRoute
   DocsSplatRoute: typeof DocsSplatRoute
   PackagesSlugRoute: typeof PackagesSlugRoute
+  VsAppwriteRoute: typeof VsAppwriteRoute
   VsConvexRoute: typeof VsConvexRoute
+  VsFirebaseRoute: typeof VsFirebaseRoute
+  VsSupabaseRoute: typeof VsSupabaseRoute
   BlogIndexRoute: typeof BlogIndexRoute
   PackagesIndexRoute: typeof PackagesIndexRoute
   LlmsDotmdxDocsSplatRoute: typeof LlmsDotmdxDocsSplatRoute
@@ -334,6 +386,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ImprintRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/compare': {
+      id: '/compare'
+      path: '/compare'
+      fullPath: '/compare'
+      preLoaderRoute: typeof CompareRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/code-of-conduct': {
       id: '/code-of-conduct'
       path: '/code-of-conduct'
@@ -376,11 +435,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof BlogIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/vs/supabase': {
+      id: '/vs/supabase'
+      path: '/vs/supabase'
+      fullPath: '/vs/supabase'
+      preLoaderRoute: typeof VsSupabaseRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/vs/firebase': {
+      id: '/vs/firebase'
+      path: '/vs/firebase'
+      fullPath: '/vs/firebase'
+      preLoaderRoute: typeof VsFirebaseRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/vs/convex': {
       id: '/vs/convex'
       path: '/vs/convex'
       fullPath: '/vs/convex'
       preLoaderRoute: typeof VsConvexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/vs/appwrite': {
+      id: '/vs/appwrite'
+      path: '/vs/appwrite'
+      fullPath: '/vs/appwrite'
+      preLoaderRoute: typeof VsAppwriteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/packages/$slug': {
@@ -440,6 +520,7 @@ const rootRouteChildren: RootRouteChildren = {
   ChangelogRoute: ChangelogRoute,
   CloudRoute: CloudRoute,
   CodeOfConductRoute: CodeOfConductRoute,
+  CompareRoute: CompareRoute,
   ImprintRoute: ImprintRoute,
   LlmsFullDottxtRoute: LlmsFullDottxtRoute,
   LlmsDottxtRoute: LlmsDottxtRoute,
@@ -452,7 +533,10 @@ const rootRouteChildren: RootRouteChildren = {
   BlogRssDotxmlRoute: BlogRssDotxmlRoute,
   DocsSplatRoute: DocsSplatRoute,
   PackagesSlugRoute: PackagesSlugRoute,
+  VsAppwriteRoute: VsAppwriteRoute,
   VsConvexRoute: VsConvexRoute,
+  VsFirebaseRoute: VsFirebaseRoute,
+  VsSupabaseRoute: VsSupabaseRoute,
   BlogIndexRoute: BlogIndexRoute,
   PackagesIndexRoute: PackagesIndexRoute,
   LlmsDotmdxDocsSplatRoute: LlmsDotmdxDocsSplatRoute,
