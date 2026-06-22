@@ -123,14 +123,15 @@ product on top of it (the business — see the marketing plan). Brand stance:
     - **Ink mark** → the open-source framework (README, CLI, docs).
     - **Aurora-gradient mark** → Lunora Cloud — the hosted, "luminous" tier. The
       aurora is Cloud's signature; the OSS stays monochrome.
-- **Brand promise that protects the wedge.** Lunora's whole pitch is _"your own
-  Cloudflare account, no SaaS bill."_ A cloud must not read as the lock-in the pitch
-  rejects. So Cloud sells **convenience + team/ops on infrastructure you still own**
-  (managed Studio, observability, point-in-time restore, team/RBAC, one-click deploy
-    - CI, backups, a human on support) — ideally deploying _to the customer's own
-      Cloudflare account_. "Your data, your account" survives the paid tier. Never frame
-      Cloud as "we host your data instead of Cloudflare." _(Open decision: the exact
-      Cloud boundary — resolve before any Cloud-facing copy ships.)_
+- **Brand promise: no lock-in, not "no SaaS".** The wedge isn't "never a managed
+  service" — it's _choice_. The same code runs two ways: self-host it on your own
+  Cloudflare account (free, open source, your data), or let **Lunora Cloud** run it for
+  you (managed). You're never forced onto our cloud the way Convex forces you onto
+  theirs — you can always take the OSS and self-host. That freedom is the promise. Sell
+  Cloud on **convenience** (managed Studio, observability, point-in-time restore,
+  team/RBAC, one-click deploy + CI, backups, a human on support), never on lock-in.
+  _(Open decision #6: whether Cloud runs on Lunora's infra or deploys into the
+  customer's own Cloudflare account — resolve before Cloud-facing copy ships.)_
 - **Investment is deliberately deferred.** The product doesn't exist yet. What we do
   now: reserve the name (here), use the aurora-mark variant + a one-field waitlist
   CTA on the docs site, and nothing more. No pricing brand, dashboard identity, or
