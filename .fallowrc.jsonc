@@ -1,0 +1,72 @@
+{
+    "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
+    // Each workspace's package.json `exports`/`main` are auto-detected entry
+    // points. These add the files the tooling executes but never imports — build,
+    // test, and lint configs, plus the Lunora framework function files under
+    // `lunora/` (queries/mutations/schema discovered by codegen, not imports).
+    // Globs are `**/`-prefixed so they resolve inside every workspace in the
+    // monorepo run, not just the repo root.
+    "entry": [
+        "**/packem.config.ts",
+        "**/vite.config.ts",
+        "**/vitest.config.ts",
+        "**/vitest.bench.config.ts",
+        "**/vitest.*.config.ts",
+        "**/eslint.config.js",
+        "**/prettier.config.js",
+        "**/playwright.config.ts",
+        "**/svelte.config.js",
+        "**/lunora/**/*.{ts,tsx}",
+        "vis.config.ts",
+    ],
+    // Non-code / generated / fixture trees, and standalone workspaces that are
+    // not part of the library's own dead-code surface: end-user templates
+    // (instantiated via giget), the shadcn-style registry, Remotion marketing
+    // videos, and repo tooling scripts. The fallow scripts only live in
+    // packages/* and apps/*, so the analysis is scoped to match.
+    "ignorePatterns": [
+        "**/docs/**",
+        "**/*.mdx",
+        "**/_generated/**",
+        "**/.source/**",
+        "**/__fixtures__/**",
+        "**/*.stories.*",
+        "**/*.mock.{ts,tsx}",
+        "**/mock/**",
+        "**/mock.html",
+        "templates/**",
+        "registry/**",
+        "marketing/**",
+        "examples/**",
+        "scripts/**",
+    ],
+    // Dev tooling consumed through config files (eslint/prettier/babel/vitest)
+    // or build plugins that fallow can't trace from import graphs.
+    "ignoreDependencies": [
+        "@anolilab/eslint-config",
+        "@anolilab/prettier-config",
+        "@codspeed/vitest-plugin",
+        "@cloudflare/vitest-pool-workers",
+        "@cloudflare/playwright",
+        "babel-plugin-react-compiler",
+        "@babel/preset-react",
+        "@babel/core",
+        "esbuild",
+        "@visulima/packem",
+        // Framework build presets consumed through packem.config, not imports.
+        "babel-preset-solid",
+        "rollup-plugin-svelte",
+        "unplugin-vue",
+        // Release / commit tooling consumed through config files.
+        "@anolilab/commitlint-config",
+        "@anolilab/semantic-release-pnpm",
+        "@anolilab/semantic-release-preset",
+        "conventional-changelog-conventionalcommits",
+        "cz-conventional-changelog",
+        // Intentional optional AI-SDK providers (bring-your-own, per @lunora/ai).
+        "@ai-sdk/anthropic",
+        "@ai-sdk/openai",
+    ],
+    // An export consumed only inside its own defining file is not dead.
+    "ignoreExportsUsedInFile": true,
+}
