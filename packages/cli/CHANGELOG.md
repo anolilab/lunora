@@ -1,3 +1,16 @@
+## @lunora/cli [1.0.0-alpha.2](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.1...@lunora/cli@1.0.0-alpha.2) (2026-06-22)
+
+### Documentation
+
+* fix homepage/cli scaffold command to lunorash@alpha ([8b69b5a](https://github.com/anolilab/lunora/commit/8b69b5af1ad8c2fd6f8bbc96292bc05cc067ffd7))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.2
+* **@lunora/config:** upgraded to 1.0.0-alpha.2
+* **@lunora/d1:** upgraded to 1.0.0-alpha.2
+
 ## @lunora/cli 1.0.0-alpha.1 (2026-06-21)
 
 ### Features
