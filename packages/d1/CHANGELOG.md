@@ -1,3 +1,15 @@
+## @lunora/d1 [1.0.0-alpha.3](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.2...@lunora/d1@1.0.0-alpha.3) (2026-06-22)
+
+### Bug Fixes
+
+* **bench:** seed remaining CodSpeed benches in beforeAll ([0fde66b](https://github.com/anolilab/lunora/commit/0fde66b509a99d09d90c6141e01c12c55ac8f5de))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.3
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.3
+
 ## @lunora/d1 [1.0.0-alpha.2](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.1...@lunora/d1@1.0.0-alpha.2) (2026-06-22)
 
 ### Bug Fixes
