@@ -1,0 +1,142 @@
+---
+title: Build a real-time chat on Cloudflare in 5 minutes
+description: "A short tutorial: build a typed, live-syncing chat app on Cloudflare Workers and Durable Objects with Lunora. Schema, functions, a React client, two tabs that sync."
+publishedAt: 2026-06-22
+author: Daniel Bannert
+category: Tutorials
+image: /og-default.jpg
+tags:
+    - tutorial
+    - cloudflare
+    - realtime
+    - typescript
+---
+
+Real-time chat is the "hello world" of real-time backends, and it's usually a slog: a WebSocket
+server, a database, some pub/sub in the middle, and a lot of code to keep them agreeing with each
+other.
+
+Here's the whole thing on Cloudflare with [Lunora](/), end to end, in about five minutes. Two browser
+tabs, type in one, watch it land in the other. No WebSocket server to run, no cache to invalidate.
+
+## 1. Create the app
+
+```bash
+pnpm dlx lunorash@alpha init my-chat
+cd my-chat
+```
+
+That scaffolds a Vite app wired to Lunora. `pnpm dev` will boot it later.
+
+## 2. Define the schema
+
+One table. Author, body, and a timestamp so we can order messages.
+
+```ts
+// lunora/schema.ts
+import { defineSchema, defineTable, v } from "lunorash/server";
+
+export default defineSchema({
+    messages: defineTable({
+        author: v.string(),
+        body: v.string(),
+        ts: v.number(),
+    }).index("by_ts", ["ts"]),
+});
+```
+
+## 3. Write the functions
+
+A query to read the last 50 messages, and a mutation to send one. Inputs are validated and the return
+type is inferred, so the client knows the exact shape of a message without you writing a type.
+
+```ts
+// lunora/messages.ts
+import { query, mutation, v } from "./_generated/server";
+
+export const list = query.query(async ({ ctx }) => ctx.db.query("messages").order("desc").take(50));
+
+export const send = mutation.input({ author: v.string(), body: v.string() }).mutation(async ({ ctx, args }) => {
+    await ctx.db.insert("messages", { ...args, ts: Date.now() });
+});
+```
+
+## 4. Build the client
+
+Here's the part that does the work. `useQuery` subscribes to `list`, so `messages` stays live. When
+anyone calls `send`, the query re-runs and every open client gets the new list. The optimistic write
+shows your own message instantly.
+
+```tsx
+// src/Chat.tsx
+import { useState } from "react";
+import { useQuery, useMutation } from "@lunora/react";
+import { api } from "../lunora/_generated/api";
+
+export function Chat() {
+    const messages = useQuery(api.messages.list) ?? [];
+    const send = useMutation(api.messages.send);
+    const [draft, setDraft] = useState("");
+
+    return (
+        <div>
+            <ul>
+                {[...messages].reverse().map((message) => (
+                    <li key={message._id}>
+                        <strong>{message.author}</strong>: {message.body}
+                    </li>
+                ))}
+            </ul>
+
+            <form
+                onSubmit={(event) => {
+                    event.preventDefault();
+                    if (!draft.trim()) return;
+                    send({ author: "me", body: draft });
+                    setDraft("");
+                }}
+            >
+                <input onChange={(event) => setDraft(event.target.value)} placeholder="Say something" value={draft} />
+                <button type="submit">Send</button>
+            </form>
+        </div>
+    );
+}
+```
+
+`message` is fully typed. Rename `body` to `text` in the schema and this component stops compiling, in
+your editor, before you ever run it.
+
+## 5. Run it
+
+```bash
+pnpm dev
+```
+
+This boots workerd (the same runtime as production), generates your client types, and starts Vite.
+Open the app in two browser windows side by side, send a message in one, and it shows up in the other
+immediately. That's the demo. No refresh, no polling.
+
+You also get a local Studio at `/__lunora` to browse the `messages` table and watch rows appear in
+real time as you type.
+
+## What you actually got
+
+For ~30 lines of code:
+
+- **Live updates** for every connected client, over WebSocket, by default.
+- **End-to-end types** from the schema to the React component.
+- **Optimistic writes** and a **durable offline queue**, so a flaky network doesn't lose or duplicate
+  messages.
+- **Your own Cloudflare account.** This runs on Workers and Durable Objects you own, roughly $0 at idle
+  on the free tier. When you're ready, [Lunora Cloud](/cloud) can run it for you instead.
+
+A real chat app needs auth, rooms, and presence, all of which Lunora has. But the core, a typed
+backend that's live by default, is the part above.
+
+Heads up: Lunora is alpha, so build this on a side project, not production yet. If you do, tell me
+where it breaks.
+
+- [Read the docs](/docs)
+- [See how Lunora compares](/compare) to Convex, Supabase, Firebase, and Appwrite
+- [Star the repo](https://github.com/anolilab/lunora)
