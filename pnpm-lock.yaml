@@ -1685,14 +1685,14 @@ importers:
         specifier: 1.0.0-alpha.2
         version: 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
       '@lunora/config':
-        specifier: 1.0.0-alpha.2
-        version: 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/studio@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@types/react@19.2.17)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@lunora/values@1.0.0-alpha.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: 1.0.0-alpha.3
+        version: 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/studio@1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@types/react@19.2.17)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@lunora/values@1.0.0-alpha.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
       '@lunora/container':
         specifier: 1.0.0-alpha.1
         version: 1.0.0-alpha.1
       '@lunora/d1':
-        specifier: 1.0.0-alpha.2
-        version: 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: 1.0.0-alpha.3
+        version: 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
       '@lunora/seed':
         specifier: 1.0.0-alpha.1
         version: 1.0.0-alpha.1(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/values@1.0.0-alpha.1)
@@ -1700,8 +1700,8 @@ importers:
         specifier: 1.0.0-alpha.1
         version: 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
       '@lunora/studio':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@tanstack/react-query@5.101.0(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(date-fns@4.4.0)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7)
+        specifier: 1.0.0-alpha.2
+        version: 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@tanstack/react-query@5.101.0(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(date-fns@4.4.0)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7)
       '@lunora/values':
         specifier: 1.0.0-alpha.1
         version: 1.0.0-alpha.1
@@ -2182,14 +2182,14 @@ importers:
   packages/lunora:
     dependencies:
       '@lunora/cli':
-        specifier: 1.0.0-alpha.2
-        version: 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@types/react@19.2.17)(@visulima/redact@3.0.0-alpha.14)(citty@0.2.2)(express@5.2.1)(github-slugger@2.0.0)(hono@4.12.26)(ini@7.0.0)(json5@2.2.3)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(smol-toml@1.6.1)(yaml@2.9.0)
+        specifier: 1.0.0-alpha.3
+        version: 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@types/react@19.2.17)(@visulima/redact@3.0.0-alpha.14)(citty@0.2.2)(express@5.2.1)(github-slugger@2.0.0)(hono@4.12.26)(ini@7.0.0)(json5@2.2.3)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(smol-toml@1.6.1)(yaml@2.9.0)
       '@lunora/client':
         specifier: 1.0.0-alpha.1
         version: 1.0.0-alpha.1
       '@lunora/do':
-        specifier: 1.0.0-alpha.2
-        version: 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: 1.0.0-alpha.3
+        version: 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
       '@lunora/runtime':
         specifier: 1.0.0-alpha.1
         version: 1.0.0-alpha.1
@@ -3003,7 +3003,7 @@ importers:
         version: 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
       '@lunora/config':
         specifier: 1.0.0-alpha.2
-        version: 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/studio@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@types/react@19.2.17)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@lunora/values@1.0.0-alpha.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        version: 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/studio@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@tanstack/react-query@5.101.0(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(date-fns@4.4.0)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7))(@lunora/values@1.0.0-alpha.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
       '@lunora/studio':
         specifier: 1.0.0-alpha.1
         version: 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@tanstack/react-query@5.101.0(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(date-fns@4.4.0)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7)
@@ -5147,8 +5147,8 @@ packages:
     resolution: {integrity: sha512-f5AUia7oRcIc1icx4Yrb/R5fYniFFPdv6xqOOKQUpMdpYuejCluS5NcfMVEzMJcD+7bscRH/QTwDgEN5h4dNHg==}
     engines: {node: ^22.15.0 || >=24.11.0}
 
-  '@lunora/cli@1.0.0-alpha.2':
-    resolution: {integrity: sha512-IRRyTyumUj0H4+8jIlIfrFPsS12hvy8odD50dqYluijDbInzXSqcGbsoL7l42Ss7CDLmHSV36UQj+lBi+y/mlg==}
+  '@lunora/cli@1.0.0-alpha.3':
+    resolution: {integrity: sha512-NlsBCWxOiPLpqzPb3sx2fnT1KTc9sug7SW+S8zcDjGVO5qL0Z2IZcTtH/4rRWLGIJBN+s1ejyxufGki36MBAUg==}
     engines: {node: ^22.15.0 || >=24.11.0}
     hasBin: true
 
@@ -5169,12 +5169,21 @@ packages:
       '@lunora/studio':
         optional: true
 
+  '@lunora/config@1.0.0-alpha.3':
+    resolution: {integrity: sha512-QNxi6+iU2SBL9iLmNuuvChah/d7HVibcpgKUs4XZHMduwowvm3d9Rnii0cxxtegSbQuU3WP+z6Ypg4qqKDyM+w==}
+    engines: {node: ^22.15.0 || >=24.11.0}
+    peerDependencies:
+      '@lunora/studio': 1.0.0-alpha.2
+    peerDependenciesMeta:
+      '@lunora/studio':
+        optional: true
+
   '@lunora/container@1.0.0-alpha.1':
     resolution: {integrity: sha512-eVUNV1Z7IxljqDwMu2o23GZ7f7mOExtkVOoNya0K4ToMNTsF8P+DaRKYMvHlTmUER6zuAax9DrrJWh7RqTe7Ow==}
     engines: {node: ^22.15.0 || >=24.11.0}
 
-  '@lunora/d1@1.0.0-alpha.2':
-    resolution: {integrity: sha512-OGWpUe6e8M+WGviQYh/ijD30DqApiQdNMuZ8wDuhLDu4Am7JboRtiRGHSOY/O83Hp1+vTvoTqZfVhxwmC+tKnA==}
+  '@lunora/d1@1.0.0-alpha.3':
+    resolution: {integrity: sha512-kKwEngvGk5a2Gu4UDztcGbBNzFzEcV+HVvnWCpcS4qHfSxFd9LtZne9dw59U4fB7NOr3Wg2wwId0zlDA/5lvQQ==}
     engines: {node: ^22.15.0 || >=24.11.0}
 
   '@lunora/do@1.0.0-alpha.1':
@@ -5239,10 +5248,6 @@ packages:
 
   '@lunora/server@1.0.0-alpha.1':
     resolution: {integrity: sha512-XWdTSUfk6OEUCM5q9hygMAfLTAkU3hfmlWu5Oq0LEcVNw8Ac3AGyfg7LrXOpsQY+I2si7J+srzfAS3Hi8eu5pw==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-
-  '@lunora/sql-store@1.0.0-alpha.2':
-    resolution: {integrity: sha512-G6L3jBwaNjxGRFybK9vyG7NBwqS5xgq9cBeK9qZYqT9i6FDQImS/htRp4oBUpvZuaAU8y+vZ9lr9tobfLCTFYg==}
     engines: {node: ^22.15.0 || >=24.11.0}
 
   '@lunora/sql-store@1.0.0-alpha.3':
@@ -20323,16 +20328,16 @@ snapshots:
 
   '@lunora/analytics@1.0.0-alpha.1': {}
 
-  '@lunora/cli@1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@types/react@19.2.17)(@visulima/redact@3.0.0-alpha.14)(citty@0.2.2)(express@5.2.1)(github-slugger@2.0.0)(hono@4.12.26)(ini@7.0.0)(json5@2.2.3)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(smol-toml@1.6.1)(yaml@2.9.0)':
+  '@lunora/cli@1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@types/react@19.2.17)(@visulima/redact@3.0.0-alpha.14)(citty@0.2.2)(express@5.2.1)(github-slugger@2.0.0)(hono@4.12.26)(ini@7.0.0)(json5@2.2.3)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(smol-toml@1.6.1)(yaml@2.9.0)':
     dependencies:
       '@bomb.sh/tab': 0.0.17(citty@0.2.2)
       '@lunora/codegen': 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
-      '@lunora/config': 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/studio@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@types/react@19.2.17)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@lunora/values@1.0.0-alpha.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+      '@lunora/config': 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/studio@1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@types/react@19.2.17)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@lunora/values@1.0.0-alpha.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
       '@lunora/container': 1.0.0-alpha.1
-      '@lunora/d1': 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+      '@lunora/d1': 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
       '@lunora/seed': 1.0.0-alpha.1(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/values@1.0.0-alpha.1)
       '@lunora/server': 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
-      '@lunora/studio': 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@tanstack/react-query@5.101.0(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(date-fns@4.4.0)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7)
+      '@lunora/studio': 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@tanstack/react-query@5.101.0(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(date-fns@4.4.0)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7)
       '@lunora/values': 1.0.0-alpha.1
       '@visulima/cerebro': 3.0.0-alpha.32(@bomb.sh/tab@0.0.17(citty@0.2.2))(@visulima/pail@4.0.0-alpha.22(@opentelemetry/api@1.9.1)(@visulima/redact@3.0.0-alpha.14)(express@5.2.1)(hono@4.12.26)(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)))(github-slugger@2.0.0)
       '@visulima/fs': 5.0.0-alpha.32(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(smol-toml@1.6.1)(yaml@2.9.0)
@@ -20446,7 +20451,7 @@ snapshots:
       - sql.js
       - sqlite3
 
-  '@lunora/config@1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/studio@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@types/react@19.2.17)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@lunora/values@1.0.0-alpha.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)':
+  '@lunora/config@1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/studio@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@tanstack/react-query@5.101.0(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(date-fns@4.4.0)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7))(@lunora/values@1.0.0-alpha.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)':
     dependencies:
       '@lunora/codegen': 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
       '@lunora/container': 1.0.0-alpha.1
@@ -20489,14 +20494,57 @@ snapshots:
       - sql.js
       - sqlite3
 
+  '@lunora/config@1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/studio@1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@types/react@19.2.17)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@lunora/values@1.0.0-alpha.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)':
+    dependencies:
+      '@lunora/codegen': 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+      '@lunora/container': 1.0.0-alpha.1
+      '@lunora/seed': 1.0.0-alpha.1(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/values@1.0.0-alpha.1)
+      es-module-lexer: 2.1.0
+      jsonc-parser: 3.3.1
+      ts-morph: 28.0.0
+    optionalDependencies:
+      '@lunora/studio': 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@tanstack/react-query@5.101.0(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(date-fns@4.4.0)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7)
+    transitivePeerDependencies:
+      - '@aws-sdk/client-rds-data'
+      - '@cloudflare/workers-types'
+      - '@electric-sql/pglite'
+      - '@libsql/client'
+      - '@libsql/client-wasm'
+      - '@lunora/server'
+      - '@lunora/values'
+      - '@neondatabase/serverless'
+      - '@op-engineering/op-sqlite'
+      - '@opentelemetry/api'
+      - '@planetscale/database'
+      - '@prisma/client'
+      - '@tidbcloud/serverless'
+      - '@types/better-sqlite3'
+      - '@types/pg'
+      - '@types/sql.js'
+      - '@upstash/redis'
+      - '@vercel/postgres'
+      - '@xata.io/client'
+      - better-sqlite3
+      - bun-types
+      - expo-sqlite
+      - gel
+      - knex
+      - kysely
+      - mysql2
+      - pg
+      - postgres
+      - prisma
+      - sql.js
+      - sqlite3
+
   '@lunora/container@1.0.0-alpha.1':
     dependencies:
       '@cloudflare/containers': 0.3.7
 
-  '@lunora/d1@1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)':
+  '@lunora/d1@1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)':
     dependencies:
-      '@lunora/do': 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
-      '@lunora/sql-store': 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+      '@lunora/do': 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+      '@lunora/sql-store': 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
       drizzle-orm: 0.45.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
     transitivePeerDependencies:
       - '@aws-sdk/client-rds-data'
@@ -20703,41 +20751,6 @@ snapshots:
       '@lunora/values': 1.0.0-alpha.1
       drizzle-orm: 0.45.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
       hono: 4.12.26
-    transitivePeerDependencies:
-      - '@aws-sdk/client-rds-data'
-      - '@cloudflare/workers-types'
-      - '@electric-sql/pglite'
-      - '@libsql/client'
-      - '@libsql/client-wasm'
-      - '@neondatabase/serverless'
-      - '@op-engineering/op-sqlite'
-      - '@opentelemetry/api'
-      - '@planetscale/database'
-      - '@prisma/client'
-      - '@tidbcloud/serverless'
-      - '@types/better-sqlite3'
-      - '@types/pg'
-      - '@types/sql.js'
-      - '@upstash/redis'
-      - '@vercel/postgres'
-      - '@xata.io/client'
-      - better-sqlite3
-      - bun-types
-      - expo-sqlite
-      - gel
-      - knex
-      - kysely
-      - mysql2
-      - pg
-      - postgres
-      - prisma
-      - sql.js
-      - sqlite3
-
-  '@lunora/sql-store@1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)':
-    dependencies:
-      '@lunora/do': 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
-      drizzle-orm: 0.45.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
     transitivePeerDependencies:
       - '@aws-sdk/client-rds-data'
       - '@cloudflare/workers-types'
