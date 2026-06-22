@@ -67,6 +67,14 @@
         "@ai-sdk/anthropic",
         "@ai-sdk/openai",
     ],
+    // Vendored UI primitive libraries: shadcn/ui components and the evilcharts
+    // charting wrappers ship their complete component family by convention, so
+    // unused exports are expected. Suppress their unused-export reports while
+    // still counting their imports (so the deps they use aren't flagged).
+    "ignoreExports": [
+        { "file": "**/components/ui/**", "exports": ["*"] },
+        { "file": "**/evilcharts/**", "exports": ["*"] },
+    ],
     // An export consumed only inside its own defining file is not dead.
     "ignoreExportsUsedInFile": true,
 }
