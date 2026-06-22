@@ -45,6 +45,21 @@ describe("window functions", () => {
         expect(fn.ntile(4).over().text).toBe("NTILE(4) OVER ()");
         expect(fn.nthValue("total", 2).over().text).toBe("NTH_VALUE(total, 2) OVER ()");
     });
+
+    it("renders every ranking, offset and aggregate helper", () => {
+        // Ranking helpers that take no args.
+        expect(fn.denseRank().over().text).toBe("DENSE_RANK() OVER ()");
+        expect(fn.percentRank().over().text).toBe("PERCENT_RANK() OVER ()");
+        expect(fn.cumeDist().over().text).toBe("CUME_DIST() OVER ()");
+        // Offset/value helpers that take a column.
+        expect(fn.lead("total").over().text).toBe("LEAD(total) OVER ()");
+        expect(fn.firstValue("total").over().text).toBe("FIRST_VALUE(total) OVER ()");
+        expect(fn.lastValue("total").over().text).toBe("LAST_VALUE(total) OVER ()");
+        // Aggregate-as-window helpers.
+        expect(fn.avg("total").over().text).toBe("AVG(total) OVER ()");
+        expect(fn.min("total").over().text).toBe("MIN(total) OVER ()");
+        expect(fn.max("total").over().text).toBe("MAX(total) OVER ()");
+    });
 });
 
 describe("window expression → select / qualify", () => {
@@ -62,5 +77,13 @@ describe("window expression → select / qualify", () => {
         expect(window.lte(3).text).toBe("ROW_NUMBER() OVER (PARTITION BY region ORDER BY total DESC) <= 3");
         expect(window.eq(1).text).toBe("ROW_NUMBER() OVER (PARTITION BY region ORDER BY total DESC) = 1");
         expect(fn.rank().over().between(1, 5).text).toBe("RANK() OVER () BETWEEN 1 AND 5");
+    });
+
+    it("covers every comparison operator", () => {
+        const rank = fn.rank().over();
+
+        expect(rank.gt(1).text).toBe("RANK() OVER () > 1");
+        expect(rank.gte(2).text).toBe("RANK() OVER () >= 2");
+        expect(rank.lt(3).text).toBe("RANK() OVER () < 3");
     });
 });

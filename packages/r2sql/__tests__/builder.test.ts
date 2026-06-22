@@ -48,6 +48,17 @@ describe("select builder SQL", () => {
         expect(from("a").crossJoin("b").toSQL()).toBe("SELECT * FROM a CROSS JOIN b");
     });
 
+    it("renders right and full outer joins", () => {
+        expect(from("a").rightJoin("b", "a.id = b.id").toSQL()).toBe("SELECT * FROM a RIGHT JOIN b ON a.id = b.id");
+        expect(from("a").fullJoin("b", "a.id = b.id").toSQL()).toBe("SELECT * FROM a FULL OUTER JOIN b ON a.id = b.id");
+    });
+
+    it("returns() re-types without changing the SQL", () => {
+        const typed = from("s.orders").select("id").returns<{ id: string }>();
+
+        expect(typed.toSQL()).toBe("SELECT id FROM s.orders");
+    });
+
     it("group by + having", () => {
         expect(from("s.orders").select("region", "COUNT(*) AS n").groupBy("region").having("COUNT(*) > 1000").toSQL()).toBe(
             "SELECT region, COUNT(*) AS n FROM s.orders GROUP BY region HAVING COUNT(*) > 1000",
@@ -126,6 +137,20 @@ describe("set operations", () => {
         ).toBe(
             "SELECT zone_id FROM s.fw WHERE action = 'block' UNION (SELECT zone_id FROM s.zones WHERE plan = 'enterprise' EXCEPT SELECT zone_id FROM s.archived)",
         );
+    });
+
+    it("appends every operator when chaining on an existing set operation", () => {
+        const base = () => a().union(b());
+
+        expect(base().unionAll(from("s.x").select("zone_id")).toSQL()).toContain("UNION ALL SELECT zone_id FROM s.x");
+        expect(base().intersect(from("s.x").select("zone_id")).toSQL()).toContain("INTERSECT SELECT zone_id FROM s.x");
+        expect(base().union(from("s.x").select("zone_id")).toSQL()).toContain("UNION SELECT zone_id FROM s.x");
+    });
+
+    it("returns() re-types a set operation without changing the SQL", () => {
+        const typed = a().union(b()).returns<{ zone_id: string }>();
+
+        expect(typed.toSQL()).toBe("SELECT zone_id FROM s.fw WHERE action = 'block' UNION SELECT zone_id FROM s.zones WHERE plan = 'enterprise'");
     });
 });
 

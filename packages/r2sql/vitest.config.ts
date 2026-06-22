@@ -7,7 +7,8 @@ const coverage = {
     provider: "v8" as const,
     reporter: ["clover", "cobertura", "lcov", "text", "html"],
     include: ["src"],
-    exclude: [...(coverageConfigDefaults.exclude ?? []), "__fixtures__/**", "src/**/types.ts", "e2e", "**/node_modules/**", "**/dist/**"],
+    // `types.ts` and `query.ts` are type-only modules (interfaces/aliases, no runtime).
+    exclude: [...(coverageConfigDefaults.exclude ?? []), "__fixtures__/**", "src/**/types.ts", "src/query.ts", "e2e", "**/node_modules/**", "**/dist/**"],
 };
 
 export default defineConfig({
