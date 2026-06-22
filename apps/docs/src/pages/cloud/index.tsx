@@ -17,7 +17,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 type Status = "error" | "idle" | "sending" | "success";
 
-const WaitlistForm: FC = () => {
+const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
     const [email, setEmail] = useState("");
     const [status, setStatus] = useState<Status>("idle");
 
@@ -33,9 +33,10 @@ const WaitlistForm: FC = () => {
         setStatus("sending");
 
         try {
-            const response = await fetch("/api/waitlist", {
-                body: JSON.stringify({ email, source: "cloud" }),
-                headers: { "content-type": "application/json" },
+            // Netlify Forms: POST url-encoded to the static detection form (public/__forms.html).
+            const response = await fetch("/__forms.html", {
+                body: new URLSearchParams({ email, "form-name": "lunora-waitlist", honeyField: "", source }).toString(),
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
                 method: "POST",
             });
 
@@ -55,7 +56,21 @@ const WaitlistForm: FC = () => {
     }
 
     return (
-        <form className="flex w-full max-w-md flex-col gap-2" onSubmit={submit}>
+        <form
+            className="flex w-full max-w-md flex-col gap-2"
+            data-netlify="true"
+            method="POST"
+            name="lunora-waitlist"
+            netlify-honeypot="honeyField"
+            onSubmit={submit}
+        >
+            <input name="form-name" type="hidden" value="lunora-waitlist" />
+            <input name="source" type="hidden" value={source} />
+            <p className="hidden">
+                <label>
+                    Don&apos;t fill this out if you&apos;re human: <input name="honeyField" tabIndex={-1} />
+                </label>
+            </p>
             <div className="flex flex-col gap-2 sm:flex-row">
                 <input
                     aria-label="Email address"

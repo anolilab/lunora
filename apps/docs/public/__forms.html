@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    </head>
+    <body>
+        <!-- Static form for Netlify build-time detection. The live form is rendered by
+             React (src/pages/cloud) and POSTs here. Keep field names in sync.
+             `source` distinguishes captures: "cloud" (Lunora Cloud waitlist) vs "stable". -->
+        <form name="lunora-waitlist" method="POST" data-netlify="true" netlify-honeypot="honeyField" hidden>
+            <input type="hidden" name="form-name" value="lunora-waitlist" />
+            <input name="honeyField" type="hidden" />
+            <input id="email" name="email" type="email" required placeholder="you@company.com" />
+            <input name="source" type="hidden" />
+        </form>
+    </body>
+</html>
