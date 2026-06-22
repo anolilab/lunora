@@ -13,8 +13,14 @@ import { COMPARE_LIST } from "./data";
  */
 
 const CompareIndex: FC = () => (
-    <section className="relative border-t border-white/[0.08] bg-[#0e0e11]" data-nav-theme="dark">
-        <div className="relative z-10 mx-auto flex max-w-4xl flex-col gap-10 px-5 pt-40 pb-24 sm:pt-48">
+    <div className="relative overflow-x-clip bg-[#0e0e11]" data-theme="dark">
+        {/* vertical guide lines at the container edges, full page height */}
+        <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 left-1/2 z-20 hidden w-full max-w-6xl -translate-x-1/2 border-x border-white/[0.08] lg:block"
+        />
+        <section className="relative border-t border-white/[0.08] bg-[#0e0e11]" data-nav-theme="dark">
+            <div className="relative z-10 mx-auto flex max-w-4xl flex-col gap-10 px-5 pt-40 pb-24 sm:pt-48">
             <Reveal className="flex flex-col items-center gap-5 text-center">
                 <span className="flex items-center gap-2 border border-white/12 px-3 py-1 font-mono text-xs text-white/60">
                     <span className="size-1.5 bg-sky-sapphire" />
@@ -45,8 +51,9 @@ const CompareIndex: FC = () => (
                     </Link>
                 ))}
             </div>
-        </div>
-    </section>
+            </div>
+        </section>
+    </div>
 );
 
 export default CompareIndex;

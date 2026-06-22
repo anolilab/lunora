@@ -19,7 +19,6 @@ import {
     KeyRound,
     LayoutDashboard,
     Menu,
-    Newspaper,
     Rocket,
     Scale,
     ScrollText,
@@ -78,6 +77,8 @@ interface NavColumn {
     featureLink?: { href: string; title: string };
     features: NavFeature[];
     navItems: NavLeaf[];
+    /** Lay the nav items out in N columns (no feature cards). Default 1. */
+    navColumns?: number;
     navTitle: string;
 }
 
@@ -127,12 +128,12 @@ const menu: NavColumn[] = [
             { description: "vs Convex, Supabase, Firebase, Appwrite.", href: "/compare", icon: <Scale />, title: "Compare" },
             { description: "Admin UI for schema, data, advisors.", href: "/studio", icon: <LayoutDashboard />, title: "Studio" },
             { description: "R2 typed buckets and signed URLs.", href: "/packages/storage", icon: <HardDrive />, title: "Storage" },
-            { description: "News, insights, and engineering deep dives.", href: "/blog", icon: <Newspaper />, title: "Blog" },
             { description: "New updates and improvements.", href: "/changelog", icon: <ScrollText />, title: "Changelog" },
             { description: "Q&A, ideas, and discussion.", href: "https://github.com/anolilab/lunora/discussions", icon: <Handshake />, title: "Discussions" },
             { description: "Chat with the community in real time.", href: "https://discord.gg/eajEZvk2PG", icon: <DiscordLogoIcon />, title: "Discord" },
             { description: "Issues, requests, and source code.", href: "https://github.com/anolilab/lunora", icon: <GitHubLogoIcon />, title: "GitHub" },
         ],
+        navColumns: 3,
         navTitle: "Resources",
     },
 ];
@@ -258,16 +259,29 @@ const FeatureCard = ({ feature, single }: { feature: NavFeature; single: boolean
     );
 };
 
-const MegaPanel = ({ column }: { column: NavColumn }) => (
-    <div className="flex gap-2">
-        <ul className="flex w-[316px] flex-col">
-            {column.navItems.map((leaf, index) => (
-                <li className={index > 0 ? "border-t border-white/[0.08]" : undefined} key={leaf.title}>
-                    <LeafLink leaf={leaf} />
-                </li>
-            ))}
-        </ul>
-        <div className="flex flex-col gap-2">
+const MegaPanel = ({ column }: { column: NavColumn }) => {
+    if (column.navColumns && column.navColumns > 1) {
+        const rows = Math.ceil(column.navItems.length / column.navColumns);
+
+        return (
+            <div className="grid grid-flow-col gap-x-1" style={{ gridAutoColumns: "236px", gridTemplateRows: `repeat(${rows}, auto)` }}>
+                {column.navItems.map((leaf) => (
+                    <LeafLink key={leaf.title} leaf={leaf} />
+                ))}
+            </div>
+        );
+    }
+
+    return (
+        <div className="flex gap-2">
+            <ul className="flex w-[316px] flex-col">
+                {column.navItems.map((leaf, index) => (
+                    <li className={index > 0 ? "border-t border-white/[0.08]" : undefined} key={leaf.title}>
+                        <LeafLink leaf={leaf} />
+                    </li>
+                ))}
+            </ul>
+            <div className="flex flex-col gap-2">
             <div className="flex flex-1 gap-2">
                 {column.features.map((feature) => (
                     <FeatureCard feature={feature} key={feature.title} single={column.features.length === 1} />
@@ -282,9 +296,10 @@ const MegaPanel = ({ column }: { column: NavColumn }) => (
                     <ChevronRight className="size-4 text-white/40 transition-transform group-hover/all:translate-x-0.5 group-hover/all:text-white" />
                 </Link>
             ) : null}
+            </div>
         </div>
-    </div>
-);
+    );
+};
 
 const Kbd = ({ children }: { children: ReactNode }) => (
     <kbd className="rounded-none bg-white/10 px-1.5 py-0.5 font-mono text-[10px] text-white/70">{children}</kbd>
@@ -408,6 +423,22 @@ const Navbar = (): ReactElement => {
                             </button>
                         </div>
                     ))}
+                    <div
+                        className="flex items-center"
+                        onMouseEnter={() => {
+                            setOpenMenu(null);
+                        }}
+                    >
+                        <Link
+                            className={cn(
+                                "flex w-max items-center px-3.5 py-2 text-sm font-medium transition-colors",
+                                light ? "text-black/80 hover:text-black/60" : "text-white hover:text-neutral-300",
+                            )}
+                            to="/blog"
+                        >
+                            Blog
+                        </Link>
+                    </div>
                 </nav>
 
                 <div className="ml-auto hidden items-center gap-2 lg:flex">
@@ -511,6 +542,15 @@ const Navbar = (): ReactElement => {
                         </button>
                     </div>
                     <div className="flex flex-col px-5 py-4">
+                        <Link
+                            className="border-b border-white/[0.06] px-1 py-3 text-sm font-medium text-white"
+                            onClick={() => {
+                                setIsMobileMenuOpen(false);
+                            }}
+                            to="/blog"
+                        >
+                            Blog
+                        </Link>
                         {menu.map((column) => (
                             <div className="border-b border-white/[0.06] py-3" key={column.navTitle}>
                                 <p className="px-1 pb-2 font-mono text-xs tracking-wider text-white/40 uppercase">{column.navTitle}</p>

@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router";
 import { ArrowRight, Minus } from "lucide-react";
 import type { FC } from "react";
 
+import HatchSpacer from "@/components/sections/hatch-spacer";
 import { Pill } from "@/components/sections/langbase";
 import Reveal from "@/components/sections/reveal";
 import { createJsonLd, SITE_URL } from "@/lib/seo";
@@ -101,9 +102,15 @@ export const ComparePage: FC<{ data: Comparison; others: { name: string; slug: C
     );
 
     return (
-        <>
+        <div className="relative overflow-x-clip bg-[#0e0e11]" data-theme="dark">
             <script dangerouslySetInnerHTML={{ __html: breadcrumbLd }} type="application/ld+json" />
             <script dangerouslySetInnerHTML={{ __html: faqLd }} type="application/ld+json" />
+
+            {/* vertical guide lines at the container edges, full page height */}
+            <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-y-0 left-1/2 z-20 hidden w-full max-w-6xl -translate-x-1/2 border-x border-white/[0.08] lg:block"
+            />
 
             {/* Hero */}
             <section className="relative border-t border-white/[0.08] bg-[#0e0e11]" data-nav-theme="dark">
@@ -129,8 +136,10 @@ export const ComparePage: FC<{ data: Comparison; others: { name: string; slug: C
                 </div>
             </section>
 
+            <HatchSpacer />
+
             {/* Comparison table */}
-            <section className="relative border-t border-white/[0.08] bg-[#0e0e11] py-14" data-nav-theme="dark">
+            <section className="relative bg-[#0e0e11] py-14" data-nav-theme="dark">
                 <div className="mx-auto max-w-4xl px-5">
                     <h2 className="mb-6 text-2xl font-semibold tracking-tight text-white">Lunora vs {data.name} at a glance</h2>
                     <table className="w-full border-collapse text-sm">
@@ -158,8 +167,10 @@ export const ComparePage: FC<{ data: Comparison; others: { name: string; slug: C
                 </div>
             </section>
 
+            <HatchSpacer />
+
             {/* Summary prose */}
-            <section className="relative border-t border-white/[0.08] bg-[#0e0e11] py-16" data-nav-theme="dark">
+            <section className="relative bg-[#0e0e11] py-16" data-nav-theme="dark">
                 <div className="mx-auto flex max-w-3xl flex-col gap-4 px-5">
                     <h2 className="text-2xl font-semibold tracking-tight text-white">How Lunora and {data.name} differ</h2>
                     {data.summary.map((paragraph) => (
@@ -170,8 +181,10 @@ export const ComparePage: FC<{ data: Comparison; others: { name: string; slug: C
                 </div>
             </section>
 
+            <HatchSpacer />
+
             {/* Verdicts */}
-            <section className="relative border-t border-white/[0.08] bg-[#0e0e11] py-16" data-nav-theme="dark">
+            <section className="relative bg-[#0e0e11] py-16" data-nav-theme="dark">
                 <div className="mx-auto max-w-5xl px-5">
                     <h2 className="mb-6 text-2xl font-semibold tracking-tight text-white">Where each one wins</h2>
                     <div className="grid grid-cols-1 gap-px border border-white/[0.08] md:grid-cols-2">
@@ -189,8 +202,10 @@ export const ComparePage: FC<{ data: Comparison; others: { name: string; slug: C
                 </div>
             </section>
 
+            <HatchSpacer />
+
             {/* FAQ */}
-            <section className="relative border-t border-white/[0.08] bg-[#0e0e11] py-16" data-nav-theme="dark">
+            <section className="relative bg-[#0e0e11] py-16" data-nav-theme="dark">
                 <div className="mx-auto flex max-w-3xl flex-col gap-6 px-5">
                     <h2 className="text-2xl font-semibold tracking-tight text-white">Frequently asked questions</h2>
                     <dl className="flex flex-col divide-y divide-white/[0.08]">
@@ -206,8 +221,10 @@ export const ComparePage: FC<{ data: Comparison; others: { name: string; slug: C
                 </div>
             </section>
 
+            <HatchSpacer />
+
             {/* CTA + other comparisons */}
-            <section className="relative overflow-hidden border-t border-white/[0.08] bg-[#0e0e11]" data-nav-theme="dark">
+            <section className="relative overflow-hidden bg-[#0e0e11]" data-nav-theme="dark">
                 <div
                     aria-hidden="true"
                     className="pointer-events-none absolute inset-x-0 bottom-0 -z-0 h-64 opacity-50"
@@ -240,6 +257,6 @@ export const ComparePage: FC<{ data: Comparison; others: { name: string; slug: C
                     ) : null}
                 </div>
             </section>
-        </>
+        </div>
     );
 };
