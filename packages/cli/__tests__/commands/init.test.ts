@@ -143,7 +143,7 @@ describe("lunora init", () => {
             expect(root).toContain('title: "rainbow"');
         });
 
-        it("vite template package.json references the lunora packages (umbrella base)", async () => {
+        it("a template's package.json references the lunora packages (umbrella base)", async () => {
             expect.assertions(7);
 
             await runInitCommand({

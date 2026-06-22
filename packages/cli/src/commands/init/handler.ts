@@ -844,7 +844,13 @@ const FRAMEWORK_CHOICES: ReadonlyArray<{ description: string; label: string; val
 ];
 
 /** Comma-joined choice values for the non-interactive error hint. */
-const CHOICE_VALUES = FRAMEWORK_CHOICES.map((choice) => choice.value).join(", ");
+/** create-vite overlay frameworks — passed via `--vite`. */
+const OVERLAY_VALUES = Object.keys(ADAPTERS).join("|");
+
+/** Bespoke templates — passed via `-t`. */
+const TEMPLATE_VALUES = FRAMEWORK_CHOICES.filter((choice) => !isOverlayFramework(choice.value))
+    .map((choice) => choice.value)
+    .join("|");
 
 /** What to scaffold: a create-vite overlay framework, or a bespoke Lunora template. */
 type ScaffoldChoice = { framework: string; kind: "overlay" } | { kind: "template"; templateType: Template };
@@ -895,7 +901,7 @@ const nonInteractiveInitError = (options: InitCommandOptions): string | undefine
     }
 
     if (options.templateType === undefined && options.vite === undefined) {
-        missing.push(`a framework (\`-t <template>\` or \`--vite <framework>\`, one of: ${CHOICE_VALUES})`);
+        missing.push(`a framework — \`--vite <${OVERLAY_VALUES}>\` for an SPA, or \`-t <${TEMPLATE_VALUES}>\` for a bespoke template`);
     }
 
     if (missing.length === 0) {
