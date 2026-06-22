@@ -11,7 +11,10 @@
         "lint:eslint": "eslint .",
         "lint:eslint:fix": "eslint . --fix",
         "lint:types": "tsc --noEmit",
-        "preview": "vite preview"
+        "preview": "vite preview",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score"
     },
     "dependencies": {
         "@fontsource-variable/geist": "catalog:ui",
@@ -27,6 +30,7 @@
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
         "@types/react-dom": "catalog:frontend",
+        "fallow": "catalog:lint",
         "tailwindcss": "catalog:vite",
         "tw-animate-css": "catalog:vite",
         "typescript": "catalog:tsc",

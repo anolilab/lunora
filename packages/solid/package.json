@@ -58,7 +58,10 @@
         "lint:prettier:fix": "prettier --write .",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
-        "test:coverage": "vitest run --coverage"
+        "test:coverage": "vitest run --coverage",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score"
     },
     "dependencies": {
         "@lunora/client": "1.0.0-alpha.1",
@@ -73,6 +76,7 @@
         "@vitest/coverage-v8": "catalog:test",
         "babel-preset-solid": "catalog:build",
         "esbuild": "catalog:build",
+        "fallow": "catalog:lint",
         "jsdom": "catalog:frontend",
         "solid-js": "catalog:frontend",
         "typescript": "catalog:tsc",

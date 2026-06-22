@@ -35,6 +35,21 @@ export default defineConfig({
             cache: true,
             dependsOn: ["^build"],
         },
+        // fallow (codebase-intelligence CLI) is pure static analysis over each
+        // project's source — no dist needed, so no ^build dependency. health and
+        // dead-code are deterministic over the source tree → cacheable. audit
+        // diffs against git state (not just the input files), so it isn't cached.
+        "fallow:health": {
+            cache: true,
+            inputs: ["default"],
+        },
+        "fallow:dead-code": {
+            cache: true,
+            inputs: ["default"],
+        },
+        "fallow:audit": {
+            cache: false,
+        },
         "lint:eslint": {
             cache: true,
             // Type-aware ESLint rules (no-unsafe-*, no-unnecessary-condition) need the

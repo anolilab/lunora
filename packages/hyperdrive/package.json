@@ -58,7 +58,10 @@
         "lint:prettier:fix": "prettier --write .",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
-        "test:coverage": "vitest run --coverage"
+        "test:coverage": "vitest run --coverage",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score"
     },
     "dependencies": {
         "@lunora/do": "1.0.0-alpha.3",
@@ -72,6 +75,7 @@
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
+        "fallow": "catalog:lint",
         "mysql-memory-server": "1.14.1",
         "mysql2": "^3.11.0",
         "typescript": "catalog:tsc",

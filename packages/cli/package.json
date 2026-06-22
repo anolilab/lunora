@@ -60,7 +60,10 @@
         "lint:types": "tsc --noEmit",
         "test:bench": "vitest bench --run --config vitest.bench.config.ts",
         "test": "vitest run",
-        "test:coverage": "vitest run --coverage"
+        "test:coverage": "vitest run --coverage",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score"
     },
     "dependencies": {
         "@bomb.sh/tab": "0.0.17",
@@ -88,6 +91,7 @@
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
+        "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
     },

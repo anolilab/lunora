@@ -55,7 +55,10 @@
         "lint:types": "pnpm exec tsc --noEmit",
         "test": "pnpm exec vitest run",
         "test:coverage": "pnpm exec vitest run --coverage",
-        "test:bench": "vitest bench --run --config vitest.bench.config.ts"
+        "test:bench": "vitest bench --run --config vitest.bench.config.ts",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score"
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
@@ -65,6 +68,7 @@
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
+        "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
     },

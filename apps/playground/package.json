@@ -13,7 +13,10 @@
         "lint:eslint": "eslint .",
         "lint:eslint:fix": "eslint . --fix",
         "lint:types": "node node_modules/lunorash/dist/bin.mjs codegen && tsc --noEmit",
-        "test": "vitest run"
+        "test": "vitest run",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score"
     },
     "dependencies": {
         "@lunora/auth": "workspace:*",
@@ -42,6 +45,7 @@
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
         "@types/react-dom": "catalog:frontend",
+        "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
         "vite": "catalog:vite",
         "vitest": "catalog:test",

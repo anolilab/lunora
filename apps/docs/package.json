@@ -18,7 +18,10 @@
         "lint:secrets": "secretlint **/*",
         "lint:types": "fumadocs-mdx && tsc --project tsconfig.json --noEmit",
         "serve": "vite preview",
-        "start": "node .output/server/index.mjs"
+        "start": "node .output/server/index.mjs",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score"
     },
     "dependencies": {
         "@babel/core": "catalog:web",
@@ -103,6 +106,7 @@
         "eslint-plugin-testing-library": "catalog:web",
         "eslint-plugin-validate-jsx-nesting": "catalog:web",
         "eslint-plugin-zod": "catalog:web",
+        "fallow": "catalog:lint",
         "happy-dom": "catalog:web",
         "prettier": "catalog:web",
         "rimraf": "catalog:web",

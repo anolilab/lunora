@@ -55,7 +55,10 @@
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
-        "test:bench": "vitest bench --run --config vitest.bench.config.ts"
+        "test:bench": "vitest bench --run --config vitest.bench.config.ts",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score"
     },
     "dependencies": {
         "@lunora/advisor": "1.0.0-alpha.1",
@@ -74,6 +77,7 @@
         "@vitest/coverage-v8": "catalog:test",
         "drizzle-orm": "catalog:drizzle",
         "esbuild": "catalog:build",
+        "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
     },
