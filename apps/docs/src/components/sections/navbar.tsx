@@ -76,9 +76,9 @@ interface NavFeature {
 interface NavColumn {
     featureLink?: { href: string; title: string };
     features: NavFeature[];
-    navItems: NavLeaf[];
     /** Lay the nav items out in N columns (no feature cards). Default 1. */
     navColumns?: number;
+    navItems: NavLeaf[];
     navTitle: string;
 }
 
@@ -264,7 +264,7 @@ const MegaPanel = ({ column }: { column: NavColumn }) => {
         const rows = Math.ceil(column.navItems.length / column.navColumns);
 
         return (
-            <div className="grid grid-flow-col gap-x-1" style={{ gridAutoColumns: "236px", gridTemplateRows: `repeat(${rows}, auto)` }}>
+            <div className="grid grid-flow-col gap-x-1" style={{ gridAutoColumns: "236px", gridTemplateRows: `repeat(${String(rows)}, auto)` }}>
                 {column.navItems.map((leaf) => (
                     <LeafLink key={leaf.title} leaf={leaf} />
                 ))}
@@ -282,20 +282,20 @@ const MegaPanel = ({ column }: { column: NavColumn }) => {
                 ))}
             </ul>
             <div className="flex flex-col gap-2">
-            <div className="flex flex-1 gap-2">
-                {column.features.map((feature) => (
-                    <FeatureCard feature={feature} key={feature.title} single={column.features.length === 1} />
-                ))}
-            </div>
-            {column.featureLink ? (
-                <Link
-                    className="group/all flex items-center justify-between rounded-none border border-white/[0.08] px-4 py-3 text-sm font-medium text-white no-underline transition-colors hover:bg-white/[0.05]"
-                    to={column.featureLink.href}
-                >
-                    {column.featureLink.title}
-                    <ChevronRight className="size-4 text-white/40 transition-transform group-hover/all:translate-x-0.5 group-hover/all:text-white" />
-                </Link>
-            ) : null}
+                <div className="flex flex-1 gap-2">
+                    {column.features.map((feature) => (
+                        <FeatureCard feature={feature} key={feature.title} single={column.features.length === 1} />
+                    ))}
+                </div>
+                {column.featureLink ? (
+                    <Link
+                        className="group/all flex items-center justify-between rounded-none border border-white/[0.08] px-4 py-3 text-sm font-medium text-white no-underline transition-colors hover:bg-white/[0.05]"
+                        to={column.featureLink.href}
+                    >
+                        {column.featureLink.title}
+                        <ChevronRight className="size-4 text-white/40 transition-transform group-hover/all:translate-x-0.5 group-hover/all:text-white" />
+                    </Link>
+                ) : null}
             </div>
         </div>
     );
