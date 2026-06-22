@@ -21,81 +21,76 @@ loader is live.
 4. `plugins/lunora.client.ts` provides the browser `LunoraClient` to the app via
    `createLunora`, so `useQuery` / `useMutation` / `hydratePreloaded` resolve it.
 
-## Two-worker architecture
+## Single-worker architecture
 
-This template uses a **two-worker split** — the documented, supported way to run
-Lunora alongside Nuxt on Cloudflare Workers.
+This template ships the **whole app as one Cloudflare Worker** — Nuxt SSR and the
+Lunora realtime plane in a single deploy — via the [`@lunora/nuxt`](https://lunora.sh)
+module.
 
-**Why two workers?** Nitro does not expose its emitted fetch handler as an
-importable virtual module. There is no `#nitro-cloudflare-handler` specifier and
-`nitro.cloudflare.entrypoint` is undocumented and absent from the Nitro API.
-Without a hook to intercept Nitro's handler, composing `/_lunora/*` into the
-Nitro output is not achievable through any supported mechanism.
-
-### Worker 1 — Nuxt SSR (`wrangler.jsonc`)
-
-Built by `nuxt build` (Nitro `cloudflare_module` preset). Handles all page
-requests, API routes, and SSR. The emitted `.output/server/index.mjs` is the
-worker entry — no custom entrypoint, no `ShardDO` export.
-
-### Worker 2 — Lunora realtime (`wrangler.lunora.jsonc`)
-
-A standalone Lunora worker (`lunora/server.ts`) that owns:
-
-- `/_lunora/*` — RPC and WebSocket realtime traffic
-- `ShardDO` — the Durable Object for state + subscriptions
-
-This worker is identical in shape to the `standalone` template.
-
-### Wiring the two workers together
-
-Set `NUXT_PUBLIC_LUNORA_URL` to the Lunora worker's URL (e.g.
-`https://{{name}}-lunora.workers.dev`). This configures:
-
-- `runtimeConfig.public.lunoraUrl` — used by `server/api/messages.get.ts` to
-  reach `/_lunora/rpc` during SSR.
-- `plugins/lunora.client.ts` — the browser `LunoraClient` connects its WebSocket
-  to this URL.
+**How?** `@lunora/nuxt` mounts Lunora _inside_ Nitro: it registers a server route
+at `/_lunora/**` (`addServerHandler`) that forwards every RPC / WebSocket / admin
+request to the Lunora app in-process, and aliases the `#lunora/app` virtual to
+`lunora/server`. The `ShardDO` Durable Object class reaches the emitted Cloudflare
+worker entry through the project-root `exports.cloudflare.ts` (the Nitro
+`cloudflare_module` preset appends its named exports). One `wrangler.jsonc`, one
+deploy, a same-origin client.
 
 ### Key files
 
-- **`lunora/server.ts`** — standalone Lunora worker entry; exports `ShardDO` and
-  calls `createWorker`. Wrangler reads this via `wrangler.lunora.jsonc`.
-- **`wrangler.lunora.jsonc`** — Lunora worker config with the `SHARD` DO binding
-  and migration. Deploy with `wrangler deploy --config wrangler.lunora.jsonc`.
-- **`wrangler.jsonc`** — Nuxt SSR worker config. Deploy with `nuxt build &&
-wrangler deploy` (or `pnpm deploy`).
-- **`nuxt.config.ts`** — uses `cloudflare_module` preset (standard; no custom
-  entrypoint).
+- **`nuxt.config.ts`** — registers `modules: ["@lunora/nuxt"]` and the
+  `cloudflare_module` Nitro preset; runs Lunora codegen through the Vite plugin.
+- **`exports.cloudflare.ts`** — re-exports `ShardDO` onto the Nitro worker entry
+  so the `SHARD` binding resolves. (If your Nitro/Nuxt version doesn't pick this
+  file up, see **Verify before deploy** below.)
+- **`lunora/server.ts`** — the Lunora app (`defineApp().build()`); exports the
+  app as `default` and the bound `ShardDO` class. `@lunora/nuxt` mounts this.
+- **`wrangler.jsonc`** — the single worker config: `main` points at Nitro's
+  output (`.output/server/index.mjs`), with the `SHARD` DO binding + migration.
+- **`server/api/messages.get.ts`** — SSR loader; calls `/_lunora/rpc` at the
+  request's own origin (a same-origin sub-request into the in-worker Lunora app).
+- **`plugins/lunora.client.ts`** — the browser `LunoraClient`, pointed at the
+  page's own origin (it reaches `/_lunora/ws` on the same worker).
 
 ## Develop
 
 ```bash
-# Terminal 1 — Lunora worker (RPC + WebSocket + ShardDO)
-wrangler dev --config wrangler.lunora.jsonc
-
-# Terminal 2 — Nuxt SSR (set the lunora port from terminal 1)
-NUXT_PUBLIC_LUNORA_URL=http://localhost:8788 pnpm dev
+pnpm dev
 ```
 
-`pnpm dev` runs `lunora dev` for the Nuxt side. Start the Lunora worker first so
-`NUXT_PUBLIC_LUNORA_URL` is known.
+`nuxt dev` serves the app and the `/_lunora/**` route together. Live queries
+need the Cloudflare bindings (the `SHARD` Durable Object) in dev — Nuxt surfaces
+them through Nitro's Cloudflare dev runtime; if a live query reports
+`LUNORA_RUNTIME_UNAVAILABLE`, enable the Cloudflare Nitro dev runtime (e.g.
+`nitro-cloudflare-dev`) so `event.context.cloudflare` is populated.
 
 ## Build and deploy
 
 ```bash
-# 1. Deploy the Lunora worker first (get its URL)
-wrangler deploy --config wrangler.lunora.jsonc
-#   → https://{{name}}-lunora.workers.dev
-
-# 2. Build and deploy the Nuxt SSR worker
-NUXT_PUBLIC_LUNORA_URL=https://{{name}}-lunora.workers.dev pnpm build
-wrangler deploy --config wrangler.jsonc
+pnpm deploy        # nuxt build && wrangler deploy
 ```
+
+## Verify before deploy
+
+Single-worker composition rides on two Nitro behaviours that vary across versions
+— check them against the toolchain this template pins for you:
+
+1. **`exports.cloudflare.ts` hook** — the `cloudflare_module` preset must append
+   this file's exports onto `.output/server/index.mjs`. If `wrangler deploy` fails
+   with "ShardDO class not exported", your Nitro version may use a different hook
+   (`nitro.cloudflare.additionalModules`, or a `rollupConfig` output export).
+2. **`main` target** — some Nitro versions emit `dist/server/index.mjs` instead of
+   `.output/server/index.mjs`; point `wrangler.jsonc`'s `main` at whatever
+   `nuxt build` actually produces.
+3. **WebSocket upgrade pass-through** — the live feed needs Nitro to return the
+   Lunora app's `101 Switching Protocols` response (carrying its Cloudflare
+   `webSocket`) untouched. RPC (plain JSON) works regardless; if live
+   subscriptions never connect while RPC does, Nitro is normalising the upgrade
+   response and the seam needs a deploy-boundary handoff for `/_lunora/ws`.
 
 ## Stack
 
 - `nuxt` — the Vue meta-framework (Nitro server engine, `cloudflare_module` preset)
+- `@lunora/nuxt` — mounts Lunora inside Nitro for single-worker deploys
 - `@lunora/vue` — Vue composables for Lunora (`useQuery`, `useMutation`,
   `hydratePreloaded`)
 - `@lunora/*` — the realtime backend on Cloudflare Workers + Durable Objects

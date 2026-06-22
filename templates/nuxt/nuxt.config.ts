@@ -9,38 +9,27 @@ export default defineNuxtConfig({
     // `srcDir` to `.` explicitly — deterministic layout, no compat warning.
     srcDir: ".",
 
-    // Two-worker split: Nuxt uses the standard `cloudflare_module` Nitro preset
-    // with no custom entrypoint. Lunora realtime (`/_lunora/*` + ShardDO) runs in
-    // a SEPARATE Cloudflare Worker — see `wrangler.lunora.jsonc` + `lunora/server.ts`.
-    //
-    // Why two workers? Nitro does not expose its emitted fetch handler as an
-    // importable virtual module (`#nitro-cloudflare-handler` is not a real
-    // specifier). `nitro.cloudflare.entrypoint` is also undocumented and absent
-    // from the Nitro API surface. Without a documented hook to intercept Nitro's
-    // handler, composing `/_lunora/*` into the Nitro output is not achievable
-    // through any supported mechanism. The two-worker split is the documented path.
+    // Single-worker composition (via `@lunora/nuxt`): Lunora realtime
+    // (`/_lunora/*` RPC + WebSocket + admin) is mounted *inside* Nitro as a
+    // server route, so the whole app — Nuxt SSR + Lunora — ships as ONE
+    // Cloudflare Worker and one deploy. The `@lunora/nuxt` module registers the
+    // `/_lunora/**` handler and aliases the `#lunora/app` virtual to
+    // `lunora/server`; the `ShardDO` Durable Object class reaches the worker
+    // entrypoint via the project-root `exports.cloudflare.ts`.
+    modules: ["@lunora/nuxt"],
+
+    // Nitro emits a Cloudflare module worker (`.output/server/index.mjs`); the
+    // `cloudflare_module` preset appends `exports.cloudflare.ts`'s exports onto it.
     nitro: {
         preset: "cloudflare_module",
-    },
-
-    runtimeConfig: {
-        public: {
-            // URL of the separate Lunora worker. Required in production — set via
-            // NUXT_PUBLIC_LUNORA_URL (e.g. https://my-app-lunora.workers.dev).
-            // During local dev: run `wrangler dev --config wrangler.lunora.jsonc`
-            // in a second terminal and set
-            //   NUXT_PUBLIC_LUNORA_URL=http://localhost:8788
-            // (or whatever port wrangler dev assigns) in `.dev.vars`.
-            lunoraUrl: "",
-        },
     },
 
     // Run Lunora codegen during the Nuxt/Vite build so `lunora/_generated/`
     // is present when page components and server routes import the typed API.
     // `cloudflare: false` — Nuxt uses its own CF adapter (Nitro preset) and
     // doesn't need @cloudflare/vite-plugin wired through here.
-    // `validateWrangler: false` — validation happens at `lunora deploy` time
-    // (wrangler.lunora.jsonc's main is `lunora/server.ts`, built by wrangler).
+    // `validateWrangler: false` — validation happens at deploy time (the single
+    // `wrangler.jsonc`'s `main` is Nitro's output, which only exists post-build).
     vite: {
         plugins: [lunora({ cloudflare: false, validateWrangler: false })],
     },

@@ -13,13 +13,10 @@ import { createLunora } from "@lunora/vue";
  * attaches after hydration.
  */
 export default defineNuxtPlugin((nuxtApp) => {
-    const config = useRuntimeConfig();
-
-    // Empty `lunoraUrl` → same origin as the page (the common single-worker
-    // deploy). Point it at a remote worker for split deploys.
-    const url = config.public.lunoraUrl || window.location.origin;
-
-    const client = new LunoraClient({ url });
+    // Single-worker deploy: Lunora is mounted in this same Nitro worker by
+    // `@lunora/nuxt`, so the client talks to the page's own origin — it appends
+    // `/_lunora/ws` (and `/_lunora/rpc`) itself, which the module's route serves.
+    const client = new LunoraClient({ url: window.location.origin });
 
     nuxtApp.vueApp.use(createLunora(client));
 });

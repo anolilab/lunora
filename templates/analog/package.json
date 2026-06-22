@@ -1,0 +1,37 @@
+{
+    "name": "{{name}}",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "build": "vite build",
+        "preview": "vite preview",
+        "codegen": "lunora codegen",
+        "deploy": "vite build && wrangler deploy"
+    },
+    "dependencies": {
+        "@analogjs/content": "^1.21.1",
+        "@analogjs/router": "^1.21.1",
+        "@angular/common": "^19.2.0",
+        "@angular/compiler": "^19.2.0",
+        "@angular/core": "^19.2.0",
+        "@angular/forms": "^19.2.0",
+        "@angular/platform-browser": "^19.2.0",
+        "@angular/platform-server": "^19.2.0",
+        "@angular/router": "^19.2.0",
+        "lunorash": "^0.0.0",
+        "rxjs": "^7.8.1",
+        "zone.js": "^0.15.0"
+    },
+    "devDependencies": {
+        "@analogjs/platform": "^1.21.1",
+        "@angular/build": "^19.2.0",
+        "@angular/compiler-cli": "^19.2.0",
+        "@cloudflare/workers-types": "^4.20260611.1",
+        "@lunora/vite": "^0.0.0",
+        "typescript": "^5.8.3",
+        "vite": "^6.3.5",
+        "wrangler": "^4.100.0"
+    }
+}

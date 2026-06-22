@@ -1,0 +1,32 @@
+{
+    "name": "{{name}}",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "build": "lunora codegen && react-router build",
+        "preview": "vite preview",
+        "codegen": "lunora codegen",
+        "deploy": "react-router build && lunora deploy",
+        "typecheck": "react-router typegen && tsc"
+    },
+    "dependencies": {
+        "@lunora/react": "^0.0.0",
+        "lunorash": "^0.0.0",
+        "react": "^19.2.7",
+        "react-dom": "^19.2.7",
+        "react-router": "^7.9.0"
+    },
+    "devDependencies": {
+        "@cloudflare/vite-plugin": "^1.29.0",
+        "@cloudflare/workers-types": "^4.20260610.1",
+        "@lunora/vite": "^0.0.0",
+        "@react-router/dev": "^7.9.0",
+        "@types/react": "^19.2.17",
+        "@types/react-dom": "^19.2.3",
+        "typescript": "^6.0.2",
+        "vite": "^8.0.16",
+        "wrangler": "^4.100.0"
+    }
+}

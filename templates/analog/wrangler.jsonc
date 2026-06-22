@@ -1,14 +1,14 @@
 {
-    // Single Cloudflare Worker for the whole app — Nuxt SSR (via Nitro's
-    // `cloudflare_module` preset) AND the Lunora realtime plane (`/_lunora/*`
-    // + ShardDO, mounted inside Nitro by `@lunora/nuxt`) in one deploy.
+    // Single Cloudflare Worker for the whole app — Analog SSR (via Nitro's
+    // `cloudflare-module` preset) AND the Lunora realtime plane (`/_lunora/*`
+    // + ShardDO) in one deploy.
     //
-    // `main` points at Nitro's emitted worker entry (produced by `nuxt build`).
+    // `main` points at Nitro's emitted worker entry (produced by `vite build`).
     // The `ShardDO` Durable Object class is re-exported onto that entry by the
     // project-root `exports.cloudflare.ts`, so the `SHARD` binding below resolves.
     "$schema": "node_modules/wrangler/config-schema.json",
     "name": "{{name}}",
-    "main": ".output/server/index.mjs",
+    "main": "dist/analog/server/index.mjs",
     "compatibility_date": "2026-06-10",
     "compatibility_flags": ["nodejs_compat"],
     "durable_objects": {
