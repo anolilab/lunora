@@ -142,7 +142,7 @@ const HowItWorks: FC = () => {
     };
 
     return (
-        <div className="grid border border-white/[0.08] lg:grid-cols-2 lg:border-x-0">
+        <div className="grid grid-cols-1 border border-white/[0.08] lg:grid-cols-2 lg:border-x-0">
             {/* left — accordion */}
             <div className="flex flex-col lg:border-r lg:border-white/[0.08]">
                 {STEPS.map((step, index) => {

@@ -117,7 +117,7 @@ const Home: FC = () => (
                     subtitle="Realtime, storage, types, and a studio — typed and edge-native by default."
                     title="Everything you need to ship realtime"
                 />
-                <div className="mt-14 grid gap-px border border-white/[0.08] md:grid-cols-2 lg:grid-cols-3 lg:border-x-0">
+                <div className="mt-14 grid grid-cols-1 gap-px border border-white/[0.08] md:grid-cols-2 lg:grid-cols-3 lg:border-x-0">
                     {bento.map((cell, index) => (
                         <Reveal className="flex flex-col gap-4 bg-white/[0.012] p-6" delay={(index % 3) * 0.05} key={cell.title}>
                             <div>
