@@ -1,4 +1,4 @@
-import { bench, describe } from "vitest";
+import { beforeAll, bench, describe } from "vitest";
 
 import type { RateLimitConfigMap } from "../src/index";
 import { RateLimiter } from "../src/index";
@@ -53,11 +53,16 @@ const unsharded = buildLimiter(unshardedConfig);
 const sharded8 = buildLimiter(sharded8Config);
 const sharded32 = buildLimiter(sharded32Config);
 
-await prime(unsharded, "hits", 100);
-await prime(sharded8, "hits", 100);
-await prime(sharded32, "hits", 100);
-
 describe("RateLimiter.getValue — sharded vs unsharded", () => {
+    // Prime in beforeAll: CodSpeed's instrumented runner honors beforeAll but does
+    // NOT pick up module-top-level await state, so a top-level prime would leave
+    // each limiter empty and getValue() projecting from "no prior".
+    beforeAll(async () => {
+        await prime(unsharded, "hits", 100);
+        await prime(sharded8, "hits", 100);
+        await prime(sharded32, "hits", 100);
+    });
+
     bench("unsharded: 1 lookup, no routing hash", async () => {
         await unsharded.getValue("hits", { key: "user-42" });
     });

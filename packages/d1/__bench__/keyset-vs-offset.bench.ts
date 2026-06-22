@@ -1,5 +1,5 @@
 import type { DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/do";
-import { bench, describe } from "vitest";
+import { beforeAll, bench, describe } from "vitest";
 
 import createD1Exec from "../__tests__/_helpers/node-sqlite-d1";
 import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db";
@@ -42,38 +42,46 @@ harness.ddl(
 
 const writer: DatabaseWriterLike = createD1ContextDatabase({ clock: () => CLOCK, exec: harness.exec, schema });
 
-for (let index = 0; index < ROW_COUNT; index += 1) {
-    // eslint-disable-next-line no-await-in-loop -- sequential seed: rows insert one at a time to keep deterministic _creationTime ordering
-    await writer.insert("todos", { _id: `t${String(index).padStart(5, "0")}`, priority: "medium", seq: index });
-}
-
-// Walk to PAGE_OFFSET once to capture the cursor.
-let walkedCursor: null | string = null;
-let rowsWalked = 0;
-
-while (rowsWalked < PAGE_OFFSET) {
-    // eslint-disable-next-line no-await-in-loop -- cursor walk: each page depends on the prior page's continueCursor, so it must be sequential
-    const page = await writer.findMany("todos", {
-        cursor: walkedCursor,
-        limit: PAGE_OFFSET - rowsWalked,
-        orderBy: [{ seq: "asc" }],
-    });
-
-    rowsWalked += page.page.length;
-    walkedCursor = page.continueCursor;
-
-    if (page.isDone) {
-        break;
-    }
-}
-
-if (!walkedCursor) {
-    throw new Error("bench setup: failed to build cursor at offset 5000");
-}
-
-const cursor = walkedCursor;
+let cursor: string;
 
 describe("d1 findMany — keyset vs offset-style at depth 5000", () => {
+    // Seed + capture the depth-5000 cursor in beforeAll: CodSpeed's instrumented
+    // runner does not pick up module-top-level await state (the seed writes and
+    // the cursor walk), so the benches would otherwise hit an empty DB. beforeAll
+    // is honored by both the plain `vitest bench` runner and CodSpeed's runner.
+    beforeAll(async () => {
+        for (let index = 0; index < ROW_COUNT; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential seed: rows insert one at a time to keep deterministic _creationTime ordering
+            await writer.insert("todos", { _id: `t${String(index).padStart(5, "0")}`, priority: "medium", seq: index });
+        }
+
+        // Walk to PAGE_OFFSET once to capture the cursor.
+        let walkedCursor: null | string = null;
+        let rowsWalked = 0;
+
+        while (rowsWalked < PAGE_OFFSET) {
+            // eslint-disable-next-line no-await-in-loop -- cursor walk: each page depends on the prior page's continueCursor, so it must be sequential
+            const page = await writer.findMany("todos", {
+                cursor: walkedCursor,
+                limit: PAGE_OFFSET - rowsWalked,
+                orderBy: [{ seq: "asc" }],
+            });
+
+            rowsWalked += page.page.length;
+            walkedCursor = page.continueCursor;
+
+            if (page.isDone) {
+                break;
+            }
+        }
+
+        if (!walkedCursor) {
+            throw new Error("bench setup: failed to build cursor at offset 5000");
+        }
+
+        cursor = walkedCursor;
+    });
+
     bench("keyset: page 101 via cursor seek (~50 rows walked)", async () => {
         await writer.findMany("todos", { cursor, limit: PAGE_SIZE, orderBy: [{ seq: "asc" }] });
     });

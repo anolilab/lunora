@@ -1,5 +1,5 @@
 import type { Id } from "@lunora/values";
-import { bench, describe } from "vitest";
+import { beforeAll, bench, describe } from "vitest";
 
 import type { RateLimitDb, RateLimitDbIndexRange, RateLimitDbQuery, RateLimitStore } from "../src/index";
 import { createDbStore } from "../src/index";
@@ -132,9 +132,6 @@ const seed = async (store: RateLimitStore): Promise<void> => {
 const legacyStore = createLegacyDatabaseStore(createFakeDatabase());
 const currentStore = createDbStore({ db: createFakeDatabase() });
 
-await seed(legacyStore);
-await seed(currentStore);
-
 // One read-modify-write against the hot key: get() then set(), the shape every
 // consuming limit() drives.
 const readModifyWrite = async (store: RateLimitStore, ts: number): Promise<void> => {
@@ -146,6 +143,14 @@ const readModifyWrite = async (store: RateLimitStore, ts: number): Promise<void>
 let clock = 0;
 
 describe("db store: get()+set() index lookups per consuming call", () => {
+    // Seed in beforeAll: CodSpeed's instrumented runner honors beforeAll but does
+    // NOT pick up module-top-level await state, so a top-level seed would leave the
+    // benches scanning empty tables.
+    beforeAll(async () => {
+        await seed(legacyStore);
+        await seed(currentStore);
+    });
+
     bench("legacy: find in get + find in set (2 scans)", async () => {
         clock += 1;
         await readModifyWrite(legacyStore, clock);

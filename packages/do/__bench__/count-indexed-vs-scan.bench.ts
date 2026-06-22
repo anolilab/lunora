@@ -1,4 +1,4 @@
-import { bench, describe } from "vitest";
+import { beforeAll, bench, describe } from "vitest";
 
 import createSqliteExec from "../__tests__/_helpers/node-sqlite";
 import type { AggregateIndexDefinitionLike } from "../src/aggregates";
@@ -65,11 +65,8 @@ const seed = async (writer: DatabaseWriterLike): Promise<void> => {
     }
 };
 
-// Setup at module load: vitest bench doesn't await beforeAll the same way the
-// test runner does, so the existing benches (broadcast-delta, dispatch) set
-// state up inline before the `bench(...)` declarations. We follow the same
-// pattern via top-level await — ESM module init waits on the promise before
-// the bench framework starts iterating.
+// Synchronous engine/migration setup persists under CodSpeed; only the async
+// seed must move into beforeAll.
 const indexedHarness = createSqliteExec();
 const indexedSchema = makeSchema(byProject, total);
 
@@ -82,10 +79,17 @@ const scanSchema = makeSchema();
 runShardMigrations(scanHarness.sql, scanSchema);
 const scanWriter = createShardContextDatabase({ schema: scanSchema, sql: scanHarness.sql });
 
-await seed(indexedWriter);
-await seed(scanWriter);
-
 describe("count() — indexed vs scan", () => {
+    // Seed in beforeAll: CodSpeed's instrumented runner (@codspeed/vitest-plugin)
+    // runs each bench against the suite's beforeAll/beforeEach hooks but does NOT
+    // pick up module-top-level await state, so a top-level seed leaves the bench
+    // querying an empty DB. beforeAll is honored in both the plain `vitest bench`
+    // runner and CodSpeed's analysis runner.
+    beforeAll(async () => {
+        await seed(indexedWriter);
+        await seed(scanWriter);
+    });
+
     bench("indexed: count by projectId (companion lookup)", async () => {
         await indexedWriter.count("todos", { where: { projectId: "p5" } });
     });

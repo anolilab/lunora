@@ -1,4 +1,4 @@
-import { bench, describe } from "vitest";
+import { beforeAll, bench, describe } from "vitest";
 
 import createSqliteExec from "../__tests__/_helpers/node-sqlite";
 import type { SchemaLike } from "../src/ctx-db";
@@ -44,38 +44,48 @@ runShardMigrations(harness.sql, schema);
 
 const writer = createShardContextDatabase({ schema, sql: harness.sql });
 
-for (let index = 0; index < ROW_COUNT; index += 1) {
-    // eslint-disable-next-line no-await-in-loop -- sequential seed writes into the same DB
-    await writer.insert("todos", { _id: `t${String(index).padStart(5, "0")}`, priority: "medium", seq: index });
-}
-
-// Walk to PAGE_OFFSET once to capture the cursor pointing at row 5000.
-let walkedCursor: null | string = null;
-let rowsWalked = 0;
-
-while (rowsWalked < PAGE_OFFSET) {
-    // eslint-disable-next-line no-await-in-loop -- sequential keyset walk to capture cursor
-    const page = await writer.findMany("todos", {
-        cursor: walkedCursor,
-        limit: PAGE_OFFSET - rowsWalked,
-        orderBy: [{ seq: "asc" }],
-    });
-
-    rowsWalked += page.page.length;
-    walkedCursor = page.continueCursor;
-
-    if (page.isDone) {
-        break;
-    }
-}
-
-if (!walkedCursor) {
-    throw new Error("bench setup: failed to build cursor at offset 5000");
-}
-
-const cursor = walkedCursor;
+// Assigned in beforeAll once the seed + cursor walk have run.
+let cursor: string;
 
 describe("findMany — keyset vs offset-style at depth 5000", () => {
+    // Seed + build the cursor in beforeAll: CodSpeed's instrumented runner
+    // (@codspeed/vitest-plugin) runs each bench against the suite's
+    // beforeAll/beforeEach hooks but does NOT pick up module-top-level await
+    // state, so a top-level seed leaves the bench querying an empty DB.
+    // beforeAll is honored in both the plain `vitest bench` runner and CodSpeed.
+    beforeAll(async () => {
+        for (let index = 0; index < ROW_COUNT; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential seed writes into the same DB
+            await writer.insert("todos", { _id: `t${String(index).padStart(5, "0")}`, priority: "medium", seq: index });
+        }
+
+        // Walk to PAGE_OFFSET once to capture the cursor pointing at row 5000.
+        let walkedCursor: null | string = null;
+        let rowsWalked = 0;
+
+        while (rowsWalked < PAGE_OFFSET) {
+            // eslint-disable-next-line no-await-in-loop -- sequential keyset walk to capture cursor
+            const page = await writer.findMany("todos", {
+                cursor: walkedCursor,
+                limit: PAGE_OFFSET - rowsWalked,
+                orderBy: [{ seq: "asc" }],
+            });
+
+            rowsWalked += page.page.length;
+            walkedCursor = page.continueCursor;
+
+            if (page.isDone) {
+                break;
+            }
+        }
+
+        if (!walkedCursor) {
+            throw new Error("bench setup: failed to build cursor at offset 5000");
+        }
+
+        cursor = walkedCursor;
+    });
+
     bench("keyset: page 101 via cursor seek (~50 rows walked)", async () => {
         await writer.findMany("todos", {
             cursor,

@@ -1,4 +1,4 @@
-import { bench, describe } from "vitest";
+import { beforeAll, bench, describe } from "vitest";
 
 import createSqliteExec from "../__tests__/_helpers/node-sqlite";
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
@@ -108,8 +108,15 @@ const semijoinHarness = createSqliteExec();
 runShardMigrations(semijoinHarness.sql, schema);
 const semijoinWriter = createShardContextDatabase({ clock: () => 1_700_000_000_000, relationExistsPushDown: "never", schema, sql: semijoinHarness.sql });
 
-await seed(pushWriter);
-await seed(semijoinWriter);
+// Seed in beforeAll: CodSpeed's instrumented runner (@codspeed/vitest-plugin)
+// runs each bench against the suite's beforeAll/beforeEach hooks but does NOT
+// pick up module-top-level await state, so a top-level seed leaves the bench
+// querying an empty DB. beforeAll is honored in both the plain `vitest bench`
+// runner and CodSpeed's analysis runner.
+beforeAll(async () => {
+    await seed(pushWriter);
+    await seed(semijoinWriter);
+});
 
 // `contains "1"` matches every user whose index carries a 1 (1, 10–19, 21, …):
 // a broad ~28-user / ~2 800-message set, so the semijoin builds a sizeable IN.

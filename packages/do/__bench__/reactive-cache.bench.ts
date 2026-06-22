@@ -1,4 +1,4 @@
-import { bench, describe } from "vitest";
+import { beforeAll, bench, describe } from "vitest";
 
 import { createDependencyTracker } from "../src/dependency-tracker";
 import { ReactiveCache, reactiveCacheKey } from "../src/reactive-cache";
@@ -39,18 +39,25 @@ const syntheticHandler = async (): Promise<number> => {
     return sum;
 };
 
-// Setup inline (vitest bench doesn't await beforeAll cleanly — same shape as
-// the existing dispatch/broadcast-delta benches).
+// Synchronous cache construction persists under CodSpeed; only the async prime
+// must move into beforeAll.
 const primedCache = new ReactiveCache({ maxEntries: 1024 });
 const primedKey = reactiveCacheKey("primed:handler", { id: "p1" }, null);
-
-await primedCache.run(primedKey, createDependencyTracker().collect(), syntheticHandler);
 
 // Tiny cache for the miss path so every iteration evicts the previous entry.
 const missCache = new ReactiveCache({ maxEntries: 1 });
 let missCounter = 0;
 
 describe("ReactiveCache.run — hit vs miss vs no-cache", () => {
+    // Prime the hit-path cache in beforeAll: CodSpeed's instrumented runner
+    // (@codspeed/vitest-plugin) runs each bench against the suite's
+    // beforeAll/beforeEach hooks but does NOT pick up module-top-level await
+    // state, so a top-level prime would leave the "hit" bench cold (a miss).
+    // beforeAll is honored in both the plain `vitest bench` runner and CodSpeed.
+    beforeAll(async () => {
+        await primedCache.run(primedKey, createDependencyTracker().collect(), syntheticHandler);
+    });
+
     bench("hit: cache.run returns memoized result", async () => {
         await primedCache.run(primedKey, createDependencyTracker().collect(), syntheticHandler);
     });

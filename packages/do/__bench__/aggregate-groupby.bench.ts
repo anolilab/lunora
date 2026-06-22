@@ -1,4 +1,4 @@
-import { bench, describe } from "vitest";
+import { beforeAll, bench, describe } from "vitest";
 
 import createSqliteExec from "../__tests__/_helpers/node-sqlite";
 import type { AggregateIndexDefinitionLike } from "../src/aggregates";
@@ -88,8 +88,15 @@ const seed = async (writer: DatabaseWriterLike): Promise<void> => {
 const indexedWriter = makeWriter(indexedSchema);
 const scanWriter = makeWriter(scanSchema);
 
-await seed(indexedWriter);
-await seed(scanWriter);
+// Seed in beforeAll: CodSpeed's instrumented runner (@codspeed/vitest-plugin)
+// runs each bench against the suite's beforeAll/beforeEach hooks but does NOT
+// pick up module-top-level await state, so a top-level seed leaves the bench
+// querying an empty DB. beforeAll is honored in both the plain `vitest bench`
+// runner and CodSpeed's analysis runner.
+beforeAll(async () => {
+    await seed(indexedWriter);
+    await seed(scanWriter);
+});
 
 describe("aggregate() — indexed vs scan", () => {
     bench("indexed: aggregate(sum, seq) by projectId", async () => {

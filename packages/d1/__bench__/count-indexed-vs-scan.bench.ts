@@ -1,5 +1,5 @@
 import type { AggregateIndexDefinitionLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/do";
-import { bench, describe } from "vitest";
+import { beforeAll, bench, describe } from "vitest";
 
 import createD1Exec from "../__tests__/_helpers/node-sqlite-d1";
 import { createD1CtxDb as createD1ContextDatabase, runD1AggregateMigrations } from "../src/d1-ctx-db";
@@ -76,15 +76,21 @@ const seed = async (writer: DatabaseWriterLike): Promise<void> => {
     }
 };
 
-const indexedWriter = await createWriter(makeSchema(byProject, total));
-
-await seed(indexedWriter);
-
-const scanWriter = await createWriter(makeSchema());
-
-await seed(scanWriter);
+let indexedWriter: DatabaseWriterLike;
+let scanWriter: DatabaseWriterLike;
 
 describe("d1 count() — indexed vs scan", () => {
+    // Build + seed in beforeAll: CodSpeed's instrumented runner does not pick up
+    // module-top-level await state (async migrations + seed writes), so the
+    // benches would otherwise hit an empty DB. beforeAll is honored by both the
+    // plain `vitest bench` runner and CodSpeed's analysis runner.
+    beforeAll(async () => {
+        indexedWriter = await createWriter(makeSchema(byProject, total));
+        await seed(indexedWriter);
+        scanWriter = await createWriter(makeSchema());
+        await seed(scanWriter);
+    });
+
     bench("indexed: count by projectId (companion lookup)", async () => {
         await indexedWriter.count("todos", { where: { projectId: "p5" } });
     });
