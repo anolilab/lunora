@@ -67,7 +67,9 @@ export default defineConfig(async ({ mode }) => {
             target: "esnext",
         },
         optimizeDeps: {
-            exclude: ["scripts/*", "@fumadocs/mdx-remote", "@fumadocs/mdx-remote/client"],
+            // @resvg/resvg-js is a native node addon used only by the server-side OG route;
+            // keep it out of the (rolldown) dep optimizer, which can't parse the .node binary.
+            exclude: ["scripts/*", "@fumadocs/mdx-remote", "@fumadocs/mdx-remote/client", "@resvg/resvg-js"],
         },
         plugins: [
             ...plugins,
@@ -135,8 +137,10 @@ export default defineConfig(async ({ mode }) => {
             },
         },
         ssr: {
+            // Native addon: load it from node_modules at runtime, never bundle it.
+            external: ["@resvg/resvg-js"],
             optimizeDeps: {
-                exclude: ["fumadocs-ui", "fumadocs-core", "@fumadocs/mdx-remote"],
+                exclude: ["fumadocs-ui", "fumadocs-core", "@fumadocs/mdx-remote", "@resvg/resvg-js"],
                 include: ["react", "react-dom"],
             },
         },
