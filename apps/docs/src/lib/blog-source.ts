@@ -1,24 +1,25 @@
-import { readFileSync } from "node:fs";
 import { extname, join, relative } from "node:path";
 
-import FastGlob from "fast-glob";
 import type { MetaData, PageData, Source, VirtualFile } from "fumadocs-core/source";
 import { loader } from "fumadocs-core/source";
 import matter from "gray-matter";
 
-let files: [string, string][];
-
-if (typeof import.meta.glob === "function") {
-    files = Object.entries(
-        import.meta.glob<true, "raw">("/src/content/blog/**/*", {
-            eager: true,
-            import: "default",
-            query: "?raw",
-        }),
-    );
-} else {
-    files = FastGlob.sync("./src/content/blog/**/*").map((file) => [file, readFileSync(file).toString()]);
-}
+// Vite statically replaces this `import.meta.glob(...)` call with a record of
+// the matched files at build time, so the bundled server/function carries the
+// content inline and never reads the filesystem at runtime.
+//
+// Do NOT gate this behind a `typeof import.meta.glob === "function"` runtime
+// check: Vite rewrites the call but leaves the bare reference, which is
+// `undefined` at runtime — so the guard is always false in the built output and
+// would fall through to a filesystem read that finds nothing in a deployed
+// function (the cause of blog posts 404-ing on client-side navigation).
+const files: [string, string][] = Object.entries(
+    import.meta.glob<true, "raw">("/src/content/blog/**/*", {
+        eager: true,
+        import: "default",
+        query: "?raw",
+    }),
+);
 
 const virtualFiles: VirtualFile[] = files.flatMap(([file, content]): VirtualFile[] => {
     const extension = extname(file);
