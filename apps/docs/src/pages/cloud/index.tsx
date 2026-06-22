@@ -1,5 +1,6 @@
 "use client";
 
+import { Link } from "@tanstack/react-router";
 import { ArrowRight, BarChart3, Check, LayoutDashboard, LifeBuoy, RotateCcw } from "lucide-react";
 import type { FC, FormEvent, ReactNode } from "react";
 import { useState } from "react";
@@ -19,13 +20,27 @@ type Status = "error" | "idle" | "sending" | "success";
 
 const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
     const [email, setEmail] = useState("");
+    const [consent, setConsent] = useState(false);
     const [status, setStatus] = useState<Status>("idle");
+    const [errorMessage, setErrorMessage] = useState("");
+
+    const fail = (message: string) => {
+        setErrorMessage(message);
+        setStatus("error");
+    };
 
     const submit = async (event: FormEvent) => {
         event.preventDefault();
 
         if (!EMAIL_RE.test(email)) {
-            setStatus("error");
+            fail("Please enter a valid email address.");
+
+            return;
+        }
+
+        // GDPR: explicit, opt-in consent is required before we store the email.
+        if (!consent) {
+            fail("Please agree to the privacy policy.");
 
             return;
         }
@@ -35,14 +50,18 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
         try {
             // Netlify Forms: POST url-encoded to the static detection form (public/__forms.html).
             const response = await fetch("/__forms.html", {
-                body: new URLSearchParams({ email, "form-name": "lunora-waitlist", honeyField: "", source }).toString(),
+                body: new URLSearchParams({ email, "form-name": "lunora-waitlist", honeyField: "", privacy: "true", source }).toString(),
                 headers: { "Content-Type": "application/x-www-form-urlencoded" },
                 method: "POST",
             });
 
-            setStatus(response.ok ? "success" : "error");
+            if (response.ok) {
+                setStatus("success");
+            } else {
+                fail("Something went wrong. Please try again.");
+            }
         } catch {
-            setStatus("error");
+            fail("Something went wrong. Please try again.");
         }
     };
 
@@ -97,10 +116,32 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
                     <ArrowRight className="size-4" />
                 </button>
             </div>
-            <p className="text-xs text-white/40">
-                {status === "error"
-                    ? "Please enter a valid email address."
-                    : "One email when Cloud opens. No spam. You can self-host the same project any time."}
+            <label className="flex items-start gap-2 text-left text-xs leading-relaxed text-white/50">
+                <input
+                    checked={consent}
+                    className="mt-0.5 size-4 shrink-0 accent-[#9273e8]"
+                    name="privacy"
+                    onChange={(event) => {
+                        setConsent(event.target.checked);
+
+                        if (status === "error") {
+                            setStatus("idle");
+                        }
+                    }}
+                    required
+                    type="checkbox"
+                    value="true"
+                />
+                <span>
+                    I agree to the{" "}
+                    <Link className="text-white/70 underline decoration-white/25 underline-offset-2 hover:text-white" to="/privacy">
+                        Privacy Policy
+                    </Link>{" "}
+                    and to receiving one email when Lunora Cloud opens. No spam; unsubscribe any time.
+                </span>
+            </label>
+            <p className={`text-xs ${status === "error" ? "text-red-400" : "text-white/40"}`}>
+                {status === "error" ? errorMessage : "Your email is only used to notify you. You can self-host the open-source framework any time."}
             </p>
         </form>
     );
