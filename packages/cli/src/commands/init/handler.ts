@@ -577,14 +577,31 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
     const interactive = offerIsInteractive(options);
 
     // Each registry apply mutates shared project files; show a spinner while it
-    // runs (no-op off a TTY, so tests/CI run bare).
+    // runs (no-op off a TTY, so tests/CI run bare). Behind the spinner the
+    // registry command's own progress logging is muted — it writes to the same
+    // stdout the live spinner repaints, which would garble the terminal — but
+    // errors/warnings still surface. Off a TTY there's no spinner, so the full
+    // logger is kept and CI retains the detail.
     const apply = async (names: ReadonlyArray<FeatureItem>): Promise<boolean> => {
+        const applyLogger: Logger = isInteractive()
+            ? {
+                  error: (message) => {
+                      options.logger.error(message);
+                  },
+                  info: () => {},
+                  success: () => {},
+                  warn: (message) => {
+                      options.logger.warn(message);
+                  },
+              }
+            : options.logger;
+
         const result = await withTuiSpinner(`adding ${names.join(", ")}…`, () =>
             runAddCommand({
                 allowUnsafeSource: options.allowUnsafeSource,
                 cwd: projectDirectory,
                 from: options.registryFrom,
-                logger: options.logger,
+                logger: applyLogger,
                 names: [...names],
                 ref: options.ref,
                 source: options.registrySource,

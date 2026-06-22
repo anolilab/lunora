@@ -77,6 +77,31 @@ const runInkPrompt = async <R,>(build: (finish: (result: R) => void) => ReactEle
 const itemLabel = (option: { description?: string; label: string }): string =>
     option.description === undefined ? option.label : `${option.label} — ${option.description}`;
 
+/**
+ * Bind a view's "the user chose X" action: record the result AND exit in one
+ * call. Centralizing the `exit()` means a view can never record a result and
+ * then forget to exit (a silent hang) — calling `commit` always does both.
+ */
+const useCommit = <R,>(finish: (result: R) => void): ((result: R) => void) => {
+    const { exit } = useApp();
+
+    return (result: R) => {
+        finish(result);
+        exit();
+    };
+};
+
+/** Wire Escape to cancel a prompt (exits without committing → `runInkPrompt` returns the fallback). */
+const useEscapeToExit = (): void => {
+    const { exit } = useApp();
+
+    useInput((_input, key) => {
+        if (key.escape) {
+            exit();
+        }
+    });
+};
+
 interface SelectViewProps<T extends string> {
     finish: (value: T) => void;
     initialIndex: number | undefined;
@@ -85,14 +110,9 @@ interface SelectViewProps<T extends string> {
 }
 
 const SelectView = <T extends string>({ finish, initialIndex, message, options }: SelectViewProps<T>): ReactElement => {
-    const { exit } = useApp();
+    const commit = useCommit(finish);
 
-    // Escape cancels without choosing — runInkPrompt then returns the default.
-    useInput((_input, key) => {
-        if (key.escape) {
-            exit();
-        }
-    });
+    useEscapeToExit();
 
     return (
         <PromptFrame>
@@ -105,8 +125,7 @@ const SelectView = <T extends string>({ finish, initialIndex, message, options }
                 })}
                 limit={SCROLL_LIMIT}
                 onSelect={(item) => {
-                    finish(item.value);
-                    exit();
+                    commit(item.value);
                 }}
             />
         </PromptFrame>
@@ -119,9 +138,14 @@ interface PaletteViewProps<T extends string> {
     options: ReadonlyArray<SelectOption<T>>;
 }
 
-/** A searchable (type-to-filter) single-select for long option lists. */
+/**
+ * A searchable (type-to-filter) single-select for long option lists. The palette
+ * is search-first, so unlike {@link SelectView} it does not pre-highlight
+ * `settings.default` — there's nothing focused until the user types or arrows.
+ */
 const PaletteView = <T extends string>({ finish, message, options }: PaletteViewProps<T>): ReactElement => {
     const { exit } = useApp();
+    const commit = useCommit(finish);
 
     return (
         <Box flexDirection="column">
@@ -137,8 +161,7 @@ const PaletteView = <T extends string>({ finish, message, options }: PaletteView
                     exit();
                 }}
                 onSelect={(id) => {
-                    finish(id as T);
-                    exit();
+                    commit(id as T);
                 }}
                 placeholder="Type to filter…"
             />
@@ -177,13 +200,9 @@ interface MultiSelectViewProps<T extends string> {
 }
 
 const MultiSelectView = <T extends string>({ defaults, finish, message, options }: MultiSelectViewProps<T>): ReactElement => {
-    const { exit } = useApp();
+    const commit = useCommit(finish);
 
-    useInput((_input, key) => {
-        if (key.escape) {
-            exit();
-        }
-    });
+    useEscapeToExit();
 
     return (
         <PromptFrame>
@@ -196,8 +215,7 @@ const MultiSelectView = <T extends string>({ defaults, finish, message, options 
                 onSubmit={(values) => {
                     const chosen = new Set(values);
                     // Preserve option order and dedupe; values are option `value`s (⊆ T).
-                    finish(options.filter((option) => chosen.has(option.value)).map((option) => option.value));
-                    exit();
+                    commit(options.filter((option) => chosen.has(option.value)).map((option) => option.value));
                 }}
                 options={options.map((option) => {
                     return { key: option.value, label: itemLabel(option), value: option.value };
@@ -233,7 +251,7 @@ interface ConfirmViewProps {
 }
 
 const ConfirmView = ({ defaultYes, finish, message }: ConfirmViewProps): ReactElement => {
-    const { exit } = useApp();
+    const commit = useCommit(finish);
 
     return (
         <PromptFrame>
@@ -242,12 +260,10 @@ const ConfirmView = ({ defaultYes, finish, message }: ConfirmViewProps): ReactEl
                 <ConfirmInput
                     defaultChoice={defaultYes ? "confirm" : "cancel"}
                     onCancel={() => {
-                        finish(false);
-                        exit();
+                        commit(false);
                     }}
                     onConfirm={() => {
-                        finish(true);
-                        exit();
+                        commit(true);
                     }}
                 />
             </Box>
@@ -259,6 +275,10 @@ const ConfirmView = ({ defaultYes, finish, message }: ConfirmViewProps): ReactEl
  * Ask a yes/no question (Y/n). Mirrors `@lunora/config`'s `promptYesNo`:
  * non-interactive ⇒ returns `options.defaultYes === true`. Pass the bare
  * question — the Y/n indicator is rendered for you (don't append "[y/N]").
+ *
+ * `defaultYes` drives the Enter default (via `ConfirmInput`), but a cancel —
+ * Escape or Ctrl-C — always declines (`false`): an interrupt must never be read
+ * as acceptance, even for a default-yes prompt.
  */
 const tuiConfirm = async (message: string, options?: { defaultYes?: boolean }): Promise<boolean> => {
     const defaultYes = options?.defaultYes === true;
@@ -267,7 +287,7 @@ const tuiConfirm = async (message: string, options?: { defaultYes?: boolean }): 
         return defaultYes;
     }
 
-    return runInkPrompt<boolean>((finish) => <ConfirmView defaultYes={defaultYes} finish={finish} message={message} />, defaultYes);
+    return runInkPrompt<boolean>((finish) => <ConfirmView defaultYes={defaultYes} finish={finish} message={message} />, false);
 };
 
 /**
