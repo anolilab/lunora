@@ -20,7 +20,7 @@ import { patchViteConfig } from "../../util/patch-vite-config";
 import { resolveDistTag, resolveSourceRef } from "../../util/source-ref";
 import type { Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
-import { tuiConfirm, tuiIntro, tuiMultiSelect, tuiOutro, tuiSelect, tuiText, withTuiSpinner } from "../../util/tui-prompts";
+import { tuiBanner, tuiConfirm, tuiIntro, tuiMultiSelect, tuiOutro, tuiSelect, tuiText, withTuiSpinner } from "../../util/tui-prompts";
 import type { FeatureItem } from "../add/features";
 import { runAddCommand } from "../registry";
 import type { InitOptions } from "./index";
@@ -822,12 +822,85 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
     await tuiOutro("you're all set 🎉");
 };
 
+/** The templates offered in the interactive picker (excludes the not-yet-available `next`). */
+const TEMPLATE_OPTIONS: ReadonlyArray<{ description: string; label: string; value: Template }> = [
+    { description: "React SPA on Vite + the Lunora plugin (the default)", label: "React + Vite", value: "vite-react" },
+    { description: "TanStack Start (React) — SSR with live-loader routes", label: "TanStack Start · React", value: "tanstack-start-react" },
+    { description: "TanStack Start (Solid)", label: "TanStack Start · Solid", value: "tanstack-start-solid" },
+    { description: "Astro + a standalone Lunora worker", label: "Astro", value: "astro" },
+    { description: "Nuxt (Vue) + a standalone Lunora worker", label: "Nuxt", value: "nuxt" },
+    { description: "SvelteKit + a standalone Lunora worker", label: "SvelteKit", value: "sveltekit" },
+    { description: "Worker only — no frontend", label: "Standalone", value: "standalone" },
+];
+
+/** Comma-joined template values for the non-interactive error hint. */
+const TEMPLATE_VALUES = TEMPLATE_OPTIONS.map((option) => option.value).join(", ");
+
+/**
+ * Resolve which template to scaffold. An explicit `-t` wins; the `--vite` overlay
+ * path doesn't use a bespoke template (value unused downstream); otherwise an
+ * interactive run shows the picker and everything else takes the `vite-react`
+ * default. The non-interactive "no template + no --yes" case is rejected earlier
+ * by {@link scaffoldNewProject}'s guard, so it never reaches the silent default.
+ */
+const resolveTemplateType = async (options: InitCommandOptions): Promise<Template> => {
+    if (options.templateType !== undefined) {
+        return options.templateType;
+    }
+
+    if (options.vite !== undefined || !isInteractive() || options.yes === true) {
+        return "vite-react";
+    }
+
+    return (await tuiSelect("Which template would you like?", TEMPLATE_OPTIONS, { default: "vite-react" })) ?? "vite-react";
+};
+
+/**
+ * In a non-interactive terminal `init` can't prompt for the name or template, so
+ * require them on the command line instead of silently scaffolding `lunora-app`
+ * with the default template. `--yes` opts into the defaults; an injected name +
+ * templateType (tests) satisfies the check. Returns an error message, or
+ * `undefined` when the run may proceed.
+ */
+const nonInteractiveInitError = (options: InitCommandOptions): string | undefined => {
+    if (isInteractive() || options.yes === true) {
+        return undefined;
+    }
+
+    const missing: string[] = [];
+
+    if (options.name === undefined) {
+        missing.push("a project name (`lunora init <name>`)");
+    }
+
+    if (options.templateType === undefined && options.vite === undefined) {
+        missing.push(`a template (\`-t <template>\`, one of: ${TEMPLATE_VALUES})`);
+    }
+
+    if (missing.length === 0) {
+        return undefined;
+    }
+
+    return `lunora init can't prompt in a non-interactive terminal — provide ${missing.join(" and ")}, or pass --yes to accept the defaults.`;
+};
+
 /** Scaffold a brand-new project directory (the non-`--here` path). */
 const scaffoldNewProject = async (options: InitCommandOptions, cwd: string): Promise<InitCommandResult> => {
-    // No name argument → ask for one (a TTY shows the prompt; non-interactive
-    // falls back to `lunora-app`, preserving the previous default).
+    // Branded ASCII title at the very top of the flow (no-op off a TTY).
+    await tuiBanner("realtime backend on Cloudflare Workers + Durable Objects");
+
+    const blocked = nonInteractiveInitError(options);
+
+    if (blocked !== undefined) {
+        options.logger.error(blocked);
+
+        return { code: 1, files: [], target: "" };
+    }
+
+    // No name argument → ask for one (a TTY shows the prompt; with `--yes` /
+    // non-interactive it takes the `lunora-app` default).
     const name = options.name ?? (await tuiText("What should we call your project?", { default: "lunora-app", placeholder: "lunora-app" }));
-    const templateType: Template = options.templateType ?? "vite-react";
+    const templateType = await resolveTemplateType(options);
 
     if (templateType === "next") {
         options.logger.warn('template "next" is not yet available — re-run with `-t vite-react` or `-t standalone`.');
@@ -949,8 +1022,14 @@ const resolveCiProvider = (raw: string | undefined, logger: Logger): CiProvider 
 
 /** `lunora init [name]` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<InitOptions> = defineHandler<InitOptions>(({ argument, cwd, logger, options }) => {
-    const templateRaw = options.template ?? "vite-react";
-    const template: Template = isTemplate(templateRaw) ? templateRaw : "vite-react";
+    // Leave `templateType` undefined when no `-t` was passed, so the scaffolder
+    // can show the interactive picker (TTY) or error (non-TTY). An explicit but
+    // unknown `-t` falls back to the default.
+    let templateType: Template | undefined;
+
+    if (options.template !== undefined) {
+        templateType = isTemplate(options.template) ? options.template : "vite-react";
+    }
 
     return runInitCommand({
         allowUnsafeSource: options.allowUnsafeSource === true,
@@ -963,7 +1042,7 @@ const execute: CommandHandler<InitOptions> = defineHandler<InitOptions>(({ argum
         name: argument[0],
         ref: options.ref,
         source: options.source,
-        templateType: template,
+        templateType,
         vite: options.vite,
         yes: options.yes === true,
     });

@@ -15,6 +15,7 @@
 import type { MultiSelectOption, SelectOption } from "@lunora/config";
 import { isInteractive } from "@lunora/config";
 import { render } from "@visulima/tui";
+import { BigText } from "@visulima/tui/components/big-text";
 import { Box } from "@visulima/tui/components/box";
 import { CommandPalette } from "@visulima/tui/components/command-palette";
 import { ConfirmInput } from "@visulima/tui/components/confirm-input";
@@ -399,6 +400,24 @@ const tuiOutro = async (message: string): Promise<void> => {
     );
 };
 
+/**
+ * Branded ASCII title shown once at the top of an interactive flow (e.g. the
+ * first thing `lunora init` prints), rendered with `@visulima/tui`'s `BigText`
+ * (CFonts). No-op off a TTY so CI/piped output stays clean.
+ */
+const tuiBanner = async (subtitle?: string): Promise<void> => {
+    if (!isInteractive()) {
+        return;
+    }
+
+    await printFrame(
+        <Box flexDirection="column" paddingX={1}>
+            <BigText colors={[ACCENT]} font="tiny" space={false} text="LUNORA" />
+            {subtitle === undefined ? null : <Text dimColor>{subtitle}</Text>}
+        </Box>,
+    );
+};
+
 const SpinnerView = ({ label }: { label: string }): ReactElement => (
     <Box>
         <Text color={ACCENT}>
@@ -427,4 +446,4 @@ const withTuiSpinner = async <T,>(label: string, task: () => Promise<T>): Promis
     }
 };
 
-export { createTuiConfirm, tuiConfirm, tuiIntro, tuiMultiSelect, tuiOutro, tuiSelect, tuiText, withTuiSpinner };
+export { createTuiConfirm, tuiBanner, tuiConfirm, tuiIntro, tuiMultiSelect, tuiOutro, tuiSelect, tuiText, withTuiSpinner };

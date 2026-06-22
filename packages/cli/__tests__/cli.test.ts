@@ -213,11 +213,13 @@ describe("lunora CLI entry", () => {
             expect(existsSync(join(target, "vite.config.ts"))).toBe(false);
         });
 
-        it("default template (no `-t` flag) is vite", async () => {
+        it("default template (no `-t` flag) with `--yes` is vite", async () => {
             expect.assertions(2);
 
+            // No TTY here, so without `-t` the template is ambiguous; `--yes`
+            // opts into the vite-react default rather than erroring.
             const code = await runCli({
-                argv: ["init", "argv_default", "--from", templatesRoot],
+                argv: ["init", "argv_default", "--from", templatesRoot, "--yes"],
                 cwd: workdir,
             });
 
@@ -226,6 +228,18 @@ describe("lunora CLI entry", () => {
             const target = join(workdir, "argv_default");
 
             expect(existsSync(join(target, "vite.config.ts"))).toBe(true);
+        });
+
+        it("non-interactive init without `-t` or `--yes` errors instead of guessing a template", async () => {
+            expect.assertions(2);
+
+            const code = await runCli({
+                argv: ["init", "argv_no_template", "--from", templatesRoot],
+                cwd: workdir,
+            });
+
+            expect(code).toBe(1);
+            expect(existsSync(join(workdir, "argv_no_template"))).toBe(false);
         });
     });
 });

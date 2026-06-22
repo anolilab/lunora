@@ -21,8 +21,10 @@ const initCommand: Command = {
     options: [
         {
             alias: "t",
-            defaultValue: "vite-react",
-            description: "Template to scaffold (vite-react | standalone | astro | nuxt | sveltekit | tanstack-start-react | tanstack-start-solid)",
+            // No default: when omitted, an interactive run shows a template picker
+            // and a non-interactive run errors (asking for -t) rather than
+            // silently scaffolding vite-react.
+            description: "Template to scaffold (vite-react [default] | standalone | astro | nuxt | sveltekit | tanstack-start-react | tanstack-start-solid)",
             name: "template",
             type: String,
         },
