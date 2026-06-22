@@ -261,6 +261,28 @@ const RouteComponent = () => (
         </p>
         <p>If other cookies and services are used on this website, you can find this information in this privacy policy.</p>
 
+        <h3>Waitlist and forms</h3>
+        <p>
+            On certain pages (for example, the Lunora Cloud early-access page) we offer a form that allows you to join a waitlist. If you use this form, we
+            collect the email address you provide, the consent you give, and the technical metadata of the submission (such as the time of submission). This
+            information is used solely to contact you about the matter you signed up for &mdash; for example, to notify you when Lunora Cloud becomes available
+            or when a stable release of Lunora ships.
+        </p>
+        <p>
+            The processing of this data is based on your consent (Art. 6(1)(a) GDPR). You may revoke your consent at any time with effect for the future, for
+            example by using the unsubscribe link in our emails or by contacting us using the information provided in this privacy policy. The legality of any
+            data processing transactions that have already taken place remains unaffected by the revocation.
+        </p>
+        <p>
+            Form submissions are processed on our behalf by our hosting and forms provider, Netlify, Inc. (44 Montgomery Street, Suite 300, San Francisco,
+            California 94104, USA), acting as a processor under a data processing agreement (Art. 28 GDPR). Where data is transferred to the USA, the transfer is
+            safeguarded by the EU Standard Contractual Clauses and/or the EU&ndash;U.S. Data Privacy Framework.
+        </p>
+        <p>
+            We retain the data you provide via the waitlist until you withdraw your consent or the purpose for storing it ceases to apply (for example, after we
+            have processed your request). Mandatory statutory retention periods remain unaffected.
+        </p>
+
         <h2>5. Newsletter</h2>
 
         <h3>Newsletter data</h3>
