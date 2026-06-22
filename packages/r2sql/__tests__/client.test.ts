@@ -11,7 +11,7 @@ interface FakeResponseInit {
 }
 
 const fakeResponse = (init: FakeResponseInit = {}): Response => {
-    const { body = { result: [], success: true }, nonJson = false, ok = true, status = 200 } = init;
+    const { body = { result: { rows: [], schema: [] }, success: true }, nonJson = false, ok = true, status = 200 } = init;
 
     return {
         ok,
@@ -35,8 +35,8 @@ const setup = (responseInit?: FakeResponseInit) => {
 };
 
 describe("createR2Sql request", () => {
-    it("sends a POST to the bucket endpoint with the bearer token and JSON body", async () => {
-        const { client, fetchImpl } = setup({ body: { result: [{ n: 1 }], success: true } });
+    it("sends a POST to the bucket endpoint with the bearer token, query and warehouse", async () => {
+        const { client, fetchImpl } = setup({ body: { result: { rows: [{ n: 1 }] }, success: true } });
 
         await client.query(sql`SELECT 1 AS n`);
 
@@ -48,7 +48,8 @@ describe("createR2Sql request", () => {
         expect(requestInit?.method).toBe("POST");
         expect((requestInit?.headers as Record<string, string>).Authorization).toBe("Bearer secret-token");
         expect((requestInit?.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
-        expect(JSON.parse(requestInit?.body as string)).toEqual({ query: "SELECT 1 AS n" });
+        // The body carries the query plus the `<accountId>_<bucket>` warehouse name.
+        expect(JSON.parse(requestInit?.body as string)).toEqual({ query: "SELECT 1 AS n", warehouse: "acc/123_my bucket" });
     });
 
     it("honours a custom endpoint override", async () => {
@@ -62,8 +63,8 @@ describe("createR2Sql request", () => {
 });
 
 describe("response normalisation", () => {
-    it("reads rows from the `result` envelope and infers columns", async () => {
-        const { client } = setup({ body: { errors: [], result: [{ id: "x", total: 5 }], success: true } });
+    it("reads rows from `result.rows` and infers columns when no schema is echoed", async () => {
+        const { client } = setup({ body: { errors: [], result: { rows: [{ id: "x", total: 5 }] }, success: true } });
 
         const out = await client.query<{ id: string; total: number }>("SELECT id, total FROM s.orders");
 
@@ -72,20 +73,17 @@ describe("response normalisation", () => {
         expect(out.columns).toEqual([{ name: "id" }, { name: "total" }]);
     });
 
-    it("falls back to `rows` / `data` keys", async () => {
-        const viaRows = setup({ body: { rows: [{ a: 1 }] } });
-        const rowsResult = await viaRows.client.query("SELECT 1");
+    it("returns an empty result when `result` is absent", async () => {
+        const { client } = setup({ body: { success: true } });
+        const result = await client.query("SELECT 1");
 
-        expect(rowsResult.rows).toEqual([{ a: 1 }]);
-
-        const viaData = setup({ body: { data: [{ b: 2 }] } });
-        const dataResult = await viaData.client.query("SELECT 1");
-
-        expect(dataResult.rows).toEqual([{ b: 2 }]);
+        expect(result.rows).toEqual([]);
+        expect(result.rowCount).toBe(0);
+        expect(result.columns).toEqual([]);
     });
 
-    it("prefers an explicit schema block over inference", async () => {
-        const { client } = setup({ body: { result: [{ id: "x" }], schema: [{ name: "id", type: "string" }], success: true } });
+    it("prefers the echoed `result.schema` over inference", async () => {
+        const { client } = setup({ body: { result: { rows: [{ id: "x" }], schema: [{ name: "id", type: "string" }] }, success: true } });
         const result = await client.query("SELECT id FROM s.orders");
 
         expect(result.columns).toEqual([{ name: "id", type: "string" }]);
@@ -139,7 +137,7 @@ describe("helpers", () => {
     });
 
     it("from() builds a runnable query bound to the client", async () => {
-        const { client, fetchImpl } = setup({ body: { result: [{ region: "North" }], success: true } });
+        const { client, fetchImpl } = setup({ body: { result: { rows: [{ region: "North" }] }, success: true } });
 
         const out = await client.from("sales.orders").select("region").distinct().limit(10).run();
 

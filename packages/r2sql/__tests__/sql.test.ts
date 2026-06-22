@@ -34,6 +34,10 @@ describe("lit", () => {
         expect(lit(["a", "b"])).toBe("('a', 'b')");
     });
 
+    it("throws on an empty array (IN () is invalid SQL)", () => {
+        expect(() => lit([])).toThrow(/empty array/);
+    });
+
     it("throws on non-finite numbers", () => {
         expect(() => lit(Number.NaN)).toThrow(/non-finite/);
         expect(() => lit(Number.POSITIVE_INFINITY)).toThrow(/non-finite/);

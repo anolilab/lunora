@@ -28,6 +28,14 @@ const renderMember = (query: Queryable<unknown>): string => {
  * single `ORDER BY` / `LIMIT` to the combined result.
  */
 export default class SetOperation<Row = Record<string, unknown>> implements Queryable<Row> {
+    /**
+     * Always `true`: a nested set operation must be parenthesised when it is a
+     * member of another set operation, or mixed operators mis-associate — e.g.
+     * `a.union(b.except(c))` must render `a UNION (b EXCEPT c)`, not the flat
+     * `a UNION b EXCEPT c`.
+     */
+    public readonly needsWrapForSetOperation = true;
+
     private readonly exec: QueryExecutor;
 
     private readonly members: SetMember[];

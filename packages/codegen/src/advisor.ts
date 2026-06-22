@@ -11,6 +11,7 @@ import type {
     NondeterministicCallIR,
     ProcedureMiddlewareIR,
     QueryReadIR,
+    R2sqlCallIR,
     RlsProcedureIR,
     SchemaIR,
     SecretLiteralIR,
@@ -105,6 +106,7 @@ export const lintSchema = (
     secretLiterals?: ReadonlyArray<SecretLiteralIR>,
     sqlInterpolations?: ReadonlyArray<SqlInterpolationIR>,
     adminRoutes?: ReadonlyArray<AdminRouteIR>,
+    r2sqlCalls?: ReadonlyArray<R2sqlCallIR>,
 ): Finding[] =>
     runAdvisor(
         {
@@ -117,6 +119,7 @@ export const lintSchema = (
             nondeterministicCalls,
             procedureProtections,
             queries,
+            r2sqlCalls,
             rlsProcedures,
             schema: toAdvisorSchema(schema),
             secretLiterals,

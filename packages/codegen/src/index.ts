@@ -10,6 +10,7 @@ export { default as discoverMaskProcedures } from "./discover-mask-procedures";
 export { default as discoverMigrations } from "./discover-migrations";
 export { default as discoverNondeterministicCalls } from "./discover-nondeterministic-calls";
 export { default as discoverQueries } from "./discover-queries";
+export { default as discoverR2sqlCalls } from "./discover-r2sql-calls";
 export { discoverRlsMetadata, default as discoverRlsProcedures } from "./discover-rls-procedures";
 export { default as discoverSchema } from "./discover-schema";
 export { default as discoverStorageRulesMetadata } from "./discover-storage-rules";
@@ -42,6 +43,7 @@ export type {
     MigrationIR,
     ProjectIR,
     QueryReadIR,
+    R2sqlCallIR,
     RlsMetadataIR,
     RlsPolicyIR,
     RlsProcedureIR,

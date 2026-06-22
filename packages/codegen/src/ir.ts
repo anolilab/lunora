@@ -384,6 +384,27 @@ export interface NondeterministicCallIR {
 }
 
 /**
+ * One `ctx.r2sql` access lexically inside a `query`/`mutation` handler — the
+ * `r2sql_outside_action` advisor lint input. Structurally identical to the
+ * advisor's `AdvisorR2sqlCall` (same field set) so values pass straight through
+ * `lintSchema` without conversion, exactly as `NondeterministicCallIR` does.
+ * Only `query`/`mutation` handlers are recorded; `action(...)` is the intended
+ * home for `ctx.r2sql` and is skipped.
+ */
+export interface R2sqlCallIR {
+    /** The accessed `ctx.r2sql` surface, e.g. `ctx.r2sql.query` / `ctx.r2sql.from`. */
+    callee: string;
+    /** Export binding name of the function performing the access. */
+    exportName: string;
+    /** Source file relative to the lunora dir, without extension (the api namespace). */
+    file: string;
+    /** Which procedure kind the access lives in — only `query`/`mutation` handlers are recorded. */
+    kind: "mutation" | "query";
+    /** 1-based line of the access, or `0` when unknown. */
+    line: number;
+}
+
+/**
  * Per-procedure RLS usage snapshot, produced by `discoverRlsProcedures` for the
  * `rls_uncovered_table` advisor lint. Structurally identical to
  * `AdvisorRlsProcedure` (they share the same field set) so values pass straight

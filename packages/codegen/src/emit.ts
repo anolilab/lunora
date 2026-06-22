@@ -1858,6 +1858,9 @@ const emitR2sqlFragments = (hasR2sql: boolean): HelperFragments => {
         // \`isAction\` block, never the every-ctx object literal.
         contextField: "",
         importLines: [`import type { R2SqlClient } from "@lunora/r2sql";`, `import { createR2Sql } from "@lunora/r2sql";`],
+        // The stub is typed `R2SqlClient`, so TS flags a missing method at build
+        // time — but it must stay structurally in sync with that interface
+        // (`@lunora/r2sql` client.ts) when a method is added there.
         stub: `
 const r2sqlStub: R2SqlClient = {
     describe: async () => {

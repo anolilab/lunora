@@ -25,13 +25,20 @@ import type { R2SqlColumn, R2SqlConfig, R2SqlExplainOptions, R2SqlResult } from 
 /** Default public R2 SQL REST host. */
 const API_BASE = "https://api.sql.cloudflarestorage.com/api/v1/accounts";
 
-/** Shape of the Cloudflare R2 SQL JSON envelope (the fields we read). */
+/**
+ * Shape of the Cloudflare R2 SQL JSON envelope (the fields we read), matching
+ * the contract the official `wrangler r2 sql query` client parses: a
+ * `{ success, errors, messages, result }` wrapper where the **rows and schema
+ * are nested under `result`** (not the top level).
+ */
 interface RawR2SqlResponse {
-    data?: Record<string, unknown>[];
-    errors?: unknown[];
-    result?: Record<string, unknown>[];
-    rows?: Record<string, unknown>[];
-    schema?: R2SqlColumn[];
+    errors?: { code?: number; message?: string }[];
+    messages?: string[];
+    result?: {
+        request_id?: string;
+        rows?: Record<string, unknown>[];
+        schema?: R2SqlColumn[];
+    };
     success?: boolean;
 }
 
@@ -92,10 +99,13 @@ export const createR2Sql = (config: R2SqlConfig): R2SqlClient => {
     // Encode account id + bucket as single path segments so a value carrying URL
     // metacharacters can't redirect the bearer-token POST elsewhere on the origin.
     const endpoint = `${base}/${encodeURIComponent(config.accountId)}/r2-sql/query/${encodeURIComponent(config.bucket)}`;
+    // The catalog warehouse name is `<accountId>_<bucket>` — the official client
+    // sends it in the body alongside the query, so we match that contract.
+    const warehouse = `${config.accountId}_${config.bucket}`;
 
     const exec: QueryExecutor = async (statement: string): Promise<R2SqlResult> => {
         const response = await fetchImpl(endpoint, {
-            body: JSON.stringify({ query: statement }),
+            body: JSON.stringify({ query: statement, warehouse }),
             headers: {
                 Authorization: `Bearer ${config.apiToken}`,
                 "Content-Type": "application/json",
@@ -126,10 +136,11 @@ export const createR2Sql = (config: R2SqlConfig): R2SqlClient => {
             throw new R2SqlError(response.status, JSON.stringify(body.errors ?? body));
         }
 
-        const rows = body.result ?? body.rows ?? body.data ?? [];
+        // Rows and schema are nested under `result` (`{ result: { rows, schema } }`).
+        const rows = body.result?.rows ?? [];
 
         return {
-            columns: body.schema ?? inferColumns(rows),
+            columns: body.result?.schema ?? inferColumns(rows),
             rowCount: rows.length,
             rows,
         };

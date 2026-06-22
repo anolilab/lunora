@@ -115,6 +115,18 @@ describe("set operations", () => {
             "UNION SELECT zone_id FROM s.zones WHERE plan = 'enterprise' EXCEPT SELECT zone_id FROM s.archived",
         );
     });
+
+    it("parenthesises a nested set operation so mixed operators don't mis-associate", () => {
+        // a.union(b.except(c)) must render `a UNION (b EXCEPT c)`, not the flat
+        // `a UNION b EXCEPT c` which left-associates to `(a UNION b) EXCEPT c`.
+        expect(
+            a()
+                .union(b().except(from("s.archived").select("zone_id")))
+                .toSQL(),
+        ).toBe(
+            "SELECT zone_id FROM s.fw WHERE action = 'block' UNION (SELECT zone_id FROM s.zones WHERE plan = 'enterprise' EXCEPT SELECT zone_id FROM s.archived)",
+        );
+    });
 });
 
 describe("run", () => {

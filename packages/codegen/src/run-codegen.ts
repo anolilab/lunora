@@ -20,6 +20,7 @@ import discoverNondeterministicCalls from "./discover-nondeterministic-calls";
 import discoverPackageDependencies from "./discover-package-dependencies";
 import discoverProcedureMiddleware from "./discover-procedure-middleware";
 import discoverQueries from "./discover-queries";
+import discoverR2sqlCalls from "./discover-r2sql-calls";
 import discoverRlsProcedures, { discoverRlsMetadata } from "./discover-rls-procedures";
 import discoverSchema from "./discover-schema";
 import discoverSecrets from "./discover-secrets";
@@ -274,6 +275,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   discoverSecrets(project, lunoraDirectory),
                   discoverSqlInterpolation(project, lunoraDirectory),
                   discoverAdminRoutes(project, lunoraDirectory),
+                  discoverR2sqlCalls(project, lunoraDirectory),
               );
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,

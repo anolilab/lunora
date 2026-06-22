@@ -91,6 +91,12 @@ export const lit = (value: unknown): string => {
     }
 
     if (Array.isArray(value)) {
+        if (value.length === 0) {
+            // An empty array would render `IN ()`, which R2 SQL rejects. Fail
+            // loudly here rather than emit a statement the engine errors on.
+            throw new TypeError("r2sql: cannot inline an empty array — `IN ()` is not valid SQL. Guard the empty case before building the query.");
+        }
+
         return `(${value.map((element) => lit(element)).join(", ")})`;
     }
 
