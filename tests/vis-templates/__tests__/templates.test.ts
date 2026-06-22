@@ -135,7 +135,7 @@ const REQUIRED_ADAPTER: Record<string, string | null> = {
     sveltekit: "@lunora/svelte",
     "tanstack-start-react": "@lunora/react",
     "tanstack-start-solid": "@lunora/solid",
-    vite: "@lunora/react",
+    "vite-react": "@lunora/react",
 };
 
 describe("templates/* package.json validation", () => {

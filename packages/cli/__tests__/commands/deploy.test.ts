@@ -10,6 +10,15 @@ import type { FetchLike } from "../../src/commands/run/handler";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
 
+// The container deploy cases run a full ts-morph codegen pass (container
+// discovery + class generation), which is fast locally (~0.5s) but can blow past
+// the shared 30s CI timeout when the runner is under heavy concurrent load (e.g.
+// an affected=all run). Give this suite extra headroom on CI only — locally the
+// 10s default still surfaces a genuine hang quickly.
+if (process.env.CI) {
+    vi.setConfig({ hookTimeout: 120_000, testTimeout: 120_000 });
+}
+
 /** Run async `body` while capturing everything written to `process.stdout`. */
 const captureStdout = async (body: () => Promise<void>): Promise<string> => {
     let captured = "";

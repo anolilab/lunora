@@ -2,7 +2,7 @@
 
 A realtime [Lunora](https://lunora.sh) app — Vite + React on the front, a
 Cloudflare Worker + Durable Object on the back. The starter ships a live,
-shared counter so you can see subscriptions working in seconds.
+shared message list so you can see subscriptions working in seconds.
 
 ## Develop
 
@@ -11,8 +11,8 @@ pnpm install
 pnpm dev
 ```
 
-Open <http://localhost:5173>. Click the button, then open a second tab — the
-count is stored in a Durable Object and synced to every client over a
+Open <http://localhost:5173>. Send a message, then open a second tab — the
+list is stored in a Durable Object and synced to every client over a
 WebSocket, so both tabs update at once.
 
 `pnpm dev` runs everything from one process: the Vite dev server (with HMR), the
@@ -23,7 +23,7 @@ Worker, the Lunora Studio, and the codegen watcher.
 ```
 lunora/
   schema.ts        your tables (defineSchema)
-  counter.ts       the get query + increment mutation
+  messages.ts      the list query + send mutation
   _generated/      types + typed api, regenerated on save (gitignored)
 src/
   main.tsx         mounts <LunoraProvider> with a LunoraClient
