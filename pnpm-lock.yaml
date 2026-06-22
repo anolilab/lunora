@@ -716,7 +716,7 @@ importers:
         version: 4.0.0-alpha.14
       '@visulima/vis':
         specifier: catalog:prod
-        version: 1.0.0-alpha.43(@shikijs/langs@4.2.0)(@shikijs/themes@4.2.0)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(shiki@4.2.0)(ws@8.21.0)
+        version: 1.0.0-alpha.43(@shikijs/langs@4.2.0)(@shikijs/themes@4.2.0)(marked@15.0.12)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(shiki@4.2.0)(ws@8.21.0)
       conventional-changelog-conventionalcommits:
         specifier: catalog:dev
         version: 9.3.1
@@ -1692,7 +1692,7 @@ importers:
         version: 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
       '@lunora/config':
         specifier: 1.0.0-alpha.3
-        version: 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/studio@1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@tanstack/react-query@5.101.0(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(date-fns@4.4.0)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7))(@lunora/values@1.0.0-alpha.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        version: 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/studio@1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@types/react@19.2.17)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@lunora/values@1.0.0-alpha.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
       '@lunora/container':
         specifier: 1.0.0-alpha.1
         version: 1.0.0-alpha.1
@@ -2188,8 +2188,8 @@ importers:
   packages/lunora:
     dependencies:
       '@lunora/cli':
-        specifier: 1.0.0-alpha.3
-        version: 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@tanstack/react-query@5.101.0(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(@visulima/redact@3.0.0-alpha.14)(citty@0.2.2)(date-fns@4.4.0)(express@5.2.1)(github-slugger@2.0.0)(hono@4.12.26)(ini@7.0.0)(json5@2.2.3)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7)(smol-toml@1.6.1)(yaml@2.9.0)
+        specifier: 1.0.0-alpha.4
+        version: 1.0.0-alpha.4(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@types/react@19.2.17)(@visulima/redact@3.0.0-alpha.14)(citty@0.2.2)(express@5.2.1)(github-slugger@2.0.0)(hono@4.12.26)(ini@7.0.0)(json5@2.2.3)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(smol-toml@1.6.1)(yaml@2.9.0)
       '@lunora/client':
         specifier: 1.0.0-alpha.1
         version: 1.0.0-alpha.1
@@ -5153,8 +5153,8 @@ packages:
     resolution: {integrity: sha512-f5AUia7oRcIc1icx4Yrb/R5fYniFFPdv6xqOOKQUpMdpYuejCluS5NcfMVEzMJcD+7bscRH/QTwDgEN5h4dNHg==}
     engines: {node: ^22.15.0 || >=24.11.0}
 
-  '@lunora/cli@1.0.0-alpha.3':
-    resolution: {integrity: sha512-NlsBCWxOiPLpqzPb3sx2fnT1KTc9sug7SW+S8zcDjGVO5qL0Z2IZcTtH/4rRWLGIJBN+s1ejyxufGki36MBAUg==}
+  '@lunora/cli@1.0.0-alpha.4':
+    resolution: {integrity: sha512-tRG7FycJXpPWoV+NddmtvQJaz00OHjSwxUKgObaauR/Z2M3Xlrcint3Xt6s2kfLi8SR1Oe9EvyBZX1i5uFVMUA==}
     engines: {node: ^22.15.0 || >=24.11.0}
     hasBin: true
 
@@ -20397,11 +20397,11 @@ snapshots:
 
   '@lunora/analytics@1.0.0-alpha.1': {}
 
-  '@lunora/cli@1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@tanstack/react-query@5.101.0(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(@visulima/redact@3.0.0-alpha.14)(citty@0.2.2)(date-fns@4.4.0)(express@5.2.1)(github-slugger@2.0.0)(hono@4.12.26)(ini@7.0.0)(json5@2.2.3)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7)(smol-toml@1.6.1)(yaml@2.9.0)':
+  '@lunora/cli@1.0.0-alpha.4(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@types/react@19.2.17)(@visulima/redact@3.0.0-alpha.14)(citty@0.2.2)(express@5.2.1)(github-slugger@2.0.0)(hono@4.12.26)(ini@7.0.0)(json5@2.2.3)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(smol-toml@1.6.1)(yaml@2.9.0)':
     dependencies:
       '@bomb.sh/tab': 0.0.17(citty@0.2.2)
       '@lunora/codegen': 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
-      '@lunora/config': 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/studio@1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@tanstack/react-query@5.101.0(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(date-fns@4.4.0)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7))(@lunora/values@1.0.0-alpha.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+      '@lunora/config': 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/studio@1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@types/react@19.2.17)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@lunora/values@1.0.0-alpha.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
       '@lunora/container': 1.0.0-alpha.1
       '@lunora/d1': 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
       '@lunora/seed': 1.0.0-alpha.1(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/values@1.0.0-alpha.1)
@@ -20563,7 +20563,7 @@ snapshots:
       - sql.js
       - sqlite3
 
-  '@lunora/config@1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/studio@1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@tanstack/react-query@5.101.0(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(date-fns@4.4.0)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7))(@lunora/values@1.0.0-alpha.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)':
+  '@lunora/config@1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/studio@1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@types/react@19.2.17)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@lunora/values@1.0.0-alpha.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)':
     dependencies:
       '@lunora/codegen': 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
       '@lunora/container': 1.0.0-alpha.1
@@ -20900,14 +20900,14 @@ snapshots:
       '@tanstack/react-router': 1.170.16(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@tanstack/react-table': 8.21.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@tanstack/react-virtual': 3.14.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@xyflow/react': 12.11.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(immer@11.1.8)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@xyflow/react': 12.11.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       class-variance-authority: 0.7.1
       clsx: 2.1.1
       html-to-image: 1.11.13
       motion: 12.40.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
-      recharts: 3.8.1(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7)(redux@5.0.1)
+      recharts: 3.8.1(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7)
       tailwind-merge: 3.6.0
     transitivePeerDependencies:
       - '@aws-sdk/client-rds-data'
@@ -20965,14 +20965,14 @@ snapshots:
       '@tanstack/react-router': 1.170.16(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@tanstack/react-table': 8.21.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@tanstack/react-virtual': 3.14.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@xyflow/react': 12.11.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(immer@11.1.8)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@xyflow/react': 12.11.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       class-variance-authority: 0.7.1
       clsx: 2.1.1
       html-to-image: 1.11.13
       motion: 12.40.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
-      recharts: 3.8.1(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7)(redux@5.0.1)
+      recharts: 3.8.1(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7)
       tailwind-merge: 3.6.0
     transitivePeerDependencies:
       - '@aws-sdk/client-rds-data'
@@ -26302,7 +26302,7 @@ snapshots:
   '@visulima/tui-binding-win32-x64-msvc@1.0.0-alpha.26':
     optional: true
 
-  '@visulima/tui@1.0.0-alpha.26(@shikijs/langs@4.2.0)(@shikijs/themes@4.2.0)(@visulima/tabular@4.0.0-alpha.14)(react-reconciler@0.33.0(react@19.2.7))(react@19.2.7)(shiki@4.2.0)(ws@8.21.0)':
+  '@visulima/tui@1.0.0-alpha.26(@shikijs/langs@4.2.0)(@shikijs/themes@4.2.0)(@visulima/tabular@4.0.0-alpha.14)(marked@15.0.12)(react-reconciler@0.33.0(react@19.2.7))(react@19.2.7)(shiki@4.2.0)(ws@8.21.0)':
     dependencies:
       '@visulima/ansi': 4.0.0-alpha.17
       '@visulima/colorize': 2.0.0-alpha.14
@@ -26332,6 +26332,7 @@ snapshots:
       '@visulima/tui-binding-linux-x64-musl': 1.0.0-alpha.26
       '@visulima/tui-binding-win32-arm64-msvc': 1.0.0-alpha.26
       '@visulima/tui-binding-win32-x64-msvc': 1.0.0-alpha.26
+      marked: 15.0.12
       shiki: 4.2.0
       ws: 8.21.0
     transitivePeerDependencies:
@@ -26361,14 +26362,14 @@ snapshots:
   '@visulima/vis-binding-win32-x64-msvc@1.0.0-alpha.43':
     optional: true
 
-  '@visulima/vis@1.0.0-alpha.43(@shikijs/langs@4.2.0)(@shikijs/themes@4.2.0)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(shiki@4.2.0)(ws@8.21.0)':
+  '@visulima/vis@1.0.0-alpha.43(@shikijs/langs@4.2.0)(@shikijs/themes@4.2.0)(marked@15.0.12)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(shiki@4.2.0)(ws@8.21.0)':
     dependencies:
       '@visulima/error': 6.0.0-alpha.34
       '@visulima/secret-scanner': 1.0.0-alpha.7(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)
       '@visulima/source-map': 3.0.0-alpha.12
       '@visulima/tabular': 4.0.0-alpha.14
       '@visulima/task-runner': 1.0.0-alpha.24
-      '@visulima/tui': 1.0.0-alpha.26(@shikijs/langs@4.2.0)(@shikijs/themes@4.2.0)(@visulima/tabular@4.0.0-alpha.14)(react-reconciler@0.33.0(react@19.2.7))(react@19.2.7)(shiki@4.2.0)(ws@8.21.0)
+      '@visulima/tui': 1.0.0-alpha.26(@shikijs/langs@4.2.0)(@shikijs/themes@4.2.0)(@visulima/tabular@4.0.0-alpha.14)(marked@15.0.12)(react-reconciler@0.33.0(react@19.2.7))(react@19.2.7)(shiki@4.2.0)(ws@8.21.0)
       module-replacements: 2.11.0
       module-replacements-codemods: 2.0.1
       react: 19.2.7
@@ -26715,6 +26716,19 @@ snapshots:
   '@xtuc/long@4.2.2': {}
 
   '@xyflow/react@12.11.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(immer@11.1.8)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
+    dependencies:
+      '@xyflow/system': 0.0.77
+      classcat: 5.0.5
+      react: 19.2.7
+      react-dom: 19.2.7(react@19.2.7)
+      zustand: 4.5.7(@types/react@19.2.17)(immer@11.1.8)(react@19.2.7)
+    optionalDependencies:
+      '@types/react': 19.2.17
+      '@types/react-dom': 19.2.3(@types/react@19.2.17)
+    transitivePeerDependencies:
+      - immer
+
+  '@xyflow/react@12.11.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
     dependencies:
       '@xyflow/system': 0.0.77
       classcat: 5.0.5
@@ -33010,6 +33024,26 @@ snapshots:
       source-map: 0.6.1
       tiny-invariant: 1.3.3
       tslib: 2.8.1
+
+  recharts@3.8.1(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7):
+    dependencies:
+      '@reduxjs/toolkit': 2.12.0(react-redux@9.3.0(@types/react@19.2.17)(react@19.2.7))(react@19.2.7)
+      clsx: 2.1.1
+      decimal.js-light: 2.5.1
+      es-toolkit: 1.47.0
+      eventemitter3: 5.0.4
+      immer: 10.2.0
+      react: 19.2.7
+      react-dom: 19.2.7(react@19.2.7)
+      react-is: 18.3.1
+      react-redux: 9.3.0(@types/react@19.2.17)(react@19.2.7)(redux@5.0.1)
+      reselect: 5.1.1
+      tiny-invariant: 1.3.3
+      use-sync-external-store: 1.6.0(react@19.2.7)
+      victory-vendor: 37.3.6
+    transitivePeerDependencies:
+      - '@types/react'
+      - redux
 
   recharts@3.8.1(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7)(redux@5.0.1):
     dependencies:
