@@ -113,6 +113,14 @@ export default defineConfig(async ({ mode }) => {
                 prerender: {
                     crawlLinks: true,
                     enabled: true,
+                    // Retry transient prerender failures instead of crashing the
+                    // build. Netlify's concurrent crawler intermittently hits a
+                    // "fetch failed" (ETIMEDOUT ::1 → ECONNREFUSED 127.0.0.1) when
+                    // a self-request races the local prerender server; without a
+                    // retry that surfaces as an uncaught rejection and fails the
+                    // whole build.
+                    retryCount: 3,
+                    retryDelay: 1000,
                 },
                 // Native sitemap: generated at build from the prerendered/crawled pages
                 // (prerender.crawlLinks above discovers every linked route). Replaces the
