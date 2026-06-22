@@ -235,4 +235,4 @@ const copycat = {
 
 export { copycat };
 
-export { generateHashKey, hashInput, setHashKey } from "./hash";
+export { hashInput, setHashKey } from "./hash";

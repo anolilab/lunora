@@ -1,14 +1,13 @@
 /**
- * Resolve the live-worker target (URL + admin token) a command should hit.
+ * Resolve the live-worker target URL a command should hit.
  *
  * Commands that talk to a deployed worker (`run`, `logs`, `deploy --migrate`,
- * `insights`, `export`, …) historically required `--url`/`--token` on every
- * invocation. This centralizes the precedence so they can fall back to the
+ * `insights`, `export`, …) historically required `--url` on every invocation.
+ * This centralizes the precedence so they can fall back to the
  * `.lunora/project.json` link written by `lunora link`.
  *
  * workerUrl precedence: the `--url` flag, then the link's `workerUrl`, then the
- * caller's own default (usually localhost). adminToken precedence: the `--token`
- * flag, then the `LUNORA_ADMIN_TOKEN` env.
+ * caller's own default (usually localhost).
  *
  * The admin token is intentionally NOT read from the link file — links carry
  * only public identifiers, never secrets.
@@ -57,20 +56,5 @@ const resolveProductionWorkerUrl = ({ cwd, prod, url }: ResolveProductionWorkerU
     return prod ? readLinkedProject(cwd)?.workerUrl : undefined;
 };
 
-/**
- * Resolve the admin bearer token: the explicit `--token` flag wins, else the
- * `LUNORA_ADMIN_TOKEN` env (preferred — it never lands in the process table).
- * Returns `undefined` when neither is set.
- */
-const resolveAdminToken = (token: string | undefined): string | undefined => {
-    if (token !== undefined && token !== "") {
-        return token;
-    }
-
-    const fromEnv = process.env.LUNORA_ADMIN_TOKEN;
-
-    return fromEnv !== undefined && fromEnv !== "" ? fromEnv : undefined;
-};
-
 export type { ResolveProductionWorkerUrlInputs, ResolveWorkerUrlInputs };
-export { resolveAdminToken, resolveProductionWorkerUrl, resolveWorkerUrl };
+export { resolveProductionWorkerUrl, resolveWorkerUrl };

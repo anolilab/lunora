@@ -265,6 +265,4 @@ const usePaginatedCore = function <T>(
     return { loadMore, pageResults, status };
 };
 
-export { usePaginatedCore };
-
-export { JOIN_FACTOR, type Page, SPLIT_FACTOR } from "@lunora/client/pagination";
+export default usePaginatedCore;

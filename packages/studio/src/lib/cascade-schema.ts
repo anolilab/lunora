@@ -78,5 +78,5 @@ const walkCascade = <T extends { children: T[] }>(root: T, predicate: (node: T) 
     return results;
 };
 
-export type { AdvisorRelation, AdvisorSchema, AdvisorTable } from "@lunora/advisor";
+export type { AdvisorRelation, AdvisorSchema } from "@lunora/advisor";
 export { buildCascadeMap, walkCascade };

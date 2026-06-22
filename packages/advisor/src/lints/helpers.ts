@@ -7,12 +7,9 @@ import type { AdvisorTable } from "../schema";
  */
 export const SYSTEM_FIELDS: ReadonlySet<string> = new Set(["_creationTime", "_id"]);
 
-/** True when `column` is a declared or system column of `table`. */
-export const hasColumn = (table: AdvisorTable, column: string): boolean => SYSTEM_FIELDS.has(column) || table.fields.includes(column);
-
 /**
  * Build a `Set` of a table's columns (declared + system) once, so repeated
- * membership checks inside a hot loop are O(1) instead of `hasColumn`'s O(n)
- * `Array.includes` scan. Behavior is identical to calling `hasColumn` per field.
+ * membership checks inside a hot loop are O(1) instead of an O(n)
+ * `Array.includes` scan.
  */
 export const tableColumnSet = (table: AdvisorTable): ReadonlySet<string> => new Set<string>([...SYSTEM_FIELDS, ...table.fields]);

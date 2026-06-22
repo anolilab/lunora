@@ -41,10 +41,5 @@
  * at build time. The `lunora()` integration (from this package) declares the
  * build-time wiring so templates don't hand-roll it.
  */
-export type {
-    FrameworkHostHandler as AstroWorkerHandler,
-    LunoraWorker as ComposedWorker,
-    FrameworkWorkerOptionsInput,
-    FrameworkWorkerOptions as LunoraOptions,
-} from "@lunora/runtime";
+export type { FrameworkHostHandler as AstroWorkerHandler, LunoraWorker as ComposedWorker, FrameworkWorkerOptions as LunoraOptions } from "@lunora/runtime";
 export { withFrameworkWorker as withLunora } from "@lunora/runtime";

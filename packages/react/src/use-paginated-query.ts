@@ -3,7 +3,7 @@
 import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
 
 import type { UsePaginatedQueryOptions, UsePaginatedQueryResult } from "./types";
-import { usePaginatedCore } from "./use-paginated-core";
+import usePaginatedCore from "./use-paginated-core";
 
 /** The args a paginated query exposes minus the framework-supplied page cursor. */
 type PaginatedArgs<F> = Omit<ArgsOf<F>, "paginationOpts">;

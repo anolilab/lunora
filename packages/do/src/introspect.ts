@@ -1,4 +1,6 @@
+import type { AuditEntry } from "./audit-log";
 import type { SqlExec } from "./ctx-db";
+import type { SortDirection } from "./query-args";
 
 /**
  * Reserved `functionPath` prefix for admin introspection RPCs. These travel
@@ -82,31 +84,6 @@ const ADMIN_FUNCTIONS = {
 interface TableInfo {
     name: string;
     rowCount: number;
-}
-
-/**
- * One recorded admin operation served by `__lunora_admin__:getAuditLog`, sourced
- * from the reserved `__lunora_audit__` table (see `audit-log.ts`). Unlike the
- * in-memory `getMetrics`/`getFunctionStats` counters, the audit log is durable —
- * it survives hibernation/restart and is bounded only by a retention cap. `seq`
- * is a monotonic per-shard cursor the studio pages through; `op` is the short
- * op name (`writeRow`, `runMigration`, `importShard`, `applyCdc`); `table`/`id`
- * are present when the op targets one; `detail` carries op-specific context
- * (notably the acting `userId`).
- */
-interface AuditEntry {
-    /** JSON extra context (acting user, op-specific counts, …); absent when none was recorded. */
-    detail?: Record<string, unknown>;
-    /** Primary key of the affected row, when the op targets one. */
-    id?: string;
-    /** Short op identifier, e.g. `writeRow`. */
-    op: string;
-    /** Monotonic per-shard cursor — strictly increasing, never reused. */
-    seq: number;
-    /** Affected table, when the op targets one. */
-    table?: string;
-    /** Epoch-ms the op was recorded. */
-    ts: number;
 }
 
 /** Payload of a `__lunora_admin__:getAuditLog` call: the recorded entries, newest first. */
@@ -560,9 +537,6 @@ interface FilterClause {
     operator: FilterOperator;
     value?: unknown;
 }
-
-/** Sort direction for an {@link OrderByClause}. */
-type SortDirection = "asc" | "desc";
 
 /**
  * A server-side sort over one displayed column. `column` resolves the same way a
@@ -1253,7 +1227,6 @@ export {
 export type {
     AdvisoriesResult,
     AdvisoryFinding,
-    AuditEntry,
     AuditLogResult,
     ColumnMeta,
     CreateWorkflowInstanceResult,
@@ -1277,7 +1250,6 @@ export type {
     SettingEntry,
     SettingKind,
     SettingsResult,
-    SortDirection,
     StorageReference,
     StorageReferenceResult,
     StorageRuleMetadata,

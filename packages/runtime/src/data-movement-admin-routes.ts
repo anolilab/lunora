@@ -18,6 +18,7 @@ import { readBodyTextWithLimit, readJsonBodyWithLimit } from "./body-readers";
 import { decodeConnectorCursor, encodeConnectorCursor, foldCdcPage } from "./connector-cdc";
 import type { ConnectorChange, ConnectorSyncPage } from "./connector-format";
 import { LunoraError } from "./errors";
+import type { ExportRow } from "./export-stream";
 import type { QueryCoordinator } from "./query-coordinator";
 import type { ShardNamespaceLike } from "./resolve-shard";
 
@@ -26,9 +27,6 @@ const IMPORT_PATH = "/_lunora/admin/import";
 const SYNC_PATH = "/_lunora/admin/sync";
 const CONNECTOR_SYNC_PATH = "/_lunora/admin/connector/sync";
 const APPLY_PATH = "/_lunora/admin/apply";
-
-/** One exported row — a table name plus its document. Mirrors the export primitive's row shape. */
-type ExportRow = { doc: Record<string, unknown>; table: string };
 
 /** Per-row import failure surfaced back to the caller. */
 type ImportRowError = { code: string; line: number; message: string; table: string };
@@ -359,5 +357,5 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
     };
 };
 
-export type { DataMovementAdminRouteDeps, ExportRow };
+export type { DataMovementAdminRouteDeps };
 export { APPLY_PATH, buildDataMovementAdminRoutes, CONNECTOR_SYNC_PATH, EXPORT_PATH, IMPORT_PATH, SYNC_PATH };

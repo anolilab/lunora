@@ -137,5 +137,3 @@ export const consumeQueuedSend = async (mailer: Mailer, payload: unknown): Promi
 
     return mailer.send(options);
 };
-
-export { type QueueLike } from "./types";

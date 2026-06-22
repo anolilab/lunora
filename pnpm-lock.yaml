@@ -1148,18 +1148,12 @@ importers:
       '@lunora/studio':
         specifier: workspace:*
         version: link:../../packages/studio
-      motion:
-        specifier: catalog:frontend
-        version: 12.40.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       react:
         specifier: 19.2.7
         version: 19.2.7
       react-dom:
         specifier: 19.2.7
         version: 19.2.7(react@19.2.7)
-      recharts:
-        specifier: catalog:frontend
-        version: 3.8.1(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7)(redux@5.0.1)
       shadcn:
         specifier: catalog:ui
         version: 4.11.0(typescript@6.0.3)
@@ -2542,9 +2536,6 @@ importers:
         specifier: catalog:data
         version: 10.5.0
     devDependencies:
-      '@lunora/do':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
       '@lunora/server':
         specifier: 1.0.0-alpha.1
         version: 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)

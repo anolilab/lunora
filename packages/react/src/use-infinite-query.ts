@@ -4,7 +4,7 @@ import type { FunctionReference } from "@lunora/client";
 import { useCallback, useEffect, useRef } from "react";
 
 import type { UseInfiniteQueryOptions, UseInfiniteQueryResult } from "./types";
-import { usePaginatedCore } from "./use-paginated-core";
+import usePaginatedCore from "./use-paginated-core";
 import type { PageItemOf, PaginatedArgs } from "./use-paginated-query";
 
 /**

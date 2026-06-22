@@ -34,18 +34,6 @@ type SchemaEditResult =
     | { kind: "needs-migration"; message: string }
     | { diagnostics: ReadonlyArray<string>; kind: "ok"; tables: ReadonlyArray<SchemaEditTable> };
 
-/** Fetch + parse the current schema tables from the dev host. */
-const fetchSchema = async (): Promise<{ kind: "error"; message: string } | { kind: "ok"; tables: ReadonlyArray<SchemaEditTable> }> => {
-    const response = await fetch(SCHEMA_EDIT_ENDPOINT, { method: "GET" });
-    const body = (await response.json()) as { error?: string; ok?: boolean; tables?: ReadonlyArray<SchemaEditTable> };
-
-    if (response.ok && body.tables !== undefined) {
-        return { kind: "ok", tables: body.tables };
-    }
-
-    return { kind: "error", message: body.error ?? `schema fetch failed (${String(response.status)})` };
-};
-
 /** Apply an additive edit through the dev host, normalising every outcome. */
 const applyEdit = async (edit: AdditiveEdit): Promise<SchemaEditResult> => {
     const response = await fetch(SCHEMA_EDIT_ENDPOINT, {
@@ -78,4 +66,4 @@ const applyEdit = async (edit: AdditiveEdit): Promise<SchemaEditResult> => {
 };
 
 export type { AdditiveEdit, SchemaEditResult, SchemaEditTable };
-export { applyEdit, fetchSchema, SCHEMA_EDIT_ENDPOINT };
+export { applyEdit, SCHEMA_EDIT_ENDPOINT };

@@ -43,4 +43,4 @@ const detectFramework = (root: string): FrameworkDetection => {
 export type { FrameworkDetection };
 export { detectFramework };
 
-export { type DetectedFramework, type FrameworkClass } from "@lunora/config";
+export { type DetectedFramework } from "@lunora/config";

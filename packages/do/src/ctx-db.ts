@@ -3071,24 +3071,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 export { assertValidClientId, createShardCtxDb, normalizeIdStructurally, NotUniqueError };
 export { backfillAggregateIndexes, backfillRankIndexes } from "./ctx-db-backfill";
 export type { CdcChange } from "./ctx-db-cdc";
-export {
-    appendCdcChange,
-    applyCdcChanges,
-    bumpCdcEpoch,
-    CDC_LOG_TABLE,
-    CDC_META_TABLE,
-    migrateCdcLog,
-    migrateCdcMeta,
-    minCdcSeq,
-    readCdcChanges,
-    readCdcCursor,
-    readCdcEpoch,
-    trimCdcChanges,
-} from "./ctx-db-cdc";
-export type { IdempotentRecord } from "./ctx-db-idempotency";
-export { IDEMPOTENCY_TABLE, migrateIdempotency, readIdempotent, trimIdempotent, writeIdempotent } from "./ctx-db-idempotency";
+export { applyCdcChanges, bumpCdcEpoch, CDC_LOG_TABLE, minCdcSeq, readCdcChanges, readCdcCursor, readCdcEpoch, trimCdcChanges } from "./ctx-db-cdc";
+export { IDEMPOTENCY_TABLE, readIdempotent, trimIdempotent, writeIdempotent } from "./ctx-db-idempotency";
 export { runShardMigrations } from "./ctx-db-migrations";
-export type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers";
+export type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike } from "./triggers";
 export type {
     BroadcastDelta,
     Clock,

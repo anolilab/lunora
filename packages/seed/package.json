@@ -64,7 +64,6 @@
         "@faker-js/faker": "catalog:data"
     },
     "devDependencies": {
-        "@lunora/do": "1.0.0-alpha.1",
         "@lunora/server": "1.0.0-alpha.1",
         "@lunora/testing": "1.0.0-alpha.1",
         "@lunora/values": "1.0.0-alpha.1",

@@ -2760,7 +2760,6 @@ export type {
     AuthIntrospector,
     AuthPage,
     AuthSession,
-    AuthTimestamp,
     AuthUser,
     ListAuthUsersOptions,
 } from "./auth-admin-routes";

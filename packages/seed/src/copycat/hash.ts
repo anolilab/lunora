@@ -110,25 +110,9 @@ const hashInput = (input: unknown): number => {
 };
 
 /**
- * Derive a reproducible 4-word key from a `secret` string (copycat parity). Use
- * a secret of 14+ characters. The returned key can be handed to
- * {@link setHashKey} to shift every generated value to a private, secret-specific
- * mapping.
- */
-const generateHashKey = (secret: string): Uint32Array => {
-    const key = new Uint32Array(4);
-
-    for (let index = 0; index < 4; index += 1) {
-        key[index] = cyrb53(secret, index + 1) % 0x1_00_00_00_00;
-    }
-
-    return key;
-};
-
-/**
  * Override the global hash salt so generated values shift to a different (but
  * still deterministic) mapping. Accepts a string secret or a {@link Uint32Array}
- * key from {@link generateHashKey}. Pass `0` / an empty string to reset.
+ * key. Pass `0` / an empty string to reset.
  */
 const setHashKey = (key: number | string | Uint32Array): void => {
     if (typeof key === "number") {
@@ -155,4 +139,4 @@ const setHashKey = (key: number | string | Uint32Array): void => {
 
 /* eslint-enable no-bitwise */
 
-export { generateHashKey, hashInput, setHashKey, stableStringify };
+export { hashInput, setHashKey, stableStringify };

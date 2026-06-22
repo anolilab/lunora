@@ -1,5 +1,3 @@
-export type { Permission, Role } from "../rls/types";
-
 /**
  * Public surface for Dynamic Data Masking — the column-level sibling of
  * Row-Level Security (`../rls`). RLS decides *which rows* a caller sees; masking

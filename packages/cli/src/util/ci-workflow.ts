@@ -13,8 +13,6 @@ import type { Logger } from "./logger";
 /** Supported CI providers. */
 type CiProvider = "github" | "gitlab";
 
-const CI_PROVIDERS = ["github", "gitlab"] as const;
-
 // The `\${{ … }}` escapes keep GitHub's expression syntax literal inside this
 // template literal (so JS doesn't try to interpolate it).
 // eslint-disable-next-line no-secrets/no-secrets -- GitHub Actions secret *reference*, not a secret value
@@ -191,4 +189,4 @@ const scaffoldCiWorkflow = (projectRoot: string, provider: CiProvider, logger: L
 };
 
 export type { CiProvider, WriteCiWorkflowOptions, WriteCiWorkflowResult };
-export { CI_PROVIDERS, isCiProvider, scaffoldCiWorkflow, WORKFLOWS, writeCiWorkflow };
+export { isCiProvider, scaffoldCiWorkflow, WORKFLOWS, writeCiWorkflow };

@@ -29,6 +29,7 @@ export type {
     RestrictableQueryOptions,
 } from "./aggregates";
 export { CountRlsUnsupportedError, mergeWhere, planAggregateLookup, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy } from "./aggregates";
+export type { AuditEntry } from "./audit-log";
 export type { AuthMetrics, AuthMetricsBucket, RecordAuthEventInput } from "./auth-metrics";
 export {
     AUTH_METRICS_BUCKET_MS,
@@ -108,7 +109,6 @@ export {
 export type {
     AdvisoriesResult,
     AdvisoryFinding,
-    AuditEntry,
     AuditLogResult,
     ColumnMeta,
     DeployInfo,

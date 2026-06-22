@@ -83,21 +83,6 @@ export interface FilterClause {
     value?: unknown;
 }
 
-/**
- * Arguments for the `__lunora_admin__:facetColumn` admin op — the read-only,
- * Datasette-style per-column value/count summary. `filters`/`search` mirror
- * {@link TablePage}'s predicate args so the facet reflects exactly the previewed
- * rows; `column` is validated + bound server-side, never interpolated. `limit`
- * caps the distinct values returned (clamped server-side).
- */
-export interface FacetColumnArgs {
-    column: string;
-    filters?: FilterClause[];
-    limit?: number;
-    search?: string;
-    table: string;
-}
-
 /** One distinct value of a faceted column with its row count, mirroring `@lunora/do`'s `FacetValue`. */
 export interface FacetValue {
     count: number;
@@ -135,35 +120,11 @@ export interface WriteRowResult {
 }
 
 /**
- * Arguments for the `__lunora_admin__:deleteRows` admin op — the writer-routed
- * bulk delete behind "delete matching". `filters`/`search` mirror
- * {@link TablePage}'s predicate args so the deleted set equals the previewed
- * one; `limit` caps the rows removed per call (clamped server-side). The server
- * removes each matched row through the schema-aware writer (keeping FTS /
- * aggregate / rank shadow tables in sync), bounded per call.
- */
-export interface DeleteRowsArgs {
-    filters?: FilterClause[];
-    limit?: number;
-    search?: string;
-    table: string;
-}
-
-/**
- * Arguments for the `__lunora_admin__:clearTable` admin op — "empty this table".
- * The same writer-routed bounded delete as {@link DeleteRowsArgs} with no
- * predicate (it matches every row).
- */
-export interface ClearTableArgs {
-    limit?: number;
-    table: string;
-}
-
-/**
- * Result of a {@link DeleteRowsArgs} / {@link ClearTableArgs} op. `deleted` is
- * the rows removed in this call; `hasMore` is `true` when matching rows remain
- * beyond the server's per-call cap, so the caller loops a single bounded
- * round-trip rather than deleting an unbounded set at once.
+ * Result of a bulk delete (`__lunora_admin__:deleteRows` /
+ * `__lunora_admin__:clearTable`) op. `deleted` is the rows removed in this call;
+ * `hasMore` is `true` when matching rows remain beyond the server's per-call
+ * cap, so the caller loops a single bounded round-trip rather than deleting an
+ * unbounded set at once.
  */
 export interface BulkDeleteResult {
     deleted: number;
@@ -715,11 +676,6 @@ export interface RequestLogEntry {
     userId?: string;
 }
 
-/** Payload of a `__lunora_admin__:getRequestLog` call: the recorded entries, newest first. */
-export interface RequestLogResult {
-    entries: RequestLogEntry[];
-}
-
 /**
  * Correlated filters accepted by `__lunora_admin__:getRequestLog`, mirroring
  * `@lunora/do`'s `ReadRequestLogOptions`. All AND-combined and bound server-side.
@@ -834,17 +790,6 @@ export interface SqlConsoleResult {
 export interface PitrBookmarkResult {
     current: string;
     forTime?: string;
-}
-
-/**
- * Arguments for the `__lunora_admin__:pitrRestore` RPC, mirroring `@lunora/do`'s
- * `PitrRestoreArgs`. Provide a `bookmark` (wins) or a `time` (epoch-ms or ISO,
- * within 30 days); `restart` also `ctx.abort()`s so recovery applies now.
- */
-export interface PitrRestoreArgs {
-    bookmark?: string;
-    restart?: boolean;
-    time?: number | string;
 }
 
 /**

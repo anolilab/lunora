@@ -38,11 +38,6 @@ interface AuditEntry {
     ts: number;
 }
 
-/** Payload of a `__lunora_admin__:getAuditLog` call: the recorded entries, newest first. */
-interface AuditLogResult {
-    entries: AuditEntry[];
-}
-
 /** Fields accepted when appending one audit entry; `seq` is assigned by the table. */
 interface AppendAuditEntry {
     detail?: Record<string, unknown>;
@@ -143,4 +138,4 @@ const readAuditLog = (sql: SqlExec, options: { limit?: number; sinceSeq?: number
 };
 
 export { appendAuditEntry, AUDIT_LOG_TABLE, ensureAuditTable, readAuditLog };
-export type { AppendAuditEntry, AuditEntry, AuditLogResult };
+export type { AppendAuditEntry, AuditEntry };

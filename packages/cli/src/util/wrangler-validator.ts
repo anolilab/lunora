@@ -8,8 +8,6 @@
  * directly from `@lunora/config`.
  */
 export type {
-    SchemaInfo,
-    WranglerConfig,
     WranglerProjectValidationOptions as WranglerValidationOptions,
     WranglerValidationReport,
     WranglerProjectValidationResult as WranglerValidationResult,

@@ -41,13 +41,4 @@
  */
 export { defineStorageRule, defineStorageRules } from "./define";
 export { storageRules } from "./middleware";
-export type {
-    DefineStorageRuleInput,
-    Permission,
-    Role,
-    StorageOperation,
-    StorageRule,
-    StorageRuleContext,
-    StorageRuleDecision,
-    StorageRulesOptions,
-} from "./types";
+export type { DefineStorageRuleInput, StorageOperation, StorageRule, StorageRuleContext, StorageRuleDecision, StorageRulesOptions } from "./types";
