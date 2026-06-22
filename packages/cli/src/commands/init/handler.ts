@@ -30,7 +30,7 @@ import type { OverlayFramework } from "./overlay/adapters";
 import { ADAPTERS, isOverlayFramework } from "./overlay/adapters";
 import { applyLunoraOverlay } from "./overlay/apply";
 
-type Template = "astro" | "next" | "nuxt" | "standalone" | "sveltekit" | "tanstack-start-react" | "tanstack-start-solid";
+type Template = "analog" | "astro" | "next" | "nuxt" | "react-router" | "standalone" | "sveltekit" | "tanstack-start-react" | "tanstack-start-solid";
 
 interface InitCommandOptions {
     /**
@@ -837,8 +837,10 @@ const FRAMEWORK_CHOICES: ReadonlyArray<{ description: string; label: string; val
     { description: "Svelte SPA — create-vite base + Lunora", label: "Svelte", value: "svelte" },
     { description: "TanStack Start (React) — SSR with live-loader routes", label: "TanStack Start · React", value: "tanstack-start-react" },
     { description: "TanStack Start (Solid)", label: "TanStack Start · Solid", value: "tanstack-start-solid" },
+    { description: "React Router (v7, framework mode) — SSR composed into the Lunora worker", label: "React Router", value: "react-router" },
     { description: "Astro + a standalone Lunora worker", label: "Astro", value: "astro" },
-    { description: "Nuxt (Vue) + a standalone Lunora worker", label: "Nuxt", value: "nuxt" },
+    { description: "AnalogJS (Angular) — single-worker, Lunora mounted in Nitro", label: "Analog", value: "analog" },
+    { description: "Nuxt (Vue) — single-worker, Lunora mounted in Nitro", label: "Nuxt", value: "nuxt" },
     { description: "SvelteKit + a standalone Lunora worker", label: "SvelteKit", value: "sveltekit" },
     { description: "Worker only — no frontend", label: "Standalone", value: "standalone" },
 ];
@@ -1028,9 +1030,11 @@ const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandR
 
 /** Narrow a raw `--template` value to a known {@link Template}. */
 const isTemplate = (value: unknown): value is Template =>
+    value === "analog" ||
     value === "astro" ||
     value === "next" ||
     value === "nuxt" ||
+    value === "react-router" ||
     value === "standalone" ||
     value === "sveltekit" ||
     value === "tanstack-start-react" ||
