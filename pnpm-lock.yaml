@@ -665,7 +665,7 @@ importers:
         version: 10.0.1(@commitlint/cli@21.0.2(@types/node@25.9.3)(conventional-commits-filter@5.0.0)(conventional-commits-parser@6.4.0)(typescript@6.0.3))(@types/node@25.9.3)(conventional-commits-filter@5.0.0)(conventional-commits-parser@6.4.0)(typescript@6.0.3)
       '@anolilab/eslint-config':
         specifier: catalog:lint
-        version: 27.0.10(5d2780387287b582cd19626c5a7f8eec)
+        version: 27.0.10(af7fa730ab4541997110a37905e60488)
       '@anolilab/multi-semantic-release':
         specifier: catalog:prod
         version: 4.4.4(semantic-release@25.0.5(typescript@6.0.3))(typescript@6.0.3)
@@ -807,7 +807,7 @@ importers:
       '@react-three/fiber':
         specifier: catalog:web
         version: 9.6.1(@types/react@19.2.17)(immer@11.1.8)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(three@0.184.0)
-      '@resvg/resvg-js':
+      '@resvg/resvg-wasm':
         specifier: 2.6.2
         version: 2.6.2
       '@rolldown/plugin-babel':
@@ -969,7 +969,7 @@ importers:
     devDependencies:
       '@anolilab/eslint-config':
         specifier: catalog:web
-        version: 27.0.10(bdd9a35816f81afd039bb065f1f963c1)
+        version: 27.0.10(619551e3c0405c25024dc9e09124e987)
       '@anolilab/prettier-config':
         specifier: catalog:web
         version: 10.0.1(prettier@3.8.4)
@@ -7626,84 +7626,8 @@ packages:
     peerDependencies:
       zod: 4.3.6
 
-  '@resvg/resvg-js-android-arm-eabi@2.6.2':
-    resolution: {integrity: sha512-FrJibrAk6v29eabIPgcTUMPXiEz8ssrAk7TXxsiZzww9UTQ1Z5KAbFJs+Z0Ez+VZTYgnE5IQJqBcoSiMebtPHA==}
-    engines: {node: '>= 10'}
-    cpu: [arm]
-    os: [android]
-
-  '@resvg/resvg-js-android-arm64@2.6.2':
-    resolution: {integrity: sha512-VcOKezEhm2VqzXpcIJoITuvUS/fcjIw5NA/w3tjzWyzmvoCdd+QXIqy3FBGulWdClvp4g+IfUemigrkLThSjAQ==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [android]
-
-  '@resvg/resvg-js-darwin-arm64@2.6.2':
-    resolution: {integrity: sha512-nmok2LnAd6nLUKI16aEB9ydMC6Lidiiq2m1nEBDR1LaaP7FGs4AJ90qDraxX+CWlVuRlvNjyYJTNv8qFjtL9+A==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [darwin]
-
-  '@resvg/resvg-js-darwin-x64@2.6.2':
-    resolution: {integrity: sha512-GInyZLjgWDfsVT6+SHxQVRwNzV0AuA1uqGsOAW+0th56J7Nh6bHHKXHBWzUrihxMetcFDmQMAX1tZ1fZDYSRsw==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [darwin]
-
-  '@resvg/resvg-js-linux-arm-gnueabihf@2.6.2':
-    resolution: {integrity: sha512-YIV3u/R9zJbpqTTNwTZM5/ocWetDKGsro0SWp70eGEM9eV2MerWyBRZnQIgzU3YBnSBQ1RcxRZvY/UxwESfZIw==}
-    engines: {node: '>= 10'}
-    cpu: [arm]
-    os: [linux]
-
-  '@resvg/resvg-js-linux-arm64-gnu@2.6.2':
-    resolution: {integrity: sha512-zc2BlJSim7YR4FZDQ8OUoJg5holYzdiYMeobb9pJuGDidGL9KZUv7SbiD4E8oZogtYY42UZEap7dqkkYuA91pg==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [linux]
-    libc: [glibc]
-
-  '@resvg/resvg-js-linux-arm64-musl@2.6.2':
-    resolution: {integrity: sha512-3h3dLPWNgSsD4lQBJPb4f+kvdOSJHa5PjTYVsWHxLUzH4IFTJUAnmuWpw4KqyQ3NA5QCyhw4TWgxk3jRkQxEKg==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [linux]
-    libc: [musl]
-
-  '@resvg/resvg-js-linux-x64-gnu@2.6.2':
-    resolution: {integrity: sha512-IVUe+ckIerA7xMZ50duAZzwf1U7khQe2E0QpUxu5MBJNao5RqC0zwV/Zm965vw6D3gGFUl7j4m+oJjubBVoftw==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [linux]
-    libc: [glibc]
-
-  '@resvg/resvg-js-linux-x64-musl@2.6.2':
-    resolution: {integrity: sha512-UOf83vqTzoYQO9SZ0fPl2ZIFtNIz/Rr/y+7X8XRX1ZnBYsQ/tTb+cj9TE+KHOdmlTFBxhYzVkP2lRByCzqi4jQ==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [linux]
-    libc: [musl]
-
-  '@resvg/resvg-js-win32-arm64-msvc@2.6.2':
-    resolution: {integrity: sha512-7C/RSgCa+7vqZ7qAbItfiaAWhyRSoD4l4BQAbVDqRRsRgY+S+hgS3in0Rxr7IorKUpGE69X48q6/nOAuTJQxeQ==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [win32]
-
-  '@resvg/resvg-js-win32-ia32-msvc@2.6.2':
-    resolution: {integrity: sha512-har4aPAlvjnLcil40AC77YDIk6loMawuJwFINEM7n0pZviwMkMvjb2W5ZirsNOZY4aDbo5tLx0wNMREp5Brk+w==}
-    engines: {node: '>= 10'}
-    cpu: [ia32]
-    os: [win32]
-
-  '@resvg/resvg-js-win32-x64-msvc@2.6.2':
-    resolution: {integrity: sha512-ZXtYhtUr5SSaBrUDq7DiyjOFJqBVL/dOBN7N/qmi/pO0IgiWW/f/ue3nbvu9joWE5aAKDoIzy/CxsY0suwGosQ==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [win32]
-
-  '@resvg/resvg-js@2.6.2':
-    resolution: {integrity: sha512-xBaJish5OeGmniDj9cW5PRa/PtmuVU3ziqrbr5xJj901ZDN4TosrVaNZpEiLZAxdfnhAe7uQ7QFWfjPe9d9K2Q==}
+  '@resvg/resvg-wasm@2.6.2':
+    resolution: {integrity: sha512-FqALmHI8D4o6lk/LRWDnhw95z5eO+eAa6ORjVg09YRR7BkcM6oPHU9uyC0gtQG5vpFLvgpeU4+zEAz2H8APHNw==}
     engines: {node: '>= 10'}
 
   '@rolldown/binding-android-arm64@1.0.3':
@@ -18395,7 +18319,7 @@ snapshots:
       - conventional-commits-parser
       - typescript
 
-  '@anolilab/eslint-config@27.0.10(5d2780387287b582cd19626c5a7f8eec)':
+  '@anolilab/eslint-config@27.0.10(619551e3c0405c25024dc9e09124e987)':
     dependencies:
       '@e18e/eslint-plugin': 0.4.1(eslint@10.5.0(jiti@2.7.0))(oxlint@1.67.0)
       '@eslint-community/eslint-plugin-eslint-comments': 4.7.2(eslint@10.5.0(jiti@2.7.0))
@@ -18452,6 +18376,7 @@ snapshots:
       yaml-eslint-parser: 2.0.0
     optionalDependencies:
       '@eslint-react/eslint-plugin': 5.9.0(eslint@10.5.0(jiti@2.7.0))(typescript@6.0.3)
+      '@eslint/css': 1.3.0
       '@ospm/eslint-plugin-react-unhookify': 1.0.2(@types/react@19.2.17)(eslint@10.5.0(jiti@2.7.0))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@tanstack/eslint-plugin-query': 5.101.0(eslint@10.5.0(jiti@2.7.0))(typescript@6.0.3)
       '@tanstack/eslint-plugin-router': 1.162.0(eslint@10.5.0(jiti@2.7.0))(typescript@6.0.3)
@@ -18464,6 +18389,8 @@ snapshots:
       eslint-plugin-react-you-might-not-need-an-effect: 1.0.1(eslint@10.5.0(jiti@2.7.0))
       eslint-plugin-testing-library: 7.16.2(eslint@10.5.0(jiti@2.7.0))(typescript@6.0.3)
       eslint-plugin-validate-jsx-nesting: 0.1.1(eslint@10.5.0(jiti@2.7.0))
+      eslint-plugin-zod: 4.7.0(eslint@10.5.0(jiti@2.7.0))(oxlint@1.67.0)(typescript@6.0.3)(zod@4.4.3)
+      tailwind-csstree: 0.3.3(@eslint/css@1.3.0)
       typescript: 6.0.3
     transitivePeerDependencies:
       - '@eslint/json'
@@ -18476,7 +18403,7 @@ snapshots:
       - vitest
       - yaml
 
-  '@anolilab/eslint-config@27.0.10(bdd9a35816f81afd039bb065f1f963c1)':
+  '@anolilab/eslint-config@27.0.10(af7fa730ab4541997110a37905e60488)':
     dependencies:
       '@e18e/eslint-plugin': 0.4.1(eslint@10.5.0(jiti@2.7.0))(oxlint@1.67.0)
       '@eslint-community/eslint-plugin-eslint-comments': 4.7.2(eslint@10.5.0(jiti@2.7.0))
@@ -18533,7 +18460,6 @@ snapshots:
       yaml-eslint-parser: 2.0.0
     optionalDependencies:
       '@eslint-react/eslint-plugin': 5.9.0(eslint@10.5.0(jiti@2.7.0))(typescript@6.0.3)
-      '@eslint/css': 1.3.0
       '@ospm/eslint-plugin-react-unhookify': 1.0.2(@types/react@19.2.17)(eslint@10.5.0(jiti@2.7.0))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@tanstack/eslint-plugin-query': 5.101.0(eslint@10.5.0(jiti@2.7.0))(typescript@6.0.3)
       '@tanstack/eslint-plugin-router': 1.162.0(eslint@10.5.0(jiti@2.7.0))(typescript@6.0.3)
@@ -18546,8 +18472,6 @@ snapshots:
       eslint-plugin-react-you-might-not-need-an-effect: 1.0.1(eslint@10.5.0(jiti@2.7.0))
       eslint-plugin-testing-library: 7.16.2(eslint@10.5.0(jiti@2.7.0))(typescript@6.0.3)
       eslint-plugin-validate-jsx-nesting: 0.1.1(eslint@10.5.0(jiti@2.7.0))
-      eslint-plugin-zod: 4.7.0(eslint@10.5.0(jiti@2.7.0))(oxlint@1.67.0)(typescript@6.0.3)(zod@4.4.3)
-      tailwind-csstree: 0.3.3(@eslint/css@1.3.0)
       typescript: 6.0.3
     transitivePeerDependencies:
       - '@eslint/json'
@@ -23604,56 +23528,7 @@ snapshots:
       - react
       - react-dom
 
-  '@resvg/resvg-js-android-arm-eabi@2.6.2':
-    optional: true
-
-  '@resvg/resvg-js-android-arm64@2.6.2':
-    optional: true
-
-  '@resvg/resvg-js-darwin-arm64@2.6.2':
-    optional: true
-
-  '@resvg/resvg-js-darwin-x64@2.6.2':
-    optional: true
-
-  '@resvg/resvg-js-linux-arm-gnueabihf@2.6.2':
-    optional: true
-
-  '@resvg/resvg-js-linux-arm64-gnu@2.6.2':
-    optional: true
-
-  '@resvg/resvg-js-linux-arm64-musl@2.6.2':
-    optional: true
-
-  '@resvg/resvg-js-linux-x64-gnu@2.6.2':
-    optional: true
-
-  '@resvg/resvg-js-linux-x64-musl@2.6.2':
-    optional: true
-
-  '@resvg/resvg-js-win32-arm64-msvc@2.6.2':
-    optional: true
-
-  '@resvg/resvg-js-win32-ia32-msvc@2.6.2':
-    optional: true
-
-  '@resvg/resvg-js-win32-x64-msvc@2.6.2':
-    optional: true
-
-  '@resvg/resvg-js@2.6.2':
-    optionalDependencies:
-      '@resvg/resvg-js-android-arm-eabi': 2.6.2
-      '@resvg/resvg-js-android-arm64': 2.6.2
-      '@resvg/resvg-js-darwin-arm64': 2.6.2
-      '@resvg/resvg-js-darwin-x64': 2.6.2
-      '@resvg/resvg-js-linux-arm-gnueabihf': 2.6.2
-      '@resvg/resvg-js-linux-arm64-gnu': 2.6.2
-      '@resvg/resvg-js-linux-arm64-musl': 2.6.2
-      '@resvg/resvg-js-linux-x64-gnu': 2.6.2
-      '@resvg/resvg-js-linux-x64-musl': 2.6.2
-      '@resvg/resvg-js-win32-arm64-msvc': 2.6.2
-      '@resvg/resvg-js-win32-ia32-msvc': 2.6.2
-      '@resvg/resvg-js-win32-x64-msvc': 2.6.2
+  '@resvg/resvg-wasm@2.6.2': {}
 
   '@rolldown/binding-android-arm64@1.0.3':
     optional: true

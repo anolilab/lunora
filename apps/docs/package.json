@@ -32,7 +32,7 @@
         "@radix-ui/react-presence": "catalog:web",
         "@radix-ui/react-slot": "catalog:web",
         "@react-three/fiber": "catalog:web",
-        "@resvg/resvg-js": "2.6.2",
+        "@resvg/resvg-wasm": "2.6.2",
         "@rolldown/plugin-babel": "catalog:web",
         "@tailwindcss/vite": "catalog:web",
         "@tanstack/react-router": "catalog:web",

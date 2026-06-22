@@ -1,8 +1,21 @@
-import { Resvg } from "@resvg/resvg-js";
+import { initWasm, Resvg } from "@resvg/resvg-wasm";
 import { createFileRoute } from "@tanstack/react-router";
 import satori from "satori";
 
 import { getPackageBySlug } from "@/data/packages";
+
+// resvg-wasm (no native binary) so this works in serverless functions, where the
+// native @resvg/resvg-js addon fails to bundle. The wasm version must match the
+// installed @resvg/resvg-wasm version. Initialized once per cold start.
+const RESVG_WASM_URL = "https://cdn.jsdelivr.net/npm/@resvg/resvg-wasm@2.6.2/index_bg.wasm";
+
+let wasmReady: Promise<void> | null = null;
+
+const ensureWasm = (): Promise<void> => {
+    wasmReady ??= initWasm(fetch(RESVG_WASM_URL));
+
+    return wasmReady;
+};
 
 const ACCENT_COLORS: Record<string, string> = {
     "crimson-energy": "#ED5AA3",
@@ -53,12 +66,19 @@ const renderPng = async (title: string, description: string, eyebrow: string, ac
         { fonts: await loadFonts(), height: 630, width: 1200 },
     );
 
-    // Copy into a fresh ArrayBuffer-backed Uint8Array (a valid Response BodyInit;
-    // a Node Buffer / pooled-buffer view is not, under the strict lib types).
-    const rendered = new Resvg(svg).render().asPng();
-    const bytes = new Uint8Array(rendered.byteLength);
+    await ensureWasm();
 
-    bytes.set(rendered);
+    const resvg = new Resvg(svg);
+    const rendered = resvg.render();
+    const png = rendered.asPng();
+
+    // Copy out of wasm memory into a fresh ArrayBuffer-backed Uint8Array before
+    // freeing (also a valid Response BodyInit, which the raw view is not).
+    const bytes = new Uint8Array(png.byteLength);
+
+    bytes.set(png);
+    rendered.free();
+    resvg.free();
 
     return bytes;
 };
