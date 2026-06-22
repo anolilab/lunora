@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { isTemplate, resolveTemplateSource, runInitCommand } from "../../src/commands/init/handler";
 import type { Logger } from "../../src/util/logger";
 import { resolveDistTag } from "../../src/util/source-ref";
+import { createRecordingSpawner } from "../../src/util/spawn";
 
 const silentLogger = (): Logger => {
     return {
@@ -51,7 +52,7 @@ describe("lunora init", () => {
 
             expect(existsSync(join(target, "package.json"))).toBe(true);
             expect(existsSync(join(target, "lunora", "schema.ts"))).toBe(true);
-            expect(existsSync(join(target, "lunora", "counter.ts"))).toBe(true);
+            expect(existsSync(join(target, "lunora", "messages.ts"))).toBe(true);
             expect(existsSync(join(target, "src", "main.tsx"))).toBe(true);
             expect(existsSync(join(target, "src", "App.tsx"))).toBe(true);
             expect(existsSync(join(target, "vite.config.ts"))).toBe(true);
@@ -59,6 +60,67 @@ describe("lunora init", () => {
             expect(existsSync(join(target, "tsconfig.json"))).toBe(true);
             expect(existsSync(join(target, ".gitignore"))).toBe(true);
             expect(existsSync(join(target, "README.md"))).toBe(true);
+        });
+
+        it("offers to install dependencies and runs the preferred package manager", async () => {
+            expect.assertions(3);
+
+            const { calls, spawner } = createRecordingSpawner();
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                installPrompt: { confirmInstall: () => Promise.resolve(true), selectManager: (managers) => Promise.resolve(managers[0]!) },
+                logger: silentLogger(),
+                name: "installed-app",
+                // Both pnpm + npm "installed" → pnpm is preferred (the default).
+                packageManagerProbe: (manager) => manager === "pnpm" || manager === "npm",
+                spawner,
+                templateType: "vite-react",
+            });
+
+            expect(result.code).toBe(0);
+            expect(calls).toHaveLength(1);
+            expect(calls[0]?.descriptor).toMatchObject({ args: ["install"], command: "pnpm", cwd: join(workdir, "installed-app") });
+        });
+
+        it("does not install when the user declines the offer", async () => {
+            expect.assertions(2);
+
+            const { calls, spawner } = createRecordingSpawner();
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                installPrompt: { confirmInstall: () => Promise.resolve(false), selectManager: (managers) => Promise.resolve(managers[0]!) },
+                logger: silentLogger(),
+                name: "declined-app",
+                packageManagerProbe: () => true,
+                spawner,
+                templateType: "vite-react",
+            });
+
+            expect(result.code).toBe(0);
+            expect(calls).toHaveLength(0);
+        });
+
+        it("does not offer to install in a non-interactive run (no prompts injected)", async () => {
+            expect.assertions(2);
+
+            const { calls, spawner } = createRecordingSpawner();
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: silentLogger(),
+                name: "ci-app",
+                packageManagerProbe: () => true,
+                spawner,
+                templateType: "vite-react",
+            });
+
+            expect(result.code).toBe(0);
+            expect(calls).toHaveLength(0);
         });
 
         it("substitutes {{name}} placeholders", async () => {

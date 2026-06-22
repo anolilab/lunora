@@ -13,10 +13,14 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { DetectedFramework, FrameworkDetection } from "../../util/detect-framework";
 import { detectFramework } from "../../util/detect-framework";
+import type { PackageManager, PackageManagerProbe } from "../../util/detect-package-manager";
+import { detectInstalledManagers, installArgsFor } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
 import { patchViteConfig } from "../../util/patch-vite-config";
 import { resolveDistTag, resolveSourceRef } from "../../util/source-ref";
-import { tuiIntro, tuiMultiSelect, tuiOutro, tuiSelect, withTuiSpinner } from "../../util/tui-prompts";
+import type { Spawner } from "../../util/spawn";
+import { defaultSpawner } from "../../util/spawn";
+import { tuiConfirm, tuiIntro, tuiMultiSelect, tuiOutro, tuiSelect, tuiText, withTuiSpinner } from "../../util/tui-prompts";
 import type { FeatureItem } from "../add/features";
 import { runAddCommand } from "../registry";
 import type { InitOptions } from "./index";
@@ -58,6 +62,16 @@ interface InitCommandOptions {
     inPlace?: boolean;
 
     /**
+     * Inject the post-scaffold install offer's prompts (tests). When set, the
+     * offer runs regardless of TTY: `confirmInstall` drives the yes/no, and
+     * `selectManager` picks among the detected managers.
+     */
+    installPrompt?: {
+        confirmInstall: () => Promise<boolean>;
+        selectManager: (managers: ReadonlyArray<PackageManager>) => Promise<PackageManager>;
+    };
+
+    /**
      * Force the post-scaffold "add auth / email?" offer on (the `--interactive`
      * flag). When omitted, the offer runs only when stdin is a TTY. `--yes`
      * suppresses it regardless. Has no effect once {@link prompt} is injected.
@@ -65,6 +79,7 @@ interface InitCommandOptions {
     interactive?: boolean;
 
     logger: Logger;
+
     name?: string;
 
     /**
@@ -73,6 +88,9 @@ interface InitCommandOptions {
      * instead of fetching `create-vite` over the network — offline mode + tests.
      */
     overlayBaseFrom?: string;
+
+    /** Probe for which package managers are installed (tests). Defaults to a real `&lt;pm> --version` check. */
+    packageManagerProbe?: PackageManagerProbe;
 
     /**
      * Inject the offer's prompts (tests). When set, the offer is treated as
@@ -101,6 +119,9 @@ interface InitCommandOptions {
      * instead to skip the network.
      */
     source?: string;
+
+    /** Spawner for the post-scaffold dependency install (tests inject a recording stub). Defaults to a real subprocess. */
+    spawner?: Spawner;
     templateType?: Template;
 
     /**
@@ -283,12 +304,98 @@ const isSafeSource = (source: string): boolean => {
     return source.startsWith("gh:") || source.startsWith("github:") || source.startsWith("https://");
 };
 
-const logScaffoldSuccess = (logger: Logger, written: ReadonlyArray<string>, target: string, name: string): void => {
+const logScaffoldSuccess = (logger: Logger, written: ReadonlyArray<string>, target: string): void => {
     logger.success(`scaffolded ${String(written.length)} files into ${target}`);
+};
+
+/** The shell command that runs a project script with `manager` (`pnpm dev`, `npm run dev`, …). */
+const runScriptCommand = (manager: PackageManager, script: string): string => {
+    if (manager === "npm") {
+        return `npm run ${script}`;
+    }
+
+    if (manager === "bun") {
+        return `bun run ${script}`;
+    }
+
+    // pnpm / yarn run scripts by bare name.
+    return `${manager} ${script}`;
+};
+
+/**
+ * Print the post-scaffold "next steps". When deps were already installed (the
+ * user accepted the install offer), the `install` line is dropped and the `dev`
+ * line uses the chosen manager; otherwise it defaults to `pnpm`.
+ */
+const printNextSteps = (logger: Logger, name: string, installed: PackageManager | undefined): void => {
+    const manager: PackageManager = installed ?? "pnpm";
+
     logger.info("next steps:");
     logger.info(`  cd ${name}`);
-    logger.info("  pnpm install");
-    logger.info("  pnpm dev");
+
+    if (installed === undefined) {
+        logger.info(`  ${manager} install`);
+    }
+
+    logger.info(`  ${runScriptCommand(manager, "dev")}`);
+};
+
+/** The install offer runs only on a real TTY or when its prompts are injected (tests) — never auto-installs in CI. */
+const offerInstallIsInteractive = (options: InitCommandOptions): boolean => options.yes !== true && (options.installPrompt !== undefined || isInteractive());
+
+/**
+ * After a successful scaffold, offer to install dependencies. Detects the
+ * installed package managers (pnpm > bun > yarn > npm), confirms, then — when
+ * more than one is available — lets the user pick (defaulting to the most
+ * preferred). Returns the manager that installed, or `undefined` when skipped or
+ * on failure (the scaffold still succeeds either way).
+ */
+const maybeOfferInstall = async (options: InitCommandOptions, target: string): Promise<PackageManager | undefined> => {
+    if (!offerInstallIsInteractive(options)) {
+        return undefined;
+    }
+
+    const managers = detectInstalledManagers(options.packageManagerProbe);
+    const [defaultManager] = managers;
+
+    if (defaultManager === undefined) {
+        // No package manager on PATH — nothing to offer; the next-steps hint covers it.
+        return undefined;
+    }
+
+    const confirm = options.installPrompt?.confirmInstall ?? (async (): Promise<boolean> => tuiConfirm("Install dependencies now?", { defaultYes: true }));
+
+    if (!(await confirm())) {
+        return undefined;
+    }
+
+    let manager = defaultManager;
+
+    if (managers.length > 1) {
+        manager = options.installPrompt
+            ? await options.installPrompt.selectManager(managers)
+            : ((await tuiSelect(
+                  "Which package manager?",
+                  managers.map((candidate) => {
+                      return { label: candidate, value: candidate };
+                  }),
+                  { default: defaultManager },
+              )) ?? defaultManager);
+    }
+
+    const spawner = options.spawner ?? defaultSpawner;
+    const { args, command } = installArgsFor(manager);
+    const result = await withTuiSpinner(`Installing dependencies with ${manager}…`, () => spawner({ args, command, cwd: target }));
+
+    if (result.code !== 0) {
+        options.logger.warn(`\`${command} install\` exited with code ${String(result.code)} — run it yourself in ${basename(target)}/.`);
+
+        return undefined;
+    }
+
+    options.logger.success(`installed dependencies with ${manager}`);
+
+    return manager;
 };
 
 const scaffoldFromLocal = (fromRoot: string, templateType: Template, target: string, name: string, logger: Logger): InitCommandResult => {
@@ -302,7 +409,7 @@ const scaffoldFromLocal = (fromRoot: string, templateType: Template, target: str
 
     const written = copyTemplate(templateDirectory, target, name);
 
-    logScaffoldSuccess(logger, written, target, name);
+    logScaffoldSuccess(logger, written, target);
 
     return { code: 0, files: written, target };
 };
@@ -329,29 +436,32 @@ const scaffoldFromRemote = async (options: {
     try {
         const remote = resolveTemplateSource(templateType, source, ref);
 
-        logger.info(`fetching template from ${remote}`);
+        // Fetch + scaffold behind live spinners (no-op off a TTY, so CI/tests
+        // stay clean). The verbose provenance is folded into one dim audit line.
+        const downloaded = (await withTuiSpinner(`Fetching the ${templateType} template…`, () =>
+            downloadTemplate(remote, {
+                cwd: stagingRoot,
+                dir: stagingDirectory,
+                force: true,
+                install: false,
+                silent: true,
+            }),
+        )) as { commit?: string; dir: string; source: string };
 
-        const downloaded = (await downloadTemplate(remote, {
-            cwd: stagingRoot,
-            dir: stagingDirectory,
-            force: true,
-            install: false,
-            silent: true,
-        })) as { commit?: string; dir: string; source: string };
-
-        // Surface the resolved provenance so the user can audit what was
-        // fetched before any files are copied into the project tree.
         const staged = collectFiles(stagingDirectory);
 
-        if (downloaded.commit) {
-            logger.info(`resolved ${downloaded.source} @ ${downloaded.commit} (${String(staged.length)} file(s))`);
-        } else {
-            logger.info(`resolved ${downloaded.source} (${String(staged.length)} file(s))`);
-        }
+        // One concise provenance line so the user can still audit what was pulled.
+        logger.info(
+            downloaded.commit
+                ? `template: ${downloaded.source} @ ${downloaded.commit} (${String(staged.length)} files)`
+                : `template: ${downloaded.source} (${String(staged.length)} files)`,
+        );
 
-        const written = copyTemplate(stagingDirectory, target, name);
+        const written = await withTuiSpinner(`Scaffolding ${String(staged.length)} files into ${name}/…`, () =>
+            Promise.resolve(copyTemplate(stagingDirectory, target, name)),
+        );
 
-        logScaffoldSuccess(logger, written, target, name);
+        logScaffoldSuccess(logger, written, target);
 
         return { code: 0, files: written, target };
     } catch (error) {
@@ -418,7 +528,7 @@ const scaffoldViteOverlay = async (options: {
             Promise.resolve(applyLunoraOverlay({ adapter, distTag: resolveDistTag(), logger, name, target })),
         );
 
-        logScaffoldSuccess(logger, written, target, name);
+        logScaffoldSuccess(logger, written, target);
 
         return { code: 0, files: [...collectFiles(target)], target };
     } catch (error) {
@@ -709,12 +819,14 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
         select: options.prompt?.select ?? ((message, choices, settings): Promise<FeatureItem | undefined> => tuiSelect(message, choices, settings)),
     });
 
-    await tuiOutro("you're all set — run `pnpm dev` to start.");
+    await tuiOutro("you're all set 🎉");
 };
 
 /** Scaffold a brand-new project directory (the non-`--here` path). */
 const scaffoldNewProject = async (options: InitCommandOptions, cwd: string): Promise<InitCommandResult> => {
-    const name = options.name ?? "lunora-app";
+    // No name argument → ask for one (a TTY shows the prompt; non-interactive
+    // falls back to `lunora-app`, preserving the previous default).
+    const name = options.name ?? (await tuiText("What should we call your project?", { default: "lunora-app", placeholder: "lunora-app" }));
     const templateType: Template = options.templateType ?? "vite-react";
 
     if (templateType === "next") {
@@ -788,7 +900,16 @@ const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandR
     const result = options.inPlace === true ? runInPlaceInit(cwd, options.logger) : await scaffoldNewProject(options, cwd);
 
     if (result.code === 0 && result.target !== "") {
+        // New-project path: offer to install dependencies, then print next steps
+        // with the chosen package manager. In-place init keeps its own per-
+        // framework wiring hints and never auto-installs an existing project.
+        const installedManager = options.inPlace === true ? undefined : await maybeOfferInstall(options, result.target);
+
         await maybeOfferExtras(options, result.target);
+
+        if (options.inPlace !== true) {
+            printNextSteps(options.logger, basename(result.target), installedManager);
+        }
     }
 
     // `--ci`: drop a deploy pipeline into the scaffolded project (or `cwd` for

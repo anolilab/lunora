@@ -22,6 +22,7 @@ import { MultiSelect } from "@visulima/tui/components/multi-select";
 import { SelectInput } from "@visulima/tui/components/select-input";
 import { Spinner } from "@visulima/tui/components/spinner";
 import { Text } from "@visulima/tui/components/text";
+import { TextInput } from "@visulima/tui/components/text-input";
 import { useApp } from "@visulima/tui/hooks/use-app";
 import { useInput } from "@visulima/tui/hooks/use-input";
 import type { ReactElement } from "react";
@@ -189,6 +190,51 @@ const tuiSelect = async <T extends string>(message: string, options: ReadonlyArr
     return runInkPrompt<T | undefined>(
         (finish) => <SelectView finish={finish} initialIndex={defaultIndex >= 0 ? defaultIndex : undefined} message={message} options={options} />,
         settings?.default,
+    );
+};
+
+interface TextViewProps {
+    defaultValue: string;
+    finish: (value: string) => void;
+    message: string;
+    placeholder: string | undefined;
+}
+
+const TextView = ({ defaultValue, finish, message, placeholder }: TextViewProps): ReactElement => {
+    const commit = useCommit(finish);
+
+    useEscapeToExit();
+
+    return (
+        <PromptFrame>
+            <Text bold>{message}</Text>
+            <TextInput
+                defaultValue={defaultValue}
+                onSubmit={(value) => {
+                    // An empty submission keeps the default — never commit "".
+                    commit(value.trim() === "" ? defaultValue : value.trim());
+                }}
+                placeholder={placeholder}
+            />
+        </PromptFrame>
+    );
+};
+
+/**
+ * Prompt for a single line of text (Enter submits, Escape keeps the default).
+ * Non-interactive ⇒ returns `settings.default` so automation never blocks; an
+ * empty submission also falls back to the default.
+ */
+const tuiText = async (message: string, settings?: { default?: string; placeholder?: string }): Promise<string> => {
+    const fallback = settings?.default ?? "";
+
+    if (!isInteractive()) {
+        return fallback;
+    }
+
+    return runInkPrompt<string>(
+        (finish) => <TextView defaultValue={fallback} finish={finish} message={message} placeholder={settings?.placeholder} />,
+        fallback,
     );
 };
 
@@ -381,4 +427,4 @@ const withTuiSpinner = async <T,>(label: string, task: () => Promise<T>): Promis
     }
 };
 
-export { createTuiConfirm, tuiConfirm, tuiIntro, tuiMultiSelect, tuiOutro, tuiSelect, withTuiSpinner };
+export { createTuiConfirm, tuiConfirm, tuiIntro, tuiMultiSelect, tuiOutro, tuiSelect, tuiText, withTuiSpinner };

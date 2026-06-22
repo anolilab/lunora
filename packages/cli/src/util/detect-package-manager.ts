@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 
 import { dirname, join } from "@visulima/path";
@@ -7,6 +8,39 @@ type PackageManager = "pnpm" | "npm" | "yarn" | "bun";
 const FALLBACK: PackageManager = "pnpm";
 
 const KNOWN_MANAGERS: ReadonlyArray<PackageManager> = ["pnpm", "yarn", "npm", "bun"];
+
+/**
+ * Preference order for the post-scaffold install offer's **default**: the first
+ * installed manager in this list is pre-selected. `pnpm`/`bun` lead because
+ * they're the fastest + Lunora's recommended runtimes; `npm` is the universal
+ * fallback. Every installed manager is still offered — this only sets the
+ * highlighted default.
+ */
+const INSTALL_PREFERENCE: ReadonlyArray<PackageManager> = ["pnpm", "bun", "yarn", "npm"];
+
+/** True when `manager` is on PATH — probed by running `&lt;manager> --version`. Injectable for tests. */
+type PackageManagerProbe = (manager: PackageManager) => boolean;
+
+const isManagerInstalled: PackageManagerProbe = (manager) => {
+    try {
+        return spawnSync(manager, ["--version"], { stdio: "ignore", timeout: 5000 }).status === 0;
+    } catch {
+        return false;
+    }
+};
+
+/**
+ * The package managers actually installed on this machine, in preference order
+ * ({@link INSTALL_PREFERENCE} — pnpm > bun > yarn > npm). The first entry is the
+ * recommended default for the install prompt; the whole list is what the user
+ * picks from. Empty when none are found.
+ */
+const detectInstalledManagers = (probe: PackageManagerProbe = isManagerInstalled): PackageManager[] => INSTALL_PREFERENCE.filter((manager) => probe(manager));
+
+/** The argv that installs a project's dependencies with `manager` (`&lt;manager> install`). */
+const installArgsFor = (manager: PackageManager): { args: string[]; command: string } => {
+    return { args: ["install"], command: manager };
+};
 
 /** Match a corepack-canonical `packageManager` string (`pnpm@8.0.0`) to a manager. */
 const parseDeclaredManager = (declared: unknown): PackageManager | undefined => {
@@ -77,5 +111,5 @@ const execArgsFor = (manager: PackageManager, command: string, args: ReadonlyArr
     return { args: ["exec", command, ...args], command: "pnpm" };
 };
 
-export type { PackageManager };
-export { detectPackageManager, execArgsFor };
+export type { PackageManager, PackageManagerProbe };
+export { detectInstalledManagers, detectPackageManager, execArgsFor, installArgsFor };
