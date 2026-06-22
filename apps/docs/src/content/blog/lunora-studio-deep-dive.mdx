@@ -1,6 +1,6 @@
 ---
 title: "Lunora Studio: your backend, in the open"
-description: A local admin UI for your schema, data, SQL, logs, and time-travel — running against your live edge database.
+description: A local admin UI for your schema, data, SQL, logs, and time-travel, running against your live edge database.
 publishedAt: 2026-06-12
 author: Daniel Bannert
 category: Updates
@@ -11,22 +11,25 @@ tags:
     - announcement
 ---
 
-Every Lunora app ships with **Studio** — a local admin UI for your schema, data, SQL, logs, and
-time-travel, running against your live edge database. No extra setup, no separate dashboard to host.
+Every Lunora app ships with **Studio**, a local admin UI for your schema, data, SQL, logs, and
+time-travel that runs against your live edge database. Nothing to install, no separate dashboard to
+host. Run `pnpm dev` and it's there.
 
-## See your data as it changes
+## Watch your data change in real time
 
-Studio subscribes to the same live queries your app does, so the data view updates in realtime as
-mutations land. It is the fastest way to understand what your backend is actually doing.
+Studio subscribes to the same live queries your app does, so the data view updates as mutations
+land. When something looks off, it's usually faster to watch Studio for a few seconds than to add a
+log line and reload.
 
 ## Rewind any shard
 
-Because every shard is a SQLite database with point-in-time history, Studio lets you rewind to any
-moment in the last 30 days and inspect — or restore — past state.
+Every shard is a SQLite database with point-in-time history. Studio lets you scrub back to any
+moment in the last 30 days, see what the state was, and restore it if you need to. There's no backup
+job to set up first.
 
-## Advisors built in
+## Advisors catch the footguns
 
-Schema and query lints surface unindexed foreign keys, duplicate indexes, and other footguns before
-they reach production, right inside the Advisors table.
+Schema and query lints flag the usual mistakes, unindexed foreign keys, duplicate indexes, a filter
+with no index behind it, right in the Advisors table, before they turn into a production incident.
 
-Studio is included with every project — run `lunora dev` and open it alongside your app.
+Studio comes with every project. Run `pnpm dev` and open it next to your app.

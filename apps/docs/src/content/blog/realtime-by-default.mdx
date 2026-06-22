@@ -11,31 +11,39 @@ tags:
     - durable-objects
 ---
 
-Realtime is usually bolted onto a backend after the fact — a separate websocket server, a pub/sub
-bus, and a pile of glue code to keep clients in sync. Lunora takes a different stance: **every query
-is a subscription**.
+Most backends bolt real-time on after the fact. You stand up a separate WebSocket server, add a
+pub/sub bus, and write a pile of glue to keep clients in sync with the database. It works, but now
+you've got a second system to reason about, and it drifts out of sync with your actual data more
+often than anyone likes to admit.
+
+Lunora doesn't do that. Every query is a subscription.
 
 ## One mental model
 
-When a client reads data with `useQuery`, it subscribes once. Any mutation that touches the
-underlying tables re-runs the affected queries and pushes the new result to every subscribed client.
+You read data with `useQuery`. That read _is_ the subscription. Any mutation that touches the same
+tables re-runs the affected queries and pushes the fresh result to every client watching them. No
+channels to wire up, no cache to invalidate by hand.
 
 ```ts
 const messages = useQuery(api.messages.list, { roomId });
 const send = useMutation(api.messages.send);
 ```
 
-No channels to wire up, no cache to invalidate by hand.
+That's the whole surface area. Reactivity isn't a feature you opt into here. It's just how reads
+work.
 
-## Optimistic and offline-ready
+## Optimistic, and fine offline
 
-Mutations apply optimistically on the client and reconcile when the server confirms. If the network
-drops, writes are queued durably and retried — keyed by a client id so they never duplicate.
+Mutations apply on the client right away and reconcile when the server confirms. Lose the network
+mid-write and the change gets queued durably and retried, keyed by a client id so a flaky connection
+never double-sends.
 
-## Powered by Durable Objects
+## How it actually works
 
-Each shard is a SQLite database running inside a Durable Object at the edge, with optimistic
-concurrency control and hibernated websocket subscriptions. That is what makes live updates cheap
-and consistent without a central server.
+Each shard is a SQLite database living inside a Durable Object at the edge, with optimistic
+concurrency control and hibernated WebSocket subscriptions. An idle connection costs you almost
+nothing, which is what makes live updates cheap and consistent without a central server fanning
+everything out.
 
-This is just the start — follow along on the [blog](/blog) as we go deeper on the internals.
+There's a lot more under the hood. I'll go deeper on the internals in future posts, so
+[follow along](/blog).
