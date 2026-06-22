@@ -753,7 +753,58 @@ async function copyRootMarkdown() {
     }
 }
 
-Promise.all([main(), copyRootMarkdown()]).catch((error) => {
+/**
+ * Copies each package's generated CHANGELOG.md into
+ * src/content/changelogs/<slug>.md (with a `title` frontmatter naming the
+ * package) so the changelog route can bundle and render every package's
+ * release notes. Packages without a CHANGELOG.md (not yet released) are
+ * skipped. The destination dir is gitignored — these are build artifacts.
+ */
+async function copyChangelogs() {
+    const destDir = path.join(__dirname, "..", "src", "content", "changelogs");
+    await fs.mkdir(destDir, { recursive: true });
+
+    const entries = await fs.readdir(PACKAGES_DIR, { withFileTypes: true });
+    let copied = 0;
+
+    for (const entry of entries) {
+        if (!entry.isDirectory()) {
+            continue;
+        }
+
+        const changelogPath = path.join(PACKAGES_DIR, entry.name, "CHANGELOG.md");
+
+        if (!existsSync(changelogPath)) {
+            continue;
+        }
+
+        const slug = await slugForPackageDir(entry.name);
+
+        let npmName = slug;
+
+        try {
+            const pkgJson = JSON.parse(await fs.readFile(path.join(PACKAGES_DIR, entry.name, "package.json"), "utf8"));
+            npmName = pkgJson.name ?? slug;
+        } catch {
+            // ignore — fall back to the slug as the display title
+        }
+
+        const body = await fs.readFile(changelogPath, "utf8");
+
+        // The page already renders the package name as a section title, so drop
+        // the redundant "## @scope/name " prefix from each version heading,
+        // leaving just "## 1.2.3 (date)".
+        const trimmed = body.replaceAll(`# ${npmName} `, "# ");
+        const frontmatter = `---\ntitle: "${npmName}"\n---\n\n`;
+
+        await fs.writeFile(path.join(destDir, `${slug}.md`), frontmatter + trimmed);
+        copied += 1;
+    }
+
+    console.log(`Copied ${copied} package changelog(s) → src/content/changelogs`);
+}
+
+Promise.all([main(), copyRootMarkdown(), copyChangelogs()]).catch((error) => {
     console.error("Fatal error:", error);
     process.exit(1);
 });

@@ -58,8 +58,8 @@ const Changelog: FC<{ data: { key: string; MdxContent: FC; title: string }[] }> 
                     patternPosition="bottom"
                 >
                     <div className="col-span-2 flex h-full items-center justify-center">
-                        <div className="px-24">
-                            <h1 className="mt-14 font-sans text-5xl font-semibold tracking-tighter">
+                        <div className="px-6 sm:px-12 lg:px-24">
+                            <h1 className="mt-14 font-sans text-4xl font-semibold tracking-tighter text-balance sm:text-5xl">
                                 All of the changes made will be <span className="">available here.</span>
                             </h1>
                             <p className="mt-4 text-sm">
