@@ -76,6 +76,6 @@ describe("lunora init — interactive offer", () => {
 
         expect(result.code).toBe(0);
         expect(existsSync(join(workdir, "app2", "lunora", "auth", "index.ts"))).toBe(false);
-        expect(lines.join("\n")).toMatch(/lunora add auth/);
+        expect(lines.join("\n")).toMatch(/lunora add/);
     });
 });

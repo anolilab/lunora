@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { FeatureItem } from "../../src/commands/add/features";
 import type { StackFeature } from "../../src/commands/init/offer-extras";
 import { offerRegistryExtras } from "../../src/commands/init/offer-extras";
 import type { Logger } from "../../src/util/logger";
@@ -19,19 +18,19 @@ describe("offerRegistryExtras", () => {
     it("prints a later-setup hint and applies nothing when non-interactive", async () => {
         expect.assertions(2);
 
-        const apply = vi.fn<(names: ReadonlyArray<FeatureItem>) => Promise<boolean>>(async () => true);
+        const apply = vi.fn<(names: ReadonlyArray<string>) => Promise<boolean>>(async () => true);
         const { lines, logger } = makeLogger();
 
         await offerRegistryExtras({ apply, interactive: false, logger, multiSelect: async () => ["auth", "email"], select: async () => "auth" });
 
         expect(apply).not.toHaveBeenCalled();
-        expect(lines.join("\n")).toMatch(/lunora add auth/);
+        expect(lines.join("\n")).toMatch(/lunora add/);
     });
 
     it("applies the chosen auth provider and then email when both are selected", async () => {
         expect.assertions(1);
 
-        const applied: FeatureItem[][] = [];
+        const applied: string[][] = [];
 
         await offerRegistryExtras({
             apply: async (names) => {
@@ -51,7 +50,7 @@ describe("offerRegistryExtras", () => {
     it("applies only email when only email is selected", async () => {
         expect.assertions(1);
 
-        const applied: FeatureItem[][] = [];
+        const applied: string[][] = [];
 
         await offerRegistryExtras({
             apply: async (names) => {
@@ -68,10 +67,31 @@ describe("offerRegistryExtras", () => {
         expect(applied).toStrictEqual([["mail"]]);
     });
 
+    it("applies non-auth/email features as their registry item directly, in selection order", async () => {
+        expect.assertions(1);
+
+        const applied: string[][] = [];
+
+        await offerRegistryExtras({
+            apply: async (names) => {
+                applied.push([...names]);
+
+                return true;
+            },
+            interactive: true,
+            logger: makeLogger().logger,
+            multiSelect: async () => ["storage", "ratelimit", "crons", "presence", "backup"],
+            select: async () => "auth",
+        });
+
+        // No sub-prompt for these — the picked value IS the registry item name.
+        expect(applied).toStrictEqual([["storage"], ["ratelimit"], ["crons"], ["presence"], ["backup"]]);
+    });
+
     it("applies nothing when the multi-select returns an empty selection", async () => {
         expect.assertions(1);
 
-        const apply = vi.fn<(names: ReadonlyArray<FeatureItem>) => Promise<boolean>>(async () => true);
+        const apply = vi.fn<(names: ReadonlyArray<string>) => Promise<boolean>>(async () => true);
 
         await offerRegistryExtras({
             apply,
@@ -87,7 +107,7 @@ describe("offerRegistryExtras", () => {
     it("falls back to the default auth item when the provider select returns undefined", async () => {
         expect.assertions(1);
 
-        const applied: FeatureItem[][] = [];
+        const applied: string[][] = [];
 
         await offerRegistryExtras({
             apply: async (names) => {

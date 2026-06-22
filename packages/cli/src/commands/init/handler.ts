@@ -778,7 +778,7 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
     // stdout the live spinner repaints, which would garble the terminal — but
     // errors/warnings still surface. Off a TTY there's no spinner, so the full
     // logger is kept and CI retains the detail.
-    const apply = async (names: ReadonlyArray<FeatureItem>): Promise<boolean> => {
+    const apply = async (names: ReadonlyArray<string>): Promise<boolean> => {
         const applyLogger: Logger = isInteractive()
             ? {
                   error: (message) => {
