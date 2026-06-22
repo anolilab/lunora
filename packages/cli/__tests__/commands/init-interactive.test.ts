@@ -53,7 +53,7 @@ describe("lunora init — interactive offer", () => {
                 select: async () => "auth",
             },
             registryFrom: registryRoot,
-            templateType: "vite-react",
+            templateType: "tanstack-start-react",
         });
 
         expect(result.code).toBe(0);
@@ -70,7 +70,7 @@ describe("lunora init — interactive offer", () => {
             logger,
             name: "app2",
             registryFrom: registryRoot,
-            templateType: "vite-react",
+            templateType: "tanstack-start-react",
             yes: true,
         });
 

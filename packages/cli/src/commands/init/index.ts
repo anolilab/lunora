@@ -21,10 +21,12 @@ const initCommand: Command = {
     options: [
         {
             alias: "t",
-            // No default: when omitted, an interactive run shows a template picker
-            // and a non-interactive run errors (asking for -t) rather than
-            // silently scaffolding vite-react.
-            description: "Template to scaffold (vite-react [default] | standalone | astro | nuxt | sveltekit | tanstack-start-react | tanstack-start-solid)",
+            // No default: when omitted, an interactive run shows the framework
+            // picker (default React overlay) and a non-interactive run errors.
+            // For React/Vue/Solid/Svelte SPAs use `--vite <framework>` (overlay);
+            // `-t` selects a bespoke template.
+            description:
+                "Bespoke template (standalone | astro | nuxt | sveltekit | tanstack-start-react | tanstack-start-solid). For an SPA use --vite react|vue|solid|svelte.",
             name: "template",
             type: String,
         },

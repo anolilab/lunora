@@ -35,7 +35,7 @@ describe("lunora init", () => {
     });
 
     describe("lunora init", () => {
-        it("vite template scaffolds expected files", async () => {
+        it("a bespoke template scaffolds its expected files", async () => {
             expect.assertions(11);
 
             const result = await runInitCommand({
@@ -43,7 +43,7 @@ describe("lunora init", () => {
                 from: templatesRoot,
                 logger: silentLogger(),
                 name: "my-app",
-                templateType: "vite-react",
+                templateType: "tanstack-start-react",
             });
 
             expect(result.code).toBe(0);
@@ -53,8 +53,8 @@ describe("lunora init", () => {
             expect(existsSync(join(target, "package.json"))).toBe(true);
             expect(existsSync(join(target, "lunora", "schema.ts"))).toBe(true);
             expect(existsSync(join(target, "lunora", "messages.ts"))).toBe(true);
-            expect(existsSync(join(target, "src", "main.tsx"))).toBe(true);
-            expect(existsSync(join(target, "src", "App.tsx"))).toBe(true);
+            expect(existsSync(join(target, "src", "router.tsx"))).toBe(true);
+            expect(existsSync(join(target, "src", "routes", "__root.tsx"))).toBe(true);
             expect(existsSync(join(target, "vite.config.ts"))).toBe(true);
             expect(existsSync(join(target, "wrangler.jsonc"))).toBe(true);
             expect(existsSync(join(target, "tsconfig.json"))).toBe(true);
@@ -76,7 +76,7 @@ describe("lunora init", () => {
                 // Both pnpm + npm "installed" → pnpm is preferred (the default).
                 packageManagerProbe: (manager) => manager === "pnpm" || manager === "npm",
                 spawner,
-                templateType: "vite-react",
+                templateType: "tanstack-start-react",
             });
 
             expect(result.code).toBe(0);
@@ -97,7 +97,7 @@ describe("lunora init", () => {
                 name: "declined-app",
                 packageManagerProbe: () => true,
                 spawner,
-                templateType: "vite-react",
+                templateType: "tanstack-start-react",
             });
 
             expect(result.code).toBe(0);
@@ -116,7 +116,7 @@ describe("lunora init", () => {
                 name: "ci-app",
                 packageManagerProbe: () => true,
                 spawner,
-                templateType: "vite-react",
+                templateType: "tanstack-start-react",
             });
 
             expect(result.code).toBe(0);
@@ -131,16 +131,16 @@ describe("lunora init", () => {
                 from: templatesRoot,
                 logger: silentLogger(),
                 name: "rainbow",
-                templateType: "vite-react",
+                templateType: "tanstack-start-react",
             });
 
             const pkg = readFileSync(join(workdir, "rainbow", "package.json"), "utf8");
             const wrangler = readFileSync(join(workdir, "rainbow", "wrangler.jsonc"), "utf8");
-            const html = readFileSync(join(workdir, "rainbow", "index.html"), "utf8");
+            const root = readFileSync(join(workdir, "rainbow", "src", "routes", "__root.tsx"), "utf8");
 
             expect(pkg).toContain('"name": "rainbow"');
             expect(wrangler).toContain('"name": "rainbow"');
-            expect(html).toContain("<title>rainbow</title>");
+            expect(root).toContain('title: "rainbow"');
         });
 
         it("vite template package.json references the lunora packages (umbrella base)", async () => {
@@ -151,7 +151,7 @@ describe("lunora init", () => {
                 from: templatesRoot,
                 logger: silentLogger(),
                 name: "demo",
-                templateType: "vite-react",
+                templateType: "tanstack-start-react",
             });
 
             const pkg = readFileSync(join(workdir, "demo", "package.json"), "utf8");
@@ -175,7 +175,7 @@ describe("lunora init", () => {
                 from: templatesRoot,
                 logger: silentLogger(),
                 name: "stamped",
-                templateType: "vite-react",
+                templateType: "tanstack-start-react",
             });
 
             const pkg = JSON.parse(readFileSync(join(workdir, "stamped", "package.json"), "utf8")) as {
@@ -190,8 +190,8 @@ describe("lunora init", () => {
             expect(pkg.dependencies["@lunora/react"]).toBe(tag);
             expect(pkg.devDependencies["@lunora/vite"]).toBe(tag);
             // Third-party deps keep their template ranges verbatim.
-            expect(pkg.dependencies["react-dom"]).toBe("^19.2.7");
-            expect(pkg.devDependencies.wrangler).toBe("^4.100.0");
+            expect(pkg.dependencies["react-dom"]).toBe("^19.0.0");
+            expect(pkg.devDependencies.wrangler).toBe("^4.74.0");
         });
 
         it("standalone template scaffolds a worker entry but no frontend files", async () => {
@@ -301,7 +301,7 @@ describe("lunora init", () => {
                 from: templatesRoot,
                 logger: silentLogger(),
                 name: "dup",
-                templateType: "vite-react",
+                templateType: "tanstack-start-react",
             });
 
             const errors: string[] = [];
@@ -311,7 +311,7 @@ describe("lunora init", () => {
                 from: templatesRoot,
                 logger: { ...silentLogger(), error: (message) => errors.push(message) },
                 name: "dup",
-                templateType: "vite-react",
+                templateType: "tanstack-start-react",
             });
 
             expect(result.code).toBe(1);
@@ -328,14 +328,14 @@ describe("lunora init", () => {
                 from: join(workdir, "does-not-exist"),
                 logger: { ...silentLogger(), error: (message) => errors.push(message) },
                 name: "broken",
-                templateType: "vite-react",
+                templateType: "tanstack-start-react",
             });
 
             expect(result.code).toBe(1);
             expect(errors.join("\n")).toContain("template not found in local source");
         });
 
-        it("isTemplate accepts all 7 real template dir names and next", () => {
+        it("isTemplate accepts the 6 real template dir names and next (not the removed vite-react)", () => {
             expect.assertions(9);
 
             expect(isTemplate("astro")).toBe(true);
@@ -344,8 +344,8 @@ describe("lunora init", () => {
             expect(isTemplate("sveltekit")).toBe(true);
             expect(isTemplate("tanstack-start-react")).toBe(true);
             expect(isTemplate("tanstack-start-solid")).toBe(true);
-            expect(isTemplate("vite-react")).toBe(true);
             expect(isTemplate("next")).toBe(true);
+            expect(isTemplate("vite-react")).toBe(false);
             expect(isTemplate("unknown-framework")).toBe(false);
         });
 
@@ -377,13 +377,15 @@ describe("lunora init", () => {
         it("an explicit --ref overrides the version-derived default", () => {
             expect.assertions(1);
 
-            expect(resolveTemplateSource("vite-react", undefined, "alpha")).toBe("gh:anolilab/lunora/templates/vite-react#alpha");
+            expect(resolveTemplateSource("tanstack-start-react", undefined, "alpha")).toBe("gh:anolilab/lunora/templates/tanstack-start-react#alpha");
         });
 
         it("a full --source wins over both --ref and the default", () => {
             expect.assertions(1);
 
-            expect(resolveTemplateSource("vite-react", "gh:me/fork/templates/vite-react#main", "alpha")).toBe("gh:me/fork/templates/vite-react#main");
+            expect(resolveTemplateSource("tanstack-start-react", "gh:me/fork/templates/tanstack-start-react#main", "alpha")).toBe(
+                "gh:me/fork/templates/tanstack-start-react#main",
+            );
         });
     });
 });

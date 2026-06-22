@@ -30,7 +30,7 @@ import type { OverlayFramework } from "./overlay/adapters";
 import { ADAPTERS, isOverlayFramework } from "./overlay/adapters";
 import { applyLunoraOverlay } from "./overlay/apply";
 
-type Template = "astro" | "next" | "nuxt" | "standalone" | "sveltekit" | "tanstack-start-react" | "tanstack-start-solid" | "vite-react";
+type Template = "astro" | "next" | "nuxt" | "standalone" | "sveltekit" | "tanstack-start-react" | "tanstack-start-solid";
 
 interface InitCommandOptions {
     /**
@@ -820,9 +820,21 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
     });
 };
 
-/** The templates offered in the interactive picker (excludes the not-yet-available `next`). */
-const TEMPLATE_OPTIONS: ReadonlyArray<{ description: string; label: string; value: Template }> = [
-    { description: "React SPA on Vite + the Lunora plugin (the default)", label: "React + Vite", value: "vite-react" },
+/** Default framework when none is specified — the React create-vite overlay. */
+const DEFAULT_FRAMEWORK = "react";
+
+/**
+ * The frameworks offered in the interactive picker. The create-vite frameworks
+ * (`react` / `vue` / `solid` / `svelte`) scaffold via the overlay engine — the
+ * official create-vite base plus the Lunora layer — while the rest are bespoke
+ * Lunora templates. (`vanilla` is overlay-only via `--vite`; `next` is hidden
+ * until available.)
+ */
+const FRAMEWORK_CHOICES: ReadonlyArray<{ description: string; label: string; value: string }> = [
+    { description: "React SPA — official create-vite base + the Lunora layer (the default)", label: "React", value: "react" },
+    { description: "Vue SPA — create-vite base + Lunora", label: "Vue", value: "vue" },
+    { description: "Solid SPA — create-vite base + Lunora", label: "Solid", value: "solid" },
+    { description: "Svelte SPA — create-vite base + Lunora", label: "Svelte", value: "svelte" },
     { description: "TanStack Start (React) — SSR with live-loader routes", label: "TanStack Start · React", value: "tanstack-start-react" },
     { description: "TanStack Start (Solid)", label: "TanStack Start · Solid", value: "tanstack-start-solid" },
     { description: "Astro + a standalone Lunora worker", label: "Astro", value: "astro" },
@@ -831,26 +843,37 @@ const TEMPLATE_OPTIONS: ReadonlyArray<{ description: string; label: string; valu
     { description: "Worker only — no frontend", label: "Standalone", value: "standalone" },
 ];
 
-/** Comma-joined template values for the non-interactive error hint. */
-const TEMPLATE_VALUES = TEMPLATE_OPTIONS.map((option) => option.value).join(", ");
+/** Comma-joined choice values for the non-interactive error hint. */
+const CHOICE_VALUES = FRAMEWORK_CHOICES.map((choice) => choice.value).join(", ");
+
+/** What to scaffold: a create-vite overlay framework, or a bespoke Lunora template. */
+type ScaffoldChoice = { framework: string; kind: "overlay" } | { kind: "template"; templateType: Template };
+
+/** Map a picker/flag value to a scaffold choice — create-vite frameworks overlay, everything else is a bespoke template. */
+const toScaffoldChoice = (value: string): ScaffoldChoice =>
+    isOverlayFramework(value) ? { framework: value, kind: "overlay" } : { kind: "template", templateType: value as Template };
 
 /**
- * Resolve which template to scaffold. An explicit `-t` wins; the `--vite` overlay
- * path doesn't use a bespoke template (value unused downstream); otherwise an
- * interactive run shows the picker and everything else takes the `vite-react`
- * default. The non-interactive "no template + no --yes" case is rejected earlier
- * by {@link scaffoldNewProject}'s guard, so it never reaches the silent default.
+ * Resolve what to scaffold. An explicit `--vite` framework or `-t` template
+ * wins; otherwise an interactive run shows the framework picker, and a
+ * `--yes` run takes the React overlay default. The non-interactive
+ * "nothing specified + no --yes" case is rejected earlier by
+ * {@link nonInteractiveInitError}, so it never reaches the silent default.
  */
-const resolveTemplateType = async (options: InitCommandOptions): Promise<Template> => {
+const resolveScaffoldChoice = async (options: InitCommandOptions): Promise<ScaffoldChoice> => {
+    if (options.vite !== undefined) {
+        return { framework: options.vite, kind: "overlay" };
+    }
+
     if (options.templateType !== undefined) {
-        return options.templateType;
+        return { kind: "template", templateType: options.templateType };
     }
 
-    if (options.vite !== undefined || !isInteractive() || options.yes === true) {
-        return "vite-react";
+    if (!isInteractive() || options.yes === true) {
+        return { framework: DEFAULT_FRAMEWORK, kind: "overlay" };
     }
 
-    return (await tuiSelect("Which template would you like?", TEMPLATE_OPTIONS, { default: "vite-react" })) ?? "vite-react";
+    return toScaffoldChoice((await tuiSelect("Which framework would you like?", FRAMEWORK_CHOICES, { default: DEFAULT_FRAMEWORK })) ?? DEFAULT_FRAMEWORK);
 };
 
 /**
@@ -872,7 +895,7 @@ const nonInteractiveInitError = (options: InitCommandOptions): string | undefine
     }
 
     if (options.templateType === undefined && options.vite === undefined) {
-        missing.push(`a template (\`-t <template>\`, one of: ${TEMPLATE_VALUES})`);
+        missing.push(`a framework (\`-t <template>\` or \`--vite <framework>\`, one of: ${CHOICE_VALUES})`);
     }
 
     if (missing.length === 0) {
@@ -898,13 +921,7 @@ const scaffoldNewProject = async (options: InitCommandOptions, cwd: string): Pro
     // No name argument → ask for one (a TTY shows the prompt; with `--yes` /
     // non-interactive it takes the `lunora-app` default).
     const name = options.name ?? (await tuiText("What should we call your project?", { default: "lunora-app", placeholder: "lunora-app" }));
-    const templateType = await resolveTemplateType(options);
-
-    if (templateType === "next") {
-        options.logger.warn('template "next" is not yet available — re-run with `-t vite-react` or `-t standalone`.');
-
-        return { code: 1, files: [], target: "" };
-    }
+    const choice = await resolveScaffoldChoice(options);
 
     // Guard the project name against path traversal: it becomes a directory
     // under cwd, so a name containing separators or `..` could scaffold outside
@@ -927,18 +944,26 @@ const scaffoldNewProject = async (options: InitCommandOptions, cwd: string): Pro
         }
     }
 
-    // Overlay path: `--vite <framework>` fetches a stock create-vite base and
-    // applies the Lunora layer (no bespoke template). Takes precedence.
-    if (options.vite !== undefined) {
-        if (!isOverlayFramework(options.vite)) {
-            options.logger.error(`init: unknown --vite framework "${options.vite}". Supported: ${Object.keys(ADAPTERS).join(", ")}.`);
+    // Overlay path: a create-vite framework (the default, `--vite`, or the
+    // picker) fetches a stock create-vite base and applies the Lunora layer.
+    if (choice.kind === "overlay") {
+        if (!isOverlayFramework(choice.framework)) {
+            options.logger.error(`init: unknown framework "${choice.framework}". Supported overlays: ${Object.keys(ADAPTERS).join(", ")}.`);
 
             return { code: 1, files: [], target };
         }
 
         mkdirSync(target, { recursive: true });
 
-        return scaffoldViteOverlay({ framework: options.vite, logger: options.logger, name, overlayBaseFrom: options.overlayBaseFrom, target });
+        return scaffoldViteOverlay({ framework: choice.framework, logger: options.logger, name, overlayBaseFrom: options.overlayBaseFrom, target });
+    }
+
+    const { templateType } = choice;
+
+    if (templateType === "next") {
+        options.logger.warn('template "next" is not yet available — re-run with `--vite react` or `-t standalone`.');
+
+        return { code: 1, files: [], target };
     }
 
     // Local-fallback path: `--from /path/to/templates` skips the network and
@@ -995,7 +1020,7 @@ const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandR
     return result;
 };
 
-/** Narrow a raw `--template` value to a known {@link Template} (defaults to vite-react). */
+/** Narrow a raw `--template` value to a known {@link Template}. */
 const isTemplate = (value: unknown): value is Template =>
     value === "astro" ||
     value === "next" ||
@@ -1003,8 +1028,7 @@ const isTemplate = (value: unknown): value is Template =>
     value === "standalone" ||
     value === "sveltekit" ||
     value === "tanstack-start-react" ||
-    value === "tanstack-start-solid" ||
-    value === "vite-react";
+    value === "tanstack-start-solid";
 
 /** Narrow the `--ci` value to a {@link CiProvider}, warning (and ignoring it) on an unknown provider. */
 const resolveCiProvider = (raw: string | undefined, logger: Logger): CiProvider | undefined => {
@@ -1023,14 +1047,10 @@ const resolveCiProvider = (raw: string | undefined, logger: Logger): CiProvider 
 
 /** `lunora init [name]` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<InitOptions> = defineHandler<InitOptions>(({ argument, cwd, logger, options }) => {
-    // Leave `templateType` undefined when no `-t` was passed, so the scaffolder
-    // can show the interactive picker (TTY) or error (non-TTY). An explicit but
-    // unknown `-t` falls back to the default.
-    let templateType: Template | undefined;
-
-    if (options.template !== undefined) {
-        templateType = isTemplate(options.template) ? options.template : "vite-react";
-    }
+    // Leave `templateType` undefined when no `-t` was passed (or an unknown one
+    // was), so the scaffolder shows the interactive picker (TTY) / errors
+    // (non-TTY) / takes the React-overlay default rather than a stale template.
+    const templateType: Template | undefined = options.template !== undefined && isTemplate(options.template) ? options.template : undefined;
 
     return runInitCommand({
         allowUnsafeSource: options.allowUnsafeSource === true,

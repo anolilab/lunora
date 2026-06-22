@@ -17,7 +17,7 @@
 # Usage:
 #   pnpm run test:templates                 # full matrix
 #   ./scripts/template-build-smoke.sh       # same
-#   ./scripts/template-build-smoke.sh vite-react  # single template (fast iteration)
+#   ./scripts/template-build-smoke.sh tanstack-start-react  # single template (fast iteration)
 #
 # Scaffolding note: `lunora init -t` only supports vite|standalone|tanstack-start
 # (next is unfinished). All 8 templates are obtained by direct `cp -R` from the

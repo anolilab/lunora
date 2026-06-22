@@ -213,11 +213,12 @@ describe("lunora CLI entry", () => {
             expect(existsSync(join(target, "vite.config.ts"))).toBe(false);
         });
 
-        it("default template (no `-t` flag) with `--yes` is vite", async () => {
+        it("default (no `-t`, no `--vite`) with `--yes` scaffolds the React overlay", async () => {
             expect.assertions(2);
 
-            // No TTY here, so without `-t` the template is ambiguous; `--yes`
-            // opts into the vite-react default rather than erroring.
+            // No `-t`/`--vite` → the React create-vite overlay is the default;
+            // `--yes` opts into it rather than erroring. (Fetches create-vite, so
+            // this one exercises the network path, unlike the `--from` tests.)
             const code = await runCli({
                 argv: ["init", "argv_default", "--from", templatesRoot, "--yes"],
                 cwd: workdir,
