@@ -30,7 +30,7 @@
         "lunora": "./dist/bin.mjs"
     },
     "files": [
-        "dist",
+        "./dist",
         "__assets__",
         "skills",
         "README.md",
@@ -72,8 +72,6 @@
         "@lunora/container": "1.0.0-alpha.1",
         "@lunora/d1": "1.0.0-alpha.3",
         "@lunora/seed": "1.0.0-alpha.1",
-        "@lunora/studio": "1.0.0-alpha.2",
-        "@lunora/values": "1.0.0-alpha.1",
         "@visulima/cerebro": "3.0.0-alpha.32",
         "@visulima/fs": "5.0.0-alpha.32",
         "@visulima/pail": "4.0.0-alpha.22",

@@ -5,7 +5,6 @@ import transformer from "@visulima/packem/transformer/esbuild";
 // eslint-disable-next-line import/no-unused-modules -- consumed by packem CLI
 export default defineConfig({
     runtime: "node",
-    failOnWarn: false,
     rollup: {
         dts: {
             oxc: true,
@@ -15,4 +14,15 @@ export default defineConfig({
         },
     },
     transformer,
+    cjsInterop: true,
+    validation: {
+        dependencies: {
+            unused: {
+                exclude: ["@bomb.sh/tab", "cfonts", "react-reconciler"],
+            },
+            hoisted: {
+                exclude: ["@visulima/interactive-manager", "@visulima/is-ansi-color-supported"],
+            },
+        },
+    },
 }) as BuildConfig;
