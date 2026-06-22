@@ -83,6 +83,8 @@ interface AddCommandOptions {
     out?: string;
     /** Force-overwrite existing files (take the incoming copy) instead of skipping/conflicting. */
     overwrite?: boolean;
+    /** Override the git ref (branch, tag, or commit) items are fetched from (default: version-derived); appended to the `source` base when that is set. Ignored when `from` is set. */
+    ref?: string;
     /** Override the remote registry source base (default gh:anolilab/lunora/registry). */
     source?: string;
     /** Skip the package.json mutation confirmation prompt. */

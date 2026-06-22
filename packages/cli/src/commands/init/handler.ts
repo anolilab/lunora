@@ -1,6 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
 
 import { isInteractive, promptMultiSelect, promptSelect } from "@lunora/config";
 import { walkSync } from "@visulima/fs";
@@ -15,6 +14,7 @@ import type { DetectedFramework, FrameworkDetection } from "../../util/detect-fr
 import { detectFramework } from "../../util/detect-framework";
 import type { Logger } from "../../util/logger";
 import { patchViteConfig } from "../../util/patch-vite-config";
+import { resolveSourceRef } from "../../util/source-ref";
 import type { FeatureItem } from "../add/features";
 import { runAddCommand } from "../registry";
 import type { InitOptions } from "./index";
@@ -68,6 +68,13 @@ interface InitCommandOptions {
      */
     prompt?: Pick<OfferDeps, "multiSelect" | "select">;
 
+    /**
+     * Override the git ref (branch, tag, or commit) the default template source
+     * is fetched from. Takes precedence over the version-derived ref. Ignored
+     * when `source` or `from` is set.
+     */
+    ref?: string;
+
     /** Local registry root for the offer's `runAddCommand` (offline / tests). Mirrors `from` but for registry items. */
     registryFrom?: string;
     /** Override the remote registry source base for the offer (default `gh:anolilab/lunora/registry`). */
@@ -75,8 +82,10 @@ interface InitCommandOptions {
 
     /**
      * Override the remote source giget downloads from. Default:
-     * `gh:anolilab/lunora/templates/&lt;templateType>#v&lt;cliVersion>`. Tests
-     * typically use `from` instead to skip the network.
+     * `gh:anolilab/lunora/templates/&lt;templateType>#&lt;ref>`, where `&lt;ref>` is
+     * the `ref` option when set, else derived from the CLI version (pre-release
+     * channels → their branch, stable → `main`). Tests typically use `from`
+     * instead to skip the network.
      */
     source?: string;
     templateType?: Template;
@@ -133,51 +142,6 @@ export const send = mutation
 `;
 
 const DEFAULT_SOURCE_BASE = "gh:anolilab/lunora/templates";
-const DEFAULT_SOURCE_REF_FALLBACK = "alpha";
-
-/**
- * Pin the default template ref to the CLI's own published version (`vX.Y.Z`)
- * so a given CLI release always fetches the matching template snapshot.
- * Falls back to the alpha channel when the CLI is running unpublished
- * (version `"0.0.0"`) or its package.json can't be read.
- */
-const resolveCliVersion = (): string => {
-    try {
-        // Walk up from this module's directory to find @lunora/cli's package.json.
-        // Works whether the file is the built `dist/index.mjs` or the source under `src/`.
-        let directory = dirname(fileURLToPath(import.meta.url));
-
-        for (let index = 0; index < 5; index += 1) {
-            const candidate = join(directory, "package.json");
-
-            if (existsSync(candidate)) {
-                const parsed = JSON.parse(readFileSync(candidate, "utf8")) as { name?: string; version?: string };
-
-                if (parsed.name === "@lunora/cli" && typeof parsed.version === "string") {
-                    return parsed.version;
-                }
-            }
-
-            const parent = dirname(directory);
-
-            if (parent === directory) {
-                break;
-            }
-
-            directory = parent;
-        }
-    } catch {
-        // Fall through to the fallback.
-    }
-
-    return "0.0.0";
-};
-
-const resolveDefaultSourceRef = (): string => {
-    const version = resolveCliVersion();
-
-    return version === "0.0.0" ? DEFAULT_SOURCE_REF_FALLBACK : `v${version}`;
-};
 
 const isTextFile = (filePath: string): boolean => {
     const lastDot = filePath.lastIndexOf(".");
@@ -226,12 +190,12 @@ const copyTemplate = (sourceDirectory: string, target: string, name: string): Re
     return written;
 };
 
-const resolveTemplateSource = (templateType: Template, source: string | undefined): string => {
+const resolveTemplateSource = (templateType: Template, source: string | undefined, ref: string | undefined): string => {
     if (source !== undefined && source.length > 0) {
         return source;
     }
 
-    return `${DEFAULT_SOURCE_BASE}/${templateType}#${resolveDefaultSourceRef()}`;
+    return `${DEFAULT_SOURCE_BASE}/${templateType}#${resolveSourceRef(ref)}`;
 };
 
 /**
@@ -279,18 +243,20 @@ const scaffoldFromLocal = (fromRoot: string, templateType: Template, target: str
  * identical to the local path so we have one rule for "what counts as a
  * text file" and one place that decides the destination layout.
  */
-const scaffoldFromRemote = async (
-    source: string | undefined,
-    templateType: Template,
-    target: string,
-    name: string,
-    logger: Logger,
-): Promise<InitCommandResult> => {
+const scaffoldFromRemote = async (options: {
+    logger: Logger;
+    name: string;
+    ref: string | undefined;
+    source: string | undefined;
+    target: string;
+    templateType: Template;
+}): Promise<InitCommandResult> => {
+    const { logger, name, ref, source, target, templateType } = options;
     const stagingRoot = mkdtempSync(join(tmpdir(), "lunora-init-fetch-"));
     const stagingDirectory = join(stagingRoot, "template");
 
     try {
-        const remote = resolveTemplateSource(templateType, source);
+        const remote = resolveTemplateSource(templateType, source, ref);
 
         logger.info(`fetching template from ${remote}`);
 
@@ -565,6 +531,7 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
             from: options.registryFrom,
             logger: options.logger,
             names: [...names],
+            ref: options.ref,
             source: options.registrySource,
             yes: true,
         });
@@ -630,7 +597,7 @@ const scaffoldNewProject = async (options: InitCommandOptions, cwd: string): Pro
         return { code: 1, files: [], target };
     }
 
-    return scaffoldFromRemote(options.source, templateType, target, name, options.logger);
+    return scaffoldFromRemote({ logger: options.logger, name, ref: options.ref, source: options.source, target, templateType });
 };
 
 /**
@@ -695,12 +662,13 @@ const execute: CommandHandler<InitOptions> = defineHandler<InitOptions>(({ argum
         interactive: options.interactive === true ? true : undefined,
         logger,
         name: argument[0],
+        ref: options.ref,
         source: options.source,
         templateType: template,
         yes: options.yes === true,
     });
 });
 
-export { execute, isTemplate };
+export { execute, isTemplate, resolveTemplateSource };
 export type { InitCommandOptions, InitCommandResult, Template };
 export { runInitCommand };

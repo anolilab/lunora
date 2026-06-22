@@ -23,13 +23,14 @@ const execute: CommandHandler<RegistryOptions> = defineHandler<RegistryOptions>(
             logger,
             names,
             overwrite: options.overwrite === true,
+            ref: options.ref,
             source: options.source,
             yes: options.yes === true,
         });
     }
 
     if (subcommand === "list") {
-        return runAddCommand({ cwd, from: options.from, json: options.json === true, list: true, logger, names: [], source: options.source });
+        return runAddCommand({ cwd, from: options.from, json: options.json === true, list: true, logger, names: [], ref: options.ref, source: options.source });
     }
 
     if (subcommand === "view") {
@@ -39,6 +40,7 @@ const execute: CommandHandler<RegistryOptions> = defineHandler<RegistryOptions>(
             from: options.from,
             logger,
             names,
+            ref: options.ref,
             source: options.source,
         });
     }

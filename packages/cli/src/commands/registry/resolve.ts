@@ -9,11 +9,11 @@ import { join } from "@visulima/path";
 import { downloadTemplate } from "giget";
 
 import type { Logger } from "../../util/logger";
+import { resolveSourceRef } from "../../util/source-ref";
 import parseManifest from "./manifest";
 import type { AddCommandOptions, RegistryManifest, ResolvedItem } from "./types";
 
 const DEFAULT_SOURCE_BASE = "gh:anolilab/lunora/registry";
-const DEFAULT_SOURCE_REF = "alpha";
 
 /**
  * A registry item name is a single path segment / identifier. It becomes a
@@ -112,7 +112,7 @@ const resolveItemDirectory = async (name: string, options: AddCommandOptions): P
 
     const base = options.source ?? DEFAULT_SOURCE_BASE;
 
-    return fetchToStaging(`${base}/${name}#${DEFAULT_SOURCE_REF}`, "item", options.logger);
+    return fetchToStaging(`${base}/${name}#${resolveSourceRef(options.ref)}`, "item", options.logger);
 };
 
 /**
@@ -129,7 +129,7 @@ const resolveRegistryRoot = async (options: AddCommandOptions): Promise<{ cleanu
     }
 
     const base = options.source ?? DEFAULT_SOURCE_BASE;
-    const { cleanup, directory } = await fetchToStaging(`${base}#${DEFAULT_SOURCE_REF}`, "registry", options.logger);
+    const { cleanup, directory } = await fetchToStaging(`${base}#${resolveSourceRef(options.ref)}`, "registry", options.logger);
 
     return { cleanup, root: directory };
 };

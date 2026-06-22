@@ -17,6 +17,7 @@ const addCommand: Command = {
         ["lunora add email", "Add transactional email (Cloudflare Email Workers + dev mail catcher)"],
         ["lunora add storage", "Add the R2 storage registry item"],
         ["lunora add crons", "Add the scheduled-jobs registry item"],
+        ["lunora add storage --ref alpha", "Add an item from the alpha branch's registry"],
     ],
     group: "Project",
     loader: () =>
@@ -29,6 +30,11 @@ const addCommand: Command = {
         { description: "Skip the provider prompt and use the default (email & password)", name: "yes", type: Boolean },
         { description: "Local registry root (offline; expects <name>/ subdirs)", name: "from", type: String },
         { description: "Override the remote registry source base (e.g. gh:owner/repo/registry)", name: "source", type: String },
+        {
+            description: "Fetch items from a git ref (branch, tag, or commit), e.g. --ref alpha. Overrides the version-derived default",
+            name: "ref",
+            type: String,
+        },
         { description: "Permit --source values outside gh:/github:/https://", name: "allow-unsafe-source", type: Boolean },
     ],
 };
@@ -39,6 +45,7 @@ export type AddOptions = CreateOptions<{
     "allow-unsafe-source": boolean | undefined;
     from: string | undefined;
     provider: string | undefined;
+    ref: string | undefined;
     source: string | undefined;
     yes: boolean | undefined;
 }>;

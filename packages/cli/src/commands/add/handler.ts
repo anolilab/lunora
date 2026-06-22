@@ -27,6 +27,8 @@ interface AddFeatureOptions {
     ) => Promise<FeatureItem | undefined>;
     /** Non-interactive auth provider (`auth` | `clerk` | `auth0`). */
     provider?: string;
+    /** Override the git ref (branch, tag, or commit) registry items are fetched from. */
+    ref?: string;
     /** Override the remote registry source base. */
     source?: string;
     /** Skip the provider prompt and use the default. */
@@ -124,6 +126,7 @@ const runAddFeature = async (options: AddFeatureOptions): Promise<AddFeatureResu
         from: options.from,
         logger: options.logger,
         names: [...items],
+        ref: options.ref,
         source: options.source,
         yes: true,
     });
@@ -140,6 +143,7 @@ const execute: CommandHandler<AddOptions> = defineHandler<AddOptions>(async ({ a
         from: options.from,
         logger,
         provider: options.provider,
+        ref: options.ref,
         source: options.source,
         yes: options.yes === true,
     });

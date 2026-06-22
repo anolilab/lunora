@@ -7,6 +7,7 @@ const initCommand: Command = {
         ["lunora init my-app", "Scaffold with the default (vite) template"],
         ["lunora init my-app -t tanstack-start-react", "Scaffold a TanStack Start (React) app"],
         ["lunora init my-app -t tanstack-start-solid", "Scaffold a TanStack Start (Solid) app"],
+        ["lunora init my-app --ref alpha", "Scaffold from the alpha branch's templates"],
         ["lunora init --here", "Add Lunora to the current project"],
         ["lunora init my-app --ci github", "Scaffold + add a GitHub Actions deploy pipeline"],
         ["lunora init my-app --ci gitlab", "Scaffold + add a GitLab CI deploy pipeline"],
@@ -33,6 +34,11 @@ const initCommand: Command = {
         {
             description: "Override the remote template source (e.g. gh:owner/repo/sub#ref)",
             name: "source",
+            type: String,
+        },
+        {
+            description: "Fetch templates from a git ref (branch, tag, or commit), e.g. --ref alpha. Overrides the version-derived default",
+            name: "ref",
             type: String,
         },
         {
@@ -73,6 +79,7 @@ export type InitOptions = CreateOptions<{
     from: string | undefined;
     here: boolean | undefined;
     interactive: boolean | undefined;
+    ref: string | undefined;
     source: string | undefined;
     template: string | undefined;
     yes: boolean | undefined;

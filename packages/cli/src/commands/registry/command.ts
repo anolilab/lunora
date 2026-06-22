@@ -26,6 +26,11 @@ const registryCommand: Command = {
         { description: "add: skip the package.json mutation confirmation prompt", name: "yes", type: Boolean },
         { description: "Local registry root (offline; expects <name>/ subdirs)", name: "from", type: String },
         { description: "Override the remote registry source base (e.g. gh:owner/repo/registry)", name: "source", type: String },
+        {
+            description: "Fetch items from a git ref (branch, tag, or commit), e.g. --ref alpha. Overrides the version-derived default",
+            name: "ref",
+            type: String,
+        },
         { description: "Permit --source values outside gh:/github:/https://", name: "allow-unsafe-source", type: Boolean },
         { description: "Emit JSON output (add plan / list)", name: "json", type: Boolean },
         { description: "build: output path for the catalog (default <root>/index.json)", name: "out", type: String },
@@ -44,6 +49,7 @@ export type RegistryOptions = CreateOptions<{
     json: boolean | undefined;
     out: string | undefined;
     overwrite: boolean | undefined;
+    ref: string | undefined;
     source: string | undefined;
     yes: boolean | undefined;
 }>;

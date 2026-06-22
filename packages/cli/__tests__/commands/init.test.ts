@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { isTemplate, runInitCommand } from "../../src/commands/init/handler";
+import { isTemplate, resolveTemplateSource, runInitCommand } from "../../src/commands/init/handler";
 import type { Logger } from "../../src/util/logger";
 
 const silentLogger = (): Logger => {
@@ -279,6 +279,20 @@ describe("lunora init", () => {
             expect(existsSync(join(target, "wrangler.jsonc"))).toBe(true);
             // vite.config.ts does NOT exist in the astro template (class-B framework)
             expect(existsSync(join(target, "vite.config.ts"))).toBe(false);
+        });
+    });
+
+    describe("template source resolution", () => {
+        it("an explicit --ref overrides the version-derived default", () => {
+            expect.assertions(1);
+
+            expect(resolveTemplateSource("vite", undefined, "alpha")).toBe("gh:anolilab/lunora/templates/vite#alpha");
+        });
+
+        it("a full --source wins over both --ref and the default", () => {
+            expect.assertions(1);
+
+            expect(resolveTemplateSource("vite", "gh:me/fork/templates/vite#main", "alpha")).toBe("gh:me/fork/templates/vite#main");
         });
     });
 });
