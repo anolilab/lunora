@@ -35,6 +35,8 @@ pnpm dev
 
 > **Alpha:** the npm package is **`lunorash`** (the unscoped `lunora` name is taken on npm); the CLI binary it installs is still **`lunora`**. Install from the `@alpha` dist-tag and expect breaking changes until the first stable release.
 
+> Prefer managed hosting, or just want one email when v1 is stable? **[Join the Lunora Cloud waitlist →](https://lunora.sh/cloud)**
+
 Three visible files in a fresh app:
 
 ```ts
