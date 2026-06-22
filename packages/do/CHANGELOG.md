@@ -1,3 +1,9 @@
+## @lunora/do [1.0.0-alpha.2](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.1...@lunora/do@1.0.0-alpha.2) (2026-06-22)
+
+### Bug Fixes
+
+* **bench:** seed CodSpeed benches in beforeAll, not top-level await ([3964f8a](https://github.com/anolilab/lunora/commit/3964f8aa241e4fac0a24236d693647144f0ea825))
+
 ## @lunora/do 1.0.0-alpha.1 (2026-06-21)
 
 ### Features
