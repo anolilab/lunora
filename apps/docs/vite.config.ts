@@ -112,6 +112,14 @@ export default defineConfig(async ({ mode }) => {
                     crawlLinks: true,
                     enabled: true,
                 },
+                // Native sitemap: generated at build from the prerendered/crawled pages
+                // (prerender.crawlLinks above discovers every linked route). Replaces the
+                // hand-maintained sitemap route so new pages are picked up automatically.
+                sitemap: {
+                    enabled: true,
+                    host: "https://lunora.sh",
+                    outputPath: "sitemap.xml",
+                },
             }),
             ...(mode !== "development" ? [netlify()] : []),
             react(),
