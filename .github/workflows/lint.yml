@@ -109,6 +109,42 @@
             - "name": "Typecheck registry items"
               "run": "pnpm run lint:types:registry"
 
+    # fallow codebase-intelligence over the affected graph. `health` is a report
+    # (prints each project's score, exits 0) — it surfaces dead code / dupes /
+    # complexity drift without blocking merges. fetch-depth 0 so `vis affected`
+    # can diff against the base ref.
+    "fallow":
+        "name": "Lint (fallow)"
+        "if": "needs.files-changed.outputs.frontend_lintable == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 15
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
+              "with":
+                  "persist-credentials": false
+                  "fetch-depth": 0
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "lint"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # fallow is static source analysis — no build needed.
+            - "name": "Run fallow health"
+              "run": "pnpm run fallow:affected:health"
+
     "prettier":
         "name": "Lint (prettier)"
         "if": "needs.files-changed.outputs.frontend_lintable == 'true'"
@@ -231,7 +267,7 @@
     # Single required check for the Lint workflow.
     "lint-required-check":
         "name": "Check Lint Run"
-        "needs": ["files-changed", "ts-lint", "prettier", "package-json-sort", "secrets", "yaml-lint"]
+        "needs": ["files-changed", "ts-lint", "fallow", "prettier", "package-json-sort", "secrets", "yaml-lint"]
         "if": "always()"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 5
