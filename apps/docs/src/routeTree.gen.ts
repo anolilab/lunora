@@ -16,14 +16,17 @@ import { Route as LlmsDottxtRouteImport } from './routes/llms[.]txt'
 import { Route as LlmsFullDottxtRouteImport } from './routes/llms-full[.]txt'
 import { Route as ImprintRouteImport } from './routes/imprint'
 import { Route as CodeOfConductRouteImport } from './routes/code-of-conduct'
+import { Route as CloudRouteImport } from './routes/cloud'
 import { Route as ChangelogRouteImport } from './routes/changelog'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as PackagesIndexRouteImport } from './routes/packages/index'
 import { Route as BlogIndexRouteImport } from './routes/blog/index'
+import { Route as VsConvexRouteImport } from './routes/vs/convex'
 import { Route as PackagesSlugRouteImport } from './routes/packages/$slug'
 import { Route as DocsSplatRouteImport } from './routes/docs/$'
 import { Route as BlogRssDotxmlRouteImport } from './routes/blog/rss[.]xml'
 import { Route as BlogSlugRouteImport } from './routes/blog/$slug'
+import { Route as ApiWaitlistRouteImport } from './routes/api/waitlist'
 import { Route as ApiSearchRouteImport } from './routes/api/search'
 import { Route as ApiOgRouteImport } from './routes/api/og'
 import { Route as LlmsDotmdxDocsSplatRouteImport } from './routes/llms[.]mdx.docs.$'
@@ -63,6 +66,11 @@ const CodeOfConductRoute = CodeOfConductRouteImport.update({
   path: '/code-of-conduct',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CloudRoute = CloudRouteImport.update({
+  id: '/cloud',
+  path: '/cloud',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ChangelogRoute = ChangelogRouteImport.update({
   id: '/changelog',
   path: '/changelog',
@@ -81,6 +89,11 @@ const PackagesIndexRoute = PackagesIndexRouteImport.update({
 const BlogIndexRoute = BlogIndexRouteImport.update({
   id: '/blog/',
   path: '/blog/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const VsConvexRoute = VsConvexRouteImport.update({
+  id: '/vs/convex',
+  path: '/vs/convex',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PackagesSlugRoute = PackagesSlugRouteImport.update({
@@ -103,6 +116,11 @@ const BlogSlugRoute = BlogSlugRouteImport.update({
   path: '/blog/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiWaitlistRoute = ApiWaitlistRouteImport.update({
+  id: '/api/waitlist',
+  path: '/api/waitlist',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiSearchRoute = ApiSearchRouteImport.update({
   id: '/api/search',
   path: '/api/search',
@@ -122,6 +140,7 @@ const LlmsDotmdxDocsSplatRoute = LlmsDotmdxDocsSplatRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/changelog': typeof ChangelogRoute
+  '/cloud': typeof CloudRoute
   '/code-of-conduct': typeof CodeOfConductRoute
   '/imprint': typeof ImprintRoute
   '/llms-full.txt': typeof LlmsFullDottxtRoute
@@ -131,10 +150,12 @@ export interface FileRoutesByFullPath {
   '/studio': typeof StudioRoute
   '/api/og': typeof ApiOgRoute
   '/api/search': typeof ApiSearchRoute
+  '/api/waitlist': typeof ApiWaitlistRoute
   '/blog/$slug': typeof BlogSlugRoute
   '/blog/rss.xml': typeof BlogRssDotxmlRoute
   '/docs/$': typeof DocsSplatRoute
   '/packages/$slug': typeof PackagesSlugRoute
+  '/vs/convex': typeof VsConvexRoute
   '/blog/': typeof BlogIndexRoute
   '/packages/': typeof PackagesIndexRoute
   '/llms.mdx/docs/$': typeof LlmsDotmdxDocsSplatRoute
@@ -142,6 +163,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/changelog': typeof ChangelogRoute
+  '/cloud': typeof CloudRoute
   '/code-of-conduct': typeof CodeOfConductRoute
   '/imprint': typeof ImprintRoute
   '/llms-full.txt': typeof LlmsFullDottxtRoute
@@ -151,10 +173,12 @@ export interface FileRoutesByTo {
   '/studio': typeof StudioRoute
   '/api/og': typeof ApiOgRoute
   '/api/search': typeof ApiSearchRoute
+  '/api/waitlist': typeof ApiWaitlistRoute
   '/blog/$slug': typeof BlogSlugRoute
   '/blog/rss.xml': typeof BlogRssDotxmlRoute
   '/docs/$': typeof DocsSplatRoute
   '/packages/$slug': typeof PackagesSlugRoute
+  '/vs/convex': typeof VsConvexRoute
   '/blog': typeof BlogIndexRoute
   '/packages': typeof PackagesIndexRoute
   '/llms.mdx/docs/$': typeof LlmsDotmdxDocsSplatRoute
@@ -163,6 +187,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/changelog': typeof ChangelogRoute
+  '/cloud': typeof CloudRoute
   '/code-of-conduct': typeof CodeOfConductRoute
   '/imprint': typeof ImprintRoute
   '/llms-full.txt': typeof LlmsFullDottxtRoute
@@ -172,10 +197,12 @@ export interface FileRoutesById {
   '/studio': typeof StudioRoute
   '/api/og': typeof ApiOgRoute
   '/api/search': typeof ApiSearchRoute
+  '/api/waitlist': typeof ApiWaitlistRoute
   '/blog/$slug': typeof BlogSlugRoute
   '/blog/rss.xml': typeof BlogRssDotxmlRoute
   '/docs/$': typeof DocsSplatRoute
   '/packages/$slug': typeof PackagesSlugRoute
+  '/vs/convex': typeof VsConvexRoute
   '/blog/': typeof BlogIndexRoute
   '/packages/': typeof PackagesIndexRoute
   '/llms.mdx/docs/$': typeof LlmsDotmdxDocsSplatRoute
@@ -185,6 +212,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/changelog'
+    | '/cloud'
     | '/code-of-conduct'
     | '/imprint'
     | '/llms-full.txt'
@@ -194,10 +222,12 @@ export interface FileRouteTypes {
     | '/studio'
     | '/api/og'
     | '/api/search'
+    | '/api/waitlist'
     | '/blog/$slug'
     | '/blog/rss.xml'
     | '/docs/$'
     | '/packages/$slug'
+    | '/vs/convex'
     | '/blog/'
     | '/packages/'
     | '/llms.mdx/docs/$'
@@ -205,6 +235,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/changelog'
+    | '/cloud'
     | '/code-of-conduct'
     | '/imprint'
     | '/llms-full.txt'
@@ -214,10 +245,12 @@ export interface FileRouteTypes {
     | '/studio'
     | '/api/og'
     | '/api/search'
+    | '/api/waitlist'
     | '/blog/$slug'
     | '/blog/rss.xml'
     | '/docs/$'
     | '/packages/$slug'
+    | '/vs/convex'
     | '/blog'
     | '/packages'
     | '/llms.mdx/docs/$'
@@ -225,6 +258,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/changelog'
+    | '/cloud'
     | '/code-of-conduct'
     | '/imprint'
     | '/llms-full.txt'
@@ -234,10 +268,12 @@ export interface FileRouteTypes {
     | '/studio'
     | '/api/og'
     | '/api/search'
+    | '/api/waitlist'
     | '/blog/$slug'
     | '/blog/rss.xml'
     | '/docs/$'
     | '/packages/$slug'
+    | '/vs/convex'
     | '/blog/'
     | '/packages/'
     | '/llms.mdx/docs/$'
@@ -246,6 +282,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ChangelogRoute: typeof ChangelogRoute
+  CloudRoute: typeof CloudRoute
   CodeOfConductRoute: typeof CodeOfConductRoute
   ImprintRoute: typeof ImprintRoute
   LlmsFullDottxtRoute: typeof LlmsFullDottxtRoute
@@ -255,10 +292,12 @@ export interface RootRouteChildren {
   StudioRoute: typeof StudioRoute
   ApiOgRoute: typeof ApiOgRoute
   ApiSearchRoute: typeof ApiSearchRoute
+  ApiWaitlistRoute: typeof ApiWaitlistRoute
   BlogSlugRoute: typeof BlogSlugRoute
   BlogRssDotxmlRoute: typeof BlogRssDotxmlRoute
   DocsSplatRoute: typeof DocsSplatRoute
   PackagesSlugRoute: typeof PackagesSlugRoute
+  VsConvexRoute: typeof VsConvexRoute
   BlogIndexRoute: typeof BlogIndexRoute
   PackagesIndexRoute: typeof PackagesIndexRoute
   LlmsDotmdxDocsSplatRoute: typeof LlmsDotmdxDocsSplatRoute
@@ -315,6 +354,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CodeOfConductRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/cloud': {
+      id: '/cloud'
+      path: '/cloud'
+      fullPath: '/cloud'
+      preLoaderRoute: typeof CloudRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/changelog': {
       id: '/changelog'
       path: '/changelog'
@@ -341,6 +387,13 @@ declare module '@tanstack/react-router' {
       path: '/blog'
       fullPath: '/blog/'
       preLoaderRoute: typeof BlogIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/vs/convex': {
+      id: '/vs/convex'
+      path: '/vs/convex'
+      fullPath: '/vs/convex'
+      preLoaderRoute: typeof VsConvexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/packages/$slug': {
@@ -371,6 +424,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof BlogSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/waitlist': {
+      id: '/api/waitlist'
+      path: '/api/waitlist'
+      fullPath: '/api/waitlist'
+      preLoaderRoute: typeof ApiWaitlistRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/search': {
       id: '/api/search'
       path: '/api/search'
@@ -398,6 +458,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ChangelogRoute: ChangelogRoute,
+  CloudRoute: CloudRoute,
   CodeOfConductRoute: CodeOfConductRoute,
   ImprintRoute: ImprintRoute,
   LlmsFullDottxtRoute: LlmsFullDottxtRoute,
@@ -407,10 +468,12 @@ const rootRouteChildren: RootRouteChildren = {
   StudioRoute: StudioRoute,
   ApiOgRoute: ApiOgRoute,
   ApiSearchRoute: ApiSearchRoute,
+  ApiWaitlistRoute: ApiWaitlistRoute,
   BlogSlugRoute: BlogSlugRoute,
   BlogRssDotxmlRoute: BlogRssDotxmlRoute,
   DocsSplatRoute: DocsSplatRoute,
   PackagesSlugRoute: PackagesSlugRoute,
+  VsConvexRoute: VsConvexRoute,
   BlogIndexRoute: BlogIndexRoute,
   PackagesIndexRoute: PackagesIndexRoute,
   LlmsDotmdxDocsSplatRoute: LlmsDotmdxDocsSplatRoute,
