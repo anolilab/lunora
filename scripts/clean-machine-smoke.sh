@@ -7,7 +7,7 @@
 #     bin shim + dist must all survive packing).
 #   - The `bin/lunora.mjs` shim + `tsx` loader still work when the cli is
 #     installed flat under `node_modules/.bin/` outside any workspace.
-#   - `lunora init -t vite` then `lunora codegen` runs end-to-end against
+#   - `lunora init -t vite-react` then `lunora codegen` runs end-to-end against
 #     the freshly-scaffolded project using only the packed tarball.
 #
 # Templates now live at the monorepo root (`/templates/`) and are fetched
@@ -98,15 +98,15 @@ test -x node_modules/.bin/lunora || {
 }
 
 echo "==> Sanity: monorepo templates root exists"
-test -d "$REPO_ROOT/templates/vite" || {
-    echo "ERROR: $REPO_ROOT/templates/vite missing — templates moved to monorepo root in this build"
+test -d "$REPO_ROOT/templates/vite-react" || {
+    echo "ERROR: $REPO_ROOT/templates/vite-react missing — templates moved to monorepo root in this build"
     exit 1
 }
 
-echo "==> Running 'lunora init -t vite --from $REPO_ROOT/templates' into $PROJECT_DIR"
+echo "==> Running 'lunora init -t vite-react --from $REPO_ROOT/templates' into $PROJECT_DIR"
 mkdir -p "$(dirname "$PROJECT_DIR")"
 cd "$(dirname "$PROJECT_DIR")"
-"$INSTALL_DIR/node_modules/.bin/lunora" init -t vite --from "$REPO_ROOT/templates" "$(basename "$PROJECT_DIR")"
+"$INSTALL_DIR/node_modules/.bin/lunora" init -t vite-react --from "$REPO_ROOT/templates" "$(basename "$PROJECT_DIR")"
 
 echo "==> Asserting scaffold structure"
 for required in \

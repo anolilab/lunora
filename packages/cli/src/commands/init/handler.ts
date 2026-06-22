@@ -22,7 +22,7 @@ import type { InitOptions } from "./index";
 import type { OfferDeps } from "./offer-extras";
 import { offerRegistryExtras } from "./offer-extras";
 
-type Template = "astro" | "next" | "nuxt" | "standalone" | "sveltekit" | "tanstack-start-react" | "tanstack-start-solid" | "vite";
+type Template = "astro" | "next" | "nuxt" | "standalone" | "sveltekit" | "tanstack-start-react" | "tanstack-start-solid" | "vite-react";
 
 interface InitCommandOptions {
     /**
@@ -602,10 +602,10 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
 /** Scaffold a brand-new project directory (the non-`--here` path). */
 const scaffoldNewProject = async (options: InitCommandOptions, cwd: string): Promise<InitCommandResult> => {
     const name = options.name ?? "lunora-app";
-    const templateType: Template = options.templateType ?? "vite";
+    const templateType: Template = options.templateType ?? "vite-react";
 
     if (templateType === "next") {
-        options.logger.warn('template "next" is not yet available — re-run with `-t vite` or `-t standalone`.');
+        options.logger.warn('template "next" is not yet available — re-run with `-t vite-react` or `-t standalone`.');
 
         return { code: 1, files: [], target: "" };
     }
@@ -673,7 +673,7 @@ const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandR
     return result;
 };
 
-/** Narrow a raw `--template` value to a known {@link Template} (defaults to vite). */
+/** Narrow a raw `--template` value to a known {@link Template} (defaults to vite-react). */
 const isTemplate = (value: unknown): value is Template =>
     value === "astro" ||
     value === "next" ||
@@ -682,7 +682,7 @@ const isTemplate = (value: unknown): value is Template =>
     value === "sveltekit" ||
     value === "tanstack-start-react" ||
     value === "tanstack-start-solid" ||
-    value === "vite";
+    value === "vite-react";
 
 /** Narrow the `--ci` value to a {@link CiProvider}, warning (and ignoring it) on an unknown provider. */
 const resolveCiProvider = (raw: string | undefined, logger: Logger): CiProvider | undefined => {
@@ -701,8 +701,8 @@ const resolveCiProvider = (raw: string | undefined, logger: Logger): CiProvider 
 
 /** `lunora init [name]` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<InitOptions> = defineHandler<InitOptions>(({ argument, cwd, logger, options }) => {
-    const templateRaw = options.template ?? "vite";
-    const template: Template = isTemplate(templateRaw) ? templateRaw : "vite";
+    const templateRaw = options.template ?? "vite-react";
+    const template: Template = isTemplate(templateRaw) ? templateRaw : "vite-react";
 
     return runInitCommand({
         allowUnsafeSource: options.allowUnsafeSource === true,

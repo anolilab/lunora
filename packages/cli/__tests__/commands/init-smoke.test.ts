@@ -1,7 +1,7 @@
 /**
  * Phase 5 verification gate: a scaffolded project is loadable by the rest of
  * the toolchain. Rather than booting Vite (slow + flaky) we compose-test the
- * pieces a real `lunora dev` would invoke: `lunora init -t vite` scaffolds the
+ * pieces a real `lunora dev` would invoke: `lunora init -t vite-react` scaffolds the
  * project (offline, via --from), `runCodegen` parses schema + function files,
  * and `validateWranglerProject` asserts bindings line up with the schema.
  *
@@ -57,7 +57,7 @@ describe("lunora init smoke", () => {
                 from: templatesRoot,
                 logger: silentLogger(),
                 name: "smoke-app",
-                templateType: "vite",
+                templateType: "vite-react",
             });
 
             expect(result.code).toBe(0);

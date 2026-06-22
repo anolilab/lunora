@@ -42,7 +42,7 @@ describe("lunora init", () => {
                 from: templatesRoot,
                 logger: silentLogger(),
                 name: "my-app",
-                templateType: "vite",
+                templateType: "vite-react",
             });
 
             expect(result.code).toBe(0);
@@ -69,7 +69,7 @@ describe("lunora init", () => {
                 from: templatesRoot,
                 logger: silentLogger(),
                 name: "rainbow",
-                templateType: "vite",
+                templateType: "vite-react",
             });
 
             const pkg = readFileSync(join(workdir, "rainbow", "package.json"), "utf8");
@@ -89,7 +89,7 @@ describe("lunora init", () => {
                 from: templatesRoot,
                 logger: silentLogger(),
                 name: "demo",
-                templateType: "vite",
+                templateType: "vite-react",
             });
 
             const pkg = readFileSync(join(workdir, "demo", "package.json"), "utf8");
@@ -113,7 +113,7 @@ describe("lunora init", () => {
                 from: templatesRoot,
                 logger: silentLogger(),
                 name: "stamped",
-                templateType: "vite",
+                templateType: "vite-react",
             });
 
             const pkg = JSON.parse(readFileSync(join(workdir, "stamped", "package.json"), "utf8")) as {
@@ -239,7 +239,7 @@ describe("lunora init", () => {
                 from: templatesRoot,
                 logger: silentLogger(),
                 name: "dup",
-                templateType: "vite",
+                templateType: "vite-react",
             });
 
             const errors: string[] = [];
@@ -249,7 +249,7 @@ describe("lunora init", () => {
                 from: templatesRoot,
                 logger: { ...silentLogger(), error: (message) => errors.push(message) },
                 name: "dup",
-                templateType: "vite",
+                templateType: "vite-react",
             });
 
             expect(result.code).toBe(1);
@@ -266,7 +266,7 @@ describe("lunora init", () => {
                 from: join(workdir, "does-not-exist"),
                 logger: { ...silentLogger(), error: (message) => errors.push(message) },
                 name: "broken",
-                templateType: "vite",
+                templateType: "vite-react",
             });
 
             expect(result.code).toBe(1);
@@ -282,7 +282,7 @@ describe("lunora init", () => {
             expect(isTemplate("sveltekit")).toBe(true);
             expect(isTemplate("tanstack-start-react")).toBe(true);
             expect(isTemplate("tanstack-start-solid")).toBe(true);
-            expect(isTemplate("vite")).toBe(true);
+            expect(isTemplate("vite-react")).toBe(true);
             expect(isTemplate("next")).toBe(true);
             expect(isTemplate("unknown-framework")).toBe(false);
         });
@@ -315,13 +315,13 @@ describe("lunora init", () => {
         it("an explicit --ref overrides the version-derived default", () => {
             expect.assertions(1);
 
-            expect(resolveTemplateSource("vite", undefined, "alpha")).toBe("gh:anolilab/lunora/templates/vite#alpha");
+            expect(resolveTemplateSource("vite-react", undefined, "alpha")).toBe("gh:anolilab/lunora/templates/vite-react#alpha");
         });
 
         it("a full --source wins over both --ref and the default", () => {
             expect.assertions(1);
 
-            expect(resolveTemplateSource("vite", "gh:me/fork/templates/vite#main", "alpha")).toBe("gh:me/fork/templates/vite#main");
+            expect(resolveTemplateSource("vite-react", "gh:me/fork/templates/vite-react#main", "alpha")).toBe("gh:me/fork/templates/vite-react#main");
         });
     });
 });
