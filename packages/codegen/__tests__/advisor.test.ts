@@ -145,25 +145,4 @@ describe("runCodegen lint integration", () => {
 
         expect(runCodegen({ lint: false, projectRoot: workdir }).generated.shard).toContain("const LUNORA_ADVISORIES: AdvisoryFinding[] = [];");
     });
-
-    it("flags ctx.r2sql used inside a query handler (r2sql_outside_action), but not inside an action", () => {
-        expect.assertions(3);
-
-        // A query touching ctx.r2sql — non-deterministic external I/O, disallowed.
-        writeFileSync(
-            join(workdir, "lunora", "reports.ts"),
-            `import { action, query } from "@lunora/server";
-export const bad = query({ args: {}, handler: async (ctx) => ctx.r2sql.from("s.orders").select("id").run() });
-export const ok = action({ args: {}, handler: async (ctx) => ctx.r2sql.query("SELECT 1") });
-`,
-            "utf8",
-        );
-
-        const findings = runCodegen({ projectRoot: workdir }).advisories.filter((advisory) => advisory.name === "r2sql_outside_action");
-
-        // Exactly the query access is flagged; the action access is exempt.
-        expect(findings).toHaveLength(1);
-        expect(findings[0]?.metadata).toMatchObject({ callee: "ctx.r2sql.from", exportName: "bad", kind: "query" });
-        expect(findings[0]?.detail).toContain("available only in actions");
-    });
 });

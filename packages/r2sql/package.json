@@ -4,10 +4,10 @@
     "description": "Typed, chainable R2 SQL for Lunora: window functions, DISTINCT, set operations, and ctx.r2sql",
     "keywords": [
         "cloudflare",
-        "r2",
-        "r2-sql",
         "iceberg",
         "lunora",
+        "r2",
+        "r2-sql",
         "sql",
         "workers"
     ],
