@@ -25,6 +25,8 @@ const columns: { links: (ExternalLinkType | TanstackLink)[]; title: string }[] =
         links: [
             { title: "Getting started", to: "/docs/getting-started" },
             { title: "Documentation", to: "/docs" },
+            { title: "Lunora Cloud", to: "/cloud" },
+            { title: "vs Convex", to: "/vs/convex" },
             { title: "Blog", to: "/blog" },
             { title: "Changelog", to: "/changelog" },
         ],
