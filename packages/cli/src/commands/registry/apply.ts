@@ -5,12 +5,13 @@
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
-import { DEV_VARS_FILE, parseDevVariableEntries, promptYesNo } from "@lunora/config";
+import { DEV_VARS_FILE, parseDevVariableEntries } from "@lunora/config";
 import { join } from "@visulima/path";
 import { applyEdits, modify, parse } from "jsonc-parser";
 
 import type { Logger } from "../../util/logger";
 import { resolveDistTag } from "../../util/source-ref";
+import { tuiConfirm } from "../../util/tui-prompts";
 import type { AddCommandOptions, RegistryBinding, RegistryEnvVariable, RegistryManifest } from "./types";
 
 /**
@@ -393,8 +394,8 @@ const confirmDepMutation = async (items: ReadonlyArray<{ manifest: RegistryManif
         return false;
     }
 
-    const confirmer = options.confirm ?? promptYesNo;
-    const confirmed = await confirmer(`The requested items ${reasonText}. Continue? [y/N] `);
+    const confirmer = options.confirm ?? tuiConfirm;
+    const confirmed = await confirmer(`The requested items ${reasonText}. Continue?`);
 
     if (!confirmed) {
         options.logger.info("add: aborted");

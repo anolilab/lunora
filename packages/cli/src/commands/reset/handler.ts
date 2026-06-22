@@ -1,11 +1,11 @@
 import { existsSync, rmSync } from "node:fs";
 
-import { promptYesNo } from "@lunora/config";
 import { join } from "@visulima/path";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
+import { tuiConfirm } from "../../util/tui-prompts";
 import type { ResetOptions } from "./index";
 
 interface ResetCommandOptions {
@@ -40,8 +40,8 @@ const runResetCommand = async (options: ResetCommandOptions): Promise<ResetComma
             return { code: 1, removed: [] };
         }
 
-        const confirmer = options.confirm ?? promptYesNo;
-        const confirmed = await confirmer("This will delete .wrangler/state. Continue? [y/N] ");
+        const confirmer = options.confirm ?? tuiConfirm;
+        const confirmed = await confirmer("This will delete .wrangler/state. Continue?");
 
         if (!confirmed) {
             options.logger.info("reset: aborted");

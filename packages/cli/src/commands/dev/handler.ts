@@ -4,7 +4,6 @@ import { spawn as nodeSpawn } from "node:child_process";
 import {
     AGENT_RULES_HINT,
     claimAgentRulesHint,
-    createConfirm,
     detectAgentRules,
     DEV_VARS_EXAMPLE_FILE,
     DEV_VARS_FILE,
@@ -30,6 +29,7 @@ import type { Logger } from "../../util/logger";
 import type { SpawnDescriptor } from "../../util/spawn";
 import type { StudioServerHandle } from "../../util/studio-server";
 import { startStudioServer } from "../../util/studio-server";
+import { createTuiConfirm } from "../../util/tui-prompts";
 import type { DevOptions } from "./index";
 
 /** Default port the embedded studio server listens on (the URL you open). */
@@ -354,7 +354,7 @@ const offerDevVariablesScaffold = async (options: DevCommandOptions, cwd: string
 
     // Phase 2 — offer to generate / top up .dev.vars from the example.
     const result = await (options.ensureEnv ?? ensureDevVariables)({
-        confirm: createConfirm(),
+        confirm: createTuiConfirm(),
         cwd,
         info: (message) => {
             options.logger.info(message);

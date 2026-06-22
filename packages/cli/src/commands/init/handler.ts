@@ -16,7 +16,7 @@ import { detectFramework } from "../../util/detect-framework";
 import type { Logger } from "../../util/logger";
 import { patchViteConfig } from "../../util/patch-vite-config";
 import { resolveDistTag, resolveSourceRef } from "../../util/source-ref";
-import { tuiMultiSelect, tuiSelect } from "../../util/tui-prompts";
+import { tuiIntro, tuiMultiSelect, tuiOutro, tuiSelect, withTuiSpinner } from "../../util/tui-prompts";
 import type { FeatureItem } from "../add/features";
 import { runAddCommand } from "../registry";
 import type { InitOptions } from "./index";
@@ -576,20 +576,27 @@ const offerIsInteractive = (options: InitCommandOptions): boolean =>
 const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: string): Promise<void> => {
     const interactive = offerIsInteractive(options);
 
+    // Each registry apply mutates shared project files; show a spinner while it
+    // runs (no-op off a TTY, so tests/CI run bare).
     const apply = async (names: ReadonlyArray<FeatureItem>): Promise<boolean> => {
-        const result = await runAddCommand({
-            allowUnsafeSource: options.allowUnsafeSource,
-            cwd: projectDirectory,
-            from: options.registryFrom,
-            logger: options.logger,
-            names: [...names],
-            ref: options.ref,
-            source: options.registrySource,
-            yes: true,
-        });
+        const result = await withTuiSpinner(`adding ${names.join(", ")}…`, () =>
+            runAddCommand({
+                allowUnsafeSource: options.allowUnsafeSource,
+                cwd: projectDirectory,
+                from: options.registryFrom,
+                logger: options.logger,
+                names: [...names],
+                ref: options.ref,
+                source: options.registrySource,
+                yes: true,
+            }),
+        );
 
         return result.code === 0;
     };
+
+    // Branded framing for the interactive offer (both no-op off a TTY).
+    await tuiIntro("let's finish setting up your app");
 
     await offerRegistryExtras({
         apply,
@@ -598,6 +605,8 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
         multiSelect: options.prompt?.multiSelect ?? ((message, choices, settings) => tuiMultiSelect(message, choices, settings)),
         select: options.prompt?.select ?? ((message, choices, settings): Promise<FeatureItem | undefined> => tuiSelect(message, choices, settings)),
     });
+
+    await tuiOutro("you're all set — run `pnpm dev` to start.");
 };
 
 /** Scaffold a brand-new project directory (the non-`--here` path). */

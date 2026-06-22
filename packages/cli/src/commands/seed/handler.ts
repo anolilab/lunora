@@ -3,7 +3,6 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
 import { discoverSchema, schemaFromIr } from "@lunora/codegen";
-import { promptYesNo } from "@lunora/config";
 import { seedPlan } from "@lunora/seed";
 import { join } from "@visulima/path";
 import { Project } from "ts-morph";
@@ -12,6 +11,7 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
 import { resolveProductionWorkerUrl } from "../../util/resolve-target";
+import { tuiConfirm } from "../../util/tui-prompts";
 import type { StreamingFetchLike } from "../data-transfer";
 import { runImportCommand } from "../data-transfer";
 import { runResetCommand } from "../reset/handler";
@@ -192,10 +192,8 @@ const confirmRemoteSeedTarget = async (options: SeedCommandOptions, generated: n
         return seedFailure(1);
     }
 
-    const confirmer = options.confirm ?? promptYesNo;
-    const confirmed = await confirmer(
-        `This will insert ${String(generated)} generated row(s) into ${options.url ?? "the production worker"}. Continue? [y/N] `,
-    );
+    const confirmer = options.confirm ?? tuiConfirm;
+    const confirmed = await confirmer(`This will insert ${String(generated)} generated row(s) into ${options.url ?? "the production worker"}. Continue?`);
 
     if (!confirmed) {
         options.logger.info("seed: aborted");
