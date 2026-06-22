@@ -21,11 +21,12 @@ overrides:
   astro@<6.4.6: ^6.4.6
   dompurify@<=3.4.10: ^3.4.11
   esbuild@>=0.27.3 <0.28.1: ^0.28.1
-  # Scope to the 4.x line only: a bare `js-yaml@<=4.1.1` also matches the
-  # js-yaml@3.x that gray-matter depends on and force-upgrades it to 4.x,
-  # which removed `yaml.safeLoad` (gray-matter calls it) and breaks the docs
-  # blog frontmatter parsing at build/prerender time.
-  js-yaml@>=4.0.0 <=4.1.1: ^4.1.2
+  # Force the whole tree onto js-yaml 4 (3.x is unmaintained / flagged by audits).
+  # The only 3.x consumer is gray-matter@4.0.3, which calls the removed
+  # safeLoad/safeDump — we pnpm-patch it to load/dump (safe by default in v4) so
+  # it works on 4.x. See patches/gray-matter@4.0.3.patch. `<=4.1.1` also folds
+  # the 4.0.0–4.1.1 security bump into this single rule.
+  js-yaml@<=4.1.1: ^4.1.2
   lodash@<=4.17.23: ^4.17.24
   lodash@>=4.0.0 <=4.17.22: ^4.17.23
   lodash@>=4.0.0 <=4.17.23: ^4.17.24
@@ -482,4 +483,5 @@ packageExtensions:
       "@babel/parser": "^7.24.1"
 
 patchedDependencies:
+  gray-matter@4.0.3: patches/gray-matter@4.0.3.patch
   recast@0.23.11: patches/recast@0.23.11.patch
