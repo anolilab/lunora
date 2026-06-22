@@ -1,6 +1,6 @@
 ---
 title: Introducing Lunora
-description: A type-safe, real-time backend for Cloudflare Workers and Durable Objects — with a Vite-first developer experience.
+description: "Lunora is a type-safe, real-time backend for Cloudflare: Convex-style DX, typed queries and reactive subscriptions, on your own Workers and Durable Objects. Open source, alpha."
 publishedAt: 2026-06-20
 author: Daniel Bannert
 category: Announcements
@@ -9,40 +9,131 @@ tags:
     - announcement
     - cloudflare
     - realtime
+    - typescript
+    - open-source
 ---
 
-We are thrilled to introduce **Lunora** — a type-safe, real-time backend framework built on
-Cloudflare Workers and Durable Objects, with a Vite-first developer experience.
+Every real-time app I've built eventually hit the same fork in the road.
 
-## Why Lunora
+Managed platforms like Convex and Firebase are lovely to build on. Then you notice your data lives on
+their servers and the bill climbs with your traffic. The other option is raw Cloudflare, Workers and
+Durable Objects, where you own everything and pay edge prices, but you spend your weekends hand-wiring
+RPC, types, and subscriptions. Good bones, no developer experience.
 
-Most realtime backends force a trade-off between developer experience and edge performance.
-Lunora removes it. You write plain TypeScript queries, mutations, and actions, and codegen keeps
-your server and client types in perfect lockstep.
+Lunora is what I wanted instead: that managed-platform DX, running on the Cloudflare account I already
+pay for. You write a schema and some TypeScript functions, and Lunora turns them into Workers backed
+by Durable Objects, with end-to-end types and reactive hooks (React, Vue, Svelte, Solid) that update
+live over WebSockets. It's open source.
+
+Fair warning: it's alpha. The APIs will move under you and I wouldn't ship it to production yet. But
+you can build something real with it today. Here's what that looks like, and where it falls short.
+
+## One file to start
+
+Define your tables once. You get a fully typed data model, no ORM and no migration tool to learn.
 
 ```ts
+// lunora/schema.ts
+import { defineSchema, defineTable, v } from "lunorash/server";
+
 export default defineSchema({
-    todos: defineTable({
-        text: v.string(),
-        done: v.boolean(),
-    }),
+    messages: defineTable({
+        author: v.string(),
+        body: v.string(),
+        ts: v.number(),
+    }).index("by_ts", ["ts"]),
 });
 ```
 
-## Realtime by default
+## Functions, not endpoints
 
-Every query is a subscription. Each mutation pushes live updates to all connected clients — with
-optimistic writes and an offline queue handled for you.
+Queries and mutations are typed builders. Inputs get validated, return types are inferred, and you
+never write a DTO.
 
 ```ts
-const todos = useQuery(api.todos.list);
-const add = useMutation(api.todos.add);
+// lunora/messages.ts
+import { query, mutation, v } from "./_generated/server";
+
+export const list = query.query(async ({ ctx }) => ctx.db.query("messages").order("desc").take(50));
+
+export const send = mutation.input({ author: v.string(), body: v.string() }).mutation(async ({ ctx, args }) => {
+    await ctx.db.insert("messages", { ...args, ts: Date.now() });
+});
 ```
 
-## Edge-native and sharded
+## The client stays live
 
-State lives in SQLite-backed Durable Objects at the edge. Shard by key, or go global to replicate
-reads across regions — all with a single line of configuration.
+Import the generated `api` and your components subscribe over WebSocket. Nothing to wire up, no cache
+to invalidate. Someone sends a message, every open client updates.
 
-There is a lot more to share in the weeks ahead. Star the repo, try the quickstart, and let us know
-what you build.
+```tsx
+import { useQuery, useMutation } from "@lunora/react";
+import { api } from "../lunora/_generated/api";
+
+function Chat() {
+    const messages = useQuery(api.messages.list) ?? [];
+    const send = useMutation(api.messages.send);
+    // `messages` is fully typed and stays live. Optimistic writes and an
+    // offline queue come for free.
+}
+```
+
+## Rename a field, break the build
+
+Schema, validators, query results, and hooks all share one source of truth. Change a field name and
+your component stops compiling. In your editor, not in production at 2am.
+
+## Own it, or let us run it
+
+This is the part most real-time backends skip. The same code runs two ways, and you're never stuck
+with one:
+
+- **Self-host on your own Cloudflare account.** Free, open source, your data, roughly $0 at idle on
+  the free tier.
+- **Lunora Cloud** (soon). The same code, managed for you, for teams that would rather ship than
+  babysit infrastructure.
+
+You can always grab the open source and self-host. That's the whole point.
+
+## Scale when you actually need to
+
+Start with one Durable Object. It's the simplest thing to reason about. When you outgrow it, opt in
+per function, no rewrite:
+
+```ts
+cursors: defineTable({
+    roomId: v.string(),
+    x: v.number(),
+    y: v.number(),
+})
+    .shardBy("roomId") // one Durable Object per room or tenant
+    .global() // geo-replicated reads at the edge
+    .index("by_room", ["roomId"]),
+```
+
+Same code, different topology.
+
+## Where it's rough
+
+Lunora has fewer built-in features than Convex right now, and it's alpha, so expect breaking changes
+before the first stable tag. If you need production-ready today, pick something mature. I'd rather say
+it here than have you find out the hard way.
+
+## Try it
+
+One command gives you a typed, live-syncing app:
+
+```bash
+pnpm dlx lunorash@alpha init my-app
+```
+
+`pnpm dev` boots workerd (the real production runtime), generates your types, starts Vite, and reloads
+on save, with a local Studio for your schema, data, and logs.
+
+It's alpha and open source. Build something with it and tell me where it breaks. That's how I'm
+deciding what to work on next.
+
+- [Star the repo](https://github.com/anolilab/lunora)
+- [Read the docs](/docs)
+- [See how it compares](/compare) to Convex, Supabase, Firebase, and Appwrite
+- [Join the Lunora Cloud waitlist](/cloud)
