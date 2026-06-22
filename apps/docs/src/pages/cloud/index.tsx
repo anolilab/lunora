@@ -161,7 +161,12 @@ const perks: Perk[] = [
 ];
 
 const CloudLanding: FC = () => (
-    <>
+    <div className="relative overflow-x-clip bg-[#0e0e11]" data-theme="dark">
+        {/* vertical guide lines at the container edges, full page height */}
+        <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 left-1/2 z-20 hidden w-full max-w-6xl -translate-x-1/2 border-x border-white/[0.08] lg:block"
+        />
         {/* Hero + waitlist */}
         <section className="relative border-t border-white/[0.08] bg-[#0e0e11]" data-nav-theme="dark">
             <div
@@ -245,7 +250,7 @@ const CloudLanding: FC = () => (
                 <WaitlistForm />
             </div>
         </section>
-    </>
+    </div>
 );
 
 export default CloudLanding;

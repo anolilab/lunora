@@ -9,7 +9,7 @@ import SpaceBackdrop from "@/components/sections/space-backdrop";
 
 const SPOTLIGHT = "radial-gradient(45% 40% at 32% 10%, rgba(255,255,255,0.12), transparent 70%)";
 
-export const NotFound: FC<PropsWithChildren<NotFoundRouteProps>> = () => (
+export const NotFound: FC<PropsWithChildren<NotFoundRouteProps>> = ({ children }) => (
     <section
         className="relative flex min-h-[100svh] flex-col overflow-hidden bg-[#0e0e11] px-6 pt-32 pb-14 sm:px-10 lg:px-14"
         data-nav-theme="dark"
@@ -18,12 +18,22 @@ export const NotFound: FC<PropsWithChildren<NotFoundRouteProps>> = () => (
         <SpaceBackdrop className="absolute inset-0 z-0" id="photo-1708559831534-44c30eb3ab0e" opacity={0.5} />
         <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-0" style={{ background: SPOTLIGHT }} />
 
+        {/* the one focal moment — an oversized ghost 404, data as texture */}
+        <span
+            aria-hidden="true"
+            className="pointer-events-none absolute -bottom-[7vw] left-1/2 z-0 -translate-x-1/2 -translate-y-0 text-[44vw] leading-none font-semibold tracking-tighter text-white/[0.035] select-none"
+        >
+            404
+        </span>
+
         {/* top — error label + return panel */}
         <div className="relative z-10 flex items-start justify-between gap-8">
-            <span className="font-mono text-xs tracking-wider text-white/45">( Error page )</span>
+            <span className="font-mono text-xs tracking-wider text-white/45">( ERROR 404 )</span>
 
             <div className="flex w-full max-w-xl flex-col gap-5">
-                <p className="text-sm leading-relaxed text-white/70">Maybe it moved, maybe it never existed — either way, let&apos;s go somewhere better.</p>
+                <p className="text-sm leading-relaxed text-white/70">
+                    {children ?? "Maybe it moved, maybe it never existed — either way, let’s go somewhere better."}
+                </p>
                 <Link className="group flex min-h-40 flex-col justify-between gap-10 bg-[#f4f4f2] p-6 text-black transition-colors hover:bg-white" to="/">
                     <span className="text-2xl font-medium tracking-tight">Back to home</span>
                     <span className="flex items-center gap-2 text-sm text-black/60">
@@ -34,10 +44,11 @@ export const NotFound: FC<PropsWithChildren<NotFoundRouteProps>> = () => (
             </div>
         </div>
 
-        {/* bottom — headline + sign-off */}
+        {/* bottom — headline + sign-off. The aurora ribbon is the single color event. */}
         <div className="relative z-10 mt-auto flex items-end justify-between gap-8 pt-20">
             <h1 className="max-w-3xl text-5xl leading-[1.02] font-semibold tracking-tight text-balance text-white sm:text-6xl lg:text-7xl">
-                This page doesn&apos;t exist — but great backends do
+                This page doesn&apos;t exist — but{" "}
+                <span className="bg-gradient-to-r from-cyan-300 via-violet-400 to-rose-300 bg-clip-text text-transparent">great backends do</span>
             </h1>
             <span className="flex shrink-0 items-center gap-2 font-mono text-xs text-white/40">
                 Oops, wrong turn

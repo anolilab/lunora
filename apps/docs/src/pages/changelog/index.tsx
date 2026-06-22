@@ -49,13 +49,10 @@ const Changelog: FC<{ data: { key: string; MdxContent: FC; title: string }[] }> 
                 <Section
                     classes={{
                         childrenWrapper: "h-full",
-                        pattern: "inset-y-10",
-                        root: "py-0 min-h-screen border-b",
+                        root: "py-0 min-h-screen border-x border-b border-white/[0.08]",
                     }}
                     gridLength={2}
                     mode="dark"
-                    patternColor="crimson-energy"
-                    patternPosition="bottom"
                 >
                     <div className="col-span-2 flex h-full items-center justify-center">
                         <div className="px-6 sm:px-12 lg:px-24">
@@ -83,8 +80,8 @@ const Changelog: FC<{ data: { key: string; MdxContent: FC; title: string }[] }> 
                         </div>
                         {changelogs.length > 0 && (
                             <ScrollArea className="h-[calc(100vh-140px)] px-6 mt-4 prose prose-invert">
-                                {changelogs.map((item) => (
-                                    <div key={item.key}>
+                                {changelogs.map((item, index) => (
+                                    <div className={index > 0 ? "mt-12 border-t border-white/[0.08] pt-12" : ""} key={item.key}>
                                         <h2 className="mt-0">{item.title}</h2>
                                         <item.MdxContent />
                                     </div>
