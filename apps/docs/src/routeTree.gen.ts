@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as StudioRouteImport } from './routes/studio'
 import { Route as PrivacyRouteImport } from './routes/privacy'
+import { Route as PressRouteImport } from './routes/press'
 import { Route as LlmsDottxtRouteImport } from './routes/llms[.]txt'
 import { Route as LlmsFullDottxtRouteImport } from './routes/llms-full[.]txt'
 import { Route as ImprintRouteImport } from './routes/imprint'
@@ -41,6 +42,11 @@ const StudioRoute = StudioRouteImport.update({
 const PrivacyRoute = PrivacyRouteImport.update({
   id: '/privacy',
   path: '/privacy',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PressRoute = PressRouteImport.update({
+  id: '/press',
+  path: '/press',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LlmsDottxtRoute = LlmsDottxtRouteImport.update({
@@ -158,6 +164,7 @@ export interface FileRoutesByFullPath {
   '/imprint': typeof ImprintRoute
   '/llms-full.txt': typeof LlmsFullDottxtRoute
   '/llms.txt': typeof LlmsDottxtRoute
+  '/press': typeof PressRoute
   '/privacy': typeof PrivacyRoute
   '/studio': typeof StudioRoute
   '/api/og': typeof ApiOgRoute
@@ -183,6 +190,7 @@ export interface FileRoutesByTo {
   '/imprint': typeof ImprintRoute
   '/llms-full.txt': typeof LlmsFullDottxtRoute
   '/llms.txt': typeof LlmsDottxtRoute
+  '/press': typeof PressRoute
   '/privacy': typeof PrivacyRoute
   '/studio': typeof StudioRoute
   '/api/og': typeof ApiOgRoute
@@ -209,6 +217,7 @@ export interface FileRoutesById {
   '/imprint': typeof ImprintRoute
   '/llms-full.txt': typeof LlmsFullDottxtRoute
   '/llms.txt': typeof LlmsDottxtRoute
+  '/press': typeof PressRoute
   '/privacy': typeof PrivacyRoute
   '/studio': typeof StudioRoute
   '/api/og': typeof ApiOgRoute
@@ -236,6 +245,7 @@ export interface FileRouteTypes {
     | '/imprint'
     | '/llms-full.txt'
     | '/llms.txt'
+    | '/press'
     | '/privacy'
     | '/studio'
     | '/api/og'
@@ -261,6 +271,7 @@ export interface FileRouteTypes {
     | '/imprint'
     | '/llms-full.txt'
     | '/llms.txt'
+    | '/press'
     | '/privacy'
     | '/studio'
     | '/api/og'
@@ -286,6 +297,7 @@ export interface FileRouteTypes {
     | '/imprint'
     | '/llms-full.txt'
     | '/llms.txt'
+    | '/press'
     | '/privacy'
     | '/studio'
     | '/api/og'
@@ -312,6 +324,7 @@ export interface RootRouteChildren {
   ImprintRoute: typeof ImprintRoute
   LlmsFullDottxtRoute: typeof LlmsFullDottxtRoute
   LlmsDottxtRoute: typeof LlmsDottxtRoute
+  PressRoute: typeof PressRoute
   PrivacyRoute: typeof PrivacyRoute
   StudioRoute: typeof StudioRoute
   ApiOgRoute: typeof ApiOgRoute
@@ -343,6 +356,13 @@ declare module '@tanstack/react-router' {
       path: '/privacy'
       fullPath: '/privacy'
       preLoaderRoute: typeof PrivacyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/press': {
+      id: '/press'
+      path: '/press'
+      fullPath: '/press'
+      preLoaderRoute: typeof PressRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/llms.txt': {
@@ -504,6 +524,7 @@ const rootRouteChildren: RootRouteChildren = {
   ImprintRoute: ImprintRoute,
   LlmsFullDottxtRoute: LlmsFullDottxtRoute,
   LlmsDottxtRoute: LlmsDottxtRoute,
+  PressRoute: PressRoute,
   PrivacyRoute: PrivacyRoute,
   StudioRoute: StudioRoute,
   ApiOgRoute: ApiOgRoute,
