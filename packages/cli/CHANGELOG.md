@@ -1,3 +1,9 @@
+## @lunora/cli [1.0.0-alpha.7](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.6...@lunora/cli@1.0.0-alpha.7) (2026-06-23)
+
+### Bug Fixes
+
+* **templates:** replace hardcoded worker port with VITE_LUNORA_URL env ([98e539d](https://github.com/anolilab/lunora/commit/98e539de32acf07c2cabd1ce73c5e52522dae3a1))
+
 ## @lunora/cli [1.0.0-alpha.6](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.5...@lunora/cli@1.0.0-alpha.6) (2026-06-23)
 
 ### Features
