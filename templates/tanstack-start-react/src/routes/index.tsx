@@ -34,9 +34,12 @@ const channelId = "channel:demo" as const;
  */
 const loadMessages = createServerFn().handler(async () => {
     // Worker URL: in Cloudflare's module-worker SSR the worker and SSR renderer share
-    // the same process, so loopback to localhost works. The env var lets operators
-    // point at a remote worker in preview deploys.
-    const workerUrl = typeof process !== "undefined" ? (process.env["LUNORA_WORKER_URL"] ?? "http://localhost:8787") : "http://localhost:8787";
+    // the same process, so loopback to localhost works. `VITE_LUNORA_URL` (replaced
+    // by Vite at dev/build) is the primary override; `LUNORA_WORKER_URL` stays as a
+    // runtime knob for preview deploys.
+    const workerUrl =
+        (import.meta.env.VITE_LUNORA_URL as string | undefined) ??
+        (typeof process !== "undefined" ? (process.env["LUNORA_WORKER_URL"] ?? "http://localhost:8787") : "http://localhost:8787");
 
     const client = createServerClient({ url: workerUrl });
 

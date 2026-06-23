@@ -12,7 +12,10 @@ import { HydrationScript } from "solid-js/web";
  * so we fall back to the loopback worker origin; the browser uses the page origin.
  */
 const lunoraClient = new LunoraClient({
-    url: typeof window === "undefined" ? "http://localhost:8787" : window.location.origin,
+    // `VITE_LUNORA_URL` (statically replaced by Vite at dev/build) wins so you can
+    // point at a deployed Worker; otherwise the browser uses the page origin and
+    // SSR loops back to the local dev worker.
+    url: (import.meta.env.VITE_LUNORA_URL as string | undefined) ?? (typeof window === "undefined" ? "http://localhost:8787" : window.location.origin),
 });
 
 export const Route = createRootRouteWithContext()({

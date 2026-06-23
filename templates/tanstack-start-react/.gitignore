@@ -3,6 +3,9 @@ node_modules
 .vinxi
 dist
 .wrangler
+.env
+.env.*
+!.env.example
 .lunora/
 .lunora-cache
 lunora/_generated

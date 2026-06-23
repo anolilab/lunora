@@ -28,15 +28,19 @@ export function Layout({ children }: { children: React.ReactNode }) {
     );
 }
 
+// Lunora endpoint. `VITE_LUNORA_URL` (statically replaced by Vite at dev/build)
+// wins so you can point at a deployed Worker; otherwise the browser uses the page
+// origin and SSR loops back to the local worker (same worker, via the composed
+// `virtual:lunora/worker` entry).
+const lunoraUrl = (import.meta.env.VITE_LUNORA_URL as string | undefined) ?? (typeof window === "undefined" ? "http://localhost:8787" : window.location.origin);
+
 /**
  * Root route component. Mounts the LunoraProvider so every child route can call
- * `useQuery` / `useMutation` / `useSubscription`. On the server the URL points at
- * the local worker; in the browser it points at the page origin (same worker, via
- * the composed `virtual:lunora/worker` entry).
+ * `useQuery` / `useMutation` / `useSubscription`.
  */
 export default function App() {
     return (
-        <LunoraProvider url={typeof window === "undefined" ? "http://localhost:8787" : window.location.origin}>
+        <LunoraProvider url={lunoraUrl}>
             <Outlet />
         </LunoraProvider>
     );

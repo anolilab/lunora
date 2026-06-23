@@ -74,8 +74,22 @@ const WRANGLER = `{
 }
 `;
 
-/** Lines the overlay ensures are present in `.gitignore`. */
-const GITIGNORE_ADDITIONS = [".wrangler", ".lunora/", ".lunora-cache", "lunora/_generated"];
+/** Lines the overlay ensures are present in `.gitignore` (keeps `.env.example` tracked). */
+const GITIGNORE_ADDITIONS = [".wrangler", ".env", ".env.*", "!.env.example", ".lunora/", ".lunora-cache", "lunora/_generated"];
+
+/**
+ * `.env.example` — documents the one client knob. The entry files read the Vite
+ * env var, which Vite statically replaces at `vite dev` / build; unset it falls
+ * back to the page origin.
+ */
+/* eslint-disable no-secrets/no-secrets -- env-var docs read as high-entropy strings */
+const ENV_EXAMPLE = `# Lunora endpoint for the browser client.
+# Vite statically replaces \`import.meta.env.VITE_LUNORA_URL\` at \`vite dev\` / build.
+# Leave it unset to use the page origin; set it to point at a deployed Worker:
+#
+# VITE_LUNORA_URL=https://my-app.example.workers.dev
+`;
+/* eslint-enable no-secrets/no-secrets */
 
 /** The dev-time deps every overlaid project needs on top of the framework adapter. */
 const COMMON_DEV_DEPENDENCIES: Record<string, string> = {
@@ -203,6 +217,7 @@ const applyLunoraOverlay = (options: ApplyOverlayOptions): ReadonlyArray<string>
     writeFile(target, join("lunora", "messages.ts"), LUNORA_MESSAGES, written);
     writeFile(target, join("src", "server.ts"), SERVER_ENTRY, written);
     writeFile(target, "wrangler.jsonc", WRANGLER.replaceAll("__NAME__", name), written);
+    writeFile(target, ".env.example", ENV_EXAMPLE, written);
 
     for (const file of adapter.files) {
         writeFile(target, file.path, file.contents, written);

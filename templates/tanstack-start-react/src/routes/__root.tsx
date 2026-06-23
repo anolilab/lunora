@@ -20,6 +20,11 @@ export const Route = createRootRouteWithContext<RouterContext>()({
     ),
 });
 
+// Lunora endpoint. `VITE_LUNORA_URL` (statically replaced by Vite at dev/build)
+// wins so you can point at a deployed Worker; otherwise the browser uses the
+// page origin and SSR loops back to the local dev worker.
+const lunoraUrl = (import.meta.env.VITE_LUNORA_URL as string | undefined) ?? (typeof window === "undefined" ? "http://localhost:8787" : window.location.origin);
+
 function RootComponent() {
     const { queryClient } = Route.useRouteContext();
 
@@ -30,7 +35,7 @@ function RootComponent() {
             </head>
             <body>
                 <QueryClientProvider client={queryClient}>
-                    <LunoraProvider url={typeof window === "undefined" ? "http://localhost:8787" : window.location.origin}>
+                    <LunoraProvider url={lunoraUrl}>
                         <Outlet />
                     </LunoraProvider>
                 </QueryClientProvider>
