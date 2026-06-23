@@ -61,7 +61,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/advisor": "1.0.0-alpha.1",
+        "@lunora/advisor": "workspace:*",
         "@lunora/container": "1.0.0-alpha.1",
         "@lunora/scheduler": "1.0.0-alpha.1",
         "@lunora/values": "1.0.0-alpha.1",

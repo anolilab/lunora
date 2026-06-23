@@ -1818,8 +1818,8 @@ importers:
   packages/codegen:
     dependencies:
       '@lunora/advisor':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: workspace:*
+        version: link:../advisor
       '@lunora/container':
         specifier: 1.0.0-alpha.1
         version: 1.0.0-alpha.1
