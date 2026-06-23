@@ -25,6 +25,9 @@ coverage/
 ts-coverage
 *.lcov
 
+# fallow (dead-code / health) run cache — emitted per package, never committed
+.fallow/
+
 # Dependency directories
 node_modules/
 jspm_packages/
