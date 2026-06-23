@@ -2194,8 +2194,8 @@ importers:
   packages/lunora:
     dependencies:
       '@lunora/cli':
-        specifier: 1.0.0-alpha.6
-        version: 1.0.0-alpha.6(89011f5a9e1ce5646fa31a16c3abfbfc)
+        specifier: 1.0.0-alpha.7
+        version: 1.0.0-alpha.7(89011f5a9e1ce5646fa31a16c3abfbfc)
       '@lunora/client':
         specifier: 1.0.0-alpha.1
         version: 1.0.0-alpha.1
@@ -5399,8 +5399,8 @@ packages:
     resolution: {integrity: sha512-f5AUia7oRcIc1icx4Yrb/R5fYniFFPdv6xqOOKQUpMdpYuejCluS5NcfMVEzMJcD+7bscRH/QTwDgEN5h4dNHg==}
     engines: {node: ^22.15.0 || >=24.11.0}
 
-  '@lunora/cli@1.0.0-alpha.6':
-    resolution: {integrity: sha512-bsDBwXAEF4WHYA+XKQWEmT9w2/84eQfik6+jwy5I/iPynOrEKa67YvczRXSNVXBUdBFMFbtsdvwALbap2Ef4Ag==}
+  '@lunora/cli@1.0.0-alpha.7':
+    resolution: {integrity: sha512-Zg5C5JBHuCnilwgWfHFDwTT+FM7YS7qiqGsd0HpuYkzAcv4GoFVFKZCLo+spV4tFOFdcP2aTaaCF5awiqrzPeQ==}
     engines: {node: ^22.15.0 || >=24.11.0}
     hasBin: true
 
@@ -22132,7 +22132,7 @@ snapshots:
 
   '@lunora/analytics@1.0.0-alpha.1': {}
 
-  '@lunora/cli@1.0.0-alpha.6(89011f5a9e1ce5646fa31a16c3abfbfc)':
+  '@lunora/cli@1.0.0-alpha.7(89011f5a9e1ce5646fa31a16c3abfbfc)':
     dependencies:
       '@bomb.sh/tab': 0.0.17(cac@6.7.14)(citty@0.2.2)
       '@lunora/codegen': 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
