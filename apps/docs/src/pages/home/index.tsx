@@ -1,4 +1,3 @@
-import SiAstro from "@icons-pack/react-simple-icons/icons/SiAstro.mjs";
 import SiReact from "@icons-pack/react-simple-icons/icons/SiReact.mjs";
 import SiSolid from "@icons-pack/react-simple-icons/icons/SiSolid.mjs";
 import SiSvelte from "@icons-pack/react-simple-icons/icons/SiSvelte.mjs";
@@ -6,6 +5,10 @@ import SiVite from "@icons-pack/react-simple-icons/icons/SiVite.mjs";
 import SiVuedotjs from "@icons-pack/react-simple-icons/icons/SiVuedotjs.mjs";
 import type { ComponentType, FC, ReactNode } from "react";
 
+import AnalogLogo from "@/assets/frameworks/analog.svg?react";
+import AstroLogo from "@/assets/frameworks/astro.svg?react";
+import NuxtLogo from "@/assets/frameworks/nuxt.svg?react";
+import TanstackLogo from "@/assets/frameworks/tanstack.svg?react";
 import schemaImg from "@/assets/studio/schema.png";
 import timeTravelImg from "@/assets/studio/time-travel.png";
 import CodeView from "@/components/sections/code-view";
@@ -69,13 +72,19 @@ const bento: Bento[] = [
     },
 ];
 
-const logos: { Icon: ComponentType<{ className?: string }>; name: string }[] = [
-    { Icon: SiReact, name: "React" },
-    { Icon: SiVuedotjs, name: "Vue" },
-    { Icon: SiSvelte, name: "Svelte" },
-    { Icon: SiSolid, name: "Solid" },
-    { Icon: SiAstro, name: "Astro" },
-    { Icon: SiVite, name: "Vite" },
+// `brand` simple-icons render their brand hex via `color="default"`; the
+// downloaded official marks (Astro gradient, TanStack white emblem, Nuxt green,
+// Analog red waveform) carry their own fills.
+const logos: { brand?: boolean; Icon: ComponentType<{ className?: string; color?: string }>; name: string }[] = [
+    { brand: true, Icon: SiReact, name: "React" },
+    { brand: true, Icon: SiVuedotjs, name: "Vue" },
+    { brand: true, Icon: SiSvelte, name: "Svelte" },
+    { brand: true, Icon: SiSolid, name: "Solid" },
+    { Icon: AstroLogo, name: "Astro" },
+    { Icon: TanstackLogo, name: "TanStack" },
+    { Icon: NuxtLogo, name: "Nuxt" },
+    { Icon: AnalogLogo, name: "Analog" },
+    { brand: true, Icon: SiVite, name: "Vite" },
 ];
 
 const BentoVisual: FC<{ cell: Bento }> = ({ cell }) => {
@@ -152,16 +161,16 @@ const Home: FC = () => (
             <div className="mx-auto max-w-6xl px-5 lg:px-0">
                 <SectionHead
                     eyebrow="Integrations"
-                    subtitle="One framework, every frontend — Lunora ships live adapters for React, Vue, Svelte, Solid, and Astro, powered by a Vite-first dev experience."
+                    subtitle="One framework, every frontend — Lunora ships live adapters for React, Vue, Svelte, Solid, Astro, TanStack, Nuxt, and Analog, powered by a Vite-first dev experience."
                     title="Works with your entire stack"
                 />
                 <div className="mt-14 grid grid-cols-2 gap-px border border-white/[0.08] bg-white/[0.08] sm:grid-cols-3 lg:border-x-0">
-                    {logos.map(({ Icon, name }) => (
+                    {logos.map(({ brand, Icon, name }) => (
                         <div
-                            className="flex h-32 items-center justify-center gap-3 bg-[#0e0e11] text-white/30 transition-colors hover:text-white/70"
+                            className="flex h-32 items-center justify-center gap-3 bg-[#0e0e11] text-white/70 transition-colors hover:text-white"
                             key={name}
                         >
-                            <Icon className="size-6" />
+                            <Icon className="size-6" color={brand ? "default" : undefined} />
                             <span className="text-xl font-medium tracking-tight">{name}</span>
                         </div>
                     ))}
