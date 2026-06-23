@@ -28,6 +28,7 @@ export default createConfig(
             "**/*.md/**",
             "**/vitest.config.ts",
             "**/packem.config.ts",
+            "**/build.config.ts",
             "**/vite.config.ts",
             "**/wrangler.jsonc",
             "**/package.json",
