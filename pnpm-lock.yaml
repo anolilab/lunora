@@ -2194,8 +2194,8 @@ importers:
   packages/lunora:
     dependencies:
       '@lunora/cli':
-        specifier: 1.0.0-alpha.5
-        version: 1.0.0-alpha.5(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@shikijs/langs@4.2.0)(@shikijs/themes@4.2.0)(@tanstack/react-query@5.101.0(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(@visulima/redact@3.0.0-alpha.14)(@visulima/tabular@4.0.0-alpha.14)(cac@6.7.14)(cfonts@3.3.1)(citty@0.2.2)(date-fns@4.4.0)(express@5.2.1)(github-slugger@2.0.0)(hono@4.12.26)(ini@7.0.0)(json5@2.2.3)(kysely@0.28.17)(marked@15.0.12)(mysql2@3.22.5(@types/node@25.9.3))(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(shiki@4.2.0)(smol-toml@1.6.1)(ws@8.21.0)(yaml@2.9.0)
+        specifier: 1.0.0-alpha.6
+        version: 1.0.0-alpha.6(89011f5a9e1ce5646fa31a16c3abfbfc)
       '@lunora/client':
         specifier: 1.0.0-alpha.1
         version: 1.0.0-alpha.1
@@ -5246,8 +5246,8 @@ packages:
     resolution: {integrity: sha512-f5AUia7oRcIc1icx4Yrb/R5fYniFFPdv6xqOOKQUpMdpYuejCluS5NcfMVEzMJcD+7bscRH/QTwDgEN5h4dNHg==}
     engines: {node: ^22.15.0 || >=24.11.0}
 
-  '@lunora/cli@1.0.0-alpha.5':
-    resolution: {integrity: sha512-UJYUtCJ1Kfe39RA4m7OjUSmXAsIRJgU4cWIqxVeKAfWSJMeR0seI8MxlR8cWja6Q8rTqj4+j+vgi7yaBrqPsyA==}
+  '@lunora/cli@1.0.0-alpha.6':
+    resolution: {integrity: sha512-bsDBwXAEF4WHYA+XKQWEmT9w2/84eQfik6+jwy5I/iPynOrEKa67YvczRXSNVXBUdBFMFbtsdvwALbap2Ef4Ag==}
     engines: {node: ^22.15.0 || >=24.11.0}
     hasBin: true
 
@@ -21609,7 +21609,7 @@ snapshots:
 
   '@lunora/analytics@1.0.0-alpha.1': {}
 
-  '@lunora/cli@1.0.0-alpha.5(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@shikijs/langs@4.2.0)(@shikijs/themes@4.2.0)(@tanstack/react-query@5.101.0(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(@visulima/redact@3.0.0-alpha.14)(@visulima/tabular@4.0.0-alpha.14)(cac@6.7.14)(cfonts@3.3.1)(citty@0.2.2)(date-fns@4.4.0)(express@5.2.1)(github-slugger@2.0.0)(hono@4.12.26)(ini@7.0.0)(json5@2.2.3)(kysely@0.28.17)(marked@15.0.12)(mysql2@3.22.5(@types/node@25.9.3))(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(shiki@4.2.0)(smol-toml@1.6.1)(ws@8.21.0)(yaml@2.9.0)':
+  '@lunora/cli@1.0.0-alpha.6(89011f5a9e1ce5646fa31a16c3abfbfc)':
     dependencies:
       '@bomb.sh/tab': 0.0.17(cac@6.7.14)(citty@0.2.2)
       '@lunora/codegen': 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
@@ -21617,15 +21617,13 @@ snapshots:
       '@lunora/container': 1.0.0-alpha.1
       '@lunora/d1': 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
       '@lunora/seed': 1.0.0-alpha.1(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/values@1.0.0-alpha.1)
-      '@lunora/server': 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
-      '@lunora/studio': 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@tanstack/react-query@5.101.0(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(date-fns@4.4.0)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7)
-      '@lunora/values': 1.0.0-alpha.1
       '@visulima/cerebro': 3.0.0-alpha.32(@bomb.sh/tab@0.0.17(cac@6.7.14)(citty@0.2.2))(@visulima/pail@4.0.0-alpha.22(@opentelemetry/api@1.9.1)(@visulima/redact@3.0.0-alpha.14)(express@5.2.1)(hono@4.12.26)(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)))(github-slugger@2.0.0)
       '@visulima/fs': 5.0.0-alpha.32(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(smol-toml@1.6.1)(yaml@2.9.0)
       '@visulima/pail': 4.0.0-alpha.22(@opentelemetry/api@1.9.1)(@visulima/redact@3.0.0-alpha.14)(express@5.2.1)(hono@4.12.26)(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))
       '@visulima/path': 3.0.0-alpha.13
       '@visulima/spinner': 1.0.0-alpha.4
       '@visulima/tui': 1.0.0-alpha.26(@shikijs/langs@4.2.0)(@shikijs/themes@4.2.0)(@visulima/tabular@4.0.0-alpha.14)(cfonts@3.3.1)(marked@15.0.12)(react-reconciler@0.33.0(react@19.2.7))(react@19.2.7)(shiki@4.2.0)(ws@8.21.0)
+      cfonts: 3.3.1
       giget: 3.3.0
       jsonc-parser: 3.3.1
       magic-string: 0.30.21
@@ -21635,11 +21633,12 @@ snapshots:
     transitivePeerDependencies:
       - '@aws-sdk/client-rds-data'
       - '@cloudflare/workers-types'
-      - '@date-fns/tz'
       - '@electric-sql/pglite'
-      - '@emotion/is-prop-valid'
       - '@libsql/client'
       - '@libsql/client-wasm'
+      - '@lunora/server'
+      - '@lunora/studio'
+      - '@lunora/values'
       - '@neondatabase/serverless'
       - '@op-engineering/op-sqlite'
       - '@opentelemetry/api'
@@ -21648,12 +21647,9 @@ snapshots:
       - '@shikijs/langs'
       - '@shikijs/themes'
       - '@sveltejs/kit'
-      - '@tanstack/react-query'
       - '@tidbcloud/serverless'
       - '@types/better-sqlite3'
       - '@types/pg'
-      - '@types/react'
-      - '@types/react-dom'
       - '@types/sql.js'
       - '@upstash/redis'
       - '@vercel/postgres'
@@ -21663,14 +21659,11 @@ snapshots:
       - '@visulima/tabular'
       - '@xata.io/client'
       - ai
-      - babel-plugin-macros
       - better-sqlite3
       - bun-types
       - cac
-      - cfonts
       - citty
       - commander
-      - date-fns
       - diff
       - elysia
       - expo-sqlite
@@ -21679,7 +21672,6 @@ snapshots:
       - gel
       - github-slugger
       - hono
-      - immer
       - ini
       - json5
       - knex
@@ -21691,15 +21683,11 @@ snapshots:
       - postgres
       - prisma
       - react-devtools-core
-      - react-dom
-      - react-is
-      - redux
       - rotating-file-stream
       - shiki
       - smol-toml
       - sql.js
       - sqlite3
-      - supports-color
       - ws
       - yaml
 
