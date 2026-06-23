@@ -141,8 +141,14 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # fallow is static source analysis — no build needed.
+            # fallow is static source analysis — no build needed. `health` is an
+            # advisory report (dead code / dupes / complexity drift): it prints
+            # each project's score but must not block merges, so the step is
+            # non-blocking. Newer fallow exits 1 on any finding (the `--score`
+            # script has no gate flag), which would otherwise fail the job —
+            # `continue-on-error` keeps the report visible without gating the PR.
             - "name": "Run fallow health"
+              "continue-on-error": true
               "run": "pnpm run fallow:affected:health"
 
     "prettier":
