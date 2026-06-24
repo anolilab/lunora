@@ -1,3 +1,21 @@
+## @lunora/do [1.0.0-alpha.4](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.3...@lunora/do@1.0.0-alpha.4) (2026-06-24)
+
+### Features
+
+* **r2sql:** typed R2 SQL client with window functions, DISTINCT and set ops ([#26](https://github.com/anolilab/lunora/issues/26)) ([fe9546b](https://github.com/anolilab/lunora/commit/fe9546bb3473875d47939bf93e6fbb81084a07aa))
+
+### Miscellaneous Chores
+
+* **deps:** wire fallow into every package ([896a81d](https://github.com/anolilab/lunora/commit/896a81d39a064293234bba3b734cde1036e81a67))
+
+### Code Refactoring
+
+* remove dead code flagged by fallow ([be57eca](https://github.com/anolilab/lunora/commit/be57ecaf4d6f3bc95d7b1a5876305dfb2af80e45))
+
+### Tests
+
+* **bench:** fix codspeed bench failures (hook timeout + seeding) ([f2af120](https://github.com/anolilab/lunora/commit/f2af12081c33296a66daa314f3d90fd4144904fe))
+
 ## @lunora/do [1.0.0-alpha.3](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.2...@lunora/do@1.0.0-alpha.3) (2026-06-22)
 
 ### Bug Fixes
