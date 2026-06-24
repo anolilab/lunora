@@ -17,6 +17,49 @@ blockExoticSubdeps: true
 # react-reconciler pin react@19.2.6 while everything else uses 19.2.7; the two
 # copies crash vis's TUI renderer ("Invalid hook call" / useContext on null).
 overrides:
+  # Internal packages → local workspace source. Lives in root overrides (NOT each
+  # package's dependencies) so semantic-release-pnpm's per-package range rewrite
+  # never clobbers it; published tarballs are unaffected (overrides are install-time).
+  "@lunora/advisor": "workspace:*"
+  "@lunora/ai": "workspace:*"
+  "@lunora/analytics": "workspace:*"
+  "@lunora/astro": "workspace:*"
+  "@lunora/auth": "workspace:*"
+  "@lunora/browser": "workspace:*"
+  "@lunora/cli": "workspace:*"
+  "@lunora/client": "workspace:*"
+  "@lunora/codegen": "workspace:*"
+  "@lunora/config": "workspace:*"
+  "@lunora/container": "workspace:*"
+  "@lunora/d1": "workspace:*"
+  "@lunora/db": "workspace:*"
+  "@lunora/do": "workspace:*"
+  "@lunora/hyperdrive": "workspace:*"
+  "@lunora/images": "workspace:*"
+  "@lunora/kv": "workspace:*"
+  "@lunora/mail": "workspace:*"
+  "@lunora/mcp": "workspace:*"
+  "@lunora/nuxt": "workspace:*"
+  "@lunora/payment": "workspace:*"
+  "@lunora/r2sql": "workspace:*"
+  "@lunora/ratelimit": "workspace:*"
+  "@lunora/react": "workspace:*"
+  "@lunora/runtime": "workspace:*"
+  "@lunora/scheduler": "workspace:*"
+  "@lunora/seed": "workspace:*"
+  "@lunora/server": "workspace:*"
+  "@lunora/solid": "workspace:*"
+  "@lunora/sql-store": "workspace:*"
+  "@lunora/storage": "workspace:*"
+  "@lunora/studio": "workspace:*"
+  "@lunora/svelte": "workspace:*"
+  "@lunora/testing": "workspace:*"
+  "@lunora/values": "workspace:*"
+  "@lunora/vectors": "workspace:*"
+  "@lunora/vite": "workspace:*"
+  "@lunora/vue": "workspace:*"
+  "@lunora/workflow": "workspace:*"
+  "lunorash": "workspace:*"
   '@opentelemetry/core@<2.8.0': ^2.8.0
   astro@<6.4.6: ^6.4.6
   dompurify@<=3.4.10: ^3.4.11

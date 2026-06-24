@@ -635,6 +635,46 @@ catalogs:
       version: 4.4.3
 
 overrides:
+  '@lunora/advisor': workspace:*
+  '@lunora/ai': workspace:*
+  '@lunora/analytics': workspace:*
+  '@lunora/astro': workspace:*
+  '@lunora/auth': workspace:*
+  '@lunora/browser': workspace:*
+  '@lunora/cli': workspace:*
+  '@lunora/client': workspace:*
+  '@lunora/codegen': workspace:*
+  '@lunora/config': workspace:*
+  '@lunora/container': workspace:*
+  '@lunora/d1': workspace:*
+  '@lunora/db': workspace:*
+  '@lunora/do': workspace:*
+  '@lunora/hyperdrive': workspace:*
+  '@lunora/images': workspace:*
+  '@lunora/kv': workspace:*
+  '@lunora/mail': workspace:*
+  '@lunora/mcp': workspace:*
+  '@lunora/nuxt': workspace:*
+  '@lunora/payment': workspace:*
+  '@lunora/r2sql': workspace:*
+  '@lunora/ratelimit': workspace:*
+  '@lunora/react': workspace:*
+  '@lunora/runtime': workspace:*
+  '@lunora/scheduler': workspace:*
+  '@lunora/seed': workspace:*
+  '@lunora/server': workspace:*
+  '@lunora/solid': workspace:*
+  '@lunora/sql-store': workspace:*
+  '@lunora/storage': workspace:*
+  '@lunora/studio': workspace:*
+  '@lunora/svelte': workspace:*
+  '@lunora/testing': workspace:*
+  '@lunora/values': workspace:*
+  '@lunora/vectors': workspace:*
+  '@lunora/vite': workspace:*
+  '@lunora/vue': workspace:*
+  '@lunora/workflow': workspace:*
+  lunorash: workspace:*
   '@opentelemetry/core@<2.8.0': ^2.8.0
   astro@<6.4.6: ^6.4.6
   dompurify@<=3.4.10: ^3.4.11
@@ -1471,12 +1511,12 @@ importers:
   packages/advisor:
     dependencies:
       '@lunora/server':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: workspace:*
+        version: link:../server
     devDependencies:
       '@lunora/values':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../values
       '@types/node':
         specifier: catalog:types
         version: 25.9.3
@@ -1575,11 +1615,11 @@ importers:
   packages/astro:
     dependencies:
       '@lunora/client':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../client
       '@lunora/runtime':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../runtime
       astro:
         specifier: ^6.4.6
         version: 6.4.8(@netlify/blobs@10.7.9)(@types/node@25.9.3)(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(mysql2@3.22.5(@types/node@25.9.3)))(ioredis@5.11.1)(jiti@2.7.0)(lightningcss@1.32.0)(rollup@4.60.1)(terser@5.48.0)(yaml@2.9.0)
@@ -1612,11 +1652,11 @@ importers:
         specifier: catalog:auth
         version: 1.6.19(@better-auth/core@1.6.19(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@cloudflare/workers-types@4.20260617.1)(@opentelemetry/api@1.9.1)(better-call@1.3.6(zod@4.4.3))(jose@6.2.3)(kysely@0.28.17)(nanostores@1.3.0))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-auth@1.6.19(8cf6972d86e43efe85749fd221bb43a2))(better-call@1.3.6(zod@4.4.3))(nanostores@1.3.0)
       '@lunora/server':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: workspace:*
+        version: link:../server
       '@lunora/values':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../values
       better-auth:
         specifier: catalog:auth
         version: 1.6.19(8cf6972d86e43efe85749fd221bb43a2)
@@ -1688,20 +1728,20 @@ importers:
         specifier: 0.0.16
         version: 0.0.16(cac@6.7.14)(citty@0.2.2)
       '@lunora/codegen':
-        specifier: 1.0.0-alpha.2
-        version: 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: workspace:*
+        version: link:../codegen
       '@lunora/config':
-        specifier: 1.0.0-alpha.3
-        version: 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/studio@1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@tanstack/react-query@5.101.0(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(date-fns@4.4.0)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7))(@lunora/values@1.0.0-alpha.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: workspace:*
+        version: link:../config
       '@lunora/container':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../container
       '@lunora/d1':
-        specifier: 1.0.0-alpha.3
-        version: 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: workspace:*
+        version: link:../d1
       '@lunora/seed':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/values@1.0.0-alpha.1)
+        specifier: workspace:*
+        version: link:../seed
       '@visulima/cerebro':
         specifier: 3.0.0-alpha.32
         version: 3.0.0-alpha.32(@bomb.sh/tab@0.0.16(cac@6.7.14)(citty@0.2.2))(@visulima/pail@4.0.0-alpha.22(@opentelemetry/api@1.9.1)(@visulima/redact@3.0.0-alpha.14)(express@5.2.1)(hono@4.12.26)(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)))(github-slugger@2.0.0)
@@ -1782,11 +1822,11 @@ importers:
         specifier: catalog:test
         version: 5.6.0(tinybench@2.9.0)(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))(vitest@4.1.9)
       '@lunora/do':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: workspace:*
+        version: link:../do
       '@lunora/runtime':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../runtime
       '@types/node':
         specifier: catalog:types
         version: 25.9.3
@@ -1821,17 +1861,17 @@ importers:
         specifier: workspace:*
         version: link:../advisor
       '@lunora/container':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../container
       '@lunora/scheduler':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../scheduler
       '@lunora/values':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../values
       '@lunora/workflow':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../workflow
       ts-morph:
         specifier: catalog:tooling
         version: 28.0.0
@@ -1840,11 +1880,11 @@ importers:
         specifier: catalog:test
         version: 5.6.0(tinybench@2.9.0)(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))(vitest@4.1.9)
       '@lunora/do':
-        specifier: 1.0.0-alpha.2
-        version: 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: workspace:*
+        version: link:../do
       '@lunora/server':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: workspace:*
+        version: link:../server
       '@types/node':
         specifier: catalog:types
         version: 25.9.3
@@ -1873,17 +1913,17 @@ importers:
   packages/config:
     dependencies:
       '@lunora/codegen':
-        specifier: 1.0.0-alpha.2
-        version: 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: workspace:*
+        version: link:../codegen
       '@lunora/container':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../container
       '@lunora/seed':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/values@1.0.0-alpha.1)
+        specifier: workspace:*
+        version: link:../seed
       '@lunora/studio':
-        specifier: 1.0.0-alpha.2
-        version: 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@tanstack/react-query@5.101.0(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(date-fns@4.4.0)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7)
+        specifier: workspace:*
+        version: link:../studio
       es-module-lexer:
         specifier: catalog:vite
         version: 2.1.0
@@ -1950,11 +1990,11 @@ importers:
   packages/d1:
     dependencies:
       '@lunora/do':
-        specifier: 1.0.0-alpha.3
-        version: 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: workspace:*
+        version: link:../do
       '@lunora/sql-store':
-        specifier: 1.0.0-alpha.3
-        version: 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: workspace:*
+        version: link:../sql-store
       drizzle-orm:
         specifier: catalog:drizzle
         version: 0.45.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
@@ -1996,8 +2036,8 @@ importers:
   packages/db:
     dependencies:
       '@lunora/client':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../client
     devDependencies:
       '@tanstack/db':
         specifier: catalog:frontend
@@ -2046,8 +2086,8 @@ importers:
         specifier: catalog:test
         version: 5.6.0(tinybench@2.9.0)(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))(vitest@4.1.9)
       '@lunora/vectors':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../vectors
       '@types/node':
         specifier: catalog:types
         version: 25.9.3
@@ -2076,11 +2116,11 @@ importers:
   packages/hyperdrive:
     dependencies:
       '@lunora/do':
-        specifier: 1.0.0-alpha.3
-        version: 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: workspace:*
+        version: link:../do
       '@lunora/sql-store':
-        specifier: 1.0.0-alpha.3
-        version: 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: workspace:*
+        version: link:../sql-store
       drizzle-orm:
         specifier: catalog:drizzle
         version: 0.45.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
@@ -2194,23 +2234,23 @@ importers:
   packages/lunora:
     dependencies:
       '@lunora/cli':
-        specifier: 1.0.0-alpha.7
-        version: 1.0.0-alpha.7(89011f5a9e1ce5646fa31a16c3abfbfc)
+        specifier: workspace:*
+        version: link:../cli
       '@lunora/client':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../client
       '@lunora/do':
-        specifier: 1.0.0-alpha.3
-        version: 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: workspace:*
+        version: link:../do
       '@lunora/runtime':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../runtime
       '@lunora/server':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: workspace:*
+        version: link:../server
       '@lunora/values':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../values
     devDependencies:
       '@codspeed/vitest-plugin':
         specifier: catalog:test
@@ -2220,7 +2260,7 @@ importers:
         version: 25.9.3
       '@visulima/packem':
         specifier: catalog:build
-        version: 2.0.0-alpha.93(113703aa76bd165aa92d0ff5d3158a66)
+        version: 2.0.0-alpha.93(39db6a19757a33ecfffbf3102bc29244)
       '@vitest/coverage-v8':
         specifier: catalog:test
         version: 4.1.9(vitest@4.1.9)
@@ -2286,8 +2326,8 @@ importers:
   packages/mcp:
     dependencies:
       '@lunora/client':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../client
       '@modelcontextprotocol/sdk':
         specifier: catalog:mcp
         version: 1.29.0(zod@4.4.3)
@@ -2317,8 +2357,8 @@ importers:
   packages/nuxt:
     dependencies:
       '@lunora/client':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../client
       '@nuxt/kit':
         specifier: ^4.0.0
         version: 4.4.8(magicast@0.5.3)
@@ -2351,11 +2391,11 @@ importers:
   packages/payment:
     dependencies:
       '@lunora/server':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: workspace:*
+        version: link:../server
       '@lunora/values':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../values
       dinero.js:
         specifier: 2.0.2
         version: 2.0.2
@@ -2421,11 +2461,11 @@ importers:
         specifier: catalog:test
         version: 5.6.0(tinybench@2.9.0)(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))(vitest@4.1.9)
       '@lunora/server':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: workspace:*
+        version: link:../server
       '@lunora/values':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../values
       '@types/node':
         specifier: catalog:types
         version: 25.9.3
@@ -2451,11 +2491,11 @@ importers:
   packages/react:
     dependencies:
       '@lunora/client':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../client
       '@lunora/ratelimit':
-        specifier: 1.0.0-alpha.2
-        version: 1.0.0-alpha.2
+        specifier: workspace:*
+        version: link:../ratelimit
     devDependencies:
       '@babel/core':
         specifier: catalog:build
@@ -2530,11 +2570,11 @@ importers:
         specifier: catalog:test
         version: 5.6.0(tinybench@2.9.0)(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))(vitest@4.1.9)
       '@lunora/do':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: workspace:*
+        version: link:../do
       '@lunora/workflow':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../workflow
       '@types/node':
         specifier: catalog:types
         version: 25.9.3
@@ -2610,14 +2650,14 @@ importers:
         version: 10.5.0
     devDependencies:
       '@lunora/server':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: workspace:*
+        version: link:../server
       '@lunora/testing':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: workspace:*
+        version: link:../testing
       '@lunora/values':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../values
       '@types/node':
         specifier: catalog:types
         version: 25.9.3
@@ -2643,11 +2683,11 @@ importers:
   packages/server:
     dependencies:
       '@lunora/scheduler':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../scheduler
       '@lunora/values':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../values
       drizzle-orm:
         specifier: catalog:drizzle
         version: 0.45.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
@@ -2683,11 +2723,11 @@ importers:
   packages/solid:
     dependencies:
       '@lunora/client':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../client
       '@lunora/ratelimit':
-        specifier: 1.0.0-alpha.2
-        version: 1.0.0-alpha.2
+        specifier: workspace:*
+        version: link:../ratelimit
     devDependencies:
       '@babel/core':
         specifier: catalog:build
@@ -2735,8 +2775,8 @@ importers:
   packages/sql-store:
     dependencies:
       '@lunora/do':
-        specifier: 1.0.0-alpha.3
-        version: 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: workspace:*
+        version: link:../do
       drizzle-orm:
         specifier: catalog:drizzle
         version: 0.45.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
@@ -2820,17 +2860,17 @@ importers:
         specifier: catalog:i18n
         version: 6.4.0
       '@lunora/advisor':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: workspace:*
+        version: link:../advisor
       '@lunora/analytics':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../analytics
       '@lunora/client':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../client
       '@lunora/react':
-        specifier: 1.0.0-alpha.2
-        version: 1.0.0-alpha.2(@tanstack/react-query@5.101.0(react@19.2.7))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: workspace:*
+        version: link:../react
       '@tanstack/react-router':
         specifier: catalog:frontend
         version: 1.170.16(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -2869,8 +2909,8 @@ importers:
         specifier: catalog:build
         version: 8.0.1(@babel/core@8.0.1)
       '@lunora/mail':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(asn1js@3.0.10)(handlebars@4.7.9)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(unstorage@1.17.5(@netlify/blobs@10.7.9)(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(mysql2@3.22.5(@types/node@25.9.3)))(ioredis@5.11.1))
+        specifier: workspace:*
+        version: link:../mail
       '@tailwindcss/cli':
         specifier: catalog:vite
         version: 4.3.1
@@ -2932,14 +2972,14 @@ importers:
   packages/svelte:
     dependencies:
       '@lunora/client':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../client
       '@lunora/ratelimit':
-        specifier: 1.0.0-alpha.2
-        version: 1.0.0-alpha.2
+        specifier: workspace:*
+        version: link:../ratelimit
       '@lunora/runtime':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../runtime
     devDependencies:
       '@types/node':
         specifier: catalog:types
@@ -2972,14 +3012,14 @@ importers:
   packages/testing:
     dependencies:
       '@lunora/do':
-        specifier: 1.0.0-alpha.3
-        version: 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: workspace:*
+        version: link:../do
       '@lunora/mail':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(asn1js@3.0.10)(handlebars@4.7.9)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(unstorage@1.17.5(@netlify/blobs@10.7.9)(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(mysql2@3.22.5(@types/node@25.9.3)))(ioredis@5.11.1))
+        specifier: workspace:*
+        version: link:../mail
       '@lunora/server':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: workspace:*
+        version: link:../server
     devDependencies:
       '@types/node':
         specifier: catalog:types
@@ -3072,14 +3112,14 @@ importers:
         specifier: catalog:vite
         version: 1.42.0(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))(workerd@1.20260617.1)(wrangler@4.102.0(@cloudflare/workers-types@4.20260617.1))
       '@lunora/codegen':
-        specifier: 1.0.0-alpha.2
-        version: 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: workspace:*
+        version: link:../codegen
       '@lunora/config':
-        specifier: 1.0.0-alpha.2
-        version: 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/studio@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@tanstack/react-query@5.101.0(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(date-fns@4.4.0)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7))(@lunora/values@1.0.0-alpha.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
+        specifier: workspace:*
+        version: link:../config
       '@lunora/studio':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@tanstack/react-query@5.101.0(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(date-fns@4.4.0)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7)
+        specifier: workspace:*
+        version: link:../studio
       '@visulima/vite-overlay':
         specifier: catalog:vite
         version: 2.0.0-alpha.35(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
@@ -3118,14 +3158,14 @@ importers:
   packages/vue:
     dependencies:
       '@lunora/client':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../client
       '@lunora/ratelimit':
-        specifier: 1.0.0-alpha.2
-        version: 1.0.0-alpha.2
+        specifier: workspace:*
+        version: link:../ratelimit
       '@lunora/runtime':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../runtime
     devDependencies:
       '@types/node':
         specifier: catalog:types
@@ -3158,8 +3198,8 @@ importers:
   packages/workflow:
     dependencies:
       '@lunora/values':
-        specifier: 1.0.0-alpha.1
-        version: 1.0.0-alpha.1
+        specifier: workspace:*
+        version: link:../values
     devDependencies:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
@@ -3941,21 +3981,6 @@ packages:
 
   '@bomb.sh/tab@0.0.16':
     resolution: {integrity: sha512-xFtIH6JYVdXgkSft97gsQyJODZbjGXw+l+wkT06lBiBPuaF0CFYNulQNsgnYud7rURI7D4lyLmOQeAzRkvl1Fg==}
-    hasBin: true
-    peerDependencies:
-      cac: ^6.7.14
-      citty: ^0.1.6 || ^0.2.0
-      commander: ^13.1.0
-    peerDependenciesMeta:
-      cac:
-        optional: true
-      citty:
-        optional: true
-      commander:
-        optional: true
-
-  '@bomb.sh/tab@0.0.17':
-    resolution: {integrity: sha512-rGhqfWwaSF6qN5Gm5P9EH9eybrwLEowHTkV+wsRgFewT6aQCQWVWXLclVk0McgVIlWCGX+W9mYYC1Egsg+Znsw==}
     hasBin: true
     peerDependencies:
       cac: ^6.7.14
@@ -5417,151 +5442,6 @@ packages:
   '@lingui/message-utils@6.4.0':
     resolution: {integrity: sha512-Bkt2V7vI57/CEVyJCO+93jssN2MhLJ07M6S0d16tHvigNftP5Ndl+2xX1HKWD6eozidc5lOeTZMtrEL9jzXEsg==}
     engines: {node: '>=22.19.0'}
-
-  '@lunora/advisor@1.0.0-alpha.1':
-    resolution: {integrity: sha512-cOvTfc9BjH/tJ4QS4i6CTcRJgAihsJ7JF438XcFC6gGThmtaJw6Ddw2SEuumYMQY1VqZzy4wSSlrmHTcrt6oNg==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-
-  '@lunora/analytics@1.0.0-alpha.1':
-    resolution: {integrity: sha512-f5AUia7oRcIc1icx4Yrb/R5fYniFFPdv6xqOOKQUpMdpYuejCluS5NcfMVEzMJcD+7bscRH/QTwDgEN5h4dNHg==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-
-  '@lunora/cli@1.0.0-alpha.7':
-    resolution: {integrity: sha512-Zg5C5JBHuCnilwgWfHFDwTT+FM7YS7qiqGsd0HpuYkzAcv4GoFVFKZCLo+spV4tFOFdcP2aTaaCF5awiqrzPeQ==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-    hasBin: true
-
-  '@lunora/client@1.0.0-alpha.1':
-    resolution: {integrity: sha512-/FRTWlKf54dsPM36RrxVmL4hpTGX7XZ6UIzDeK1u4bUTm7pBPs44ezmt6hDdzruomSrKklNyL2RwyhMPV3Tqjw==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-
-  '@lunora/codegen@1.0.0-alpha.2':
-    resolution: {integrity: sha512-j5OwvTtmJSXh65ZTdU4ABa4XNHO/8bgjlz9/PEODfLLG1FZlIbH1/iG4Y3qcYAZaCSvP1IfkO5oVZyWGd4JHbA==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-
-  '@lunora/config@1.0.0-alpha.2':
-    resolution: {integrity: sha512-bUVtGszX6I+AZPNckOtMnPPHPMT1vK5ILAurrUgPfLUeaHn/RgaCmKCeCX+fJ2h9cXGCCa52JC5JBL1JnIIzgg==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-    peerDependencies:
-      '@lunora/studio': 1.0.0-alpha.1
-    peerDependenciesMeta:
-      '@lunora/studio':
-        optional: true
-
-  '@lunora/config@1.0.0-alpha.3':
-    resolution: {integrity: sha512-QNxi6+iU2SBL9iLmNuuvChah/d7HVibcpgKUs4XZHMduwowvm3d9Rnii0cxxtegSbQuU3WP+z6Ypg4qqKDyM+w==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-    peerDependencies:
-      '@lunora/studio': 1.0.0-alpha.2
-    peerDependenciesMeta:
-      '@lunora/studio':
-        optional: true
-
-  '@lunora/container@1.0.0-alpha.1':
-    resolution: {integrity: sha512-eVUNV1Z7IxljqDwMu2o23GZ7f7mOExtkVOoNya0K4ToMNTsF8P+DaRKYMvHlTmUER6zuAax9DrrJWh7RqTe7Ow==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-
-  '@lunora/d1@1.0.0-alpha.3':
-    resolution: {integrity: sha512-kKwEngvGk5a2Gu4UDztcGbBNzFzEcV+HVvnWCpcS4qHfSxFd9LtZne9dw59U4fB7NOr3Wg2wwId0zlDA/5lvQQ==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-
-  '@lunora/do@1.0.0-alpha.1':
-    resolution: {integrity: sha512-6ckESpQ05o7WVgRAe3vbBhfQi+vcqaZATF269P6kGB3wXiRigU0r6Uci/lG6mebz6n/SwDR3kW0npENYa9HarQ==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-
-  '@lunora/do@1.0.0-alpha.2':
-    resolution: {integrity: sha512-wb6Cq52BDaBEk1c91fCSImcAzFA20Htcb3EMQh1nP5au/s3aCcZ8S8BAoE8Rs24gJS7OcBbFNR938fbTSlDe4g==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-
-  '@lunora/do@1.0.0-alpha.3':
-    resolution: {integrity: sha512-hyO+oi/JgkKqlzXYIXuNeyMn2DtBEWPNQ9tLTGSdHNQJTPyZDkQwyboXD+bOpPIbC+wwYemlzg8cR7UdSv3SKw==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-
-  '@lunora/mail@1.0.0-alpha.1':
-    resolution: {integrity: sha512-ort4semuD9x9KRp4jJBbnX+WRb6MrUVj4sFU0HEUqHq/itSIGBhl+aRpWEtaSGh4448VtYkA4IQS9Ji1LO1gUg==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-    peerDependencies:
-      react: 19.2.7
-    peerDependenciesMeta:
-      react:
-        optional: true
-
-  '@lunora/ratelimit@1.0.0-alpha.1':
-    resolution: {integrity: sha512-G9h3PGb3GBqhkemPfc4HuDPsjt+YYODjH7OQcd33QW/JqDjf16Byk3p8cBn+m3n9FlZP6SgmzhILJhPmKJTBwA==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-
-  '@lunora/ratelimit@1.0.0-alpha.2':
-    resolution: {integrity: sha512-v2TZHrHbtv/2gEjJJdU06gkl5eotnbki8P1VhkBABv596479B1ZzbIWgf6NgGbiUEL68RJN1zKkiZagVJOQc1Q==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-
-  '@lunora/react@1.0.0-alpha.1':
-    resolution: {integrity: sha512-r1MbxH3DtYSrfoCSCK+IYMtOWm3TkSe3MeBj8n3AW7vJ3xVij05eVhrShQUF8zza4hyNc2BH7oUYmCjj2drSGQ==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-    peerDependencies:
-      '@tanstack/react-query': ^5.101.0
-      react: 19.2.7
-      react-dom: 19.2.7
-
-  '@lunora/react@1.0.0-alpha.2':
-    resolution: {integrity: sha512-jAUMmowkSsIo+9PSTpb/Q+0jE+Feu/mo0qiJpTcAO5qAojsJ+kWTrxO03gYMPlHd8lRWKHbFi20gC8Jv1UaeHQ==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-    peerDependencies:
-      '@tanstack/react-query': ^5.101.0
-      react: 19.2.7
-      react-dom: 19.2.7
-
-  '@lunora/runtime@1.0.0-alpha.1':
-    resolution: {integrity: sha512-518y+ggVoYq/GlM1yj18IJY9Y0USOdriP7FHTraZAiHwymfP+tWAciRGCq88o0TIqIKALp/ZabhNBMnrxq0AUQ==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-
-  '@lunora/scheduler@1.0.0-alpha.1':
-    resolution: {integrity: sha512-l0JXjNqF4GDCnadRo64IPoWdxYc6stBA/fETGrozPPj66ehYk4/MZbQsa6YAZtXRd+6s7GepdkuXiqVGJL/CYg==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-
-  '@lunora/seed@1.0.0-alpha.1':
-    resolution: {integrity: sha512-GRZwp3jSFqwb/TnS8KENtwUQSMWspTabxa19IOkEe/T7dJB1WvJiqL5JjNdMvU6QQ0rXugi4auwlPTdsBReD5g==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-    peerDependencies:
-      '@lunora/server': 1.0.0-alpha.1
-      '@lunora/values': 1.0.0-alpha.1
-
-  '@lunora/server@1.0.0-alpha.1':
-    resolution: {integrity: sha512-XWdTSUfk6OEUCM5q9hygMAfLTAkU3hfmlWu5Oq0LEcVNw8Ac3AGyfg7LrXOpsQY+I2si7J+srzfAS3Hi8eu5pw==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-
-  '@lunora/sql-store@1.0.0-alpha.3':
-    resolution: {integrity: sha512-SaHSaGZUp6MSws6w4UmreCeTwx9zbwKMNH+NGfMZhp+5Avntmffu57j7neBHa/TmScX1FZXvigN/L2MJIpjVyQ==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-
-  '@lunora/studio@1.0.0-alpha.1':
-    resolution: {integrity: sha512-0/c05vyTjxobSzXsKYnEvGtFYWKmjVczPcPuySiZMBjpgq4vBMJ5Z3mFYarYcVnyw4nsr7MTPPG6ZZ+wqViqNA==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-    peerDependencies:
-      react: 19.2.7
-      react-dom: 19.2.7
-
-  '@lunora/studio@1.0.0-alpha.2':
-    resolution: {integrity: sha512-vWMGRzDer5a+73Bnmy2nvSoyqN4K5EoFsTXxzES3YHLdNtXn/7bhgFxDg9QCD4a13FgjLuExhO0iVoHEhFiPQA==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-    peerDependencies:
-      react: 19.2.7
-      react-dom: 19.2.7
-
-  '@lunora/testing@1.0.0-alpha.1':
-    resolution: {integrity: sha512-lNf1AD9JjG9bmTG6H73wuzgGk6NqXKmNPL0C6jIv0x3t87J4+xz/l5W5TcM7+XtWLRpiPAoT/PcmsUo0Dy4djw==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-
-  '@lunora/values@1.0.0-alpha.1':
-    resolution: {integrity: sha512-EGlLCPAJtuhndNkrvnZ3K+xyu0sgCKYzhM4N4PV6YRCq3mEsLR6u74ID3chUDsP4psyxj+Ct2vajoZU8K1XA8Q==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-
-  '@lunora/vectors@1.0.0-alpha.1':
-    resolution: {integrity: sha512-LsAa90+uPYAwy4zLn84kjCn6094tbmoOik2F85jPiF63De8CJObmDIcx5fR6nmLv7y7T3em56dpz5HZfoXdGKQ==}
-    engines: {node: ^22.15.0 || >=24.11.0}
-
-  '@lunora/workflow@1.0.0-alpha.1':
-    resolution: {integrity: sha512-rDRUCauDQ2D/ZFvVzJI1FxYFTDEOwvEEucupo/cIGPXtFrCwnWcbZ6inwi8QAI5AJmBr2PRXnl/oGZqoUc60nA==}
-    engines: {node: ^22.15.0 || >=24.11.0}
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
     resolution: {integrity: sha512-tqaifcY9Cr41SblO1+FLzh8oxxtkNhuW9Dhl22lKme9BreYvKvxEZcdPIXTuqkJc5tagOEC4QHShKmJjLyLXLQ==}
@@ -20777,11 +20657,6 @@ snapshots:
       cac: 6.7.14
       citty: 0.2.2
 
-  '@bomb.sh/tab@0.0.17(cac@6.7.14)(citty@0.2.2)':
-    optionalDependencies:
-      cac: 6.7.14
-      citty: 0.2.2
-
   '@bramus/specificity@2.4.2':
     dependencies:
       css-tree: 3.2.1
@@ -22122,727 +21997,6 @@ snapshots:
       '@messageformat/date-skeleton': 1.1.0
       '@messageformat/parser': 5.1.1
       js-sha256: 0.10.1
-
-  '@lunora/advisor@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)':
-    dependencies:
-      '@lunora/server': 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
-    transitivePeerDependencies:
-      - '@aws-sdk/client-rds-data'
-      - '@cloudflare/workers-types'
-      - '@electric-sql/pglite'
-      - '@libsql/client'
-      - '@libsql/client-wasm'
-      - '@neondatabase/serverless'
-      - '@op-engineering/op-sqlite'
-      - '@opentelemetry/api'
-      - '@planetscale/database'
-      - '@prisma/client'
-      - '@tidbcloud/serverless'
-      - '@types/better-sqlite3'
-      - '@types/pg'
-      - '@types/sql.js'
-      - '@upstash/redis'
-      - '@vercel/postgres'
-      - '@xata.io/client'
-      - better-sqlite3
-      - bun-types
-      - expo-sqlite
-      - gel
-      - knex
-      - kysely
-      - mysql2
-      - pg
-      - postgres
-      - prisma
-      - sql.js
-      - sqlite3
-
-  '@lunora/analytics@1.0.0-alpha.1': {}
-
-  '@lunora/cli@1.0.0-alpha.7(89011f5a9e1ce5646fa31a16c3abfbfc)':
-    dependencies:
-      '@bomb.sh/tab': 0.0.17(cac@6.7.14)(citty@0.2.2)
-      '@lunora/codegen': 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
-      '@lunora/config': 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/studio@1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@tanstack/react-query@5.101.0(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(date-fns@4.4.0)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7))(@lunora/values@1.0.0-alpha.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
-      '@lunora/container': 1.0.0-alpha.1
-      '@lunora/d1': 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
-      '@lunora/seed': 1.0.0-alpha.1(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/values@1.0.0-alpha.1)
-      '@visulima/cerebro': 3.0.0-alpha.32(@bomb.sh/tab@0.0.17(cac@6.7.14)(citty@0.2.2))(@visulima/pail@4.0.0-alpha.22(@opentelemetry/api@1.9.1)(@visulima/redact@3.0.0-alpha.14)(express@5.2.1)(hono@4.12.26)(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)))(github-slugger@2.0.0)
-      '@visulima/fs': 5.0.0-alpha.32(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(smol-toml@1.6.1)(yaml@2.9.0)
-      '@visulima/pail': 4.0.0-alpha.22(@opentelemetry/api@1.9.1)(@visulima/redact@3.0.0-alpha.14)(express@5.2.1)(hono@4.12.26)(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))
-      '@visulima/path': 3.0.0-alpha.13
-      '@visulima/spinner': 1.0.0-alpha.4
-      '@visulima/tui': 1.0.0-alpha.26(@shikijs/langs@4.2.0)(@shikijs/themes@4.2.0)(@visulima/tabular@4.0.0-alpha.14)(cfonts@3.3.1)(marked@15.0.12)(react-reconciler@0.33.0(react@19.2.7))(react@19.2.7)(shiki@4.2.0)(ws@8.21.0)
-      cfonts: 3.3.1
-      giget: 3.3.0
-      jsonc-parser: 3.3.1
-      magic-string: 0.30.21
-      react: 19.2.7
-      react-reconciler: 0.33.0(react@19.2.7)
-      ts-morph: 28.0.0
-    transitivePeerDependencies:
-      - '@aws-sdk/client-rds-data'
-      - '@cloudflare/workers-types'
-      - '@electric-sql/pglite'
-      - '@libsql/client'
-      - '@libsql/client-wasm'
-      - '@lunora/server'
-      - '@lunora/studio'
-      - '@lunora/values'
-      - '@neondatabase/serverless'
-      - '@op-engineering/op-sqlite'
-      - '@opentelemetry/api'
-      - '@planetscale/database'
-      - '@prisma/client'
-      - '@shikijs/langs'
-      - '@shikijs/themes'
-      - '@sveltejs/kit'
-      - '@tidbcloud/serverless'
-      - '@types/better-sqlite3'
-      - '@types/pg'
-      - '@types/sql.js'
-      - '@upstash/redis'
-      - '@vercel/postgres'
-      - '@visulima/boxen'
-      - '@visulima/find-cache-dir'
-      - '@visulima/redact'
-      - '@visulima/tabular'
-      - '@xata.io/client'
-      - ai
-      - better-sqlite3
-      - bun-types
-      - cac
-      - citty
-      - commander
-      - diff
-      - elysia
-      - expo-sqlite
-      - express
-      - fastify
-      - gel
-      - github-slugger
-      - hono
-      - ini
-      - json5
-      - knex
-      - kysely
-      - marked
-      - mysql2
-      - next
-      - pg
-      - postgres
-      - prisma
-      - react-devtools-core
-      - rotating-file-stream
-      - shiki
-      - smol-toml
-      - sql.js
-      - sqlite3
-      - ws
-      - yaml
-
-  '@lunora/client@1.0.0-alpha.1': {}
-
-  '@lunora/codegen@1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)':
-    dependencies:
-      '@lunora/advisor': 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
-      '@lunora/container': 1.0.0-alpha.1
-      '@lunora/scheduler': 1.0.0-alpha.1
-      '@lunora/values': 1.0.0-alpha.1
-      '@lunora/workflow': 1.0.0-alpha.1
-      ts-morph: 28.0.0
-    transitivePeerDependencies:
-      - '@aws-sdk/client-rds-data'
-      - '@cloudflare/workers-types'
-      - '@electric-sql/pglite'
-      - '@libsql/client'
-      - '@libsql/client-wasm'
-      - '@neondatabase/serverless'
-      - '@op-engineering/op-sqlite'
-      - '@opentelemetry/api'
-      - '@planetscale/database'
-      - '@prisma/client'
-      - '@tidbcloud/serverless'
-      - '@types/better-sqlite3'
-      - '@types/pg'
-      - '@types/sql.js'
-      - '@upstash/redis'
-      - '@vercel/postgres'
-      - '@xata.io/client'
-      - better-sqlite3
-      - bun-types
-      - expo-sqlite
-      - gel
-      - knex
-      - kysely
-      - mysql2
-      - pg
-      - postgres
-      - prisma
-      - sql.js
-      - sqlite3
-
-  '@lunora/config@1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/studio@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@tanstack/react-query@5.101.0(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(date-fns@4.4.0)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7))(@lunora/values@1.0.0-alpha.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)':
-    dependencies:
-      '@lunora/codegen': 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
-      '@lunora/container': 1.0.0-alpha.1
-      '@lunora/seed': 1.0.0-alpha.1(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/values@1.0.0-alpha.1)
-      es-module-lexer: 2.1.0
-      jsonc-parser: 3.3.1
-      ts-morph: 28.0.0
-    optionalDependencies:
-      '@lunora/studio': 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@tanstack/react-query@5.101.0(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(date-fns@4.4.0)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7)
-    transitivePeerDependencies:
-      - '@aws-sdk/client-rds-data'
-      - '@cloudflare/workers-types'
-      - '@electric-sql/pglite'
-      - '@libsql/client'
-      - '@libsql/client-wasm'
-      - '@lunora/server'
-      - '@lunora/values'
-      - '@neondatabase/serverless'
-      - '@op-engineering/op-sqlite'
-      - '@opentelemetry/api'
-      - '@planetscale/database'
-      - '@prisma/client'
-      - '@tidbcloud/serverless'
-      - '@types/better-sqlite3'
-      - '@types/pg'
-      - '@types/sql.js'
-      - '@upstash/redis'
-      - '@vercel/postgres'
-      - '@xata.io/client'
-      - better-sqlite3
-      - bun-types
-      - expo-sqlite
-      - gel
-      - knex
-      - kysely
-      - mysql2
-      - pg
-      - postgres
-      - prisma
-      - sql.js
-      - sqlite3
-
-  '@lunora/config@1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/studio@1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@tanstack/react-query@5.101.0(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(date-fns@4.4.0)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7))(@lunora/values@1.0.0-alpha.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)':
-    dependencies:
-      '@lunora/codegen': 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
-      '@lunora/container': 1.0.0-alpha.1
-      '@lunora/seed': 1.0.0-alpha.1(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/values@1.0.0-alpha.1)
-      es-module-lexer: 2.1.0
-      jsonc-parser: 3.3.1
-      ts-morph: 28.0.0
-    optionalDependencies:
-      '@lunora/studio': 1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@tanstack/react-query@5.101.0(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(date-fns@4.4.0)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7)
-    transitivePeerDependencies:
-      - '@aws-sdk/client-rds-data'
-      - '@cloudflare/workers-types'
-      - '@electric-sql/pglite'
-      - '@libsql/client'
-      - '@libsql/client-wasm'
-      - '@lunora/server'
-      - '@lunora/values'
-      - '@neondatabase/serverless'
-      - '@op-engineering/op-sqlite'
-      - '@opentelemetry/api'
-      - '@planetscale/database'
-      - '@prisma/client'
-      - '@tidbcloud/serverless'
-      - '@types/better-sqlite3'
-      - '@types/pg'
-      - '@types/sql.js'
-      - '@upstash/redis'
-      - '@vercel/postgres'
-      - '@xata.io/client'
-      - better-sqlite3
-      - bun-types
-      - expo-sqlite
-      - gel
-      - knex
-      - kysely
-      - mysql2
-      - pg
-      - postgres
-      - prisma
-      - sql.js
-      - sqlite3
-
-  '@lunora/container@1.0.0-alpha.1':
-    dependencies:
-      '@cloudflare/containers': 0.3.7
-
-  '@lunora/d1@1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)':
-    dependencies:
-      '@lunora/do': 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
-      '@lunora/sql-store': 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
-      drizzle-orm: 0.45.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
-    transitivePeerDependencies:
-      - '@aws-sdk/client-rds-data'
-      - '@cloudflare/workers-types'
-      - '@electric-sql/pglite'
-      - '@libsql/client'
-      - '@libsql/client-wasm'
-      - '@neondatabase/serverless'
-      - '@op-engineering/op-sqlite'
-      - '@opentelemetry/api'
-      - '@planetscale/database'
-      - '@prisma/client'
-      - '@tidbcloud/serverless'
-      - '@types/better-sqlite3'
-      - '@types/pg'
-      - '@types/sql.js'
-      - '@upstash/redis'
-      - '@vercel/postgres'
-      - '@xata.io/client'
-      - better-sqlite3
-      - bun-types
-      - expo-sqlite
-      - gel
-      - knex
-      - kysely
-      - mysql2
-      - pg
-      - postgres
-      - prisma
-      - sql.js
-      - sqlite3
-
-  '@lunora/do@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)':
-    dependencies:
-      '@visulima/redact': 3.0.0-alpha.14
-      drizzle-orm: 0.45.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
-    transitivePeerDependencies:
-      - '@aws-sdk/client-rds-data'
-      - '@cloudflare/workers-types'
-      - '@electric-sql/pglite'
-      - '@libsql/client'
-      - '@libsql/client-wasm'
-      - '@neondatabase/serverless'
-      - '@op-engineering/op-sqlite'
-      - '@opentelemetry/api'
-      - '@planetscale/database'
-      - '@prisma/client'
-      - '@tidbcloud/serverless'
-      - '@types/better-sqlite3'
-      - '@types/pg'
-      - '@types/sql.js'
-      - '@upstash/redis'
-      - '@vercel/postgres'
-      - '@xata.io/client'
-      - better-sqlite3
-      - bun-types
-      - expo-sqlite
-      - gel
-      - knex
-      - kysely
-      - mysql2
-      - pg
-      - postgres
-      - prisma
-      - sql.js
-      - sqlite3
-
-  '@lunora/do@1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)':
-    dependencies:
-      '@visulima/redact': 3.0.0-alpha.14
-      drizzle-orm: 0.45.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
-    transitivePeerDependencies:
-      - '@aws-sdk/client-rds-data'
-      - '@cloudflare/workers-types'
-      - '@electric-sql/pglite'
-      - '@libsql/client'
-      - '@libsql/client-wasm'
-      - '@neondatabase/serverless'
-      - '@op-engineering/op-sqlite'
-      - '@opentelemetry/api'
-      - '@planetscale/database'
-      - '@prisma/client'
-      - '@tidbcloud/serverless'
-      - '@types/better-sqlite3'
-      - '@types/pg'
-      - '@types/sql.js'
-      - '@upstash/redis'
-      - '@vercel/postgres'
-      - '@xata.io/client'
-      - better-sqlite3
-      - bun-types
-      - expo-sqlite
-      - gel
-      - knex
-      - kysely
-      - mysql2
-      - pg
-      - postgres
-      - prisma
-      - sql.js
-      - sqlite3
-
-  '@lunora/do@1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)':
-    dependencies:
-      '@visulima/redact': 3.0.0-alpha.14
-      drizzle-orm: 0.45.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
-    transitivePeerDependencies:
-      - '@aws-sdk/client-rds-data'
-      - '@cloudflare/workers-types'
-      - '@electric-sql/pglite'
-      - '@libsql/client'
-      - '@libsql/client-wasm'
-      - '@neondatabase/serverless'
-      - '@op-engineering/op-sqlite'
-      - '@opentelemetry/api'
-      - '@planetscale/database'
-      - '@prisma/client'
-      - '@tidbcloud/serverless'
-      - '@types/better-sqlite3'
-      - '@types/pg'
-      - '@types/sql.js'
-      - '@upstash/redis'
-      - '@vercel/postgres'
-      - '@xata.io/client'
-      - better-sqlite3
-      - bun-types
-      - expo-sqlite
-      - gel
-      - knex
-      - kysely
-      - mysql2
-      - pg
-      - postgres
-      - prisma
-      - sql.js
-      - sqlite3
-
-  '@lunora/mail@1.0.0-alpha.1(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(asn1js@3.0.10)(handlebars@4.7.9)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(unstorage@1.17.5(@netlify/blobs@10.7.9)(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(mysql2@3.22.5(@types/node@25.9.3)))(ioredis@5.11.1))':
-    dependencies:
-      '@react-email/render': 2.0.9(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@visulima/email': 1.0.0-alpha.41(@opentelemetry/api@1.9.1)(@react-email/render@2.0.9(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@types/node@25.9.3)(asn1js@3.0.10)(handlebars@4.7.9)(unstorage@1.17.5(@netlify/blobs@10.7.9)(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(mysql2@3.22.5(@types/node@25.9.3)))(ioredis@5.11.1))
-      postal-mime: 2.7.4
-    optionalDependencies:
-      react: 19.2.7
-    transitivePeerDependencies:
-      - '@opentelemetry/api'
-      - '@touch4it/ical-timezones'
-      - '@types/luxon'
-      - '@types/mocha'
-      - '@types/node'
-      - '@vue-email/render'
-      - asn1js
-      - dayjs
-      - fast-xml-parser
-      - handlebars
-      - jsx-email
-      - juice
-      - liquidjs
-      - luxon
-      - mjml
-      - moment
-      - moment-timezone
-      - nodemailer
-      - pkijs
-      - react-dom
-      - rrule
-      - unstorage
-
-  '@lunora/ratelimit@1.0.0-alpha.1': {}
-
-  '@lunora/ratelimit@1.0.0-alpha.2': {}
-
-  '@lunora/react@1.0.0-alpha.1(@tanstack/react-query@5.101.0(react@19.2.7))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
-    dependencies:
-      '@lunora/client': 1.0.0-alpha.1
-      '@lunora/ratelimit': 1.0.0-alpha.1
-      '@tanstack/react-query': 5.101.0(react@19.2.7)
-      react: 19.2.7
-      react-dom: 19.2.7(react@19.2.7)
-
-  '@lunora/react@1.0.0-alpha.2(@tanstack/react-query@5.101.0(react@19.2.7))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
-    dependencies:
-      '@lunora/client': 1.0.0-alpha.1
-      '@lunora/ratelimit': 1.0.0-alpha.2
-      '@tanstack/react-query': 5.101.0(react@19.2.7)
-      react: 19.2.7
-      react-dom: 19.2.7(react@19.2.7)
-
-  '@lunora/runtime@1.0.0-alpha.1': {}
-
-  '@lunora/scheduler@1.0.0-alpha.1':
-    dependencies:
-      cron-parser: 5.5.0
-
-  '@lunora/seed@1.0.0-alpha.1(@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(@lunora/values@1.0.0-alpha.1)':
-    dependencies:
-      '@faker-js/faker': 10.5.0
-      '@lunora/server': 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
-      '@lunora/values': 1.0.0-alpha.1
-
-  '@lunora/server@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)':
-    dependencies:
-      '@lunora/scheduler': 1.0.0-alpha.1
-      '@lunora/values': 1.0.0-alpha.1
-      drizzle-orm: 0.45.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
-      hono: 4.12.26
-    transitivePeerDependencies:
-      - '@aws-sdk/client-rds-data'
-      - '@cloudflare/workers-types'
-      - '@electric-sql/pglite'
-      - '@libsql/client'
-      - '@libsql/client-wasm'
-      - '@neondatabase/serverless'
-      - '@op-engineering/op-sqlite'
-      - '@opentelemetry/api'
-      - '@planetscale/database'
-      - '@prisma/client'
-      - '@tidbcloud/serverless'
-      - '@types/better-sqlite3'
-      - '@types/pg'
-      - '@types/sql.js'
-      - '@upstash/redis'
-      - '@vercel/postgres'
-      - '@xata.io/client'
-      - better-sqlite3
-      - bun-types
-      - expo-sqlite
-      - gel
-      - knex
-      - kysely
-      - mysql2
-      - pg
-      - postgres
-      - prisma
-      - sql.js
-      - sqlite3
-
-  '@lunora/sql-store@1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)':
-    dependencies:
-      '@lunora/do': 1.0.0-alpha.3(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
-      drizzle-orm: 0.45.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
-    transitivePeerDependencies:
-      - '@aws-sdk/client-rds-data'
-      - '@cloudflare/workers-types'
-      - '@electric-sql/pglite'
-      - '@libsql/client'
-      - '@libsql/client-wasm'
-      - '@neondatabase/serverless'
-      - '@op-engineering/op-sqlite'
-      - '@opentelemetry/api'
-      - '@planetscale/database'
-      - '@prisma/client'
-      - '@tidbcloud/serverless'
-      - '@types/better-sqlite3'
-      - '@types/pg'
-      - '@types/sql.js'
-      - '@upstash/redis'
-      - '@vercel/postgres'
-      - '@xata.io/client'
-      - better-sqlite3
-      - bun-types
-      - expo-sqlite
-      - gel
-      - knex
-      - kysely
-      - mysql2
-      - pg
-      - postgres
-      - prisma
-      - sql.js
-      - sqlite3
-
-  '@lunora/studio@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@tanstack/react-query@5.101.0(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(date-fns@4.4.0)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7)':
-    dependencies:
-      '@base-ui/react': 1.6.0(@types/react@19.2.17)(date-fns@4.4.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@hugeicons/core-free-icons': 4.2.1
-      '@hugeicons/react': 1.1.7(react@19.2.7)
-      '@lingui/core': 6.4.0
-      '@lingui/message-utils': 6.4.0
-      '@lunora/advisor': 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
-      '@lunora/analytics': 1.0.0-alpha.1
-      '@lunora/client': 1.0.0-alpha.1
-      '@lunora/react': 1.0.0-alpha.1(@tanstack/react-query@5.101.0(react@19.2.7))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@tanstack/react-router': 1.170.16(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@tanstack/react-table': 8.21.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@tanstack/react-virtual': 3.14.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@xyflow/react': 12.11.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(immer@11.1.8)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      class-variance-authority: 0.7.1
-      clsx: 2.1.1
-      html-to-image: 1.11.13
-      motion: 12.40.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      react: 19.2.7
-      react-dom: 19.2.7(react@19.2.7)
-      recharts: 3.8.1(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7)(redux@5.0.1)
-      tailwind-merge: 3.6.0
-    transitivePeerDependencies:
-      - '@aws-sdk/client-rds-data'
-      - '@cloudflare/workers-types'
-      - '@date-fns/tz'
-      - '@electric-sql/pglite'
-      - '@emotion/is-prop-valid'
-      - '@libsql/client'
-      - '@libsql/client-wasm'
-      - '@neondatabase/serverless'
-      - '@op-engineering/op-sqlite'
-      - '@opentelemetry/api'
-      - '@planetscale/database'
-      - '@prisma/client'
-      - '@tanstack/react-query'
-      - '@tidbcloud/serverless'
-      - '@types/better-sqlite3'
-      - '@types/pg'
-      - '@types/react'
-      - '@types/react-dom'
-      - '@types/sql.js'
-      - '@upstash/redis'
-      - '@vercel/postgres'
-      - '@xata.io/client'
-      - babel-plugin-macros
-      - better-sqlite3
-      - bun-types
-      - date-fns
-      - expo-sqlite
-      - gel
-      - immer
-      - knex
-      - kysely
-      - mysql2
-      - pg
-      - postgres
-      - prisma
-      - react-is
-      - redux
-      - sql.js
-      - sqlite3
-      - supports-color
-
-  '@lunora/studio@1.0.0-alpha.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@tanstack/react-query@5.101.0(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(date-fns@4.4.0)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7)':
-    dependencies:
-      '@base-ui/react': 1.6.0(@types/react@19.2.17)(date-fns@4.4.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@hugeicons/core-free-icons': 4.2.1
-      '@hugeicons/react': 1.1.7(react@19.2.7)
-      '@lingui/core': 6.4.0
-      '@lingui/message-utils': 6.4.0
-      '@lunora/advisor': 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
-      '@lunora/analytics': 1.0.0-alpha.1
-      '@lunora/client': 1.0.0-alpha.1
-      '@lunora/react': 1.0.0-alpha.2(@tanstack/react-query@5.101.0(react@19.2.7))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@tanstack/react-router': 1.170.16(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@tanstack/react-table': 8.21.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@tanstack/react-virtual': 3.14.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@xyflow/react': 12.11.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(immer@11.1.8)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      class-variance-authority: 0.7.1
-      clsx: 2.1.1
-      html-to-image: 1.11.13
-      motion: 12.40.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      react: 19.2.7
-      react-dom: 19.2.7(react@19.2.7)
-      recharts: 3.8.1(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7)(redux@5.0.1)
-      tailwind-merge: 3.6.0
-    transitivePeerDependencies:
-      - '@aws-sdk/client-rds-data'
-      - '@cloudflare/workers-types'
-      - '@date-fns/tz'
-      - '@electric-sql/pglite'
-      - '@emotion/is-prop-valid'
-      - '@libsql/client'
-      - '@libsql/client-wasm'
-      - '@neondatabase/serverless'
-      - '@op-engineering/op-sqlite'
-      - '@opentelemetry/api'
-      - '@planetscale/database'
-      - '@prisma/client'
-      - '@tanstack/react-query'
-      - '@tidbcloud/serverless'
-      - '@types/better-sqlite3'
-      - '@types/pg'
-      - '@types/react'
-      - '@types/react-dom'
-      - '@types/sql.js'
-      - '@upstash/redis'
-      - '@vercel/postgres'
-      - '@xata.io/client'
-      - babel-plugin-macros
-      - better-sqlite3
-      - bun-types
-      - date-fns
-      - expo-sqlite
-      - gel
-      - immer
-      - knex
-      - kysely
-      - mysql2
-      - pg
-      - postgres
-      - prisma
-      - react-is
-      - redux
-      - sql.js
-      - sqlite3
-      - supports-color
-
-  '@lunora/testing@1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
-    dependencies:
-      '@lunora/do': 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
-      '@lunora/mail': 1.0.0-alpha.1(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(asn1js@3.0.10)(handlebars@4.7.9)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(unstorage@1.17.5(@netlify/blobs@10.7.9)(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(mysql2@3.22.5(@types/node@25.9.3)))(ioredis@5.11.1))
-      '@lunora/server': 1.0.0-alpha.1(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
-    transitivePeerDependencies:
-      - '@aws-sdk/client-rds-data'
-      - '@cloudflare/workers-types'
-      - '@electric-sql/pglite'
-      - '@libsql/client'
-      - '@libsql/client-wasm'
-      - '@neondatabase/serverless'
-      - '@op-engineering/op-sqlite'
-      - '@opentelemetry/api'
-      - '@planetscale/database'
-      - '@prisma/client'
-      - '@tidbcloud/serverless'
-      - '@touch4it/ical-timezones'
-      - '@types/better-sqlite3'
-      - '@types/luxon'
-      - '@types/mocha'
-      - '@types/node'
-      - '@types/pg'
-      - '@types/sql.js'
-      - '@upstash/redis'
-      - '@vercel/postgres'
-      - '@vue-email/render'
-      - '@xata.io/client'
-      - asn1js
-      - better-sqlite3
-      - bun-types
-      - dayjs
-      - expo-sqlite
-      - fast-xml-parser
-      - gel
-      - handlebars
-      - jsx-email
-      - juice
-      - knex
-      - kysely
-      - liquidjs
-      - luxon
-      - mjml
-      - moment
-      - moment-timezone
-      - mysql2
-      - nodemailer
-      - pg
-      - pkijs
-      - postgres
-      - prisma
-      - react
-      - react-dom
-      - rrule
-      - sql.js
-      - sqlite3
-      - unstorage
-
-  '@lunora/values@1.0.0-alpha.1': {}
-
-  '@lunora/vectors@1.0.0-alpha.1': {}
-
-  '@lunora/workflow@1.0.0-alpha.1':
-    dependencies:
-      '@lunora/values': 1.0.0-alpha.1
 
   '@lydell/node-pty-darwin-arm64@1.2.0-beta.12':
     optional: true
@@ -25393,7 +24547,7 @@ snapshots:
       - '@types/react'
       - immer
 
-  '@reduxjs/toolkit@2.12.0(react-redux@9.3.0(@types/react@19.2.17)(react@19.2.7))(react@19.2.7)':
+  '@reduxjs/toolkit@2.12.0(react-redux@9.3.0(@types/react@19.2.17)(react@19.2.7)(redux@5.0.1))(react@19.2.7)':
     dependencies:
       '@standard-schema/spec': 1.1.0
       '@standard-schema/utils': 0.3.0
@@ -28026,18 +27180,6 @@ snapshots:
       '@visulima/pail': 4.0.0-alpha.22(@opentelemetry/api@1.9.1)(@visulima/redact@3.0.0-alpha.14)(express@5.2.1)(hono@4.12.26)(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))
       github-slugger: 2.0.0
 
-  '@visulima/cerebro@3.0.0-alpha.25(@bomb.sh/tab@0.0.17(cac@6.7.14)(citty@0.2.2))(@visulima/pail@4.0.0-alpha.22(@opentelemetry/api@1.9.1)(@visulima/redact@3.0.0-alpha.14)(express@5.2.1)(hono@4.12.26)(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)))(github-slugger@2.0.0)':
-    dependencies:
-      '@visulima/colorize': 2.0.0-alpha.11
-      '@visulima/string': 3.0.0-alpha.13
-      '@visulima/tabular': 4.0.0-alpha.11
-      fastest-levenshtein: 1.0.16
-      terminal-size: 4.0.1
-    optionalDependencies:
-      '@bomb.sh/tab': 0.0.17(cac@6.7.14)(citty@0.2.2)
-      '@visulima/pail': 4.0.0-alpha.22(@opentelemetry/api@1.9.1)(@visulima/redact@3.0.0-alpha.14)(express@5.2.1)(hono@4.12.26)(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))
-      github-slugger: 2.0.0
-
   '@visulima/cerebro@3.0.0-alpha.32(@bomb.sh/tab@0.0.16(cac@6.7.14)(citty@0.2.2))(@visulima/pail@4.0.0-alpha.22(@opentelemetry/api@1.9.1)(@visulima/redact@3.0.0-alpha.14)(express@5.2.1)(hono@4.12.26)(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)))(github-slugger@2.0.0)':
     dependencies:
       '@visulima/colorize': 2.0.0-alpha.14
@@ -28045,16 +27187,6 @@ snapshots:
       fastest-levenshtein: 1.0.16
     optionalDependencies:
       '@bomb.sh/tab': 0.0.16(cac@6.7.14)(citty@0.2.2)
-      '@visulima/pail': 4.0.0-alpha.22(@opentelemetry/api@1.9.1)(@visulima/redact@3.0.0-alpha.14)(express@5.2.1)(hono@4.12.26)(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))
-      github-slugger: 2.0.0
-
-  '@visulima/cerebro@3.0.0-alpha.32(@bomb.sh/tab@0.0.17(cac@6.7.14)(citty@0.2.2))(@visulima/pail@4.0.0-alpha.22(@opentelemetry/api@1.9.1)(@visulima/redact@3.0.0-alpha.14)(express@5.2.1)(hono@4.12.26)(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)))(github-slugger@2.0.0)':
-    dependencies:
-      '@visulima/colorize': 2.0.0-alpha.14
-      '@visulima/tabular': 4.0.0-alpha.14
-      fastest-levenshtein: 1.0.16
-    optionalDependencies:
-      '@bomb.sh/tab': 0.0.17(cac@6.7.14)(citty@0.2.2)
       '@visulima/pail': 4.0.0-alpha.22(@opentelemetry/api@1.9.1)(@visulima/redact@3.0.0-alpha.14)(express@5.2.1)(hono@4.12.26)(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))
       github-slugger: 2.0.0
 
@@ -28071,30 +27203,6 @@ snapshots:
   '@visulima/disposable-email-domains@1.0.0-alpha.17': {}
 
   '@visulima/email@1.0.0-alpha.41(@opentelemetry/api@1.9.1)(@react-email/render@2.0.9(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@types/node@25.9.3)(asn1js@3.0.10)(dayjs@1.11.21)(handlebars@4.7.9)(luxon@3.7.2)(moment@2.30.1)(unstorage@1.17.5(@netlify/blobs@10.7.9)(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(mysql2@3.22.5(@types/node@25.9.3)))(ioredis@5.11.1))':
-    dependencies:
-      '@visulima/disposable-email-domains': 1.0.0-alpha.17
-      html-to-text: 10.0.0
-      ical-generator: 11.0.0(@types/node@25.9.3)(dayjs@1.11.21)(luxon@3.7.2)(moment@2.30.1)
-      lru-cache: 11.5.1
-      mime: 4.1.0
-    optionalDependencies:
-      '@opentelemetry/api': 1.9.1
-      '@react-email/render': 2.0.9(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      asn1js: 3.0.10
-      handlebars: 4.7.9
-      unstorage: 1.17.5(@netlify/blobs@10.7.9)(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(mysql2@3.22.5(@types/node@25.9.3)))(ioredis@5.11.1)
-    transitivePeerDependencies:
-      - '@touch4it/ical-timezones'
-      - '@types/luxon'
-      - '@types/mocha'
-      - '@types/node'
-      - dayjs
-      - luxon
-      - moment
-      - moment-timezone
-      - rrule
-
-  '@visulima/email@1.0.0-alpha.41(@opentelemetry/api@1.9.1)(@react-email/render@2.0.9(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@types/node@25.9.3)(asn1js@3.0.10)(handlebars@4.7.9)(unstorage@1.17.5(@netlify/blobs@10.7.9)(db0@0.3.4(@electric-sql/pglite@0.3.16)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260617.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(mysql2@3.22.5(@types/node@25.9.3)))(ioredis@5.11.1))':
     dependencies:
       '@visulima/disposable-email-domains': 1.0.0-alpha.17
       html-to-text: 10.0.0
@@ -28240,75 +27348,6 @@ snapshots:
       - json5
       - jsonc-parser
       - smol-toml
-      - yaml
-
-  '@visulima/packem@2.0.0-alpha.93(113703aa76bd165aa92d0ff5d3158a66)':
-    dependencies:
-      '@antfu/install-pkg': 1.1.0
-      '@clack/prompts': 1.5.0
-      '@rollup/pluginutils': 5.4.0(rollup@4.62.2)
-      '@visulima/cerebro': 3.0.0-alpha.25(@bomb.sh/tab@0.0.17(cac@6.7.14)(citty@0.2.2))(@visulima/pail@4.0.0-alpha.22(@opentelemetry/api@1.9.1)(@visulima/redact@3.0.0-alpha.14)(express@5.2.1)(hono@4.12.26)(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)))(github-slugger@2.0.0)
-      '@visulima/packem-rollup': 1.0.0-alpha.75(@ts-macro/tsc@0.3.7(rollup@4.62.2))(esbuild@0.28.1)(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(rolldown@1.0.3)(rollup@4.62.2)(smol-toml@1.6.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))(yaml@2.9.0)
-      '@visulima/packem-share': 1.0.0-alpha.50(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(rollup@4.62.2)(smol-toml@1.6.1)(yaml@2.9.0)
-      '@visulima/rollup-plugin-css': 1.0.0-alpha.54(@csstools/css-parser-algorithms@4.0.0(@csstools/css-tokenizer@4.0.0))(@csstools/css-tokenizer@4.0.0)(@csstools/postcss-slow-plugins@2.0.0(postcss@8.5.15))(@tailwindcss/node@4.3.0)(@tailwindcss/oxide@4.3.0)(@visulima/css-style-inject@1.0.0-alpha.19)(cssnano@8.0.2(postcss@8.5.15))(icss-utils@5.1.0(postcss@8.5.15))(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(lightningcss@1.32.0)(postcss-modules-extract-imports@3.1.0(postcss@8.5.15))(postcss-modules-local-by-default@4.2.0(postcss@8.5.15))(postcss-modules-scope@3.2.1(postcss@8.5.15))(postcss-modules-values@4.0.0(postcss@8.5.15))(postcss-value-parser@4.2.0)(postcss@8.5.15)(rollup@4.62.2)(smol-toml@1.6.1)(yaml@2.9.0)
-      '@visulima/rollup-plugin-dts': 1.0.0-alpha.35(@ts-macro/tsc@0.3.7(rollup@4.62.2))(ini@7.0.0)(json5@2.2.3)(rolldown@1.0.3)(rollup@4.62.2)(smol-toml@1.6.1)(typescript@6.0.3)(yaml@2.9.0)
-      '@visulima/tsconfig': 3.0.0-alpha.24(ini@7.0.0)(json5@2.2.3)(smol-toml@1.6.1)(yaml@2.9.0)
-      browserslist: 4.28.2
-      cjs-module-lexer: 2.2.0
-      clean-css: 5.3.3
-      defu: 6.1.7
-      estree-walker: 3.0.3
-      fastest-levenshtein: 1.0.16
-      hookable: 6.1.1
-      html-minifier-next: 6.2.7
-      jiti: 2.7.0
-      magic-string: 0.30.21
-      mime: 4.1.0
-      mlly: 1.8.2
-      oxc-parser: 0.133.0
-      oxc-resolver: 11.20.0
-      package-manager-detector: 1.6.0
-      rollup: 4.62.2
-      rollup-plugin-license: 3.7.1(picomatch@4.0.4)(rollup@4.62.2)
-      rs-module-lexer: 2.8.0
-      tinyexec: 1.2.4
-      workerpool: 10.0.2
-    optionalDependencies:
-      '@babel/core': 8.0.1
-      '@tailwindcss/node': 4.3.0
-      '@tailwindcss/oxide': 4.3.0
-      cssnano: 8.0.2(postcss@8.5.15)
-      esbuild: 0.28.1
-      icss-utils: 5.1.0(postcss@8.5.15)
-      lightningcss: 1.32.0
-      postcss: 8.5.15
-      postcss-modules-extract-imports: 3.1.0(postcss@8.5.15)
-      postcss-modules-local-by-default: 4.2.0(postcss@8.5.15)
-      postcss-modules-scope: 3.2.1(postcss@8.5.15)
-      postcss-modules-values: 4.0.0(postcss@8.5.15)
-      postcss-value-parser: 4.2.0
-      rolldown: 1.0.3
-      rollup-plugin-svelte: 7.2.3(rollup@4.62.2)(svelte@5.56.3(@typescript-eslint/types@8.61.0))
-      typescript: 6.0.3
-      unplugin-vue: 7.2.0(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(vue@3.5.38(typescript@6.0.3))(yaml@2.9.0)
-    transitivePeerDependencies:
-      - '@bomb.sh/tab'
-      - '@csstools/css-parser-algorithms'
-      - '@csstools/css-tokenizer'
-      - '@csstools/postcss-slow-plugins'
-      - '@ts-macro/tsc'
-      - '@typescript/native-preview'
-      - '@visulima/boxen'
-      - '@visulima/css-style-inject'
-      - '@visulima/find-cache-dir'
-      - '@visulima/pail'
-      - github-slugger
-      - ini
-      - json5
-      - jsonc-parser
-      - picomatch
-      - smol-toml
-      - vue-tsc
       - yaml
 
   '@visulima/packem@2.0.0-alpha.93(13152a753d46028f600c4cffa5ec241d)':
@@ -36468,7 +35507,7 @@ snapshots:
 
   recharts@3.8.1(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-is@18.3.1)(react@19.2.7)(redux@5.0.1):
     dependencies:
-      '@reduxjs/toolkit': 2.12.0(react-redux@9.3.0(@types/react@19.2.17)(react@19.2.7))(react@19.2.7)
+      '@reduxjs/toolkit': 2.12.0(react-redux@9.3.0(@types/react@19.2.17)(react@19.2.7)(redux@5.0.1))(react@19.2.7)
       clsx: 2.1.1
       decimal.js-light: 2.5.1
       es-toolkit: 1.47.0
