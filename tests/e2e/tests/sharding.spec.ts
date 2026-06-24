@@ -40,7 +40,10 @@ test("messages.list(channelA) doesn't see channel B's messages, and vice versa",
 
     expect(channelA).not.toBe(channelB);
 
-    const SEND_COUNT = 50;
+    // Both channels' sends are one user, so they share the `messages:send` token
+    // bucket (30 / 60s). 2×SEND_COUNT must stay under it — a dozen per channel
+    // proves shard isolation just as well as fifty without tripping the limiter.
+    const SEND_COUNT = 12;
 
     for (let index = 0; index < SEND_COUNT; index += 1) {
         await rpc("messages:send", { channelId: channelA, createdAt: Date.now(), text: `A-${index}` });
