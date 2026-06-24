@@ -1,3 +1,17 @@
+## @lunora/advisor [1.0.0-alpha.2](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.1...@lunora/advisor@1.0.0-alpha.2) (2026-06-24)
+
+### Features
+
+* **r2sql:** typed R2 SQL client with window functions, DISTINCT and set ops ([#26](https://github.com/anolilab/lunora/issues/26)) ([fe9546b](https://github.com/anolilab/lunora/commit/fe9546bb3473875d47939bf93e6fbb81084a07aa))
+
+### Miscellaneous Chores
+
+* **deps:** wire fallow into every package ([896a81d](https://github.com/anolilab/lunora/commit/896a81d39a064293234bba3b734cde1036e81a67))
+
+### Code Refactoring
+
+* remove dead code flagged by fallow ([be57eca](https://github.com/anolilab/lunora/commit/be57ecaf4d6f3bc95d7b1a5876305dfb2af80e45))
+
 ## @lunora/advisor 1.0.0-alpha.1 (2026-06-21)
 
 ### Features
