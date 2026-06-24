@@ -1,3 +1,14 @@
+## @lunora/testing [1.0.0-alpha.4](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.3...@lunora/testing@1.0.0-alpha.4) (2026-06-24)
+
+### Miscellaneous Chores
+
+* **deps:** wire fallow into every package ([896a81d](https://github.com/anolilab/lunora/commit/896a81d39a064293234bba3b734cde1036e81a67))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.4
+
 ## @lunora/testing [1.0.0-alpha.3](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.2...@lunora/testing@1.0.0-alpha.3) (2026-06-22)
 
 
