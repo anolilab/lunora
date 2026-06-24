@@ -48,7 +48,7 @@
  */
 import { createMailerFromEnv } from "@lunora/mail";
 import type { Mailer, SendOptions } from "@lunora/mail";
-import { internalAction, v } from "./_generated/server.js";
+import { internalAction, v } from "#lunora/_generated/server.js";
 import { env } from "cloudflare:workers";
 
 /**
@@ -132,10 +132,7 @@ const toSendOptions = (args: {
  * rejects (the raw provider error is logged server-side only). In dev the send
  * is captured into the studio Mail inbox instead of delivered.
  */
-export const sendEmail = internalAction({
-    args: emailArgs,
-    handler: async (_ctx, args): Promise<{ id: string }> => mailer().send(toSendOptions(args)),
-});
+export const sendEmail = internalAction.input(emailArgs).action(async ({ args }): Promise<{ id: string }> => mailer().send(toSendOptions(args)));
 
 /**
  * Enqueue an email onto a Cloudflare Queue and return immediately, so the caller
@@ -145,7 +142,4 @@ export const sendEmail = internalAction({
  * Your queue consumer Worker should call `consumeQueuedSend(mailer, message.body)`
  * (from `@lunora/mail`) for each message — see the README.
  */
-export const queueEmail = internalAction({
-    args: emailArgs,
-    handler: async (_ctx, args): Promise<{ queued: true }> => mailer().queue(toSendOptions(args)),
-});
+export const queueEmail = internalAction.input(emailArgs).action(async ({ args }): Promise<{ queued: true }> => mailer().queue(toSendOptions(args)));

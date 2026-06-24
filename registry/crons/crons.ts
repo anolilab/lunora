@@ -30,7 +30,7 @@
  */
 import { cronJobs } from "@lunora/server";
 
-import { internal } from "./_generated/api.js";
+import { internal } from "#lunora/_generated/api.js";
 
 const crons = cronJobs();
 

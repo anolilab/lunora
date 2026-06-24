@@ -13,7 +13,7 @@
     "bindings": [
         {
             "path": ["d1_databases"],
-            "value": [{ "binding": "DB", "database_name": "REPLACE_ME-db", "database_id": "<replace-with-d1-create-id>" }]
+            "value": [{ "binding": "DB", "database_name": "replace-me-db", "database_id": "<replace-with-d1-create-id>" }]
         }
     ],
     "envVars": [

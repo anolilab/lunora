@@ -7,7 +7,8 @@
     "requires": [],
     "deps": {
         "@lunora/storage": "workspace:*",
-        "@lunora/server": "workspace:*"
+        "@lunora/server": "workspace:*",
+        "@lunora/ratelimit": "workspace:*"
     },
     "bindings": [
         {

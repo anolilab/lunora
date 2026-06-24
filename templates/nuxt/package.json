@@ -3,6 +3,9 @@
     "version": "0.0.0",
     "private": true,
     "type": "module",
+    "imports": {
+        "#lunora/*": "./lunora/*"
+    },
     "scripts": {
         "dev": "nuxt dev",
         "build": "nuxt build",
@@ -13,6 +16,7 @@
     "dependencies": {
         "@lunora/nuxt": "^0.0.0",
         "@lunora/vue": "^0.0.0",
+        "@lunora/ratelimit": "^0.0.0",
         "lunorash": "^0.0.0",
         "nuxt": "^4.4.8",
         "vue": "^3.5.38"

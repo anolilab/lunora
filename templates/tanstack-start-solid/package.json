@@ -3,6 +3,9 @@
     "version": "0.0.0",
     "private": true,
     "type": "module",
+    "imports": {
+        "#lunora/*": "./lunora/*"
+    },
     "scripts": {
         "dev": "vite",
         "build": "lunora codegen && vite build",
@@ -14,6 +17,7 @@
         "@lunora/solid": "^0.0.0",
         "@tanstack/solid-router": "^1.170.15",
         "@tanstack/solid-start": "^1.168.25",
+        "@lunora/ratelimit": "^0.0.0",
         "lunorash": "^0.0.0",
         "solid-js": "^1.9.13"
     },

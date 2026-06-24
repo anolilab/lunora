@@ -3,6 +3,9 @@
     "version": "0.0.0",
     "private": true,
     "type": "module",
+    "imports": {
+        "#lunora/*": "./lunora/*"
+    },
     "scripts": {
         "dev": "vite",
         "build": "vite build",
@@ -13,6 +16,7 @@
     },
     "dependencies": {
         "@lunora/svelte": "^0.0.0",
+        "@lunora/ratelimit": "^0.0.0",
         "lunorash": "^0.0.0"
     },
     "devDependencies": {

@@ -30,7 +30,7 @@
  *     `lunora backup restore <id|file>` (the CLI imports NDJSON through the admin
  *     `/apply` endpoint), optionally with `--to <ISO>` for CDC replay.
  */
-import { internalAction, v } from "./_generated/server.js";
+import { internalAction, v } from "#lunora/_generated/server.js";
 import { createStorage } from "@lunora/storage";
 import type { R2BucketLike } from "@lunora/storage";
 // `env` from `cloudflare:workers` exposes the worker's configured bindings (here
@@ -72,12 +72,12 @@ const toNdjson = (rows: ReadonlyArray<Record<string, unknown>>): string => rows.
  * {"_id":"…","name":"Ada"}
  * ```
  */
-export const snapshot = internalAction({
-    args: {
+export const snapshot = internalAction
+    .input({
         /** Optional override of the configured table list (e.g. a partial backup). */
         tables: v.optional(v.array(v.string())),
-    },
-    handler: async (ctx, { tables }): Promise<{ bytes: number; key: string; rows: number; tables: Record<string, number> }> => {
+    })
+    .action(async ({ args: { tables }, ctx }): Promise<{ bytes: number; key: string; rows: number; tables: Record<string, number> }> => {
         const targets = tables ?? TABLES;
 
         if (targets.length === 0) {
@@ -125,8 +125,7 @@ export const snapshot = internalAction({
         });
 
         return { bytes: encoded.byteLength, key, rows: total, tables: perTable };
-    },
-});
+    });
 
 /** Milliseconds in a day — the unit `keepDays` is measured in. */
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -161,14 +160,14 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
  * ISO stamp, so age ordering also stays stable for the `keepLast` rule via the
  * key sort below.
  */
-export const prune = internalAction({
-    args: {
+export const prune = internalAction
+    .input({
         /** Keep only the N most-recent snapshots; older surplus is eligible for deletion. */
         keepLast: v.optional(v.number()),
         /** Keep snapshots written within the last N days; older ones are eligible for deletion. */
         keepDays: v.optional(v.number()),
-    },
-    handler: async (_ctx, { keepDays, keepLast }): Promise<{ deleted: string[]; kept: string[] }> => {
+    })
+    .action(async ({ args: { keepDays, keepLast } }): Promise<{ deleted: string[]; kept: string[] }> => {
         if (keepDays === undefined && keepLast === undefined) {
             throw new Error("backup/prune: pass keepDays and/or keepLast — refusing to prune with no retention window configured.");
         }
@@ -247,5 +246,4 @@ export const prune = internalAction({
         }
 
         return { deleted, kept };
-    },
-});
+    });

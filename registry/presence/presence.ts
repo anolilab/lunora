@@ -22,11 +22,25 @@
  * The client half is `usePresence` in `@lunora/react`, which calls `heartbeat`
  * on an interval and subscribes to `listPresent`.
  */
-import { internalMutation, mutation, query, v } from "./_generated/server.js";
+import { RateLimiter, rateLimit } from "@lunora/ratelimit";
+
+import { internalMutation, mutation, query, v } from "#lunora/_generated/server.js";
 
 import { PRESENCE_TABLE, PRESENCE_TTL_MS } from "./schema.js";
 
 export { presence } from "./schema.js";
+
+/**
+ * Per-session rate limit for the public `heartbeat` mutation — clients call it on
+ * an interval, so cap the rate to defend against a runaway/forged loop. The
+ * default store is in-memory (per-isolate, resets on eviction); run
+ * `lunora add ratelimit` for a durable, `ctx.db`-backed store in production.
+ */
+const limiter = new RateLimiter({
+    config: {
+        heartbeat: { kind: "token bucket", period: 60_000, rate: 120 },
+    },
+});
 
 /** A single present member as returned by `listPresent`. */
 interface PresenceMember {
@@ -47,13 +61,17 @@ interface PresenceMember {
  * Patches the existing `(roomId, sessionId)` row on re-heartbeat so subscribers
  * get a single-row delta.
  */
-export const heartbeat = mutation({
-    args: {
-        data: v.optional(v.record(v.string(), v.any())),
-        roomId: v.string(),
-        sessionId: v.string(),
-    },
-    handler: async (ctx, { data, roomId, sessionId }): Promise<{ lastSeen: number }> => {
+export const heartbeat = mutation
+    .input({
+        // Awareness payload (cursor, status, color, …) — a bounded map of scalar
+        // values rather than `v.any()`, so a public client can't smuggle an
+        // unvalidated/oversized blob. Widen the value union if you need more.
+        data: v.optional(v.record(v.string(), v.union(v.string().meta({ schema: { maxLength: 1024 } }), v.number(), v.boolean()))),
+        roomId: v.string().meta({ schema: { maxLength: 256 } }),
+        sessionId: v.string().meta({ schema: { maxLength: 256 } }),
+    })
+    .use(rateLimit(limiter, "heartbeat", { key: (ctx) => ctx.auth.userId ?? "anon" }))
+    .mutation(async ({ args: { data, roomId, sessionId }, ctx }): Promise<{ lastSeen: number }> => {
         const lastSeen = Date.now();
         const userId = ctx.auth.userId ?? undefined;
 
@@ -83,16 +101,15 @@ export const heartbeat = mutation({
         await (existing ? ctx.db.patch(existing["_id"] as never, row) : ctx.db.insert(PRESENCE_TABLE, row));
 
         return { lastSeen };
-    },
-});
+    });
 
 /**
  * Live query: the non-expired members of `roomId`, newest heartbeat first.
  * Subscribe to it for a reactive present-list.
  */
-export const listPresent = query({
-    args: { roomId: v.string() },
-    handler: async (ctx, { roomId }): Promise<PresenceMember[]> => {
+export const listPresent = query
+    .input({ roomId: v.string().meta({ schema: { maxLength: 256 } }) })
+    .query(async ({ args: { roomId }, ctx }): Promise<PresenceMember[]> => {
         const cutoff = Date.now() - PRESENCE_TTL_MS;
 
         const rows = await ctx.db
@@ -120,31 +137,27 @@ export const listPresent = query({
                 return member;
             })
             .toSorted((a, b) => b.lastSeen - a.lastSeen);
-    },
-});
+    });
 
 /**
  * Hard-delete every expired row for `roomId`. Internal (server-only) — schedule
  * it from a cron / `runAfter` to reclaim storage. Stale rows already vanish from
  * `listPresent` via the read-time TTL filter, so this is purely housekeeping.
  */
-export const sweep = internalMutation({
-    args: { roomId: v.string() },
-    handler: async (ctx, { roomId }): Promise<{ deleted: number }> => {
-        const cutoff = Date.now() - PRESENCE_TTL_MS;
+export const sweep = internalMutation.input({ roomId: v.string() }).mutation(async ({ args: { roomId }, ctx }): Promise<{ deleted: number }> => {
+    const cutoff = Date.now() - PRESENCE_TTL_MS;
 
-        const stale = await ctx.db
-            .query(PRESENCE_TABLE)
-            .withIndex("byRoom", (q) => q.eq("roomId", roomId))
-            .filter((row) => (row["lastSeen"] as number) <= cutoff)
-            .collect();
+    const stale = await ctx.db
+        .query(PRESENCE_TABLE)
+        .withIndex("byRoom", (q) => q.eq("roomId", roomId))
+        .filter((row) => (row["lastSeen"] as number) <= cutoff)
+        .collect();
 
-        // One room's expired members is a small set sharing the mutation's
-        // snapshot — fire the deletes together.
-        await Promise.all(stale.map((row) => ctx.db.delete(row["_id"] as never)));
+    // One room's expired members is a small set sharing the mutation's
+    // snapshot — fire the deletes together.
+    await Promise.all(stale.map((row) => ctx.db.delete(row["_id"] as never)));
 
-        return { deleted: stale.length };
-    },
+    return { deleted: stale.length };
 });
 
 export type { PresenceMember };

@@ -3,6 +3,9 @@
     "version": "0.0.0",
     "private": true,
     "type": "module",
+    "imports": {
+        "#lunora/*": "./lunora/*"
+    },
     "scripts": {
         "dev": "vite",
         "build": "lunora codegen && vite build",
@@ -15,6 +18,7 @@
         "@tanstack/react-query": "^5.101.0",
         "@tanstack/react-router": "^1.170.15",
         "@tanstack/react-start": "^1.168.25",
+        "@lunora/ratelimit": "^0.0.0",
         "lunorash": "^0.0.0",
         "react": "^19.0.0",
         "react-dom": "^19.0.0"

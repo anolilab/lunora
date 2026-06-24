@@ -35,12 +35,28 @@
  */
 import { env } from "cloudflare:workers";
 
+import { RateLimiter, rateLimit } from "@lunora/ratelimit";
 import { createStorage, scopeKey } from "@lunora/storage";
 import type { Storage } from "@lunora/storage";
-import { action, mutation, query, v } from "./_generated/server.js";
+import { action, mutation, query, v } from "#lunora/_generated/server.js";
 
 /** The R2 bucket binding type `createStorage` expects. */
 type StorageBucket = Parameters<typeof createStorage>[0]["bucket"];
+
+/**
+ * Per-user rate limit shared by the public storage endpoints, so they aren't
+ * open flood targets. The default store is in-memory (per-isolate, resets on
+ * eviction) — run `lunora add ratelimit` for the durable, `ctx.db`-backed store
+ * in production, and tune the rate to your upload/download volume.
+ */
+const limiter = new RateLimiter({
+    config: {
+        storage: { kind: "token bucket", period: 60_000, rate: 60 },
+    },
+});
+
+/** Rate-limit key: the authenticated owner (every endpoint here requires one via {@link requireOwner}). */
+const rateLimitByOwner = rateLimit(limiter, "storage", { key: (ctx) => ctx.auth.userId ?? "anon" });
 
 /**
  * Read a required string env var/secret or throw a clear, actionable error.
@@ -118,13 +134,14 @@ const ALLOWED_UPLOAD_CONTENT_TYPES: ReadonlySet<string> = new Set(["application/
  * — it's pinned into the signature, so an unconstrained value would let a caller
  * store renderable HTML/SVG (stored-XSS risk when served same-origin).
  */
-export const generateUploadUrl = action({
-    args: {
-        contentType: v.string(),
+export const generateUploadUrl = action
+    .input({
+        contentType: v.string().meta({ schema: { maxLength: 256 } }),
         expiresInSeconds: v.optional(v.number()),
-        key: v.string(),
-    },
-    handler: async (ctx, { contentType, expiresInSeconds, key }): Promise<{ key: string; url: string }> => {
+        key: v.string().meta({ schema: { maxLength: 1024 } }),
+    })
+    .use(rateLimitByOwner)
+    .action(async ({ args: { contentType, expiresInSeconds, key }, ctx }): Promise<{ key: string; url: string }> => {
         if (!ALLOWED_UPLOAD_CONTENT_TYPES.has(contentType)) {
             throw new Error(
                 `@lunora/storage registry item: content type \`${contentType}\` is not allowed — permitted: ${[...ALLOWED_UPLOAD_CONTENT_TYPES].join(", ")}. Edit ALLOWED_UPLOAD_CONTENT_TYPES to widen.`,
@@ -135,37 +152,36 @@ export const generateUploadUrl = action({
         const url = await makeStorage().generateUploadUrl(scoped, { contentType, expiresInSeconds });
 
         return { key: scoped, url };
-    },
-});
+    });
 
 /**
  * Mint a short-lived signed `GET` URL for a stored object. Verify it in your
  * Worker's `GET /storage/:key` route with {@link verifySignedUrl} before
  * streaming the R2 body.
  */
-export const getDownloadUrl = action({
-    args: {
+export const getDownloadUrl = action
+    .input({
         expiresInSeconds: v.optional(v.number()),
-        key: v.string(),
-    },
-    handler: async (ctx, { expiresInSeconds, key }): Promise<{ key: string; url: string }> => {
+        key: v.string().meta({ schema: { maxLength: 1024 } }),
+    })
+    .use(rateLimitByOwner)
+    .action(async ({ args: { expiresInSeconds, key }, ctx }): Promise<{ key: string; url: string }> => {
         const scoped = scopeKey(requireOwner(ctx.auth.userId), key);
         const url = await makeStorage().getSignedUrl(scoped, { expiresInSeconds, method: "GET" });
 
         return { key: scoped, url };
-    },
-});
+    });
 
 /** Delete a stored object owned by the caller. */
-export const deleteObject = mutation({
-    args: { key: v.string() },
-    handler: async (ctx, { key }): Promise<{ ok: true }> => {
+export const deleteObject = mutation
+    .input({ key: v.string().meta({ schema: { maxLength: 1024 } }) })
+    .use(rateLimitByOwner)
+    .mutation(async ({ args: { key }, ctx }): Promise<{ ok: true }> => {
         const scoped = scopeKey(requireOwner(ctx.auth.userId), key);
         await makeStorage().delete(scoped);
 
         return { ok: true as const };
-    },
-});
+    });
 
 /** A single listed object as returned by `listObjects`. */
 interface StorageObject {
@@ -182,13 +198,13 @@ interface StorageObject {
  * it's a query. Returns the R2 page cursor + `truncated` flag for pagination;
  * keys are returned relative to the caller's tenant prefix.
  */
-export const listObjects = query({
-    args: {
-        cursor: v.optional(v.string()),
+export const listObjects = query
+    .input({
+        cursor: v.optional(v.string().meta({ schema: { maxLength: 2048 } })),
         limit: v.optional(v.number()),
-        prefix: v.optional(v.string()),
-    },
-    handler: async (ctx, { cursor, limit, prefix }): Promise<{ cursor?: string; objects: StorageObject[]; truncated?: boolean }> => {
+        prefix: v.optional(v.string().meta({ schema: { maxLength: 1024 } })),
+    })
+    .query(async ({ args: { cursor, limit, prefix }, ctx }): Promise<{ cursor?: string; objects: StorageObject[]; truncated?: boolean }> => {
         const base = requireOwner(ctx.auth.userId);
         const scopedPrefix = prefix === undefined ? `${base}/` : `${scopeKey(base, prefix)}`;
         const stripLength = `${base}/`.length;
@@ -211,7 +227,6 @@ export const listObjects = query({
             }),
             truncated: page.truncated,
         };
-    },
-});
+    });
 
 export type { StorageObject };

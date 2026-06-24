@@ -3,12 +3,16 @@
     "version": "0.0.0",
     "private": true,
     "type": "module",
+    "imports": {
+        "#lunora/*": "./lunora/*"
+    },
     "scripts": {
         "dev": "lunora dev",
         "codegen": "lunora codegen",
         "deploy": "lunora deploy"
     },
     "dependencies": {
+        "@lunora/ratelimit": "^0.0.0",
         "lunorash": "^0.0.0"
     },
     "devDependencies": {

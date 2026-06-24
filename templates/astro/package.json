@@ -3,6 +3,9 @@
     "version": "0.0.0",
     "private": true,
     "type": "module",
+    "imports": {
+        "#lunora/*": "./lunora/*"
+    },
     "scripts": {
         "dev": "astro dev",
         "build": "lunora codegen && astro build",
@@ -16,6 +19,7 @@
         "@lunora/astro": "^0.0.0",
         "@lunora/react": "^0.0.0",
         "astro": "^6.4.6",
+        "@lunora/ratelimit": "^0.0.0",
         "lunorash": "^0.0.0",
         "react": "^19.2.7",
         "react-dom": "^19.2.7"
