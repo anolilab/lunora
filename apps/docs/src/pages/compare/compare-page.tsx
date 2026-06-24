@@ -16,33 +16,33 @@ import { createJsonLd, SITE_URL } from "@/lib/seo";
  * Facts live in ./data; keep them accurate and sourced.
  */
 
-export type Tone = "neutral" | "no" | "warn" | "yes";
+type Tone = "neutral" | "no" | "warn" | "yes";
 
 /** Comparison page slugs (routes under /vs). Literal so `/vs/${slug}` typechecks. */
-export type CompareSlug = "appwrite" | "convex" | "firebase" | "supabase";
+type CompareSlug = "appwrite" | "convex" | "firebase" | "supabase";
 
-export interface Cell {
+interface Cell {
     label: string;
     tone?: Tone;
 }
 
-export interface CompareRow {
+interface CompareRow {
     criterion: string;
     lunora: Cell;
     them: Cell;
 }
 
-export interface Verdict {
+interface Verdict {
     body: string;
     title: string;
 }
 
-export interface Faq {
+interface Faq {
     a: string;
     q: string;
 }
 
-export interface Comparison {
+interface Comparison {
     description: string;
     /** FAQ — rendered as content and emitted as FAQPage structured data. */
     faqs: Faq[];
@@ -66,7 +66,7 @@ const TONE_CLASS: Record<Tone, string> = {
 };
 
 // Escape `<` so a stray "</script>" in data can't break out of the JSON-LD block.
-const safeJsonLd = (value: string): string => value.replaceAll("<", "\\u003c");
+const safeJsonLd = (value: string): string => value.replaceAll("<", String.raw`\u003c`);
 
 const CellView: FC<{ cell: Cell }> = ({ cell }) => {
     const tone = cell.tone ?? "neutral";
@@ -93,17 +93,21 @@ export const ComparePage: FC<{ data: Comparison; others: { name: string; slug: C
     const faqLd = safeJsonLd(
         createJsonLd({
             "@type": "FAQPage",
-            mainEntity: data.faqs.map((faq) => ({
-                "@type": "Question",
-                acceptedAnswer: { "@type": "Answer", text: faq.a },
-                name: faq.q,
-            })),
+            mainEntity: data.faqs.map((faq) => {
+                return {
+                    "@type": "Question",
+                    acceptedAnswer: { "@type": "Answer", text: faq.a },
+                    name: faq.q,
+                };
+            }),
         }),
     );
 
     return (
         <div className="relative overflow-x-clip bg-[#0e0e11]" data-theme="dark">
+            {/* eslint-disable-next-line react/no-danger -- JSON-LD structured data; the payload is built locally and `<` is escaped via safeJsonLd */}
             <script dangerouslySetInnerHTML={{ __html: breadcrumbLd }} type="application/ld+json" />
+            {/* eslint-disable-next-line react/no-danger -- JSON-LD structured data; the payload is built locally and `<` is escaped via safeJsonLd */}
             <script dangerouslySetInnerHTML={{ __html: faqLd }} type="application/ld+json" />
 
             {/* vertical guide lines at the container edges, full page height */}
@@ -145,7 +149,9 @@ export const ComparePage: FC<{ data: Comparison; others: { name: string; slug: C
                     <table className="w-full border-collapse text-sm">
                         <thead>
                             <tr className="border-b border-white/10 text-left">
-                                <th className="py-3 pr-4 font-medium text-white/45" />
+                                <th className="py-3 pr-4 font-medium text-white/45">
+                                    <span className="sr-only">Criterion</span>
+                                </th>
                                 <th className="py-3 pr-4 font-semibold text-white">Lunora</th>
                                 <th className="py-3 font-semibold text-white/70">{data.name}</th>
                             </tr>
@@ -260,3 +266,5 @@ export const ComparePage: FC<{ data: Comparison; others: { name: string; slug: C
         </div>
     );
 };
+
+export type { Cell, CompareRow, CompareSlug, Comparison, Faq, Tone, Verdict };

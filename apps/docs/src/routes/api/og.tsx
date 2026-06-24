@@ -89,16 +89,16 @@ export const Route = createFileRoute("/api/og")({
             async GET(request) {
                 const url = new URL(request.request.url);
                 const slug = url.searchParams.get("slug");
-                const titleParam = url.searchParams.get("title");
+                const titleParameter = url.searchParams.get("title");
 
                 let title = "Lunora";
                 let description = "The type-safe, real-time backend for Cloudflare.";
                 let eyebrow = "Lunora";
                 let accentColor = "sky-sapphire";
 
-                if (titleParam) {
+                if (titleParameter) {
                     // Direct mode: blog posts (and any page) pass their own title/description.
-                    title = titleParam;
+                    title = titleParameter;
                     description = url.searchParams.get("description") ?? "";
                     eyebrow = url.searchParams.get("eyebrow") ?? "Lunora";
                     accentColor = url.searchParams.get("accent") ?? "royal-amethyst";

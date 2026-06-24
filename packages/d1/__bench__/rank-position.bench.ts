@@ -1,5 +1,5 @@
 import type { DatabaseWriterLike, RankIndexDefinitionLike, SchemaLike, ValidatorLike } from "@lunora/do";
-import { beforeAll, bench, describe } from "vitest";
+import { bench, describe } from "vitest";
 
 import createD1Exec from "../__tests__/_helpers/node-sqlite-d1";
 import { createD1CtxDb as createD1ContextDatabase, runD1RankMigrations } from "../src/d1-ctx-db";
@@ -83,26 +83,38 @@ const TARGET_CHANNEL = `c${String(Math.floor(CHANNEL_COUNT / 2))}`;
 const TARGET_INDEX = Math.floor(ROWS_PER_CHANNEL / 2);
 const TARGET_ID = `m-${TARGET_CHANNEL}-${String(TARGET_INDEX).padStart(5, "0")}`;
 
-let indexedWriter: DatabaseWriterLike;
-let scanWriter: DatabaseWriterLike;
+let indexedWriter: DatabaseWriterLike | undefined;
+let scanWriter: DatabaseWriterLike | undefined;
 
-describe("d1 rank() — indexed vs emulated scan", () => {
-    // Build + seed in beforeAll: CodSpeed's instrumented runner does not pick up
-    // module-top-level await state (async migrations + seed writes), so the
-    // benches would otherwise hit an empty DB. beforeAll is honored by both the
-    // plain `vitest bench` runner and CodSpeed's analysis runner.
-    beforeAll(async () => {
+// Build + seed lazily on first use, not in `beforeAll`: CodSpeed's instrumented
+// runner measures each bench body WITHOUT the suite's `beforeAll` seed state, so
+// the writers would otherwise hit an empty DB ("row not found in emulated scan").
+// Memoized by the module-level handles, so the 10k-row seed runs once and the
+// measured iterations reuse it.
+const ensureSeed = async (): Promise<{ indexed: DatabaseWriterLike; scan: DatabaseWriterLike }> => {
+    if (!indexedWriter) {
         indexedWriter = await createWriter(indexedSchema);
         await seed(indexedWriter);
+    }
+
+    if (!scanWriter) {
         scanWriter = await createWriter(scanSchema);
         await seed(scanWriter);
-    });
+    }
 
+    return { indexed: indexedWriter, scan: scanWriter };
+};
+
+describe("d1 rank() — indexed vs emulated scan", () => {
     bench("indexed: rank() via companion table seek", async () => {
-        await indexedWriter.rank("messages", "byChannel", { row: TARGET_ID });
+        const { indexed } = await ensureSeed();
+
+        await indexed.rank("messages", "byChannel", { row: TARGET_ID });
     });
 
     bench("emulated: findMany(channel) + JS index-of", async () => {
+        const { scan } = await ensureSeed();
+
         let cursor: null | string = null;
         let position: null | number = null;
         let total = 0;
@@ -110,7 +122,7 @@ describe("d1 rank() — indexed vs emulated scan", () => {
 
         while (true) {
             // eslint-disable-next-line no-await-in-loop -- cursor walk: each page depends on the prior page's continueCursor, so it must be sequential
-            const page = await scanWriter.findMany("messages", {
+            const page = await scan.findMany("messages", {
                 cursor,
                 limit: 200,
                 orderBy: [{ seq: "asc" }],

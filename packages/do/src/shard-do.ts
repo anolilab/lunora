@@ -2507,45 +2507,27 @@ abstract class ShardDO {
             });
         }
 
-        // Capture `exec` into a const so the nested closure below doesn't
-        // re-widen `sqlHandle.exec` to a possibly-undefined function via
-        // the narrowing-loss control flow has after the guard.
-        const sqlExec = sqlHandle.exec.bind(sqlHandle);
+        // workerd FORBIDS raw `BEGIN`/`COMMIT`/`SAVEPOINT` SQL inside a Durable
+        // Object ("please use the state.storage.transaction() ... APIs instead")
+        // — issuing them throws and fails every transactional mutation. Use the
+        // platform primitive `state.storage.transaction(closure)`: it's atomic,
+        // rolls back automatically when the closure throws, and is correctly
+        // isolated from concurrent dispatch. (`transactionSync` is sync-only and
+        // can't wrap our async handler; the async `transaction` can.) The
+        // `storage.sql` guard above still ensures the handler's SQL has a
+        // connection. Test doubles whose storage lacks `transaction` fall back to
+        // a bare call — their fakes carry no transactional semantics anyway.
+        const transactionalStorage = this.state.storage as undefined | { transaction?: <R>(closure: () => Promise<R>) => Promise<R> };
 
-        // Raw `BEGIN`/`COMMIT` via `sqlHandle.exec` is not isolated from
-        // concurrent fetch dispatch — a sibling RPC running between the
-        // two would observe (or worse, write through) the open
-        // transaction. `blockConcurrencyWhile` serializes ALL requests to
-        // this DO for the duration of the callback, which is what we need
-        // here. The cost is real: every concurrent reader stalls for the
-        // length of the transaction, not just writers. This is fine for
-        // the workloads SQLite-in-DO is built for (one DO per shard;
-        // bounded concurrency by design), but if a future workload is
-        // contention-sensitive we should migrate to `storage.transactionSync`
-        // (the platform's native, properly-scoped transaction primitive)
-        // and drop this gate.
-        // TODO(perf): switch to `state.storage.transactionSync(...)` once
-        // the workers-types definitions and our async-handler contract are
-        // both compatible — that primitive is sync-only today.
         const run = async (): Promise<T> => {
             this.transactionDepth = 1;
-            sqlExec("BEGIN");
 
             try {
-                const value = await handler();
-
-                sqlExec("COMMIT");
-
-                return value;
-            } catch (error) {
-                try {
-                    sqlExec("ROLLBACK");
-                } catch {
-                    // The rollback itself may fail if the connection is in a
-                    // bad state — swallow it so the original error propagates.
+                if (typeof transactionalStorage?.transaction === "function") {
+                    return await transactionalStorage.transaction(async () => handler());
                 }
 
-                throw error;
+                return await handler();
             } finally {
                 this.transactionDepth = 0;
             }

@@ -33,6 +33,7 @@ const RouteComponent = () => {
         () =>
             data.map((item) => {
                 const { default: MdxContent } = executeMdxSync(item.compiled);
+                // eslint-disable-next-line react-x/no-nested-component-definitions -- per-item compiled MDX bound to the shared component map; memoized on `data`, and the Changelog page renders it as `<item.MdxContent />` (no props to thread)
                 const Rendered: FC = () => <MdxContent components={defaultMdxComponents} />;
 
                 return { MdxContent: Rendered, key: item.key, title: item.title };

@@ -125,17 +125,30 @@ const LATEST_MAJORS: Record<string, number> = {
 };
 
 /**
+ * Per-template major overrides for a dep a template intentionally pins below
+ * {@link LATEST_MAJORS} — keyed by template → dep → the major it must stay on.
+ */
+const MAJOR_OVERRIDES: Record<string, Record<string, number>> = {
+    // AnalogJS rides Angular 19, whose `@angular/build` toolchain pins Vite 6 —
+    // it can't move to Vite 8 until Angular's build supports it.
+    analog: { vite: 6 },
+};
+
+/**
  * The Lunora client adapter each template's UI must depend on. `standalone` has
- * no UI (server-only), so it's exempt.
+ * no UI (server-only), and `analog` has no `@lunora/angular` adapter yet (it
+ * wires the vanilla `lunorash/client` through a hand-written service) — both
+ * are exempt with an explicit `null`.
  */
 const REQUIRED_ADAPTER: Record<string, string | null> = {
+    analog: null,
     astro: "@lunora/react",
     nuxt: "@lunora/vue",
+    "react-router": "@lunora/react",
     standalone: null,
     sveltekit: "@lunora/svelte",
     "tanstack-start-react": "@lunora/react",
     "tanstack-start-solid": "@lunora/solid",
-    "vite-react": "@lunora/react",
 };
 
 describe("templates/* package.json validation", () => {
@@ -192,7 +205,7 @@ describe("templates/* package.json validation", () => {
                     continue;
                 }
 
-                const expectedMajor = LATEST_MAJORS[name];
+                const expectedMajor = MAJOR_OVERRIDES[templateName]?.[name] ?? LATEST_MAJORS[name];
 
                 if (expectedMajor === undefined) {
                     continue;

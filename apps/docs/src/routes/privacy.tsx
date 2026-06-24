@@ -275,8 +275,8 @@ const RouteComponent = () => (
         </p>
         <p>
             Form submissions are processed on our behalf by our hosting and forms provider, Netlify, Inc. (44 Montgomery Street, Suite 300, San Francisco,
-            California 94104, USA), acting as a processor under a data processing agreement (Art. 28 GDPR). Where data is transferred to the USA, the transfer is
-            safeguarded by the EU Standard Contractual Clauses and/or the EU&ndash;U.S. Data Privacy Framework.
+            California 94104, USA), acting as a processor under a data processing agreement (Art. 28 GDPR). Where data is transferred to the USA, the transfer
+            is safeguarded by the EU Standard Contractual Clauses and/or the EU&ndash;U.S. Data Privacy Framework.
         </p>
         <p>
             We retain the data you provide via the waitlist until you withdraw your consent or the purpose for storing it ceases to apply (for example, after we

@@ -101,7 +101,7 @@ export const Route = createFileRoute("/blog/$slug")({
             return {};
         }
 
-        const ogParams = new URLSearchParams({
+        const ogParameters = new URLSearchParams({
             description: loaderData.meta.description ?? "",
             eyebrow: loaderData.meta.category ?? "Blog",
             title: loaderData.meta.title,
@@ -110,7 +110,7 @@ export const Route = createFileRoute("/blog/$slug")({
         const seo = createSeoHead({
             description: loaderData.meta.description ?? `${loaderData.meta.title} — Lunora blog`,
             // Dynamic OG image generated per post (see routes/api/og.ts).
-            ogImage: `${SITE_URL}/api/og?${ogParams.toString()}`,
+            ogImage: `${SITE_URL}/api/og?${ogParameters.toString()}`,
             ogType: "article",
             path: `/blog/${loaderData.slug}`,
             title: loaderData.meta.title,

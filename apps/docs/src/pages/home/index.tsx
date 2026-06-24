@@ -166,10 +166,7 @@ const Home: FC = () => (
                 />
                 <div className="mt-14 grid grid-cols-2 gap-px border border-white/[0.08] bg-white/[0.08] sm:grid-cols-3 lg:border-x-0">
                     {logos.map(({ brand, Icon, name }) => (
-                        <div
-                            className="flex h-32 items-center justify-center gap-3 bg-[#0e0e11] text-white/70 transition-colors hover:text-white"
-                            key={name}
-                        >
+                        <div className="flex h-32 items-center justify-center gap-3 bg-[#0e0e11] text-white/70 transition-colors hover:text-white" key={name}>
                             <Icon className="size-6" color={brand ? "default" : undefined} />
                             <span className="text-xl font-medium tracking-tight">{name}</span>
                         </div>

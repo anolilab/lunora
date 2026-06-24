@@ -195,6 +195,29 @@ export const ext = action({ args: { id: v.string() }, handler: async (ctx, { id 
             expect(result.generated.server).toContain('readonly sql: import("@lunora/hyperdrive").SqlClient;');
         });
 
+        it("wires ctx.r2sql (R2 SQL) end-to-end onto the ActionCtx ONLY (value-level) when an action reads ctx.r2sql", () => {
+            expect.assertions(4);
+
+            writeFileSync(
+                join(workdir, "lunora", "analytics.ts"),
+                `import { action, v } from "@lunora/server";
+export const top = action({ args: { region: v.string() }, handler: async (ctx, { region }) => ctx.r2sql.from("s.orders").select("id").run() });
+`,
+                "utf8",
+            );
+
+            const result = runCodegen({ lint: false, projectRoot: workdir });
+
+            expect(result.generated.shard).toContain('import { createR2Sql } from "@lunora/r2sql";');
+            // Attached only inside the `if (isAction)` block — never spliced into the shared ctx literal.
+            expect(result.generated.shard).toContain("ctx.r2sql = r2sql;");
+
+            const baseCtxBody = result.generated.shard.slice(0, result.generated.shard.indexOf("const isAction ="));
+
+            expect(baseCtxBody).not.toContain("\n                r2sql,");
+            expect(result.generated.server).toContain('readonly r2sql: import("@lunora/r2sql").R2SqlClient;');
+        });
+
         it("gates studioFeatures end-to-end: payments on (ctx read), crons drive scheduler, storage column drives storage, mail/vectors off", () => {
             expect.assertions(5);
 

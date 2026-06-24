@@ -2,7 +2,7 @@
 
 import { Link } from "@tanstack/react-router";
 import { ArrowRight, BarChart3, Check, LayoutDashboard, LifeBuoy, RotateCcw } from "lucide-react";
-import type { FC, FormEvent, ReactNode } from "react";
+import type { FC, ReactNode, SyntheticEvent } from "react";
 import { useState } from "react";
 
 import { Pill } from "@/components/sections/langbase";
@@ -14,7 +14,7 @@ import Reveal from "@/components/sections/reveal";
  * account, or let Lunora Cloud run it. Same code, no lock-in. Shared dark frame.
  */
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const EMAIL_RE = /^[^\s@]+@[^\s@][^\s.@]*\.[^\s@]+$/;
 
 type Status = "error" | "idle" | "sending" | "success";
 
@@ -29,7 +29,7 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
         setStatus("error");
     };
 
-    const submit = async (event: FormEvent) => {
+    const submit = async (event: SyntheticEvent) => {
         event.preventDefault();
 
         if (!EMAIL_RE.test(email)) {
@@ -80,14 +80,15 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
             data-netlify="true"
             method="POST"
             name="lunora-waitlist"
+            // eslint-disable-next-line react/no-unknown-property -- Netlify Forms spam-filter attribute, read by Netlify's build, not the DOM
             netlify-honeypot="honeyField"
-            onSubmit={submit}
+            onSubmit={(event) => void submit(event)}
         >
             <input name="form-name" type="hidden" value="lunora-waitlist" />
             <input name="source" type="hidden" value={source} />
             <p className="hidden">
-                <label>
-                    Don&apos;t fill this out if you&apos;re human: <input name="honeyField" tabIndex={-1} />
+                <label htmlFor="honeyField">
+                    Don&apos;t fill this out if you&apos;re human: <input id="honeyField" name="honeyField" tabIndex={-1} />
                 </label>
             </p>
             <div className="flex flex-col gap-2 sm:flex-row">
@@ -116,10 +117,11 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
                     <ArrowRight className="size-4" />
                 </button>
             </div>
-            <label className="flex items-start gap-2 text-left text-xs leading-relaxed text-white/50">
+            <label className="flex items-start gap-2 text-left text-xs leading-relaxed text-white/50" htmlFor="privacy-consent">
                 <input
                     checked={consent}
                     className="mt-0.5 size-4 shrink-0 accent-[#9273e8]"
+                    id="privacy-consent"
                     name="privacy"
                     onChange={(event) => {
                         setConsent(event.target.checked);

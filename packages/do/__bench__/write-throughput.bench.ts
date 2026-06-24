@@ -92,13 +92,14 @@ const seedId = "seed";
 // that is idempotent: the flag makes it a no-op after the first call (so it
 // never double-inserts when `beforeAll` already ran), and the one-off insert
 // lands in tinybench's discarded warmup iterations, not the measured ones.
-let bareSeeded = false;
 const ensureBareSeed = async () => {
-    if (bareSeeded) {
+    // DB-checked, not a module flag: CodSpeed's instrumented runner measures each
+    // bench body without the suite `beforeAll` seed, and a stale boolean flag (set
+    // before the await) would latch true while the row is absent — the source of
+    // "document not found: seed". `get` is a cheap PK lookup; insert only if gone.
+    if (await bareWriter.get(seedId, "todos")) {
         return;
     }
-
-    bareSeeded = true;
 
     await bareWriter.insert("todos", { _id: seedId, projectId: "p1", seq: 1 });
 };

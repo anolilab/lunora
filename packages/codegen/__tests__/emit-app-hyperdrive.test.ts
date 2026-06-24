@@ -15,6 +15,7 @@ const baseOptions = {
     hasImages: false,
     hasKv: false,
     hasPayments: false,
+    hasR2sql: false,
     hasHyperdriveGlobal: false,
     hasScheduler: false,
     hasStorage: false,

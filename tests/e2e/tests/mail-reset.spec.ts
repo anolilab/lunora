@@ -34,7 +34,10 @@ test("forgot-password email is captured and its reset link sets a new password",
 
     // Request a password reset — better-auth fires `sendResetPassword`, which the
     // playground sends via @lunora/mail. In the E2E run that's captured, not sent.
-    const forgot = await page.request.post(`${WORKER_URL}/api/auth/forget-password`, {
+    // better-auth ≥1.6 serves this at `/request-password-reset` (the old
+    // `/forget-password` path was removed and 404s — see
+    // packages/auth/__tests__/forget-password-route.test.ts).
+    const forgot = await page.request.post(`${WORKER_URL}/api/auth/request-password-reset`, {
         data: { email, redirectTo: `${WORKER_URL}/reset` },
         headers: { Origin: WORKER_URL },
     });

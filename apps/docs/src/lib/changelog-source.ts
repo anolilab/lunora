@@ -18,13 +18,15 @@ const files: [string, string][] = Object.entries(
     }),
 );
 
+const MD_EXTENSION = /\.md$/;
+
+const slugFromPath = (file: string): string => (file.split("/").pop() ?? file).replace(MD_EXTENSION, "");
+
 export interface ChangelogEntry {
     content: string;
     key: string;
     title: string;
 }
-
-const slugFromPath = (file: string): string => (file.split("/").pop() ?? file).replace(/\.md$/, "");
 
 export const listChangelogs = (): ChangelogEntry[] =>
     files
@@ -38,4 +40,4 @@ export const listChangelogs = (): ChangelogEntry[] =>
                 title: typeof parsed.data.title === "string" ? parsed.data.title : key,
             };
         })
-        .sort((a, b) => a.title.localeCompare(b.title));
+        .toSorted((a, b) => a.title.localeCompare(b.title));

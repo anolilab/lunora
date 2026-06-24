@@ -26,6 +26,7 @@ import nondeterministicQueryMutation from "./lints/static/nondeterministic-query
 import policyReferencesUnknownTable from "./lints/static/policy-references-unknown-table";
 import publicArgumentUsesAny from "./lints/static/public-argument-uses-any";
 import publicMutationWithoutRatelimit from "./lints/static/public-mutation-without-ratelimit";
+import r2sqlOutsideAction from "./lints/static/r2sql-outside-action";
 import relationReferencesUnknownField from "./lints/static/relation-references-unknown-field";
 import relationReferencesUnknownTable from "./lints/static/relation-references-unknown-table";
 import rlsUncoveredTable from "./lints/static/rls-uncovered-table";
@@ -67,6 +68,7 @@ export { default as nondeterministicQueryMutation } from "./lints/static/nondete
 export { default as policyReferencesUnknownTable } from "./lints/static/policy-references-unknown-table";
 export { default as publicArgumentUsesAny } from "./lints/static/public-argument-uses-any";
 export { default as publicMutationWithoutRatelimit } from "./lints/static/public-mutation-without-ratelimit";
+export { default as r2sqlOutsideAction } from "./lints/static/r2sql-outside-action";
 export { default as relationReferencesUnknownField } from "./lints/static/relation-references-unknown-field";
 export { default as relationReferencesUnknownTable } from "./lints/static/relation-references-unknown-table";
 export { default as rlsUncoveredTable } from "./lints/static/rls-uncovered-table";
@@ -82,6 +84,7 @@ export type { AdvisorMaskProcedure } from "./mask-procedures";
 export type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
 export type { AdvisorProcedureProtection } from "./procedure-protections";
 export type { AdvisorQueryRead } from "./queries";
+export type { AdvisorR2sqlCall } from "./r2sql-calls";
 export type { AdvisorRlsProcedure } from "./rls-procedures";
 export type { AdvisorIndex, AdvisorRelation, AdvisorSchema, AdvisorTable } from "./schema";
 export { fromServerSchema } from "./schema";
@@ -113,6 +116,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     filterWithoutIndex,
     nondeterministicQueryMutation,
     hyperdriveOutsideAction,
+    r2sqlOutsideAction,
     authApiCallWithoutHeaders,
     policyReferencesUnknownTable,
     rlsUncoveredTable,

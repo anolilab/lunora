@@ -1,4 +1,4 @@
-import type { Cell, Comparison, CompareRow, CompareSlug } from "./compare-page";
+import type { Cell, CompareRow, CompareSlug, Comparison } from "./compare-page";
 
 /**
  * Honest comparison data. Verified against primary sources (each vendor's docs,
@@ -260,4 +260,6 @@ export const COMPARE_LIST: { name: string; slug: CompareSlug; tagline: string }[
 ];
 
 export const othersFor = (slug: CompareSlug): { name: string; slug: CompareSlug }[] =>
-    COMPARE_LIST.filter((item) => item.slug !== slug).map(({ name, slug: s }) => ({ name, slug: s }));
+    COMPARE_LIST.filter((item) => item.slug !== slug).map(({ name, slug: s }) => {
+        return { name, slug: s };
+    });

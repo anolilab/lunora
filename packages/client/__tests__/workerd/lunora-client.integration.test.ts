@@ -38,20 +38,27 @@ const fetchViaSelf: typeof fetch = (...arguments_) => SELF.fetch(...(arguments_ 
  * constructor-shaped wrapper.
  */
 class SelfWebSocket {
-    public onclose: ((event: unknown) => void) | null = null;
-
-    public onerror: ((event: unknown) => void) | null = null;
-
-    public onmessage: ((event: { data: unknown }) => void) | null = null;
-
-    public onopen: ((event: unknown) => void) | null = null;
-
     private socket: WebSocket | null = null;
 
     private pendingSends: string[] = [];
 
+    // The client subscribes through the standard `socket.addEventListener(type, fn)`
+    // API, so the polyfill must expose it. (It previously exposed only `on*` handler
+    // props, which the client no longer uses — the source of the
+    // "socket.addEventListener is not a function" failure.)
+    private readonly listeners: Record<string, Set<(event: unknown) => void>> = {};
+
     public constructor(url: string) {
         this.connect(url);
+    }
+
+    public addEventListener(type: string, listener: (event: unknown) => void): void {
+        this.listeners[type] ??= new Set();
+        this.listeners[type].add(listener);
+    }
+
+    public removeEventListener(type: string, listener: (event: unknown) => void): void {
+        this.listeners[type]?.delete(listener);
     }
 
     public send(data: string): void {
@@ -66,27 +73,39 @@ class SelfWebSocket {
         this.socket?.close();
     }
 
+    private dispatch(type: string, event: unknown): void {
+        for (const listener of this.listeners[type] ?? new Set<(event: unknown) => void>()) {
+            listener(event);
+        }
+    }
+
     private connect(url: string): void {
-        SELF.fetch(url, { headers: { Upgrade: "websocket" } })
+        // The client builds a browser `wss://`/`ws://` URL, but workerd's
+        // `SELF.fetch` upgrades over `https://`/`http://` — rewrite the scheme so
+        // the upgrade actually lands on the worker (a `wss://` URL silently fails
+        // to upgrade, which left the DO with zero registered sockets).
+        const httpUrl = url.replace(/^wss:\/\//, "https://").replace(/^ws:\/\//, "http://");
+
+        SELF.fetch(httpUrl, { headers: { Upgrade: "websocket" } })
             .then((response) => {
                 const ws = (response as unknown as { webSocket: WebSocket | null }).webSocket;
 
                 if (!ws) {
-                    this.onerror?.({});
-                    this.onclose?.({});
+                    this.dispatch("error", {});
+                    this.dispatch("close", {});
 
                     return false;
                 }
 
                 this.socket = ws;
                 ws.addEventListener("message", (event) => {
-                    this.onmessage?.(event);
+                    this.dispatch("message", event);
                 });
                 ws.addEventListener("close", (event) => {
-                    this.onclose?.(event);
+                    this.dispatch("close", event);
                 });
                 ws.addEventListener("error", (event) => {
-                    this.onerror?.(event);
+                    this.dispatch("error", event);
                 });
                 ws.accept();
 
@@ -96,13 +115,13 @@ class SelfWebSocket {
 
                 this.pendingSends = [];
 
-                this.onopen?.({});
+                this.dispatch("open", {});
 
                 return true;
             })
             .catch(() => {
-                this.onerror?.({});
-                this.onclose?.({});
+                this.dispatch("error", {});
+                this.dispatch("close", {});
             });
     }
 }
