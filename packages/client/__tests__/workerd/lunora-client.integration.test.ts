@@ -80,7 +80,13 @@ class SelfWebSocket {
     }
 
     private connect(url: string): void {
-        SELF.fetch(url, { headers: { Upgrade: "websocket" } })
+        // The client builds a browser `wss://`/`ws://` URL, but workerd's
+        // `SELF.fetch` upgrades over `https://`/`http://` — rewrite the scheme so
+        // the upgrade actually lands on the worker (a `wss://` URL silently fails
+        // to upgrade, which left the DO with zero registered sockets).
+        const httpUrl = url.replace(/^wss:\/\//, "https://").replace(/^ws:\/\//, "http://");
+
+        SELF.fetch(httpUrl, { headers: { Upgrade: "websocket" } })
             .then((response) => {
                 const ws = (response as unknown as { webSocket: WebSocket | null }).webSocket;
 
