@@ -24,7 +24,7 @@ import { tuiBanner, tuiConfirm, tuiIntro, tuiMultiSelect, tuiOutro, tuiSelect, t
 import type { FeatureItem } from "../add/features";
 import { runAddCommand } from "../registry";
 import type { InitOptions } from "./index";
-import type { OfferDeps } from "./offer-extras";
+import type { OfferDeps, OfferTransformManifest } from "./offer-extras";
 import { offerRegistryExtras } from "./offer-extras";
 import type { OverlayFramework } from "./overlay/adapters";
 import { ADAPTERS, isOverlayFramework } from "./overlay/adapters";
@@ -94,10 +94,10 @@ interface InitCommandOptions {
 
     /**
      * Inject the offer's prompts (tests). When set, the offer is treated as
-     * interactive regardless of TTY, and these drive the feature multi-select
-     * and the auth-provider sub-select.
+     * interactive regardless of TTY, and these drive the feature multi-select,
+     * the auth-provider sub-select, and the storage bucket-name text input.
      */
-    prompt?: Pick<OfferDeps, "multiSelect" | "select">;
+    prompt?: Pick<OfferDeps, "multiSelect" | "select" | "text">;
 
     /**
      * Override the git ref (branch, tag, or commit) the default template source
@@ -778,7 +778,7 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
     // stdout the live spinner repaints, which would garble the terminal — but
     // errors/warnings still surface. Off a TTY there's no spinner, so the full
     // logger is kept and CI retains the detail.
-    const apply = async (names: ReadonlyArray<string>): Promise<boolean> => {
+    const apply = async (names: ReadonlyArray<string>, applyOptions?: { transformManifest?: OfferTransformManifest }): Promise<boolean> => {
         const applyLogger: Logger = isInteractive()
             ? {
                   error: (message) => {
@@ -801,6 +801,7 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
                 names: [...names],
                 ref: options.ref,
                 source: options.registrySource,
+                transformManifest: applyOptions?.transformManifest,
                 yes: true,
             }),
         );
@@ -816,7 +817,9 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
         interactive,
         logger: options.logger,
         multiSelect: options.prompt?.multiSelect ?? ((message, choices, settings) => tuiMultiSelect(message, choices, settings)),
+        projectName: basename(projectDirectory),
         select: options.prompt?.select ?? ((message, choices, settings): Promise<FeatureItem | undefined> => tuiSelect(message, choices, settings)),
+        text: options.prompt?.text ?? ((message, settings) => tuiText(message, settings)),
     });
 };
 

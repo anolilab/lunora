@@ -221,12 +221,15 @@ const TextView = ({ defaultValue, finish, message, placeholder }: TextViewProps)
     );
 };
 
+/** A single-line text prompt — {@link tuiText}'s shape; injectable for tests / non-TUI callers. */
+type TextPrompt = (message: string, settings?: { default?: string; placeholder?: string }) => Promise<string>;
+
 /**
  * Prompt for a single line of text (Enter submits, Escape keeps the default).
  * Non-interactive ⇒ returns `settings.default` so automation never blocks; an
  * empty submission also falls back to the default.
  */
-const tuiText = async (message: string, settings?: { default?: string; placeholder?: string }): Promise<string> => {
+const tuiText: TextPrompt = async (message, settings) => {
     const fallback = settings?.default ?? "";
 
     if (!isInteractive()) {
@@ -447,3 +450,4 @@ const withTuiSpinner = async <T,>(label: string, task: () => Promise<T>): Promis
 };
 
 export { createTuiConfirm, tuiBanner, tuiConfirm, tuiIntro, tuiMultiSelect, tuiOutro, tuiSelect, tuiText, withTuiSpinner };
+export type { TextPrompt };

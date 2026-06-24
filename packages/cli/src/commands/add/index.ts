@@ -15,7 +15,8 @@ const addCommand: Command = {
         ["lunora add auth", "Add authentication (asks which provider)"],
         ["lunora add auth --provider clerk", "Add Clerk auth without prompting"],
         ["lunora add email", "Add transactional email (Cloudflare Email Workers + dev mail catcher)"],
-        ["lunora add storage", "Add the R2 storage registry item"],
+        ["lunora add storage", "Add the R2 storage registry item (asks for the bucket name)"],
+        ["lunora add storage --bucket my-app-uploads", "Add storage with a bucket name, no prompt"],
         ["lunora add crons", "Add the scheduled-jobs registry item"],
         ["lunora add storage --ref alpha", "Add an item from the alpha branch's registry"],
     ],
@@ -27,7 +28,10 @@ const addCommand: Command = {
     name: "add",
     options: [
         { description: "auth: provider to use without prompting (auth | clerk | auth0)", name: "provider", type: String },
-        { description: "Skip the provider prompt and use the default (email & password)", name: "yes", type: Boolean },
+        { description: "auth: D1 database name to use without prompting (lowercase alphanumeric + hyphens)", name: "db", type: String },
+        { description: "storage: R2 bucket name to use without prompting (lowercase alphanumeric + hyphens)", name: "bucket", type: String },
+        { description: "email: verified destination address to use without prompting", name: "mail-to", type: String },
+        { description: "Skip prompts (auth provider, DB name, bucket name, mail destination) and use the defaults", name: "yes", type: Boolean },
         { description: "Local registry root (offline; expects <name>/ subdirs)", name: "from", type: String },
         { description: "Override the remote registry source base (e.g. gh:owner/repo/registry)", name: "source", type: String },
         {
@@ -43,7 +47,10 @@ export { addCommand };
 
 export type AddOptions = CreateOptions<{
     "allow-unsafe-source": boolean | undefined;
+    bucket: string | undefined;
+    db: string | undefined;
     from: string | undefined;
+    "mail-to": string | undefined;
     provider: string | undefined;
     ref: string | undefined;
     source: string | undefined;

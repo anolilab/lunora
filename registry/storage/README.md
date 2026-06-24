@@ -13,7 +13,7 @@ lunora registry add storage
 This:
 
 1. Adds `@lunora/storage` and `@lunora/server` to your `package.json` (run `pnpm install` afterwards).
-2. Adds an R2 bucket binding to `wrangler.jsonc` (`r2_buckets`, binding **`UPLOADS`**, `bucket_name: "REPLACE_ME-uploads"` — rename it to a real bucket).
+2. Adds an R2 bucket binding to `wrangler.jsonc` (`r2_buckets`, binding **`UPLOADS`**). `lunora init` and `lunora add storage` prompt for the bucket name (default `<project>-uploads`, or pass `--bucket <name>`); the low-level `lunora registry add storage` writes the placeholder `bucket_name: "replace-me-uploads"` — rename it to a real bucket.
 3. Scaffolds `STORAGE_SIGNING_SECRET` (a secret — write a real value with `wrangler secret put STORAGE_SIGNING_SECRET`) and `STORAGE_PUBLIC_BASE_URL` into your `.dev.vars`.
 4. Copies `lunora/storage/index.ts` (the `generateUploadUrl` / `getDownloadUrl` / `deleteObject` / `listObjects` functions) into your project — this is **yours** to edit.
 
@@ -39,7 +39,7 @@ The R2 binding `lunora registry add` writes:
 
 ```jsonc
 // wrangler.jsonc
-"r2_buckets": [{ "binding": "UPLOADS", "bucket_name": "REPLACE_ME-uploads" }]
+"r2_buckets": [{ "binding": "UPLOADS", "bucket_name": "replace-me-uploads" }]
 ```
 
 `lunora registry add` **merges** this into any existing `r2_buckets` (it won't drop buckets you already have); rename `bucket_name` to a real bucket. Generate a signing secret with `openssl rand -base64 32`.

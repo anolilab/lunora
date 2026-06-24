@@ -9,8 +9,12 @@
  * blocking automation.
  */
 import type { Logger } from "../../util/logger";
+import { promptDatabaseName, withAuthDatabaseName } from "../add/auth-database";
 import type { FeatureItem } from "../add/features";
 import { EMAIL_ITEM, promptAuthProvider } from "../add/features";
+import { MAIL_DESTINATION_PROMPT, resolveTypedDestination, withMailDestination } from "../add/mail";
+import { promptBucketName, withStorageBucketName } from "../add/storage";
+import type { RegistryManifest } from "../registry/types";
 
 /**
  * A feature offered in the post-scaffold multi-select. `auth`/`email` carry a
@@ -18,6 +22,9 @@ import { EMAIL_ITEM, promptAuthProvider } from "../add/features";
  * directly (`storage` → the `storage` registry item, etc.).
  */
 type StackFeature = "auth" | "backup" | "crons" | "email" | "presence" | "ratelimit" | "storage";
+
+/** Customize a resolved manifest before it is written (e.g. inject the chosen R2 bucket name). */
+type OfferTransformManifest = (manifest: RegistryManifest) => RegistryManifest;
 
 const STACK_FEATURE_OPTIONS: ReadonlyArray<{ description: string; label: string; value: StackFeature }> = [
     { description: "Sign-up / sign-in (asks which provider)", label: "Authentication", value: "auth" },
@@ -30,8 +37,12 @@ const STACK_FEATURE_OPTIONS: ReadonlyArray<{ description: string; label: string;
 ];
 
 interface OfferDeps {
-    /** Apply one or more registry items into the new project; resolves `true` on success. */
-    apply: (names: ReadonlyArray<string>) => Promise<boolean>;
+    /**
+     * Apply one or more registry items into the new project; resolves `true` on
+     * success. `options.transformManifest` customizes each item's manifest before
+     * it is written (used to inject the user-chosen R2 bucket name for storage).
+     */
+    apply: (names: ReadonlyArray<string>, options?: { transformManifest?: OfferTransformManifest }) => Promise<boolean>;
     /** When `false`, skip all prompts and print the later-setup hint. */
     interactive: boolean;
     logger: Logger;
@@ -41,21 +52,68 @@ interface OfferDeps {
         options: ReadonlyArray<{ description?: string; label: string; value: StackFeature }>,
         settings?: { defaults?: ReadonlyArray<StackFeature> },
     ) => Promise<StackFeature[]>;
+    /** The new project's name — seeds smart defaults like the `project-uploads` bucket name. */
+    projectName: string;
     /** Single-select among the auth providers (TTY-backed in production). */
     select: (
         message: string,
         options: ReadonlyArray<{ description?: string; label: string; value: FeatureItem }>,
         settings?: { default?: FeatureItem },
     ) => Promise<FeatureItem | undefined>;
+    /** Single-line text input (TTY-backed in production) — used for the storage bucket-name prompt. */
+    text: (message: string, settings?: { default?: string; placeholder?: string }) => Promise<string>;
 }
 
 /**
+ * Auth: pick a provider, then prompt for the D1 database name. Every provider
+ * (Clerk / Auth0 included) pulls in the base `auth` item via `requires`, and
+ * that's what carries the D1 binding — so the name applies regardless of choice.
+ */
+const applyAuthFeature = async (deps: OfferDeps): Promise<void> => {
+    const provider = await promptAuthProvider(deps.select);
+    const databaseName = await promptDatabaseName(deps.text, deps.projectName);
+
+    await deps.apply([provider], { transformManifest: (manifest) => withAuthDatabaseName(manifest, databaseName) });
+};
+
+/**
+ * Email: ask for a verified destination address (the send-email binding ships a
+ * placeholder). A blank or invalid answer keeps the placeholder to set later.
+ */
+const applyEmailFeature = async (deps: OfferDeps): Promise<void> => {
+    const answer = await deps.text(MAIL_DESTINATION_PROMPT, { placeholder: "you@yourdomain.com" });
+    const destination = resolveTypedDestination(answer, (message) => {
+        deps.logger.warn(message);
+    });
+
+    await deps.apply([EMAIL_ITEM], destination === undefined ? undefined : { transformManifest: (manifest) => withMailDestination(manifest, destination) });
+};
+
+/**
+ * Storage: prompt for the R2 bucket name (default `project-uploads`, sanitized).
+ * R2 names are strict and wrangler rejects an invalid one on dev/deploy, so we
+ * ask up front rather than ship a placeholder the user has to chase down.
+ */
+const applyStorageFeature = async (deps: OfferDeps): Promise<void> => {
+    const bucketName = await promptBucketName(deps.text, deps.projectName);
+
+    await deps.apply(["storage"], { transformManifest: (manifest) => withStorageBucketName(manifest, bucketName) });
+};
+
+/** Per-feature handlers that need a sub-prompt; everything else applies as its bare item name. */
+const FEATURE_HANDLERS: Partial<Record<StackFeature, (deps: OfferDeps) => Promise<void>>> = {
+    auth: applyAuthFeature,
+    email: applyEmailFeature,
+    storage: applyStorageFeature,
+};
+
+/**
  * Offer the stack features (auth, email, storage, rate limiting, crons,
- * presence, backups) in ONE multi-select after a successful scaffold. When auth
- * is picked, a follow-up single-select chooses the provider (email+password /
- * Clerk / Auth0); email maps to the `mail` item; every other feature value is
- * applied as its registry item directly. Picked items are applied in selection
- * order. Non-interactive: prints how to add them later and changes nothing.
+ * presence, backups) in ONE multi-select after a successful scaffold. Auth,
+ * email, and storage run a follow-up prompt (provider / destination / bucket
+ * name); every other feature value is applied as its registry item directly.
+ * Picked items are applied in selection order. Non-interactive: prints how to
+ * add them later and changes nothing.
  */
 const offerRegistryExtras = async (deps: OfferDeps): Promise<void> => {
     if (!deps.interactive) {
@@ -67,24 +125,17 @@ const offerRegistryExtras = async (deps: OfferDeps): Promise<void> => {
 
     const picked = await deps.multiSelect("Which features do you want to add?", STACK_FEATURE_OPTIONS, { defaults: [] });
 
-    // Sequential by design: the auth-provider sub-prompt and each registry apply
-    // both mutate shared project files (package.json, wrangler.jsonc) and prompt
-    // the user one at a time — running them in parallel would interleave prompts
-    // and race the file writes.
+    // Sequential by design: the sub-prompts and each registry apply both mutate
+    // shared project files (package.json, wrangler.jsonc) and prompt the user one
+    // at a time — running them in parallel would interleave prompts and race the
+    // file writes.
     for (const feature of picked) {
-        if (feature === "auth") {
-            // eslint-disable-next-line no-await-in-loop -- prompts/applies must run one at a time (see above).
-            const provider = await promptAuthProvider(deps.select);
+        const handler = FEATURE_HANDLERS[feature];
 
-            // eslint-disable-next-line no-await-in-loop -- registry applies mutate shared files; keep them serial.
-            await deps.apply([provider]);
-        } else {
-            // `email` aliases the `mail` item; every other value IS its registry item name.
-            // eslint-disable-next-line no-await-in-loop -- registry applies mutate shared files; keep them serial.
-            await deps.apply([feature === "email" ? EMAIL_ITEM : feature]);
-        }
+        // eslint-disable-next-line no-await-in-loop -- serial by design (shared file writes + one prompt at a time).
+        await (handler ? handler(deps) : deps.apply([feature]));
     }
 };
 
 export { offerRegistryExtras, STACK_FEATURE_OPTIONS };
-export type { OfferDeps, StackFeature };
+export type { OfferDeps, OfferTransformManifest, StackFeature };

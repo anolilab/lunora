@@ -87,6 +87,14 @@ interface AddCommandOptions {
     ref?: string;
     /** Override the remote registry source base (default gh:anolilab/lunora/registry). */
     source?: string;
+
+    /**
+     * Customize each resolved manifest after it is loaded but before the plan is
+     * printed / reconciled — used to inject user-chosen values into otherwise
+     * static manifests (e.g. the R2 `bucket_name` the init storage prompt asks
+     * for). Applied to every item; return the manifest unchanged to leave it as-is.
+     */
+    transformManifest?: (manifest: RegistryManifest) => RegistryManifest;
     /** Skip the package.json mutation confirmation prompt. */
     yes?: boolean;
 }
@@ -119,6 +127,49 @@ const emptyResult = (): AddCommandResult => {
     return { bindings: [], code: 0, deps: [], skipped: [], written: [] };
 };
 
+/**
+ * Return a copy of `manifest` with `field` set to `fieldValue` on the binding
+ * entry under the `section` (e.g. `r2_buckets`) whose `match.key` equals
+ * `match.value` (e.g. `{ key: "binding", value: "UPLOADS" }`). Every other
+ * section, entry, and the rest of the manifest are preserved, and it no-ops when
+ * no matching binding/entry exists — so it's safe to run over any item. Used to
+ * inject user-chosen values (R2 bucket name, D1 database name, send-email
+ * destination) into an item's otherwise-static manifest before it's written.
+ */
+const setBindingField = (
+    manifest: RegistryManifest,
+    section: string,
+    match: { key: string; value: string },
+    field: string,
+    fieldValue: string,
+): RegistryManifest => {
+    if (!manifest.bindings) {
+        return manifest;
+    }
+
+    return {
+        ...manifest,
+        bindings: manifest.bindings.map((binding) => {
+            if (binding.path[0] !== section || !Array.isArray(binding.value)) {
+                return binding;
+            }
+
+            // `RegistryBinding.value` is `unknown`; `Array.isArray` widens it to
+            // `any[]`, so re-narrow to `unknown[]` before touching the entries.
+            const entries = binding.value as unknown[];
+
+            return {
+                ...binding,
+                value: entries.map((entry) =>
+                    typeof entry === "object" && entry !== null && (entry as Record<string, unknown>)[match.key] === match.value
+                        ? { ...entry, [field]: fieldValue }
+                        : entry,
+                ),
+            };
+        }),
+    };
+};
+
 export type {
     AddCommandOptions,
     AddCommandResult,
@@ -130,4 +181,4 @@ export type {
     RegistryManifest,
     ResolvedItem,
 };
-export { emptyResult };
+export { emptyResult, setBindingField };

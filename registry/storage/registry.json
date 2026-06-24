@@ -12,7 +12,7 @@
     "bindings": [
         {
             "path": ["r2_buckets"],
-            "value": [{ "binding": "UPLOADS", "bucket_name": "REPLACE_ME-uploads" }]
+            "value": [{ "binding": "UPLOADS", "bucket_name": "replace-me-uploads" }]
         }
     ],
     "envVars": [

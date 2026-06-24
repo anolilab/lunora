@@ -166,9 +166,19 @@ const runAddCommand = async (options: AddCommandOptions): Promise<AddCommandResu
     let cleanups: (() => void)[] = [];
 
     try {
-        const { cleanups: planCleanups, items } = await resolvePlan(options.names, options);
+        const { cleanups: planCleanups, items: resolvedItems } = await resolvePlan(options.names, options);
 
         cleanups = planCleanups;
+
+        // Let the caller inject user-chosen values into the static manifests (e.g.
+        // the R2 bucket_name the init storage prompt asks for) before anything is
+        // printed or written, so the plan preview and the wrangler edits agree.
+        const { transformManifest } = options;
+        const items = transformManifest
+            ? resolvedItems.map((item) => {
+                  return { ...item, manifest: transformManifest(item.manifest) };
+              })
+            : resolvedItems;
 
         // --- Plan ---
         for (const { manifest } of items) {

@@ -41,7 +41,7 @@ This:
 1. Adds `@lunora/storage` and `@lunora/server` to `package.json` (run
    `pnpm install` afterwards).
 2. Adds an R2 bucket binding to `wrangler.jsonc` (`r2_buckets`, binding
-   **`UPLOADS`**, `bucket_name: "REPLACE_ME-uploads"` — rename it to a real
+   **`UPLOADS`**, `bucket_name: "replace-me-uploads"` — rename it to a real
    bucket). It **merges** into any existing `r2_buckets`.
 3. Scaffolds `STORAGE_SIGNING_SECRET` (a secret) and `STORAGE_PUBLIC_BASE_URL`
    into `.dev.vars`.
@@ -137,8 +137,12 @@ persist that, and pass the bare key back in — the component re-scopes it.
 
 1. **Skipping `verifySignedUrl` on the download route.** Without it, anyone can
    read any key. Always verify before streaming.
-2. **Placeholder bucket name.** `bucket_name: "REPLACE_ME-uploads"` ships as a
-   placeholder — rename it to a real R2 bucket.
+2. **Placeholder bucket name.** `lunora init` and `lunora add storage` prompt for
+   the bucket name (or take `--bucket <name>`), but the low-level
+   `lunora registry add storage` writes the placeholder
+   `bucket_name: "replace-me-uploads"` — rename it to a real R2 bucket. (R2 names
+   are lowercase alphanumeric + hyphens, 3–63 chars; wrangler rejects anything
+   else on `dev`/`deploy`.)
 3. **Short / shared signing secret.** Use ≥32 chars and a distinct secret per
    bucket; reusing it lets one bucket's URLs sign for another.
 4. **Proxying bytes through the Worker.** The design uploads/downloads directly

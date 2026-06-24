@@ -1,31 +1,44 @@
 import { existsSync } from "node:fs";
 
 import { findWranglerFile } from "@lunora/config";
-import { join } from "@visulima/path";
+import { basename, join } from "@visulima/path";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
-import { tuiSelect } from "../../util/tui-prompts";
+import type { TextPrompt } from "../../util/tui-prompts";
+import { tuiSelect, tuiText } from "../../util/tui-prompts";
 import { runAddCommand } from "../registry";
+import type { RegistryManifest } from "../registry/types";
+import { deriveDatabaseName, promptDatabaseName, sanitizeDatabaseName, withAuthDatabaseName } from "./auth-database";
 import type { FeatureItem, NormalizedFeature } from "./features";
 import { AUTH_PROVIDER_OPTIONS, DEFAULT_AUTH_ITEM, EMAIL_ITEM, normalizeFeature, promptAuthProvider } from "./features";
 import type { AddOptions } from "./index";
+import { MAIL_DESTINATION_PROMPT, resolveTypedDestination, withMailDestination } from "./mail";
+import { deriveBucketName, promptBucketName, sanitizeBucketName, withStorageBucketName } from "./storage";
 
 interface AddFeatureOptions {
     allowUnsafeSource?: boolean;
+    /** storage: R2 bucket name to use without prompting. */
+    bucket?: string;
     cwd?: string;
+    /** auth: D1 database name to use without prompting. */
+    db?: string;
     /** The raw `&lt;feature>` argument: an alias (`auth` | `email` | `mail`) or a bare registry item name. */
     feature?: string;
     /** Local registry root (offline / tests). */
     from?: string;
     logger: Logger;
+    /** mail: verified destination address to use without prompting. */
+    mailTo?: string;
     /** Inject the provider prompt (tests). */
     promptSelect?: (
         message: string,
         options: ReadonlyArray<{ description?: string; label: string; value: FeatureItem }>,
         settings?: { default?: FeatureItem },
     ) => Promise<FeatureItem | undefined>;
+    /** Inject the bucket-name text prompt (tests). */
+    promptText?: (message: string, settings?: { default?: string; placeholder?: string }) => Promise<string>;
     /** Non-interactive auth provider (`auth` | `clerk` | `auth0`). */
     provider?: string;
     /** Override the git ref (branch, tag, or commit) registry items are fetched from. */
@@ -79,6 +92,90 @@ const resolveAuthItem = async (options: AddFeatureOptions): Promise<FeatureItem>
     return promptAuthProvider(select);
 };
 
+/** The injected text prompt for `add` (tests pass a fake; production uses the TUI). */
+const textPrompt = (options: AddFeatureOptions): TextPrompt => options.promptText ?? ((message, settings) => tuiText(message, settings));
+
+/**
+ * Resolve the R2 bucket name for a storage add: an explicit `--bucket` wins
+ * (sanitized, falling back with a warning if it's not a valid R2 name); `--yes`
+ * takes the `project-uploads` default without asking; otherwise prompt. The
+ * prompt + default + sanitize flow itself lives in {@link promptBucketName},
+ * shared with the init offer.
+ */
+const resolveStorageBucketName = async (options: AddFeatureOptions): Promise<string> => {
+    const projectName = basename(options.cwd ?? process.cwd());
+
+    if (options.bucket !== undefined && options.bucket !== "") {
+        const sanitized = sanitizeBucketName(options.bucket);
+
+        if (sanitized !== undefined) {
+            return sanitized;
+        }
+
+        const fallback = deriveBucketName(projectName);
+        options.logger.warn(`add: "${options.bucket}" isn't a valid R2 bucket name (lowercase alphanumeric + hyphens, 3–63 chars) — using "${fallback}".`);
+
+        return fallback;
+    }
+
+    if (options.yes === true) {
+        return deriveBucketName(projectName);
+    }
+
+    return promptBucketName(textPrompt(options), projectName);
+};
+
+/**
+ * Resolve the verified mail destination address, or `undefined` to keep the
+ * placeholder (so no transform is applied). An explicit `--mail-to` wins;
+ * `--yes` keeps the placeholder; otherwise prompt. The trim/validate/warn rules
+ * live in {@link resolveTypedDestination}, shared with the init offer.
+ */
+const resolveMailDestination = async (options: AddFeatureOptions): Promise<string | undefined> => {
+    const warn = (message: string): void => {
+        options.logger.warn(`add: ${message}`);
+    };
+
+    if (options.mailTo !== undefined && options.mailTo !== "") {
+        return resolveTypedDestination(options.mailTo, warn);
+    }
+
+    if (options.yes === true) {
+        return undefined;
+    }
+
+    return resolveTypedDestination(await textPrompt(options)(MAIL_DESTINATION_PROMPT, { placeholder: "you@yourdomain.com" }), warn);
+};
+
+/**
+ * Resolve the D1 database name for an auth add: an explicit `--db` wins
+ * (sanitized, falling back with a warning if unusable); `--yes` takes the
+ * `project-db` default without asking; otherwise prompt. The prompt flow lives
+ * in {@link promptDatabaseName}, shared with the init offer.
+ */
+const resolveAuthDatabaseName = async (options: AddFeatureOptions): Promise<string> => {
+    const projectName = basename(options.cwd ?? process.cwd());
+
+    if (options.db !== undefined && options.db !== "") {
+        const sanitized = sanitizeDatabaseName(options.db);
+
+        if (sanitized !== undefined) {
+            return sanitized;
+        }
+
+        const fallback = deriveDatabaseName(projectName);
+        options.logger.warn(`add: "${options.db}" isn't a usable D1 database name — using "${fallback}".`);
+
+        return fallback;
+    }
+
+    if (options.yes === true) {
+        return deriveDatabaseName(projectName);
+    }
+
+    return promptDatabaseName(textPrompt(options), projectName);
+};
+
 /** Resolve the registry item(s) a normalized feature installs. */
 const resolveFeatureItems = async (feature: NormalizedFeature, options: AddFeatureOptions): Promise<ReadonlyArray<string>> => {
     if (feature.kind === "auth") {
@@ -119,6 +216,49 @@ const runAddFeature = async (options: AddFeatureOptions): Promise<AddFeatureResu
 
     const items = await resolveFeatureItems(feature, options);
 
+    // Several items ship `REPLACE_ME` placeholders in their bindings. Resolve real
+    // values (flag / prompt / project-derived default) and inject them into the
+    // manifests before they're written, matching the init offer's DX. Each
+    // transform no-ops on items it doesn't match, so composing them is safe.
+    const transforms: ((manifest: RegistryManifest) => RegistryManifest)[] = [];
+
+    if (items.includes("storage")) {
+        const bucketName = await resolveStorageBucketName(options);
+
+        transforms.push((manifest) => withStorageBucketName(manifest, bucketName));
+    }
+
+    if (items.includes("mail")) {
+        const destination = await resolveMailDestination(options);
+
+        if (destination !== undefined) {
+            transforms.push((manifest) => withMailDestination(manifest, destination));
+        }
+    }
+
+    // Every auth-family item (auth, auth-clerk, auth-auth0, the plugins) pulls in
+    // the base `auth` item via `requires`, which carries the D1 binding — so name
+    // its database whenever any auth item is requested. The transform no-ops on
+    // the provider/plugin manifests and rewrites the base `auth` one.
+    if (items.some((name) => name === "auth" || name.startsWith("auth-"))) {
+        const databaseName = await resolveAuthDatabaseName(options);
+
+        transforms.push((manifest) => withAuthDatabaseName(manifest, databaseName));
+    }
+
+    const transformManifest =
+        transforms.length > 0
+            ? (manifest: RegistryManifest): RegistryManifest => {
+                  let result = manifest;
+
+                  for (const transform of transforms) {
+                      result = transform(result);
+                  }
+
+                  return result;
+              }
+            : undefined;
+
     // The act of running `lunora add` IS the opt-in, so skip the registry's
     // package.json-mutation confirmation (yes: true) and apply directly.
     const result = await runAddCommand({
@@ -129,6 +269,7 @@ const runAddFeature = async (options: AddFeatureOptions): Promise<AddFeatureResu
         names: [...items],
         ref: options.ref,
         source: options.source,
+        transformManifest,
         yes: true,
     });
 
@@ -139,10 +280,13 @@ const runAddFeature = async (options: AddFeatureOptions): Promise<AddFeatureResu
 const execute: CommandHandler<AddOptions> = defineHandler<AddOptions>(async ({ argument, cwd, logger, options }) => {
     const result = await runAddFeature({
         allowUnsafeSource: options.allowUnsafeSource === true,
+        bucket: options.bucket,
         cwd,
+        db: options.db,
         feature: argument[0],
         from: options.from,
         logger,
+        mailTo: options.mailTo,
         provider: options.provider,
         ref: options.ref,
         source: options.source,

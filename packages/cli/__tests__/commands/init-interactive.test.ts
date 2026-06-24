@@ -51,6 +51,7 @@ describe("lunora init — interactive offer", () => {
                 // Select authentication only.
                 multiSelect: async () => ["auth"],
                 select: async () => "auth",
+                text: async () => "",
             },
             registryFrom: registryRoot,
             templateType: "tanstack-start-react",
