@@ -1,3 +1,13 @@
+## @lunora/auth [1.0.0-alpha.2](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.1...@lunora/auth@1.0.0-alpha.2) (2026-06-24)
+
+### Features
+
+* **r2sql:** typed R2 SQL client with window functions, DISTINCT and set ops ([#26](https://github.com/anolilab/lunora/issues/26)) ([fe9546b](https://github.com/anolilab/lunora/commit/fe9546bb3473875d47939bf93e6fbb81084a07aa))
+
+### Miscellaneous Chores
+
+* **deps:** wire fallow into every package ([896a81d](https://github.com/anolilab/lunora/commit/896a81d39a064293234bba3b734cde1036e81a67))
+
 ## @lunora/auth 1.0.0-alpha.1 (2026-06-21)
 
 ### Features
