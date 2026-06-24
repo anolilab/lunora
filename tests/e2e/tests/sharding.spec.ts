@@ -32,16 +32,19 @@ test("messages.list(channelA) doesn't see channel B's messages, and vice versa",
         return body.result;
     };
 
-    const channelA = (await rpc("channels:create", { name: "shard-A" })) as string;
-    const channelB = (await rpc("channels:create", { name: "shard-B" })) as string;
+    // `channels:create` / `messages:send` are deterministic mutations: the client
+    // stamps `createdAt` (Date.now() in a handler would be non-deterministic), so
+    // direct RPC callers must supply it too. `id` is optional (server mints it).
+    const channelA = (await rpc("channels:create", { createdAt: Date.now(), name: "shard-A" })) as string;
+    const channelB = (await rpc("channels:create", { createdAt: Date.now(), name: "shard-B" })) as string;
 
     expect(channelA).not.toBe(channelB);
 
     const SEND_COUNT = 50;
 
     for (let index = 0; index < SEND_COUNT; index += 1) {
-        await rpc("messages:send", { channelId: channelA, text: `A-${index}` });
-        await rpc("messages:send", { channelId: channelB, text: `B-${index}` });
+        await rpc("messages:send", { channelId: channelA, createdAt: Date.now(), text: `A-${index}` });
+        await rpc("messages:send", { channelId: channelB, createdAt: Date.now(), text: `B-${index}` });
     }
 
     const listA = (await rpc("messages:list", { channelId: channelA, limit: 200 })) as { channelId: string; text: string }[];
@@ -68,21 +71,21 @@ test("both channels run independently — a thrown error in A doesn't kill B", a
         return body.result ?? body.error;
     };
 
-    const channelA = (await rpc("channels:create", { name: "shard-iso-A" })) as string;
-    const channelB = (await rpc("channels:create", { name: "shard-iso-B" })) as string;
+    const channelA = (await rpc("channels:create", { createdAt: Date.now(), name: "shard-iso-A" })) as string;
+    const channelB = (await rpc("channels:create", { createdAt: Date.now(), name: "shard-iso-B" })) as string;
 
     // Force a failed write on channel A: a wrong-typed `text` fails arg
     // validation with a 4xx. (Sending to a *non-existent* channel id wouldn't
     // error — `shardBy` mints a shard on demand.) The point is resilience: a
     // rejected request must not poison the worker so B's writes still land.
     const bogusResponse = await user.request.post(`/_lunora/rpc`, {
-        data: { args: { channelId: channelA, text: 123 }, functionPath: "messages:send" },
+        data: { args: { channelId: channelA, createdAt: Date.now(), text: 123 }, functionPath: "messages:send" },
     });
 
     // We don't care which error code — only that B still works after.
     expect(bogusResponse.status()).toBeGreaterThanOrEqual(400);
 
-    await rpc("messages:send", { channelId: channelB, text: "post-error" });
+    await rpc("messages:send", { channelId: channelB, createdAt: Date.now(), text: "post-error" });
 
     const listB = (await rpc("messages:list", { channelId: channelB, limit: 10 })) as { text: string }[];
 
