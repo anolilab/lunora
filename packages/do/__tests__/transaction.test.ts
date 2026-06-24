@@ -9,18 +9,23 @@ type ExecMock = ((query: string) => unknown) & {
     mockImplementation: (impl: (query: string) => unknown) => ExecMock;
 };
 
+type TransactionMock = (<R>(closure: () => Promise<R>) => Promise<R>) & { mock: { calls: unknown[][] } };
+
 interface FakeState extends ShardDOState {
     sockets: never[];
-    storage: { sql: { exec: ExecMock } };
+    storage: { sql: { exec: ExecMock }; transaction?: TransactionMock };
 }
 
-const createFakeState = (sqlExec: ExecMock = vi.fn<(query: string) => unknown>()): FakeState => {
+/** A `state.storage.transaction` double mirroring the platform: run the closure, propagate (the platform rolls back a thrown closure). */
+const fakeTransaction = (): TransactionMock => vi.fn(async <R>(closure: () => Promise<R>): Promise<R> => closure()) as TransactionMock;
+
+const createFakeState = (sqlExec: ExecMock = vi.fn<(query: string) => unknown>(), transaction: TransactionMock | undefined = fakeTransaction()): FakeState => {
     const state: FakeState = {
         acceptWebSocket: vi.fn<ShardDOState["acceptWebSocket"]>(),
         getWebSockets: vi.fn<ShardDOState["getWebSockets"]>(() => []),
         id: { name: "test-shard" },
         sockets: [],
-        storage: { sql: { exec: sqlExec } },
+        storage: { sql: { exec: sqlExec }, transaction },
     };
 
     return state;
@@ -68,23 +73,27 @@ class TestShardDO extends ShardDO {
 
 describe("shardDO.runInTransaction", () => {
     let exec: ExecMock;
+    let transaction: TransactionMock;
     let shard: TestShardDO;
 
     beforeEach(() => {
         exec = vi.fn<(query: string) => unknown>();
-        shard = new TestShardDO(createFakeState(exec));
+        transaction = fakeTransaction();
+        shard = new TestShardDO(createFakeState(exec, transaction));
     });
 
-    it("wraps handler in BEGIN / COMMIT on success", async () => {
+    it("runs the handler inside state.storage.transaction and returns its result", async () => {
         expect.assertions(2);
 
         const result = await shard.callRunInTransaction(() => 42);
 
         expect(result).toBe(42);
-        expect(exec.mock.calls.map((call) => call[0])).toEqual(["BEGIN", "COMMIT"]);
+        // Atomicity/rollback come from the platform primitive, NOT raw BEGIN/COMMIT
+        // SQL (which workerd forbids inside a Durable Object).
+        expect(transaction).toHaveBeenCalledTimes(1);
     });
 
-    it("emits ROLLBACK when the handler throws", async () => {
+    it("propagates a thrown error (the platform transaction rolls back)", async () => {
         expect.assertions(2);
 
         const boom = new Error("boom");
@@ -95,10 +104,10 @@ describe("shardDO.runInTransaction", () => {
             }),
         ).rejects.toBe(boom);
 
-        expect(exec.mock.calls.map((call) => call[0])).toEqual(["BEGIN", "ROLLBACK"]);
+        expect(transaction).toHaveBeenCalledTimes(1);
     });
 
-    it("re-throws ConflictError after rolling back", async () => {
+    it("re-throws ConflictError through the transaction", async () => {
         expect.assertions(2);
 
         const conflict = new ConflictError("stale version");
@@ -109,7 +118,17 @@ describe("shardDO.runInTransaction", () => {
             }),
         ).rejects.toBe(conflict);
 
-        expect(exec.mock.calls.map((call) => call[0])).toEqual(["BEGIN", "ROLLBACK"]);
+        expect(transaction).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls back to a bare handler call when storage.transaction is unavailable (test doubles)", async () => {
+        expect.assertions(1);
+
+        const bareState = createFakeState();
+        delete bareState.storage.transaction;
+        const bareShard = new TestShardDO(bareState);
+
+        await expect(bareShard.callRunInTransaction(() => 7)).resolves.toBe(7);
     });
 
     it("refuses nested transactions with NESTED_TRANSACTION code", async () => {
@@ -122,33 +141,13 @@ describe("shardDO.runInTransaction", () => {
         ).rejects.toMatchObject({ code: "NESTED_TRANSACTION", name: "LunoraError", status: 500 });
     });
 
-    it("swallows secondary ROLLBACK errors so the original throw propagates", async () => {
-        expect.assertions(1);
-
-        exec.mockImplementation((query: string) => {
-            if (query === "ROLLBACK") {
-                throw new Error("rollback failed");
-            }
-        });
-
-        const original = new Error("handler failure");
-
-        await expect(
-            shard.callRunInTransaction(() => {
-                throw original;
-            }),
-        ).rejects.toBe(original);
-    });
-
     it("clears transactionDepth in the finally branch so a second tx can run", async () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
-        await shard.callRunInTransaction(() => 1);
-        await shard.callRunInTransaction(() => 2);
-
-        const queries = exec.mock.calls.map((call) => call[0]);
-
-        expect(queries).toEqual(["BEGIN", "COMMIT", "BEGIN", "COMMIT"]);
+        await expect(shard.callRunInTransaction(() => 1)).resolves.toBe(1);
+        // The second call only succeeds if `transactionDepth` was cleared after the
+        // first (otherwise it trips the nested-transaction guard).
+        await expect(shard.callRunInTransaction(() => 2)).resolves.toBe(2);
     });
 
     it("conflictError carries code / status / name as own properties", () => {
