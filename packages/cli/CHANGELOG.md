@@ -1,3 +1,15 @@
+## @lunora/cli [1.0.0-alpha.14](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.13...@lunora/cli@1.0.0-alpha.14) (2026-06-25)
+
+### Bug Fixes
+
+* **cli:** pin overlay deps to concrete version ([eb71417](https://github.com/anolilab/lunora/commit/eb714173bcb4f273f17cf41732a1cd32c4408024))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.5
+* **@lunora/config:** upgraded to 1.0.0-alpha.7
+
 ## @lunora/cli [1.0.0-alpha.13](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.12...@lunora/cli@1.0.0-alpha.13) (2026-06-25)
 
 ### Bug Fixes
