@@ -1,3 +1,19 @@
+## @lunora/vite [1.0.0-alpha.4](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.3...@lunora/vite@1.0.0-alpha.4) (2026-06-25)
+
+### Features
+
+* **cli:** rebuild init DX in create-astro style ([36638dc](https://github.com/anolilab/lunora/commit/36638dc6b08978509da90861f3b9292205c10300))
+* **vite:** unify plugin logging with the shared lunora line style ([4f6890f](https://github.com/anolilab/lunora/commit/4f6890f65adb6755fee8bc8b47d64474706658db))
+
+### Bug Fixes
+
+* **vite:** align the agent-rules hint with the other lunora log lines ([815604f](https://github.com/anolilab/lunora/commit/815604fdfb2615580eda791a5e7172ee3a017fd5))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.5
+
 ## @lunora/vite [1.0.0-alpha.3](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.2...@lunora/vite@1.0.0-alpha.3) (2026-06-24)
 
 ### Miscellaneous Chores
