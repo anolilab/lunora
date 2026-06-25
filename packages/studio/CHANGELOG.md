@@ -1,3 +1,9 @@
+## @lunora/studio [1.0.0-alpha.5](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.4...@lunora/studio@1.0.0-alpha.5) (2026-06-25)
+
+### Features
+
+* **studio:** gate the studio behind a token login ([9901b86](https://github.com/anolilab/lunora/commit/9901b863dcb4f051c3e7733354a82e75f14d6fa0))
+
 ## @lunora/studio [1.0.0-alpha.4](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.3...@lunora/studio@1.0.0-alpha.4) (2026-06-25)
 
 
