@@ -1,3 +1,9 @@
+## @lunora/cli [1.0.0-alpha.21](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.20...@lunora/cli@1.0.0-alpha.21) (2026-06-25)
+
+### Features
+
+* **cli:** branded welcome + advisor-clean messages for create-vite overlay ([d522a91](https://github.com/anolilab/lunora/commit/d522a91f7aed50d00404af6b0f93a918dae7cbc2))
+
 ## @lunora/cli [1.0.0-alpha.20](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.19...@lunora/cli@1.0.0-alpha.20) (2026-06-25)
 
 ### Bug Fixes
