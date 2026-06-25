@@ -72,7 +72,7 @@ export const heartbeat = mutation
     })
     .use(rateLimit(limiter, "heartbeat", { key: (ctx) => ctx.auth.userId ?? "anon" }))
     .mutation(async ({ args: { data, roomId, sessionId }, ctx }): Promise<{ lastSeen: number }> => {
-        const lastSeen = Date.now();
+        const lastSeen = ctx.now;
         const userId = ctx.auth.userId ?? undefined;
 
         const existing = await ctx.db
@@ -110,7 +110,7 @@ export const heartbeat = mutation
 export const listPresent = query
     .input({ roomId: v.string().meta({ schema: { maxLength: 256 } }) })
     .query(async ({ args: { roomId }, ctx }): Promise<PresenceMember[]> => {
-        const cutoff = Date.now() - PRESENCE_TTL_MS;
+        const cutoff = ctx.now - PRESENCE_TTL_MS;
 
         const rows = await ctx.db
             .query(PRESENCE_TABLE)

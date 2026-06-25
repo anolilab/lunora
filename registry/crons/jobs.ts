@@ -21,8 +21,11 @@ import { internalMutation, v } from "#lunora/_generated/server.js";
  * The example periodic job. Returns the wall-clock time it ran so you can see
  * it firing in the studio's function logs; replace the body with real work.
  */
-export const run = internalMutation.input({ since: v.optional(v.number()) }).mutation(async ({ args: { since } }): Promise<{ ranAt: number }> => {
-    const ranAt = Date.now();
+export const run = internalMutation.input({ since: v.optional(v.number()) }).mutation(async ({ args: { since }, ctx }): Promise<{ ranAt: number }> => {
+    // `ctx.now` (not `Date.now()`): mutation handlers must be deterministic, so
+    // read the run instant from the context — a single stable value the runtime
+    // captures once per execution.
+    const ranAt = ctx.now;
 
     // TODO: do your periodic work here. `since` is an example arg — pass
     // whatever you need from the cron registration's args object.
