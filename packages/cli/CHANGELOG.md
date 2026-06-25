@@ -1,3 +1,15 @@
+## @lunora/cli [1.0.0-alpha.17](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.16...@lunora/cli@1.0.0-alpha.17) (2026-06-25)
+
+### Bug Fixes
+
+* **cli:** write pnpm-workspace.yaml for build approval ([c6572ae](https://github.com/anolilab/lunora/commit/c6572ae7cbee5b0e79f7a24a48f0c9bf075b5dda))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.7
+* **@lunora/config:** upgraded to 1.0.0-alpha.9
+
 ## @lunora/cli [1.0.0-alpha.16](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.15...@lunora/cli@1.0.0-alpha.16) (2026-06-25)
 
 ### Bug Fixes
