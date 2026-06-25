@@ -1,4 +1,4 @@
-import type { CallExpression, Project } from "ts-morph";
+import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { enclosingExportName } from "./discover-ast";
@@ -26,11 +26,47 @@ const isDatabaseInsertCall = (call: CallExpression): boolean => {
     return Node.isIdentifier(receiver) && receiver.getText() === "db";
 };
 
-/** The literal table name from an `insert("table", …)` call, or `""` when the argument is not a string literal. */
+/**
+ * Resolve a string-const identifier to its literal value — `const T = "table"`
+ * referenced as `insert(T, …)`, including one imported from a sibling lunora
+ * file (the presence/ratelimit plugins reference their prefixed table name via
+ * such a const). Follows the symbol's (aliased) declaration to a string-literal
+ * initializer; returns `undefined` for anything non-constant.
+ */
+const resolveStringConst = (identifier: TsNode): string | undefined => {
+    if (!Node.isIdentifier(identifier)) {
+        return undefined;
+    }
+
+    const symbol = identifier.getSymbol();
+    const declarations = symbol?.getAliasedSymbol()?.getDeclarations() ?? symbol?.getDeclarations() ?? [];
+
+    for (const declaration of declarations) {
+        if (Node.isVariableDeclaration(declaration)) {
+            const initializer = declaration.getInitializer();
+
+            if (initializer && Node.isStringLiteral(initializer)) {
+                return initializer.getLiteralText();
+            }
+        }
+    }
+
+    return undefined;
+};
+
+/** The table name from an insert call — a string literal or a resolvable string const — or `""` when it can't be resolved to a literal. */
 const tableOf = (call: CallExpression): string => {
     const argument = call.getArguments()[0];
 
-    return argument && Node.isStringLiteral(argument) ? argument.getLiteralText() : "";
+    if (!argument) {
+        return "";
+    }
+
+    if (Node.isStringLiteral(argument)) {
+        return argument.getLiteralText();
+    }
+
+    return resolveStringConst(argument) ?? "";
 };
 
 /**

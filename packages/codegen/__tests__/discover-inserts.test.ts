@@ -28,8 +28,11 @@ const MESSAGES = `
     // A read — not an insert.
     export const list = query({ args: {}, handler: (ctx) => ctx.db.query("messages").collect() });
 
-    // Dynamic (non-literal) table — discovered but with table "".
-    export const dynamic = mutation({ args: {}, handler: (ctx) => ctx.db.insert(dynamicTable, {}) });
+    // String-const table name — resolved to its literal value ("messages").
+    export const aliased = mutation({ args: {}, handler: (ctx) => ctx.db.insert(dynamicTable, {}) });
+
+    // Genuinely dynamic (computed) table — not resolvable, discovered with table "".
+    export const dynamic = mutation({ args: {}, handler: (ctx) => ctx.db.insert(\`tbl_\${ctx.foo}\`, {}) });
 
     // Not exported — dropped.
     const helper = (ctx) => ctx.db.insert("secret", {});
@@ -70,7 +73,18 @@ describe("discoverInserts", () => {
         expect(writes).toContainEqual({ exportName: "create", file: "channels", table: "channels" });
     });
 
-    it("records a non-literal table argument as an empty table", () => {
+    it("resolves a string-const table argument to its literal value", () => {
+        expect.assertions(1);
+
+        // `ctx.db.insert(dynamicTable, …)` where `const dynamicTable = "messages"`
+        // — the const is resolved so the write attributes to the real table (this
+        // is what stops `table_without_insert` false-flagging const-aliased tables).
+        const aliased = discoverInserts(project, join(workdir, "lunora")).find((write) => write.exportName === "aliased");
+
+        expect(aliased).toMatchObject({ table: "messages" });
+    });
+
+    it("records a genuinely dynamic (computed) table argument as an empty table", () => {
         expect.assertions(1);
 
         const dynamic = discoverInserts(project, join(workdir, "lunora")).find((write) => write.exportName === "dynamic");
