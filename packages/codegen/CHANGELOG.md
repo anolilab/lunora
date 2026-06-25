@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.7](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.6...@lunora/codegen@1.0.0-alpha.7) (2026-06-25)
+
+### Bug Fixes
+
+* **codegen:** resolve const table names in insert discovery ([37c97e7](https://github.com/anolilab/lunora/commit/37c97e71e1787a398a709a0ed5790ced05e00e62))
+
 ## @lunora/codegen [1.0.0-alpha.6](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.5...@lunora/codegen@1.0.0-alpha.6) (2026-06-25)
 
 ### Features
