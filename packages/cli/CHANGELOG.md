@@ -1,3 +1,10 @@
+## @lunora/cli [1.0.0-alpha.12](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.11...@lunora/cli@1.0.0-alpha.12) (2026-06-25)
+
+### Bug Fixes
+
+* **cli:** align task rows to the badge gutter ([55a380e](https://github.com/anolilab/lunora/commit/55a380edd7c0b82e8ded08fab03d48d5c189457d))
+* **cli:** merge schema extension into default export ([4530f38](https://github.com/anolilab/lunora/commit/4530f38390ebbfa481b3e0f96a6bf568d7220ec9))
+
 ## @lunora/cli [1.0.0-alpha.11](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.10...@lunora/cli@1.0.0-alpha.11) (2026-06-25)
 
 ### Bug Fixes
