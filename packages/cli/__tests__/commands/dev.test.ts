@@ -194,6 +194,38 @@ describe("lunora dev", () => {
             expect(result.plan.workerOrigin).toBe("http://localhost:8787");
         });
 
+        it("fills empty .dev.vars secrets + the admin token before the worker boots", async () => {
+            expect.assertions(2);
+
+            let filledCwd: string | undefined;
+
+            const result = await runDevCommand({
+                cwd: workdir,
+                // fillSecrets seam: assert it runs against the project cwd during startup.
+                fillSecrets: ({ cwd }) => {
+                    filledCwd = cwd;
+
+                    return { addedKeys: ["LUNORA_ADMIN_TOKEN"], filledKeys: [], status: "filled" };
+                },
+                logger: silentLogger(),
+                startCodegen: () => {
+                    return { close: () => {}, watchAvailable: true };
+                },
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            // The filler ran against the project cwd, and the worker still booted.
+            // (key/status behaviour is exercised in @lunora/config's fillDevSecrets tests.)
+            expect(filledCwd).toBe(workdir);
+            expect(result.code).toBe(0);
+        });
+
         it("unlinks the materialized remote temp config when the worker exits", async () => {
             expect.assertions(1);
 

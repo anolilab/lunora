@@ -6,7 +6,14 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ScaffoldPlan } from "../src/scaffold-dev-variables";
-import { ensureDevVariables, isPlaceholderValue, planDevVariablesAugment, planDevVariablesScaffold } from "../src/scaffold-dev-variables";
+import {
+    ensureDevVariables,
+    fillDevSecrets,
+    isPlaceholderValue,
+    planDevSecretsFill,
+    planDevVariablesAugment,
+    planDevVariablesScaffold,
+} from "../src/scaffold-dev-variables";
 
 /** Deterministic stand-in for `crypto.randomBytes(n).toString("hex")`. */
 const fixedHex = (bytes: number): string => "a".repeat(bytes * 2);
@@ -335,5 +342,98 @@ describe("ensureDevVariables", () => {
         expect(result.status).toBe("skipped-exists");
         // The peer's file is left untouched.
         expect(readFileSync(join(dir, ".dev.vars"), "utf8")).toBe('AUTH_SECRET="peer-secret"\n');
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// planDevSecretsFill — pure
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("planDevSecretsFill", () => {
+    it("fills empty secret-keyed values + appends the missing core admin token", () => {
+        expect.assertions(5);
+
+        // A `lunora add`-scaffolded .dev.vars: secrets blank, a non-secret URL, no admin token.
+        const existing = "# comment\nBETTER_AUTH_SECRET=\nBETTER_AUTH_URL=http://localhost:8787\nSTORAGE_SIGNING_SECRET=\n";
+
+        const plan = planDevSecretsFill({ existingContent: existing, randomHex: fixedHex });
+
+        // Both empty secret-keyed vars are filled.
+        expect(plan.filledKeys).toStrictEqual(["BETTER_AUTH_SECRET", "STORAGE_SIGNING_SECRET"]);
+        // The core admin token is appended (it was absent).
+        expect(plan.addedKeys).toStrictEqual(["LUNORA_ADMIN_TOKEN"]);
+        // Filled with a real generated value; the comment + non-secret URL are kept verbatim.
+        expect(plan.content).toContain(`BETTER_AUTH_SECRET="${"a".repeat(64)}"`);
+        expect(plan.content).toContain("BETTER_AUTH_URL=http://localhost:8787");
+        expect(plan.content).toContain(`LUNORA_ADMIN_TOKEN="${"a".repeat(64)}"`);
+    });
+
+    it("never overwrites a real (non-placeholder) secret value", () => {
+        expect.assertions(2);
+
+        const existing = 'BETTER_AUTH_SECRET="my-real-secret-value-kept"\nLUNORA_ADMIN_TOKEN="my-token"\n';
+
+        const plan = planDevSecretsFill({ existingContent: existing, randomHex: fixedHex });
+
+        expect(plan.filledKeys).toStrictEqual([]);
+        expect(plan.addedKeys).toStrictEqual([]);
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// fillDevSecrets — I/O
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("fillDevSecrets", () => {
+    let dir: string;
+
+    beforeEach(() => {
+        dir = mkdtempSync(join(tmpdir(), "lunora-fill-secrets-"));
+    });
+
+    afterEach(() => {
+        rmSync(dir, { force: true, recursive: true });
+    });
+
+    it("fills a feature-scaffolded .dev.vars (blank secrets, no admin token) so dev boots with real values", () => {
+        expect.assertions(4);
+
+        // Mirrors what `lunora add auth storage` writes: secrets blank, no admin token.
+        writeFileSync(join(dir, ".dev.vars"), "BETTER_AUTH_SECRET=\nBETTER_AUTH_URL=http://localhost:8787\nSTORAGE_SIGNING_SECRET=\n", "utf8");
+
+        const result = fillDevSecrets({ cwd: dir, randomHex: (bytes) => "a".repeat(bytes * 2) });
+
+        expect(result.status).toBe("filled");
+        expect(result.filledKeys).toStrictEqual(["BETTER_AUTH_SECRET", "STORAGE_SIGNING_SECRET"]);
+        expect(result.addedKeys).toStrictEqual(["LUNORA_ADMIN_TOKEN"]);
+
+        const content = readFileSync(join(dir, ".dev.vars"), "utf8");
+
+        // The Studio reads this token to skip its login gate in dev.
+        expect(content).toContain(`LUNORA_ADMIN_TOKEN="${"a".repeat(64)}"`);
+    });
+
+    it("creates .dev.vars with a generated admin token when none exists", () => {
+        expect.assertions(3);
+
+        const result = fillDevSecrets({ cwd: dir, randomHex: (bytes) => "b".repeat(bytes * 2) });
+
+        expect(result.status).toBe("created");
+        expect(result.addedKeys).toStrictEqual(["LUNORA_ADMIN_TOKEN"]);
+        expect(readFileSync(join(dir, ".dev.vars"), "utf8")).toContain(`LUNORA_ADMIN_TOKEN="${"b".repeat(64)}"`);
+    });
+
+    it("is idempotent — a second run with everything filled changes nothing", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(dir, ".dev.vars"), "BETTER_AUTH_SECRET=\n", "utf8");
+        fillDevSecrets({ cwd: dir, randomHex: (bytes) => "c".repeat(bytes * 2) });
+        const afterFirst = readFileSync(join(dir, ".dev.vars"), "utf8");
+
+        const second = fillDevSecrets({ cwd: dir, randomHex: (bytes) => "d".repeat(bytes * 2) });
+
+        expect(second.status).toBe("unchanged");
+        // The second run must not regenerate (and so must not change) the values.
+        expect(readFileSync(join(dir, ".dev.vars"), "utf8")).toBe(afterFirst);
     });
 });

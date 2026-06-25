@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -50,14 +50,38 @@ describe("devVariablesPlugin", () => {
         expect(plugin.apply).toBe("serve");
     });
 
-    it("does not prompt or write in a non-interactive context", async () => {
-        expect.assertions(1);
+    it("does not scaffold the example's secrets without a prompt, but still ensures the admin token", async () => {
+        expect.assertions(2);
 
         writeFileSync(join(dir, ".dev.vars.example"), 'AUTH_SECRET="replace-me-openssl"\n', "utf8");
-        // stdin is not a TTY in the test runner → confirm resolves false → nothing written.
+        // stdin is not a TTY in the test runner → ensureDevVariables's confirm
+        // resolves false → the example's AUTH_SECRET is NOT scaffolded. But
+        // fillDevSecrets still ensures the (locally-generated) admin token, since
+        // the Studio needs it and there's nothing to prompt about.
         await runConfigResolved(devVariablesPlugin(RESOLVED(dir)));
 
-        expect(existsSync(join(dir, ".dev.vars"))).toBe(false);
+        const content = existsSync(join(dir, ".dev.vars")) ? readFileSync(join(dir, ".dev.vars"), "utf8") : "";
+
+        expect(content).toContain("LUNORA_ADMIN_TOKEN=");
+        // The example secret stays unscaffolded — it needs the (declined) prompt.
+        expect(content).not.toContain("AUTH_SECRET=");
+    });
+
+    it("fills an empty feature-scaffolded secret + the admin token on dev (no prompt)", async () => {
+        expect.assertions(3);
+
+        // What `lunora add auth` writes into .dev.vars directly: a blank secret, no admin token.
+        writeFileSync(join(dir, ".dev.vars"), "BETTER_AUTH_SECRET=\n", "utf8");
+
+        await runConfigResolved(devVariablesPlugin(RESOLVED(dir)));
+
+        const content = readFileSync(join(dir, ".dev.vars"), "utf8");
+
+        // The blank secret is now filled with a generated value (64 hex chars).
+        expect(content).toMatch(/BETTER_AUTH_SECRET="[a-f0-9]{64}"/u);
+        // The Studio admin token is appended + generated.
+        expect(content).toMatch(/LUNORA_ADMIN_TOKEN="[a-f0-9]{64}"/u);
+        expect(content).toContain("BETTER_AUTH_SECRET=");
     });
 
     it("is among the leading plugins so it scaffolds `.dev.vars` before the worker boots", () => {

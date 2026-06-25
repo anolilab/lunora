@@ -464,12 +464,132 @@ const ensureDevVariablesExample = (cwd: string, packageNames: ReadonlyArray<stri
         .map((entry) => entry.key);
 };
 
-export type { AugmentPlan, EnsureDevVariablesDeps, EnsureDevVariablesResult, EnsureDevVariablesStatus, ScaffoldPlan };
+interface DevSecretsFillPlan {
+    /** {@link CORE_SECRETS} keys appended because they were absent (each generated). */
+    addedKeys: string[];
+    /** The full new file content to write. */
+    content: string;
+    /** Existing empty/placeholder secret-keyed entries filled with fresh values. */
+    filledKeys: string[];
+}
+
+/**
+ * Plan the in-place generation of dev secrets for a `.dev.vars`. First, every
+ * line whose KEY looks like a secret (`*_SECRET`, `*_TOKEN`, `*_KEY`,
+ * `*_PASSWORD`) and whose value is empty or a placeholder gets a freshly
+ * generated value — so a `lunora add`-scaffolded `.dev.vars` (which writes each
+ * secret blank) becomes usable on `lunora dev` / `vite dev` without the user
+ * running `openssl` by hand. Second, any {@link CORE_SECRETS} key absent from
+ * the file is appended (generated) — notably `LUNORA_ADMIN_TOKEN`, which the
+ * local Studio needs to call the worker's admin gate in dev (without it the
+ * Studio shows its login gate).
+ *
+ * Pure (given `randomHex`): real (non-placeholder) values are never touched, and
+ * comments + non-secret entries are preserved verbatim.
+ */
+const planDevSecretsFill = (input: { existingContent: string; randomHex?: (bytes: number) => string }): DevSecretsFillPlan => {
+    const randomHex = input.randomHex ?? defaultRandomHex;
+    const filledKeys: string[] = [];
+
+    // 1. Fill empty/placeholder secret-keyed values in place.
+    const lines = input.existingContent.split(DEV_VARS_NEWLINE).map((line) => {
+        const parsed = splitDevVariableLine(line);
+        const secret = parsed ? generatedSecretFor(parsed.key, parsed.value, randomHex) : undefined;
+
+        if (!parsed || secret === undefined) {
+            return line;
+        }
+
+        filledKeys.push(parsed.key);
+
+        return `${parsed.key}="${secret}"`;
+    });
+
+    // 2. Append any missing core secret (a present-but-empty one is already
+    //    handled by the fill pass — every CORE_SECRETS key matches SECRET_KEY).
+    const present = new Set(parseDevVariableEntries(input.existingContent).map((entry) => entry.key));
+    const addedKeys: string[] = [];
+    const additions: string[] = [];
+
+    for (const entry of CORE_SECRETS) {
+        if (present.has(entry.key)) {
+            continue;
+        }
+
+        addedKeys.push(entry.key);
+        additions.push(`# ${entry.description}`, `${entry.key}="${randomHex(SECRET_BYTES)}"`);
+    }
+
+    const body = lines.join("\n");
+
+    if (additions.length === 0) {
+        return { addedKeys, content: body, filledKeys };
+    }
+
+    const separator = body === "" || body.endsWith("\n") ? "" : "\n";
+
+    return { addedKeys, content: `${body}${separator}${additions.join("\n")}\n`, filledKeys };
+};
+
+interface FillDevSecretsResult {
+    /** Core secret keys appended (generated) because they were missing. */
+    addedKeys: string[];
+    /** Existing empty/placeholder secrets filled with generated values. */
+    filledKeys: string[];
+    /** `created` = no `.dev.vars` existed; `filled` = topped up an existing one; `unchanged` = nothing to do. */
+    status: "created" | "filled" | "unchanged";
+}
+
+/**
+ * Generate any missing/empty dev secrets in the project's `.dev.vars`, in place.
+ *
+ * Complements {@link ensureDevVariables} (which scaffolds `.dev.vars` from
+ * `.dev.vars.example`). A `lunora add`-scaffolded project writes secrets blank
+ * straight into `.dev.vars` (no example) and never includes `LUNORA_ADMIN_TOKEN`
+ * — so the worker boots with empty secrets and the Studio shows its login gate.
+ * This fills those gaps at dev startup, so both `lunora dev` and the
+ * `@lunora/vite` dev server give a working project with zero manual `openssl`.
+ *
+ * Never overwrites a real (non-placeholder) value. The write is atomic + owner-
+ * only (temp + rename, `mode: 0o600`), matching the other `.dev.vars` writers.
+ */
+const fillDevSecrets = (deps: { cwd: string; info?: (message: string) => void; randomHex?: (bytes: number) => string }): FillDevSecretsResult => {
+    const devVariablesPath = join(deps.cwd, DEV_VARS_FILE);
+    const exists = existsSync(devVariablesPath);
+    const existingContent = exists ? readFileSync(devVariablesPath, "utf8") : "";
+
+    const plan = planDevSecretsFill({ existingContent, randomHex: deps.randomHex });
+
+    if (plan.filledKeys.length === 0 && plan.addedKeys.length === 0) {
+        return { addedKeys: [], filledKeys: [], status: "unchanged" };
+    }
+
+    const temporaryPath = `${devVariablesPath}.tmp-${String(process.pid)}`;
+
+    try {
+        writeFileSync(temporaryPath, plan.content, { encoding: "utf8", mode: 0o600 });
+        renameSync(temporaryPath, devVariablesPath);
+    } catch (error) {
+        rmSync(temporaryPath, { force: true });
+
+        throw error;
+    }
+
+    const generated = [...plan.filledKeys, ...plan.addedKeys];
+
+    deps.info?.(`Generated ${String(generated.length)} dev secret(s) in ${DEV_VARS_FILE}: ${generated.join(", ")}`);
+
+    return { addedKeys: plan.addedKeys, filledKeys: plan.filledKeys, status: exists ? "filled" : "created" };
+};
+
+export type { AugmentPlan, DevSecretsFillPlan, EnsureDevVariablesDeps, EnsureDevVariablesResult, EnsureDevVariablesStatus, FillDevSecretsResult, ScaffoldPlan };
 export {
     buildPackageSecretsBlock,
     ensureDevVariables,
     ensureDevVariablesExample as ensureDevVarsExample,
+    fillDevSecrets,
     isPlaceholderValue,
+    planDevSecretsFill,
     planDevVariablesAugment,
     planDevVariablesScaffold,
 };

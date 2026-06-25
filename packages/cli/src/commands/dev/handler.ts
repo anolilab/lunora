@@ -9,6 +9,7 @@ import {
     DEV_VARS_FILE,
     ensureDevVariables,
     ensureDevVarsExample,
+    fillDevSecrets,
     formatLunoraEvent,
     inferLunoraBindings,
     isInteractive,
@@ -59,6 +60,8 @@ interface DevCommandOptions {
     ensureEnv?: typeof ensureDevVariables;
     /** Injection seam for tests — defaults to the real `.dev.vars.example` package-aware scaffolder. */
     ensureExample?: typeof ensureDevVarsExample;
+    /** Injection seam for tests — defaults to the real empty-secret/admin-token filler. */
+    fillSecrets?: typeof fillDevSecrets;
     logger: Logger;
     /** Injection seam for tests — defaults to the real remote-config materializer. */
     materializeRemote?: typeof materializeRemoteWranglerConfig;
@@ -371,6 +374,23 @@ const offerDevVariablesScaffold = async (options: DevCommandOptions, cwd: string
                 `Copy ${DEV_VARS_EXAMPLE_FILE} → ${DEV_VARS_FILE} and fill in secrets, ` +
                 `or run \`lunora dev\` in an interactive terminal to scaffold automatically.`,
         );
+    }
+
+    // Phase 3 — fill any empty/placeholder secret already in .dev.vars (a
+    // `lunora add`-scaffolded project writes secrets blank) and ensure the core
+    // LUNORA_ADMIN_TOKEN is present + generated, so the worker boots with real
+    // secrets and the Studio authenticates without its login gate. No prompt: it
+    // only generates locally-derivable values and never overwrites a real one.
+    // Best-effort — a write failure must not block dev startup.
+    try {
+        (options.fillSecrets ?? fillDevSecrets)({
+            cwd,
+            info: (message) => {
+                options.logger.info(message);
+            },
+        });
+    } catch {
+        // Non-fatal — fall through to the worker, which will surface a missing secret itself.
     }
 };
 

@@ -37,12 +37,22 @@ export {
     REMOTE_ELIGIBLE_KEYS,
     resolveRemoteEnabled,
 } from "./remote-bindings";
-export type { AugmentPlan, EnsureDevVariablesDeps, EnsureDevVariablesResult, EnsureDevVariablesStatus, ScaffoldPlan } from "./scaffold-dev-variables";
+export type {
+    AugmentPlan,
+    DevSecretsFillPlan,
+    EnsureDevVariablesDeps,
+    EnsureDevVariablesResult,
+    EnsureDevVariablesStatus,
+    FillDevSecretsResult,
+    ScaffoldPlan,
+} from "./scaffold-dev-variables";
 export {
     buildPackageSecretsBlock,
     ensureDevVariables,
     ensureDevVarsExample,
+    fillDevSecrets,
     isPlaceholderValue,
+    planDevSecretsFill,
     planDevVariablesAugment,
     planDevVariablesScaffold,
 } from "./scaffold-dev-variables";
