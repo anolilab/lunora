@@ -1,3 +1,9 @@
+## @lunora/cli [1.0.0-alpha.13](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.12...@lunora/cli@1.0.0-alpha.13) (2026-06-25)
+
+### Bug Fixes
+
+* **cli:** pin scaffold deps to concrete version ([54cd8ae](https://github.com/anolilab/lunora/commit/54cd8ae441bd48042bc0d63d83717e75821d911b))
+
 ## @lunora/cli [1.0.0-alpha.12](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.11...@lunora/cli@1.0.0-alpha.12) (2026-06-25)
 
 ### Bug Fixes
