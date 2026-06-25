@@ -1,3 +1,16 @@
+## @lunora/vite [1.0.0-alpha.6](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.5...@lunora/vite@1.0.0-alpha.6) (2026-06-25)
+
+### Bug Fixes
+
+* **vite:** brand schema-advisory log output ([f9ed146](https://github.com/anolilab/lunora/commit/f9ed14629bc2b042d92b3ed53fd2bcf0587aee48))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.4
+* **@lunora/config:** upgraded to 1.0.0-alpha.6
+* **@lunora/studio:** upgraded to 1.0.0-alpha.4
+
 ## @lunora/vite [1.0.0-alpha.5](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.4...@lunora/vite@1.0.0-alpha.5) (2026-06-25)
 
 ### Bug Fixes
