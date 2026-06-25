@@ -8,7 +8,7 @@ import type { Project } from "ts-morph";
 import type { Plugin, ViteDevServer } from "vite";
 
 import { reconcileWranglerCrons } from "./cron-sync";
-import { LUNORA_TAG } from "./log";
+import { advisoryLine, LUNORA_TAG } from "./log";
 import type { ResolvedLunoraPluginOptions } from "./types";
 
 const DEBOUNCE_MS = 100;
@@ -127,7 +127,13 @@ const runCodegenSafely = (
         // log. Codegen returns them without printing; the richer error-overlay
         // presentation is a later step.
         for (const advisory of result.advisories) {
-            logger.warn(`${LUNORA_TAG} schema advisory [${advisory.level}] ${advisory.name}: ${advisory.detail} — ${advisory.remediation}`);
+            const line = advisoryLine(advisory.level, advisory.name, advisory.detail, advisory.remediation);
+
+            if (advisory.level === "ERROR") {
+                logger.error(line);
+            } else {
+                logger.warn(line);
+            }
         }
 
         // Codegen succeeded. The browser error overlay (if any was shown) is
