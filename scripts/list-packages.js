@@ -1,6 +1,9 @@
 /**
- * Lists all packages in the monorepo and generates a markdown table
- * Updates the README.md file by replacing content between START_TABLE_PLACEHOLDER and END_TABLE_PLACEHOLDER
+ * Lists all packages in the monorepo and generates a markdown table.
+ * Updates the README.md file by replacing content between START_TABLE_PLACEHOLDER and END_TABLE_PLACEHOLDER.
+ *
+ * Lunora's packages live flat under `packages/<name>/`, so the category is read from each
+ * package's `project.json` `category:<slug>` tag rather than from the directory path.
  */
 
 import { readdir, readFile, writeFile } from "node:fs/promises";
@@ -8,148 +11,142 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
-const packagesDir = join(__dirname, "..", "packages");
-const readmePath = join(__dirname, "..", "README.md");
+const rootDir = join(__dirname, "..");
+const packagesDir = join(rootDir, "packages");
+const readmePath = join(rootDir, "README.md");
 
 /**
- * Recursively finds all package.json files in the packages directory
- * @param {string} dir - Directory to search
- * @param {string[]} packages - Array to collect package info
- * @returns {Promise<void>}
+ * Reads the `category:<slug>` tag from a package's project.json.
+ * @param {string} packageDir - Absolute path to the package directory
+ * @returns {Promise<string>} The category slug, or "other" if none is declared
  */
-const findPackages = async (dir, packages = []) => {
+const readCategory = async (packageDir) => {
     try {
-        const entries = await readdir(dir, { withFileTypes: true });
+        const projectJson = JSON.parse(await readFile(join(packageDir, "project.json"), "utf-8"));
+        const categoryTag = (projectJson.tags || []).find((tag) => tag.startsWith("category:"));
 
-        for (const entry of entries) {
-            const fullPath = join(dir, entry.name);
-
-            // Skip test fixtures, examples, benchmarks, and test directories
-            if (entry.name.startsWith("__") || entry.name === "examples" || entry.name === "__bench__" || entry.name === "__tests__") {
-                continue;
-            }
-
-            if (entry.isDirectory()) {
-                const packageJsonPath = join(fullPath, "package.json");
-                try {
-                    const packageJsonContent = await readFile(packageJsonPath, "utf-8");
-                    const packageJson = JSON.parse(packageJsonContent);
-                    const rootDir = join(__dirname, "..");
-                    // Get relative path from root, ensuring it starts with packages/
-                    let relativePath = fullPath.replace(rootDir, "").replace(/^\/+/, "");
-                    // If path doesn't start with packages/, add it
-                    if (!relativePath.startsWith("packages/")) {
-                        relativePath = `packages/${relativePath}`;
-                    }
-                    // Extract category from path (e.g., packages/api/api-platform -> api)
-                    const pathParts = relativePath.split("/");
-                    const category = pathParts.length > 1 ? pathParts[1] : "other";
-
-                    packages.push({
-                        name: packageJson.name,
-                        version: packageJson.version || "",
-                        description: packageJson.description || "",
-                        path: relativePath,
-                        category: category,
-                    });
-                } catch {
-                    // No package.json, continue searching subdirectories
-                    await findPackages(fullPath, packages);
-                }
-            }
-        }
-    } catch (error) {
-        // Directory doesn't exist or can't be read, skip it
-        if (error.code !== "ENOENT") {
-            console.error(`Error reading directory ${dir}:`, error.message);
-        }
+        return categoryTag ? categoryTag.slice("category:".length) : "other";
+    } catch {
+        return "other";
     }
 };
 
 /**
- * Escapes markdown table special characters
+ * Finds every publishable package directly under `packages/` (one level deep, flat layout).
+ * @returns {Promise<Array<{name: string, version: string, description: string, path: string, category: string}>>}
+ */
+const findPackages = async () => {
+    const packages = [];
+    const entries = await readdir(packagesDir, { withFileTypes: true });
+
+    for (const entry of entries) {
+        if (!entry.isDirectory() || entry.name.startsWith("__") || entry.name.startsWith(".")) {
+            continue;
+        }
+
+        const packageDir = join(packagesDir, entry.name);
+
+        let packageJson;
+        try {
+            packageJson = JSON.parse(await readFile(join(packageDir, "package.json"), "utf-8"));
+        } catch {
+            // No package.json — not a package, skip.
+            continue;
+        }
+
+        // Skip private (non-published) packages.
+        if (packageJson.private) {
+            continue;
+        }
+
+        packages.push({
+            name: packageJson.name,
+            version: packageJson.version || "",
+            description: packageJson.description || "",
+            path: `packages/${entry.name}`,
+            category: await readCategory(packageDir),
+        });
+    }
+
+    return packages;
+};
+
+/**
+ * Escapes markdown table special characters.
  * @param {string} text - Text to escape
  * @returns {string}
  */
 const escapeMarkdown = (text) => text.replace(/\|/g, "\\|").replace(/\n/g, " ");
 
 /**
- * Generates npm badge URL
- * @param {string} packageName - Package name
- * @returns {string}
+ * Human-readable display names for category slugs. Anything not listed is title-cased.
  */
-const getNpmBadgeUrl = (packageName) => {
-    const encodedName = encodeURIComponent(packageName);
-    return `https://img.shields.io/npm/v/${encodedName}?style=flat-square&labelColor=292a44&color=663399&label=v`;
+const CATEGORY_NAMES = {
+    "add-on": "Add-ons",
+    advisor: "Advisor",
+    cli: "CLI",
+    client: "Client & Framework Adapters",
+    codegen: "Codegen",
+    "dev-tools": "Dev Tools",
+    runtime: "Runtime",
+    "vite-plugin": "Vite Plugin",
 };
 
 /**
- * Generates npm package URL
- * @param {string} packageName - Package name
- * @returns {string}
+ * Preferred ordering for category sections. Categories not listed are appended alphabetically.
  */
-const getNpmPackageUrl = (packageName) => `https://www.npmjs.com/package/${packageName}`;
+const CATEGORY_ORDER = ["runtime", "client", "cli", "codegen", "vite-plugin", "dev-tools", "advisor", "add-on"];
 
 /**
- * Formats category name for display (e.g., "data-manipulation" -> "Data Manipulation", "api" -> "API")
- * @param {string} category - Category name
+ * Formats a category slug for display.
+ * @param {string} category - Category slug
  * @returns {string}
  */
-const formatCategoryName = (category) => {
-    // Special cases for acronyms (check entire category first)
-    const categoryAcronyms = {
-        api: "API",
-    };
-
-    if (categoryAcronyms[category]) {
-        return categoryAcronyms[category];
-    }
-
-    // Special cases for individual words that are acronyms
-    const wordAcronyms = {
-        api: "API",
-    };
-
-    return category
+const formatCategoryName = (category) =>
+    CATEGORY_NAMES[category] ||
+    category
         .split("-")
-        .map((word) => {
-            // Check if word is an acronym
-            if (wordAcronyms[word.toLowerCase()]) {
-                return wordAcronyms[word.toLowerCase()];
-            }
-            return word.charAt(0).toUpperCase() + word.slice(1);
-        })
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
         .join(" ");
-};
 
 /**
- * Generates the markdown table content grouped by category
- * @param {Object} packagesByCategory - Object with categories as keys and arrays of packages as values
+ * Generates the markdown table content grouped by category.
+ * @param {Record<string, Array<{name: string, description: string, path: string}>>} packagesByCategory
  * @returns {string}
  */
 const generateTableContent = (packagesByCategory) => {
     let content = "";
 
-    // Sort categories alphabetically
-    const sortedCategories = Object.keys(packagesByCategory).sort();
+    const sortedCategories = Object.keys(packagesByCategory).sort((a, b) => {
+        const aIndex = CATEGORY_ORDER.indexOf(a);
+        const bIndex = CATEGORY_ORDER.indexOf(b);
+
+        if (aIndex !== -1 && bIndex !== -1) {
+            return aIndex - bIndex;
+        }
+        if (aIndex !== -1) {
+            return -1;
+        }
+        if (bIndex !== -1) {
+            return 1;
+        }
+
+        return a.localeCompare(b);
+    });
 
     for (const category of sortedCategories) {
         const packages = packagesByCategory[category];
-        const categoryName = formatCategoryName(category);
 
-        // Add category header
-        content += `\n### ${categoryName}\n\n`;
+        content += `\n### ${formatCategoryName(category)}\n\n`;
         content += "| Package | Version | Description |\n";
-        content +=
-            "| ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |\n";
+        content += "| --- | --- | --- |\n";
 
-        // Sort packages within category by name
         packages.sort((a, b) => a.name.localeCompare(b.name));
 
-        // Add packages for this category
         for (const pkg of packages) {
-            const packageLink = `[${pkg.name}](${pkg.path}/README.md)`;
-            const npmBadge = `[![npm](https://img.shields.io/npm/v/${encodeURIComponent(pkg.name)}?style=flat-square&labelColor=292a44&color=663399&label=v)](https://www.npmjs.com/package/${encodeURIComponent(pkg.name)})`;
+            const packageLink = `[\`${pkg.name}\`](${pkg.path}/README.md)`;
+            const encodedName = encodeURIComponent(pkg.name);
+            const npmBadge = `[![npm](https://img.shields.io/npm/v/${encodedName}?style=flat-square&labelColor=292a44&color=663399&label=v)](https://www.npmjs.com/package/${encodedName})`;
             const description = escapeMarkdown(pkg.description || "No description");
 
             content += `| ${packageLink} | ${npmBadge} | ${description} |\n`;
@@ -160,7 +157,7 @@ const generateTableContent = (packagesByCategory) => {
 };
 
 /**
- * Replaces content between placeholders in README
+ * Replaces content between placeholders in the README.
  * @param {string} readmeContent - Current README content
  * @param {string} newContent - New content to insert
  * @returns {string}
@@ -187,36 +184,24 @@ const replaceTableContent = (readmeContent, newContent) => {
 };
 
 /**
- * Main function to list all packages and update README
+ * Main function to list all packages and update the README.
  */
 const listPackages = async () => {
-    const packages = [];
-    await findPackages(packagesDir, packages);
+    const packages = await findPackages();
 
-    // Group packages by category
     const packagesByCategory = {};
     for (const pkg of packages) {
-        if (!packagesByCategory[pkg.category]) {
-            packagesByCategory[pkg.category] = [];
-        }
-        packagesByCategory[pkg.category].push(pkg);
+        (packagesByCategory[pkg.category] ||= []).push(pkg);
     }
 
-    // Generate table content grouped by category
     const tableContent = generateTableContent(packagesByCategory);
-
-    // Read current README
     const readmeContent = await readFile(readmePath, "utf-8");
-
-    // Replace content between placeholders
     const updatedReadme = replaceTableContent(readmeContent, tableContent);
 
-    // Write updated README
     await writeFile(readmePath, updatedReadme, "utf-8");
 
-    const totalPackages = packages.length;
     const categoryCount = Object.keys(packagesByCategory).length;
-    console.log(`✅ Successfully updated README.md with ${totalPackages} packages across ${categoryCount} categories\n`);
+    console.log(`✅ Successfully updated README.md with ${packages.length} packages across ${categoryCount} categories\n`);
 };
 
 listPackages().catch((error) => {

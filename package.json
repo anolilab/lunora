@@ -34,6 +34,7 @@
         "fallow:dead-code": "vis run fallow:dead-code",
         "fallow:health": "vis run fallow:health",
         "generate:og": "node scripts/generate-package-og-images.js",
+        "generate:packages-list": "node scripts/list-packages.js && prettier --write README.md",
         "lint:affected:eslint": "vis affected lint:eslint --fail-fast",
         "lint:affected:types": "vis affected lint:types --fail-fast",
         "lint:eslint": "vis run lint:eslint",
