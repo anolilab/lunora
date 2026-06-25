@@ -1,3 +1,19 @@
+## @lunora/codegen [1.0.0-alpha.4](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.3...@lunora/codegen@1.0.0-alpha.4) (2026-06-25)
+
+### Features
+
+* **codegen:** emit deterministic ctx.now ([9e190cf](https://github.com/anolilab/lunora/commit/9e190cf0dc10bfa0785421bcc45fe32653f0388b))
+
+### Bug Fixes
+
+* **codegen:** detect aliased rate-limit .use() ([7c9e0de](https://github.com/anolilab/lunora/commit/7c9e0ded8686fbbfc46fa245cef1732b37404779))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.3
+* **@lunora/server:** upgraded to 1.0.0-alpha.2
+
 ## @lunora/codegen [1.0.0-alpha.3](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.2...@lunora/codegen@1.0.0-alpha.3) (2026-06-24)
 
 ### Features

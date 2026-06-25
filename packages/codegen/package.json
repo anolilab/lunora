@@ -1,6 +1,6 @@
 {
     "name": "@lunora/codegen",
-    "version": "1.0.0-alpha.3",
+    "version": "1.0.0-alpha.4",
     "description": "Code generator for Lunora: emits _generated/{api,server,dataModel}.ts from your schema",
     "keywords": [
         "cloudflare",
@@ -61,7 +61,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/advisor": "1.0.0-alpha.2",
+        "@lunora/advisor": "1.0.0-alpha.3",
         "@lunora/container": "1.0.0-alpha.1",
         "@lunora/scheduler": "1.0.0-alpha.1",
         "@lunora/values": "1.0.0-alpha.1",
@@ -71,7 +71,7 @@
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
         "@lunora/do": "1.0.0-alpha.4",
-        "@lunora/server": "1.0.0-alpha.1",
+        "@lunora/server": "1.0.0-alpha.2",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
