@@ -11,7 +11,10 @@ import {
     unquoteDevVariable,
 } from "./dev-variables-format";
 import type { SecretEntry } from "./package-secrets-registry";
-import { secretsForPackages } from "./package-secrets-registry";
+import { CORE_SECRETS, secretsForPackages } from "./package-secrets-registry";
+
+/** Core (always-scaffolded) secrets followed by the package-specific ones for the detected capabilities. */
+const requiredSecrets = (packageNames: ReadonlyArray<string>): SecretEntry[] => [...CORE_SECRETS, ...secretsForPackages(packageNames)];
 
 /**
  * Scaffolding `.dev.vars` from `.dev.vars.example`.
@@ -410,7 +413,7 @@ const secretEntryBlock = (entry: SecretEntry): string => {
  * in the output is the entry's `placeholderValue`.
  */
 const buildPackageSecretsBlock = (packageNames: ReadonlyArray<string>, existingKeys: ReadonlySet<string>): string => {
-    const entries = secretsForPackages(packageNames).filter((entry) => !existingKeys.has(entry.key));
+    const entries = requiredSecrets(packageNames).filter((entry) => !existingKeys.has(entry.key));
 
     if (entries.length === 0) {
         return "";
@@ -456,7 +459,7 @@ const ensureDevVariablesExample = (cwd: string, packageNames: ReadonlyArray<stri
     }
 
     // Return the keys we actually added.
-    return secretsForPackages(packageNames)
+    return requiredSecrets(packageNames)
         .filter((entry) => !existingKeys.has(entry.key))
         .map((entry) => entry.key);
 };

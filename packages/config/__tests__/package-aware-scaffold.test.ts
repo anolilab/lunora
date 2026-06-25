@@ -114,16 +114,24 @@ describe("packageSecretsRegistry", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("buildPackageSecretsBlock", () => {
-    it("returns empty string when no packages have secret requirements", () => {
+    it("contributes no package secrets when no packages have requirements (core token already present)", () => {
         expect.assertions(1);
 
-        expect(buildPackageSecretsBlock(["@lunora/runtime"], new Set())).toBe("");
+        // `LUNORA_ADMIN_TOKEN` is an always-included core secret; mark it present
+        // so this asserts only that the package itself contributes nothing.
+        expect(buildPackageSecretsBlock(["@lunora/runtime"], new Set(["LUNORA_ADMIN_TOKEN"]))).toBe("");
     });
 
-    it("returns empty string for an empty package list", () => {
+    it("contributes no package secrets for an empty package list (core token already present)", () => {
         expect.assertions(1);
 
-        expect(buildPackageSecretsBlock([], new Set())).toBe("");
+        expect(buildPackageSecretsBlock([], new Set(["LUNORA_ADMIN_TOKEN"]))).toBe("");
+    });
+
+    it("always emits the core LUNORA_ADMIN_TOKEN even with no package secrets", () => {
+        expect.assertions(1);
+
+        expect(buildPackageSecretsBlock([], new Set())).toContain("LUNORA_ADMIN_TOKEN=");
     });
 
     it("includes key=placeholder lines for each secret of the given packages", () => {
@@ -160,7 +168,8 @@ describe("buildPackageSecretsBlock", () => {
     it("returns empty string when all keys are already present", () => {
         expect.assertions(1);
 
-        const authKeys = new Set(secretsForPackages(["@lunora/auth"]).map((entry) => entry.key));
+        // Include the always-present core token so the block is genuinely empty.
+        const authKeys = new Set([...secretsForPackages(["@lunora/auth"]).map((entry) => entry.key), "LUNORA_ADMIN_TOKEN"]);
 
         expect(buildPackageSecretsBlock(["@lunora/auth"], authKeys)).toBe("");
     });
@@ -207,8 +216,8 @@ describe("ensureDevVarsExample", () => {
 
         const added = ensureDevVarsExample(dir, ["@lunora/auth"]);
 
-        // AUTH_SECRET was already there; only AUTH_URL should be added.
-        expect(added).toStrictEqual(["AUTH_URL"]);
+        // AUTH_SECRET was already there; the core admin token + AUTH_URL are added.
+        expect(added).toStrictEqual(["LUNORA_ADMIN_TOKEN", "AUTH_URL"]);
 
         const content = readFileSync(join(dir, ".dev.vars.example"), "utf8");
 
@@ -236,9 +245,9 @@ describe("ensureDevVarsExample", () => {
     it("returns an empty array when all secrets are already present", () => {
         expect.assertions(1);
 
-        // Pre-populate with all auth entries.
+        // Pre-populate with all auth entries plus the always-present core token.
         const authEntries = secretsForPackages(["@lunora/auth"]);
-        const existing = `${authEntries.map((entry) => `${entry.key}="${entry.placeholderValue}"`).join("\n")}\n`;
+        const existing = `LUNORA_ADMIN_TOKEN="x"\n${authEntries.map((entry) => `${entry.key}="${entry.placeholderValue}"`).join("\n")}\n`;
 
         writeFileSync(join(dir, ".dev.vars.example"), existing, "utf8");
 
@@ -261,14 +270,14 @@ describe("ensureDevVarsExample", () => {
         expect(content).toContain("AUTH_SECRET=");
     });
 
-    it("produces no entries for packages with no registered secrets", () => {
+    it("emits only the core LUNORA_ADMIN_TOKEN for packages with no registered secrets", () => {
         expect.assertions(2);
 
         const added = ensureDevVarsExample(dir, ["@lunora/runtime", "@lunora/client"]);
 
-        expect(added).toStrictEqual([]);
-        // No file created — nothing to write.
-        expect(existsSync(join(dir, ".dev.vars.example"))).toBe(false);
+        // The packages contribute nothing, but the always-present core token is written.
+        expect(added).toStrictEqual(["LUNORA_ADMIN_TOKEN"]);
+        expect(existsSync(join(dir, ".dev.vars.example"))).toBe(true);
     });
 
     it("never writes a real secret value — secret-keyed entries have placeholder values", () => {

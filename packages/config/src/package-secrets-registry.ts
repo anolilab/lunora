@@ -46,6 +46,24 @@ interface SecretEntry {
 }
 
 /**
+ * Secrets every Lunora project needs regardless of which capability packages are
+ * installed — scaffolded into `.dev.vars` always. `LUNORA_ADMIN_TOKEN` is the
+ * bearer the local Studio uses to call the worker's admin endpoints (the data
+ * browser, schema edits) in dev; the worker reads the SAME `.dev.vars` value via
+ * its admin gate, so both agree and the Studio authenticates without a prompt.
+ * Without it, every `/_lunora/admin/*` call is `ADMIN_FORBIDDEN` (403).
+ */
+const CORE_SECRETS: ReadonlyArray<SecretEntry> = [
+    {
+        description:
+            "Bearer token the local Lunora Studio uses to call the worker's admin endpoints (data browser, schema edits) in dev. Generate with: openssl rand -hex 32",
+        docsUrl: "https://lunora.sh/docs/packages/studio",
+        key: "LUNORA_ADMIN_TOKEN",
+        placeholderValue: "replace-with-openssl-rand-hex-32",
+    },
+];
+
+/**
  * The canonical registry of per-package secret requirements.
  *
  * Keys are exact npm package names (e.g. `"@lunora/auth"`). Values are
@@ -131,4 +149,4 @@ const secretsForPackages = (packageNames: ReadonlyArray<string>): SecretEntry[] 
 };
 
 export type { SecretEntry };
-export { PACKAGE_SECRETS_REGISTRY, secretsForPackages };
+export { CORE_SECRETS, PACKAGE_SECRETS_REGISTRY, secretsForPackages };
