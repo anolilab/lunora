@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { PACKAGE_SECRETS_REGISTRY, secretsForPackages } from "../src/package-secrets-registry";
-import { buildPackageSecretsBlock, ensureDevVarsExample, isPlaceholderValue } from "../src/scaffold-dev-variables";
+import { buildPackageSecretsBlock, ensureDevVariables, ensureDevVarsExample, isPlaceholderValue } from "../src/scaffold-dev-variables";
 
 /** Keys whose name implies a secret value — mirrors the scaffolder's SECRET_KEY regex. */
 const SECRET_KEY_PATTERN = /(?:KEY|PASSWORD|SECRET|TOKEN)$/u;
@@ -317,5 +317,55 @@ describe("ensureDevVarsExample", () => {
 
         expect(content).toMatch(/^#.+/mu);
         expect(content).toContain("# Docs: https://lunora.sh/docs/packages/auth");
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// End-to-end: example → real .dev.vars carries the core admin token
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("dev admin-token end-to-end", () => {
+    let dir: string;
+
+    beforeEach(() => {
+        dir = mkdtempSync(join(tmpdir(), "lunora-devvars-e2e-"));
+    });
+
+    afterEach(() => {
+        rmSync(dir, { force: true, recursive: true });
+    });
+
+    /**
+     * Regression guard for the studio login gate appearing in dev. `lunora add`
+     * writes `.dev.vars.example` (the core `LUNORA_ADMIN_TOKEN` is always
+     * included), then the dev flow scaffolds the real `.dev.vars` from it with
+     * the secret auto-filled. The `@lunora/vite` studio host reads that token to
+     * skip its login page — so this whole pipeline MUST carry it through, even
+     * for a project that pulled in NO add-on packages.
+     */
+    it("scaffolds a real .dev.vars with a filled admin token from an example with no add-on packages", async () => {
+        expect.assertions(3);
+
+        // 1. `lunora add` (no add-on packages) — only the core token is required.
+        const added = ensureDevVarsExample(dir, []);
+
+        expect(added).toStrictEqual(["LUNORA_ADMIN_TOKEN"]);
+
+        // 2. dev scaffolds the real `.dev.vars` from the example, auto-filling secrets.
+        const result = await ensureDevVariables({
+            confirm: async () => true,
+            cwd: dir,
+            info: () => undefined,
+            randomHex: (bytes) => "a".repeat(bytes * 2),
+        });
+
+        expect(result.generatedKeys).toContain("LUNORA_ADMIN_TOKEN");
+
+        const devVars = readFileSync(join(dir, ".dev.vars"), "utf8");
+
+        // The token is present AND filled with a real generated value (the 64-char
+        // hex), not left as a placeholder — a placeholder/empty token would
+        // re-trigger the studio login gate in dev.
+        expect(devVars).toContain(`LUNORA_ADMIN_TOKEN="${"a".repeat(64)}"`);
     });
 });
