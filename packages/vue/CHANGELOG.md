@@ -1,3 +1,10 @@
+## @lunora/vue [1.0.0-alpha.4](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.3...@lunora/vue@1.0.0-alpha.4) (2026-06-25)
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.2
+
 ## @lunora/vue [1.0.0-alpha.3](https://github.com/anolilab/lunora/compare/@lunora/vue@1.0.0-alpha.2...@lunora/vue@1.0.0-alpha.3) (2026-06-24)
 
 ### Miscellaneous Chores
