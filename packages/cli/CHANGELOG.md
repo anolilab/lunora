@@ -1,3 +1,9 @@
+## @lunora/cli [1.0.0-alpha.20](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.19...@lunora/cli@1.0.0-alpha.20) (2026-06-25)
+
+### Bug Fixes
+
+* **cli:** pnpm allowBuilds + overlay [#lunora](https://github.com/anolilab/lunora/issues/lunora) imports mapping ([e437eee](https://github.com/anolilab/lunora/commit/e437eee71369b141677a813eb4be2dce8819be75))
+
 ## @lunora/cli [1.0.0-alpha.19](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.18...@lunora/cli@1.0.0-alpha.19) (2026-06-25)
 
 
