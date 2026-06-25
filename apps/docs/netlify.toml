@@ -1,0 +1,17 @@
+# Netlify configuration for the Lunora docs site.
+#
+# `build.ignore` is Netlify's "Ignored Build Step": it runs before the build and
+# its exit code decides whether the build proceeds.
+#   - exit 0  -> build is skipped (cancelled)
+#   - exit !0 -> build proceeds
+#
+# `vis ci ignore` is graph-aware: it skips the deploy when nothing affecting the
+# docs site changed, and still rebuilds when an upstream `@lunora/*` package the
+# docs pull content from changed (which a plain `git diff -- apps/docs` would
+# miss). It auto-detects Netlify's CACHED_COMMIT_REF as the git base and falls
+# back to HEAD~1, and uses inverted Vercel/Netlify exit semantics by default.
+#
+# Build command, publish dir, and base directory remain configured in the
+# Netlify UI; this file only adds the ignore gate.
+[build]
+  ignore = "pnpm exec vis ci ignore lunora-docs-app"
