@@ -17,7 +17,7 @@ import type { PackageManager, PackageManagerProbe } from "../../util/detect-pack
 import { detectInstalledManagers, installArgsFor } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
 import { patchViteConfig } from "../../util/patch-vite-config";
-import { resolveDistTag, resolveSourceRef } from "../../util/source-ref";
+import { resolveDistTag, resolveSourceRef, resolveTagVersion } from "../../util/source-ref";
 import type { Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import type { NextStep } from "../../util/tui-prompts";
@@ -257,7 +257,55 @@ const isLunoraDep = (name: string): boolean => name === "lunorash" || name.start
  * (react, vite, wrangler, …) are left untouched. Structural jsonc edits preserve
  * the file's formatting; a parse failure leaves the text unchanged.
  */
-const stampLunoraDeps = (packageJsonText: string, distTag: string): string => {
+
+/**
+ * Resolve every `@lunora/*` + `lunorash` dependency declared across the template's
+ * `package.json` files to the CONCRETE version its `distTag` currently points at
+ * (one registry lookup per package, in parallel). Scaffolds pin this exact version
+ * rather than the floating tag — a tag lets a stale lockfile / pnpm metadata cache
+ * silently install an older release (the specifier still matches, so the lockfile
+ * is never re-resolved). A package whose lookup fails is simply absent from the
+ * map, and {@link stampLunoraDeps} falls back to the tag for it (offline-safe).
+ */
+const resolveLunoraVersions = async (files: ReadonlyArray<string>, distTag: string): Promise<ReadonlyMap<string, string>> => {
+    const names = new Set<string>();
+
+    for (const file of files) {
+        if (basename(file) !== "package.json") {
+            continue;
+        }
+
+        try {
+            const parsed = JSON.parse(readFileSync(file, "utf8")) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+
+            for (const section of ["dependencies", "devDependencies"] as const) {
+                for (const name of Object.keys(parsed[section] ?? {})) {
+                    if (isLunoraDep(name)) {
+                        names.add(name);
+                    }
+                }
+            }
+        } catch {
+            // Unparseable package.json — skip; stamping leaves it untouched too.
+        }
+    }
+
+    const resolved = new Map<string, string>();
+
+    await Promise.all(
+        [...names].map(async (name) => {
+            const version = await resolveTagVersion(name, distTag);
+
+            if (version !== undefined) {
+                resolved.set(name, version);
+            }
+        }),
+    );
+
+    return resolved;
+};
+
+const stampLunoraDeps = (packageJsonText: string, distTag: string, versions: ReadonlyMap<string, string>): string => {
     let parsed: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
 
     try {
@@ -274,7 +322,10 @@ const stampLunoraDeps = (packageJsonText: string, distTag: string): string => {
                 continue;
             }
 
-            const edits = modify(text, [section, name], distTag, { formattingOptions: { insertSpaces: true, tabSize: 4 } });
+            // Pin the concrete resolved version when available; fall back to the
+            // floating dist-tag (offline / lookup failed).
+            const pin = versions.get(name) ?? distTag;
+            const edits = modify(text, [section, name], pin, { formattingOptions: { insertSpaces: true, tabSize: 4 } });
 
             text = applyEdits(text, edits);
         }
@@ -293,10 +344,15 @@ const collectFiles = (directory: string): ReadonlyArray<string> => {
     return out;
 };
 
-const copyTemplate = (sourceDirectory: string, target: string, name: string): ReadonlyArray<string> => {
+const copyTemplate = async (sourceDirectory: string, target: string, name: string): Promise<ReadonlyArray<string>> => {
     const files = collectFiles(sourceDirectory);
     const written: string[] = [];
     const distTag = resolveDistTag();
+
+    // Resolve each Lunora dep's tag → concrete version once, up front, so the
+    // scaffold pins exact versions instead of the floating tag (see
+    // resolveLunoraVersions). Network best-effort; falls back to the tag per dep.
+    const versions = await resolveLunoraVersions(files, distTag);
 
     for (const source of files) {
         const relativePath = relative(sourceDirectory, source);
@@ -308,10 +364,11 @@ const copyTemplate = (sourceDirectory: string, target: string, name: string): Re
         let text = isTextFile(source) ? substitute(raw.toString("utf8"), name) : undefined;
 
         // Pin the template's `@lunora/*` + `lunorash` placeholder ranges to the
-        // CLI's release channel so the scaffold installs real code, not the
-        // `^0.0.0` stub. Other deps and non-package.json files pass through.
+        // concrete published version (falling back to the CLI's release channel
+        // tag) so the scaffold installs real code, not the `^0.0.0` stub. Other
+        // deps and non-package.json files pass through.
         if (text !== undefined && basename(source) === "package.json") {
-            text = stampLunoraDeps(text, distTag);
+            text = stampLunoraDeps(text, distTag, versions);
         }
 
         if (text === undefined) {
@@ -581,7 +638,7 @@ const maybeOfferInstall = async (options: InitCommandOptions, target: string): P
     return manager;
 };
 
-const scaffoldFromLocal = (fromRoot: string, templateType: Template, target: string, name: string, logger: Logger): InitCommandResult => {
+const scaffoldFromLocal = async (fromRoot: string, templateType: Template, target: string, name: string, logger: Logger): Promise<InitCommandResult> => {
     const templateDirectory = join(fromRoot, templateType);
 
     if (!existsSync(templateDirectory)) {
@@ -590,7 +647,7 @@ const scaffoldFromLocal = (fromRoot: string, templateType: Template, target: str
         return { code: 1, files: [], target };
     }
 
-    const written = copyTemplate(templateDirectory, target, name);
+    const written = await copyTemplate(templateDirectory, target, name);
 
     logScaffoldSuccess(logger, written, target);
 
@@ -640,10 +697,8 @@ const scaffoldFromRemote = async (options: {
                 },
                 {
                     label: `files copied into ${name}/`,
-                    run: () => {
-                        written = copyTemplate(stagingDirectory, target, name);
-
-                        return Promise.resolve();
+                    run: async () => {
+                        written = await copyTemplate(stagingDirectory, target, name);
                     },
                 },
             ],
@@ -1237,7 +1292,7 @@ const scaffoldTemplatePath = async (options: InitCommandOptions, templateType: T
     }
 
     if (options.from !== undefined) {
-        return scaffoldFromLocal(options.from, templateType, target, name, options.logger);
+        return await scaffoldFromLocal(options.from, templateType, target, name, options.logger);
     }
 
     if (options.source !== undefined && options.source.length > 0 && !options.allowUnsafeSource && !isSafeSource(options.source)) {

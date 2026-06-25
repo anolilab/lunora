@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { isTemplate, resolveTemplateSource, runInitCommand } from "../../src/commands/init/handler";
 import type { Logger } from "../../src/util/logger";
@@ -28,11 +28,32 @@ let workdir: string;
 describe("lunora init", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-cli-init-"));
+        // Default: no network. Scaffolding resolves `@lunora/*` dep versions from the
+        // registry; stub it offline so the suite is hermetic (deps fall back to the
+        // dist-tag). Tests that assert concrete pinning override via `stubRegistry`.
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () => { throw new Error("no network in tests"); }),
+        );
     });
 
     afterEach(() => {
         rmSync(workdir, { force: true, recursive: true });
+        vi.unstubAllGlobals();
     });
+
+    /** Stub the registry so `resolveTagVersion` resolves every dist-tag to `version` (deterministic, offline). */
+    const stubRegistry = (version: string): void => {
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () =>
+                {return {
+                    json: async () => {return { "dist-tags": { alpha: version, beta: version, latest: version, next: version } }},
+                    ok: true,
+                }},
+            ),
+        );
+    };
 
     describe("lunora init", () => {
         it("a bespoke template scaffolds its expected files", async () => {
@@ -167,8 +188,12 @@ describe("lunora init", () => {
             expect(pkg).not.toContain("@lunora/server");
         });
 
-        it("stamps the template's lunora deps to the CLI release channel, leaving others untouched", async () => {
+        it("pins the template's lunora deps to the concrete published version, leaving others untouched", async () => {
             expect.assertions(5);
+
+            // Registry resolves the channel tag to this exact version; the scaffold
+            // must pin it (not the floating tag) so a stale lockfile can't downgrade.
+            stubRegistry("1.0.0-alpha.99");
 
             await runInitCommand({
                 cwd: workdir,
@@ -183,15 +208,37 @@ describe("lunora init", () => {
                 devDependencies: Record<string, string>;
             };
 
-            const tag = resolveDistTag();
-
-            // Lunora-scoped ranges are pinned to the channel; the `^0.0.0` stub is gone.
-            expect(pkg.dependencies.lunorash).toBe(tag);
-            expect(pkg.dependencies["@lunora/react"]).toBe(tag);
-            expect(pkg.devDependencies["@lunora/vite"]).toBe(tag);
+            // Lunora-scoped ranges are pinned to the concrete version; the `^0.0.0` stub is gone.
+            expect(pkg.dependencies.lunorash).toBe("1.0.0-alpha.99");
+            expect(pkg.dependencies["@lunora/react"]).toBe("1.0.0-alpha.99");
+            expect(pkg.devDependencies["@lunora/vite"]).toBe("1.0.0-alpha.99");
             // Third-party deps keep their template ranges verbatim.
             expect(pkg.dependencies["react-dom"]).toBe("^19.0.0");
             expect(pkg.devDependencies.wrangler).toBe("^4.74.0");
+        });
+
+        it("falls back to the channel dist-tag when the registry lookup fails (offline)", async () => {
+            expect.assertions(2);
+
+            // Registry unreachable → resolveTagVersion returns undefined → keep the tag.
+            vi.stubGlobal(
+                "fetch",
+                vi.fn(async () => { throw new Error("offline"); }),
+            );
+
+            await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: silentLogger(),
+                name: "offline",
+                templateType: "tanstack-start-react",
+            });
+
+            const pkg = JSON.parse(readFileSync(join(workdir, "offline", "package.json"), "utf8")) as { dependencies: Record<string, string> };
+            const tag = resolveDistTag();
+
+            expect(pkg.dependencies.lunorash).toBe(tag);
+            expect(tag.length).toBeGreaterThan(0);
         });
 
         it("standalone template scaffolds a worker entry but no frontend files", async () => {

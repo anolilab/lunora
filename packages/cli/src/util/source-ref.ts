@@ -147,4 +147,49 @@ const resolveDistTag = (): string => {
     return ref === STABLE_BRANCH ? STABLE_DIST_TAG : ref;
 };
 
-export { resolveDistTag, resolveSourceRef, resolveVersionRef };
+/** Default public npm registry, used when no `npm_config_registry` is configured. */
+const DEFAULT_REGISTRY = "https://registry.npmjs.org";
+
+/** The configured npm registry (honours `npm_config_registry`), without a trailing slash. */
+const registryBase = (): string => {
+    const configured = process.env["npm_config_registry"];
+    const base = configured !== undefined && configured.length > 0 ? configured : DEFAULT_REGISTRY;
+
+    return base.endsWith("/") ? base.slice(0, -1) : base;
+};
+
+/**
+ * Resolve a dist-tag (`alpha` / `latest` / …) to the CONCRETE published version
+ * it currently points at (e.g. `alpha` → `1.0.0-alpha.12`), via the npm registry.
+ *
+ * Scaffolds pin this concrete version rather than the floating tag: a tag in
+ * `package.json` lets a stale lockfile or pnpm metadata cache silently keep an
+ * older release (the specifier still "matches", so the lockfile is never
+ * re-resolved). A concrete version forces the exact published code.
+ *
+ * Best-effort: returns `undefined` on any failure (offline, 404, malformed
+ * packument, timeout) so the caller can fall back to the tag string. Uses the
+ * abbreviated-packument accept header so only `dist-tags` (not every version's
+ * full manifest) is transferred.
+ */
+const resolveTagVersion = async (packageName: string, tag: string): Promise<string | undefined> => {
+    try {
+        // Scoped names (`@lunora/vite`) encode only the `/`; the registry path is `/@lunora%2Fvite`.
+        const response = await fetch(`${registryBase()}/${packageName.replace("/", "%2F")}`, {
+            headers: { accept: "application/vnd.npm.install-v1+json" },
+            signal: AbortSignal.timeout(10_000),
+        });
+
+        if (!response.ok) {
+            return undefined;
+        }
+
+        const packument = (await response.json()) as { "dist-tags"?: Record<string, string> };
+
+        return packument["dist-tags"]?.[tag];
+    } catch {
+        return undefined;
+    }
+};
+
+export { resolveDistTag, resolveSourceRef, resolveTagVersion, resolveVersionRef };
