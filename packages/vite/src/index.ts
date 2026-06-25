@@ -31,14 +31,18 @@ const resolveOptions = (options: LunoraPluginOptions | undefined): ResolvedLunor
         cloudflareOption = input.cloudflare;
     }
 
+    // Forward both `error` AND `warn` console calls to the dev error overlay by
+    // default (the overlay plugin's own default is `["error"]` only) — surfacing
+    // Lunora's branded `warn` advisories in the browser too. User-overridable.
+    const overlayDefaults = { forwardedConsoleMethods: ["error", "warn"] } satisfies Partial<OverlayPluginOptions>;
     let overlayOption: false | OverlayPluginOptions;
 
     if (input.overlay === false) {
         overlayOption = false;
     } else if (input.overlay === true || input.overlay === undefined) {
-        overlayOption = {};
+        overlayOption = { ...overlayDefaults };
     } else {
-        overlayOption = input.overlay;
+        overlayOption = { ...overlayDefaults, ...input.overlay };
     }
 
     return {
