@@ -1,3 +1,14 @@
+## @lunora/cli [1.0.0-alpha.23](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.22...@lunora/cli@1.0.0-alpha.23) (2026-06-25)
+
+### Features
+
+* **cli:** env generate + deploy-time missing-secret gate ([c0f6c6f](https://github.com/anolilab/lunora/commit/c0f6c6f68a125c112263237eba8ecb3ac9efdc3e))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.13
+
 ## @lunora/cli [1.0.0-alpha.22](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.21...@lunora/cli@1.0.0-alpha.22) (2026-06-25)
 
 ### Features
