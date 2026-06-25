@@ -10,6 +10,13 @@ import type { FetchLike } from "../../src/commands/run/handler";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
 
+// Keep the deploy suite hermetic: the deploy-time missing-secret gate lists the
+// target's remote secrets via `wrangler secret list`, which would shell out to a
+// real wrangler. Stub it to "can't determine" (ok: false) so the gate is a no-op
+// and the deploy proceeds, exactly as before the gate existed. Cases that
+// exercise the gate inject their own lister.
+const noRemoteSecrets = (): Promise<{ names: string[]; ok: boolean }> => Promise.resolve({ names: [], ok: false });
+
 // The container deploy cases run a full ts-morph codegen pass (container
 // discovery + class generation), which is fast locally (~0.5s) but can blow past
 // the shared 30s CI timeout when the runner is under heavy concurrent load (e.g.
@@ -91,7 +98,7 @@ describe("lunora deploy", () => {
             const { calls, spawner } = createRecordingSpawner();
             const { logger } = silentLogger();
 
-            const result = await runDeployCommand({ cwd: workdir, logger, spawner });
+            const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner });
 
             expect(result.code).toBe(0);
             expect(result.validation.problems).toEqual([]);
@@ -111,7 +118,7 @@ describe("lunora deploy", () => {
             const { calls, spawner } = createRecordingSpawner();
             const { logger } = silentLogger();
 
-            const result = await runDeployCommand({ cwd: workdir, logger, preview: true, spawner });
+            const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, preview: true, spawner });
 
             expect(result.code).toBe(0);
 
@@ -131,7 +138,7 @@ describe("lunora deploy", () => {
             const { calls, spawner } = createRecordingSpawner();
             const { logger } = silentLogger();
 
-            const result = await runDeployCommand({ cwd: workdir, logger, skipCodegen: true, spawner });
+            const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, skipCodegen: true, spawner });
 
             expect(result.code).toBe(0);
             expect(calls).toHaveLength(1);
@@ -151,7 +158,7 @@ describe("lunora deploy", () => {
             const { calls, spawner } = createRecordingSpawner();
             const { errors, logger } = silentLogger();
 
-            const result = await runDeployCommand({ cwd: workdir, dockerAvailable: () => false, logger, spawner });
+            const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, dockerAvailable: () => false, logger, spawner });
 
             expect(result.code).toBe(1);
             expect(calls).toHaveLength(0);
@@ -180,7 +187,7 @@ describe("lunora deploy", () => {
             const { spawner } = createRecordingSpawner();
             const { logger } = silentLogger();
 
-            const result = await runDeployCommand({ cwd: workdir, dockerAvailable: () => false, logger, spawner });
+            const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, dockerAvailable: () => false, logger, spawner });
 
             expect(result.code).toBe(0);
         });
@@ -201,7 +208,14 @@ export const worker = defineContainer({ image: { build: "./services/worker" } })
             const { calls, spawner } = createRecordingSpawner();
             const { logger } = silentLogger();
 
-            const result = await runDeployCommand({ cwd: workdir, dockerAvailable: () => true, logger, railpackAvailable: () => true, spawner });
+            const result = await runDeployCommand({
+                cwd: workdir,
+                secretLister: noRemoteSecrets,
+                dockerAvailable: () => true,
+                logger,
+                railpackAvailable: () => true,
+                spawner,
+            });
 
             expect(result.code).toBe(0);
             // railpack build → wrangler containers push → wrangler deploy.
@@ -225,7 +239,14 @@ export const worker = defineContainer({ image: { build: "./services/worker" } })
             const { calls, spawner } = createRecordingSpawner();
             const { logger } = silentLogger();
 
-            const result = await runDeployCommand({ cwd: workdir, dockerAvailable: () => true, logger, railpackAvailable: () => false, spawner });
+            const result = await runDeployCommand({
+                cwd: workdir,
+                secretLister: noRemoteSecrets,
+                dockerAvailable: () => true,
+                logger,
+                railpackAvailable: () => false,
+                spawner,
+            });
 
             expect(result.code).toBe(1);
             expect(calls).toHaveLength(0);
@@ -247,7 +268,14 @@ export const worker = defineContainer({ image: { build: "./services/worker" } })
             const { calls, spawner } = createRecordingSpawner();
             const { errors, logger } = silentLogger();
 
-            const result = await runDeployCommand({ cwd: workdir, dockerAvailable: () => true, logger, railpackAvailable: () => true, spawner });
+            const result = await runDeployCommand({
+                cwd: workdir,
+                secretLister: noRemoteSecrets,
+                dockerAvailable: () => true,
+                logger,
+                railpackAvailable: () => true,
+                spawner,
+            });
 
             expect(result.code).toBe(1);
             expect(calls).toHaveLength(0);
@@ -270,7 +298,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
             const { calls, spawner } = createRecordingSpawner();
             const { errors, logger } = silentLogger();
 
-            const result = await runDeployCommand({ cwd: workdir, dockerAvailable: () => true, logger, spawner });
+            const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, dockerAvailable: () => true, logger, spawner });
 
             expect(result.code).toBe(1);
             expect(calls).toHaveLength(0);
@@ -290,7 +318,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
             const { calls, spawner } = createRecordingSpawner();
             const { infos, logger } = silentLogger();
 
-            const result = await runDeployCommand({ cwd: workdir, logger, spawner });
+            const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner });
 
             expect(result.code).toBe(0);
 
@@ -308,7 +336,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
             const { calls, spawner } = createRecordingSpawner();
             const { logger } = silentLogger();
 
-            const result = await runDeployCommand({ cwd: workdir, logger, spawner });
+            const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner });
 
             expect(result.code).toBe(0);
             // exec wrangler deploy — three args, no positional entry path
@@ -323,7 +351,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
             const { calls, spawner } = createRecordingSpawner();
             const { logger } = silentLogger();
 
-            await runDeployCommand({ cwd: workdir, env: "production", logger, spawner });
+            await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, env: "production", logger, spawner });
 
             const args = calls[0]?.descriptor.args ?? [];
 
@@ -339,7 +367,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
             const { calls, spawner } = createRecordingSpawner();
             const { logger } = silentLogger();
 
-            await runDeployCommand({ cwd: workdir, logger, spawner, temporary: true });
+            await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner, temporary: true });
 
             const args = calls[0]?.descriptor.args ?? [];
 
@@ -354,7 +382,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
             const { calls, spawner } = createRecordingSpawner();
             const { logger } = silentLogger();
 
-            await runDeployCommand({ cwd: workdir, logger, spawner });
+            await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner });
 
             const args = calls[0]?.descriptor.args ?? [];
 
@@ -384,7 +412,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
             const { calls, spawner } = createRecordingSpawner();
             const { errors, logger } = silentLogger();
 
-            const result = await runDeployCommand({ cwd: workdir, logger, spawner });
+            const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner });
 
             // Bindings were written into wrangler.jsonc by reconcile
             const written = readFileSync(join(workdir, "wrangler.jsonc"), "utf8");
@@ -407,7 +435,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
             const { calls, spawner } = createRecordingSpawner();
             const { logger } = silentLogger();
 
-            const result = await runDeployCommand({ cwd: workdir, logger, spawner });
+            const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner });
 
             expect(result.code).toBe(0);
             expect(calls).toHaveLength(1);
@@ -438,7 +466,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
             const { calls, spawner } = createRecordingSpawner();
             const { errors, logger } = silentLogger();
 
-            const result = await runDeployCommand({ cwd: workdir, logger, spawner });
+            const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner });
 
             expect(result.code).toBe(1);
             expect(calls).toHaveLength(0);
@@ -466,7 +494,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
             const { calls, spawner } = createRecordingSpawner();
             const { errors, logger } = silentLogger();
 
-            const result = await runDeployCommand({ cwd: workdir, logger, spawner });
+            const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner });
 
             expect(result.code).toBe(1);
             expect(calls).toHaveLength(0);
@@ -482,7 +510,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
             const { calls, spawner } = createRecordingSpawner();
             const { logger } = silentLogger();
 
-            const result = await runDeployCommand({ cwd: workdir, logger, spawner });
+            const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner });
 
             // Only one spawn call (wrangler deploy); no migration RPC calls
             expect(result.code).toBe(0);
@@ -500,6 +528,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
 
             const result = await runDeployCommand({
                 cwd: workdir,
+                secretLister: noRemoteSecrets,
                 logger,
                 migrate: true,
                 migrateToken: "test-token",
@@ -523,6 +552,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
 
             const result = await runDeployCommand({
                 cwd: workdir,
+                secretLister: noRemoteSecrets,
                 logger,
                 migrate: true,
                 migrateToken: "test-token",
@@ -546,6 +576,7 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
 
             const result = await runDeployCommand({
                 cwd: workdir,
+                secretLister: noRemoteSecrets,
                 logger,
                 migrate: true,
                 migrateToken: "test-token",
@@ -595,6 +626,7 @@ export const backfillNames = defineMigration({
 
             const result = await runDeployCommand({
                 cwd: workdir,
+                secretLister: noRemoteSecrets,
                 fetchImpl: fetchStub,
                 logger,
                 migrate: true,
@@ -623,7 +655,7 @@ export const backfillNames = defineMigration({
                 const { logger } = silentLogger();
 
                 const stdout = await captureStdout(async () => {
-                    await runDeployCommand({ cwd: workdir, format: "json", logger, spawner });
+                    await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, format: "json", logger, spawner });
                 });
 
                 const parsed = JSON.parse(stdout) as { code: number; descriptor: { args: string[] } | null; validation: { problems: unknown[] } };
@@ -646,7 +678,7 @@ export const backfillNames = defineMigration({
                 const { logger } = silentLogger();
 
                 await captureStdout(async () => {
-                    await runDeployCommand({ cwd: workdir, format: "json", logger, spawner });
+                    await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, format: "json", logger, spawner });
                 });
 
                 expect(calls[0]?.descriptor.stdoutToStderr).toBe(true);
@@ -654,7 +686,7 @@ export const backfillNames = defineMigration({
                 // Pretty mode keeps wrangler's output inherited on stdout.
                 const pretty = createRecordingSpawner();
 
-                await runDeployCommand({ cwd: workdir, logger, spawner: pretty.spawner });
+                await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner: pretty.spawner });
 
                 expect(pretty.calls[0]?.descriptor.stdoutToStderr).toBe(false);
             });
@@ -667,7 +699,7 @@ export const backfillNames = defineMigration({
                 const { logger } = silentLogger();
 
                 const stdout = await captureStdout(async () => {
-                    await runDeployCommand({ cwd: workdir, format: "json", logger, spawner });
+                    await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, format: "json", logger, spawner });
                 });
 
                 const parsed = JSON.parse(stdout) as { code: number; error?: string };
@@ -685,7 +717,7 @@ export const backfillNames = defineMigration({
                 const { errors, logger } = silentLogger();
 
                 const stdout = await captureStdout(async () => {
-                    const result = await runDeployCommand({ cwd: workdir, format: "yaml", logger, spawner });
+                    const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, format: "yaml", logger, spawner });
 
                     expect(result.code).toBe(1);
                     expect(result.error).toBeDefined();
@@ -694,6 +726,57 @@ export const backfillNames = defineMigration({
                 expect(stdout).toBe("");
                 expect(errors.some((line) => line.includes('unknown --format "yaml" — expected pretty | json'))).toBe(true);
                 expect(calls).toHaveLength(0);
+            });
+        });
+
+        describe("missing-secret gate", () => {
+            it("interactively generates + pushes a missing mintable secret before deploying", async () => {
+                expect.assertions(3);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    // Remote has no secrets → the core LUNORA_ADMIN_TOKEN is missing + mintable.
+                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    spawner,
+                });
+
+                const argv = calls.map((call) => call.descriptor.args.join(" "));
+
+                expect(result.code).toBe(0);
+                // The mintable secret was generated + pushed (via stdin) before the deploy spawn.
+                expect(argv.some((line) => line.includes("wrangler secret put LUNORA_ADMIN_TOKEN"))).toBe(true);
+                expect(argv.some((line) => line.includes("wrangler deploy"))).toBe(true);
+            });
+
+            it("aborts a non-interactive deploy when a required secret is missing on the target", async () => {
+                expect.assertions(3);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { errors, logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    interactive: false,
+                    logger,
+                    // Worker exists (ok) but has no secrets → can't prompt → must abort.
+                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    spawner,
+                });
+
+                expect(result.code).toBe(1);
+                // Never reached the wrangler deploy spawn.
+                expect(calls.some((call) => call.descriptor.args.join(" ").includes("wrangler deploy"))).toBe(false);
+                expect(errors.some((line) => line.includes("missing required secret"))).toBe(true);
             });
         });
     });

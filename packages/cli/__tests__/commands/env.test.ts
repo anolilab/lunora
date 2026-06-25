@@ -374,4 +374,75 @@ describe("lunora env", () => {
             expect(infos).toContain("REMOTE_ONLY");
         });
     });
+
+    describe("lunora env generate", () => {
+        const HEX64 = /^[a-f0-9]{64}$/u;
+
+        it("writes generated values for the project's mintable secrets with --set (skipping provider keys)", async () => {
+            expect.assertions(5);
+
+            // A feature-scaffolded .dev.vars: two mintable secrets + a provider key, all blank.
+            writeFileSync(join(workdir, ".dev.vars"), "BETTER_AUTH_SECRET=\nSTORAGE_SIGNING_SECRET=\nRESEND_API_KEY=\n", "utf8");
+
+            const { logger } = recordingLogger();
+            const result = await runEnvCommand({ cwd: workdir, logger, set: true, subcommand: "generate" });
+
+            expect(result.code).toBe(0);
+
+            const map = new Map(
+                readFileSync(join(workdir, ".dev.vars"), "utf8")
+                    .split("\n")
+                    .filter((line) => line.includes("="))
+                    .map((line) => {
+                        const eq = line.indexOf("=");
+
+                        return [line.slice(0, eq), line.slice(eq + 1).replaceAll(/^"|"$/gu, "")] as const;
+                    }),
+            );
+
+            // Mintable secrets filled with strong hex; the core admin token is added.
+            expect(map.get("BETTER_AUTH_SECRET")).toMatch(HEX64);
+            expect(map.get("STORAGE_SIGNING_SECRET")).toMatch(HEX64);
+            expect(map.get("LUNORA_ADMIN_TOKEN")).toMatch(HEX64);
+            // The provider key (Resend) is NOT minted — you obtain it from a dashboard.
+            expect(map.get("RESEND_API_KEY")).toBe("");
+        });
+
+        it("prints KEY=value to stdout for an explicit key (default, no --set)", async () => {
+            expect.assertions(3);
+
+            const writes: string[] = [];
+            const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+                writes.push(String(chunk));
+
+                return true;
+            });
+
+            const { logger } = recordingLogger();
+
+            try {
+                const result = await runEnvCommand({ cwd: workdir, key: "AUTH_SECRET", logger, subcommand: "generate" });
+
+                expect(result.code).toBe(0);
+            } finally {
+                spy.mockRestore();
+            }
+
+            const printed = writes.join("");
+
+            expect(printed).toMatch(/^AUTH_SECRET=[a-f0-9]{64}\n$/u);
+            // Default mode never touches .dev.vars.
+            expect(existsSync(join(workdir, ".dev.vars"))).toBe(false);
+        });
+
+        it("rejects an invalid explicit key", async () => {
+            expect.assertions(2);
+
+            const { logger, recorded } = recordingLogger();
+            const result = await runEnvCommand({ cwd: workdir, key: "bad-key!", logger, subcommand: "generate" });
+
+            expect(result.code).toBe(1);
+            expect(recorded.errors.join("\n")).toContain("invalid key");
+        });
+    });
 });

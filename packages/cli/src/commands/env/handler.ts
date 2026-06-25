@@ -1,7 +1,18 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { DEV_VARS_EXAMPLE_FILE, DEV_VARS_FILE, DEV_VARS_KEY_PATTERN, isPlaceholderValue, parseDevVariableEntries } from "@lunora/config";
+import {
+    DEV_VARS_EXAMPLE_FILE,
+    DEV_VARS_FILE,
+    DEV_VARS_KEY_PATTERN,
+    generateSecretValue,
+    inferLunoraBindings,
+    isMintableSecretKey,
+    isPlaceholderValue,
+    packageNamesFromBindings,
+    parseDevVariableEntries,
+    requiredSecrets,
+} from "@lunora/config";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
@@ -12,7 +23,7 @@ import type { ListRemoteSecretsInputs, ListRemoteSecretsResult } from "../../uti
 import { listRemoteSecrets } from "../../util/wrangler-secrets";
 import type { EnvOptions } from "./index";
 
-type EnvSubcommand = "diff" | "doctor" | "get" | "list" | "push" | "set" | "unset";
+type EnvSubcommand = "diff" | "doctor" | "generate" | "get" | "list" | "push" | "set" | "unset";
 
 interface EnvCommandOptions {
     cwd?: string;
@@ -22,6 +33,8 @@ interface EnvCommandOptions {
     prod?: boolean;
     /** Remote-secret lister for `pull`/`diff`; injected in tests. */
     secretLister?: (inputs: ListRemoteSecretsInputs) => Promise<ListRemoteSecretsResult>;
+    /** For `generate` — also write the generated secrets into `.dev.vars` (default: print to stdout). */
+    set?: boolean;
     spawner?: Spawner;
     subcommand: EnvSubcommand;
 
@@ -377,6 +390,88 @@ const runEnvDoctor = (context: EnvContext): EnvCommandResult => {
     return { code: 1, descriptors: [] };
 };
 
+/**
+ * Resolve the project's mintable secret keys (no explicit key given): the
+ * locally-generatable secrets the project requires (core `LUNORA_ADMIN_TOKEN` +
+ * the secret-typed vars of its installed `@lunora/*` packages), plus any
+ * mintable secret already present in `.dev.vars` (covers feature-registry keys
+ * like `STORAGE_SIGNING_SECRET`). Provider keys (`RESEND_API_KEY`, `STRIPE_*`)
+ * are excluded — they can't be minted. Binding inference is best-effort.
+ */
+const resolveMintableKeys = async (context: EnvContext): Promise<string[]> => {
+    let packages: ReadonlyArray<string> = [];
+
+    try {
+        packages = packageNamesFromBindings(await inferLunoraBindings({ projectRoot: context.cwd }));
+    } catch {
+        // Scan failure → fall back to the core secret + whatever is already local.
+    }
+
+    const fromPackages = requiredSecrets(packages)
+        .map((entry) => entry.key)
+        .filter((key) => isMintableSecretKey(key));
+    const fromLocal = [...loadDevVariables(context.devVariablesPath).keys()].filter((key) => isMintableSecretKey(key));
+
+    return [...new Set([...fromPackages, ...fromLocal])];
+};
+
+/**
+ * Generate cryptographically-strong secret values (32-byte hex) so the user can
+ * set them for prod or other envs. With an explicit key argument it mints that
+ * one key; with none it mints every secret the project can generate locally.
+ * Prints `KEY=value` lines to stdout by default (pipe into `wrangler secret
+ * put`), or with `--set` writes them into `.dev.vars`.
+ */
+const runEnvGenerate = async (context: EnvContext): Promise<EnvCommandResult> => {
+    const { devVariablesPath, logger, options } = context;
+
+    let keys: string[];
+
+    if (options.key === undefined) {
+        keys = await resolveMintableKeys(context);
+
+        if (keys.length === 0) {
+            logger.info("env generate: no locally-generatable secrets for this project. Name one explicitly: lunora env generate <KEY>");
+
+            return { code: 0, descriptors: [] };
+        }
+    } else {
+        // An explicit key is minted even if it's a provider key — the user named it.
+        if (!DEV_VARS_KEY_PATTERN.test(options.key)) {
+            logger.error(`env: invalid key "${options.key}" — must match [A-Za-z_][A-Za-z0-9_]*`);
+
+            return { code: 1, descriptors: [] };
+        }
+
+        keys = [options.key];
+    }
+
+    const generated = keys.map((key) => {
+        return { key, value: generateSecretValue() };
+    });
+
+    if (options.set === true) {
+        const map = loadDevVariables(devVariablesPath);
+
+        for (const entry of generated) {
+            map.set(entry.key, entry);
+        }
+
+        writeFileSync(devVariablesPath, serializeDevVariables(map), "utf8");
+        logger.success(`env: generated ${String(generated.length)} secret(s) into ${DEV_VARS_FILE}: ${generated.map((entry) => entry.key).join(", ")}`);
+
+        return { code: 0, descriptors: [] };
+    }
+
+    // Print full `KEY=value` lines to stdout (the user asked to generate them —
+    // e.g. to pipe into `wrangler secret put`). Not via the logger, which redacts.
+    for (const entry of generated) {
+        process.stdout.write(`${entry.key}=${entry.value}\n`);
+    }
+
+    return { code: 0, descriptors: [] };
+};
+
 const runEnvCommand = async (options: EnvCommandOptions): Promise<EnvCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const context: EnvContext = {
@@ -392,6 +487,9 @@ const runEnvCommand = async (options: EnvCommandOptions): Promise<EnvCommandResu
         }
         case "doctor": {
             return runEnvDoctor(context);
+        }
+        case "generate": {
+            return runEnvGenerate(context);
         }
         case "get": {
             return runEnvGet(context);
@@ -418,14 +516,21 @@ const runEnvCommand = async (options: EnvCommandOptions): Promise<EnvCommandResu
 
 /** Narrow a raw argument to a known {@link EnvSubcommand}. */
 const isEnvSubcommand = (value: unknown): value is EnvSubcommand =>
-    value === "list" || value === "get" || value === "set" || value === "unset" || value === "push" || value === "diff" || value === "doctor";
+    value === "list" ||
+    value === "get" ||
+    value === "set" ||
+    value === "unset" ||
+    value === "push" ||
+    value === "diff" ||
+    value === "doctor" ||
+    value === "generate";
 
 /** `lunora env &lt;subcommand>` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<EnvOptions> = defineHandler<EnvOptions>(({ argument, cwd, logger, options }) => {
     const sub = argument[0];
 
     if (!isEnvSubcommand(sub)) {
-        logger.error(`env: unknown subcommand "${sub ?? ""}" — expected list | get | set | unset | push | diff | doctor`);
+        logger.error(`env: unknown subcommand "${sub ?? ""}" — expected list | get | set | unset | push | diff | doctor | generate`);
 
         return { code: 1 };
     }
@@ -435,6 +540,7 @@ const execute: CommandHandler<EnvOptions> = defineHandler<EnvOptions>(({ argumen
         key: argument[1],
         logger,
         prod: options.prod === true,
+        set: options.set === true,
         subcommand: sub,
         temporary: options.temporary === true,
         value: argument[2],

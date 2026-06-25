@@ -6,11 +6,15 @@ import {
     DEV_VARS_FILE,
     discoverContainerInfo,
     findWranglerFile,
+    generateSecretValue,
     inferLunoraBindings,
+    isMintableSecretKey,
+    packageNamesFromBindings,
     parseDevVariableEntries,
     readLinkedProject,
     readWranglerJsonc,
     reconcileWranglerBindings,
+    requiredSecrets,
 } from "@lunora/config";
 import { join } from "@visulima/path";
 import { Spinner } from "@visulima/spinner";
@@ -31,6 +35,9 @@ import { resolveWorkerUrl } from "../../util/resolve-target";
 import { runSchemaDriftGate } from "../../util/schema-drift-gate";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
+import { createTuiConfirm } from "../../util/tui-prompts";
+import type { ListRemoteSecretsInputs, ListRemoteSecretsResult } from "../../util/wrangler-secrets";
+import { listRemoteSecrets } from "../../util/wrangler-secrets";
 import { validateWrangler } from "../../util/wrangler-validator";
 import type { MigrateDataCommandOptions } from "../migrate/handler";
 import { runMigrateDataCommand } from "../migrate/handler";
@@ -113,6 +120,10 @@ interface DeployCommandOptions {
     preview?: boolean;
     /** Railpack-availability probe injected in tests. Defaults to a real `railpack --version` + `BUILDKIT_HOST` check. */
     railpackAvailable?: DockerProbe;
+    /** Confirm prompt for the missing-secret offer; injected in tests. Defaults to the TTY prompt. */
+    secretConfirm?: (message: string) => Promise<boolean>;
+    /** Remote-secret lister for the missing-secret offer; injected in tests. Defaults to `wrangler secret list`. */
+    secretLister?: (inputs: ListRemoteSecretsInputs) => Promise<ListRemoteSecretsResult>;
     skipCodegen?: boolean;
     spawner?: Spawner;
 
@@ -379,6 +390,158 @@ const warnDevVariablesNotPushed = (cwd: string, logger: Logger): void => {
         `Note: \`lunora deploy\` does not push secrets. ${DEV_VARS_FILE} has ${String(keyCount)} key(s); ` +
             `if you changed them, run \`lunora env push --yes\` to update the deployed secrets.`,
     );
+};
+
+/** A `.dev.vars` key whose value is a secret (vs. a plain config var like a URL). Module-scoped to avoid recompilation. */
+const SECRET_LIKE_KEY = /(?:KEY|PASSWORD|SECRET|TOKEN)$/u;
+
+/** The secret keys this project requires on the deployed worker: its packages' + any secret-typed local var. */
+const resolveRequiredSecretKeys = async (cwd: string): Promise<string[]> => {
+    let packages: ReadonlyArray<string> = [];
+
+    try {
+        packages = packageNamesFromBindings(await inferLunoraBindings({ projectRoot: cwd }));
+    } catch {
+        // Scan failure → fall back to the core secrets + whatever is declared locally.
+    }
+
+    const fromPackages = requiredSecrets(packages).map((entry) => entry.key);
+
+    let fromLocal: string[] = [];
+
+    try {
+        const devVariablesPath = join(cwd, DEV_VARS_FILE);
+
+        if (existsSync(devVariablesPath)) {
+            // Only secret-typed local vars count as "required secrets" on the worker;
+            // a non-secret var (e.g. a URL) belongs in wrangler.jsonc `vars`, not secrets.
+            fromLocal = parseDevVariableEntries(readFileSync(devVariablesPath, "utf8"))
+                .map((entry) => entry.key)
+                .filter((key) => SECRET_LIKE_KEY.test(key));
+        }
+    } catch {
+        // Unreadable .dev.vars → packages-only.
+    }
+
+    return [...new Set([...fromPackages, ...fromLocal])];
+};
+
+/** Generate + `wrangler secret put` each mintable key (sequential; stops on first failure). Returns true on full success. */
+const pushMintableSecrets = async (cwd: string, options: DeployCommandOptions, keys: ReadonlyArray<string>): Promise<boolean> => {
+    const { logger } = options;
+    const spawner = options.spawner ?? defaultSpawner;
+    const environmentFlag = options.env === undefined ? "" : ` --env ${options.env}`;
+
+    for (const key of keys) {
+        const args = ["exec", "wrangler", "secret", "put", key];
+
+        if (options.env !== undefined) {
+            args.push("--env", options.env);
+        }
+
+        if (options.temporary === true) {
+            args.push("--temporary");
+        }
+
+        // `wrangler secret put <name>` reads the value from stdin, so the generated
+        // secret never lands on the command line, in env, or in shell history.
+        // eslint-disable-next-line no-await-in-loop -- push sequentially so a failure aborts before the rest.
+        const pushResult = await spawner({ args, command: "pnpm", cwd, input: generateSecretValue() });
+
+        if (pushResult.code !== 0) {
+            logger.error(
+                `failed to push secret ${key} (exit ${String(pushResult.code)}); set it manually with \`wrangler secret put ${key}${environmentFlag}\`.`,
+            );
+
+            return false;
+        }
+
+        logger.success(`generated + pushed ${key}`);
+    }
+
+    return true;
+};
+
+/**
+ * Before a live deploy, detect required secrets that are NOT yet set on the
+ * target worker and resolve them. INTERACTIVE: offer to generate + push the
+ * mintable secrets (`AUTH_SECRET`, `LUNORA_ADMIN_TOKEN`, …) in place and flag
+ * provider secrets (`RESEND_API_KEY`, `STRIPE_*`) to set by hand.
+ * NON-INTERACTIVE (CI): there's nothing to prompt, so a missing required secret
+ * aborts the deploy — returns an error message rather than shipping a worker
+ * that will crash on a missing secret. Returns `undefined` when the deploy may
+ * proceed.
+ *
+ * Best-effort detection: a dry-run/preview publishes nothing (skip), and if the
+ * worker doesn't exist yet (first deploy) or wrangler isn't authenticated the
+ * secret list can't be read — we proceed rather than guess. Any pushing happens
+ * BEFORE the deploy spawn so the new version boots with the secrets present.
+ */
+const offerMissingSecrets = async (cwd: string, options: DeployCommandOptions, interactive: boolean): Promise<string | undefined> => {
+    if (options.dryRun === true || options.preview === true) {
+        return undefined;
+    }
+
+    const { logger } = options;
+    const environmentFlag = options.env === undefined ? "" : ` --env ${options.env}`;
+
+    let remote: ListRemoteSecretsResult;
+
+    try {
+        remote = await (options.secretLister ?? listRemoteSecrets)({ cwd, env: options.env, temporary: options.temporary });
+    } catch {
+        return undefined;
+    }
+
+    // Can't enumerate (no worker yet / not authed) → nothing actionable to check.
+    if (!remote.ok) {
+        return undefined;
+    }
+
+    const remoteNames = new Set(remote.names);
+    const required = await resolveRequiredSecretKeys(cwd);
+    const missing = required.filter((key) => !remoteNames.has(key));
+
+    if (missing.length === 0) {
+        return undefined;
+    }
+
+    // No TTY to prompt on → fail fast rather than deploy a worker that will crash
+    // on a missing required secret.
+    if (!interactive) {
+        return (
+            `missing required secret(s) on the deploy target: ${missing.join(", ")}. ` +
+            `Set them with \`wrangler secret put <KEY>${environmentFlag}\` ` +
+            `(or \`lunora env generate --set\` then \`lunora env push --yes${options.env === undefined ? "" : " --prod"}\`), then re-deploy.`
+        );
+    }
+
+    for (const key of missing.filter((name) => !isMintableSecretKey(name))) {
+        logger.warn(`required secret ${key} is not set on the target — set it with: wrangler secret put ${key}${environmentFlag}`);
+    }
+
+    const mintable = missing.filter((key) => isMintableSecretKey(key));
+
+    if (mintable.length === 0) {
+        return undefined;
+    }
+
+    const confirm = options.secretConfirm ?? createTuiConfirm();
+
+    if (
+        await confirm(`${String(mintable.length)} required secret(s) not set on the target (${mintable.join(", ")}). Generate strong values and push them now?`)
+    ) {
+        await pushMintableSecrets(cwd, options, mintable);
+
+        return undefined;
+    }
+
+    logger.warn(
+        `${String(mintable.length)} required secret(s) not set on the target: ${mintable.join(", ")}. ` +
+            `Generate + push with \`lunora env generate --set\` then \`lunora env push --yes${options.env === undefined ? "" : " --prod"}\`.`,
+    );
+
+    return undefined;
 };
 
 /**
@@ -706,6 +869,21 @@ const buildWranglerDeployArgs = (cwd: string, options: DeployCommandOptions): st
     return args;
 };
 
+/** Log wrangler.jsonc validation problems (if any) and report whether the deploy must abort. */
+const reportWranglerProblems = (validation: { problems: ReadonlyArray<string> }, logger: Logger): boolean => {
+    if (validation.problems.length === 0) {
+        return false;
+    }
+
+    logger.error("wrangler.jsonc validation failed:");
+
+    for (const problem of validation.problems) {
+        logger.error(`  - ${problem}`);
+    }
+
+    return true;
+};
+
 const executeDeploy = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const interactive = isInteractive(options);
@@ -779,25 +957,27 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
 
     const validation = validateWrangler({ projectRoot: cwd });
 
-    if (validation.problems.length > 0) {
-        options.logger.error("wrangler.jsonc validation failed:");
-
-        for (const problem of validation.problems) {
-            options.logger.error(`  - ${problem}`);
-        }
-
-        return {
-            code: 1,
-            descriptor: undefined,
-            error: "wrangler validation failed",
-            validation,
-        };
+    if (reportWranglerProblems(validation, options.logger)) {
+        return { code: 1, descriptor: undefined, error: "wrangler validation failed", validation };
     }
 
     // Non-blocking secret-drift reminder: `wrangler deploy` never pushes
     // `.dev.vars` values, so an edited `.dev.vars` would otherwise leave the
     // deployed worker with stale/missing secrets silently (Supabase #45242).
     warnDevVariablesNotPushed(cwd, options.logger);
+
+    // Detect required secrets not yet set on the target. Interactive: offer to
+    // generate + push the mintable ones (provider keys flagged to set by hand).
+    // Non-interactive (CI): a missing required secret aborts rather than shipping
+    // a worker that will crash. Best-effort detection — skips dry-run/preview and
+    // stays quiet when the worker can't be queried yet (first deploy / not authed).
+    const secretAbort = await offerMissingSecrets(cwd, options, interactive);
+
+    if (secretAbort !== undefined) {
+        options.logger.error(secretAbort);
+
+        return { code: 1, descriptor: undefined, error: secretAbort, validation };
+    }
 
     // Capture wrangler's stdout (to read the deployed URL for auto-link) only on
     // a first, unlinked, real (non-dry-run, non-preview) pretty-mode deploy — so

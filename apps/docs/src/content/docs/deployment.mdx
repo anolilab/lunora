@@ -48,27 +48,66 @@ to generate one from the example. Secret-looking placeholders (`*_SECRET`,
 `*_TOKEN`, and the like) are filled with fresh random values, and everything
 else is copied verbatim. If `.dev.vars` exists but is missing keys the example
 lists (e.g. you enabled a new addon), it offers to append just those.
-Non-interactive runs (CI) skip the prompt. You can also manage keys by hand with
-`lunora env set NAME VALUE` and `lunora env list`.
 
-To check a `.dev.vars` against its example for missing keys, still-unset
-placeholders, and stray extras, run `lunora env doctor`. It exits non-zero when
+On every `lunora dev` / `vite dev` startup, Lunora also **auto-generates any
+empty secret** already in `.dev.vars` and ensures `LUNORA_ADMIN_TOKEN` is
+present — so a project scaffolded by `lunora add` (which writes its secrets
+blank) boots with working values and the [Studio](/docs/packages/studio)
+authenticates without prompting. Only locally-generatable secrets are minted;
+provider keys (`RESEND_API_KEY`, `STRIPE_SECRET_KEY`, …) stay blank for you to
+paste, and a real value is never overwritten.
+
+You can also manage keys by hand: `lunora env set NAME VALUE`, `lunora env list`,
+or generate strong values explicitly with `lunora env generate` (see below). To
+check a `.dev.vars` against its example for missing keys, still-unset
+placeholders, and stray extras, run `lunora env doctor` — it exits non-zero when
 anything is actionable, so it works as a CI gate or a pre-`dev` sanity check.
+
+### Generating strong secrets
+
+`lunora env generate` mints cryptographically-strong values (32-byte hex, like
+`openssl rand -hex 32`) for the secrets your project can generate locally — use
+them for production or any other environment:
+
+```bash
+lunora env generate                 # print KEY=value for every generatable secret
+lunora env generate AUTH_SECRET     # print one
+lunora env generate --set           # write them into .dev.vars instead of printing
+```
+
+Provider-issued keys (Resend, Stripe, Polar) are skipped — you obtain those from
+the provider's dashboard.
 
 ### In production
 
-Set with `wrangler secret put`:
+Cloudflare secrets are **per-environment and non-inheritable** — set them for the
+environment you deploy to:
 
 ```bash
-wrangler secret put AUTH_SECRET
-wrangler secret put RESEND_API_KEY
-wrangler secret put STORAGE_SECRET
+wrangler secret put AUTH_SECRET --env production
+wrangler secret put RESEND_API_KEY --env production
 ```
 
-Or push everything from `.dev.vars` at once with `lunora env push --yes`.
+Or push everything from `.dev.vars` at once with `lunora env push --yes`
+(`--prod` targets the production environment). Pipe a freshly generated value
+straight in: `lunora env generate AUTH_SECRET | cut -d= -f2- | wrangler secret put AUTH_SECRET --env production`.
 
-Lunora never logs secret values; the `wrangler-validator` plugin warns if a
-binding marked `secret: true` in your schema is missing from your secret list.
+`wrangler deploy` never pushes `.dev.vars` values, so `lunora deploy` checks the
+target worker's secrets first:
+
+- **Interactively**, it offers to generate + push any missing _generatable_
+  secret before shipping, and flags provider keys for you to set by hand.
+- **Non-interactively (CI)**, a missing required secret **aborts the deploy** —
+  better a failed pipeline than a worker that crashes on a missing secret. Set
+  the secrets (the error lists them) and re-deploy.
+
+The check is best-effort: a brand-new worker (nothing deployed yet) or an
+unauthenticated wrangler can't be queried, so the deploy proceeds. Lunora never
+logs secret values; the `wrangler-validator` plugin warns if a binding marked
+`secret: true` in your schema is missing.
+
+See Cloudflare's [Secrets](https://developers.cloudflare.com/workers/configuration/secrets/)
+and [Environments](https://developers.cloudflare.com/workers/wrangler/environments/) docs for the underlying model.
 
 ## Containers
 
