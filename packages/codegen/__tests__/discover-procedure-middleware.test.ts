@@ -80,6 +80,21 @@ const OPAQUE_CONFIG = `${PREAMBLE}
         });
 `;
 
+/**
+ * A builder-form mutation guarded by a `const`-aliased rate-limit middleware
+ * (`const rateLimitByOwner = rateLimit(...)` then `.use(rateLimitByOwner)`) — the
+ * shape the storage/presence templates use. The alias must resolve to its factory.
+ */
+const ALIASED_RATE_LIMITED = `${PREAMBLE}
+    const rateLimitByOwner = rateLimit({ limit: 5 });
+
+    export const send = c.mutation
+        .use(rateLimitByOwner)
+        .mutation(async ({ ctx }) => {
+            await ctx.db.insert("messages", {});
+        });
+`;
+
 let workdir: string;
 let project: Project;
 
@@ -127,6 +142,16 @@ describe("discoverProcedureMiddleware", () => {
         expect.assertions(1);
 
         writeFileSync(join(workdir, "lunora", "send.ts"), DB_RATE_LIMITED, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "send", usesCaptcha: false, usesRateLimit: true });
+    });
+
+    it("resolves a `const`-aliased `.use(rateLimitByOwner)` middleware to its factory", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "send.ts"), ALIASED_RATE_LIMITED, "utf8");
 
         const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
 

@@ -69,12 +69,64 @@ const protectPublicFlags = (call: CallExpression): { usesCaptcha: boolean; usesR
 };
 
 /**
+ * Resolve a `.use(...)` argument to the middleware-factory call it ultimately
+ * installs. A direct `.use(rateLimit(...))` is already that call; a `.use(mw)`
+ * alias — `const mw = rateLimit(limiter, "bucket", …)` then `.use(mw)`, the shape
+ * the storage/presence templates use — resolves through the local `const`'s
+ * initializer. Resolution is by NAME within the same file (no cross-file/type
+ * info), matching the feeder's name-based philosophy; an alias defined elsewhere
+ * (import) or initialised by something other than a call returns `undefined`, so
+ * the lint stays fail-closed.
+ */
+const resolveUseArgumentCall = (argument: TsNode): CallExpression | undefined => {
+    if (Node.isCallExpression(argument)) {
+        return argument;
+    }
+
+    if (!Node.isIdentifier(argument)) {
+        return undefined;
+    }
+
+    const declaration = argument.getSourceFile().getVariableDeclaration(argument.getText());
+    const initializer = declaration?.getInitializer();
+
+    return initializer && Node.isCallExpression(initializer) ? initializer : undefined;
+};
+
+/** The protections a single `.use(...)` step installs (all `false` when it matches none). */
+const NO_PROTECTIONS: Protections = { usesCaptcha: false, usesMask: false, usesRateLimit: false, usesRls: false };
+
+/**
+ * The protections a single `.use(arg)` step installs. `arg` is resolved to its
+ * factory call ({@link resolveUseArgumentCall}, so a `const`-aliased
+ * `.use(rateLimitByOwner)` counts), then matched against the `protectPublic({...})`
+ * bundle or the individual factories in {@link MIDDLEWARE_FLAGS}.
+ */
+const useStepProtections = (useArgument: TsNode): Protections => {
+    const argument = resolveUseArgumentCall(useArgument);
+    const name = argument ? calleeNameOf(argument) : undefined;
+
+    if (argument && name === "protectPublic") {
+        const bundle = protectPublicFlags(argument);
+
+        return { ...NO_PROTECTIONS, usesCaptcha: bundle.usesCaptcha, usesRateLimit: bundle.usesRateLimit };
+    }
+
+    if (name !== undefined && name in MIDDLEWARE_FLAGS) {
+        return { ...NO_PROTECTIONS, [MIDDLEWARE_FLAGS[name] as keyof Protections]: true };
+    }
+
+    return NO_PROTECTIONS;
+};
+
+/**
  * Walk a builder chain leftward from `receiver` collecting the protective
  * middlewares its `.use(...)` steps install. Recognises the individual factories
- * in {@link MIDDLEWARE_FLAGS} and unwraps a `protectPublic({...})` bundle.
+ * in {@link MIDDLEWARE_FLAGS}, unwraps a `protectPublic({...})` bundle, and
+ * resolves a `const`-aliased middleware (`.use(rateLimitByOwner)`) to its factory.
  */
 const protectionsInChain = (receiver: TsNode): Protections => {
-    const protections: Protections = { usesCaptcha: false, usesMask: false, usesRateLimit: false, usesRls: false };
+    const protections: Protections = { ...NO_PROTECTIONS };
     let node: TsNode = receiver;
 
     while (Node.isCallExpression(node)) {
@@ -84,21 +136,15 @@ const protectionsInChain = (receiver: TsNode): Protections => {
             break;
         }
 
-        if (chainCallee.getName() === "use") {
-            const argument = node.getArguments()[0];
+        const useArgument = chainCallee.getName() === "use" ? node.getArguments()[0] : undefined;
 
-            if (argument && Node.isCallExpression(argument)) {
-                const name = calleeNameOf(argument);
+        if (useArgument) {
+            const step = useStepProtections(useArgument);
 
-                if (name === "protectPublic") {
-                    const bundle = protectPublicFlags(argument);
-
-                    protections.usesRateLimit ||= bundle.usesRateLimit;
-                    protections.usesCaptcha ||= bundle.usesCaptcha;
-                } else if (name !== undefined && name in MIDDLEWARE_FLAGS) {
-                    protections[MIDDLEWARE_FLAGS[name] as keyof Protections] = true;
-                }
-            }
+            protections.usesCaptcha ||= step.usesCaptcha;
+            protections.usesMask ||= step.usesMask;
+            protections.usesRateLimit ||= step.usesRateLimit;
+            protections.usesRls ||= step.usesRls;
         }
 
         node = chainCallee.getExpression();
