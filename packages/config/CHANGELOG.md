@@ -1,3 +1,16 @@
+## @lunora/config [1.0.0-alpha.6](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.5...@lunora/config@1.0.0-alpha.6) (2026-06-25)
+
+### Features
+
+* **config:** export BADGE_COLUMN_WIDTH ([c8a6a1e](https://github.com/anolilab/lunora/commit/c8a6a1ed760b62f800e3e174883a620fba3d81bc))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.4
+* **@lunora/seed:** upgraded to 1.0.0-alpha.2
+* **@lunora/studio:** upgraded to 1.0.0-alpha.4
+
 ## @lunora/config [1.0.0-alpha.5](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.4...@lunora/config@1.0.0-alpha.5) (2026-06-25)
 
 ### Features
