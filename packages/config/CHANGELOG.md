@@ -1,3 +1,9 @@
+## @lunora/config [1.0.0-alpha.13](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.12...@lunora/config@1.0.0-alpha.13) (2026-06-25)
+
+### Features
+
+* **config:** export secret-generation primitives ([3b16361](https://github.com/anolilab/lunora/commit/3b1636139bf704c2b38440f509b5909b1e2e9ad7))
+
 ## @lunora/config [1.0.0-alpha.12](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.11...@lunora/config@1.0.0-alpha.12) (2026-06-25)
 
 ### Features
