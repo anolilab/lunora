@@ -1,3 +1,14 @@
+## @lunora/payment [1.0.0-alpha.2](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.1...@lunora/payment@1.0.0-alpha.2) (2026-06-25)
+
+### Miscellaneous Chores
+
+* **deps:** wire fallow into every package ([896a81d](https://github.com/anolilab/lunora/commit/896a81d39a064293234bba3b734cde1036e81a67))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.2
+
 ## @lunora/payment 1.0.0-alpha.1 (2026-06-21)
 
 ### Features
