@@ -919,8 +919,12 @@ interface TaskSpec<T> {
     run: () => Promise<T>;
 }
 
-/** Indent for the task sub-rows — markers sit under the header text (create-astro layout). */
-const TASK_INDENT = " ".repeat(9);
+/**
+ * Indent for the task sub-rows. Markers right-align in the badge gutter — under
+ * the `✔` header glyph and the badge boxes — so the row LABELS land at the shared
+ * message column, in line with the header title and every badge message.
+ */
+const TASK_INDENT = " ".repeat(BADGE_COLUMN_WIDTH - 1);
 
 /** Lunora's gradient for the "rocket-flame" task spinner — purple → cyan, the badge hues. */
 const SPINNER_FIRST = "#a855f7";
