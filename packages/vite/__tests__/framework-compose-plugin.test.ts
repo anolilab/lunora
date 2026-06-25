@@ -9,8 +9,12 @@
  * plus assert the emitted source routes `/_lunora/*` to Lunora and falls
  * through to the framework handler.
  */
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import type { Plugin } from "vite";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 
 import type { DetectedFramework, FrameworkClass } from "../src/detect-framework";
 import {
@@ -194,6 +198,73 @@ describe("framework-compose-plugin", () => {
             const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", true);
 
             expect(code).toContain('export * from "./lunora/_generated/containers"');
+        });
+
+        it("imports the runtime from the granular `@lunora/runtime` by default", () => {
+            expect.hasAssertions();
+
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated");
+
+            expect(code).toContain('import { composeWorker } from "@lunora/runtime"');
+        });
+
+        it("imports the runtime via the umbrella subpath when the project uses `lunorash`", () => {
+            expect.hasAssertions();
+
+            // A `lunorash`-only install (the starter-template default) does not expose
+            // the bare `@lunora/runtime` specifier, so the composed worker must reach
+            // the runtime through the umbrella subpath instead.
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", false, true);
+
+            expect(code).toContain('import { composeWorker } from "lunorash/runtime"');
+            expect(code).not.toContain('from "@lunora/runtime"');
+        });
+    });
+
+    describe("umbrella-aware runtime import (scaffolded project)", () => {
+        // Regression for the dev-server boot failure
+        // (`Cannot find module '@lunora/runtime' imported from 'virtual:lunora/worker'`):
+        // a `lunorash`-only install — the starter-template default — cannot resolve the
+        // bare `@lunora/runtime`, so the composed worker must reach the runtime through
+        // the umbrella subpath. This drives the REAL plugin path (`projectUsesUmbrella`
+        // reading an actual scaffolded `package.json`), exactly as a project boot would,
+        // so a regression in the detection — not just the pure emitter — is caught.
+        const dirs: string[] = [];
+
+        const scaffold = (pkg: Record<string, unknown>): string => {
+            const dir = mkdtempSync(join(tmpdir(), "lunora-compose-"));
+
+            writeFileSync(join(dir, "package.json"), JSON.stringify(pkg));
+            dirs.push(dir);
+
+            return dir;
+        };
+
+        afterAll(() => {
+            for (const dir of dirs) {
+                rmSync(dir, { force: true, recursive: true });
+            }
+        });
+
+        it("imports the runtime via `lunorash/runtime` when the scaffolded project depends on the umbrella", () => {
+            expect.hasAssertions();
+
+            const projectRoot = scaffold({ dependencies: { lunorash: "^1.0.0" }, name: "umbrella-app" });
+            const plugin = frameworkComposePlugin(baseOptions({ projectRoot }), context("tanstack-start", "A"));
+            const code = callLoad(plugin, RESOLVED_LUNORA_WORKER_ID) as string;
+
+            expect(code).toContain('import { composeWorker } from "lunorash/runtime"');
+            expect(code).not.toContain('from "@lunora/runtime"');
+        });
+
+        it("imports the granular `@lunora/runtime` when the scaffolded project uses scoped packages", () => {
+            expect.hasAssertions();
+
+            const projectRoot = scaffold({ dependencies: { "@lunora/server": "^1.0.0" }, name: "granular-app" });
+            const plugin = frameworkComposePlugin(baseOptions({ projectRoot }), context("tanstack-start", "A"));
+            const code = callLoad(plugin, RESOLVED_LUNORA_WORKER_ID) as string;
+
+            expect(code).toContain('import { composeWorker } from "@lunora/runtime"');
         });
     });
 });
