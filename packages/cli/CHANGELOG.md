@@ -1,3 +1,14 @@
+## @lunora/cli [1.0.0-alpha.22](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.21...@lunora/cli@1.0.0-alpha.22) (2026-06-25)
+
+### Features
+
+* **config:** generate empty dev secrets + admin token on dev ([c4f729f](https://github.com/anolilab/lunora/commit/c4f729f51bc0a68a356e2750ce49cc7a1edbf9a2))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.12
+
 ## @lunora/cli [1.0.0-alpha.21](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.20...@lunora/cli@1.0.0-alpha.21) (2026-06-25)
 
 ### Features
