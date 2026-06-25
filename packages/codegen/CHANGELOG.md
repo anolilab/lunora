@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.6](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.5...@lunora/codegen@1.0.0-alpha.6) (2026-06-25)
+
+### Features
+
+* **codegen:** resolve node_modules schema extensions ([3b8d7e9](https://github.com/anolilab/lunora/commit/3b8d7e9b42b9778b64291e795c2f8e943d57fbab))
+
 ## @lunora/codegen [1.0.0-alpha.5](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.4...@lunora/codegen@1.0.0-alpha.5) (2026-06-25)
 
 ### Features
