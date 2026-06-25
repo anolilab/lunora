@@ -1,0 +1,71 @@
+# https://help.github.com/en/categories/automating-your-workflow-with-github-actions
+
+"name": "Check CLA in PR description"
+
+"on": # yamllint disable-line rule:truthy
+    "pull_request_target":
+        # Run when PRs are opened, reopened, edited, or updated with new commits.
+        "types":
+            - "opened"
+            - "reopened"
+            - "synchronize"
+            - "edited"
+
+"permissions":
+    "contents": "read"
+
+"jobs":
+    "check-cla":
+        "permissions":
+            "pull-requests": "write" # to post the sticky comment with instructions
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 10
+        "name": "Check CLA in PR description"
+        # Exclude automated PRs from bots.
+        "if": "${{ (startsWith(github.head_ref, 'dependabot') || startsWith(github.head_ref, 'renovate')) == false }}"
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Checkout"
+              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.0
+              "with":
+                  # pull_request_target runs against the base ref; check out the
+                  # base repo's scripts (never the PR's), which is the safe default.
+                  "persist-credentials": "false"
+
+            - "name": "Validate PR has CLA confirmation"
+              "id": "check_cla"
+              "env":
+                  "PR_DESCRIPTION": "${{ github.event.pull_request.body }}"
+                  "PR_AUTHOR": "${{ github.event.pull_request.user.login }}"
+                  "ORGANIZATION": "${{ github.repository_owner }}"
+                  "GITHUB_TOKEN": "${{ secrets.GITHUB_TOKEN }}"
+              "run": "node ./scripts/check-cla.js"
+
+            # Post instructions when the CLA confirmation is missing.
+            - "name": "Comment with CLA instructions"
+              "if": "failure() && steps.check_cla.outcome == 'failure'"
+              "uses": "marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0" # v3.0.4
+              "with":
+                  "header": "cla-check"
+                  "message": |
+                      Hey there and thank you for your contribution! 👋🏼
+
+                      Before we can merge this pull request, we need you to confirm the
+                      Contributor License Agreement (CLA). Please add the following line
+                      to your **pull request description** and we'll re-run the check
+                      automatically:
+
+                      > By submitting this pull request, I confirm that my contribution is made under the terms of the project's license and that you can use, modify, copy, and redistribute this contribution under those terms.
+
+            # Remove the comment once the CLA confirmation is present.
+            - "name": "Clear CLA comment"
+              "if": "success()"
+              "uses": "marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0" # v3.0.4
+              "with":
+                  "header": "cla-check"
+                  "message": |
+                      Thank you for confirming the Contributor License Agreement! 🙏
