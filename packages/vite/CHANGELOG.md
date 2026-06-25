@@ -1,3 +1,9 @@
+## @lunora/vite [1.0.0-alpha.5](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.4...@lunora/vite@1.0.0-alpha.5) (2026-06-25)
+
+### Bug Fixes
+
+* **vite:** import runtime via umbrella subpath ([84f8be2](https://github.com/anolilab/lunora/commit/84f8be25aa0eb5f91d2aaa369b5526335fe9c536))
+
 ## @lunora/vite [1.0.0-alpha.4](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.3...@lunora/vite@1.0.0-alpha.4) (2026-06-25)
 
 ### Features
