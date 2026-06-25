@@ -15,6 +15,7 @@ import { dirname, join } from "@visulima/path";
 
 import type { Logger } from "../../../util/logger";
 import { patchViteConfig } from "../../../util/patch-vite-config";
+import { resolveTagVersions } from "../../../util/source-ref";
 import type { FrameworkAdapter } from "./adapters";
 
 /** Canonical `lunora/schema.ts` — byte-identical to the bespoke templates' scaffold. */
@@ -123,24 +124,33 @@ const ensureGitignore = (target: string): void => {
     writeFileSync(path, `${existing}${prefix}\n# Lunora\n${missing.join("\n")}\n`, "utf8");
 };
 
-/** Pin a dependency range to the CLI's release channel when it is a Lunora-scoped package. */
-const stampRange = (name: string, range: string, distTag: string): string => (name === "lunorash" || name.startsWith("@lunora/") ? distTag : range);
+/** True for the unscoped umbrella or any `@lunora/*` package. */
+const isLunoraDep = (name: string): boolean => name === "lunorash" || name.startsWith("@lunora/");
+
+/**
+ * Pin a Lunora-scoped dependency to its concrete version (from `versions`),
+ * falling back to the channel dist-tag when unresolved; non-Lunora deps keep
+ * their range. Pinning the exact version stops a stale lockfile/metadata cache
+ * silently installing an older release than the channel currently points at.
+ */
+const stampRange = (name: string, range: string, distTag: string, versions?: ReadonlyMap<string, string>): string =>
+    isLunoraDep(name) ? (versions?.get(name) ?? distTag) : range;
 
 /** A pure "add this dep (channel-stamped)" — returns a new map, never mutating the input. */
 const withDependency = (map: Record<string, string>, name: string, range: string, distTag: string): Record<string, string> => {
     return { ...map, [name]: stampRange(name, range, distTag) };
 };
 
-/** Channel-stamp every Lunora-scoped range already present in a dep map. */
-const restampLunora = (map: Record<string, string>, distTag: string): Record<string, string> =>
-    Object.fromEntries(Object.entries(map).map(([name, range]) => [name, stampRange(name, range, distTag)]));
+/** Stamp every Lunora-scoped range in a dep map to its concrete version (or the tag fallback). */
+const restampLunora = (map: Record<string, string>, distTag: string, versions: ReadonlyMap<string, string>): Record<string, string> =>
+    Object.fromEntries(Object.entries(map).map(([name, range]) => [name, stampRange(name, range, distTag, versions)]));
 
 /**
  * Merge the Lunora deps + name + scripts into the base's `package.json`. The
- * framework deps create-vite declared are kept verbatim; existing Lunora ranges
- * are re-stamped to the channel.
+ * framework deps create-vite declared are kept verbatim; Lunora ranges are
+ * pinned to the concrete published version of the channel (tag fallback offline).
  */
-const patchPackageJson = (target: string, name: string, adapter: FrameworkAdapter, distTag: string): void => {
+const patchPackageJson = async (target: string, name: string, adapter: FrameworkAdapter, distTag: string): Promise<void> => {
     const path = join(target, "package.json");
     const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown> & {
         dependencies?: Record<string, string>;
@@ -166,9 +176,13 @@ const patchPackageJson = (target: string, name: string, adapter: FrameworkAdapte
         devDependencies = withDependency(devDependencies, depName, range, distTag);
     }
 
+    // Resolve every Lunora-scoped dep's tag → concrete version once, then pin.
+    const lunoraNames = [...Object.keys(dependencies), ...Object.keys(devDependencies)].filter((depName) => isLunoraDep(depName));
+    const versions = await resolveTagVersions(lunoraNames, distTag);
+
     parsed.name = name;
-    parsed.dependencies = restampLunora(dependencies, distTag);
-    parsed.devDependencies = restampLunora(devDependencies, distTag);
+    parsed.dependencies = restampLunora(dependencies, distTag, versions);
+    parsed.devDependencies = restampLunora(devDependencies, distTag, versions);
     parsed.scripts = { ...parsed.scripts, codegen: "lunora codegen", deploy: "vite build && lunora deploy" };
 
     writeFileSync(path, `${JSON.stringify(parsed, undefined, 4)}\n`, "utf8");
@@ -209,7 +223,7 @@ interface ApplyOverlayOptions {
  * Apply the Lunora overlay onto a create-vite base already present at
  * `options.target`. Returns the project-relative paths the overlay wrote.
  */
-const applyLunoraOverlay = (options: ApplyOverlayOptions): ReadonlyArray<string> => {
+const applyLunoraOverlay = async (options: ApplyOverlayOptions): Promise<ReadonlyArray<string>> => {
     const { adapter, distTag, logger, name, target } = options;
     const written: string[] = [];
 
@@ -224,7 +238,7 @@ const applyLunoraOverlay = (options: ApplyOverlayOptions): ReadonlyArray<string>
     }
 
     patchBaseViteConfig(target, logger);
-    patchPackageJson(target, name, adapter, distTag);
+    await patchPackageJson(target, name, adapter, distTag);
     ensureGitignore(target);
 
     return written;

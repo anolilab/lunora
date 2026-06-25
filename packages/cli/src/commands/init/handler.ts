@@ -17,7 +17,7 @@ import type { PackageManager, PackageManagerProbe } from "../../util/detect-pack
 import { detectInstalledManagers, installArgsFor } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
 import { patchViteConfig } from "../../util/patch-vite-config";
-import { resolveDistTag, resolveSourceRef, resolveTagVersion } from "../../util/source-ref";
+import { resolveDistTag, resolveSourceRef, resolveTagVersions } from "../../util/source-ref";
 import type { Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import type { NextStep } from "../../util/tui-prompts";
@@ -290,19 +290,7 @@ const resolveLunoraVersions = async (files: ReadonlyArray<string>, distTag: stri
         }
     }
 
-    const resolved = new Map<string, string>();
-
-    await Promise.all(
-        [...names].map(async (name) => {
-            const version = await resolveTagVersion(name, distTag);
-
-            if (version !== undefined) {
-                resolved.set(name, version);
-            }
-        }),
-    );
-
-    return resolved;
+    return resolveTagVersions(names, distTag);
 };
 
 const stampLunoraDeps = (packageJsonText: string, distTag: string, versions: ReadonlyMap<string, string>): string => {
@@ -802,10 +790,8 @@ const scaffoldViteOverlay = async (options: {
                 { label: `create-vite (${adapter.label}) base ready`, run: copyBase },
                 {
                     label: `Lunora overlay applied (${adapter.label})`,
-                    run: () => {
-                        written = applyLunoraOverlay({ adapter, distTag: resolveDistTag(), logger, name, target });
-
-                        return Promise.resolve();
+                    run: async () => {
+                        written = await applyLunoraOverlay({ adapter, distTag: resolveDistTag(), logger, name, target });
                     },
                 },
             ],

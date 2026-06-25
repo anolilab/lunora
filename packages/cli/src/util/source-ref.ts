@@ -192,4 +192,25 @@ const resolveTagVersion = async (packageName: string, tag: string): Promise<stri
     }
 };
 
-export { resolveDistTag, resolveSourceRef, resolveTagVersion, resolveVersionRef };
+/**
+ * Resolve many package names' `tag` → concrete version in parallel (deduped).
+ * A name whose lookup fails is simply absent from the returned map, so callers
+ * fall back to the tag for it. See {@link resolveTagVersion}.
+ */
+const resolveTagVersions = async (names: Iterable<string>, tag: string): Promise<ReadonlyMap<string, string>> => {
+    const resolved = new Map<string, string>();
+
+    await Promise.all(
+        [...new Set(names)].map(async (name) => {
+            const version = await resolveTagVersion(name, tag);
+
+            if (version !== undefined) {
+                resolved.set(name, version);
+            }
+        }),
+    );
+
+    return resolved;
+};
+
+export { resolveDistTag, resolveSourceRef, resolveTagVersion, resolveTagVersions, resolveVersionRef };

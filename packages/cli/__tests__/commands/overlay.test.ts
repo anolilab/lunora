@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runInitCommand } from "../../src/commands/init/handler";
 import { ADAPTERS } from "../../src/commands/init/overlay/adapters";
@@ -53,17 +53,26 @@ let base: string;
 describe("applyLunoraOverlay", () => {
     beforeEach(() => {
         base = mkdtempSync(join(tmpdir(), "lunora-overlay-"));
+        // Offline by default: dep-version resolution falls back to the dist-tag, so
+        // the channel-stamp assertions below stay deterministic without network.
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () => {
+                throw new Error("no network in tests");
+            }),
+        );
     });
 
     afterEach(() => {
         rmSync(base, { force: true, recursive: true });
+        vi.unstubAllGlobals();
     });
 
-    it("adds the lunora backend, worker entry and wrangler config", () => {
+    it("adds the lunora backend, worker entry and wrangler config", async () => {
         expect.assertions(5);
 
         writeReactBase(base);
-        applyLunoraOverlay({ adapter: ADAPTERS.react, distTag: "alpha", logger: silentLogger(), name: "my-app", target: base });
+        await applyLunoraOverlay({ adapter: ADAPTERS.react, distTag: "alpha", logger: silentLogger(), name: "my-app", target: base });
 
         expect(readFileSync(join(base, "lunora", "schema.ts"), "utf8")).toContain("defineSchema");
         expect(readFileSync(join(base, "lunora", "messages.ts"), "utf8")).toContain("export const send");
@@ -75,11 +84,11 @@ describe("applyLunoraOverlay", () => {
         expect(wrangler).toContain('"class_name": "ShardDO"');
     });
 
-    it("replaces the entry with the Lunora-wired provider (react)", () => {
+    it("replaces the entry with the Lunora-wired provider (react)", async () => {
         expect.assertions(2);
 
         writeReactBase(base);
-        applyLunoraOverlay({ adapter: ADAPTERS.react, distTag: "alpha", logger: silentLogger(), name: "my-app", target: base });
+        await applyLunoraOverlay({ adapter: ADAPTERS.react, distTag: "alpha", logger: silentLogger(), name: "my-app", target: base });
 
         const main = readFileSync(join(base, "src", "main.tsx"), "utf8");
 
@@ -87,11 +96,11 @@ describe("applyLunoraOverlay", () => {
         expect(main).toContain("<LunoraProvider client={client}>");
     });
 
-    it("keeps the framework plugin and adds lunora() to vite.config", () => {
+    it("keeps the framework plugin and adds lunora() to vite.config", async () => {
         expect.assertions(3);
 
         writeReactBase(base);
-        applyLunoraOverlay({ adapter: ADAPTERS.react, distTag: "alpha", logger: silentLogger(), name: "my-app", target: base });
+        await applyLunoraOverlay({ adapter: ADAPTERS.react, distTag: "alpha", logger: silentLogger(), name: "my-app", target: base });
 
         const config = readFileSync(join(base, "vite.config.ts"), "utf8");
 
@@ -100,11 +109,11 @@ describe("applyLunoraOverlay", () => {
         expect(config).toContain('import { lunora } from "@lunora/vite"');
     });
 
-    it("merges + channel-stamps the Lunora dependencies, keeping framework deps", () => {
+    it("merges + channel-stamps the Lunora dependencies, keeping framework deps", async () => {
         expect.assertions(6);
 
         writeReactBase(base);
-        applyLunoraOverlay({ adapter: ADAPTERS.react, distTag: "alpha", logger: silentLogger(), name: "my-app", target: base });
+        await applyLunoraOverlay({ adapter: ADAPTERS.react, distTag: "alpha", logger: silentLogger(), name: "my-app", target: base });
 
         const pkg = JSON.parse(readFileSync(join(base, "package.json"), "utf8")) as {
             dependencies: Record<string, string>;
@@ -121,16 +130,16 @@ describe("applyLunoraOverlay", () => {
         expect(pkg.dependencies["react-dom"]).toBe("^19.2.7");
     });
 
-    it("appends the Lunora ignores to .gitignore", () => {
+    it("appends the Lunora ignores to .gitignore", async () => {
         expect.assertions(1);
 
         writeReactBase(base);
-        applyLunoraOverlay({ adapter: ADAPTERS.react, distTag: "alpha", logger: silentLogger(), name: "my-app", target: base });
+        await applyLunoraOverlay({ adapter: ADAPTERS.react, distTag: "alpha", logger: silentLogger(), name: "my-app", target: base });
 
         expect(readFileSync(join(base, ".gitignore"), "utf8")).toContain("lunora/_generated");
     });
 
-    it("wires every framework adapter's entry to its Lunora client API", () => {
+    it("wires every framework adapter's entry to its Lunora client API", async () => {
         expect.assertions(4);
 
         const expectations: Record<string, { contains: string; entry: string }> = {
@@ -140,16 +149,24 @@ describe("applyLunoraOverlay", () => {
             vue: { contains: "createLunora", entry: "src/main.ts" },
         };
 
-        for (const [framework, { contains, entry }] of Object.entries(expectations)) {
-            const root = mkdtempSync(join(tmpdir(), `lunora-overlay-${framework}-`));
+        await Promise.all(
+            Object.entries(expectations).map(async ([framework, { contains, entry }]) => {
+                const root = mkdtempSync(join(tmpdir(), `lunora-overlay-${framework}-`));
 
-            write(root, "package.json", JSON.stringify({ dependencies: {}, devDependencies: {}, name: "x", scripts: {} }));
-            applyLunoraOverlay({ adapter: ADAPTERS[framework as keyof typeof ADAPTERS], distTag: "alpha", logger: silentLogger(), name: "app", target: root });
+                write(root, "package.json", JSON.stringify({ dependencies: {}, devDependencies: {}, name: "x", scripts: {} }));
+                await applyLunoraOverlay({
+                    adapter: ADAPTERS[framework as keyof typeof ADAPTERS],
+                    distTag: "alpha",
+                    logger: silentLogger(),
+                    name: "app",
+                    target: root,
+                });
 
-            expect(readFileSync(join(root, entry), "utf8")).toContain(contains);
+                expect(readFileSync(join(root, entry), "utf8")).toContain(contains);
 
-            rmSync(root, { force: true, recursive: true });
-        }
+                rmSync(root, { force: true, recursive: true });
+            }),
+        );
     });
 });
 
@@ -162,11 +179,19 @@ describe("lunora init --vite (overlay, end to end)", () => {
         // A local create-vite base root: one `template-<id>/` dir per framework.
         baseRoot = mkdtempSync(join(tmpdir(), "lunora-vite-bases-"));
         writeReactBase(join(baseRoot, "template-react-ts"));
+        // Offline: dep-version resolution falls back to the dist-tag (hermetic).
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () => {
+                throw new Error("no network in tests");
+            }),
+        );
     });
 
     afterEach(() => {
         rmSync(workdir, { force: true, recursive: true });
         rmSync(baseRoot, { force: true, recursive: true });
+        vi.unstubAllGlobals();
     });
 
     it("scaffolds a create-vite base + Lunora overlay through runInitCommand", async () => {
