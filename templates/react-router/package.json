@@ -25,6 +25,7 @@
     "devDependencies": {
         "@cloudflare/vite-plugin": "^1.29.0",
         "@cloudflare/workers-types": "^4.20260610.1",
+        "@lunora/studio": "^0.0.0",
         "@lunora/vite": "^0.0.0",
         "@react-router/dev": "^7.9.0",
         "@types/react": "^19.2.17",
