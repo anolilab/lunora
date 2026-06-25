@@ -91,6 +91,7 @@ describe("queryCtx.storage / MutationCtx.storage", () => {
             auth: { getIdentity: async () => null, userId: null },
             db: {} as QueryContext["db"],
             log: {} as QueryContext["log"],
+            now: 0,
             runQuery: (async () => undefined) as unknown as QueryContext["runQuery"],
             storage,
             vectors: {} as QueryContext["vectors"],

@@ -26,6 +26,7 @@ const makeMutationContext = (): MutationContext => {
         auth: { getIdentity: async () => null, userId: null },
         db: {} as MutationContext["db"],
         log: {} as MutationContext["log"],
+        now: 0,
         runMutation: vi.fn<MutationContext["runMutation"]>() as MutationContext["runMutation"],
         runQuery: vi.fn<MutationContext["runQuery"]>() as MutationContext["runQuery"],
         scheduler: {} as MutationContext["scheduler"],

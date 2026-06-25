@@ -1050,6 +1050,15 @@ interface QueryCtx {
     readonly log: LunoraLogger;
 
     /**
+     * Wall-clock time (epoch ms) the function began, captured once so the whole
+     * handler sees a single stable value. Query/mutation handlers must be
+     * deterministic — they may be re-run on OCC retry / subscription re-eval — so
+     * read time through `ctx.now` instead of `Date.now()` (the latter is flagged
+     * by the `nondeterministic_query_mutation` advisor). Actions may use `Date.now()`.
+     */
+    readonly now: number;
+
+    /**
      * Compose a read-only subquery in-process, reusing this query's read
      * context (same transaction, same `db`). Executes the referenced query's
      * handler directly — no fresh DO RPC round-trip — so it observes the exact
@@ -1077,6 +1086,15 @@ interface MutationCtx {
     readonly ip?: string;
     /** Structured, function-attributed logger; see {@link LunoraLogger}. */
     readonly log: LunoraLogger;
+
+    /**
+     * Wall-clock time (epoch ms) the function began, captured once so the whole
+     * handler sees a single stable value. Mutation handlers must be deterministic
+     * — they may be re-run on OCC retry — so read time through `ctx.now` instead
+     * of `Date.now()` (the latter is flagged by the `nondeterministic_query_mutation`
+     * advisor). Actions may use `Date.now()`.
+     */
+    readonly now: number;
 
     /**
      * Compose a submutation in-process, reusing this mutation's `db` writer.
@@ -1119,6 +1137,13 @@ interface ActionCtx {
     readonly ip?: string;
     /** Structured, function-attributed logger; see {@link LunoraLogger}. */
     readonly log: LunoraLogger;
+
+    /**
+     * Wall-clock time (epoch ms) the action began, captured once for convenience
+     * and parity with query/mutation `ctx.now`. Actions run exactly once, so they
+     * may also use ambient `Date.now()` freely.
+     */
+    readonly now: number;
     readonly runAction: <A extends ArgsValidator, R>(reference: RegisteredAction<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly runMutation: <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
