@@ -588,14 +588,56 @@ const isInlineExtensionCall = (argument: TsNode): argument is CallExpression => 
     return Node.isIdentifier(callee) && callee.getText() === "defineSchemaExtension";
 };
 
-/** The identifier to resolve for an identifier / property-access `.extend(...)` argument, or `undefined`. */
+/**
+ * The identifier to resolve for an identifier / property-access `.extend(...)`
+ * argument, or `undefined`. For `.extend(plugin.extension)` we resolve the
+ * RECEIVER (`plugin`), NOT the `.extension` name: a `definePlugin(...)` /
+ * `defineSchemaExtension(...)` value has a return TYPE (declared in
+ * `@lunora/server`) whose `extension` field would send symbol-resolution into
+ * that package's `.d.ts`, losing the local object literal. Following the receiver
+ * keeps us on the project's own `const plugin = definePlugin(...)` declaration,
+ * which we then navigate structurally in {@link nextExpressionFromDeclaration}.
+ */
 const extensionTargetIdentifier = (argument: TsNode): TsNode | undefined => {
     if (Node.isIdentifier(argument)) {
         return argument;
     }
 
     if (Node.isPropertyAccessExpression(argument)) {
-        return argument.getNameNode();
+        const receiver = argument.getExpression();
+
+        return Node.isIdentifier(receiver) ? receiver : undefined;
+    }
+
+    return undefined;
+};
+
+/**
+ * The object literal a plugin/extension value exposes its properties on: the
+ * literal itself (`const p = { extension: … }`), or the config object passed to a
+ * `definePlugin("key", { extension: … })` wrapper (the shape the registry's
+ * `ratelimit`/`presence` items ship). Returns `undefined` for anything else.
+ */
+const pluginConfigObject = (expression: Expression): ObjectLiteralExpression | undefined => {
+    if (Node.isObjectLiteralExpression(expression)) {
+        return expression;
+    }
+
+    if (Node.isCallExpression(expression)) {
+        const callee = expression.getExpression();
+        let name: string | undefined;
+
+        if (Node.isIdentifier(callee)) {
+            name = callee.getText();
+        } else if (Node.isPropertyAccessExpression(callee)) {
+            name = callee.getName();
+        }
+
+        if (name === "definePlugin") {
+            const configArgument = expression.getArguments()[1];
+
+            return configArgument && Node.isObjectLiteralExpression(configArgument) ? configArgument : undefined;
+        }
     }
 
     return undefined;
@@ -618,17 +660,21 @@ const extensionTargetIdentifier = (argument: TsNode): TsNode | undefined => {
  * the declaration carries nothing further to follow.
  */
 const nextExpressionFromDeclaration = (declaration: TsNode, argument: TsNode): Expression | undefined => {
-    // `const myExt = defineSchemaExtension(...)` or
-    // `const plugin = { extension: defineSchemaExtension(...) }`.
+    // `const myExt = defineSchemaExtension(...)`,
+    // `const plugin = { extension: defineSchemaExtension(...) }`, or
+    // `const plugin = definePlugin("key", { extension: defineSchemaExtension(...) })`.
     const initializer = declarationInitializer(declaration);
 
     if (!initializer) {
         return undefined;
     }
 
-    // For `.extend(plugin.extension)`, dig into the object's named property.
-    if (Node.isPropertyAccessExpression(argument) && Node.isObjectLiteralExpression(initializer)) {
-        return objectPropertyInitializer(initializer, argument.getName());
+    // For `.extend(plugin.extension)`, dig the named property off the plugin's
+    // config object — unwrapping a `definePlugin(...)` wrapper when present.
+    if (Node.isPropertyAccessExpression(argument)) {
+        const configObject = pluginConfigObject(initializer);
+
+        return configObject ? objectPropertyInitializer(configObject, argument.getName()) : undefined;
     }
 
     return initializer;

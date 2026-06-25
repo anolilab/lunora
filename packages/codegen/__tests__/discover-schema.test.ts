@@ -775,6 +775,80 @@ describe("discoverSchema", () => {
         expect(schema.tables.map((table) => table.name).toSorted((a, b) => a.localeCompare(b))).toEqual(["ext_buckets", "todos"]);
     });
 
+    it("resolves a `definePlugin(...)`-wrapped extension via .extend(plugin.extension)", () => {
+        expect.assertions(1);
+
+        // The shape the registry's `ratelimit`/`presence` items ship: the extension
+        // is wrapped in `definePlugin("key", { extension: … })`. Accessing
+        // `plugin.extension` resolves the `.extension` field through definePlugin's
+        // return TYPE (in @lunora/server), so resolution must follow the receiver
+        // and unwrap the local `definePlugin(...)` config object structurally.
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineSchemaExtension, definePlugin, defineTable, v } from "@lunora/server";
+
+            export const ratelimit = definePlugin("ratelimit", {
+                extension: defineSchemaExtension("ratelimit", {
+                    tables: {
+                        buckets: defineTable({ key: v.string() }).index("by_key", ["key"]),
+                    },
+                }),
+                middleware: ({ ctx, next }) => next({ ctx }),
+            });
+
+            export const schema = defineSchema({
+                todos: defineTable({ title: v.string() }),
+            }).extend(ratelimit.extension);
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+
+        expect(schema.tables.map((table) => table.name).toSorted((a, b) => a.localeCompare(b))).toEqual(["ratelimit_buckets", "todos"]);
+    });
+
+    it("resolves a `definePlugin(...)` extension imported from a sibling local file", () => {
+        expect.assertions(1);
+
+        // The exact scaffold shape: `lunora/<key>/schema.ts` exports the plugin and
+        // `lunora/schema.ts` imports it and `.extend(<key>.extension)`. Resolution
+        // must follow the import into the sibling project file (not bail as cross-package).
+        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: true });
+
+        project.createSourceFile(
+            "/virtual/lunora/ratelimit/schema.ts",
+            `
+            import { defineSchemaExtension, definePlugin, defineTable, v } from "@lunora/server";
+
+            export const ratelimit = definePlugin("ratelimit", {
+                extension: defineSchemaExtension("ratelimit", {
+                    tables: {
+                        buckets: defineTable({ key: v.string() }).index("by_key", ["key"]),
+                    },
+                }),
+                middleware: ({ ctx, next }) => next({ ctx }),
+            });
+        `,
+        );
+
+        const schemaPath = "/virtual/lunora/schema.ts";
+
+        project.createSourceFile(
+            schemaPath,
+            `
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            import { ratelimit } from "./ratelimit/schema";
+
+            export const schema = defineSchema({
+                todos: defineTable({ title: v.string() }),
+            }).extend(ratelimit.extension);
+        `,
+        );
+
+        const schema = discoverSchema(project, schemaPath);
+
+        expect(schema.tables.map((table) => table.name).toSorted((a, b) => a.localeCompare(b))).toEqual(["ratelimit_buckets", "todos"]);
+    });
+
     it("merges multiple chained .extend() calls", () => {
         expect.assertions(1);
 
