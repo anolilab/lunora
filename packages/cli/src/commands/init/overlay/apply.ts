@@ -172,6 +172,11 @@ const patchPackageJson = async (target: string, name: string, adapter: Framework
 
     let devDependencies = withDependency(parsed.devDependencies ?? {}, "@lunora/vite", distTag, distTag);
 
+    // The local Studio (served at `/__lunora` in dev) is an OPTIONAL peer of
+    // `@lunora/vite`, so pnpm won't install it transitively — list it as a
+    // dev dependency so the studio works out of the box.
+    devDependencies = withDependency(devDependencies, "@lunora/studio", distTag, distTag);
+
     for (const [depName, range] of Object.entries(COMMON_DEV_DEPENDENCIES)) {
         devDependencies = withDependency(devDependencies, depName, range, distTag);
     }
