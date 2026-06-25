@@ -18,6 +18,7 @@ import {
     Home,
     KeyRound,
     LayoutDashboard,
+    LayoutTemplate,
     Menu,
     Rocket,
     Scale,
@@ -106,6 +107,7 @@ const menu: NavColumn[] = [
         ],
         navItems: [
             { description: "Build your first app in minutes.", href: "/docs/getting-started", icon: <Rocket />, title: "Quickstart" },
+            { description: "Scaffold an app for your framework.", href: "/start", icon: <LayoutTemplate />, title: "Starter kits" },
             { description: "The full Lunora framework reference.", href: "/docs/", icon: <Book />, title: "Documentation" },
             { description: "Auth: email/password, OAuth, passkeys.", href: "/packages/auth", icon: <KeyRound />, title: "Auth" },
             { description: "Workers AI on the Vercel AI SDK.", href: "/packages/ai", icon: <Bot />, title: "AI" },

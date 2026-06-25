@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as StudioRouteImport } from './routes/studio'
+import { Route as StartRouteImport } from './routes/start'
 import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as PressRouteImport } from './routes/press'
 import { Route as LlmsDottxtRouteImport } from './routes/llms[.]txt'
@@ -37,6 +38,11 @@ import { Route as LlmsDotmdxDocsSplatRouteImport } from './routes/llms[.]mdx.doc
 const StudioRoute = StudioRouteImport.update({
   id: '/studio',
   path: '/studio',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const StartRoute = StartRouteImport.update({
+  id: '/start',
+  path: '/start',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PrivacyRoute = PrivacyRouteImport.update({
@@ -166,6 +172,7 @@ export interface FileRoutesByFullPath {
   '/llms.txt': typeof LlmsDottxtRoute
   '/press': typeof PressRoute
   '/privacy': typeof PrivacyRoute
+  '/start': typeof StartRoute
   '/studio': typeof StudioRoute
   '/api/og': typeof ApiOgRoute
   '/api/search': typeof ApiSearchRoute
@@ -192,6 +199,7 @@ export interface FileRoutesByTo {
   '/llms.txt': typeof LlmsDottxtRoute
   '/press': typeof PressRoute
   '/privacy': typeof PrivacyRoute
+  '/start': typeof StartRoute
   '/studio': typeof StudioRoute
   '/api/og': typeof ApiOgRoute
   '/api/search': typeof ApiSearchRoute
@@ -219,6 +227,7 @@ export interface FileRoutesById {
   '/llms.txt': typeof LlmsDottxtRoute
   '/press': typeof PressRoute
   '/privacy': typeof PrivacyRoute
+  '/start': typeof StartRoute
   '/studio': typeof StudioRoute
   '/api/og': typeof ApiOgRoute
   '/api/search': typeof ApiSearchRoute
@@ -247,6 +256,7 @@ export interface FileRouteTypes {
     | '/llms.txt'
     | '/press'
     | '/privacy'
+    | '/start'
     | '/studio'
     | '/api/og'
     | '/api/search'
@@ -273,6 +283,7 @@ export interface FileRouteTypes {
     | '/llms.txt'
     | '/press'
     | '/privacy'
+    | '/start'
     | '/studio'
     | '/api/og'
     | '/api/search'
@@ -299,6 +310,7 @@ export interface FileRouteTypes {
     | '/llms.txt'
     | '/press'
     | '/privacy'
+    | '/start'
     | '/studio'
     | '/api/og'
     | '/api/search'
@@ -326,6 +338,7 @@ export interface RootRouteChildren {
   LlmsDottxtRoute: typeof LlmsDottxtRoute
   PressRoute: typeof PressRoute
   PrivacyRoute: typeof PrivacyRoute
+  StartRoute: typeof StartRoute
   StudioRoute: typeof StudioRoute
   ApiOgRoute: typeof ApiOgRoute
   ApiSearchRoute: typeof ApiSearchRoute
@@ -349,6 +362,13 @@ declare module '@tanstack/react-router' {
       path: '/studio'
       fullPath: '/studio'
       preLoaderRoute: typeof StudioRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/start': {
+      id: '/start'
+      path: '/start'
+      fullPath: '/start'
+      preLoaderRoute: typeof StartRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/privacy': {
@@ -526,6 +546,7 @@ const rootRouteChildren: RootRouteChildren = {
   LlmsDottxtRoute: LlmsDottxtRoute,
   PressRoute: PressRoute,
   PrivacyRoute: PrivacyRoute,
+  StartRoute: StartRoute,
   StudioRoute: StudioRoute,
   ApiOgRoute: ApiOgRoute,
   ApiSearchRoute: ApiSearchRoute,
