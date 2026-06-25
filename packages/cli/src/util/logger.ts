@@ -3,14 +3,18 @@
  * us level-aware output, structured `success`/`warn`/`error` channels and
  * (importantly) the same Spinner / Reporter primitives we use elsewhere.
  *
- * Two reporters are wired: `PrettyReporter` for interactive terminals and
- * `JsonReporter` when `LUNORA_LOG_JSON=1` (CI / machine-readable mode).
+ * Two reporters are wired: `LunoraReporter` for normal runs (it paints the
+ * create-astro-style step badges of the `init` flow and renders the standard
+ * levels itself — log types without a badge print plain) and `JsonReporter` when
+ * `LUNORA_LOG_JSON=1` (CI / machine-readable mode).
  *
  * The public surface stays the same `Logger` shape the existing commands
- * already program against so we don't have to touch every command.
+ * already program against so we don't have to touch every command; the badged
+ * step output is reached through the separate `logStep` helper.
  */
+import type { StepBadgeName } from "@lunora/config";
+import { LunoraReporter, STEP_BADGE_NAMES } from "@lunora/config";
 import { JsonReporter } from "@visulima/pail/reporter/json";
-import { PrettyReporter } from "@visulima/pail/reporter/pretty";
 import { createPail } from "@visulima/pail/server";
 
 interface Logger {
@@ -57,10 +61,22 @@ const wantJson = (): boolean => {
 };
 
 const buildReporter = (): PailReporter => {
-    const Reporter: PailReporterConstructor = (wantJson() ? JsonReporter : PrettyReporter) as PailReporterConstructor;
+    const Reporter: PailReporterConstructor = (wantJson() ? JsonReporter : LunoraReporter) as PailReporterConstructor;
 
     return new Reporter();
 };
+
+/**
+ * Custom pail log types backing the `init` flow's step badges. Each becomes a
+ * `pail.&lt;name>(message)` method; `LunoraReporter` paints them as badge boxes
+ * (off-TTY fallback) while the colors live in `@lunora/config`'s theme. The
+ * `informational` RFC5424 level keeps them on stdout and visible at the default
+ * verbosity (pail rejects the `"info"` shorthand).
+ */
+const STEP_LOG_TYPES = Object.fromEntries(STEP_BADGE_NAMES.map((name) => [name, { label: name, logLevel: "informational" }])) as Record<
+    StepBadgeName,
+    { label: string; logLevel: "informational" }
+>;
 
 /**
  * Lazily-constructed pail instance. Building it (plus its Pretty/Json reporter)
@@ -76,6 +92,7 @@ const getPail = (): PailLogger => {
         scope: ["lunora"],
         stderr: process.stderr,
         stdout: process.stdout,
+        types: STEP_LOG_TYPES,
     }) as PailLogger;
 
     return sharedPail;
@@ -147,5 +164,15 @@ const pail: PailLogger = new Proxy({} as PailLogger, {
     },
 });
 
+/**
+ * Emit a badged step line through the shared pail (the `init` flow's off-TTY
+ * fallback for the create-astro-style transcript). The `message` may contain
+ * newlines — `LunoraReporter` indents continuation lines under the badge so a
+ * dimmed answer sits below its question.
+ */
+const logStep = (type: StepBadgeName, message: string): void => {
+    (getPail() as unknown as Record<StepBadgeName, (message: string) => void>)[type](message);
+};
+
 export type { Logger };
-export { createLogger, createStderrLogger, getPail, pail };
+export { createLogger, createStderrLogger, getPail, logStep, pail };

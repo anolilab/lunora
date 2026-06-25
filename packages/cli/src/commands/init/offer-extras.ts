@@ -36,13 +36,55 @@ const STACK_FEATURE_OPTIONS: ReadonlyArray<{ description: string; label: string;
     { description: "Snapshot + restore your Durable Object data", label: "Backups", value: "backup" },
 ];
 
+/** The selectable feature values, for validating a `--add` list. */
+const STACK_FEATURE_VALUES: ReadonlyArray<StackFeature> = STACK_FEATURE_OPTIONS.map((option) => option.value);
+
+/** Map a feature value to the registry item it applies as (most are identity; `email` → the mail item). */
+const featureItem = (feature: StackFeature): string => (feature === "email" ? EMAIL_ITEM : feature);
+
+/**
+ * Parse a comma-separated `--add` list into known features, in first-seen order,
+ * warning on (and dropping) anything unrecognized. Deduplicates.
+ */
+const parseFeatureList = (raw: string, warn: (message: string) => void): StackFeature[] => {
+    const features: StackFeature[] = [];
+
+    for (const part of raw
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean)) {
+        if ((STACK_FEATURE_VALUES as ReadonlyArray<string>).includes(part)) {
+            if (!features.includes(part as StackFeature)) {
+                features.push(part as StackFeature);
+            }
+        } else {
+            warn(`init: unknown --add feature "${part}" — expected ${STACK_FEATURE_VALUES.join(" | ")}; skipping.`);
+        }
+    }
+
+    return features;
+};
+
+/**
+ * One feature ready to apply: the registry item name(s), an optional manifest
+ * transform, and a short `label` (the feature value) shown on the combined
+ * progress line. Built up-front by the collectors so every prompt is answered
+ * before any apply runs.
+ */
+interface FeatureApply {
+    label: string;
+    names: ReadonlyArray<string>;
+    transformManifest?: OfferTransformManifest;
+}
+
 interface OfferDeps {
     /**
-     * Apply one or more registry items into the new project; resolves `true` on
-     * success. `options.transformManifest` customizes each item's manifest before
-     * it is written (used to inject the user-chosen R2 bucket name for storage).
+     * Apply the collected features into the new project in one batch — resolves
+     * `true` when every item succeeds. The CLI renders this as a single progress
+     * line whose label changes per feature; each plan's `transformManifest`
+     * customizes that item's manifest before it is written.
      */
-    apply: (names: ReadonlyArray<string>, options?: { transformManifest?: OfferTransformManifest }) => Promise<boolean>;
+    applyAll: (plans: ReadonlyArray<FeatureApply>) => Promise<boolean>;
     /** When `false`, skip all prompts and print the later-setup hint. */
     interactive: boolean;
     logger: Logger;
@@ -52,6 +94,13 @@ interface OfferDeps {
         options: ReadonlyArray<{ description?: string; label: string; value: StackFeature }>,
         settings?: { defaults?: ReadonlyArray<StackFeature> },
     ) => Promise<StackFeature[]>;
+
+    /**
+     * Features chosen non-interactively (the `--add` flag). When set, the
+     * multi-select and every sub-prompt are skipped — each feature is applied with
+     * its shipped defaults (base registry item, placeholder bindings).
+     */
+    preselected?: ReadonlyArray<StackFeature>;
     /** The new project's name — seeds smart defaults like the `project-uploads` bucket name. */
     projectName: string;
     /** Single-select among the auth providers (TTY-backed in production). */
@@ -69,24 +118,28 @@ interface OfferDeps {
  * (Clerk / Auth0 included) pulls in the base `auth` item via `requires`, and
  * that's what carries the D1 binding — so the name applies regardless of choice.
  */
-const applyAuthFeature = async (deps: OfferDeps): Promise<void> => {
+const collectAuthFeature = async (deps: OfferDeps): Promise<FeatureApply> => {
     const provider = await promptAuthProvider(deps.select);
     const databaseName = await promptDatabaseName(deps.text, deps.projectName);
 
-    await deps.apply([provider], { transformManifest: (manifest) => withAuthDatabaseName(manifest, databaseName) });
+    return { label: "auth", names: [provider], transformManifest: (manifest) => withAuthDatabaseName(manifest, databaseName) };
 };
 
 /**
  * Email: ask for a verified destination address (the send-email binding ships a
  * placeholder). A blank or invalid answer keeps the placeholder to set later.
  */
-const applyEmailFeature = async (deps: OfferDeps): Promise<void> => {
+const collectEmailFeature = async (deps: OfferDeps): Promise<FeatureApply> => {
     const answer = await deps.text(MAIL_DESTINATION_PROMPT, { placeholder: "you@yourdomain.com" });
     const destination = resolveTypedDestination(answer, (message) => {
         deps.logger.warn(message);
     });
 
-    await deps.apply([EMAIL_ITEM], destination === undefined ? undefined : { transformManifest: (manifest) => withMailDestination(manifest, destination) });
+    return {
+        label: "email",
+        names: [EMAIL_ITEM],
+        transformManifest: destination === undefined ? undefined : (manifest) => withMailDestination(manifest, destination),
+    };
 };
 
 /**
@@ -94,17 +147,17 @@ const applyEmailFeature = async (deps: OfferDeps): Promise<void> => {
  * R2 names are strict and wrangler rejects an invalid one on dev/deploy, so we
  * ask up front rather than ship a placeholder the user has to chase down.
  */
-const applyStorageFeature = async (deps: OfferDeps): Promise<void> => {
+const collectStorageFeature = async (deps: OfferDeps): Promise<FeatureApply> => {
     const bucketName = await promptBucketName(deps.text, deps.projectName);
 
-    await deps.apply(["storage"], { transformManifest: (manifest) => withStorageBucketName(manifest, bucketName) });
+    return { label: "storage", names: ["storage"], transformManifest: (manifest) => withStorageBucketName(manifest, bucketName) };
 };
 
-/** Per-feature handlers that need a sub-prompt; everything else applies as its bare item name. */
-const FEATURE_HANDLERS: Partial<Record<StackFeature, (deps: OfferDeps) => Promise<void>>> = {
-    auth: applyAuthFeature,
-    email: applyEmailFeature,
-    storage: applyStorageFeature,
+/** Per-feature collectors that need a sub-prompt; everything else applies as its bare item name. */
+const FEATURE_COLLECTORS: Partial<Record<StackFeature, (deps: OfferDeps) => Promise<FeatureApply>>> = {
+    auth: collectAuthFeature,
+    email: collectEmailFeature,
+    storage: collectStorageFeature,
 };
 
 /**
@@ -112,10 +165,25 @@ const FEATURE_HANDLERS: Partial<Record<StackFeature, (deps: OfferDeps) => Promis
  * presence, backups) in ONE multi-select after a successful scaffold. Auth,
  * email, and storage run a follow-up prompt (provider / destination / bucket
  * name); every other feature value is applied as its registry item directly.
- * Picked items are applied in selection order. Non-interactive: prints how to
- * add them later and changes nothing.
+ *
+ * Every question is asked FIRST (in selection order), then the picked features
+ * are applied together via {@link OfferDeps.applyAll} — the CLI renders that as a
+ * single progress line whose label changes per feature, instead of one spinner
+ * per item. Non-interactive: prints how to add them later and changes nothing.
  */
 const offerRegistryExtras = async (deps: OfferDeps): Promise<void> => {
+    // `--add`: apply the named features with their shipped defaults — no
+    // multi-select, no sub-prompts (scriptable / repeatable).
+    if (deps.preselected !== undefined && deps.preselected.length > 0) {
+        await deps.applyAll(
+            deps.preselected.map((feature) => {
+                return { label: feature, names: [featureItem(feature)] };
+            }),
+        );
+
+        return;
+    }
+
     if (!deps.interactive) {
         // eslint-disable-next-line no-secrets/no-secrets -- a pipe-separated feature list, not a secret
         deps.logger.info("tip: add features later with `lunora add <auth|email|storage|ratelimit|crons|presence|backup>`.");
@@ -125,17 +193,24 @@ const offerRegistryExtras = async (deps: OfferDeps): Promise<void> => {
 
     const picked = await deps.multiSelect("Which features do you want to add?", STACK_FEATURE_OPTIONS, { defaults: [] });
 
-    // Sequential by design: the sub-prompts and each registry apply both mutate
-    // shared project files (package.json, wrangler.jsonc) and prompt the user one
-    // at a time — running them in parallel would interleave prompts and race the
-    // file writes.
-    for (const feature of picked) {
-        const handler = FEATURE_HANDLERS[feature];
-
-        // eslint-disable-next-line no-await-in-loop -- serial by design (shared file writes + one prompt at a time).
-        await (handler ? handler(deps) : deps.apply([feature]));
+    if (picked.length === 0) {
+        return;
     }
+
+    // Collect every answer first. Sequential by design: each sub-prompt asks the
+    // user one at a time, so running them in parallel would interleave prompts.
+    const plans: FeatureApply[] = [];
+
+    for (const feature of picked) {
+        const collect = FEATURE_COLLECTORS[feature];
+
+        // eslint-disable-next-line no-await-in-loop -- serial by design (one prompt at a time).
+        plans.push(collect ? await collect(deps) : { label: feature, names: [feature] });
+    }
+
+    // Then apply them all in one batch — one progress line for the whole stack.
+    await deps.applyAll(plans);
 };
 
-export { offerRegistryExtras, STACK_FEATURE_OPTIONS };
-export type { OfferDeps, OfferTransformManifest, StackFeature };
+export { offerRegistryExtras, parseFeatureList, STACK_FEATURE_OPTIONS };
+export type { FeatureApply, OfferDeps, OfferTransformManifest, StackFeature };

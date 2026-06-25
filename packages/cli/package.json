@@ -73,6 +73,7 @@
         "@lunora/d1": "1.0.0-alpha.4",
         "@lunora/seed": "1.0.0-alpha.1",
         "@visulima/cerebro": "3.0.0-alpha.32",
+        "@visulima/colorize": "2.0.0-alpha.14",
         "@visulima/fs": "5.0.0-alpha.32",
         "@visulima/pail": "4.0.0-alpha.22",
         "@visulima/path": "3.0.0-alpha.13",

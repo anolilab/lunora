@@ -1,0 +1,3 @@
+# Netlify redirects — processed before the TanStack Start SSR catch-all.
+# Short link to the community chat (Discord invite).
+/chat  https://discord.gg/eajEZvk2PG  302

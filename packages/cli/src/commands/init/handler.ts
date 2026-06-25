@@ -1,7 +1,7 @@
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
-import { isInteractive } from "@lunora/config";
+import { BADGES, isInteractive } from "@lunora/config";
 import { walkSync } from "@visulima/fs";
 import { basename, dirname, join, relative, resolve } from "@visulima/path";
 import { downloadTemplate } from "giget";
@@ -20,19 +20,55 @@ import { patchViteConfig } from "../../util/patch-vite-config";
 import { resolveDistTag, resolveSourceRef } from "../../util/source-ref";
 import type { Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
-import { tuiBanner, tuiConfirm, tuiIntro, tuiMultiSelect, tuiOutro, tuiSelect, tuiText, withTuiSpinner } from "../../util/tui-prompts";
+import type { NextStep } from "../../util/tui-prompts";
+import {
+    PromptCancelledError,
+    tuiConfirm,
+    tuiHeadline,
+    tuiInfo,
+    tuiMoonrise,
+    tuiMultiSelect,
+    tuiNextSteps,
+    tuiSelect,
+    tuiTasks,
+    tuiText,
+    withTuiBadgeProgress,
+    withTuiSpinner,
+} from "../../util/tui-prompts";
 import type { FeatureItem } from "../add/features";
 import { runAddCommand } from "../registry";
+import { emitMascot, emitStep } from "./flow";
 import type { InitOptions } from "./index";
-import type { OfferDeps, OfferTransformManifest } from "./offer-extras";
-import { offerRegistryExtras } from "./offer-extras";
+import type { FeatureApply, OfferDeps } from "./offer-extras";
+import { offerRegistryExtras, parseFeatureList } from "./offer-extras";
 import type { OverlayFramework } from "./overlay/adapters";
 import { ADAPTERS, isOverlayFramework } from "./overlay/adapters";
 import { applyLunoraOverlay } from "./overlay/apply";
+import generateProjectName from "./project-name";
+import { verifyRemoteTemplate } from "./verify";
+
+/** Lunar-mission copy for the flow. Kept here so the tui and pail paths read identically. */
+const COPY = {
+    extras: "Let's finish setting up your app.",
+    framework: "Which framework should we launch?",
+    git: "Initialize a new git repository? (optional)",
+    install: "Install dependencies now?",
+    name: "Where should we land your project?",
+    nextHeader: "Liftoff confirmed — explore your project!",
+    packageManager: "Which package manager?",
+} as const;
 
 type Template = "analog" | "astro" | "next" | "nuxt" | "react-router" | "standalone" | "sveltekit" | "tanstack-start-react" | "tanstack-start-solid";
 
 interface InitCommandOptions {
+    /**
+     * Add features non-interactively after scaffolding (the `--add` flag): a
+     * comma-separated list of `auth | email | storage | ratelimit | crons |
+     * presence | backup`. Bypasses the interactive multi-select and sub-prompts —
+     * each named feature is applied with its shipped defaults.
+     */
+    add?: string;
+
     /**
      * When true, accept `--source` values that don't start with `gh:` /
      * `github:` / `https://` or that contain `..`. Defaults to false; the CLI
@@ -44,6 +80,13 @@ interface InitCommandOptions {
     ci?: CiProvider;
 
     cwd?: string;
+
+    /**
+     * Walk the whole flow — prompts, task list, next-steps, mascot — but make no
+     * changes: skip the template fetch/copy, the feature applies, the dependency
+     * install, and `git init`. Each skipped action logs a `would …` line instead.
+     */
+    dryRun?: boolean;
 
     /**
      * Local directory containing the template subdirs (e.g. `vite/`,
@@ -122,6 +165,7 @@ interface InitCommandOptions {
 
     /** Spawner for the post-scaffold dependency install (tests inject a recording stub). Defaults to a real subprocess. */
     spawner?: Spawner;
+
     templateType?: Template;
 
     /**
@@ -304,7 +348,18 @@ const isSafeSource = (source: string): boolean => {
     return source.startsWith("gh:") || source.startsWith("github:") || source.startsWith("https://");
 };
 
+/** One consistent `[dry-run] would …` line for every skipped side effect. */
+const logWould = (logger: Logger, action: string): void => {
+    logger.info(`[dry-run] would ${action}`);
+};
+
 const logScaffoldSuccess = (logger: Logger, written: ReadonlyArray<string>, target: string): void => {
+    // Cosmetic blank line above the success so it isn't glued to the task
+    // checklist — TTY only, so piped / JSON output stays clean.
+    if (isInteractive()) {
+        process.stdout.write("\n");
+    }
+
     logger.success(`scaffolded ${String(written.length)} files into ${target}`);
 };
 
@@ -323,21 +378,133 @@ const runScriptCommand = (manager: PackageManager, script: string): string => {
 };
 
 /**
- * Print the post-scaffold "next steps". When deps were already installed (the
- * user accepted the install offer), the `install` line is dropped and the `dev`
- * line uses the chosen manager; otherwise it defaults to `pnpm`.
+ * Walk up from `startDirectory` looking for a workspace root — a `pnpm-workspace.yaml`
+ * or a `package.json` with a `workspaces` field. Used to skip the dependency
+ * install offer: a freshly-scaffolded package isn't listed in the workspace yet,
+ * so installing from inside it won't resolve `workspace:` deps — the user must
+ * install from the repo root after wiring it in.
  */
-const printNextSteps = (logger: Logger, name: string, installed: PackageManager | undefined): void => {
-    const manager: PackageManager = installed ?? "pnpm";
+const isInsideMonorepo = (startDirectory: string): boolean => {
+    let directory = resolve(startDirectory);
 
-    logger.info("next steps:");
-    logger.info(`  cd ${name}`);
+    for (;;) {
+        if (existsSync(join(directory, "pnpm-workspace.yaml"))) {
+            return true;
+        }
 
-    if (installed === undefined) {
-        logger.info(`  ${manager} install`);
+        const packagePath = join(directory, "package.json");
+
+        if (existsSync(packagePath)) {
+            try {
+                const parsed = JSON.parse(readFileSync(packagePath, "utf8")) as { workspaces?: unknown };
+
+                if (parsed.workspaces !== undefined) {
+                    return true;
+                }
+            } catch {
+                // Unreadable / invalid package.json — not a workspace root we can trust.
+            }
+        }
+
+        const parent = dirname(directory);
+
+        if (parent === directory) {
+            return false;
+        }
+
+        directory = parent;
+    }
+};
+
+/** Walk up from `startDirectory` to see if it already sits inside a git work-tree (an ancestor has a `.git`). */
+const isInsideGitRepo = (startDirectory: string): boolean => {
+    let directory = resolve(startDirectory);
+
+    for (;;) {
+        if (existsSync(join(directory, ".git"))) {
+            return true;
+        }
+
+        const parent = dirname(directory);
+
+        if (parent === directory) {
+            return false;
+        }
+
+        directory = parent;
+    }
+};
+
+/**
+ * After scaffolding, optionally `git init` the new project — create-astro's git
+ * step. Only on a real TTY (never CI / `--yes`), and skipped when the project is
+ * already inside a git work-tree (e.g. scaffolded into an existing repo or this
+ * monorepo), since a nested repo there is rarely what you want.
+ */
+const maybeOfferGit = async (options: InitCommandOptions, target: string): Promise<void> => {
+    if (options.yes === true || !isInteractive() || isInsideGitRepo(dirname(target))) {
+        return;
     }
 
-    logger.info(`  ${runScriptCommand(manager, "dev")}`);
+    if (!(await tuiConfirm(COPY.git, { badge: BADGES.git, defaultYes: false }))) {
+        await tuiInfo("Sounds good! You can always run git init manually.");
+
+        return;
+    }
+
+    if (options.dryRun === true) {
+        logWould(options.logger, "initialize a git repository");
+
+        return;
+    }
+
+    const spawner = options.spawner ?? defaultSpawner;
+    const result = await withTuiSpinner("Initializing a git repository…", () => spawner({ args: ["init"], command: "git", cwd: target }));
+
+    if (result.code === 0) {
+        await emitStep("git", "Initialized an empty git repository.");
+    } else {
+        options.logger.warn("`git init` failed — initialize it yourself later with `git init`.");
+    }
+};
+
+/**
+ * Print the post-scaffold "next steps". When deps were already installed (the
+ * user accepted the install offer), the `install` line is dropped and the `dev`
+ * line uses the chosen manager; otherwise it defaults to `pnpm`. Inside a
+ * monorepo we point at the workspace root, since installing in the new package
+ * before it's wired into the workspace won't work.
+ */
+const printNextSteps = async (name: string, installed: PackageManager | undefined, insideMonorepo: boolean): Promise<void> => {
+    const manager: PackageManager = installed ?? "pnpm";
+
+    const steps: NextStep[] = [{ code: `cd ./${name}`, lead: "Enter your project directory using" }];
+
+    if (installed === undefined) {
+        steps.push({ code: `${manager} install`, lead: "Install dependencies with", tail: insideMonorepo ? " from the workspace root" : undefined });
+    }
+
+    steps.push(
+        { code: runScriptCommand(manager, "dev"), lead: "Run", tail: " to start the dev server." },
+        { code: "lunora add", lead: "Add features like auth or storage using" },
+    );
+
+    const help: NextStep[] = [
+        { code: "https://lunora.sh/docs", lead: "Read the docs at" },
+        { code: "https://lunora.sh/chat", lead: "Stuck? Join the chat at" },
+    ];
+
+    if (isInteractive()) {
+        await tuiNextSteps(BADGES.next, COPY.nextHeader, steps, help);
+
+        return;
+    }
+
+    const lines = steps.map((step) => `${step.lead} ${step.code}${step.tail ?? ""}`);
+
+    lines.push("", ...help.map((line) => `${line.lead} ${line.code}${line.tail ?? ""}`));
+
+    await emitStep("next", COPY.nextHeader, lines.join("\n"));
 };
 
 /** The install offer runs only on a real TTY or when its prompts are injected (tests) — never auto-installs in CI. */
@@ -355,6 +522,13 @@ const maybeOfferInstall = async (options: InitCommandOptions, target: string): P
         return undefined;
     }
 
+    // Inside a monorepo, don't offer to install: the new package isn't part of the
+    // workspace yet, so an install from here can't resolve its `workspace:` deps.
+    // The next-steps hint points the user at the workspace root instead.
+    if (isInsideMonorepo(dirname(target))) {
+        return undefined;
+    }
+
     const managers = detectInstalledManagers(options.packageManagerProbe);
     const [defaultManager] = managers;
 
@@ -363,9 +537,11 @@ const maybeOfferInstall = async (options: InitCommandOptions, target: string): P
         return undefined;
     }
 
-    const confirm = options.installPrompt?.confirmInstall ?? (async (): Promise<boolean> => tuiConfirm("Install dependencies now?", { defaultYes: true }));
+    const confirm = options.installPrompt?.confirmInstall ?? (async (): Promise<boolean> => tuiConfirm(COPY.install, { badge: BADGES.deps, defaultYes: true }));
 
     if (!(await confirm())) {
+        await tuiInfo("No problem! Remember to install dependencies after setup.");
+
         return undefined;
     }
 
@@ -375,12 +551,19 @@ const maybeOfferInstall = async (options: InitCommandOptions, target: string): P
         manager = options.installPrompt
             ? await options.installPrompt.selectManager(managers)
             : ((await tuiSelect(
-                  "Which package manager?",
+                  COPY.packageManager,
                   managers.map((candidate) => {
                       return { label: candidate, value: candidate };
                   }),
-                  { default: defaultManager },
+                  { badge: BADGES.deps, default: defaultManager },
               )) ?? defaultManager);
+    }
+
+    if (options.dryRun === true) {
+        // Walk the prompts but install nothing; next-steps still lists install.
+        logWould(options.logger, `install dependencies with ${manager}`);
+
+        return undefined;
     }
 
     const spawner = options.spawner ?? defaultSpawner;
@@ -393,7 +576,7 @@ const maybeOfferInstall = async (options: InitCommandOptions, target: string): P
         return undefined;
     }
 
-    options.logger.success(`installed dependencies with ${manager}`);
+    await emitStep("deps", `Dependencies installed with ${manager}.`);
 
     return manager;
 };
@@ -436,35 +619,60 @@ const scaffoldFromRemote = async (options: {
     try {
         const remote = resolveTemplateSource(templateType, source, ref);
 
-        // Fetch + scaffold behind live spinners (no-op off a TTY, so CI/tests
-        // stay clean). The verbose provenance is folded into one dim audit line.
-        const downloaded = (await withTuiSpinner(`Fetching the ${templateType} template…`, () =>
-            downloadTemplate(remote, {
-                cwd: stagingRoot,
-                dir: stagingDirectory,
-                force: true,
-                install: false,
-                silent: true,
-            }),
-        )) as { commit?: string; dir: string; source: string };
+        // Fetch + scaffold as a live checklist ("Project initialized!" with ✔ rows,
+        // create-astro style; off a TTY the tasks run bare so CI/tests stay clean).
+        let downloaded: { commit?: string; dir: string; source: string } | undefined;
+        let written: ReadonlyArray<string> = [];
+
+        await tuiTasks(
+            [
+                {
+                    label: `${templateType} template fetched`,
+                    run: async () => {
+                        downloaded = await downloadTemplate(remote, {
+                            cwd: stagingRoot,
+                            dir: stagingDirectory,
+                            force: true,
+                            install: false,
+                            silent: true,
+                        });
+                    },
+                },
+                {
+                    label: `files copied into ${name}/`,
+                    run: () => {
+                        written = copyTemplate(stagingDirectory, target, name);
+
+                        return Promise.resolve();
+                    },
+                },
+            ],
+            { end: "Project initialized!", start: "Project initializing…" },
+        );
 
         const staged = collectFiles(stagingDirectory);
 
+        // Cosmetic blank line above the provenance note (TTY only, so it doesn't
+        // glue to the task checklist) — keeps piped / JSON output clean.
+        if (isInteractive()) {
+            process.stdout.write("\n");
+        }
+
         // One concise provenance line so the user can still audit what was pulled.
         logger.info(
-            downloaded.commit
+            downloaded?.commit
                 ? `template: ${downloaded.source} @ ${downloaded.commit} (${String(staged.length)} files)`
-                : `template: ${downloaded.source} (${String(staged.length)} files)`,
-        );
-
-        const written = await withTuiSpinner(`Scaffolding ${String(staged.length)} files into ${name}/…`, () =>
-            Promise.resolve(copyTemplate(stagingDirectory, target, name)),
+                : `template: ${downloaded?.source ?? remote} (${String(staged.length)} files)`,
         );
 
         logScaffoldSuccess(logger, written, target);
 
         return { code: 0, files: written, target };
     } catch (error) {
+        if (error instanceof PromptCancelledError) {
+            throw error;
+        }
+
         const message = error instanceof Error ? error.message : String(error);
 
         logger.error(`failed to download template: ${message}`);
@@ -503,35 +711,60 @@ const scaffoldViteOverlay = async (options: {
     const stagingRoot = mkdtempSync(join(tmpdir(), "lunora-vite-base-"));
 
     try {
-        if (overlayBaseFrom === undefined) {
-            const stagingDirectory = join(stagingRoot, "base");
-            const remote = `github:vitejs/vite/packages/create-vite/template-${adapter.createViteTemplate}#main`;
+        // The local-base validation stays an early return so the exact error is
+        // preserved; only the actual file work runs inside the task checklist.
+        let localBase: string | undefined;
 
-            await withTuiSpinner(`Fetching the ${adapter.label} (create-vite) base…`, () =>
-                downloadTemplate(remote, { cwd: stagingRoot, dir: stagingDirectory, force: true, install: false, silent: true }),
-            );
-            renameCreateViteDotfiles(stagingDirectory);
-            cpSync(stagingDirectory, target, { recursive: true });
-        } else {
-            const localBase = join(overlayBaseFrom, `template-${adapter.createViteTemplate}`);
+        if (overlayBaseFrom !== undefined) {
+            localBase = join(overlayBaseFrom, `template-${adapter.createViteTemplate}`);
 
             if (!existsSync(localBase)) {
                 logger.error(`create-vite base not found on disk: ${localBase}`);
 
                 return { code: 1, files: [], target };
             }
-
-            cpSync(localBase, target, { recursive: true });
         }
 
-        const written = await withTuiSpinner(`Applying the Lunora overlay (${adapter.label})…`, () =>
-            Promise.resolve(applyLunoraOverlay({ adapter, distTag: resolveDistTag(), logger, name, target })),
+        const copyBase = async (): Promise<void> => {
+            if (localBase !== undefined) {
+                cpSync(localBase, target, { recursive: true });
+
+                return;
+            }
+
+            const stagingDirectory = join(stagingRoot, "base");
+            const remote = `github:vitejs/vite/packages/create-vite/template-${adapter.createViteTemplate}#main`;
+
+            await downloadTemplate(remote, { cwd: stagingRoot, dir: stagingDirectory, force: true, install: false, silent: true });
+            renameCreateViteDotfiles(stagingDirectory);
+            cpSync(stagingDirectory, target, { recursive: true });
+        };
+
+        let written: ReadonlyArray<string> = [];
+
+        await tuiTasks(
+            [
+                { label: `create-vite (${adapter.label}) base ready`, run: copyBase },
+                {
+                    label: `Lunora overlay applied (${adapter.label})`,
+                    run: () => {
+                        written = applyLunoraOverlay({ adapter, distTag: resolveDistTag(), logger, name, target });
+
+                        return Promise.resolve();
+                    },
+                },
+            ],
+            { end: "Project initialized!", start: "Project initializing…" },
         );
 
         logScaffoldSuccess(logger, written, target);
 
         return { code: 0, files: [...collectFiles(target)], target };
     } catch (error) {
+        if (error instanceof PromptCancelledError) {
+            throw error;
+        }
+
         const message = error instanceof Error ? error.message : String(error);
 
         logger.error(`failed to scaffold the ${adapter.label} base: ${message}`);
@@ -771,14 +1004,32 @@ const offerIsInteractive = (options: InitCommandOptions): boolean =>
  */
 const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: string): Promise<void> => {
     const interactive = offerIsInteractive(options);
+    const preselected =
+        options.add === undefined
+            ? []
+            : parseFeatureList(options.add, (message) => {
+                  options.logger.warn(message);
+              });
 
-    // Each registry apply mutates shared project files; show a spinner while it
-    // runs (no-op off a TTY, so tests/CI run bare). Behind the spinner the
-    // registry command's own progress logging is muted — it writes to the same
-    // stdout the live spinner repaints, which would garble the terminal — but
-    // errors/warnings still surface. Off a TTY there's no spinner, so the full
-    // logger is kept and CI retains the detail.
-    const apply = async (names: ReadonlyArray<string>, applyOptions?: { transformManifest?: OfferTransformManifest }): Promise<boolean> => {
+    // Each registry apply mutates shared project files; the whole batch runs
+    // behind ONE progress line whose label changes per feature (no-op off a TTY,
+    // so tests/CI run bare). Behind the spinner the registry command's own
+    // progress logging is muted — it writes to the same stdout the live spinner
+    // repaints, which would garble the terminal — but errors/warnings still
+    // surface. Off a TTY there's no spinner, so the full logger is kept and CI
+    // retains the detail.
+    const applyAll = async (plans: ReadonlyArray<FeatureApply>): Promise<boolean> => {
+        if (plans.length === 0) {
+            return true;
+        }
+
+        // --dry-run: report what would be added without touching the project.
+        if (options.dryRun === true) {
+            logWould(options.logger, `add ${plans.map((plan) => plan.label).join(", ")}`);
+
+            return true;
+        }
+
         const applyLogger: Logger = isInteractive()
             ? {
                   error: (message) => {
@@ -792,35 +1043,59 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
               }
             : options.logger;
 
-        const result = await withTuiSpinner(`adding ${names.join(", ")}…`, () =>
-            runAddCommand({
-                allowUnsafeSource: options.allowUnsafeSource,
-                cwd: projectDirectory,
-                from: options.registryFrom,
-                logger: applyLogger,
-                names: [...names],
-                ref: options.ref,
-                source: options.registrySource,
-                transformManifest: applyOptions?.transformManifest,
-                yes: true,
-            }),
-        );
+        const steps = plans.map((plan) => {
+            return {
+                running: `adding ${plan.label}…`,
+                task: () =>
+                    runAddCommand({
+                        allowUnsafeSource: options.allowUnsafeSource,
+                        cwd: projectDirectory,
+                        from: options.registryFrom,
+                        logger: applyLogger,
+                        names: [...plan.names],
+                        ref: options.ref,
+                        source: options.registrySource,
+                        transformManifest: plan.transformManifest,
+                        yes: true,
+                    }),
+            };
+        });
 
-        return result.code === 0;
+        const done = `added ${plans.map((plan) => plan.label).join(", ")}`;
+        const results = await withTuiBadgeProgress(BADGES.add, steps, done);
+
+        return results.every((result) => result.code === 0);
     };
 
-    // Branded framing for the interactive offer (both no-op off a TTY).
-    await tuiIntro("let's finish setting up your app");
-
-    await offerRegistryExtras({
-        apply,
+    const deps: OfferDeps = {
+        applyAll,
         interactive,
         logger: options.logger,
-        multiSelect: options.prompt?.multiSelect ?? ((message, choices, settings) => tuiMultiSelect(message, choices, settings)),
+        multiSelect: options.prompt?.multiSelect ?? ((message, choices, settings) => tuiMultiSelect(message, choices, { ...settings, badge: BADGES.add })),
+        preselected: preselected.length > 0 ? preselected : undefined,
         projectName: basename(projectDirectory),
-        select: options.prompt?.select ?? ((message, choices, settings): Promise<FeatureItem | undefined> => tuiSelect(message, choices, settings)),
-        text: options.prompt?.text ?? ((message, settings) => tuiText(message, settings)),
-    });
+        select:
+            options.prompt?.select ??
+            ((message, choices, settings): Promise<FeatureItem | undefined> => tuiSelect(message, choices, { ...settings, badge: BADGES.add })),
+        text: options.prompt?.text ?? ((message, settings) => tuiText(message, { ...settings, badge: BADGES.add })),
+    };
+
+    // `--add` applies its features directly (no headline, no multi-select).
+    if (preselected.length > 0) {
+        await offerRegistryExtras(deps);
+
+        return;
+    }
+
+    // A plain headline for the interactive offer (no badge, just the section
+    // intro). TTY only — off a TTY the offer prints its own structured hint
+    // through the logger, so we don't write raw copy to stdout (keeps piped /
+    // JSON output clean).
+    if (isInteractive()) {
+        await tuiHeadline(COPY.extras);
+    }
+
+    await offerRegistryExtras(deps);
 };
 
 /** Default framework when none is specified — the React create-vite overlay. */
@@ -884,7 +1159,7 @@ const resolveScaffoldChoice = async (options: InitCommandOptions): Promise<Scaff
         return { framework: DEFAULT_FRAMEWORK, kind: "overlay" };
     }
 
-    return toScaffoldChoice((await tuiSelect("Which framework would you like?", FRAMEWORK_CHOICES, { default: DEFAULT_FRAMEWORK })) ?? DEFAULT_FRAMEWORK);
+    return toScaffoldChoice((await tuiSelect(COPY.framework, FRAMEWORK_CHOICES, { badge: BADGES.tmpl, default: DEFAULT_FRAMEWORK })) ?? DEFAULT_FRAMEWORK);
 };
 
 /**
@@ -916,71 +1191,39 @@ const nonInteractiveInitError = (options: InitCommandOptions): string | undefine
     return `lunora init can't prompt in a non-interactive terminal — provide ${missing.join(" and ")}, or pass --yes to accept the defaults.`;
 };
 
-/** Scaffold a brand-new project directory (the non-`--here` path). */
-const scaffoldNewProject = async (options: InitCommandOptions, cwd: string): Promise<InitCommandResult> => {
-    // Branded ASCII title at the very top of the flow (no-op off a TTY).
-    await tuiBanner("realtime backend on Cloudflare Workers + Durable Objects");
+/**
+ * Overlay path: a create-vite framework (the default, `--vite`, or the picker)
+ * fetches a stock create-vite base (over the network unless `overlayBaseFrom` is
+ * set) and applies the Lunora layer on top.
+ */
+const scaffoldOverlayPath = async (options: InitCommandOptions, framework: string, name: string, target: string): Promise<InitCommandResult> => {
+    if (!isOverlayFramework(framework)) {
+        options.logger.error(`init: unknown framework "${framework}". Supported overlays: ${Object.keys(ADAPTERS).join(", ")}.`);
 
-    const blocked = nonInteractiveInitError(options);
-
-    if (blocked !== undefined) {
-        options.logger.error(blocked);
-
-        return { code: 1, files: [], target: "" };
+        return { code: 1, files: [], target };
     }
 
-    // No name argument → ask for one (a TTY shows the prompt; with `--yes` /
-    // non-interactive it takes the `lunora-app` default).
-    const name = options.name ?? (await tuiText("What should we call your project?", { default: "lunora-app", placeholder: "lunora-app" }));
-    const choice = await resolveScaffoldChoice(options);
-
-    // Guard the project name against path traversal: it becomes a directory
-    // under cwd, so a name containing separators or `..` could scaffold outside
-    // the intended parent. Mirrors the `--source` `isSafeSource` gate.
-    if (name.includes("/") || name.includes("\\") || name === ".." || name === ".") {
-        options.logger.error(`init: refusing project name "${name}" — must not contain path separators or be "." / "..".`);
-
-        return { code: 1, files: [], target: "" };
+    if (!(await verifyRemoteTemplate({ isLocal: options.overlayBaseFrom !== undefined, logger: options.logger }))) {
+        return { code: 1, files: [], target };
     }
 
-    const target = resolve(cwd, name);
+    mkdirSync(target, { recursive: true });
 
-    if (existsSync(target)) {
-        const entries = readdirSync(target);
+    return scaffoldViteOverlay({ framework, logger: options.logger, name, overlayBaseFrom: options.overlayBaseFrom, target });
+};
 
-        if (entries.length > 0) {
-            options.logger.error(`target directory not empty: ${target}`);
-
-            return { code: 1, files: [], target };
-        }
-    }
-
-    // Overlay path: a create-vite framework (the default, `--vite`, or the
-    // picker) fetches a stock create-vite base and applies the Lunora layer.
-    if (choice.kind === "overlay") {
-        if (!isOverlayFramework(choice.framework)) {
-            options.logger.error(`init: unknown framework "${choice.framework}". Supported overlays: ${Object.keys(ADAPTERS).join(", ")}.`);
-
-            return { code: 1, files: [], target };
-        }
-
-        mkdirSync(target, { recursive: true });
-
-        return scaffoldViteOverlay({ framework: choice.framework, logger: options.logger, name, overlayBaseFrom: options.overlayBaseFrom, target });
-    }
-
-    const { templateType } = choice;
-
+/**
+ * Bespoke-template path: copy from `--from` (offline / tests), else fetch the
+ * remote template with giget — verifying connectivity + the ref first so a bad
+ * `--ref`/`--source` or being offline fails fast and clean.
+ */
+const scaffoldTemplatePath = async (options: InitCommandOptions, templateType: Template, name: string, target: string): Promise<InitCommandResult> => {
     if (templateType === "next") {
         options.logger.warn('template "next" is not yet available — re-run with `--vite react` or `-t standalone`.');
 
         return { code: 1, files: [], target };
     }
 
-    // Local-fallback path: `--from /path/to/templates` skips the network and
-    // copies straight from disk. Used by the clean-machine smoke + the unit
-    // tests; also a working offline mode for end users with a pre-cloned
-    // template tree.
     if (options.from !== undefined) {
         return scaffoldFromLocal(options.from, templateType, target, name, options.logger);
     }
@@ -994,7 +1237,110 @@ const scaffoldNewProject = async (options: InitCommandOptions, cwd: string): Pro
         return { code: 1, files: [], target };
     }
 
+    if (!(await verifyRemoteTemplate({ isLocal: false, logger: options.logger, source: resolveTemplateSource(templateType, options.source, options.ref) }))) {
+        return { code: 1, files: [], target };
+    }
+
     return scaffoldFromRemote({ logger: options.logger, name, ref: options.ref, source: options.source, target, templateType });
+};
+
+const scaffoldNewProject = async (
+    options: InitCommandOptions,
+    cwd: string,
+    recordTarget: (target: string, preExisted: boolean) => void,
+): Promise<InitCommandResult> => {
+    // Moonrise header, then create-astro-style linear questions: each prompt shows
+    // its badge + question and collapses to a dimmed transcript line on submit.
+    await tuiMoonrise("realtime backend on Cloudflare Workers + Durable Objects");
+
+    const blocked = nonInteractiveInitError(options);
+
+    if (blocked !== undefined) {
+        options.logger.error(blocked);
+
+        return { code: 1, files: [], target: "" };
+    }
+
+    // No name argument → ask for one (a TTY shows the prompt; with `--yes` /
+    // non-interactive it takes the generated lunar default). A fresh fun name is
+    // generated per run so an empty submit lands on something nicer than a static
+    // placeholder (create-astro does the same).
+    const suggestedName = generateProjectName();
+    const name = options.name ?? (await tuiText(COPY.name, { badge: BADGES.dir, default: suggestedName, placeholder: suggestedName }));
+    const choice = await resolveScaffoldChoice(options);
+
+    // Guard the project name against path traversal: it becomes a directory
+    // under cwd, so a name containing separators or `..` could scaffold outside
+    // the intended parent. Mirrors the `--source` `isSafeSource` gate.
+    if (name.includes("/") || name.includes("\\") || name === ".." || name === ".") {
+        options.logger.error(`init: refusing project name "${name}" — must not contain path separators or be "." / "..".`);
+
+        return { code: 1, files: [], target: "" };
+    }
+
+    const target = resolve(cwd, name);
+    const targetPreExisted = existsSync(target);
+
+    if (targetPreExisted) {
+        const entries = readdirSync(target);
+
+        if (entries.length > 0) {
+            options.logger.error(`target directory not empty: ${target}`);
+
+            return { code: 1, files: [], target };
+        }
+    }
+
+    // --dry-run: the prompts ran (so the flow is walked) but stop before any
+    // writes. Report the would-be scaffold and return success; the offer /
+    // install / git steps each have their own dry-run guard downstream.
+    if (options.dryRun === true) {
+        const what = choice.kind === "overlay" ? `the ${choice.framework} create-vite overlay` : `the ${choice.templateType} template`;
+
+        logWould(options.logger, `scaffold ${what} into ${target}`);
+
+        return { code: 0, files: [], target };
+    }
+
+    // From here we commit to writing into `target`. Record it so a Ctrl-C abort
+    // can reset it (a dir we created is removed; a pre-existing empty dir is
+    // emptied back out) — see `resetScaffoldOnCancel`.
+    recordTarget(target, targetPreExisted);
+
+    return choice.kind === "overlay"
+        ? scaffoldOverlayPath(options, choice.framework, name, target)
+        : scaffoldTemplatePath(options, choice.templateType, name, target);
+};
+
+/** Tracks the project directory a `lunora init` run creates, so a Ctrl-C abort can reset it. */
+interface ScaffoldCleanup {
+    target?: string;
+    targetPreExisted?: boolean;
+}
+
+/**
+ * Undo a partially-created scaffold after the user aborts (Ctrl-C): restore the
+ * target back to its pre-run state. A directory we created is removed outright; a
+ * directory that already existed (verified empty before we wrote into it) is
+ * emptied back out but kept. A no-op when nothing was created yet (cancel during
+ * the early prompts) or for in-place init (which never sets `cleanup.target`).
+ */
+const resetScaffoldOnCancel = (cleanup: ScaffoldCleanup, logger: Logger): void => {
+    const { target, targetPreExisted } = cleanup;
+
+    if (target === undefined || !existsSync(target)) {
+        return;
+    }
+
+    if (targetPreExisted === true) {
+        for (const entry of readdirSync(target)) {
+            rmSync(join(target, entry), { force: true, recursive: true });
+        }
+    } else {
+        rmSync(target, { force: true, recursive: true });
+    }
+
+    logger.info(`removed the partially-created project at ${target}`);
 };
 
 /**
@@ -1002,31 +1348,97 @@ const scaffoldNewProject = async (options: InitCommandOptions, cwd: string): Pro
  * — offer to add auth + email via the registry. The offer never affects the
  * scaffold's exit code.
  */
+/** Run the scaffold step itself: in-place config, a `--dry-run` no-op, or a fresh-directory scaffold. */
+const runScaffoldStep = async (
+    options: InitCommandOptions,
+    cwd: string,
+    recordTarget: (target: string, preExisted: boolean) => void,
+): Promise<InitCommandResult> => {
+    if (options.inPlace !== true) {
+        return scaffoldNewProject(options, cwd, recordTarget);
+    }
+
+    if (options.dryRun === true) {
+        logWould(options.logger, `configure Lunora into ${cwd}`);
+
+        return { code: 0, files: [], target: cwd };
+    }
+
+    return runInPlaceInit(cwd, options.logger);
+};
+
+/**
+ * The post-scaffold success flow: offer the auth/email extras FIRST (they add
+ * deps + bindings to package.json), then install LAST so those newly-added deps
+ * are part of the single install. In-place init keeps its own per-framework
+ * wiring hints and never auto-installs an existing project.
+ */
+const runPostScaffold = async (options: InitCommandOptions, result: InitCommandResult, cwd: string): Promise<void> => {
+    await maybeOfferExtras(options, result.target);
+
+    const installedManager = options.inPlace === true ? undefined : await maybeOfferInstall(options, result.target);
+
+    if (options.inPlace !== true) {
+        await maybeOfferGit(options, result.target);
+
+        // Closing flourish + next steps + Luna's send-off, after the install so it's truly last.
+        await printNextSteps(basename(result.target), installedManager, isInsideMonorepo(cwd));
+        await emitMascot(options.logger);
+    }
+};
+
+/** `--ci`: drop a deploy pipeline into the scaffolded project (or `cwd` for in-place). Best-effort — never affects the exit code. */
+const scaffoldCiPipeline = (options: InitCommandOptions, result: InitCommandResult, cwd: string): void => {
+    if (result.code !== 0 || options.ci === undefined) {
+        return;
+    }
+
+    if (options.dryRun === true) {
+        logWould(options.logger, `scaffold a ${options.ci} CI deploy pipeline`);
+
+        return;
+    }
+
+    scaffoldCiWorkflow(options.inPlace === true ? cwd : result.target, options.ci, options.logger);
+};
+
 const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
-    const result = options.inPlace === true ? runInPlaceInit(cwd, options.logger) : await scaffoldNewProject(options, cwd);
+    const cleanup: ScaffoldCleanup = {};
 
-    if (result.code === 0 && result.target !== "") {
-        // Offer the auth/email extras FIRST — they add dependencies + bindings to
-        // the scaffold's package.json — then install LAST so those newly-added
-        // deps are part of the single install. In-place init keeps its own
-        // per-framework wiring hints and never auto-installs an existing project.
-        await maybeOfferExtras(options, result.target);
+    let result: InitCommandResult;
 
-        const installedManager = options.inPlace === true ? undefined : await maybeOfferInstall(options, result.target);
+    try {
+        result = await runScaffoldStep(options, cwd, (target, preExisted) => {
+            cleanup.target = target;
+            cleanup.targetPreExisted = preExisted;
+        });
 
-        if (options.inPlace !== true) {
-            // Closing flourish + next steps, after the install so it's truly last.
-            await tuiOutro("you're all set 🎉");
-            printNextSteps(options.logger, basename(result.target), installedManager);
+        if (result.code === 0 && result.target !== "") {
+            // The scaffold succeeded and was announced ("Project initialized!").
+            // From here a Ctrl-C in the OPTIONAL post-scaffold offers (extras /
+            // install / git) must abort the offers but NOT delete the finished
+            // project — so stop tracking it for cleanup. Cleanup only fires for a
+            // scaffold interrupted mid-write (which throws before reaching here).
+            cleanup.target = undefined;
+
+            await runPostScaffold(options, result, cwd);
         }
+    } catch (error) {
+        // The user pressed Ctrl-C mid-flow — reset anything we created, then abort
+        // cleanly with a friendly note (NOT the install/git failure path, which
+        // prints recovery steps instead).
+        if (error instanceof PromptCancelledError) {
+            resetScaffoldOnCancel(cleanup, options.logger);
+            process.stdout.write("\n  ✖  Setup cancelled — run `lunora init` again whenever you're ready. 🌙\n");
+
+            return { code: 130, files: [], target: "" };
+        }
+
+        throw error;
     }
 
-    // `--ci`: drop a deploy pipeline into the scaffolded project (or `cwd` for
-    // in-place init). Best-effort — never affects the scaffold exit code.
-    if (result.code === 0 && options.ci !== undefined) {
-        scaffoldCiWorkflow(options.inPlace === true ? cwd : result.target, options.ci, options.logger);
-    }
+    scaffoldCiPipeline(options, result, cwd);
 
     return result;
 };
@@ -1066,9 +1478,11 @@ const execute: CommandHandler<InitOptions> = defineHandler<InitOptions>(({ argum
     const templateType: Template | undefined = options.template !== undefined && isTemplate(options.template) ? options.template : undefined;
 
     return runInitCommand({
+        add: options.add,
         allowUnsafeSource: options.allowUnsafeSource === true,
         cwd,
         ci: resolveCiProvider(options.ci, logger),
+        dryRun: options.dryRun === true,
         from: options.from,
         inPlace: options.here === true,
         interactive: options.interactive === true ? true : undefined,

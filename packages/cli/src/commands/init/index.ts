@@ -78,14 +78,26 @@ const initCommand: Command = {
             name: "ci",
             type: String,
         },
+        {
+            description: "Add features non-interactively after scaffolding (comma-separated): auth | email | storage | ratelimit | crons | presence | backup",
+            name: "add",
+            type: String,
+        },
+        {
+            description: "Walk through every step (prompts + output) without writing files, installing, or running git",
+            name: "dry-run",
+            type: Boolean,
+        },
     ],
 };
 
 export { initCommand };
 
 export type InitOptions = CreateOptions<{
+    add: string | undefined;
     "allow-unsafe-source": boolean | undefined;
     ci: string | undefined;
+    "dry-run": boolean | undefined;
     from: string | undefined;
     here: boolean | undefined;
     interactive: boolean | undefined;
