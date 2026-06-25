@@ -400,6 +400,22 @@ const Navbar = (): ReactElement => {
                 <Logo light={light} pathname={pathname} />
 
                 <nav aria-label="Primary navigation" className="absolute left-1/2 hidden -translate-x-1/2 items-center lg:flex">
+                    <div
+                        className="flex items-center"
+                        onMouseEnter={() => {
+                            setOpenMenu(null);
+                        }}
+                    >
+                        <Link
+                            className={cn(
+                                "flex w-max items-center px-3.5 py-2 text-sm font-medium transition-colors",
+                                light ? "text-black/80 hover:text-black/60" : "text-white hover:text-neutral-300",
+                            )}
+                            to="/docs/$"
+                        >
+                            Docs
+                        </Link>
+                    </div>
                     {menu.map((column) => (
                         <div
                             className="flex items-center"
@@ -542,6 +558,15 @@ const Navbar = (): ReactElement => {
                         </button>
                     </div>
                     <div className="flex flex-col px-5 py-4">
+                        <Link
+                            className="border-b border-white/[0.06] px-1 py-3 text-sm font-medium text-white"
+                            onClick={() => {
+                                setIsMobileMenuOpen(false);
+                            }}
+                            to="/docs/$"
+                        >
+                            Docs
+                        </Link>
                         <Link
                             className="border-b border-white/[0.06] px-1 py-3 text-sm font-medium text-white"
                             onClick={() => {
