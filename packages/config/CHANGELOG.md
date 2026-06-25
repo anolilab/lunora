@@ -1,3 +1,9 @@
+## @lunora/config [1.0.0-alpha.5](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.4...@lunora/config@1.0.0-alpha.5) (2026-06-25)
+
+### Features
+
+* **config:** add shared tui theme and LunoraReporter ([79a1895](https://github.com/anolilab/lunora/commit/79a1895ac8eac8c1be35776da268c1764d2956ef))
+
 ## @lunora/config [1.0.0-alpha.4](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.3...@lunora/config@1.0.0-alpha.4) (2026-06-24)
 
 ### Miscellaneous Chores
