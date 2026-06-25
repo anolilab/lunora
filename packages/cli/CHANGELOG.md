@@ -1,3 +1,10 @@
+## @lunora/cli [1.0.0-alpha.16](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.15...@lunora/cli@1.0.0-alpha.16) (2026-06-25)
+
+### Bug Fixes
+
+* **cli:** fix init install UX and pnpm builds ([8ad019c](https://github.com/anolilab/lunora/commit/8ad019c1b02262d494aa5e9a2ebb9ecbbfd1b771))
+* **cli:** scaffold @lunora/studio for /__lunora ([a92299c](https://github.com/anolilab/lunora/commit/a92299c34192f21a0db58a9f62a20c512f3abbc6))
+
 ## @lunora/cli [1.0.0-alpha.15](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.14...@lunora/cli@1.0.0-alpha.15) (2026-06-25)
 
 
