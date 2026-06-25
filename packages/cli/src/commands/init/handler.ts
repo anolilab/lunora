@@ -322,6 +322,28 @@ const stampLunoraDeps = (packageJsonText: string, distTag: string, versions: Rea
     return text;
 };
 
+/**
+ * Native build scripts the scaffold's toolchain needs to run on install
+ * (esbuild/sharp/workerd, pulled in by Vite + Wrangler). pnpm v10+ blocks
+ * post-install build scripts by default; listing them in
+ * `pnpm.onlyBuiltDependencies` lets `pnpm install` run exactly these without the
+ * interactive `pnpm approve-builds` step. npm/yarn ignore the `pnpm` key.
+ */
+const PNPM_BUILT_DEPENDENCIES: ReadonlyArray<string> = ["esbuild", "sharp", "workerd"];
+
+/** Pre-approve {@link PNPM_BUILT_DEPENDENCIES} in the scaffold's `package.json` so `pnpm install` builds them without `pnpm approve-builds`. */
+const stampPnpmBuildAllowlist = (packageJsonText: string): string => {
+    try {
+        const parsed = JSON.parse(packageJsonText) as { pnpm?: { onlyBuiltDependencies?: ReadonlyArray<string> } };
+        const merged = [...new Set([...(parsed.pnpm?.onlyBuiltDependencies ?? []), ...PNPM_BUILT_DEPENDENCIES])].toSorted((a, b) => a.localeCompare(b));
+        const edits = modify(packageJsonText, ["pnpm", "onlyBuiltDependencies"], merged, { formattingOptions: { insertSpaces: true, tabSize: 4 } });
+
+        return applyEdits(packageJsonText, edits);
+    } catch {
+        return packageJsonText;
+    }
+};
+
 const collectFiles = (directory: string): ReadonlyArray<string> => {
     const out: string[] = [];
 
@@ -356,7 +378,7 @@ const copyTemplate = async (sourceDirectory: string, target: string, name: strin
         // tag) so the scaffold installs real code, not the `^0.0.0` stub. Other
         // deps and non-package.json files pass through.
         if (text !== undefined && basename(source) === "package.json") {
-            text = stampLunoraDeps(text, distTag, versions);
+            text = stampPnpmBuildAllowlist(stampLunoraDeps(text, distTag, versions));
         }
 
         if (text === undefined) {
@@ -613,7 +635,16 @@ const maybeOfferInstall = async (options: InitCommandOptions, target: string): P
 
     const spawner = options.spawner ?? defaultSpawner;
     const { args, command } = installArgsFor(manager);
-    const result = await withTuiSpinner(`Installing dependencies with ${manager}…`, () => spawner({ args, command, cwd: target }));
+
+    // Stream the package manager's OWN output straight through (the spawner
+    // inherits stdio) — NOT behind a TUI spinner. An Ink spinner owns the
+    // terminal, so it garbles the manager's live progress and blocks any prompt
+    // it shows (e.g. pnpm's build-script approval). `emitStep` also gives the
+    // line its own breathing room, so the manager output is cleanly separated
+    // from the package-manager answer above it.
+    await emitStep("deps", `Installing dependencies with ${manager}…`);
+
+    const result = await spawner({ args, command, cwd: target });
 
     if (result.code !== 0) {
         options.logger.warn(`\`${command} install\` exited with code ${String(result.code)} — run it yourself in ${basename(target)}/.`);
