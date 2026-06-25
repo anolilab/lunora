@@ -721,6 +721,14 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 warn: (...args: unknown[]) => { this.recordUserLog(logFunctionPath, "warn", args, observability); },
             };
 
+            // `ctx.now`: the wall-clock instant (epoch ms) this function began,
+            // captured ONCE so the whole handler body sees a single stable value.
+            // Query/mutation handlers must be deterministic (they may be re-run on
+            // OCC retry / subscription re-eval), so they must read time through
+            // `ctx.now` instead of `Date.now()` — the `nondeterministic_query_mutation`
+            // advisor flags the latter. Actions may still use ambient `Date.now()`.
+            const now = Date.now();
+
             const ctx: Record<string, unknown> = {
                 auth: {
                     getIdentity: async () => identity ?? null,
@@ -730,6 +738,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 fetch: globalThis.fetch.bind(globalThis),
                 ip: this.getCurrentIp(),
                 log,
+                now,
                 orm: bindOrm(facade),
                 scheduler,
                 storage,
