@@ -1,3 +1,14 @@
+## @lunora/config [1.0.0-alpha.8](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.7...@lunora/config@1.0.0-alpha.8) (2026-06-25)
+
+### Bug Fixes
+
+* **config:** see package schema extensions in schema-info ([9912f53](https://github.com/anolilab/lunora/commit/9912f53de444487cdc1cfd796b47e9c26fa0312e))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.6
+
 ## @lunora/config [1.0.0-alpha.7](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.6...@lunora/config@1.0.0-alpha.7) (2026-06-25)
 
 
