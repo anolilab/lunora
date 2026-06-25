@@ -96,7 +96,7 @@ const padBadge = (text: string): string => ` ${text} `;
 const badgeLead = (text: string): string => " ".repeat(Math.max(0, BADGE_GUTTER - text.length));
 
 /** Total columns a rendered badge column occupies (lead + box), constant across badges. */
-const BADGE_COLUMN_WIDTH = BADGE_GUTTER + 2;
+const BADGE_COLUMN_WIDTH: number = BADGE_GUTTER + 2;
 
 /** Columns a rendered badge occupies — the gutter-aligned column width. */
 const badgeWidth = (_spec: BadgeSpec): number => BADGE_COLUMN_WIDTH;
@@ -111,4 +111,18 @@ const paintBadge = (spec: BadgeSpec): string =>
 const paintAnswer = (text: string): string => colorize.dim(text);
 
 export type { BadgeName, BadgeSpec, LevelBadgeName, StepBadgeName };
-export { ACCENT, badgeLead, BADGES, badgeWidth, LUNA_ART, LUNA_BUNNY, LUNA_NAME, LUNA_SIGNOFF, padBadge, paintAnswer, paintBadge, STEP_BADGE_NAMES };
+export {
+    ACCENT,
+    BADGE_COLUMN_WIDTH,
+    badgeLead,
+    BADGES,
+    badgeWidth,
+    LUNA_ART,
+    LUNA_BUNNY,
+    LUNA_NAME,
+    LUNA_SIGNOFF,
+    padBadge,
+    paintAnswer,
+    paintBadge,
+    STEP_BADGE_NAMES,
+};

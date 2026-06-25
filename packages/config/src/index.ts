@@ -75,6 +75,7 @@ export { discoverSchemaInfo } from "./schema-info";
 export type { BadgeName, BadgeSpec, LevelBadgeName, StepBadgeName } from "./tui-theme";
 export {
     ACCENT,
+    BADGE_COLUMN_WIDTH,
     badgeLead,
     BADGES,
     badgeWidth,
