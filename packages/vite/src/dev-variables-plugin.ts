@@ -1,6 +1,7 @@
 import { createConfirm, ensureDevVariables } from "@lunora/config";
 import type { Plugin } from "vite";
 
+import { lunoraLine } from "./log";
 import type { ResolvedLunoraPluginOptions } from "./types";
 
 /**
@@ -24,7 +25,7 @@ const devVariablesPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 cwd: options.projectRoot,
                 info: (message) => {
                     // eslint-disable-next-line no-console -- dev-server startup notice, before Vite's logger is wired up
-                    console.info(`[lunora] ${message}`);
+                    console.info(lunoraLine(message));
                 },
             });
         },

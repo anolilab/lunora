@@ -4,6 +4,7 @@ import type { WranglerConfig } from "@lunora/config";
 import { readWranglerJsonc, validateWranglerProject } from "@lunora/config";
 import type { Plugin } from "vite";
 
+import { lunoraLine } from "./log";
 import type { ResolvedLunoraPluginOptions } from "./types";
 
 /** Mirrors the config-layer heuristic: a container image that is a local path. */
@@ -36,7 +37,9 @@ const warnWhenDockerMissing = (wranglerPath: string, dockerAvailable: () => bool
 
     // eslint-disable-next-line no-console
     console.warn(
-        "[lunora] wrangler.jsonc declares containers built from a local Dockerfile, but no Docker-compatible engine is running. Start Docker (or Colima) before `vite dev`, or the container instances will fail to start.",
+        lunoraLine(
+            "wrangler.jsonc declares containers built from a local Dockerfile, but no Docker-compatible engine is running. Start Docker (or Colima) before `vite dev`, or the container instances will fail to start.",
+        ),
     );
 };
 
@@ -81,7 +84,7 @@ const wranglerValidatorPlugin = (options: ResolvedLunoraPluginOptions): Plugin =
             if (result.report.warnings.length > 0) {
                 for (const warning of result.report.warnings) {
                     // eslint-disable-next-line no-console
-                    console.warn(`[lunora] wrangler validator: ${warning}`);
+                    console.warn(lunoraLine(`wrangler validator: ${warning}`));
                 }
             }
 

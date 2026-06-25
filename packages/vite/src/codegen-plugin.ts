@@ -8,6 +8,7 @@ import type { Project } from "ts-morph";
 import type { Plugin, ViteDevServer } from "vite";
 
 import { reconcileWranglerCrons } from "./cron-sync";
+import { LUNORA_TAG } from "./log";
 import type { ResolvedLunoraPluginOptions } from "./types";
 
 const DEBOUNCE_MS = 100;
@@ -56,11 +57,11 @@ const reconcileBindingsSafely = async (
         const reconciled = reconcileWranglerBindings(options.projectRoot, inferred);
 
         if (reconciled.changed) {
-            logger.info?.(`[lunora] inferred bindings → ${reconciled.added.join(", ")} (written to ${reconciled.wranglerPath ?? "wrangler.jsonc"})`);
+            logger.info?.(`${LUNORA_TAG} inferred bindings → ${reconciled.added.join(", ")} (written to ${reconciled.wranglerPath ?? "wrangler.jsonc"})`);
         }
 
         for (const warning of reconciled.warnings) {
-            logger.warn(`[lunora] ${warning}`);
+            logger.warn(`${LUNORA_TAG} ${warning}`);
         }
 
         if (reconciled.exportGaps.length > 0) {
@@ -69,7 +70,7 @@ const reconcileBindingsSafely = async (
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 
-        logger.warn(`[lunora] binding inference skipped: ${message}`);
+        logger.warn(`${LUNORA_TAG} binding inference skipped: ${message}`);
     }
 };
 
@@ -97,7 +98,7 @@ const runCodegenSafely = (
     const schemaPath = join(options.projectRoot, options.schemaDir, "schema.ts");
 
     if (!existsSync(schemaPath)) {
-        logger.warn(`[lunora] schema.ts not found at ${schemaPath} — codegen skipped`);
+        logger.warn(`${LUNORA_TAG} schema.ts not found at ${schemaPath} — codegen skipped`);
 
         return undefined;
     }
@@ -112,19 +113,21 @@ const runCodegenSafely = (
             const reconciled = reconcileWranglerCrons(options.projectRoot, result.cronTriggers);
 
             if (reconciled.changed) {
-                logger.info?.(`[lunora] synced ${result.cronTriggers.length.toFixed(0)} cron trigger(s) into ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
+                logger.info?.(
+                    `${LUNORA_TAG} synced ${result.cronTriggers.length.toFixed(0)} cron trigger(s) into ${reconciled.wranglerPath ?? "wrangler.jsonc"}`,
+                );
             }
         } catch (cronError: unknown) {
             const message = cronError instanceof Error ? cronError.message : String(cronError);
 
-            logger.warn(`[lunora] cron trigger sync skipped: ${message}`);
+            logger.warn(`${LUNORA_TAG} cron trigger sync skipped: ${message}`);
         }
 
         // Surface static schema advisories (unindexed FKs, …) in the dev/build
         // log. Codegen returns them without printing; the richer error-overlay
         // presentation is a later step.
         for (const advisory of result.advisories) {
-            logger.warn(`[lunora] schema advisory [${advisory.level}] ${advisory.name}: ${advisory.detail} — ${advisory.remediation}`);
+            logger.warn(`${LUNORA_TAG} schema advisory [${advisory.level}] ${advisory.name}: ${advisory.detail} — ${advisory.remediation}`);
         }
 
         // Codegen succeeded. The browser error overlay (if any was shown) is
@@ -136,7 +139,7 @@ const runCodegenSafely = (
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 
-        logger.error(`[lunora] codegen failed: ${message}`);
+        logger.error(`${LUNORA_TAG} codegen failed: ${message}`);
 
         // In dev mode, surface the failure in the browser error overlay so the
         // user sees it immediately without leaving the browser.
