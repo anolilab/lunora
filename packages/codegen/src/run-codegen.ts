@@ -225,7 +225,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // exactly as createCodegenProject would.
     const project = options.project ?? createCodegenProject(lunoraDirectory);
 
-    const schema = discoverSchema(project, schemaPath);
+    const schema = discoverSchema(project, schemaPath, options.projectRoot);
     const functions = discoverFunctions(project, lunoraDirectory);
     const httpRoutes = discoverHttpRoutes(project, lunoraDirectory);
     const migrations = discoverMigrations(project, lunoraDirectory);

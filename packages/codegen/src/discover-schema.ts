@@ -4,6 +4,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import { diagnosticAt } from "./diagnostics";
 import type { IndexIR, RankIndexIR, RankSortKeyIR, RelationIR, SchemaIR, SearchIndexIR, TableIR, ValidatorIR, VectorIndexIR } from "./ir";
 import { parseObjectShape } from "./parse-validator";
+import { resolvePackageExtension } from "./resolve-package-extension";
 
 const VECTOR_METRICS = new Set(["cosine", "dot-product", "euclidean"]);
 const ON_DELETE_ACTIONS = new Set(["cascade", "restrict", "set null"]);
@@ -788,20 +789,27 @@ interface MergedExtension {
     vectorIndexes: VectorIndexIR[];
 }
 
-/** Apply runtime namespacing (table prefixing + intra-extension reference rewrite) to one resolved extension. */
-const mergeExtension = (key: string, options: ObjectLiteralExpression): MergedExtension => {
-    const bareTables = parseExtensionTables(options);
+/**
+ * Apply runtime namespacing (table prefixing + intra-extension reference
+ * rewrite) to an extension's BARE tables + standalone vector indexes — the step
+ * shared by the AST path and the package-runtime path ({@link resolvePackageExtension}).
+ */
+const namespaceExtension = (key: string, bareTables: ReadonlyArray<TableIR>, bareVectorIndexes: ReadonlyArray<VectorIndexIR>): MergedExtension => {
     const bareNames = new Set(bareTables.map((table) => table.name));
     const tables = bareTables.map((table) => namespaceExtensionTable(table, key, bareNames));
 
     // Standalone vector indexes carry their own bare map key plus a `table`
     // reference; prefix both, matching the runtime merge.
-    const vectorIndexes = parseExtensionVectorIndexes(options).map((index) => {
+    const vectorIndexes = bareVectorIndexes.map((index) => {
         return { ...index, name: prefixTableName(key, index.name), table: rewriteReference(index.table, key, bareNames) };
     });
 
     return { tables, vectorIndexes };
 };
+
+/** Apply runtime namespacing to one AST-resolved `defineSchemaExtension(...)` options object. */
+const mergeExtension = (key: string, options: ObjectLiteralExpression): MergedExtension =>
+    namespaceExtension(key, parseExtensionTables(options), parseExtensionVectorIndexes(options));
 
 /**
  * Resolve + merge one `.extend(...)` call into a {@link MergedExtension}, or
@@ -809,7 +817,7 @@ const mergeExtension = (key: string, options: ObjectLiteralExpression): MergedEx
  * local sources or is malformed. Mirrors how codegen elsewhere warns rather
  * than crashing on inputs it can't statically resolve.
  */
-const mergeExtendCall = (extendCall: CallExpression): MergedExtension | undefined => {
+const mergeExtendCall = (extendCall: CallExpression, projectRoot: string | undefined): MergedExtension | undefined => {
     const extendArgument = extendCall.getArguments()[0];
 
     if (!extendArgument) {
@@ -819,9 +827,21 @@ const mergeExtendCall = (extendCall: CallExpression): MergedExtension | undefine
     const resolved = resolveSchemaExtensionCall(extendArgument);
 
     if (!resolved) {
-        // eslint-disable-next-line no-console -- codegen surfaces a clear, actionable warning when an extension cannot be resolved locally.
+        // AST resolution bailed (the extension lives in a published package, only
+        // a `.d.ts` is reachable). When we know the project root, fall back to
+        // importing the package and introspecting its runtime extension value
+        // (Plan 056). Returns `undefined` on any failure → the warn+skip below.
+        if (projectRoot !== undefined) {
+            const fromPackage = resolvePackageExtension(extendArgument, projectRoot);
+
+            if (fromPackage) {
+                return namespaceExtension(fromPackage.key, fromPackage.bareTables, fromPackage.bareVectorIndexes);
+            }
+        }
+
+        // eslint-disable-next-line no-console -- codegen surfaces a clear, actionable warning when an extension cannot be resolved.
         console.warn(
-            `@lunora/codegen: skipping \`.extend(${extendArgument.getText()})\` — its \`defineSchemaExtension(...)\` definition could not be resolved from local sources (cross-package node_modules/.d.ts resolution is a deferred phase). Extension tables will be absent from the generated types.`,
+            `@lunora/codegen: skipping \`.extend(${extendArgument.getText()})\` — its \`defineSchemaExtension(...)\` could not be resolved from local sources, and ${projectRoot === undefined ? "no project root was available to resolve the package" : "the package could not be imported/introspected"}. Extension tables will be absent from the generated types.`,
         );
 
         return undefined;
@@ -906,12 +926,12 @@ const parseBaseTables = (object: ObjectLiteralExpression): TableIR[] => {
  * Cross-package extensions (only reachable as a `.d.ts`) are skipped with a
  * warning — a deferred phase. Throws on a real post-prefix table collision.
  */
-const applyExtensions = (defineSchemaCall: CallExpression, tables: TableIR[]): VectorIndexIR[] => {
+const applyExtensions = (defineSchemaCall: CallExpression, tables: TableIR[], projectRoot: string | undefined): VectorIndexIR[] => {
     const existingTableNames = new Set(tables.map((table) => table.name));
     const vectorIndexes: VectorIndexIR[] = [];
 
     for (const extendCall of extendCallsOf(defineSchemaCall)) {
-        const merged = mergeExtendCall(extendCall);
+        const merged = mergeExtendCall(extendCall, projectRoot);
 
         if (!merged) {
             continue;
@@ -939,7 +959,7 @@ const applyExtensions = (defineSchemaCall: CallExpression, tables: TableIR[]): V
  * Load `&lt;projectRoot>/lunora/schema.ts`, find `defineSchema({...})`, and
  * return a structural IR. Throws if the file or call cannot be found.
  */
-const discoverSchema = (project: Project, schemaPath: string): SchemaIR => {
+const discoverSchema = (project: Project, schemaPath: string, projectRoot?: string): SchemaIR => {
     const file: SourceFile = project.addSourceFileAtPath(schemaPath);
 
     const defineSchemaCall = file.getDescendantsOfKind(SyntaxKind.CallExpression).find((call) => {
@@ -967,7 +987,7 @@ const discoverSchema = (project: Project, schemaPath: string): SchemaIR => {
 
     // Merge chained `.extend(...)` extensions, mutating `tables` and collecting
     // their standalone vector indexes.
-    const extensionStandaloneVectorIndexes = applyExtensions(defineSchemaCall, tables);
+    const extensionStandaloneVectorIndexes = applyExtensions(defineSchemaCall, tables, projectRoot);
 
     // Flatten inline Shape A indexes (hoisted with their owning table) plus Shape B
     // plus extension-contributed standalone vector indexes.

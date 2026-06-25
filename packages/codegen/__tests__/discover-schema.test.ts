@@ -1,9 +1,15 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { defineTable, v } from "@lunora/server";
 import { Project } from "ts-morph";
 import { describe, expect, it } from "vitest";
 
 import { CodegenDiagnosticError } from "../src/diagnostics";
 import discoverSchema from "../src/discover-schema";
 import { emitDataModel } from "../src/emit";
+import { runtimeTableToIR } from "../src/resolve-package-extension";
 
 /**
  * Build a fresh in-memory project hosting a `schema.ts` with the given source.
@@ -847,6 +853,159 @@ describe("discoverSchema", () => {
         const schema = discoverSchema(project, schemaPath);
 
         expect(schema.tables.map((table) => table.name).toSorted((a, b) => a.localeCompare(b))).toEqual(["ratelimit_buckets", "todos"]);
+    });
+
+    it("resolves a schema extension defined inside an installed package (node_modules runtime introspection)", () => {
+        expect.assertions(3);
+
+        // Plan 056: when the extension can't be resolved from local AST (it lives
+        // in a published package), codegen imports the package from the project
+        // root and introspects its runtime `SchemaExtension` value.
+        const root = mkdtempSync(join(tmpdir(), "lunora-pkgext-"));
+
+        try {
+            // A fake installed package shipping a runtime definePlugin-shaped value:
+            // duck-typed validators (`{ kind, _meta }`) + a `defineTable`-shaped builder.
+            const pkgDir = join(root, "node_modules", "test-rl-ext");
+
+            mkdirSync(pkgDir, { recursive: true });
+            writeFileSync(join(pkgDir, "package.json"), JSON.stringify({ exports: "./index.mjs", main: "index.mjs", name: "test-rl-ext", type: "module" }));
+            writeFileSync(
+                join(pkgDir, "index.mjs"),
+                `const s = (kind) => ({ kind, _meta: { column: { notNull: true } } });
+                 const optional = (inner) => ({ kind: "optional", _meta: { inner, column: { notNull: false } } });
+                 const buckets = {
+                     shape: { key: s("string"), value: s("number"), ts: s("number"), prev: optional(s("number")) },
+                     indexes: [{ fields: ["key"], name: "by_key", unique: false }],
+                     shardMode: { kind: "root" },
+                 };
+                 export const ratelimit = { key: "ratelimit", extension: { key: "ratelimit", tables: { buckets } } };
+                `,
+            );
+
+            mkdirSync(join(root, "lunora"), { recursive: true });
+            const schemaPath = join(root, "lunora", "schema.ts");
+
+            writeFileSync(
+                schemaPath,
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+                 import { ratelimit } from "test-rl-ext";
+                 export const schema = defineSchema({ todos: defineTable({ title: v.string() }) }).extend(ratelimit.extension);
+                `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true });
+            const schema = discoverSchema(project, schemaPath, root);
+
+            const buckets = schema.tables.find((table) => table.name === "ratelimit_buckets");
+
+            expect(schema.tables.map((table) => table.name).toSorted((a, b) => a.localeCompare(b))).toEqual(["ratelimit_buckets", "todos"]);
+            expect(Object.keys(buckets?.shape ?? {}).toSorted((a, b) => a.localeCompare(b))).toEqual(["key", "prev", "ts", "value"]);
+            expect(buckets?.indexes).toEqual([{ fields: ["key"], name: "by_key" }]);
+        } finally {
+            rmSync(root, { force: true, recursive: true });
+        }
+    });
+
+    it("resolves a package extension imported as a default export (.extend(plugin.extension))", () => {
+        expect.assertions(1);
+
+        const root = mkdtempSync(join(tmpdir(), "lunora-pkgext-default-"));
+
+        try {
+            const pkgDir = join(root, "node_modules", "test-default-ext");
+
+            mkdirSync(pkgDir, { recursive: true });
+            writeFileSync(
+                join(pkgDir, "package.json"),
+                JSON.stringify({ exports: "./index.mjs", main: "index.mjs", name: "test-default-ext", type: "module" }),
+            );
+            writeFileSync(
+                join(pkgDir, "index.mjs"),
+                `const s = (kind) => ({ kind, _meta: { column: { notNull: true } } });
+                 const present = { shape: { roomId: s("string") }, indexes: [], shardMode: { kind: "root" } };
+                 export default { key: "presence", extension: { key: "presence", tables: { present } } };
+                `,
+            );
+
+            mkdirSync(join(root, "lunora"), { recursive: true });
+            const schemaPath = join(root, "lunora", "schema.ts");
+
+            writeFileSync(
+                schemaPath,
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+                 import presence from "test-default-ext";
+                 export const schema = defineSchema({ todos: defineTable({ title: v.string() }) }).extend(presence.extension);
+                `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true });
+            const schema = discoverSchema(project, schemaPath, root);
+
+            expect(schema.tables.map((table) => table.name).toSorted((a, b) => a.localeCompare(b))).toEqual(["presence_present", "todos"]);
+        } finally {
+            rmSync(root, { force: true, recursive: true });
+        }
+    });
+
+    it("runtimeTableToIR converts a REAL `defineTable` builder (drift guard for `@lunora/values` _meta)", () => {
+        expect.assertions(8);
+
+        // Build with the real `v`/`defineTable` so a rename of a validator's `_meta`
+        // key (inner/members/shape/valueValidator/tableName/value) FAILS this test
+        // rather than silently degrading every package-extension column.
+        const builder = defineTable({
+            count: v.optional(v.number()),
+            meta: v.record(v.string(), v.number()),
+            nested: v.object({ x: v.string() }),
+            tag: v.union(v.literal("a"), v.id("things")),
+            title: v.string(),
+        }).index("by_title", ["title"]);
+
+        const table = runtimeTableToIR(builder, "t");
+
+        expect(table.shape["title"]?.kind).toBe("string");
+        expect(table.shape["count"]?.kind).toBe("optional");
+        expect(table.shape["count"]?.inner?.kind).toBe("number");
+        expect(table.shape["tag"]?.members?.map((member) => member.kind)).toEqual(["literal", "id"]);
+        expect(table.shape["tag"]?.members?.[1]?.tableName).toBe("things");
+        expect(table.shape["meta"]?.valueType?.kind).toBe("number");
+        expect(table.shape["nested"]?.shape?.["x"]?.kind).toBe("string");
+        expect(table.indexes).toEqual([{ fields: ["title"], name: "by_title" }]);
+    });
+
+    it("skips (without throwing) a package export that is not a SchemaExtension", () => {
+        expect.assertions(1);
+
+        const root = mkdtempSync(join(tmpdir(), "lunora-pkgext-bad-"));
+
+        try {
+            const pkgDir = join(root, "node_modules", "test-bad-ext");
+
+            mkdirSync(pkgDir, { recursive: true });
+            writeFileSync(join(pkgDir, "package.json"), JSON.stringify({ exports: "./index.mjs", main: "index.mjs", name: "test-bad-ext", type: "module" }));
+            // `extension` resolves to a non-SchemaExtension value (no string `key`).
+            writeFileSync(join(pkgDir, "index.mjs"), `export const bad = { extension: { nope: true } };\n`);
+
+            mkdirSync(join(root, "lunora"), { recursive: true });
+            const schemaPath = join(root, "lunora", "schema.ts");
+
+            writeFileSync(
+                schemaPath,
+                `import { defineSchema, defineTable, v } from "@lunora/server";
+                 import { bad } from "test-bad-ext";
+                 export const schema = defineSchema({ todos: defineTable({ title: v.string() }) }).extend(bad.extension);
+                `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true });
+            const schema = discoverSchema(project, schemaPath, root);
+
+            // Fail-safe: the extension is dropped (warn+skip), the base table survives, nothing throws.
+            expect(schema.tables.map((table) => table.name)).toEqual(["todos"]);
+        } finally {
+            rmSync(root, { force: true, recursive: true });
+        }
     });
 
     it("merges multiple chained .extend() calls", () => {
