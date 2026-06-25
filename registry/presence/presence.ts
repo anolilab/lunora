@@ -114,7 +114,7 @@ export const listPresent = query
 
         const rows = await ctx.db
             .query(PRESENCE_TABLE)
-            .withIndex("byRoom", (q) => q.eq("roomId", roomId))
+            .withIndex("byRoomSession", (q) => q.eq("roomId", roomId))
             .collect();
 
         return rows
@@ -145,11 +145,11 @@ export const listPresent = query
  * `listPresent` via the read-time TTL filter, so this is purely housekeeping.
  */
 export const sweep = internalMutation.input({ roomId: v.string() }).mutation(async ({ args: { roomId }, ctx }): Promise<{ deleted: number }> => {
-    const cutoff = Date.now() - PRESENCE_TTL_MS;
+    const cutoff = ctx.now - PRESENCE_TTL_MS;
 
     const stale = await ctx.db
         .query(PRESENCE_TABLE)
-        .withIndex("byRoom", (q) => q.eq("roomId", roomId))
+        .withIndex("byRoomSession", (q) => q.eq("roomId", roomId))
         .filter((row) => (row["lastSeen"] as number) <= cutoff)
         .collect();
 

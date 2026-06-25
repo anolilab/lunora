@@ -70,12 +70,17 @@ export const ratelimit = definePlugin("ratelimit", {
     extension: defineSchemaExtension("ratelimit", {
         tables: {
             // Bare name — auto-prefixes to `ratelimit_buckets` at merge time.
+            // `externallyManaged`: rows are written by `createDbStore` (via
+            // `makeRateLimiter`), not a discoverable `ctx.db.insert(...)`, so the
+            // `table_without_insert` advisor correctly skips it.
             buckets: defineTable({
                 key: v.string(),
                 value: v.number(),
                 ts: v.number(),
                 prev: v.optional(v.number()),
-            }).index("by_key", ["key"]),
+            })
+                .index("by_key", ["key"])
+                .externallyManaged(),
         },
     }),
     middleware,
