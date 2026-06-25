@@ -21,7 +21,7 @@ const agentRulesHintPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                     return;
                 }
 
-                server.config.logger.warn(`\n  ${lunoraLine(AGENT_RULES_HINT)}\n`);
+                server.config.logger.warn(`\n${lunoraLine(AGENT_RULES_HINT)}\n`);
             };
         },
         name: "lunora:agent-rules-hint",
