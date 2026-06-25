@@ -1,3 +1,15 @@
+## @lunora/vite [1.0.0-alpha.9](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.8...@lunora/vite@1.0.0-alpha.9) (2026-06-25)
+
+### Bug Fixes
+
+* **vite:** forward warn to the error overlay by default ([cf7dda2](https://github.com/anolilab/lunora/commit/cf7dda2d682ebc675dddfec7fc9d8397dbff5ac2))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.7
+* **@lunora/config:** upgraded to 1.0.0-alpha.9
+
 ## @lunora/vite [1.0.0-alpha.8](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.7...@lunora/vite@1.0.0-alpha.8) (2026-06-25)
 
 
