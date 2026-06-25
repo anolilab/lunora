@@ -1,3 +1,9 @@
+## @lunora/config [1.0.0-alpha.10](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.9...@lunora/config@1.0.0-alpha.10) (2026-06-25)
+
+### Bug Fixes
+
+* **config:** scaffold LUNORA_ADMIN_TOKEN as a core secret ([6cd2567](https://github.com/anolilab/lunora/commit/6cd25676e4799e7383c52f5e7bbccce7b3b92068))
+
 ## @lunora/config [1.0.0-alpha.9](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.8...@lunora/config@1.0.0-alpha.9) (2026-06-25)
 
 
