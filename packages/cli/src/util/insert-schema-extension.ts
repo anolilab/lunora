@@ -16,8 +16,8 @@
  * `@lunora/cli`; this module is only imported from the `add` command's reconcile
  * path, never at CLI start.
  */
-import type { CallExpression } from "ts-morph";
-import { Project, SyntaxKind } from "ts-morph";
+import type { CallExpression, Node as TsNode } from "ts-morph";
+import { Node, Project, SyntaxKind } from "ts-morph";
 
 type InsertSchemaExtensionResult =
     | { ok: true; text: string }
@@ -45,8 +45,9 @@ const endMarker = (key: string): string => `// lunora:add:${key}:end`;
 const extensionImportSpecifier = (key: string): string => `./${key}/schema`;
 
 /**
- * Locate the `export const schema = defineSchema(...)` call so we can append a
- * `.extend()` to the end of its (possibly already chained) expression.
+ * Locate the `defineSchema(...)` call so we can append a `.extend()` to the end
+ * of its (possibly already chained) expression — whether it's bound to a
+ * `const schema = …` or sits behind an `export default …`.
  */
 const findDefineSchemaCall = (callExpressions: ReadonlyArray<CallExpression>): CallExpression | undefined => {
     for (const call of callExpressions) {
@@ -56,6 +57,29 @@ const findDefineSchemaCall = (callExpressions: ReadonlyArray<CallExpression>): C
     }
 
     return undefined;
+};
+
+/**
+ * The outermost expression of the `defineSchema(...).extend(...)…` call chain.
+ * Walk up only through chain links where `node` is the callee/receiver (a
+ * `.method()` continuation), never an enclosing call that merely takes the chain
+ * as an argument — so the `.extend(...)` is spliced at the true end of the chain
+ * regardless of whether it's a `const schema = …` binding or an `export default …`.
+ */
+const outermostChainExpression = (defineSchemaCall: CallExpression): TsNode => {
+    let node: TsNode = defineSchemaCall;
+
+    for (let parent = node.getParent(); parent !== undefined; parent = node.getParent()) {
+        if (Node.isPropertyAccessExpression(parent) && parent.getExpression() === node) {
+            node = parent;
+        } else if (Node.isCallExpression(parent) && parent.getExpression() === node) {
+            node = parent;
+        } else {
+            break;
+        }
+    }
+
+    return node;
 };
 
 /**
@@ -97,28 +121,15 @@ const insertSchemaExtension = (source: string, key: string): InsertSchemaExtensi
         return { ok: false, reason: "non-object-argument" };
     }
 
-    // Walk up from the `defineSchema(...)` call to the full chained expression
-    // (it may already end in `.extend(...)` from a previous item) and to the
-    // VariableStatement so we can find the `= ` initializer to append onto.
-    const variableDeclaration = defineSchemaCall.getFirstAncestorByKind(SyntaxKind.VariableDeclaration);
-
-    if (!variableDeclaration) {
-        return { ok: false, reason: "no-define-schema" };
-    }
-
-    const initializer = variableDeclaration.getInitializer();
-
-    if (!initializer) {
-        return { ok: false, reason: "no-define-schema" };
-    }
-
     // Splice the chained `.extend(...)` in via raw-text insertion at the end of
-    // the initializer expression (before the statement terminator `;`). We avoid
-    // ts-morph's `replaceWithText` here because re-printing a chained expression
-    // with trailing line-comments confuses the parser on a second pass; raw
-    // splicing keeps the managed markers as plain trivia. A trailing newline
-    // after the end-marker keeps the statement's `;` on its own line.
-    const insertAt = initializer.getEnd();
+    // the full `defineSchema(...).extend(...)…` chain (before the statement
+    // terminator `;`). Works for both `const schema = defineSchema(...)` and
+    // `export default defineSchema(...)` — we resolve the chain end from the call
+    // itself rather than a variable binding. We avoid ts-morph's `replaceWithText`
+    // here because re-printing a chained expression with trailing line-comments
+    // confuses the parser on a second pass; raw splicing keeps the managed markers
+    // as plain trivia. A trailing newline after the end-marker keeps the `;` on its own line.
+    const insertAt = outermostChainExpression(defineSchemaCall).getEnd();
     const chainText = `\n    ${startMarker(key)}\n    .extend(${key}.extension)\n    ${endMarker(key)}\n`;
 
     sourceFile.insertText(insertAt, chainText);
