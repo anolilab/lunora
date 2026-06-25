@@ -51,10 +51,13 @@ export {
     ensureDevVariables,
     ensureDevVarsExample,
     fillDevSecrets,
+    generateSecretValue,
+    isMintableSecretKey,
     isPlaceholderValue,
     planDevSecretsFill,
     planDevVariablesAugment,
     planDevVariablesScaffold,
+    requiredSecrets,
 } from "./scaffold-dev-variables";
 export type {
     AddIndexEdit,

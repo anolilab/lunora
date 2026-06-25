@@ -11,7 +11,7 @@ import {
     unquoteDevVariable,
 } from "./dev-variables-format";
 import type { SecretEntry } from "./package-secrets-registry";
-import { CORE_SECRETS, secretsForPackages } from "./package-secrets-registry";
+import { CORE_SECRETS, PACKAGE_SECRETS_REGISTRY, secretsForPackages } from "./package-secrets-registry";
 
 /** Core (always-scaffolded) secrets followed by the package-specific ones for the detected capabilities. */
 const requiredSecrets = (packageNames: ReadonlyArray<string>): SecretEntry[] => [...CORE_SECRETS, ...secretsForPackages(packageNames)];
@@ -125,6 +125,30 @@ const defaultRandomHex = (bytes: number): string => randomBytes(bytes).toString(
  */
 const generatedSecretFor = (key: string, rawValue: string, randomHex: (bytes: number) => string): string | undefined =>
     SECRET_KEY.test(key) && isPlaceholder(rawValue) ? randomHex(SECRET_BYTES) : undefined;
+
+/**
+ * Provider-issued secret keys we CANNOT mint locally — you obtain them from a
+ * third-party dashboard (Resend, Stripe, Polar, …). Derived from the registry:
+ * a secret-keyed entry whose placeholder is an angle-bracket `&lt;your-…>` marker
+ * (rather than the `openssl rand` marker) is a provider key. Generating a random
+ * value for one would be actively wrong (the provider would reject it).
+ */
+const PROVIDER_SECRET_KEYS: ReadonlySet<string> = new Set(
+    [...CORE_SECRETS, ...Object.values(PACKAGE_SECRETS_REGISTRY).flat()]
+        .filter((entry) => SECRET_KEY.test(entry.key) && entry.placeholderValue.startsWith("<"))
+        .map((entry) => entry.key),
+);
+
+/**
+ * True for a secret-looking key whose value Lunora can mint locally (a random
+ * 32-byte hex, like `openssl rand -hex 32`) — e.g. `AUTH_SECRET`,
+ * `LUNORA_ADMIN_TOKEN`, `STORAGE_SIGNING_SECRET`. False for provider-issued keys
+ * ({@link PROVIDER_SECRET_KEYS}) and any non-secret key.
+ */
+const isMintableSecretKey = (key: string): boolean => SECRET_KEY.test(key) && !PROVIDER_SECRET_KEYS.has(key);
+
+/** Mint a fresh strong secret value — 64 hex chars (32 bytes), like `openssl rand -hex 32`. */
+const generateSecretValue = (randomHex: (bytes: number) => string = defaultRandomHex): string => randomHex(SECRET_BYTES);
 
 /**
  * The outcome of planning a scaffold — a discriminated union so the orchestrator
@@ -588,8 +612,11 @@ export {
     ensureDevVariables,
     ensureDevVariablesExample as ensureDevVarsExample,
     fillDevSecrets,
+    generateSecretValue,
+    isMintableSecretKey,
     isPlaceholderValue,
     planDevSecretsFill,
     planDevVariablesAugment,
     planDevVariablesScaffold,
+    requiredSecrets,
 };
