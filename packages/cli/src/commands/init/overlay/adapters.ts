@@ -13,7 +13,13 @@
  * The `lunora()` Vite plugin does NOT bundle the framework JSX plugin, so the
  * base's official `react()`/`vue()`/`solid()` plugin is kept and `lunora()` is
  * simply added (see `patchViteConfig`).
+ *
+ * Each adapter also overwrites create-vite's default `App` + base stylesheet
+ * with the branded Lunora welcome (see `./welcome`), so an overlaid project
+ * opens on the Lunora hero rather than the generic Vite "Get started" splash.
  */
+
+import { REACT_APP, SOLID_APP, SVELTE_APP, VANILLA_MAIN, VUE_APP, WELCOME_CSS } from "./welcome";
 
 /** A file the overlay writes into the scaffolded project (relative path + contents). */
 interface OverlayFile {
@@ -131,50 +137,57 @@ const app = mount(Root, { target: document.getElementById("app")! });
 export default app;
 `;
 
-/* eslint-disable no-secrets/no-secrets -- emitted vanilla starter code (a `document.querySelector` line), flagged for entropy but not a credential */
-const VANILLA_MAIN = `import "./style.css";
-
-import { LunoraClient } from "lunorash/client";
-
-import { api } from "../lunora/_generated/api";
-
-// Vanilla starter: no framework provider — talk to Lunora through the client
-// directly. \`@lunora/vite\` runs the Worker on the same origin as Vite.
-${READ_URL}
-const client = new LunoraClient({ url });
-
-const root = document.querySelector<HTMLDivElement>("#app")!;
-
-const heading = document.createElement("h1");
-heading.textContent = "Vite + Lunora";
-
-const output = document.createElement("pre");
-root.replaceChildren(heading, output);
-
-const render = (messages: unknown): void => {
-    // textContent (not innerHTML) — never inject server data as markup.
-    output.textContent = JSON.stringify(messages, null, 2);
-};
-
-// Live subscription: the list re-renders on every server delta.
-client.onUpdate(api.messages.list, { channelId: "channel:demo" }, render);
-`;
-/* eslint-enable no-secrets/no-secrets */
-
 const ADAPTERS = {
-    react: { adapter: "@lunora/react", createViteTemplate: "react-ts", files: [{ contents: REACT_MAIN, path: "src/main.tsx" }], label: "React" },
-    solid: { adapter: "@lunora/solid", createViteTemplate: "solid", files: [{ contents: SOLID_INDEX, path: "src/index.tsx" }], label: "Solid" },
+    react: {
+        adapter: "@lunora/react",
+        createViteTemplate: "react-ts",
+        files: [
+            { contents: REACT_MAIN, path: "src/main.tsx" },
+            { contents: REACT_APP, path: "src/App.tsx" },
+            { contents: WELCOME_CSS, path: "src/index.css" },
+        ],
+        label: "React",
+    },
+    solid: {
+        adapter: "@lunora/solid",
+        createViteTemplate: "solid",
+        files: [
+            { contents: SOLID_INDEX, path: "src/index.tsx" },
+            { contents: SOLID_APP, path: "src/App.tsx" },
+            { contents: WELCOME_CSS, path: "src/index.css" },
+        ],
+        label: "Solid",
+    },
     svelte: {
         adapter: "@lunora/svelte",
         createViteTemplate: "svelte-ts",
         files: [
             { contents: SVELTE_ROOT, path: "src/Root.svelte" },
             { contents: SVELTE_MAIN, path: "src/main.ts" },
+            { contents: SVELTE_APP, path: "src/App.svelte" },
+            { contents: WELCOME_CSS, path: "src/app.css" },
         ],
         label: "Svelte",
     },
-    vanilla: { adapter: "lunorash/client", createViteTemplate: "vanilla-ts", files: [{ contents: VANILLA_MAIN, path: "src/main.ts" }], label: "Vanilla" },
-    vue: { adapter: "@lunora/vue", createViteTemplate: "vue-ts", files: [{ contents: VUE_MAIN, path: "src/main.ts" }], label: "Vue" },
+    vanilla: {
+        adapter: "lunorash/client",
+        createViteTemplate: "vanilla-ts",
+        files: [
+            { contents: VANILLA_MAIN, path: "src/main.ts" },
+            { contents: WELCOME_CSS, path: "src/style.css" },
+        ],
+        label: "Vanilla",
+    },
+    vue: {
+        adapter: "@lunora/vue",
+        createViteTemplate: "vue-ts",
+        files: [
+            { contents: VUE_MAIN, path: "src/main.ts" },
+            { contents: VUE_APP, path: "src/App.vue" },
+            { contents: WELCOME_CSS, path: "src/style.css" },
+        ],
+        label: "Vue",
+    },
 } satisfies Record<string, FrameworkAdapter>;
 
 /** The overlay-supported SPA frameworks (create-vite bases). */

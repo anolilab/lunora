@@ -84,6 +84,45 @@ describe("applyLunoraOverlay", () => {
         expect(wrangler).toContain('"class_name": "ShardDO"');
     });
 
+    it("writes the branded Lunora welcome (scoped CSS + a hero App) for every overlay framework", async () => {
+        expect.assertions(15);
+
+        // Per framework: which base stylesheet the welcome CSS overwrites, and
+        // which file carries the hero markup (vanilla renders it from its entry).
+        const cssPath: Record<string, string> = {
+            react: "src/index.css",
+            solid: "src/index.css",
+            svelte: "src/app.css",
+            vanilla: "src/style.css",
+            vue: "src/style.css",
+        };
+        const heroPath: Record<string, string> = {
+            react: "src/App.tsx",
+            solid: "src/App.tsx",
+            svelte: "src/App.svelte",
+            vanilla: "src/main.ts",
+            vue: "src/App.vue",
+        };
+
+        for (const [key, adapter] of Object.entries(ADAPTERS)) {
+            const target = join(base, key);
+
+            writeReactBase(target);
+            // eslint-disable-next-line no-await-in-loop -- sequential per-framework scaffold; the assertions below depend on each completing
+            await applyLunoraOverlay({ adapter, distTag: "alpha", logger: silentLogger(), name: "my-app", target });
+
+            // The scoped welcome stylesheet replaced the base stylesheet.
+            expect(readFileSync(join(target, cssPath[key] as string), "utf8")).toContain(".lunora-welcome");
+
+            const hero = readFileSync(join(target, heroPath[key] as string), "utf8");
+
+            // The hero markup + the framework-labelled footer (so it's the Lunora
+            // welcome, not create-vite's "Get started" splash).
+            expect(hero).toContain("lunora-welcome");
+            expect(hero).toContain(`Running on Lunora · Vite + ${adapter.label}`);
+        }
+    });
+
     it("replaces the entry with the Lunora-wired provider (react)", async () => {
         expect.assertions(2);
 
@@ -128,6 +167,29 @@ describe("applyLunoraOverlay", () => {
         expect(pkg.devDependencies.wrangler).toBeDefined();
         // create-vite's framework dep is untouched.
         expect(pkg.dependencies["react-dom"]).toBe("^19.2.7");
+    });
+
+    it("scaffolds an advisor-clean messages.ts (rate limit, bounded args, real insert) + the ratelimit dep", async () => {
+        expect.assertions(5);
+
+        writeReactBase(base);
+        await applyLunoraOverlay({ adapter: ADAPTERS.react, distTag: "alpha", logger: silentLogger(), name: "my-app", target: base });
+
+        const messages = readFileSync(join(base, "lunora", "messages.ts"), "utf8");
+
+        // public_mutation_without_ratelimit → the public `send` carries a rate limit.
+        expect(messages).toContain('rateLimit(limiter, "send"');
+        // table_without_insert → `send` writes a row.
+        expect(messages).toContain('ctx.db.insert("messages"');
+        // unbounded_string_arg → the string args are length-bounded.
+        expect(messages).toContain("maxLength");
+
+        // The rate limiter the starter imports must be installed.
+        const pkg = JSON.parse(readFileSync(join(base, "package.json"), "utf8")) as { dependencies: Record<string, string> };
+
+        expect(pkg.dependencies["@lunora/ratelimit"]).toBe("alpha");
+        // No leftover stub: the demo `list` query reads from `ctx.db`, not `messages: []`.
+        expect(messages).not.toContain("messages: []");
     });
 
     it("adds the #lunora/* subpath imports mapping so generated/registry modules resolve", async () => {
