@@ -1293,6 +1293,27 @@ interface LunoraWorker {
 const createWorker = (options: WorkerOptions): LunoraWorker => {
     const defaultShard = options.defaultShardKey ?? "__root__";
 
+    // Effective admin bearer for the request-time `/_lunora/admin/*` gates: the
+    // explicit `options.adminToken`, or — when unset (the `composeWorker` default,
+    // since the generated worker entry doesn't thread it) — `env.LUNORA_ADMIN_TOKEN`.
+    // Resolved once per isolate from the first request's env (env is constant
+    // within an isolate, so no cross-request race), mirroring `ensureSecurityResolved`.
+    // Without this, the local Studio's admin calls would 403 even though both it
+    // and the worker read the same `LUNORA_ADMIN_TOKEN` from `.dev.vars`.
+    let envAdminToken: string | undefined;
+    const effectiveAdminToken = (): string | undefined => options.adminToken ?? envAdminToken;
+    const resolveAdminTokenFromEnv = (env: unknown): void => {
+        if (envAdminToken !== undefined || options.adminToken !== undefined) {
+            return;
+        }
+
+        const value = ((env ?? {}) as Record<string, unknown>)["LUNORA_ADMIN_TOKEN"];
+
+        if (typeof value === "string" && value.length > 0) {
+            envAdminToken = value;
+        }
+    };
+
     // Fan-out and non-default shard routing are authorization-open when neither
     // `authorizeShard` nor `authorizeFanOut` is configured — any caller can name
     // any shard or fan a function across every shard for a table. That's the
@@ -1327,7 +1348,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const orchestrationAdminRoutes = buildOrchestrationAdminRoutes({
         defaultShard,
         forwardToShard,
-        isAdmin: (request) => checkAdminAuth(request, options.adminToken),
+        isAdmin: (request) => checkAdminAuth(request, effectiveAdminToken()),
         queryCoordinator: options.queryCoordinator,
         resolveForwardContext: (request, env) => resolveForwardContext(request, env, options.resolveIdentity),
         shardDO: options.shardDO,
@@ -1444,7 +1465,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * `/_lunora/admin/*` mutations.
      */
     const handleRunCronJob = async (request: Request, env: unknown): Promise<Response> => {
-        if (!checkAdminAuth(request, options.adminToken)) {
+        if (!checkAdminAuth(request, effectiveAdminToken())) {
             throw new LunoraError("admin endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
         }
 
@@ -1583,7 +1604,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // the scheduled R2 backup (mirroring the other extracted clusters).
     const dataMovementAdminRoutes = buildDataMovementAdminRoutes({
         applyGlobals: options.applyGlobals,
-        isAdmin: (request) => checkAdminAuth(request, options.adminToken),
+        isAdmin: (request) => checkAdminAuth(request, effectiveAdminToken()),
         knownTables: () => collectKnownTables(options.resolveTableSharding),
         queryCoordinator: options.queryCoordinator,
         resolveForwardContext: (request, env) => resolveForwardContext(request, env, options.resolveIdentity),
@@ -1606,7 +1627,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
     /** Throw 403 unless the request carries a valid admin bearer. */
     const assertAdminAuthorized = (request: Request): void => {
-        if (!checkAdminAuth(request, options.adminToken)) {
+        if (!checkAdminAuth(request, effectiveAdminToken())) {
             throw new LunoraError("admin endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
         }
     };
@@ -1666,7 +1687,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // the admin gate, scheduler-namespace requirement, and resolved stub through
     // injected deps (mirroring the other extracted clusters below).
     const scheduledAdminRoutes = buildScheduledAdminRoutes({
-        checkWsAdmin: (request) => checkAdminAuth(request, options.adminToken) || checkAdminWsToken(request, options.adminToken),
+        checkWsAdmin: (request) => checkAdminAuth(request, effectiveAdminToken()) || checkAdminWsToken(request, effectiveAdminToken()),
         requireSchedulerNamespace,
         resolveSchedulerStub,
         schedulerInstanceName: options.schedulerInstanceName ?? "default",
@@ -2559,6 +2580,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // below read `resolvedSecurity`, so opt-outs and env CORS apply from
             // the first request per isolate (not just the second onward).
             ensureSecurityResolved(env);
+
+            // Pick up `env.LUNORA_ADMIN_TOKEN` for the admin gates (see top of
+            // createWorker), so the Studio's admin calls authenticate when the
+            // token lives only in env (the composed-worker default).
+            resolveAdminTokenFromEnv(env);
 
             // CORS preflight is answered up front for allowlisted origins; its
             // own response already carries the `Access-Control-Allow-*` headers,
