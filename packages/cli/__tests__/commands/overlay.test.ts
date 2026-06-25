@@ -130,6 +130,18 @@ describe("applyLunoraOverlay", () => {
         expect(pkg.dependencies["react-dom"]).toBe("^19.2.7");
     });
 
+    it("adds the #lunora/* subpath imports mapping so generated/registry modules resolve", async () => {
+        expect.assertions(1);
+
+        writeReactBase(base);
+        await applyLunoraOverlay({ adapter: ADAPTERS.react, distTag: "alpha", logger: silentLogger(), name: "my-app", target: base });
+
+        const pkg = JSON.parse(readFileSync(join(base, "package.json"), "utf8")) as { imports?: Record<string, string> };
+
+        // Without this, the worker entry fails with "Cannot find module '#lunora/_generated/server.js'".
+        expect(pkg.imports?.["#lunora/*"]).toBe("./lunora/*");
+    });
+
     it("appends the Lunora ignores to .gitignore", async () => {
         expect.assertions(1);
 

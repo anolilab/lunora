@@ -33,7 +33,9 @@ describe("lunora init", () => {
         // dist-tag). Tests that assert concrete pinning override via `stubRegistry`.
         vi.stubGlobal(
             "fetch",
-            vi.fn(async () => { throw new Error("no network in tests"); }),
+            vi.fn(async () => {
+                throw new Error("no network in tests");
+            }),
         );
     });
 
@@ -46,12 +48,14 @@ describe("lunora init", () => {
     const stubRegistry = (version: string): void => {
         vi.stubGlobal(
             "fetch",
-            vi.fn(async () =>
-                {return {
-                    json: async () => {return { "dist-tags": { alpha: version, beta: version, latest: version, next: version } }},
+            vi.fn(async () => {
+                return {
+                    json: async () => {
+                        return { "dist-tags": { alpha: version, beta: version, latest: version, next: version } };
+                    },
                     ok: true,
-                }},
-            ),
+                };
+            }),
         );
     };
 
@@ -103,6 +107,33 @@ describe("lunora init", () => {
             expect(result.code).toBe(0);
             expect(calls).toHaveLength(1);
             expect(calls[0]?.descriptor).toMatchObject({ args: ["install"], command: "pnpm", cwd: join(workdir, "installed-app") });
+        });
+
+        it("writes pnpm-workspace.yaml with the allowBuilds allowlist before a pnpm install", async () => {
+            expect.assertions(3);
+
+            const { spawner } = createRecordingSpawner();
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                installPrompt: { confirmInstall: () => Promise.resolve(true), selectManager: (managers) => Promise.resolve(managers[0]!) },
+                logger: silentLogger(),
+                name: "installed-app",
+                packageManagerProbe: (manager) => manager === "pnpm",
+                spawner,
+                templateType: "tanstack-start-react",
+            });
+
+            expect(result.code).toBe(0);
+
+            const workspace = readFileSync(join(workdir, "installed-app", "pnpm-workspace.yaml"), "utf8");
+
+            // pnpm 11 honours `allowBuilds:` (a name→true map), NOT the legacy
+            // `onlyBuiltDependencies:` array — so `pnpm install` runs the native
+            // build scripts without the interactive `pnpm approve-builds` step.
+            expect(workspace).toContain("allowBuilds:");
+            expect(workspace).toContain("esbuild: true");
         });
 
         it("does not install when the user declines the offer", async () => {
@@ -223,7 +254,9 @@ describe("lunora init", () => {
             // Registry unreachable → resolveTagVersion returns undefined → keep the tag.
             vi.stubGlobal(
                 "fetch",
-                vi.fn(async () => { throw new Error("offline"); }),
+                vi.fn(async () => {
+                    throw new Error("offline");
+                }),
             );
 
             await runInitCommand({

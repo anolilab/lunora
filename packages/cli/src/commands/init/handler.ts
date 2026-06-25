@@ -337,14 +337,18 @@ const PNPM_WORKSPACE_FILENAME = "pnpm-workspace.yaml";
  * The `pnpm-workspace.yaml` written into a scaffold so `pnpm install` builds the
  * toolchain's native deps without `pnpm approve-builds`. This is the new home for
  * the setting — pnpm v10.16+ NO LONGER reads the `package.json` `pnpm` field.
- * npm/yarn ignore the file.
+ *
+ * Uses the `allowBuilds` map (`name: true`) — the key pnpm v11's `approve-builds`
+ * writes and honours; the older `onlyBuiltDependencies` array is NOT honoured by
+ * pnpm 11.x at install time. npm/yarn ignore the file.
  */
 const pnpmWorkspaceYaml = (): string =>
     [
         "# pnpm reads its settings from here (the package.json `pnpm` field is no longer read).",
-        "# These native-build toolchain deps run their install scripts without `pnpm approve-builds`.",
-        "onlyBuiltDependencies:",
-        ...PNPM_BUILT_DEPENDENCIES.map((name) => `    - ${name}`),
+        "# Pre-approve the toolchain's native build scripts so `pnpm install` runs them",
+        "# without the interactive `pnpm approve-builds` step.",
+        "allowBuilds:",
+        ...PNPM_BUILT_DEPENDENCIES.map((name) => `    ${name}: true`),
         "",
     ].join("\n");
 
@@ -392,15 +396,6 @@ const copyTemplate = async (sourceDirectory: string, target: string, name: strin
         }
 
         written.push(destination);
-    }
-
-    // Pre-approve the toolchain's native build scripts so `pnpm install` doesn't
-    // need `pnpm approve-builds` (the package.json `pnpm` field is no longer read).
-    if (!files.some((source) => basename(source) === PNPM_WORKSPACE_FILENAME)) {
-        const workspacePath = join(target, PNPM_WORKSPACE_FILENAME);
-
-        writeFileSync(workspacePath, pnpmWorkspaceYaml(), "utf8");
-        written.push(workspacePath);
     }
 
     return written;
@@ -644,6 +639,19 @@ const maybeOfferInstall = async (options: InitCommandOptions, target: string): P
         logWould(options.logger, `install dependencies with ${manager}`);
 
         return undefined;
+    }
+
+    // Only when pnpm is the chosen manager: write the build-script allowlist to
+    // pnpm-workspace.yaml just before the install (pnpm v10.16+ no longer reads
+    // the package.json `pnpm` field), so `pnpm install` runs the toolchain's
+    // native builds (esbuild/sharp/workerd) without a follow-up
+    // `pnpm approve-builds`. npm/yarn scaffolds don't get a stray pnpm file.
+    if (manager === "pnpm") {
+        const workspacePath = join(target, PNPM_WORKSPACE_FILENAME);
+
+        if (!existsSync(workspacePath)) {
+            writeFileSync(workspacePath, pnpmWorkspaceYaml(), "utf8");
+        }
     }
 
     const spawner = options.spawner ?? defaultSpawner;

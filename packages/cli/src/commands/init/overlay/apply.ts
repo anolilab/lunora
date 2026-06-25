@@ -155,6 +155,7 @@ const patchPackageJson = async (target: string, name: string, adapter: Framework
     const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown> & {
         dependencies?: Record<string, string>;
         devDependencies?: Record<string, string>;
+        imports?: Record<string, string>;
         scripts?: Record<string, string>;
     };
 
@@ -186,6 +187,11 @@ const patchPackageJson = async (target: string, name: string, adapter: Framework
     const versions = await resolveTagVersions(lunoraNames, distTag);
 
     parsed.name = name;
+    // The generated `lunora/_generated/*` and the registry files (`lunora/<feature>/…`)
+    // import via the `#lunora/*` subpath; the create-vite base has no such mapping,
+    // so add it (the bespoke templates ship it) — without it the worker entry fails
+    // with "Cannot find module '#lunora/_generated/server.js'".
+    parsed.imports = { ...parsed.imports, "#lunora/*": "./lunora/*" };
     parsed.dependencies = restampLunora(dependencies, distTag, versions);
     parsed.devDependencies = restampLunora(devDependencies, distTag, versions);
     parsed.scripts = { ...parsed.scripts, codegen: "lunora codegen", deploy: "vite build && lunora deploy" };
@@ -237,14 +243,8 @@ const applyLunoraOverlay = async (options: ApplyOverlayOptions): Promise<Readonl
     writeFile(target, join("src", "server.ts"), SERVER_ENTRY, written);
     writeFile(target, "wrangler.jsonc", WRANGLER.replaceAll("__NAME__", name), written);
     writeFile(target, ".env.example", ENV_EXAMPLE, written);
-    // Pre-approve the toolchain's native build scripts (the package.json `pnpm`
-    // field is no longer read) so `pnpm install` skips `pnpm approve-builds`.
-    writeFile(
-        target,
-        "pnpm-workspace.yaml",
-        "# pnpm reads its settings from here (the package.json `pnpm` field is no longer read).\nonlyBuiltDependencies:\n    - esbuild\n    - sharp\n    - workerd\n",
-        written,
-    );
+    // (pnpm-workspace.yaml — the build-script allowlist — is written by the init
+    // install step only when pnpm is the chosen package manager.)
 
     for (const file of adapter.files) {
         writeFile(target, file.path, file.contents, written);
