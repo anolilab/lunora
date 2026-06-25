@@ -325,24 +325,28 @@ const stampLunoraDeps = (packageJsonText: string, distTag: string, versions: Rea
 /**
  * Native build scripts the scaffold's toolchain needs to run on install
  * (esbuild/sharp/workerd, pulled in by Vite + Wrangler). pnpm v10+ blocks
- * post-install build scripts by default; listing them in
- * `pnpm.onlyBuiltDependencies` lets `pnpm install` run exactly these without the
- * interactive `pnpm approve-builds` step. npm/yarn ignore the `pnpm` key.
+ * post-install build scripts by default; pre-approving them lets `pnpm install`
+ * run exactly these without the interactive `pnpm approve-builds` step.
  */
 const PNPM_BUILT_DEPENDENCIES: ReadonlyArray<string> = ["esbuild", "sharp", "workerd"];
 
-/** Pre-approve {@link PNPM_BUILT_DEPENDENCIES} in the scaffold's `package.json` so `pnpm install` builds them without `pnpm approve-builds`. */
-const stampPnpmBuildAllowlist = (packageJsonText: string): string => {
-    try {
-        const parsed = JSON.parse(packageJsonText) as { pnpm?: { onlyBuiltDependencies?: ReadonlyArray<string> } };
-        const merged = [...new Set([...(parsed.pnpm?.onlyBuiltDependencies ?? []), ...PNPM_BUILT_DEPENDENCIES])].toSorted((a, b) => a.localeCompare(b));
-        const edits = modify(packageJsonText, ["pnpm", "onlyBuiltDependencies"], merged, { formattingOptions: { insertSpaces: true, tabSize: 4 } });
+/** File pnpm reads its settings from. */
+const PNPM_WORKSPACE_FILENAME = "pnpm-workspace.yaml";
 
-        return applyEdits(packageJsonText, edits);
-    } catch {
-        return packageJsonText;
-    }
-};
+/**
+ * The `pnpm-workspace.yaml` written into a scaffold so `pnpm install` builds the
+ * toolchain's native deps without `pnpm approve-builds`. This is the new home for
+ * the setting — pnpm v10.16+ NO LONGER reads the `package.json` `pnpm` field.
+ * npm/yarn ignore the file.
+ */
+const pnpmWorkspaceYaml = (): string =>
+    [
+        "# pnpm reads its settings from here (the package.json `pnpm` field is no longer read).",
+        "# These native-build toolchain deps run their install scripts without `pnpm approve-builds`.",
+        "onlyBuiltDependencies:",
+        ...PNPM_BUILT_DEPENDENCIES.map((name) => `    - ${name}`),
+        "",
+    ].join("\n");
 
 const collectFiles = (directory: string): ReadonlyArray<string> => {
     const out: string[] = [];
@@ -378,7 +382,7 @@ const copyTemplate = async (sourceDirectory: string, target: string, name: strin
         // tag) so the scaffold installs real code, not the `^0.0.0` stub. Other
         // deps and non-package.json files pass through.
         if (text !== undefined && basename(source) === "package.json") {
-            text = stampPnpmBuildAllowlist(stampLunoraDeps(text, distTag, versions));
+            text = stampLunoraDeps(text, distTag, versions);
         }
 
         if (text === undefined) {
@@ -388,6 +392,15 @@ const copyTemplate = async (sourceDirectory: string, target: string, name: strin
         }
 
         written.push(destination);
+    }
+
+    // Pre-approve the toolchain's native build scripts so `pnpm install` doesn't
+    // need `pnpm approve-builds` (the package.json `pnpm` field is no longer read).
+    if (!files.some((source) => basename(source) === PNPM_WORKSPACE_FILENAME)) {
+        const workspacePath = join(target, PNPM_WORKSPACE_FILENAME);
+
+        writeFileSync(workspacePath, pnpmWorkspaceYaml(), "utf8");
+        written.push(workspacePath);
     }
 
     return written;

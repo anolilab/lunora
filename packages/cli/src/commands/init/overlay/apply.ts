@@ -237,6 +237,14 @@ const applyLunoraOverlay = async (options: ApplyOverlayOptions): Promise<Readonl
     writeFile(target, join("src", "server.ts"), SERVER_ENTRY, written);
     writeFile(target, "wrangler.jsonc", WRANGLER.replaceAll("__NAME__", name), written);
     writeFile(target, ".env.example", ENV_EXAMPLE, written);
+    // Pre-approve the toolchain's native build scripts (the package.json `pnpm`
+    // field is no longer read) so `pnpm install` skips `pnpm approve-builds`.
+    writeFile(
+        target,
+        "pnpm-workspace.yaml",
+        "# pnpm reads its settings from here (the package.json `pnpm` field is no longer read).\nonlyBuiltDependencies:\n    - esbuild\n    - sharp\n    - workerd\n",
+        written,
+    );
 
     for (const file of adapter.files) {
         writeFile(target, file.path, file.contents, written);
