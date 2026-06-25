@@ -108,6 +108,17 @@ interface LunoraTestOptions {
      * ```
      */
     functions?: FunctionRegistry;
+
+    /**
+     * Fixed value for `ctx.now` (epoch ms) in every context. Production captures
+     * `Date.now()` once per execution; in tests a fixed `now` makes time-dependent
+     * handlers deterministic. Defaults to the wall clock at harness creation.
+     * @example
+     * ```ts
+     * const t = lunoraTest(schema, { now: 1_700_000_000_000 });
+     * ```
+     */
+    now?: number;
 }
 
 /**
@@ -526,6 +537,10 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         () => functionRegistryMap,
     );
 
+    // `ctx.now` for every context: captured once so a harness sees one stable
+    // instant (production captures it per execution). Overridable via `options.now`.
+    const harnessNow = options?.now ?? Date.now();
+
     const makeHarness = (identity: null | TestIdentity): TestHarness => {
         const auth: AuthState = {
             // eslint-disable-next-line unicorn/no-null -- AuthState.getIdentity's anonymous sentinel is `null` (mirrors a decoded JWT being absent)
@@ -538,6 +553,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             auth,
             db: database,
             log: noopLog,
+            now: harnessNow,
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runQuery, after construction completes
             runQuery: (reference, args) => runInternal("query", reference, queryContext, args) as Promise<never>,
             storage: stubProxy("storage") as QueryCtx["storage"],
@@ -548,6 +564,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             auth,
             db: database,
             log: noopLog,
+            now: harnessNow,
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runMutation, after construction completes
             runMutation: (reference, args) => runInternal("mutation", reference, mutationContext, args) as Promise<never>,
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runQuery, after construction completes
@@ -569,6 +586,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             // Use the injected fetch when provided; fall back to the v1 stub otherwise.
             fetch: options?.fetch ?? (stubProxy("fetch") as ActionCtx["fetch"]),
             log: noopLog,
+            now: harnessNow,
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runAction, after construction completes
             runAction: (reference, args) => runInternal("action", reference, actionContext, args) as Promise<never>,
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runMutation, after construction completes
