@@ -14,6 +14,7 @@ import { loadToken, saveToken } from "../lib/token-storage";
 import { cn } from "../lib/utils";
 import type { StudioChrome, StudioProps } from "./studio";
 import { Studio } from "./studio";
+import { StudioLogin } from "./studio-login";
 
 interface StudioAppProps {
     /**
@@ -226,18 +227,27 @@ const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClient, rule
 
     // Theme lives in a provider so the resolved class can be applied to the
     // studio's own scoped root (see StudioShell) rather than `<html>`.
+    //
+    // Token gate: with no admin token (none injected by the dev host, none
+    // persisted), render the login page and nothing else — every studio page
+    // sits behind it. A token (dev `.dev.vars` auto-inject, a prior paste, or
+    // submitting the login) drops straight into the app; clearing it returns here.
     return (
         <ThemeProvider>
-            <StudioShell
-                basePath={basePath}
-                clearToken={clearToken}
-                client={client}
-                i18n={i18n}
-                onTokenChange={onTokenChange}
-                rulesInstalled={rulesInstalled}
-                studio={studio}
-                token={token}
-            />
+            {token === "" ? (
+                <StudioLogin i18n={i18n} onSubmit={setToken} />
+            ) : (
+                <StudioShell
+                    basePath={basePath}
+                    clearToken={clearToken}
+                    client={client}
+                    i18n={i18n}
+                    onTokenChange={onTokenChange}
+                    rulesInstalled={rulesInstalled}
+                    studio={studio}
+                    token={token}
+                />
+            )}
         </ThemeProvider>
     );
 };
