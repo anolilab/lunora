@@ -66,7 +66,13 @@ function toggleTheme() {
      and uses descendant selectors + custom properties that must not be mangled
      by Vue's scoped-style transform. -->
 <style>
-/* ── self-contained, collision-safe: everything scoped under .lunora-welcome ── */
+/* Full-bleed starter — reset the browser's default body margin/padding so it sits
+   flush; everything else is scoped under .lunora-welcome (collision-safe). */
+body {
+    margin: 0;
+    padding: 0;
+}
+
 .lunora-welcome {
     --cyan: hsl(186 84% 56%); --violet: hsl(256 72% 68%); --rose: hsl(330 80% 64%);
     --ribbon: linear-gradient(115deg, var(--cyan), var(--violet) 52%, var(--rose));
