@@ -1,3 +1,13 @@
+## @lunora/config [1.0.0-alpha.12](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.11...@lunora/config@1.0.0-alpha.12) (2026-06-25)
+
+### Features
+
+* **config:** generate empty dev secrets + admin token on dev ([c4f729f](https://github.com/anolilab/lunora/commit/c4f729f51bc0a68a356e2750ce49cc7a1edbf9a2))
+
+### Tests
+
+* **config:** guard dev .dev.vars admin token end-to-end ([badc524](https://github.com/anolilab/lunora/commit/badc5247fe9070e6be3e7aff0617b303e82bbd8d))
+
 ## @lunora/config [1.0.0-alpha.11](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.10...@lunora/config@1.0.0-alpha.11) (2026-06-25)
 
 
