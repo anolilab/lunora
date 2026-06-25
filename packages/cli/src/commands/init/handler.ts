@@ -1030,15 +1030,22 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
             return true;
         }
 
+        // Warnings/errors raised mid-apply can't be written straight to stdout:
+        // the live gradient spinner repaints the same lines, so an interleaved
+        // write breaks Ink's cursor math and orphans the spinner frame (the
+        // stacked "adding …" rows bug). Buffer them while the spinner is live and
+        // replay after it unmounts, so they still surface — just cleanly, below
+        // the settled `add` row.
+        const buffered: { level: "error" | "warn"; message: string }[] = [];
         const applyLogger: Logger = isInteractive()
             ? {
                   error: (message) => {
-                      options.logger.error(message);
+                      buffered.push({ level: "error", message });
                   },
                   info: () => {},
                   success: () => {},
                   warn: (message) => {
-                      options.logger.warn(message);
+                      buffered.push({ level: "warn", message });
                   },
               }
             : options.logger;
@@ -1063,6 +1070,11 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
 
         const done = `added ${plans.map((plan) => plan.label).join(", ")}`;
         const results = await withTuiBadgeProgress(BADGES.add, steps, done);
+
+        // Spinner is gone — now it's safe to surface anything the applies raised.
+        for (const { level, message } of buffered) {
+            options.logger[level](message);
+        }
 
         return results.every((result) => result.code === 0);
     };

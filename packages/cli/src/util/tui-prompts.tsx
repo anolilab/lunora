@@ -13,7 +13,7 @@
  */
 /* eslint-disable react-refresh/only-export-components, react-perf/jsx-no-new-function-as-prop, react-perf/jsx-no-new-array-as-prop -- render-once CLI prompt module, not an HMR app surface: components mount once per prompt and unmount on submit, so co-locating the promise-wrapping helpers is intended and inline callback/array props carry no re-render cost. */
 import type { BadgeSpec, MultiSelectOption, SelectOption } from "@lunora/config";
-import { ACCENT, badgeLead, badgeWidth, isInteractive, LUNA_ART, LUNA_NAME, LUNA_SIGNOFF, padBadge } from "@lunora/config";
+import { ACCENT, BADGE_COLUMN_WIDTH, badgeLead, badgeWidth, isInteractive, LUNA_ART, LUNA_NAME, LUNA_SIGNOFF, padBadge } from "@lunora/config";
 import { render } from "@visulima/tui";
 import { BigText } from "@visulima/tui/components/big-text";
 import { Box } from "@visulima/tui/components/box";
@@ -123,8 +123,14 @@ const PromptHeader = ({ badge, message }: { badge: BadgeSpec | undefined; messag
 /** The body indent that aligns a prompt's input / answer under the message (past the badge gutter). */
 const BODY_INDENT = 2;
 
-/** Indent for the `✔`/`◼` header symbol, so the text past it aligns with task sub-rows. */
-const HEADER_INDENT = " ".repeat(6);
+/**
+ * Lead spaces that right-align the `✔`/`◼` header glyph within the badge gutter,
+ * so it ends at the same column the badge boxes do (one glyph is one cell, so the
+ * lead is one column short of the gutter width). With a single trailing space the
+ * header text then lands at the badge MESSAGE column — identical to every
+ * prompt/transcript row and to the gradient-bar label — so the title never shifts.
+ */
+const HEADER_INDENT = " ".repeat(BADGE_COLUMN_WIDTH - 1);
 
 /** Spaces that align a step's dimmed answer under its question (the full badge column + the message's leading space). */
 const badgeIndent = (badge: BadgeSpec): string => " ".repeat(badgeWidth(badge) + 1);
@@ -945,8 +951,18 @@ const SPINNER_FRAMES: string[][] = SPINNER_STRIP.map((_, offset) => {
 });
 
 /**
+ * Lead spaces that right-align the gradient bar within the badge gutter, so its
+ * right edge lands at the same column the badge boxes (`dir`, `tmpl`, `add`, …)
+ * end at. With a single trailing space the label then sits at the badge MESSAGE
+ * column — so the bar reads as one more right-aligned badge in the same gutter.
+ */
+const SPINNER_LEAD = " ".repeat(Math.max(0, BADGE_COLUMN_WIDTH - SPINNER_BAR_WIDTH));
+
+/**
  * The animated gradient bar + header text, rendered as a single line so the text
- * sits immediately after the bar (no flex-row gap): `██████  Project initializing…`.
+ * sits immediately after the bar: `  ██████ Project initializing…`. The bar is
+ * right-aligned in the badge gutter (see {@link SPINNER_LEAD}) so it lines up with
+ * the `dir`/`tmpl`/`add` badges, and the label lands at the shared message column.
  */
 const GradientSpinner = ({ label }: { label: string }): ReactElement => {
     const [index, setIndex] = useState(0);
@@ -959,13 +975,14 @@ const GradientSpinner = ({ label }: { label: string }): ReactElement => {
 
     return (
         <Text>
+            {SPINNER_LEAD}
             {colors.map((color, blockIndex) => (
                 // eslint-disable-next-line react-x/no-array-index-key -- fixed-length gradient bar that never reorders.
                 <Text color={color} key={blockIndex}>
                     █
                 </Text>
             ))}
-            {`  ${label}`}
+            {` ${label}`}
         </Text>
     );
 };
@@ -1086,7 +1103,7 @@ const TasksView = <T,>({ end, onSettle, start, tasks }: TasksViewProps<T>): Reac
                         {`${HEADER_INDENT}✔`}
                     </Text>
                     <Text bold color="green">
-                        {`  ${end}`}
+                        {` ${end}`}
                     </Text>
                 </Box>
             ) : (
