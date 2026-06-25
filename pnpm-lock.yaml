@@ -1745,6 +1745,9 @@ importers:
       '@visulima/cerebro':
         specifier: 3.0.0-alpha.32
         version: 3.0.0-alpha.32(@bomb.sh/tab@0.0.16(cac@6.7.14)(citty@0.2.2))(@visulima/pail@4.0.0-alpha.22(@opentelemetry/api@1.9.1)(@visulima/redact@3.0.0-alpha.14)(express@5.2.1)(hono@4.12.26)(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)))(github-slugger@2.0.0)
+      '@visulima/colorize':
+        specifier: 2.0.0-alpha.14
+        version: 2.0.0-alpha.14
       '@visulima/fs':
         specifier: 5.0.0-alpha.32
         version: 5.0.0-alpha.32(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(smol-toml@1.6.1)(yaml@2.9.0)
@@ -1924,6 +1927,9 @@ importers:
       '@lunora/studio':
         specifier: workspace:*
         version: link:../studio
+      '@visulima/colorize':
+        specifier: 2.0.0-alpha.14
+        version: 2.0.0-alpha.14
       es-module-lexer:
         specifier: catalog:vite
         version: 2.1.0

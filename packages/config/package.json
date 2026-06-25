@@ -67,6 +67,7 @@
         "@lunora/codegen": "1.0.0-alpha.3",
         "@lunora/container": "1.0.0-alpha.1",
         "@lunora/seed": "1.0.0-alpha.1",
+        "@visulima/colorize": "2.0.0-alpha.14",
         "es-module-lexer": "catalog:vite",
         "jsonc-parser": "catalog:vite",
         "ts-morph": "catalog:tooling"

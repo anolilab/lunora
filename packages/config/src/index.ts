@@ -19,6 +19,7 @@ export type { LinkedProject } from "./linked-project";
 export { LINKED_PROJECT_DIR, LINKED_PROJECT_FILE, readLinkedProject, writeLinkedProject } from "./linked-project";
 export type { LunoraFormattedLine, LunoraLineLevel } from "./log-format";
 export { formatLunoraEvent, LUNORA_EVENT_SOURCE } from "./log-format";
+export { default as LunoraReporter } from "./lunora-reporter";
 export type { SecretEntry } from "./package-secrets-registry";
 export { PACKAGE_SECRETS_REGISTRY, secretsForPackages } from "./package-secrets-registry";
 export type { LunoraProjectConfig, RemotePreference } from "./project-config";
@@ -71,6 +72,21 @@ export type {
 export { classifyPolicyEdit, scaffoldPolicyFile, wireRlsIntoProcedure } from "./schema-edit/policy-scaffold";
 export type { DiscoverSchemaInfoResult, SchemaInfo } from "./schema-info";
 export { discoverSchemaInfo } from "./schema-info";
+export type { BadgeName, BadgeSpec, LevelBadgeName, StepBadgeName } from "./tui-theme";
+export {
+    ACCENT,
+    badgeLead,
+    BADGES,
+    badgeWidth,
+    LUNA_ART,
+    LUNA_BUNNY,
+    LUNA_NAME,
+    LUNA_SIGNOFF,
+    padBadge,
+    paintAnswer,
+    paintBadge,
+    STEP_BADGE_NAMES,
+} from "./tui-theme";
 export type { DiscoverWorkflowInfoResult, WorkflowIR } from "./workflow-info";
 export { discoverWorkflowInfo } from "./workflow-info";
 export type { ReadWranglerResult } from "./wrangler-path";
