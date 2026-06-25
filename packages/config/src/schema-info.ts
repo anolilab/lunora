@@ -41,7 +41,10 @@ const discoverSchemaInfo = (projectRoot: string, schemaDirectory: string): Disco
 
     try {
         const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
-        const schema = discoverSchema(project, schemaPath);
+        // Pass `projectRoot` so a package-defined `.extend(...)` (resolved by
+        // importing the dep) is seen here too — keeping binding inference + the
+        // wrangler validator consistent with what codegen emits.
+        const schema = discoverSchema(project, schemaPath, projectRoot);
 
         return {
             info: {
