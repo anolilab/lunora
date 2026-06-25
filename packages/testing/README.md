@@ -116,6 +116,18 @@ const t = lunoraTest(schema, { fetch: fakeFetch });
 
 Without the option, `ctx.fetch` still throws the v1 error on first access.
 
+#### Fixed `ctx.now`
+
+Pass a `now` option (epoch ms) to pin `ctx.now` across every context, so
+time-dependent handlers are deterministic:
+
+```ts
+const t = lunoraTest(schema, { now: 1_700_000_000_000 });
+// ctx.now === 1_700_000_000_000 in every query/mutation/action
+```
+
+Defaults to the wall clock captured at harness creation.
+
 #### Controllable in-memory scheduler
 
 `ctx.scheduler` is a fully functional fake. Jobs are enqueued synchronously but

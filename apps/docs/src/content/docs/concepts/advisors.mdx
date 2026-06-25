@@ -26,15 +26,15 @@ Run against the declared schema alone — deterministic, no running shard needed
 
 ### Correctness
 
-| Lint                                | Level | Detects                                                                                                                                             |
-| ----------------------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `index_references_unknown_field`    | error | An index references a column that doesn't exist on the table.                                                                                       |
-| `relation_references_unknown_table` | error | A relation targets a table that doesn't exist.                                                                                                      |
-| `relation_references_unknown_field` | error | A relation's key column doesn't exist — the join can never resolve.                                                                                 |
-| `workflow_unknown_target`           | error | `ctx.workflows.get("name")` names a workflow that isn't declared.                                                                                   |
-| `empty_index`                       | warn  | An index declared with no columns — it narrows nothing.                                                                                             |
-| `circular_fk`                       | warn  | A cycle of `one` relations (A → B → C → A) — cascade/restrict hazards.                                                                              |
-| `nondeterministic_query_mutation`   | warn  | A `query`/`mutation` calls `Date.now`/`Math.random`/`fetch` — non-deterministic reads break caching and replay. Move side effects into an `action`. |
+| Lint                                | Level | Detects                                                                                                                                                                           |
+| ----------------------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `index_references_unknown_field`    | error | An index references a column that doesn't exist on the table.                                                                                                                     |
+| `relation_references_unknown_table` | error | A relation targets a table that doesn't exist.                                                                                                                                    |
+| `relation_references_unknown_field` | error | A relation's key column doesn't exist — the join can never resolve.                                                                                                               |
+| `workflow_unknown_target`           | error | `ctx.workflows.get("name")` names a workflow that isn't declared.                                                                                                                 |
+| `empty_index`                       | warn  | An index declared with no columns — it narrows nothing.                                                                                                                           |
+| `circular_fk`                       | warn  | A cycle of `one` relations (A → B → C → A) — cascade/restrict hazards.                                                                                                            |
+| `nondeterministic_query_mutation`   | warn  | A `query`/`mutation` calls `Date.now`/`Math.random`/`fetch` — non-deterministic reads break caching and replay. Use `ctx.now` for time; move randomness/network into an `action`. |
 
 ### Performance
 

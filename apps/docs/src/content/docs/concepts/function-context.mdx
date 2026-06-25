@@ -73,6 +73,12 @@ These are present regardless of kind:
 - **`ctx.ip`** — the caller's trusted `CF-Connecting-IP`, or `undefined` for a
   live-subscription re-run, a server-initiated dispatch, or non-Cloudflare
   hosting. Useful as a rate-limit key for anonymous traffic.
+- **`ctx.now`** — the wall-clock instant (epoch ms) the function began, captured
+  once so the whole handler sees a single stable value. Read time from here in a
+  `query`/`mutation` instead of `Date.now()`: those handlers must be
+  deterministic (they may be re-run on OCC retry / subscription re-eval), and the
+  `nondeterministic_query_mutation` advisor flags `Date.now()`. Actions may use
+  `Date.now()` freely but get `ctx.now` too for parity.
 
 ## ctx field matrix
 
@@ -82,6 +88,7 @@ These are present regardless of kind:
 | `auth`        | ✓                | ✓                | ✓                  |
 | `log`         | ✓                | ✓                | ✓                  |
 | `ip`          | ✓                | ✓                | ✓                  |
+| `now`         | ✓                | ✓                | ✓                  |
 | `storage`     | read-only        | read-only        | read/write         |
 | `vectors`     | read-only        | read/write       | read/write         |
 | `scheduler`   | —                | ✓                | ✓                  |

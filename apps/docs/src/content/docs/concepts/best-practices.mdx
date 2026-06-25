@@ -33,8 +33,10 @@ ones that do. This is the short list.
 - **Keep mutations small and deterministic.** A `mutation` reads and writes the
   database and nothing else. No `Date.now()`, `Math.random()`, or `fetch()`:
   nondeterminism breaks caching and replay, and the
-  `nondeterministic_query_mutation` advisor will warn you. Pass a timestamp in as
-  an argument instead.
+  `nondeterministic_query_mutation` advisor will warn you. For the current time,
+  read [`ctx.now`](/docs/concepts/function-context) (a stable per-execution
+  timestamp); for randomness/network, compute it in an `action` and pass the
+  result in as an argument.
 - **Push side effects into actions.** External API calls, queues, sending mail,
   anything non-deterministic or that touches the outside world: that's what an
   `action` is for. See [Actions](/docs/concepts/actions). Have the action call

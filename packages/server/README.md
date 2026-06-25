@@ -91,7 +91,7 @@ export const send = mutation
 
 The builder chain is `<builder>.input(validators).<kind>(handler)`, plus `.use(middleware)` and `.output(validator)`. `internalQuery` / `internalMutation` / `internalAction` are the same builders but kept off the public `api`. Run `lunora codegen` (or the Vite plugin) to (re)generate `_generated/` after a schema change.
 
-> **Determinism:** `query` and `mutation` handlers must be deterministic — they may be re-run on OCC retry or subscription re-evaluation. Compute time, randomness, and network results in an `action` (e.g. `Date.now()`, `crypto.randomUUID()`, `fetch`) and pass them into the mutation as arguments.
+> **Determinism:** `query` and `mutation` handlers must be deterministic — they may be re-run on OCC retry or subscription re-evaluation. Read the current time from **`ctx.now`** (epoch ms, captured once per execution — also on `ActionCtx`) instead of `Date.now()`; compute randomness and network results in an `action` (`crypto.randomUUID()`, `fetch`) and pass them into the mutation as arguments. The `nondeterministic_query_mutation` advisor flags `Date.now()`/`Math.random()`/`fetch` in query/mutation handlers.
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/server)**.
 
