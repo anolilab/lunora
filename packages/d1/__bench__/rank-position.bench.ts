@@ -86,19 +86,19 @@ const TARGET_ID = `m-${TARGET_CHANNEL}-${String(TARGET_INDEX).padStart(5, "0")}`
 let indexedWriter: DatabaseWriterLike;
 let scanWriter: DatabaseWriterLike;
 
-describe("d1 rank() — indexed vs emulated scan", () => {
-    // Build + seed the writers in `beforeAll`, out of the measured bench body:
-    // seeding 10k rows inside the body runs the whole seed under CodSpeed's
-    // cachegrind instrumentation, which truncates it so the scan misses TARGET_ID
-    // ("row not found"). The DO relation-predicate benches prove `beforeAll` seed
-    // state IS visible to the measured body — so build + seed here, once.
-    beforeAll(async () => {
-        indexedWriter = await createWriter(indexedSchema);
-        await seed(indexedWriter);
-        scanWriter = await createWriter(scanSchema);
-        await seed(scanWriter);
-    });
+// Build + seed the writers in a ROOT-level beforeAll, NOT inside the describe:
+// CodSpeed's analysis runner only fires the root suite's beforeAll, so a
+// describe-scoped hook never runs and the scan walks an empty DB ("row not
+// found"). The DO relation-predicate benches (root-level beforeAll) pass; the
+// describe-scoped variants did not — that's the whole difference.
+beforeAll(async () => {
+    indexedWriter = await createWriter(indexedSchema);
+    await seed(indexedWriter);
+    scanWriter = await createWriter(scanSchema);
+    await seed(scanWriter);
+});
 
+describe("d1 rank() — indexed vs emulated scan", () => {
     bench("indexed: rank() via companion table seek", async () => {
         await indexedWriter.rank("messages", "byChannel", { row: TARGET_ID });
     });

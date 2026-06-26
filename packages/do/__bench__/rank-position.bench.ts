@@ -72,18 +72,18 @@ const TARGET_ID = `m-${TARGET_CHANNEL}-${String(TARGET_INDEX).padStart(5, "0")}`
 let indexedWriter: DatabaseWriterLike;
 let scanWriter: DatabaseWriterLike;
 
-describe("rank() — indexed vs emulated scan", () => {
-    // Build + seed the writers INSIDE beforeAll, never at module scope: CodSpeed's
-    // instrumented runner measures each bench body in a context that does not
-    // carry module-level state, so module-level writers query an empty DB
-    // ("row not found in emulated scan"). beforeAll runs in the measured context.
-    beforeAll(async () => {
-        indexedWriter = makeWriter(indexedSchema);
-        await seed(indexedWriter);
-        scanWriter = makeWriter(scanSchema);
-        await seed(scanWriter);
-    });
+// Build + seed the writers in a ROOT-level beforeAll, NOT inside the describe:
+// CodSpeed's analysis runner only fires the root suite's beforeAll, so a
+// describe-scoped hook never runs and the bench body queries an empty DB
+// ("row not found in emulated scan").
+beforeAll(async () => {
+    indexedWriter = makeWriter(indexedSchema);
+    await seed(indexedWriter);
+    scanWriter = makeWriter(scanSchema);
+    await seed(scanWriter);
+});
 
+describe("rank() — indexed vs emulated scan", () => {
     bench("indexed: rank() via companion table seek", async () => {
         await indexedWriter.rank("messages", "byChannel", { row: TARGET_ID });
     });

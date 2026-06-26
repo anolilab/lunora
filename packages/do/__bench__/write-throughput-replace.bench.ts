@@ -24,12 +24,15 @@ const schema: SchemaLike = {
 let writer: DatabaseWriterLike;
 let counter = 0;
 
-describe("write throughput — bare replace", () => {
-    beforeAll(async () => {
-        writer = makeWriter(schema);
-        await writer.insert("todos", { _id: SEED_ID, projectId: "p1", seq: 0 });
-    });
+// Root-level beforeAll (NOT inside describe): CodSpeed's analysis runner only
+// fires the root suite's beforeAll, not a nested describe's. See
+// `write-throughput-patch.bench.ts`.
+beforeAll(async () => {
+    writer = makeWriter(schema);
+    await writer.insert("todos", { _id: SEED_ID, projectId: "p1", seq: 0 });
+});
 
+describe("write throughput — bare replace", () => {
     bench("bare: replace (full-row substitute on seed row)", async () => {
         counter += 1;
         await writer.replace(SEED_ID, { _id: SEED_ID, projectId: "p1", seq: counter });

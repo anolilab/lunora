@@ -25,12 +25,15 @@ const schema: SchemaLike = {
 let writer: DatabaseWriterLike;
 let counter = 0;
 
-describe("write throughput — bare patch", () => {
-    beforeAll(async () => {
-        writer = makeWriter(schema);
-        await writer.insert("todos", { _id: SEED_ID, projectId: "p1", seq: 0 });
-    });
+// Root-level beforeAll (NOT inside describe): CodSpeed's analysis runner only
+// fires the root suite's beforeAll, not a nested describe's — a describe-scoped
+// hook never runs, leaving the body to query an empty DB ("document not found").
+beforeAll(async () => {
+    writer = makeWriter(schema);
+    await writer.insert("todos", { _id: SEED_ID, projectId: "p1", seq: 0 });
+});
 
+describe("write throughput — bare patch", () => {
     bench("bare: patch (single-field update on seed row)", async () => {
         counter += 1;
         await writer.patch(SEED_ID, { seq: counter });
