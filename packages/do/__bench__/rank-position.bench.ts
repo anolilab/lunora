@@ -1,9 +1,8 @@
 import { beforeAll, bench, describe } from "vitest";
 
-import createSqliteExec from "../__tests__/_helpers/node-sqlite";
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
-import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import type { RankIndexDefinitionLike } from "../src/rank";
+import { makeWriter } from "./shared";
 
 /**
  * `rank()` is "where does this row stand in its partition?" — a hot question
@@ -65,29 +64,23 @@ const seed = async (writer: DatabaseWriterLike): Promise<void> => {
     }
 };
 
-const indexedHarness = createSqliteExec();
-
-runShardMigrations(indexedHarness.sql, indexedSchema);
-const indexedWriter = createShardContextDatabase({ schema: indexedSchema, sql: indexedHarness.sql });
-
-const scanHarness = createSqliteExec();
-
-runShardMigrations(scanHarness.sql, scanSchema);
-const scanWriter = createShardContextDatabase({ schema: scanSchema, sql: scanHarness.sql });
-
 // Median position of the median channel.
 const TARGET_CHANNEL = `c${String(Math.floor(CHANNEL_COUNT / 2))}`;
 const TARGET_INDEX = Math.floor(ROWS_PER_CHANNEL / 2);
 const TARGET_ID = `m-${TARGET_CHANNEL}-${String(TARGET_INDEX).padStart(5, "0")}`;
 
+let indexedWriter: DatabaseWriterLike;
+let scanWriter: DatabaseWriterLike;
+
 describe("rank() — indexed vs emulated scan", () => {
-    // Seed in beforeAll: CodSpeed's instrumented runner (@codspeed/vitest-plugin)
-    // runs each bench against the suite's beforeAll/beforeEach hooks but does NOT
-    // pick up module-top-level await state, so a top-level seed leaves the bench
-    // querying an empty DB (→ "row not found"). beforeAll is honored in both the
-    // plain `vitest bench` runner and CodSpeed's analysis runner.
+    // Build + seed the writers INSIDE beforeAll, never at module scope: CodSpeed's
+    // instrumented runner measures each bench body in a context that does not
+    // carry module-level state, so module-level writers query an empty DB
+    // ("row not found in emulated scan"). beforeAll runs in the measured context.
     beforeAll(async () => {
+        indexedWriter = makeWriter(indexedSchema);
         await seed(indexedWriter);
+        scanWriter = makeWriter(scanSchema);
         await seed(scanWriter);
     });
 

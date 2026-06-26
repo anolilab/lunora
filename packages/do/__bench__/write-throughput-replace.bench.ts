@@ -1,13 +1,14 @@
 import { beforeAll, bench, describe } from "vitest";
 
-import type { SchemaLike } from "../src/ctx-db";
+import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
 import { makeWriter } from "./shared";
 
 /**
- * `replace` (full-row substitute) against the bare table. The seed row is created
- * once in `beforeAll` and only ever replaced (the `_id` is preserved), so it
- * survives CodSpeed's many re-runs. Own writer, one scenario per file (see
- * `write-throughput-insert-bare.bench.ts`).
+ * `replace` (full-row substitute) against the bare table. The writer is built AND
+ * seeded inside `beforeAll` — never at module scope: CodSpeed's instrumented
+ * runner measures the bench body in a context that doesn't carry module-level
+ * seed state, so a module-level seed row is absent at run time ("document not
+ * found: seed"). See `write-throughput-patch.bench.ts`.
  */
 const SEED_ID = "seed";
 
@@ -20,11 +21,12 @@ const schema: SchemaLike = {
     },
 };
 
-const writer = makeWriter(schema);
+let writer: DatabaseWriterLike;
 let counter = 0;
 
 describe("write throughput — bare replace", () => {
     beforeAll(async () => {
+        writer = makeWriter(schema);
         await writer.insert("todos", { _id: SEED_ID, projectId: "p1", seq: 0 });
     });
 

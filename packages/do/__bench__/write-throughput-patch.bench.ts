@@ -1,14 +1,15 @@
 import { beforeAll, bench, describe } from "vitest";
 
-import type { SchemaLike } from "../src/ctx-db";
+import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
 import { makeWriter } from "./shared";
 
 /**
- * `patch` (single-field update) against the bare table. The seed row is created
- * once in `beforeAll` and only ever patched (never deleted), so it survives
- * CodSpeed's many re-runs of the bench body. Own writer, one scenario per file,
- * so no sibling bench mutates it — the source of the old "document not found:
- * seed" failure (see `write-throughput-insert-bare.bench.ts`).
+ * `patch` (single-field update) against the bare table. The writer is built AND
+ * the seed row inserted inside `beforeAll` — never at module scope: CodSpeed's
+ * instrumented runner measures the bench body in a context that does not carry
+ * module-level seed state, so a module-level writer's seed row is absent when the
+ * body runs ("document not found: seed"). Building it in `beforeAll` puts the
+ * seed in the same context the measured run uses.
  */
 const SEED_ID = "seed";
 
@@ -21,11 +22,12 @@ const schema: SchemaLike = {
     },
 };
 
-const writer = makeWriter(schema);
+let writer: DatabaseWriterLike;
 let counter = 0;
 
 describe("write throughput — bare patch", () => {
     beforeAll(async () => {
+        writer = makeWriter(schema);
         await writer.insert("todos", { _id: SEED_ID, projectId: "p1", seq: 0 });
     });
 

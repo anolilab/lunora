@@ -1,5 +1,5 @@
 import type { DatabaseWriterLike, RankIndexDefinitionLike, SchemaLike, ValidatorLike } from "@lunora/do";
-import { bench, describe } from "vitest";
+import { beforeAll, bench, describe } from "vitest";
 
 import createD1Exec from "../__tests__/_helpers/node-sqlite-d1";
 import { createD1CtxDb as createD1ContextDatabase, runD1RankMigrations } from "../src/d1-ctx-db";
@@ -83,37 +83,28 @@ const TARGET_CHANNEL = `c${String(Math.floor(CHANNEL_COUNT / 2))}`;
 const TARGET_INDEX = Math.floor(ROWS_PER_CHANNEL / 2);
 const TARGET_ID = `m-${TARGET_CHANNEL}-${String(TARGET_INDEX).padStart(5, "0")}`;
 
-let indexedWriter: DatabaseWriterLike | undefined;
-let scanWriter: DatabaseWriterLike | undefined;
-
-// Build + seed lazily on first use, not in `beforeAll`: CodSpeed's instrumented
-// runner measures each bench body WITHOUT the suite's `beforeAll` seed state, so
-// the writers would otherwise hit an empty DB ("row not found in emulated scan").
-// Memoized by the module-level handles, so the 10k-row seed runs once and the
-// measured iterations reuse it.
-const ensureSeed = async (): Promise<{ indexed: DatabaseWriterLike; scan: DatabaseWriterLike }> => {
-    if (!indexedWriter) {
-        indexedWriter = await createWriter(indexedSchema);
-        await seed(indexedWriter);
-    }
-
-    if (!scanWriter) {
-        scanWriter = await createWriter(scanSchema);
-        await seed(scanWriter);
-    }
-
-    return { indexed: indexedWriter, scan: scanWriter };
-};
+let indexedWriter: DatabaseWriterLike;
+let scanWriter: DatabaseWriterLike;
 
 describe("d1 rank() — indexed vs emulated scan", () => {
-    bench("indexed: rank() via companion table seek", async () => {
-        const { indexed } = await ensureSeed();
+    // Build + seed the writers in `beforeAll`, out of the measured bench body:
+    // seeding 10k rows inside the body runs the whole seed under CodSpeed's
+    // cachegrind instrumentation, which truncates it so the scan misses TARGET_ID
+    // ("row not found"). The DO relation-predicate benches prove `beforeAll` seed
+    // state IS visible to the measured body — so build + seed here, once.
+    beforeAll(async () => {
+        indexedWriter = await createWriter(indexedSchema);
+        await seed(indexedWriter);
+        scanWriter = await createWriter(scanSchema);
+        await seed(scanWriter);
+    });
 
-        await indexed.rank("messages", "byChannel", { row: TARGET_ID });
+    bench("indexed: rank() via companion table seek", async () => {
+        await indexedWriter.rank("messages", "byChannel", { row: TARGET_ID });
     });
 
     bench("emulated: findMany(channel) + JS index-of", async () => {
-        const { scan } = await ensureSeed();
+        const scan = scanWriter;
 
         let cursor: null | string = null;
         let position: null | number = null;
