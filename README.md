@@ -1,20 +1,32 @@
 <div align="center">
 
-<img src="./.github/assets/lunora.svg" alt="Lunora" width="150" />
-
-<h1>Lunora</h1>
+<img src="./.github/assets/package-og.svg" alt="Lunora" />
 
 **Type-safe, real-time backend on your own Cloudflare account. Vite-first.**
 
 [**Documentation**](https://lunora.sh/docs) · [**Website**](https://lunora.sh) · [**Packages**](https://lunora.sh/packages) · [**Quick start**](#quick-start)
 
-[![License: FSL-1.1-Apache-2.0](https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg)](./LICENSE.md)
-[![Status](https://img.shields.io/badge/status-alpha-blueviolet.svg)](#status)
-[![Node](https://img.shields.io/badge/node-%5E22.15%20%7C%7C%20%3E%3D24.11-brightgreen.svg)](./package.json)
-[![pnpm](https://img.shields.io/badge/pnpm-11.5.3-f69220.svg)](./package.json)
-[![CI](https://github.com/anolilab/lunora/actions/workflows/test.yml/badge.svg?branch=alpha)](https://github.com/anolilab/lunora/actions/workflows/test.yml)
-[![npm: lunorash](https://img.shields.io/npm/v/lunorash/alpha?label=lunorash%40alpha&color=cb3837)](https://www.npmjs.com/package/lunorash)
+<br />
 
+[![typescript-image][typescript-badge]][typescript-url]
+[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![Status][status-badge]][status]
+[![Node][node-badge]][node]
+[![pnpm][pnpm-badge]][pnpm]
+[![CI][ci-badge]][ci]
+[![npm version][npm-version-badge]][npm-version]
+[![PRs Welcome][prs-welcome-badge]][prs-welcome]
+
+</div>
+
+---
+
+<div align="center">
+    <p>
+        <sup>
+            Daniel Bannert's open source work is supported by the community on <a href="https://github.com/sponsors/prisis">GitHub Sponsors</a>
+        </sup>
+    </p>
 </div>
 
 ---
@@ -91,6 +103,19 @@ export default function App() {
 - **Real-time by default.** Queries are reactive over WebSocket subscriptions; mutations push deltas to subscribed clients without manual cache invalidation.
 - **Your data, your account.** Everything runs on your Cloudflare resources (Workers, Durable Objects, D1, R2, Queues, KV). No vendor lock-in beyond Cloudflare itself.
 - **Scales past the single-DO ceiling.** Start simple with one Durable Object; opt into `.shardBy(key)` per function when you need tenant-level isolation, or `.global()` for geo-replicated reads, without rewriting your app.
+
+## Lunora Studio
+
+Every app ships with **Lunora Studio** — a local admin UI for your schema, data, functions, logs, and advisors, served automatically by `pnpm dev`. Browse and edit data, run SQL, inspect live connections and function metrics, replay state with Time Travel, and read the security & performance advisories generated from your schema.
+
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./.github/assets/studio-home-dark.png" />
+    <img src="./.github/assets/studio-home-light.png" alt="Lunora Studio — the local admin UI for your schema, data, functions, and advisors" width="900" />
+  </picture>
+</div>
+
+> Read the [Studio deep dive →](https://lunora.sh/blog/lunora-studio-deep-dive)
 
 ## Lunora vs. the alternatives
 
@@ -228,6 +253,17 @@ All packages are published under the [`@lunora`](https://www.npmjs.com/org/lunor
 
 <!-- END_TABLE_PLACEHOLDER -->
 
+## Documentation
+
+Full documentation lives at **[lunora.sh/docs](https://lunora.sh/docs)** — guides, core concepts, framework adapters, and per-package reference:
+
+- [Getting started](https://lunora.sh/docs/getting-started) — scaffold an app and run the dev loop in under a minute
+- [Queries, mutations & actions](https://lunora.sh/docs/concepts/queries-mutations) — the core authoring model
+- [Real-time](https://lunora.sh/docs/concepts/realtime) · [Sharding](https://lunora.sh/docs/concepts/sharding) · [RLS](https://lunora.sh/docs/concepts/rls) — the concepts that make it scale
+- [Architecture](https://lunora.sh/docs/architecture) — how the Worker, Durable Objects, and storage fit together
+- [Deployment](https://lunora.sh/docs/deployment) — ship to your own Cloudflare account
+- [Packages](https://lunora.sh/packages) — every `@lunora/*` adapter and add-on
+
 ## Status
 
 **v1.0.0-alpha.1 — APIs WILL break.** This is bootstrap-quality. Nothing is on npm yet; the surface area, package boundaries, and on-disk layout will all shift before the first non-alpha tag.
@@ -243,3 +279,22 @@ For security reports, see [`SECURITY.md`](./SECURITY.md). For community guidelin
 ## License
 
 [FSL-1.1-Apache-2.0](./LICENSE.md) © 2026 anolilab and contributors. Source-available; each release converts to Apache-2.0 two years after it ships.
+
+<!-- badges -->
+
+[typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
+[typescript-url]: https://www.typescriptlang.org/
+[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license]: ./LICENSE.md
+[status-badge]: https://img.shields.io/badge/status-alpha-blueviolet.svg?style=for-the-badge
+[status]: #status
+[node-badge]: https://img.shields.io/badge/node-%5E22.15%20%7C%7C%20%3E%3D24.11-brightgreen.svg?style=for-the-badge
+[node]: ./package.json
+[pnpm-badge]: https://img.shields.io/badge/pnpm-11.5.3-f69220.svg?style=for-the-badge
+[pnpm]: ./package.json
+[ci-badge]: https://img.shields.io/github/actions/workflow/status/anolilab/lunora/test.yml?branch=alpha&style=for-the-badge&label=CI
+[ci]: https://github.com/anolilab/lunora/actions/workflows/test.yml
+[npm-version-badge]: https://img.shields.io/npm/v/lunorash/alpha?label=lunorash%40alpha&color=cb3837&style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/lunorash
+[prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
+[prs-welcome]: https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md
