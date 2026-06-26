@@ -6,6 +6,7 @@ import { mergeSchemaExtension } from "./plugin";
 import type {
     AggregateIndexDefinition,
     AggregateOp,
+    DurableObjectJurisdiction,
     GlobalBackend,
     IndexDefinition,
     OnDeleteAction,
@@ -450,6 +451,17 @@ type ExtendableSchema<T extends Record<string, TableDefinition>> = {
     ) => ExtendableSchema<PrefixedTables<X, Key> & T>;
 
     /**
+     * Pin every Durable Object the app reaches — shards, sessions, fan-out,
+     * subscriptions, the scheduler — to a Cloudflare data-residency jurisdiction
+     * (`"eu"`, `"us"`, `"fedramp"`). Codegen reads this off the schema and emits
+     * it into the generated worker's `createWorker({ jurisdiction })` (and
+     * `ctx.scheduler`). Non-mutating: returns a fresh `ExtendableSchema`, so it
+     * composes with `.rls(...)` / `.extend(...)` in any order.
+     * @see https://developers.cloudflare.com/durable-objects/reference/data-location/
+     */
+    jurisdiction: (jurisdiction: DurableObjectJurisdiction) => ExtendableSchema<T>;
+
+    /**
      * Turn on secure-by-default RLS for the whole schema. Every table is then
      * protected — the DO/D1 write path denies raw, non-RLS `ctx.db` access, so a
      * procedure that forgets `.use(rls(...))` fails closed. Opt a table out with
@@ -466,6 +478,14 @@ const withExtend = <T extends Record<string, TableDefinition>>(schema: Schema<T>
             extension: SchemaExtension<X> & { readonly key: Key },
         ): ExtendableSchema<PrefixedTables<X, Key> & T> {
             return withExtend(mergeSchemaExtension(schema, extension));
+        },
+        jurisdiction(_jurisdiction: DurableObjectJurisdiction): ExtendableSchema<T> {
+            // Authoring-time, type-checked declaration only. The jurisdiction is
+            // a worker-side residency concern: codegen reads the literal off the
+            // schema AST and emits it into the generated `createWorker({ jurisdiction })`
+            // (and `ctx.scheduler`). Nothing reads it off the schema object at
+            // runtime, so this returns the schema unchanged.
+            return withExtend(schema);
         },
         rls(mode: "required"): ExtendableSchema<T> {
             return withExtend({ ...schema, rlsMode: mode });

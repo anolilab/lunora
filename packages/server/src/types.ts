@@ -15,6 +15,15 @@ type InferArgs<A extends ArgsValidator> = InferValidatorMap<A>;
 /** Storage backend for a `.global()` table: D1 (default) or a Postgres/MySQL database via Cloudflare Hyperdrive (PlanetScale, Neon, …). */
 type GlobalBackend = "d1" | "hyperdrive";
 
+/**
+ * Cloudflare Durable Object data-residency jurisdiction declared via
+ * `defineSchema(...).jurisdiction("…")`. Restricts where every DO the app
+ * reaches runs and persists data (GDPR, FedRAMP, US data residency). Widening
+ * union — Cloudflare adds values over time.
+ * @see https://developers.cloudflare.com/durable-objects/reference/data-location/
+ */
+type DurableObjectJurisdiction = "eu" | "fedramp" | "us";
+
 /** How a table is routed at runtime. */
 type ShardMode = { backend?: GlobalBackend; kind: "global" } | { field: string; kind: "shardBy" } | { kind: "root" };
 
@@ -1211,6 +1220,7 @@ export type {
     AuthState,
     DatabaseReader,
     DatabaseWriter,
+    DurableObjectJurisdiction,
     FunctionKind,
     FunctionVisibility,
     GlobalBackend,

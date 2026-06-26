@@ -86,6 +86,7 @@ export type {
     AuthState,
     DatabaseReader,
     DatabaseWriter,
+    DurableObjectJurisdiction,
     FunctionKind,
     FunctionVisibility,
     IndexDefinition,

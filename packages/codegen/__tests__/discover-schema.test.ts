@@ -1142,4 +1142,60 @@ describe("discoverSchema", () => {
         expect(diagnostic.line).toBeGreaterThan(0);
         expect(diagnostic.column).toBeGreaterThan(0);
     });
+
+    it("defaults jurisdiction to undefined when not declared", () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                messages: defineTable({ text: v.string() }),
+            });
+        `);
+
+        expect(discoverSchema(project, schemaPath).jurisdiction).toBeUndefined();
+    });
+
+    it.each(["eu", "us", "fedramp"] as const)("captures `.jurisdiction(%s)` into the schema IR", (value) => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                messages: defineTable({ text: v.string() }),
+            }).jurisdiction("${value}");
+        `);
+
+        expect(discoverSchema(project, schemaPath).jurisdiction).toBe(value);
+    });
+
+    it("finds `.jurisdiction(...)` regardless of position in the builder chain", () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                messages: defineTable({ text: v.string() }),
+            }).rls("required").jurisdiction("eu");
+        `);
+
+        expect(discoverSchema(project, schemaPath).jurisdiction).toBe("eu");
+    });
+
+    it("throws a diagnostic on an unknown jurisdiction literal", () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                messages: defineTable({ text: v.string() }),
+            }).jurisdiction("atlantis");
+        `);
+
+        expect(() => discoverSchema(project, schemaPath)).toThrow(/unknown jurisdiction/);
+    });
 });

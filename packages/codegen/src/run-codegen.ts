@@ -444,6 +444,8 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasStorage: studioFeatures.storage,
         hasVectors: schema.vectorIndexes.length > 0,
         hasWorkflow: workflows.length > 0,
+        // Schema `.jurisdiction("…")` → pin the generated worker's DOs to the region.
+        jurisdiction: schema.jurisdiction,
         useUmbrella,
         wantsOpenApi,
         wantsOpenRpc,

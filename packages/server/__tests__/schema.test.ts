@@ -291,3 +291,31 @@ describe("defineSchema", () => {
         expect(index?.select({ body: "B", title: "T" })).toBe("T\n\nB");
     });
 });
+
+describe("defineSchema().jurisdiction()", () => {
+    it("is chainable and preserves the schema's tables", () => {
+        expect.assertions(2);
+
+        const schema = defineSchema({
+            messages: defineTable({ text: v.string() }),
+        }).jurisdiction("us");
+
+        expect(Object.keys(schema.tables)).toStrictEqual(["messages"]);
+        // Still extendable/composable after pinning the jurisdiction.
+        expect(typeof schema.extend).toBe("function");
+    });
+
+    it("composes with .rls() in either order", () => {
+        expect.assertions(2);
+
+        const a = defineSchema({ messages: defineTable({ text: v.string() }) })
+            .rls("required")
+            .jurisdiction("eu");
+        const b = defineSchema({ messages: defineTable({ text: v.string() }) })
+            .jurisdiction("eu")
+            .rls("required");
+
+        expect(a.rlsMode).toBe("required");
+        expect(b.rlsMode).toBe("required");
+    });
+});
