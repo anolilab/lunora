@@ -93,20 +93,20 @@ const TYPE_ONLY_IMPORT_PATTERN = /^\s*import\s+type\b/;
  * binding is a one-line entry rather than a seven-site edit.
  */
 // Provisioning behaviour per package (see plans 027/028/031/032/035/036):
-//   @lunora/kv         → kv_namespaces             → hint (un-mintable namespace id)
+//   @lunora/bindings/kv         → kv_namespaces             → hint (un-mintable namespace id)
 //   @lunora/hyperdrive → hyperdrive                → hint (un-mintable remote id)
 //   @lunora/browser    → browser                   → self-describing (binding name only)
-//   @lunora/images     → images                    → self-describing (binding name only)
-//   @lunora/analytics  → analytics_engine_datasets → self-describing (dataset == binding name)
-//   ctx.pipelines      → pipelines                 → hint (un-mintable remote pipeline name; ships from @lunora/analytics)
+//   @lunora/bindings/images     → images                    → self-describing (binding name only)
+//   @lunora/bindings/analytics  → analytics_engine_datasets → self-describing (dataset == binding name)
+//   ctx.pipelines               → pipelines                 → hint (un-mintable remote pipeline name; ships from @lunora/bindings/analytics)
 const CAPABILITY_SOURCES = {
     usesAi: { pattern: /\bfrom\s+["']@lunora\/ai["']/, source: "@lunora/ai" },
-    usesAnalytics: { pattern: /\bfrom\s+["']@lunora\/analytics["']/, source: "@lunora/analytics" },
+    usesAnalytics: { pattern: /\bfrom\s+["']@lunora\/bindings\/analytics["']/, source: "@lunora/bindings/analytics" },
     usesAuth: { pattern: /\bfrom\s+["']@lunora\/auth["']/, source: "@lunora/auth" },
     usesBrowser: { pattern: /\bfrom\s+["']@lunora\/browser["']/, source: "@lunora/browser" },
     usesHyperdrive: { pattern: /\bfrom\s+["']@lunora\/hyperdrive["']/, source: "@lunora/hyperdrive" },
-    usesImages: { pattern: /\bfrom\s+["']@lunora\/images["']/, source: "@lunora/images" },
-    usesKv: { pattern: /\bfrom\s+["']@lunora\/kv["']/, source: "@lunora/kv" },
+    usesImages: { pattern: /\bfrom\s+["']@lunora\/bindings\/images["']/, source: "@lunora/bindings/images" },
+    usesKv: { pattern: /\bfrom\s+["']@lunora\/bindings\/kv["']/, source: "@lunora/bindings/kv" },
     usesMail: { pattern: /\bfrom\s+["']@lunora\/mail["']/, source: "@lunora/mail" },
     usesPayment: { pattern: /\bfrom\s+["']@lunora\/payment["']/, source: "@lunora/payment" },
     // Keyed off the `ctx.pipelines` access (not an import) — see CTX_PIPELINES_PATTERN.
@@ -177,7 +177,7 @@ interface InferredBindings {
     signals: string[];
     /** `@lunora/ai` is imported or `env.AI` is used → needs the `ai` Workers AI binding. */
     usesAi: boolean;
-    /** `@lunora/analytics` is imported → self-describing `analytics_engine_datasets` binding (auto-writeable). */
+    /** `@lunora/bindings/analytics` is imported → self-describing `analytics_engine_datasets` binding (auto-writeable). */
     usesAnalytics: boolean;
     /** `@lunora/auth` is imported (sessions may be D1- or `SessionDO`-backed). */
     usesAuth: boolean;
@@ -185,9 +185,9 @@ interface InferredBindings {
     usesBrowser: boolean;
     /** `@lunora/hyperdrive` is imported (binding needs an un-mintable remote `id`; hint-only). */
     usesHyperdrive: boolean;
-    /** `@lunora/images` is imported → self-describing `images` binding (auto-writeable). */
+    /** `@lunora/bindings/images` is imported → self-describing `images` binding (auto-writeable). */
     usesImages: boolean;
-    /** `@lunora/kv` is imported (namespace binding name + id are user-defined; hint-only). */
+    /** `@lunora/bindings/kv` is imported (namespace binding name + id are user-defined; hint-only). */
     usesKv: boolean;
     /** `@lunora/mail` is imported (Resend API key must be set in `.dev.vars`; no binding). */
     usesMail: boolean;
@@ -552,14 +552,14 @@ const describeCapabilitySignals = (capabilities: Capabilities, exported: Readonl
         // Self-describing bindings: the binding name is the whole config (no remote
         // id to mint), so reconcile auto-writes them like the DO/D1 bindings.
         [capabilities.usesBrowser, "browser (@lunora/browser imported) — self-describing { binding: BROWSER }"],
-        [capabilities.usesImages, "images (@lunora/images imported) — self-describing { binding: IMAGES }"],
-        [capabilities.usesAnalytics, "analytics_engine_datasets (@lunora/analytics imported) — self-describing { binding: ANALYTICS, dataset }"],
+        [capabilities.usesImages, "images (@lunora/bindings/images imported) — self-describing { binding: IMAGES }"],
+        [capabilities.usesAnalytics, "analytics_engine_datasets (@lunora/bindings/analytics imported) — self-describing { binding: ANALYTICS, dataset }"],
         // Hint bindings: each needs a remote resource Lunora can't fabricate (a KV
         // namespace id, a Hyperdrive id, a Pipelines pipeline name), so they surface
         // as hints — never an auto-write — exactly like R2's user-defined bucket name.
         [
             capabilities.usesKv,
-            "hint: @lunora/kv is imported; add a kv_namespaces binding ({ binding, id }) and pass env.<BINDING> to createKv() — the namespace id can't be auto-provisioned",
+            "hint: @lunora/bindings/kv is imported; add a kv_namespaces binding ({ binding, id }) and pass env.<BINDING> to createKv() — the namespace id can't be auto-provisioned",
         ],
         [
             capabilities.usesHyperdrive,

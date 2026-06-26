@@ -1040,7 +1040,7 @@ interface VectorRecord {
 
 /**
  * Read-only vector surface exposed on {@link QueryCtx}. Mirrors the read half
- * of `@lunora/vectors`' `LunoraVectors` so the live adapter is assignable.
+ * of `@lunora/bindings/vectors`' `LunoraVectors` so the live adapter is assignable.
  */
 interface VectorSearchReader {
     getByIds: (indexName: string, ids: ReadonlyArray<string>) => Promise<ReadonlyArray<VectorRecord>>;

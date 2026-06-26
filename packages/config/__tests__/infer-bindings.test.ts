@@ -367,11 +367,11 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
     // NOT import-driven (it ships from @lunora/analytics, reached via
     // ctx.pipelines) and is covered by its own test below.
     it.each([
-        ["@lunora/kv", "usesKv", /hint: @lunora\/kv/u],
+        ["@lunora/bindings/kv", "usesKv", /hint: @lunora\/bindings\/kv/u],
         ["@lunora/hyperdrive", "usesHyperdrive", /hint: @lunora\/hyperdrive/u],
         ["@lunora/browser", "usesBrowser", /browser \(@lunora\/browser/u],
-        ["@lunora/images", "usesImages", /images \(@lunora\/images/u],
-        ["@lunora/analytics", "usesAnalytics", /analytics_engine_datasets/u],
+        ["@lunora/bindings/images", "usesImages", /images \(@lunora\/bindings\/images/u],
+        ["@lunora/bindings/analytics", "usesAnalytics", /analytics_engine_datasets/u],
     ] as const)("infers %s usage and emits the expected signal", async (source, flag, signalRe) => {
         expect.assertions(2);
 

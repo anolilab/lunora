@@ -23,15 +23,15 @@ import { listLunoraSourceFiles } from "./discover-functions";
 interface FeatureUsage {
     /** A `lunora/` source imports `@lunora/ai` or reads `ctx.ai`. */
     ai: boolean;
-    /** A `lunora/` source imports `@lunora/analytics` or reads `ctx.analytics`. */
+    /** A `lunora/` source imports `@lunora/bindings/analytics` or reads `ctx.analytics`. */
     analytics: boolean;
     /** A `lunora/` source imports `@lunora/browser` or reads `ctx.browser`. */
     browser: boolean;
     /** A `lunora/` source imports `@lunora/hyperdrive` or reads `ctx.sql`. */
     hyperdrive: boolean;
-    /** A `lunora/` source imports `@lunora/images` or reads `ctx.images`. */
+    /** A `lunora/` source imports `@lunora/bindings/images` or reads `ctx.images`. */
     images: boolean;
-    /** A `lunora/` source imports `@lunora/kv` or reads `ctx.kv`. */
+    /** A `lunora/` source imports `@lunora/bindings/kv` or reads `ctx.kv`. */
     kv: boolean;
     /** A `lunora/` source imports `@lunora/mail`. */
     mail: boolean;
@@ -39,13 +39,13 @@ interface FeatureUsage {
     payments: boolean;
     /** A `lunora/` source imports `@lunora/pipelines` or reads `ctx.pipelines`. */
     pipelines: boolean;
-    /** A `lunora/` source imports `@lunora/r2sql` or reads `ctx.r2sql`. */
+    /** A `lunora/` source imports `@lunora/bindings/r2sql` or reads `ctx.r2sql`. */
     r2sql: boolean;
     /** A source imports `@lunora/scheduler` or reads `ctx.scheduler`. */
     scheduler: boolean;
     /** A source imports `@lunora/storage` or reads `ctx.storage`. */
     storage: boolean;
-    /** A source imports `@lunora/vectors` or reads `ctx.vectors`. */
+    /** A source imports `@lunora/bindings/vectors` or reads `ctx.vectors`. */
     vectors: boolean;
     /** A source imports `@lunora/workflow` or reads `ctx.workflows`. */
     workflows: boolean;
@@ -61,22 +61,22 @@ interface FeatureProbe {
 
 const PROBES: Record<keyof FeatureUsage, FeatureProbe> = {
     ai: { contextProperty: "ai", moduleSpecifier: "@lunora/ai" },
-    analytics: { contextProperty: "analytics", moduleSpecifier: "@lunora/analytics" },
+    analytics: { contextProperty: "analytics", moduleSpecifier: "@lunora/bindings/analytics" },
     browser: { contextProperty: "browser", moduleSpecifier: "@lunora/browser" },
     hyperdrive: { contextProperty: "sql", moduleSpecifier: "@lunora/hyperdrive" },
-    images: { contextProperty: "images", moduleSpecifier: "@lunora/images" },
-    kv: { contextProperty: "kv", moduleSpecifier: "@lunora/kv" },
+    images: { contextProperty: "images", moduleSpecifier: "@lunora/bindings/images" },
+    kv: { contextProperty: "kv", moduleSpecifier: "@lunora/bindings/kv" },
     mail: { moduleSpecifier: "@lunora/mail" },
     payments: { contextProperty: "payments", moduleSpecifier: "@lunora/payment" },
-    // Pipelines ships from `@lunora/analytics`, but a plain analytics import must
+    // Pipelines ships from `@lunora/bindings/analytics`, but a plain analytics import must
     // NOT flip `hasPipelines` (that would wire `ctx.pipelines` for analytics-only
     // apps). So key it solely on the `ctx.pipelines` read via a sentinel specifier
     // that no real import ever matches.
-    pipelines: { contextProperty: "pipelines", moduleSpecifier: "@lunora/analytics#pipelines" },
-    r2sql: { contextProperty: "r2sql", moduleSpecifier: "@lunora/r2sql" },
+    pipelines: { contextProperty: "pipelines", moduleSpecifier: "@lunora/bindings/analytics#pipelines" },
+    r2sql: { contextProperty: "r2sql", moduleSpecifier: "@lunora/bindings/r2sql" },
     scheduler: { contextProperty: "scheduler", moduleSpecifier: "@lunora/scheduler" },
     storage: { contextProperty: "storage", moduleSpecifier: "@lunora/storage" },
-    vectors: { contextProperty: "vectors", moduleSpecifier: "@lunora/vectors" },
+    vectors: { contextProperty: "vectors", moduleSpecifier: "@lunora/bindings/vectors" },
     workflows: { contextProperty: "workflows", moduleSpecifier: "@lunora/workflow" },
 };
 
@@ -207,7 +207,7 @@ const buildStudioFeatures = (usage: FeatureUsage, signals: StudioFeatureSignals)
         queues: signals.queueCount > 0 || signals.dependencies.has("@lunora/queue"),
         scheduler: usage.scheduler || signals.cronCount > 0 || signals.dependencies.has("@lunora/scheduler"),
         storage: usage.storage || signals.storageRuleCount > 0 || signals.storageColumnCount > 0 || signals.dependencies.has("@lunora/storage"),
-        vectors: usage.vectors || signals.vectorIndexCount > 0 || signals.dependencies.has("@lunora/vectors"),
+        vectors: usage.vectors || signals.vectorIndexCount > 0 || signals.dependencies.has("@lunora/bindings/vectors"),
         workflows: usage.workflows || signals.workflowCount > 0 || signals.dependencies.has("@lunora/workflow"),
     };
 };

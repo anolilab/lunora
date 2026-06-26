@@ -618,9 +618,9 @@ catalogs:
 overrides:
   '@lunora/advisor': workspace:*
   '@lunora/ai': workspace:*
-  '@lunora/analytics': workspace:*
   '@lunora/astro': workspace:*
   '@lunora/auth': workspace:*
+  '@lunora/bindings': workspace:*
   '@lunora/browser': workspace:*
   '@lunora/cli': workspace:*
   '@lunora/client': workspace:*
@@ -631,14 +631,11 @@ overrides:
   '@lunora/db': workspace:*
   '@lunora/do': workspace:*
   '@lunora/hyperdrive': workspace:*
-  '@lunora/images': workspace:*
-  '@lunora/kv': workspace:*
   '@lunora/mail': workspace:*
   '@lunora/mcp': workspace:*
   '@lunora/nuxt': workspace:*
   '@lunora/payment': workspace:*
   '@lunora/queue': workspace:*
-  '@lunora/r2sql': workspace:*
   '@lunora/ratelimit': workspace:*
   '@lunora/react': workspace:*
   '@lunora/runtime': workspace:*
@@ -652,7 +649,6 @@ overrides:
   '@lunora/svelte': workspace:*
   '@lunora/testing': workspace:*
   '@lunora/values': workspace:*
-  '@lunora/vectors': workspace:*
   '@lunora/vite': workspace:*
   '@lunora/vue': workspace:*
   '@lunora/workflow': workspace:*
@@ -1268,6 +1264,9 @@ importers:
       '@lunora/auth':
         specifier: workspace:*
         version: link:../../packages/auth
+      '@lunora/bindings':
+        specifier: workspace:*
+        version: link:../../packages/bindings
       '@lunora/d1':
         specifier: workspace:*
         version: link:../../packages/d1
@@ -1280,9 +1279,6 @@ importers:
       '@lunora/storage':
         specifier: workspace:*
         version: link:../../packages/storage
-      '@lunora/vectors':
-        specifier: workspace:*
-        version: link:../../packages/vectors
       '@lunora/vite':
         specifier: workspace:*
         version: link:../../packages/vite
@@ -1524,33 +1520,6 @@ importers:
         specifier: catalog:cloudflare
         version: 4.102.0(@cloudflare/workers-types@4.20260617.1)
 
-  packages/analytics:
-    devDependencies:
-      '@cloudflare/workers-types':
-        specifier: catalog:cloudflare
-        version: 4.20260617.1
-      '@types/node':
-        specifier: catalog:types
-        version: 25.9.3
-      '@visulima/packem':
-        specifier: catalog:build
-        version: 2.0.0-alpha.93(39db6a19757a33ecfffbf3102bc29244)
-      '@vitest/coverage-v8':
-        specifier: catalog:test
-        version: 4.1.9(vitest@4.1.9)
-      esbuild:
-        specifier: catalog:build
-        version: 0.28.1
-      fallow:
-        specifier: catalog:lint
-        version: 2.101.0
-      typescript:
-        specifier: catalog:tsc
-        version: 6.0.3
-      vitest:
-        specifier: catalog:test
-        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
-
   packages/astro:
     dependencies:
       '@lunora/client':
@@ -1599,6 +1568,33 @@ importers:
       better-auth:
         specifier: catalog:auth
         version: 1.6.19(8cf6972d86e43efe85749fd221bb43a2)
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: catalog:cloudflare
+        version: 4.20260617.1
+      '@types/node':
+        specifier: catalog:types
+        version: 25.9.3
+      '@visulima/packem':
+        specifier: catalog:build
+        version: 2.0.0-alpha.93(39db6a19757a33ecfffbf3102bc29244)
+      '@vitest/coverage-v8':
+        specifier: catalog:test
+        version: 4.1.9(vitest@4.1.9)
+      esbuild:
+        specifier: catalog:build
+        version: 0.28.1
+      fallow:
+        specifier: catalog:lint
+        version: 2.101.0
+      typescript:
+        specifier: catalog:tsc
+        version: 6.0.3
+      vitest:
+        specifier: catalog:test
+        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
+
+  packages/bindings:
     devDependencies:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
@@ -2030,9 +2026,9 @@ importers:
       '@codspeed/vitest-plugin':
         specifier: catalog:test
         version: 5.6.0(tinybench@2.9.0)(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))(vitest@4.1.9)
-      '@lunora/vectors':
+      '@lunora/bindings':
         specifier: workspace:*
-        version: link:../vectors
+        version: link:../bindings
       '@types/node':
         specifier: catalog:types
         version: 25.9.3
@@ -2109,72 +2105,6 @@ importers:
       vitest:
         specifier: catalog:test
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
-
-  packages/images:
-    devDependencies:
-      '@cloudflare/vitest-pool-workers':
-        specifier: catalog:cloudflare
-        version: 0.16.17(@cloudflare/workers-types@4.20260617.1)(@vitest/runner@4.1.9)(@vitest/snapshot@4.1.9)(vitest@4.1.9)
-      '@cloudflare/workers-types':
-        specifier: catalog:cloudflare
-        version: 4.20260617.1
-      '@types/node':
-        specifier: catalog:types
-        version: 25.9.3
-      '@visulima/packem':
-        specifier: catalog:build
-        version: 2.0.0-alpha.93(39db6a19757a33ecfffbf3102bc29244)
-      '@vitest/coverage-v8':
-        specifier: catalog:test
-        version: 4.1.9(vitest@4.1.9)
-      esbuild:
-        specifier: catalog:build
-        version: 0.28.1
-      fallow:
-        specifier: catalog:lint
-        version: 2.101.0
-      typescript:
-        specifier: catalog:tsc
-        version: 6.0.3
-      vitest:
-        specifier: catalog:test
-        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
-      wrangler:
-        specifier: catalog:cloudflare
-        version: 4.102.0(@cloudflare/workers-types@4.20260617.1)
-
-  packages/kv:
-    devDependencies:
-      '@cloudflare/vitest-pool-workers':
-        specifier: catalog:cloudflare
-        version: 0.16.17(@cloudflare/workers-types@4.20260617.1)(@vitest/runner@4.1.9)(@vitest/snapshot@4.1.9)(vitest@4.1.9)
-      '@cloudflare/workers-types':
-        specifier: catalog:cloudflare
-        version: 4.20260617.1
-      '@types/node':
-        specifier: catalog:types
-        version: 25.9.3
-      '@visulima/packem':
-        specifier: catalog:build
-        version: 2.0.0-alpha.93(39db6a19757a33ecfffbf3102bc29244)
-      '@vitest/coverage-v8':
-        specifier: catalog:test
-        version: 4.1.9(vitest@4.1.9)
-      esbuild:
-        specifier: catalog:build
-        version: 0.28.1
-      fallow:
-        specifier: catalog:lint
-        version: 2.101.0
-      typescript:
-        specifier: catalog:tsc
-        version: 6.0.3
-      vitest:
-        specifier: catalog:test
-        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
-      wrangler:
-        specifier: catalog:cloudflare
-        version: 4.102.0(@cloudflare/workers-types@4.20260617.1)
 
   packages/lunora:
     dependencies:
@@ -2374,33 +2304,6 @@ importers:
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
   packages/queue:
-    devDependencies:
-      '@cloudflare/workers-types':
-        specifier: catalog:cloudflare
-        version: 4.20260617.1
-      '@types/node':
-        specifier: catalog:types
-        version: 25.9.3
-      '@visulima/packem':
-        specifier: catalog:build
-        version: 2.0.0-alpha.93(39db6a19757a33ecfffbf3102bc29244)
-      '@vitest/coverage-v8':
-        specifier: catalog:test
-        version: 4.1.9(vitest@4.1.9)
-      esbuild:
-        specifier: catalog:build
-        version: 0.28.1
-      fallow:
-        specifier: catalog:lint
-        version: 2.101.0
-      typescript:
-        specifier: catalog:tsc
-        version: 6.0.3
-      vitest:
-        specifier: catalog:test
-        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
-
-  packages/r2sql:
     devDependencies:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
@@ -2834,9 +2737,9 @@ importers:
       '@lunora/advisor':
         specifier: workspace:*
         version: link:../advisor
-      '@lunora/analytics':
+      '@lunora/bindings':
         specifier: workspace:*
-        version: link:../analytics
+        version: link:../bindings
       '@lunora/client':
         specifier: workspace:*
         version: link:../client
@@ -3044,39 +2947,6 @@ importers:
       vitest:
         specifier: catalog:test
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
-
-  packages/vectors:
-    devDependencies:
-      '@cloudflare/vitest-pool-workers':
-        specifier: catalog:cloudflare
-        version: 0.16.17(@cloudflare/workers-types@4.20260617.1)(@vitest/runner@4.1.9)(@vitest/snapshot@4.1.9)(vitest@4.1.9)
-      '@cloudflare/workers-types':
-        specifier: catalog:cloudflare
-        version: 4.20260617.1
-      '@types/node':
-        specifier: catalog:types
-        version: 25.9.3
-      '@visulima/packem':
-        specifier: catalog:build
-        version: 2.0.0-alpha.93(39db6a19757a33ecfffbf3102bc29244)
-      '@vitest/coverage-v8':
-        specifier: catalog:test
-        version: 4.1.9(vitest@4.1.9)
-      esbuild:
-        specifier: catalog:build
-        version: 0.28.1
-      fallow:
-        specifier: catalog:lint
-        version: 2.101.0
-      typescript:
-        specifier: catalog:tsc
-        version: 6.0.3
-      vitest:
-        specifier: catalog:test
-        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
-      wrangler:
-        specifier: catalog:cloudflare
-        version: 4.102.0(@cloudflare/workers-types@4.20260617.1)
 
   packages/vite:
     dependencies:

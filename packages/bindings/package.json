@@ -1,15 +1,15 @@
 {
-    "name": "@lunora/do",
-    "version": "1.0.0-alpha.5",
-    "description": "Lunora Durable Objects: ShardDO (SQLite, OCC, hibernated WebSocket subscriptions) and SessionDO",
+    "name": "@lunora/bindings",
+    "version": "1.0.0-alpha.1",
+    "description": "Lightweight Cloudflare binding helpers for Lunora — ctx.kv, ctx.images, ctx.analytics (+ Pipelines), ctx.vectors, ctx.r2sql — one install, per-binding subpaths",
     "keywords": [
         "cloudflare",
-        "durable-objects",
-        "hibernation",
         "lunora",
-        "shard",
-        "sqlite",
-        "websocket",
+        "kv",
+        "images",
+        "analytics",
+        "vectorize",
+        "r2-sql",
         "workers"
     ],
     "homepage": "https://lunora.sh",
@@ -22,7 +22,7 @@
     "repository": {
         "type": "git",
         "url": "git+https://github.com/anolilab/lunora.git",
-        "directory": "packages/do"
+        "directory": "packages/bindings"
     },
     "files": [
         "dist",
@@ -32,13 +32,26 @@
     ],
     "type": "module",
     "sideEffects": false,
-    "main": "./dist/index.mjs",
-    "module": "./dist/index.mjs",
-    "types": "./dist/index.d.ts",
     "exports": {
-        ".": {
-            "types": "./dist/index.d.ts",
-            "import": "./dist/index.mjs"
+        "./kv": {
+            "types": "./dist/kv/index.d.ts",
+            "import": "./dist/kv/index.mjs"
+        },
+        "./images": {
+            "types": "./dist/images/index.d.ts",
+            "import": "./dist/images/index.mjs"
+        },
+        "./analytics": {
+            "types": "./dist/analytics/index.d.ts",
+            "import": "./dist/analytics/index.mjs"
+        },
+        "./vectors": {
+            "types": "./dist/vectors/index.d.ts",
+            "import": "./dist/vectors/index.mjs"
+        },
+        "./r2sql": {
+            "types": "./dist/r2sql/index.d.ts",
+            "import": "./dist/r2sql/index.mjs"
         },
         "./package.json": "./package.json"
     },
@@ -55,28 +68,19 @@
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
-        "test:bench": "vitest bench --run --config vitest.bench.config.ts",
         "fallow:audit": "fallow audit",
         "fallow:dead-code": "fallow dead-code",
         "fallow:health": "fallow health --score"
     },
-    "dependencies": {
-        "@visulima/redact": "catalog:redact",
-        "drizzle-orm": "catalog:drizzle"
-    },
     "devDependencies": {
-        "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
-        "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/bindings": "1.0.0-alpha.1",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
-        "vitest": "catalog:test",
-        "wrangler": "catalog:cloudflare"
+        "vitest": "catalog:test"
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"

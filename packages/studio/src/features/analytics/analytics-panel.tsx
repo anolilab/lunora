@@ -1,5 +1,5 @@
-import type { AnalyticsSqlResult } from "@lunora/analytics";
-import { createAnalyticsSqlClient } from "@lunora/analytics";
+import type { AnalyticsSqlResult } from "@lunora/bindings/analytics";
+import { createAnalyticsSqlClient } from "@lunora/bindings/analytics";
 import type { ReactElement } from "react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -47,7 +47,7 @@ const DEFAULT_DATASET = "ANALYTICS";
 
 /**
  * One named usage panel: a title and the SQL that backs it. The columns are
- * `@lunora/analytics`'s `track()` layout — `blob1` is the event name, `blob2`
+ * `@lunora/bindings/analytics`'s `track()` layout — `blob1` is the event name, `blob2`
  * the function path, `double1` the handler duration — so these read against the
  * data points `ctx.analytics.track("function_call", …)` emits.
  */

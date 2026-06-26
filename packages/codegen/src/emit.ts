@@ -924,20 +924,20 @@ const buildStorageBucketNames = (schema: SchemaIR, ruleBuckets: ReadonlyArray<st
 interface EmitServerOptions {
     containers?: ReadonlyArray<ContainerIR>;
     hasAi?: boolean;
-    /** A `lunora/` source uses `@lunora/analytics` / `ctx.analytics` — wires the write helper onto every ctx. */
+    /** A `lunora/` source uses `@lunora/bindings/analytics` / `ctx.analytics` — wires the write helper onto every ctx. */
     hasAnalytics?: boolean;
     /** A `lunora/` source uses `@lunora/browser` / `ctx.browser` — wires `ctx.browser` onto ActionCtx only. */
     hasBrowser?: boolean;
     /** A `lunora/` source uses `@lunora/hyperdrive` / `ctx.sql` — wires `ctx.sql` onto ActionCtx only. */
     hasHyperdrive?: boolean;
-    /** A `lunora/` source uses `@lunora/images` / `ctx.images` — wires `ctx.images` onto ActionCtx only. */
+    /** A `lunora/` source uses `@lunora/bindings/images` / `ctx.images` — wires `ctx.images` onto ActionCtx only. */
     hasImages?: boolean;
-    /** A `lunora/` source uses `@lunora/kv` / `ctx.kv` — wires `ctx.kv` onto every ctx. */
+    /** A `lunora/` source uses `@lunora/bindings/kv` / `ctx.kv` — wires `ctx.kv` onto every ctx. */
     hasKv?: boolean;
     hasPayments?: boolean;
     /** A `lunora/` source uses `@lunora/pipelines` / `ctx.pipelines` — wires `ctx.pipelines` onto ActionCtx only. */
     hasPipelines?: boolean;
-    /** A `lunora/` source uses `@lunora/r2sql` / `ctx.r2sql` — wires `ctx.r2sql` onto ActionCtx only. */
+    /** A `lunora/` source uses `@lunora/bindings/r2sql` / `ctx.r2sql` — wires `ctx.r2sql` onto ActionCtx only. */
     hasR2sql?: boolean;
     /** Queues declared via `defineQueue` exports — wires the typed `ctx.queues` producers onto Mutation/Action contexts. */
     queues?: ReadonlyArray<QueueIR>;
@@ -1056,7 +1056,7 @@ export type Env = CloudflareBindings;`;
     //
     // `ctx.kv` — Workers KV. Typed on EVERY ctx (a KV read is allowed in a
     // deterministic read path the way `ctx.db` is; the binding is user-named).
-    const kvContextField = hasKv ? `\n    readonly kv: import("@lunora/kv").Kv;` : "";
+    const kvContextField = hasKv ? `\n    readonly kv: import("@lunora/bindings/kv").Kv;` : "";
     // `ctx.sql` — Hyperdrive (external Postgres/MySQL). ActionCtx ONLY: external,
     // non-deterministic I/O whose writes are invisible to Lunora live queries.
     const hyperdriveActionField = hasHyperdrive
@@ -1068,23 +1068,23 @@ export type Env = CloudflareBindings;`;
         : "";
     // `ctx.images` — Cloudflare Images binding transforms. ActionCtx ONLY: non-deterministic compute/network I/O.
     const imagesActionField = hasImages
-        ? `\n    /** Cloudflare Images transforms (resize/format/optimize). Non-deterministic — available only in actions. */\n    readonly images: import("@lunora/images").Images;`
+        ? `\n    /** Cloudflare Images transforms (resize/format/optimize). Non-deterministic — available only in actions. */\n    readonly images: import("@lunora/bindings/images").Images;`
         : "";
     // `ctx.analytics` — Analytics Engine write helper. EVERY ctx: a write-only,
     // fire-and-forget side effect, not a determinism hazard for reads.
     const analyticsContextField = hasAnalytics
-        ? `\n    /** Analytics Engine telemetry sink. Fire-and-forget and sampled; do not read it back in-handler. */\n    readonly analytics: import("@lunora/analytics").AnalyticsClient;`
+        ? `\n    /** Analytics Engine telemetry sink. Fire-and-forget and sampled; do not read it back in-handler. */\n    readonly analytics: import("@lunora/bindings/analytics").AnalyticsClient;`
         : "";
     // `ctx.pipelines` — Pipelines (R2-backed) ingestion sink. ActionCtx ONLY
     // (write-only fire-and-forget, but external I/O — kept off query/mutation).
     const pipelinesActionField = hasPipelines
-        ? `\n    /** Pipelines ingestion sink (durable, R2-backed). Fire-and-forget and batched; do not read it back in-handler. */\n    readonly pipelines: import("@lunora/analytics").PipelineClient;`
+        ? `\n    /** Pipelines ingestion sink (durable, R2-backed). Fire-and-forget and batched; do not read it back in-handler. */\n    readonly pipelines: import("@lunora/bindings/analytics").PipelineClient;`
         : "";
     // `ctx.r2sql` — R2 SQL (serverless query engine over Apache Iceberg tables).
     // ActionCtx ONLY: external REST I/O, non-deterministic, and non-reactive
     // (reads are not tracked by Lunora live queries).
     const r2sqlActionField = hasR2sql
-        ? `\n    /**\n     * R2 SQL over Apache Iceberg tables (window functions, DISTINCT, set operations). Non-deterministic — available only in actions. Reads here are NOT tracked by Lunora live queries.\n     */\n    readonly r2sql: import("@lunora/r2sql").R2SqlClient;`
+        ? `\n    /**\n     * R2 SQL over Apache Iceberg tables (window functions, DISTINCT, set operations). Non-deterministic — available only in actions. Reads here are NOT tracked by Lunora live queries.\n     */\n    readonly r2sql: import("@lunora/bindings/r2sql").R2SqlClient;`
         : "";
 
     // Workflows live on BOTH MutationCtx and ActionCtx (a workflow can be kicked
@@ -1434,7 +1434,7 @@ export const LUNORA_MIGRATIONS: Record<string, RegisteredDataMigration> = {${mig
  * `./functions.js`; the live schema is imported from `../schema.js`.
  *
  * The file stays dependency-light: it always imports `@lunora/do`, and only
- * imports `@lunora/vectors` when the schema declares at least one vector index.
+ * imports `@lunora/bindings/vectors` when the schema declares at least one vector index.
  * `scheduler`/`storage` arrive via optional config thunks (so the generated
  * file never hard-imports `@lunora/scheduler` / `@lunora/storage`); when a
  * thunk is omitted an error stub is wired in its place.
@@ -1715,7 +1715,7 @@ const emitKvFragments = (hasKv: boolean): HelperFragments => {
 `,
         configField: `\n    kv?: (env: Record<string, unknown>) => KVNamespaceLike;`,
         contextField: `\n                kv,`,
-        importLines: [`import type { Kv, KVNamespaceLike } from "@lunora/kv";`, `import { createKv } from "@lunora/kv";`],
+        importLines: [`import type { Kv, KVNamespaceLike } from "@lunora/bindings/kv";`, `import { createKv } from "@lunora/bindings/kv";`],
         stub: `
 const kvStub: Kv = {
     delete: async () => {
@@ -1764,8 +1764,8 @@ const emitAnalyticsFragments = (hasAnalytics: boolean): HelperFragments => {
         configField: `\n    analytics?: (env: Record<string, unknown>) => AnalyticsEngineDatasetLike;`,
         contextField: `\n                analytics,`,
         importLines: [
-            `import type { AnalyticsClient, AnalyticsEngineDatasetLike } from "@lunora/analytics";`,
-            `import { createAnalytics } from "@lunora/analytics";`,
+            `import type { AnalyticsClient, AnalyticsEngineDatasetLike } from "@lunora/bindings/analytics";`,
+            `import { createAnalytics } from "@lunora/bindings/analytics";`,
         ],
         stub: `
 const analyticsStub: AnalyticsClient = {
@@ -1803,7 +1803,7 @@ const emitImagesFragments = (hasImages: boolean): HelperFragments => {
         configField: `\n    images?: (env: Record<string, unknown>) => ImagesBindingLike;`,
         // ActionCtx-only: woven onto the action ctx object, never query/mutation.
         contextField: `\n                images,`,
-        importLines: [`import type { Images, ImagesBindingLike } from "@lunora/images";`, `import { createImages } from "@lunora/images";`],
+        importLines: [`import type { Images, ImagesBindingLike } from "@lunora/bindings/images";`, `import { createImages } from "@lunora/bindings/images";`],
         stub: `
 const imagesStub: Images = {
     info: async () => {
@@ -1931,10 +1931,10 @@ const emitR2sqlFragments = (hasR2sql: boolean): HelperFragments => {
         // ActionCtx-only: attached via the \`ctx.r2sql = r2sql\` assignment in the
         // \`isAction\` block, never the every-ctx object literal.
         contextField: "",
-        importLines: [`import type { R2SqlClient } from "@lunora/r2sql";`, `import { createR2Sql } from "@lunora/r2sql";`],
+        importLines: [`import type { R2SqlClient } from "@lunora/bindings/r2sql";`, `import { createR2Sql } from "@lunora/bindings/r2sql";`],
         // The stub is typed `R2SqlClient`, so TS flags a missing method at build
         // time — but it must stay structurally in sync with that interface
-        // (`@lunora/r2sql` client.ts) when a method is added there.
+        // (`@lunora/bindings/r2sql` client.ts) when a method is added there.
         stub: `
 const r2sqlStub: R2SqlClient = {
     describe: async () => {
@@ -1964,7 +1964,7 @@ const r2sqlStub: R2SqlClient = {
 /**
  * `ctx.pipelines` (Cloudflare Pipelines — R2-backed streaming ingestion)
  * fragments. ActionCtx ONLY: ingestion is external, fire-and-forget I/O (like
- * `ctx.images`). The client ships from `@lunora/analytics` (the other "emit data
+ * `ctx.images`). The client ships from `@lunora/bindings/analytics` (the other "emit data
  * to a sink" surface). The binding resolves from a `config.pipelines` thunk
  * override, else the conventional `env.PIPELINES`; absent both, `send` throws via
  * `pipelinesStub`.
@@ -1985,7 +1985,10 @@ const emitPipelinesFragments = (hasPipelines: boolean): HelperFragments => {
         // ActionCtx-only: attached via the \`ctx.pipelines = pipelines\` assignment
         // in the \`isAction\` block, never the every-ctx object literal.
         contextField: "",
-        importLines: [`import type { PipelineBindingLike, PipelineClient } from "@lunora/analytics";`, `import { createPipelines } from "@lunora/analytics";`],
+        importLines: [
+            `import type { PipelineBindingLike, PipelineClient } from "@lunora/bindings/analytics";`,
+            `import { createPipelines } from "@lunora/bindings/analytics";`,
+        ],
         stub: `
 const pipelinesStub: PipelineClient = {
     send: async () => {
@@ -2615,8 +2618,8 @@ const emitShard = ({
 
     if (hasVectors) {
         importLines.push(
-            `import type { SchemaLike as VectorSchemaLike, VectorizeIndexLike, VectorSearchLike } from "@lunora/vectors";`,
-            `import { createContextVectors, createVectors, createVectorSyncHook } from "@lunora/vectors";`,
+            `import type { SchemaLike as VectorSchemaLike, VectorizeIndexLike, VectorSearchLike } from "@lunora/bindings/vectors";`,
+            `import { createContextVectors, createVectors, createVectorSyncHook } from "@lunora/bindings/vectors";`,
         );
     }
 

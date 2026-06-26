@@ -6,7 +6,7 @@ import type { JurisdictionIR } from "./ir";
 interface EmitAppOptions {
     /** App uses `@lunora/ai` / `ctx.ai` → emit `.ai()` (override the Workers AI binding backing `ctx.ai`). */
     hasAi: boolean;
-    /** App uses `@lunora/analytics` / `ctx.analytics` → emit `.analytics()` (override the dataset backing `ctx.analytics`). */
+    /** App uses `@lunora/bindings/analytics` / `ctx.analytics` → emit `.analytics()` (override the dataset backing `ctx.analytics`). */
     hasAnalytics: boolean;
     /** App depends on `@lunora/auth` → emit `.auth()` + the lazy build/migrate dance. */
     hasAuth: boolean;
@@ -20,15 +20,15 @@ interface EmitAppOptions {
     hasHyperdrive: boolean;
     /** Schema declares **Hyperdrive-backed** `.global({ backend: "hyperdrive" })` tables → emit `.hyperdriveGlobal()` (reactive Postgres/MySQL ctx-db over Hyperdrive). */
     hasHyperdriveGlobal: boolean;
-    /** App uses `@lunora/images` / `ctx.images` → emit `.images()`. */
+    /** App uses `@lunora/bindings/images` / `ctx.images` → emit `.images()`. */
     hasImages: boolean;
-    /** App uses `@lunora/kv` / `ctx.kv` → emit `.kv()`. */
+    /** App uses `@lunora/bindings/kv` / `ctx.kv` → emit `.kv()`. */
     hasKv: boolean;
     /** App uses `@lunora/payment` / `ctx.payments` → emit `.payment()`. */
     hasPayments: boolean;
     /** App declares push queues (`defineQueue`) → wire `LUNORA_QUEUE_REGISTRY` into the worker's `queue()` consumer entry. */
     hasQueue: boolean;
-    /** App uses `@lunora/r2sql` / `ctx.r2sql` → emit `.r2sql()`. */
+    /** App uses `@lunora/bindings/r2sql` / `ctx.r2sql` → emit `.r2sql()`. */
     hasR2sql: boolean;
     /** App imports `@lunora/scheduler` / declares crons → emit `.scheduler()`. */
     hasScheduler: boolean;

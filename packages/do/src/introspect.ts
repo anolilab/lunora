@@ -396,7 +396,7 @@ interface StudioFeaturesResult {
     scheduler: boolean;
     /** `@lunora/storage` / `ctx.storage` is used, the schema declares storage columns/rules, or it is a declared dependency. */
     storage: boolean;
-    /** The schema declares vector indexes, `@lunora/vectors` / `ctx.vectors` is used, or it is a declared dependency. */
+    /** The schema declares vector indexes, `@lunora/bindings/vectors` / `ctx.vectors` is used, or it is a declared dependency. */
     vectors: boolean;
     /** `@lunora/workflow` / `ctx.workflows` is used, the app declares workflows, or it is a declared dependency. */
     workflows: boolean;

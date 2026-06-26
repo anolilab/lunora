@@ -5,7 +5,7 @@ import { createWorker } from "lunorash/runtime";
 import { createScheduler, type DurableObjectNamespaceLike } from "@lunora/scheduler";
 import type { R2BucketLike } from "@lunora/storage";
 import { createStorage } from "@lunora/storage";
-import type { VectorizeIndexLike } from "@lunora/vectors";
+import type { VectorizeIndexLike } from "@lunora/bindings/vectors";
 
 import { openApiSpec } from "../../lunora/_generated/openapi.js";
 import { createShardDO } from "../../lunora/_generated/shard.js";

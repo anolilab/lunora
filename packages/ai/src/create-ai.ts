@@ -18,7 +18,7 @@ const buildProvider = (binding: AiBindingLike, gateway?: LunoraAiOptions["gatewa
  * every helper takes either a model id string (resolved against the Workers AI
  * provider) or any AI SDK {@link LanguageModel}/{@link EmbeddingModel} object
  * (`@ai-sdk/openai`, `@ai-sdk/anthropic`, OpenRouter, …), so apps are never
- * locked to Workers AI. Pair `embed` with `@lunora/vectors` for RAG.
+ * locked to Workers AI. Pair `embed` with `@lunora/bindings/vectors` for RAG.
  *
  * Combine with the re-exported `generateText`/`streamText`/`generateObject`/
  * `embed`/`tool` from this package:

@@ -293,7 +293,7 @@ describe("reconcileWranglerBindings", () => {
         expect(second.changed).toBe(false);
     });
 
-    it("auto-writes the self-describing analytics dataset when @lunora/analytics is inferred, idempotently", () => {
+    it("auto-writes the self-describing analytics dataset when @lunora/bindings/analytics is inferred, idempotently", () => {
         expect.assertions(3);
 
         const first = reconcileWranglerBindings(root, baseInferred({ usesAnalytics: true }));
@@ -306,7 +306,7 @@ describe("reconcileWranglerBindings", () => {
         expect(second.changed).toBe(false);
     });
 
-    it("warns rather than writes a kv_namespaces binding when @lunora/kv is used (the namespace id can't be minted)", () => {
+    it("warns rather than writes a kv_namespaces binding when @lunora/bindings/kv is used (the namespace id can't be minted)", () => {
         expect.assertions(2);
 
         const result = reconcileWranglerBindings(root, baseInferred({ usesKv: true }));

@@ -98,12 +98,12 @@ describe("discover-feature-usage", () => {
         expect.assertions(12);
 
         // Imports flip kv / analytics / hyperdrive / images / browser. Pipelines
-        // ships from `@lunora/analytics`, so a plain import must NOT flip it — it is
+        // ships from `@lunora/bindings/analytics`, so a plain import must NOT flip it — it is
         // detected solely via the `ctx.pipelines` read (asserted below).
-        writeSource("flag.ts", `import { createKv } from "@lunora/kv";\nexport const a = () => createKv();`);
-        writeSource("track.ts", `import { createAnalytics } from "@lunora/analytics";\nexport const b = () => createAnalytics();`);
+        writeSource("flag.ts", `import { createKv } from "@lunora/bindings/kv";\nexport const a = () => createKv();`);
+        writeSource("track.ts", `import { createAnalytics } from "@lunora/bindings/analytics";\nexport const b = () => createAnalytics();`);
         writeSource("pg.ts", `import { createHyperdrive } from "@lunora/hyperdrive";\nexport const c = () => createHyperdrive();`);
-        writeSource("img.ts", `import { createImages } from "@lunora/images";\nexport const d = () => createImages();`);
+        writeSource("img.ts", `import { createImages } from "@lunora/bindings/images";\nexport const d = () => createImages();`);
         writeSource("shot.ts", `import { createBrowser } from "@lunora/browser";\nexport const e = () => createBrowser();`);
 
         const usage = discoverFeatureUsage(newProject(), workdir);
