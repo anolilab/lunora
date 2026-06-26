@@ -7,9 +7,13 @@ release video as a separate composition, built on the
 
 ## Compositions
 
-| ID             | Video                          |
-| -------------- | ------------------------------ |
-| `LunoraLaunch` | v1.0-alpha launch (~35s, 16:9) |
+Each video renders at three aspect ratios (16:9 / 9:16 / 1:1) from one component
+— the scenes read `useFormat()` and reflow.
+
+| ID               | Video                                                                                                      |
+| ---------------- | ---------------------------------------------------------------------------------------------------------- |
+| `LunoraLaunch`   | v1.0-alpha launch (~37s, 16:9)                                                                             |
+| `LunoraFeatures` | "Platform on ctx" features release (~37s) — the new `ctx.*` integrations (AI, payments, workflows, R2 SQL) |
 
 ## Layout
 
@@ -21,6 +25,11 @@ release video as a separate composition, built on the
   `timings.ts` derives each scene's `from` from one duration list, `code.ts`
   holds the on-screen snippets, and `*-scene.tsx` are the individual beats
   (intro → install → schema → functions → reactive → scale → outro).
+- `src/features/` — the "Platform on ctx" features video, same shape as
+  `launch/` (it reuses the launch beat grid via `../launch/timings` and the
+  shared `CodeScene`/`Outro`). Beats: the `ctx.*` primitive grid lights up into
+  the brand reveal → AI → payments → workflows → R2 SQL → outro. Snippets in
+  `code.ts` are real, current package APIs.
 - `src/components/remocn/` + `src/lib/remocn-ui/` — components vendored from the
   remocn registry (we own the code). A few were lightly adapted: the text
   components (`blur-reveal`, `tracking-in`, `typewriter`) take a `background`
@@ -42,6 +51,8 @@ static — SMIL renders non-deterministically headless). Tokens live in
 ```bash
 pnpm dev                  # Remotion Studio (preview / scrub)
 pnpm render:launch        # render LunoraLaunch → out/lunora-launch.mp4
+pnpm render:features      # render LunoraFeatures → out/lunora-features.mp4
+pnpm render:features:social # vertical + square cuts for social
 pnpm render <id> out/x.mp4 # render any composition
 pnpm lint:types           # tsc --noEmit
 ```

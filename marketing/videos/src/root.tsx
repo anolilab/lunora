@@ -1,6 +1,8 @@
 import { Composition } from "remotion";
 
 import { CodeCard } from "./cards/card";
+import { LunoraFeatures } from "./features/composition";
+import { TOTAL_DURATION as FEATURES_DURATION } from "./features/timings";
 import { CLIENT_CODE, FUNCTIONS_CODE, SCALE_CODE, SCHEMA_CODE } from "./launch/code";
 import { LunoraLaunch } from "./launch/composition";
 import { TOTAL_DURATION as LAUNCH_DURATION } from "./launch/timings";
@@ -13,6 +15,13 @@ import { TOTAL_DURATION as LAUNCH_DURATION } from "./launch/timings";
  * `pnpm render <id> out/<name>.mp4`.
  */
 const SHARED = { component: LunoraLaunch, durationInFrames: LAUNCH_DURATION, fps: 30 } as const;
+
+/**
+ * The "Platform on ctx" features release video — the new `ctx.*` integration
+ * surface (AI, payments, workflows, R2 SQL) plus the rebuilt `init` command.
+ * Same component across the three aspect ratios; scenes reflow via `useFormat()`.
+ */
+const FEATURES = { component: LunoraFeatures, durationInFrames: FEATURES_DURATION, fps: 30 } as const;
 
 /**
  * Still-only code cards for social posts (`pnpm render:cards`) — the same window +
@@ -29,6 +38,14 @@ export const RemotionRoot: React.FC = () => (
         <Composition id="LunoraLaunchVertical" {...SHARED} width={1080} height={1920} />
         {/* 1:1 — X / LinkedIn / Instagram feed */}
         <Composition id="LunoraLaunchSquare" {...SHARED} width={1080} height={1080} />
+
+        {/* Features release — "Platform on ctx" */}
+        {/* 16:9 — site hero, YouTube, embeds */}
+        <Composition id="LunoraFeatures" {...FEATURES} width={1920} height={1080} />
+        {/* 9:16 — Stories / Reels / TikTok / Shorts */}
+        <Composition id="LunoraFeaturesVertical" {...FEATURES} width={1080} height={1920} />
+        {/* 1:1 — X / LinkedIn / Instagram feed */}
+        <Composition id="LunoraFeaturesSquare" {...FEATURES} width={1080} height={1080} />
 
         {/* social code cards (stills) */}
         <Composition id="CardSchema" {...CARD} defaultProps={{ code: SCHEMA_CODE, filename: "lunora/schema.ts" }} />
