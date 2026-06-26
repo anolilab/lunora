@@ -29,6 +29,8 @@ import { useInterval } from "@visulima/tui/hooks/use-interval";
 import type { Dispatch, ReactElement, SetStateAction } from "react";
 import { useEffect, useState } from "react";
 
+import { PromptCancelledError } from "./prompt-cancelled";
+
 /**
  * `@visulima/tui`'s `render` attaches a `process` `beforeExit` listener per
  * mount and doesn't always detach it on unmount; a single `init` flow mounts
@@ -49,14 +51,6 @@ const raiseListenerCap = (): void => {
         process.setMaxListeners(64);
     }
 };
-
-/** Thrown when the user hits Ctrl-C during a prompt or the scaffold tasks, so the flow can abort cleanly instead of continuing with defaults. */
-class PromptCancelledError extends Error {
-    public constructor() {
-        super("cancelled");
-        this.name = "PromptCancelledError";
-    }
-}
 
 /**
  * Owns Ctrl-C while a prompt or task block is live: records the cancel AND exits
@@ -1318,7 +1312,6 @@ const withTuiBadgeProgress = async <T,>(badge: BadgeSpec, steps: ReadonlyArray<P
 
 export {
     createTuiConfirm,
-    PromptCancelledError,
     tuiBanner,
     tuiConfirm,
     tuiHeadline,

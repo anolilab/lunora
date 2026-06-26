@@ -2,6 +2,7 @@ import type { CommandExecute, Toolbox } from "@visulima/cerebro";
 
 import type { Logger } from "./logger";
 import { createLogger } from "./logger";
+import { PROMPT_CANCEL_EXIT_CODE, PromptCancelledError } from "./prompt-cancelled";
 
 /** The context a command body receives — the toolbox bits every command needs. */
 interface CommandContext<TOptions extends Record<string, unknown>> {
@@ -42,6 +43,15 @@ const defineHandler =
 
             toolbox.process.exit(code);
         } catch (error: unknown) {
+            if (error instanceof PromptCancelledError) {
+                // User cancelled an interactive prompt — not a failure. Exit quietly
+                // with the conventional interactive-cancel code and without touching
+                // the red error channel.
+                toolbox.process.exit(PROMPT_CANCEL_EXIT_CODE);
+
+                return;
+            }
+
             logger.error(error instanceof Error ? error.message : String(error));
             toolbox.process.exit(1);
         }
