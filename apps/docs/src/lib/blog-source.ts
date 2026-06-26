@@ -69,10 +69,17 @@ interface CompiledPost {
 // Compiling MDX is the expensive part of loading a post — shiki (via rehypeCode)
 // re-highlights on every call. The compiler is heavy, so load it lazily; this
 // keeps list-only consumers (the index route, RSS, sitemap) from bundling it.
+//
+// `onError: "ignore"` on remarkImage is required: it reads each image off the
+// filesystem (`./public`) to inject width/height, but the deployed server
+// function runs with a different cwd and doesn't ship the static assets, so the
+// read fails at runtime. Ignoring it lets the post compile (the image still
+// renders, just without baked dimensions) instead of throwing. The prerendered
+// build still bakes dimensions in because cwd is the app root there.
 const loadCompiler = async () => {
     const { createCompiler } = await import("@fumadocs/mdx-remote");
 
-    return createCompiler({ development: false });
+    return createCompiler({ development: false, remarkImageOptions: { onError: "ignore" } });
 };
 
 let compilerPromise: ReturnType<typeof loadCompiler> | undefined;
