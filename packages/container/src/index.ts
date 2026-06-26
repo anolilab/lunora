@@ -17,6 +17,7 @@ export type {
     ContainerNamespaceLike,
     ContainerStartOptions,
     ContainerTestHandler,
+    DurableObjectJurisdiction,
     PoolOptions,
 } from "./client";
 export { createContainerContext, createContainerTestContext } from "./client";

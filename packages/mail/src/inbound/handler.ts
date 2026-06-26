@@ -31,7 +31,8 @@
  */
 /* eslint-enable jsdoc/check-indentation, jsdoc/no-multi-asterisks */
 import type { InboundEmail, RawInboundEmail } from "./parse";
-import type { ShardNamespaceLike } from "./shard";
+import type { DurableObjectJurisdiction, ShardNamespaceLike } from "./shard";
+import { applyJurisdiction } from "./shard";
 
 /**
  * Structural projection of Cloudflare's `ForwardableEmailMessage` (verified
@@ -174,6 +175,13 @@ interface DispatchToLunoraFunctionOptions<TEnv = Record<string, unknown>> {
     functionPath: string;
 
     /**
+     * Pin inbound dispatch to a Cloudflare data-residency jurisdiction. Pass the
+     * same value as the worker's `jurisdiction` so inbound mail routes to the
+     * jurisdiction-pinned shard. Omit for the un-pinned global namespace.
+     */
+    jurisdiction?: DurableObjectJurisdiction;
+
+    /**
      * Map the parsed message into the function's args. Defaults to passing the
      * whole {@link InboundEmail} with binary attachment `content` base64-encoded
      * (see {@link toJsonSafeEmail}) so it survives the JSON-serialised RPC body.
@@ -260,7 +268,8 @@ const dispatchToLunoraFunction = <TEnv extends Record<string, unknown> = Record<
             shardKey,
         };
 
-        const stub = options.shard.get(options.shard.idFromName(shardKey));
+        const namespace = applyJurisdiction(options.shard, options.jurisdiction);
+        const stub = namespace.get(namespace.idFromName(shardKey));
         const response = (await stub.fetch("https://shard.internal/rpc", {
             body: JSON.stringify(envelope),
             headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },

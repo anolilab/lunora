@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { ContainerNamespaceLike } from "../src/index";
 import { createContainerContext, createContainerTestContext } from "../src/index";
 
+const JURISDICTION_UNSUPPORTED = /does not support jurisdiction/;
+
 /** A fake DO namespace recording which instance names were targeted. */
 const fakeNamespace = (): { names: string[]; namespace: ContainerNamespaceLike; requests: Request[] } => {
     const names: string[] = [];
@@ -107,6 +109,43 @@ describe(createContainerContext, () => {
         ]);
 
         expect(() => containers.transcoder!.get("a")).toThrow('no "CONTAINER_TRANSCODER" Durable Object binding found');
+    });
+
+    it("routes through a jurisdiction-pinned subnamespace when configured", async () => {
+        expect.assertions(2);
+
+        const inner = fakeNamespace();
+        const jurisdictionCalls: string[] = [];
+        const namespace: ContainerNamespaceLike = {
+            get: () => {
+                throw new Error("should resolve via the jurisdiction subnamespace, not the root namespace");
+            },
+            idFromName: () => {
+                throw new Error("should resolve via the jurisdiction subnamespace, not the root namespace");
+            },
+            jurisdiction: (j) => {
+                jurisdictionCalls.push(j);
+
+                return inner.namespace;
+            },
+        };
+
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: namespace }, [{ binding: "CONTAINER_TRANSCODER", exportName: "transcoder" }], "us");
+
+        await containers.transcoder!.get("video-42").fetch("/transcode", { method: "POST" });
+
+        expect(jurisdictionCalls).toStrictEqual(["us"]);
+        expect(inner.names).toStrictEqual(["video-42"]);
+    });
+
+    it("fails closed when the binding lacks jurisdiction support", () => {
+        expect.assertions(1);
+
+        const { namespace } = fakeNamespace();
+
+        expect(() =>
+            createContainerContext({ CONTAINER_TRANSCODER: namespace }, [{ binding: "CONTAINER_TRANSCODER", exportName: "transcoder" }], "eu"),
+        ).toThrow(JURISDICTION_UNSUPPORTED);
     });
 });
 

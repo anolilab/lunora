@@ -35,11 +35,43 @@ interface ContainerStubLike {
     stop?: (signal?: number | string) => Promise<void>;
 }
 
+/**
+ * Cloudflare Durable Object data-residency jurisdiction. Widening union —
+ * Cloudflare adds values over time.
+ * @see https://developers.cloudflare.com/durable-objects/reference/data-location/
+ */
+type DurableObjectJurisdiction = "eu" | "fedramp" | "us";
+
 /** What the client needs from a Durable Object namespace binding. */
 interface ContainerNamespaceLike {
     get: (id: unknown) => ContainerStubLike;
     idFromName: (name: string) => unknown;
+
+    /**
+     * Derive a jurisdiction-restricted subnamespace. Optional because older
+     * workers-types releases (and test doubles) may not expose it.
+     */
+    jurisdiction?: (jurisdiction: DurableObjectJurisdiction) => ContainerNamespaceLike;
 }
+
+/**
+ * Return a jurisdiction-restricted view of `namespace`, or `namespace`
+ * unchanged when no jurisdiction is configured. Fail-closed when the binding
+ * lacks `.jurisdiction()` so a residency constraint is never silently dropped.
+ */
+const applyJurisdiction = (namespace: ContainerNamespaceLike, jurisdiction?: DurableObjectJurisdiction): ContainerNamespaceLike => {
+    if (jurisdiction === undefined) {
+        return namespace;
+    }
+
+    if (typeof namespace.jurisdiction !== "function") {
+        throw new TypeError(
+            `@lunora/container: Durable Object namespace does not support jurisdiction("${jurisdiction}") — update @cloudflare/workers-types or remove the jurisdiction option`,
+        );
+    }
+
+    return namespace.jurisdiction(jurisdiction);
+};
 
 /** A handle on one container instance (one Durable Object). */
 interface ContainerHandle {
@@ -274,15 +306,19 @@ const missingBindingAccessor = (spec: ContainerBindingSpec): ContainerAccessor =
  * handle is actually used — so one unprovisioned container never breaks
  * unrelated functions.
  */
-const createContainerContext = (env: Record<string, unknown>, specs: ReadonlyArray<ContainerBindingSpec>): Record<string, ContainerAccessor> => {
+const createContainerContext = (
+    env: Record<string, unknown>,
+    specs: ReadonlyArray<ContainerBindingSpec>,
+    jurisdiction?: DurableObjectJurisdiction,
+): Record<string, ContainerAccessor> => {
     const containers: Record<string, ContainerAccessor> = {};
 
     for (const spec of specs) {
-        const namespace = env[spec.binding] as ContainerNamespaceLike | undefined;
+        const binding = env[spec.binding] as ContainerNamespaceLike | undefined;
 
         containers[spec.exportName] =
-            namespace && typeof namespace.idFromName === "function" && typeof namespace.get === "function"
-                ? accessorFor(namespace, spec)
+            binding && typeof binding.idFromName === "function" && typeof binding.get === "function"
+                ? accessorFor(applyJurisdiction(binding, jurisdiction), spec)
                 : missingBindingAccessor(spec);
     }
 
@@ -347,6 +383,7 @@ export type {
     ContainerNamespaceLike,
     ContainerStartOptions,
     ContainerTestHandler,
+    DurableObjectJurisdiction,
     PoolOptions,
 };
 export { createContainerContext, createContainerTestContext };

@@ -38,7 +38,8 @@
  */
 
 import type { ShardRegistry } from "./query-coordinator";
-import type { ShardNamespaceLike } from "./resolve-shard";
+import type { DurableObjectJurisdiction, ShardNamespaceLike } from "./resolve-shard";
+import { applyJurisdiction } from "./resolve-shard";
 
 /**
  * Conventional DO instance name. Kept in sync with `SHARD_REGISTRY_DO_NAME`
@@ -75,6 +76,13 @@ interface DynamicShardRegistryOptions {
      * only if you run multiple isolated registries in one environment.
      */
     instanceName?: string;
+
+    /**
+     * Pin the registry DO to a Cloudflare data-residency jurisdiction. Pass the
+     * same value as the worker's `jurisdiction` so the registry co-locates with
+     * the shards it tracks. Omit for the un-pinned global namespace.
+     */
+    jurisdiction?: DurableObjectJurisdiction;
     /** DO namespace binding (`env.SHARD_REGISTRY`). */
     namespace: ShardNamespaceLike;
 }
@@ -111,13 +119,15 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
     const instanceName = options.instanceName ?? SHARD_REGISTRY_DO_NAME;
     const cacheTtlMs = options.cacheTtlMs ?? DEFAULT_REGISTRY_CACHE_TTL_MS;
     const cache = new Map<string, CacheEntry>();
+    // Pin the registry DO to the configured jurisdiction (unchanged when unset).
+    const namespace = applyJurisdiction(options.namespace, options.jurisdiction);
 
     // The stub is keyed by the fixed `instanceName` for the lifetime of this
     // registry, so resolve it once at construction. Avoids paying the
     // `idFromName` + `namespace.get` cost on every `register`/`list`/`unregister`.
     let cachedStub: ReturnType<ShardNamespaceLike["get"]> | undefined;
     const stub = (): ReturnType<ShardNamespaceLike["get"]> => {
-        cachedStub ??= options.namespace.get(options.namespace.idFromName(instanceName));
+        cachedStub ??= namespace.get(namespace.idFromName(instanceName));
 
         return cachedStub;
     };

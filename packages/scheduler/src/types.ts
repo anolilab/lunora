@@ -145,10 +145,23 @@ export interface Scheduler {
     ) => Promise<{ id: string; scheduledFor: number }>;
 }
 
+/**
+ * Cloudflare Durable Object data-residency jurisdiction. Widening union —
+ * Cloudflare adds values over time.
+ * @see https://developers.cloudflare.com/durable-objects/reference/data-location/
+ */
+export type DurableObjectJurisdiction = "eu" | "fedramp" | "us";
+
 /** Subset of `DurableObjectNamespace` the package consumes. */
 export interface DurableObjectNamespaceLike {
     get: (id: DurableObjectIdLike) => DurableObjectStubLike;
     idFromName: (name: string) => DurableObjectIdLike;
+
+    /**
+     * Derive a jurisdiction-restricted subnamespace. Optional because older
+     * workers-types releases (and test doubles) may not expose it.
+     */
+    jurisdiction?: (jurisdiction: DurableObjectJurisdiction) => DurableObjectNamespaceLike;
 }
 
 export interface DurableObjectIdLike {
@@ -162,6 +175,14 @@ export interface DurableObjectStubLike {
 export interface LunoraSchedulerOptions {
     /** Optional named instance — useful for tenant isolation. Default `default`. */
     instanceName?: string;
+
+    /**
+     * Pin the SchedulerDO (durable timers + cron state) to a Cloudflare
+     * data-residency jurisdiction. Pass the same value as the worker's
+     * `jurisdiction` so scheduled state co-resides with app data. Omit for the
+     * un-pinned global namespace.
+     */
+    jurisdiction?: DurableObjectJurisdiction;
     /** Binding to the `SchedulerDO` durable object namespace. */
     namespace: DurableObjectNamespaceLike;
 

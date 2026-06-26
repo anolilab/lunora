@@ -11,6 +11,7 @@ export type {
     ArgsOf,
     CronTarget,
     DurableObjectIdLike,
+    DurableObjectJurisdiction,
     DurableObjectNamespaceLike,
     DurableObjectStubLike,
     EnqueueOptions,
