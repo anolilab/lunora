@@ -2,7 +2,6 @@ packages:
   - "apps/*"
   - "packages/*"
   - "examples/*"
-  - "marketing/*"
   - "tests/*"
   - "!*/__test__/**"
   - "!*/__tests__/**"
@@ -230,16 +229,6 @@ catalogs:
     svelte: ^5.56.3
     vite-plugin-solid: ^2.11.12
     vue: ^3.5.38
-  # Remotion video stack (marketing/videos and any future video packages). Keep
-  # every @remotion/* entry on the same version so `remotion upgrade` is a
-  # single-catalog bump.
-  video:
-    "@remotion/cli": 4.0.481
-    "@remotion/google-fonts": 4.0.481
-    "@remotion/media": 4.0.481
-    "@remotion/tailwind-v4": 4.0.481
-    remotion: 4.0.481
-    culori: 4.0.2
   mail:
     "@visulima/email": 1.0.0-alpha.41
     "@react-email/render": 2.0.9

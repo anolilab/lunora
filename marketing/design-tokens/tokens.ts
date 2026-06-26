@@ -3,8 +3,8 @@
  * OG image generators, canvas, etc.). For CSS/Tailwind apps, import the sibling
  * `tokens.css` instead.
  *
- * Plain shared file — import by relative path, e.g. from marketing/videos/src:
- *   import { aurora, neutrals } from "../../../design-tokens/tokens";
+ * Plain shared file — import by relative path from a sibling consumer, e.g.:
+ *   import { aurora, neutrals } from "../design-tokens/tokens";
  *
  * Mirrors ./DESIGN.md §2. Identity: nocturnal · luminous · precise.
  */
