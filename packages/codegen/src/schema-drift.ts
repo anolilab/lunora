@@ -67,6 +67,13 @@ interface TableSnapshot {
 
 /** The committed baseline — a deterministic structural view of the whole schema. */
 interface SchemaSnapshot {
+    /**
+     * Cloudflare DO data-residency jurisdiction declared via `.jurisdiction("…")`,
+     * or absent. Tracked because changing it strands all existing Durable Object
+     * data (a DO name maps to a different ID per jurisdiction). Optional, so old
+     * baselines written before this field parse cleanly (absent ⇒ undefined).
+     */
+    jurisdiction?: "eu" | "fedramp" | "us";
     /** Sorted list of every declared `defineMigration` id at capture time. */
     migrationIds: ReadonlyArray<string>;
     /** Table name → {@link TableSnapshot}, keys sorted for stable serialization. */
@@ -87,6 +94,7 @@ interface DriftChange {
         | "addedRelation"
         | "addedRequiredField"
         | "addedTable"
+        | "changedJurisdiction"
         | "changedFieldKind"
         | "changedIndex"
         | "changedShardMode"
@@ -169,6 +177,7 @@ const buildSchemaSnapshot = (schema: SchemaIR, migrationIds: ReadonlyArray<strin
     }
 
     return {
+        jurisdiction: schema.jurisdiction,
         migrationIds: [...migrationIds].toSorted((a, b) => a.localeCompare(b)),
         tables: sortKeys(tables),
         version: SCHEMA_SNAPSHOT_VERSION,
@@ -225,7 +234,14 @@ const parseSchemaSnapshot = (content: string | undefined): SchemaSnapshot | unde
         }
     }
 
+    // `jurisdiction` is optional and was added after v1, so a baseline written
+    // before it simply omits the key (parsed as `undefined`) — no version bump,
+    // no forced re-bless. Only accept the known literals; anything else is treated
+    // as absent.
+    const jurisdiction = parsed.jurisdiction === "eu" || parsed.jurisdiction === "us" || parsed.jurisdiction === "fedramp" ? parsed.jurisdiction : undefined;
+
     return {
+        jurisdiction,
         migrationIds: Array.isArray(parsed.migrationIds) ? (parsed.migrationIds as ReadonlyArray<string>) : [],
         tables: parsed.tables as Record<string, TableSnapshot>,
         version: SCHEMA_SNAPSHOT_VERSION,
@@ -385,6 +401,22 @@ const diffSchemaSnapshots = (baseline: SchemaSnapshot | undefined, current: Sche
                 type: "removedTable",
             });
         }
+    }
+
+    // A jurisdiction change re-homes every Durable Object: a DO name maps to a
+    // different ID per jurisdiction, so the prior data is left in the old region
+    // and becomes unreachable. There is no in-place migration, so this is the
+    // most destructive change the gate can see — flag it breaking. Only compared
+    // against an existing baseline (a first-ever capture is never drift).
+    if (baseline !== undefined && baseline.jurisdiction !== current.jurisdiction) {
+        const from = baseline.jurisdiction ?? "(none)";
+        const to = current.jurisdiction ?? "(none)";
+
+        changes.push({
+            severity: "breaking",
+            summary: `Durable Object jurisdiction changed from ${from} to ${to} — this re-homes every DO and strands all existing shard/scheduler/session data in the old region (no in-place migration; export then import to move it). Revert the change, or override the gate to proceed intentionally.`,
+            type: "changedJurisdiction",
+        });
     }
 
     return { changes };

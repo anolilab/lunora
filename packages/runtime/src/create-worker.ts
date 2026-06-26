@@ -671,6 +671,13 @@ interface WorkerOptions {
      * (an older `@cloudflare/workers-types`), the worker throws rather than
      * silently routing to the un-pinned global namespace. Omit it for the
      * default, un-pinned behaviour.
+     *
+     * ⚠️ Set once, before the first deploy — changing it strands data. A DO name
+     * maps to a *different* ID per jurisdiction, so toggling this on an existing
+     * deployment makes every shard/scheduler call resolve to a new, empty DO; the
+     * prior data stays in the old jurisdiction and is unreachable (no in-place
+     * migration). Usually set via the schema's `.jurisdiction(...)`, which codegen
+     * threads here.
      * @see https://developers.cloudflare.com/durable-objects/reference/data-location/
      */
     jurisdiction?: DurableObjectJurisdiction;

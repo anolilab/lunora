@@ -451,12 +451,23 @@ type ExtendableSchema<T extends Record<string, TableDefinition>> = {
     ) => ExtendableSchema<PrefixedTables<X, Key> & T>;
 
     /**
-     * Pin every Durable Object the app reaches — shards, sessions, fan-out,
-     * subscriptions, the scheduler — to a Cloudflare data-residency jurisdiction
-     * (`"eu"`, `"us"`, `"fedramp"`). Codegen reads this off the schema and emits
-     * it into the generated worker's `createWorker({ jurisdiction })` (and
-     * `ctx.scheduler`). Non-mutating: returns a fresh `ExtendableSchema`, so it
-     * composes with `.rls(...)` / `.extend(...)` in any order.
+     * Pin every Durable Object the app reaches — shards, fan-out, subscriptions,
+     * the scheduler, and `ctx.containers` — to a Cloudflare data-residency
+     * jurisdiction (`"eu"`, `"us"`, `"fedramp"`). Codegen reads this off the
+     * schema and emits it into the generated worker's `createWorker({ jurisdiction })`
+     * (and `ctx.scheduler` / `ctx.containers`). Non-mutating: returns a fresh
+     * `ExtendableSchema`, so it composes with `.rls(...)` / `.extend(...)` in any order.
+     *
+     * ⚠️ **Set this once, before your first deploy — changing or removing it
+     * strands data.** A Durable Object name maps to a *different* ID in each
+     * jurisdiction, so toggling this on an existing app makes every shard, scheduler
+     * job, and session resolve to a NEW, empty DO; the previous data stays in the
+     * old jurisdiction's DOs and is no longer reachable. There is no in-place
+     * migration — you would have to export from the old jurisdiction and import
+     * into the new one.
+     *
+     * Note: this pins **DO-backed** state only. `.global()` tables are D1-backed
+     * and governed by D1's own location settings, not this option.
      * @see https://developers.cloudflare.com/durable-objects/reference/data-location/
      */
     jurisdiction: (jurisdiction: DurableObjectJurisdiction) => ExtendableSchema<T>;
