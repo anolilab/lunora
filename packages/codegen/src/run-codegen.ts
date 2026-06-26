@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { performance } from "node:perf_hooks";
 
 import type { Finding } from "@lunora/advisor";
 import { Project } from "ts-morph";
@@ -109,6 +110,18 @@ const readProjectVersion = (projectRoot: string): string | undefined => {
 };
 
 /**
+ * Whether opt-in codegen timing is enabled. Gated on a truthy
+ * `LUNORA_CODEGEN_TIMING` env var so a normal run is byte-for-byte unchanged:
+ * no timers are read, no summary is printed. An empty string (`""`) counts as
+ * unset, matching how shells export blank vars.
+ */
+const isTimingEnabled = (): boolean => {
+    const flag = process.env["LUNORA_CODEGEN_TIMING"];
+
+    return flag !== undefined && flag !== "";
+};
+
+/**
  * Walk up from `startPath` until we find a `tsconfig.json` or hit the file
  * system root. Returns the absolute path to the tsconfig, or `undefined`.
  */
@@ -211,8 +224,16 @@ export const refreshCodegenProject = (project: Project, lunoraDirectory: string)
  * Top-level codegen entry. Parses `&lt;projectRoot>/lunora/schema.ts` and every
  * function file under `&lt;projectRoot>/lunora/`, then writes
  * `_generated/{api,server,dataModel}.ts` next to them.
+ *
+ * When `LUNORA_CODEGEN_TIMING` is set (truthy), a single diagnostic summary
+ * line is written to stderr with the total wall time and the discovery-vs-emit
+ * split — opt-in instrumentation that is otherwise zero-cost and side-effect-free
+ * on the returned {@link CodegenResult}.
  */
 export const runCodegen = (options: CodegenOptions): CodegenResult => {
+    const timingEnabled = isTimingEnabled();
+    const startedAt = timingEnabled ? performance.now() : 0;
+
     const lunoraDirectory = join(options.projectRoot, options.lunoraDirectory ?? "lunora");
     const schemaPath = join(lunoraDirectory, "schema.ts");
 
@@ -336,6 +357,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // through the umbrella's subpaths (`lunorash/server`, `lunorash/do`, …) so the
     // app needs only the single `lunorash` dependency installed.
     const useUmbrella = dependencies.has("lunorash");
+
+    // Boundary between the discovery phase (all `discover*` passes + the inline
+    // discovers `lintSchema` drives + the metadata discovers above) and the emit
+    // phase (the `emit*`/`build*`/serialize work + the file writes below).
+    const emitStartedAt = timingEnabled ? performance.now() : 0;
 
     const dataModelContent = emitDataModel(schema, useUmbrella);
     const apiContent = emitApi(functions, workflows, useUmbrella);
@@ -500,6 +526,17 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         if (!schemaSnapshotExists || options.updateSchemaBaseline === true) {
             writeIfChanged(schemaSnapshotPath, serializeSchemaSnapshot(schemaSnapshot));
         }
+    }
+
+    if (timingEnabled) {
+        const finishedAt = performance.now();
+        const total = Math.round(finishedAt - startedAt);
+        const discovery = Math.round(emitStartedAt - startedAt);
+        const emit = Math.round(finishedAt - emitStartedAt);
+
+        // Diagnostic-only; stderr keeps it out of any stdout the caller parses.
+        // eslint-disable-next-line no-console -- opt-in diagnostic line, gated on LUNORA_CODEGEN_TIMING
+        console.error(`@lunora/codegen: codegen took ${total.toString()}ms (discovery ${discovery.toString()}ms, emit ${emit.toString()}ms)`);
     }
 
     return {

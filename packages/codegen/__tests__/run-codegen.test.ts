@@ -63,6 +63,46 @@ describe("run-codegen", () => {
             expect(result.generated.dataModel).toContain("text: string;");
         });
 
+        it("is silent and output-unchanged when LUNORA_CODEGEN_TIMING is unset", () => {
+            expect.assertions(3);
+
+            const priorFlag = process.env["LUNORA_CODEGEN_TIMING"];
+            // eslint-disable-next-line no-console -- capture the opt-in timing line under test.
+            const originalError = console.error;
+            const errors: string[] = [];
+
+            // eslint-disable-next-line no-console -- temporarily intercept the diagnostic line.
+            console.error = (...arguments_: unknown[]): void => {
+                errors.push(arguments_.map(String).join(" "));
+            };
+
+            let withFlag: ReturnType<typeof runCodegen>;
+            let withoutFlag: ReturnType<typeof runCodegen>;
+
+            try {
+                delete process.env["LUNORA_CODEGEN_TIMING"];
+                withoutFlag = runCodegen({ projectRoot: workdir });
+
+                process.env["LUNORA_CODEGEN_TIMING"] = "1";
+                withFlag = runCodegen({ projectRoot: workdir });
+            } finally {
+                // eslint-disable-next-line no-console -- restore the original implementation.
+                console.error = originalError;
+
+                if (priorFlag === undefined) {
+                    delete process.env["LUNORA_CODEGEN_TIMING"];
+                } else {
+                    process.env["LUNORA_CODEGEN_TIMING"] = priorFlag;
+                }
+            }
+
+            // Exactly one diagnostic line — emitted by the flagged run only.
+            expect(errors).toHaveLength(1);
+            expect(errors[0]).toMatch(/@lunora\/codegen: codegen took \d+ms \(discovery \d+ms, emit \d+ms\)/u);
+            // The instrumentation is side-effect-free on the generated output.
+            expect(withFlag.generated).toStrictEqual(withoutFlag.generated);
+        });
+
         it("does not wire @lunora/ai for a project that doesn't use it", () => {
             expect.assertions(2);
 
