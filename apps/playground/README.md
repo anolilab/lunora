@@ -49,8 +49,19 @@ apps/playground/
 
 ```bash
 pnpm install
+cp apps/playground/.dev.vars.example apps/playground/.dev.vars   # then fill in the secrets
 pnpm --filter @lunora/playground dev
 ```
+
+The worker reads its secrets from `.dev.vars` (gitignored, auto-loaded by
+`@cloudflare/vite-plugin`). Without it the worker throws `AUTH_SECRET is required`
+on boot. Generate strong values with `openssl rand -hex 32`; see
+[`.dev.vars.example`](./.dev.vars.example) for the full list (`AUTH_SECRET`,
+`AUTH_URL`, `STORAGE_SECRET`, `LUNORA_ADMIN_TOKEN`).
+
+`vite dev` provides a **local** D1 by default, so no Cloudflare account is needed
+to iterate locally — the `database_id` placeholder in `wrangler.jsonc` only
+matters for `deploy` (see below).
 
 This spins up Vite + Wrangler. Codegen runs on schema edits, deltas land via
 WebSocket within ~10 ms locally.
