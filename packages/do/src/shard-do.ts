@@ -33,6 +33,7 @@ import type {
     FunctionStatsResult,
     MaskPoliciesResult,
     OrderByClause,
+    QueuesResult,
     RlsPoliciesResult,
     StorageRulesResult,
     StudioFeaturesResult,
@@ -2747,7 +2748,20 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with the statically-discovered feature flags
     protected studioFeatures(): StudioFeaturesResult {
-        return { mail: false, payments: false, scheduler: false, storage: false, vectors: false, workflows: false };
+        return { mail: false, payments: false, queues: false, scheduler: false, storage: false, vectors: false, workflows: false };
+    }
+
+    /**
+     * The Cloudflare Queues declared by this app, surfaced via
+     * `__lunora_admin__:listQueues` for the studio's Queues page. Queues are NOT
+     * Durable Objects and hold no shard state, so this is pure declaration
+     * metadata statically discovered by `@lunora/codegen` from `lunora/queues.ts`
+     * and emitted into the generated subclass, which overrides this. The base
+     * class can't see the user's project, so it reports none.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with the statically-discovered queue metadata
+    protected queuesMetadata(): QueuesResult {
+        return { queues: [] };
     }
 
     /**
@@ -4730,6 +4744,14 @@ abstract class ShardDO {
             // Workflows page lists. Deployment-wide static declaration data,
             // like the other static reads (workflows hold no shard state).
             return this.workflowsMetadata();
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.listQueues) {
+            // Read-only declared-queue metadata (codegen-emitted, via
+            // `queuesMetadata()`): the Cloudflare Queues the studio's Queues page
+            // lists. Deployment-wide static declaration data (queues hold no
+            // shard state).
+            return this.queuesMetadata();
         }
 
         return undefined;

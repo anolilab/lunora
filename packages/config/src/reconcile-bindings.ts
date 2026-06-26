@@ -19,7 +19,7 @@ import { writeFileSync } from "node:fs";
 import { containerBuildTag } from "@lunora/container";
 import { applyEdits, modify } from "jsonc-parser";
 
-import type { DurableObjectSpec, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
+import type { DurableObjectSpec, InferredBindings, InferredContainer, InferredQueue, InferredWorkflow } from "./infer-bindings";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 
 const FORMATTING = { formattingOptions: { insertSpaces: true, tabSize: 4 } } as const;
@@ -53,6 +53,21 @@ interface WorkflowEntry {
     name?: string;
 }
 
+interface QueueProducerEntry {
+    binding?: string;
+    queue?: string;
+}
+
+interface QueueConsumerEntry {
+    queue?: string;
+    type?: string;
+}
+
+interface QueuesShape {
+    consumers?: ReadonlyArray<QueueConsumerEntry>;
+    producers?: ReadonlyArray<QueueProducerEntry>;
+}
+
 interface WranglerShape {
     ai?: { binding?: string };
     // Self-describing: { binding, dataset } with no remote id — auto-writeable (see reconcileAnalytics).
@@ -73,6 +88,8 @@ interface WranglerShape {
     observability?: { enabled?: boolean; head_sampling_rate?: number; logs?: { enabled?: boolean; head_sampling_rate?: number } };
     // Hint-only: the `pipeline` name is a remote resource Lunora can't mint — warned, never written.
     pipelines?: ReadonlyArray<{ binding?: string; pipeline?: string }>;
+    // Cloudflare Queues — producers + consumers, both reconciled from `lunora/queues.ts`.
+    queues?: QueuesShape;
     r2_buckets?: ReadonlyArray<{ binding?: string }>;
     workflows?: ReadonlyArray<WorkflowEntry>;
 }
@@ -487,6 +504,78 @@ const reconcileWorkflows = (text: string, parsed: WranglerShape, workflows: Read
 };
 
 /**
+ * Add any missing `queues.producers[]` (matched by binding) and
+ * `queues.consumers[]` (matched by queue name) from the declared `defineQueue`
+ * exports. Every queue gets a producer; push queues add a worker consumer, pull
+ * queues add a `type: "http_pull"` consumer. Like workflows, queues are NOT
+ * Durable Objects — this writes only the `queues` block. Pure.
+ */
+const reconcileQueues = (text: string, parsed: WranglerShape, queues: ReadonlyArray<InferredQueue>): ReconcileStep => {
+    const existing = parsed.queues ?? {};
+    const existingProducers = existing.producers ?? [];
+    const existingConsumers = existing.consumers ?? [];
+
+    const haveProducer = new Set(existingProducers.map((entry) => entry.binding));
+    const haveConsumer = new Set(existingConsumers.map((entry) => entry.queue));
+
+    const missingProducers = queues.filter((queue) => !haveProducer.has(queue.bindingName));
+    const missingConsumers = queues.filter((queue) => !haveConsumer.has(queue.name));
+
+    if (missingProducers.length === 0 && missingConsumers.length === 0) {
+        return { added: [], text };
+    }
+
+    const nextProducers = [
+        ...existingProducers,
+        ...missingProducers.map((queue) => {
+            return { binding: queue.bindingName, queue: queue.name };
+        }),
+    ];
+    const nextConsumers = [
+        ...existingConsumers,
+        ...missingConsumers.map((queue) => {
+            const consumer: Record<string, unknown> = { queue: queue.name };
+
+            if (queue.mode === "pull") {
+                consumer.type = "http_pull";
+            }
+
+            if (queue.tuning.maxBatchSize !== undefined) {
+                consumer.max_batch_size = queue.tuning.maxBatchSize;
+            }
+
+            if (queue.tuning.maxBatchTimeout !== undefined) {
+                consumer.max_batch_timeout = queue.tuning.maxBatchTimeout;
+            }
+
+            if (queue.tuning.maxRetries !== undefined) {
+                consumer.max_retries = queue.tuning.maxRetries;
+            }
+
+            if (queue.tuning.deadLetterQueue !== undefined) {
+                consumer.dead_letter_queue = queue.tuning.deadLetterQueue;
+            }
+
+            if (queue.tuning.retryDelay !== undefined) {
+                consumer.retry_delay = queue.tuning.retryDelay;
+            }
+
+            return consumer;
+        }),
+    ];
+
+    const nextText = applyModify(text, ["queues"], { consumers: nextConsumers, producers: nextProducers });
+
+    return {
+        added: [
+            ...missingProducers.map((queue) => `queues.producers/${queue.bindingName}`),
+            ...missingConsumers.map((queue) => `queues.consumers/${queue.name}`),
+        ],
+        text: nextText,
+    };
+};
+
+/**
  * Reconcile inferred Durable Object / D1 bindings into `wrangler.jsonc`.
  *
  * Writes only when something is missing; returns `changed: false` when the
@@ -547,6 +636,7 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
         { enabled: true, run: (text) => reconcileObservability(text, parsed) },
         { enabled: exportedContainers.length > 0, run: (text) => reconcileContainers(text, parsed, exportedContainers) },
         { enabled: exportedWorkflows.length > 0, run: (text) => reconcileWorkflows(text, parsed, exportedWorkflows) },
+        { enabled: inferred.queues.length > 0, run: (text) => reconcileQueues(text, parsed, inferred.queues) },
     ];
 
     let text = original;

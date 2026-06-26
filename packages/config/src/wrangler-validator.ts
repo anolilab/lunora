@@ -62,6 +62,24 @@ interface WranglerWorkflowEntry {
     name?: string;
 }
 
+/** A wrangler `queues.producers[]` entry — a `Queue` binding sending to `queue`. */
+interface WranglerQueueProducer {
+    binding?: string;
+    delivery_delay?: number;
+    queue?: string;
+}
+
+/** A wrangler `queues.consumers[]` entry — push (worker) or `type: "http_pull"`. */
+interface WranglerQueueConsumer {
+    dead_letter_queue?: string;
+    max_batch_size?: number;
+    max_batch_timeout?: number;
+    max_retries?: number;
+    queue?: string;
+    retry_delay?: number;
+    type?: string;
+}
+
 interface WranglerConfig {
     // Analytics Engine datasets (self-describing: { binding, dataset }, dataset
     // defaults to the binding name). See `validateAnalyticsBindings`.
@@ -106,7 +124,18 @@ interface WranglerConfig {
     // Smart Placement (`{ mode: "smart" }` — the only documented mode). See
     // `validatePlacement`.
     placement?: { mode?: string };
+    // Cloudflare Queues — producer bindings (`env.<BINDING>.send(...)`) and
+    // push/pull consumers. Lunora reconciles both from `lunora/queues.ts`; the
+    // entries are parsed from untrusted JSONC, so `validateQueues` guards shape.
+    queues?: {
+        consumers?: ReadonlyArray<WranglerQueueConsumer | null | undefined>;
+        producers?: ReadonlyArray<WranglerQueueProducer | null | undefined>;
+    };
     r2_buckets?: ReadonlyArray<{ binding?: string }>;
+    // Cloudflare Secrets Store bindings (`env.<BINDING>.get()`). Each references a
+    // remote store + secret by name (created out-of-band); `validateSecretsStore`
+    // shape-checks the entries. See also the `ctx.secrets` core built-in.
+    secrets_store_secrets?: ReadonlyArray<{ binding?: string; secret_name?: string; store_id?: string } | null | undefined>;
     // Email Routing outbound bindings used for auto-reply/forward from an
     // inbound `email()` worker (plan 029). Shape-check only. See
     // `validateSendEmail`.
@@ -334,6 +363,127 @@ const validateWorkflows = (wrangler: WranglerConfig, errors: string[]): void => 
 
         if (typeof entry.name !== "string" || entry.name.length === 0) {
             errors.push(`${label} must have a non-empty "name" naming the deployed workflow`);
+        }
+    }
+};
+
+/** Validate the `queues.producers[]` array: each entry needs `{ binding, queue }`. */
+const validateQueueProducers = (producers: ReadonlyArray<WranglerQueueProducer | null | undefined> | undefined, errors: string[]): void => {
+    if (producers === undefined) {
+        return;
+    }
+
+    if (!Array.isArray(producers)) {
+        errors.push("queues.producers must be an array of { binding, queue } entries");
+
+        return;
+    }
+
+    // `Array.isArray` widens the readonly element type to `any`; restore it.
+    const entries = producers as ReadonlyArray<WranglerQueueProducer | null | undefined>;
+
+    for (const [index, entry] of entries.entries()) {
+        const label = `queues.producers[${String(index)}]`;
+
+        if (!entry || typeof entry !== "object") {
+            errors.push(`${label} must be a { binding, queue } object`);
+
+            continue;
+        }
+
+        if (typeof entry.binding !== "string" || entry.binding.length === 0) {
+            errors.push(`${label} must have a non-empty "binding" naming the Queue producer (e.g. QUEUE_EMAIL)`);
+        }
+
+        if (typeof entry.queue !== "string" || entry.queue.length === 0) {
+            errors.push(`${label} must have a non-empty "queue" naming the deployed queue`);
+        }
+    }
+};
+
+/** Validate the `queues.consumers[]` array: each entry needs a `queue`. */
+const validateQueueConsumers = (consumers: ReadonlyArray<WranglerQueueConsumer | null | undefined> | undefined, errors: string[]): void => {
+    if (consumers === undefined) {
+        return;
+    }
+
+    if (!Array.isArray(consumers)) {
+        errors.push("queues.consumers must be an array of { queue } entries");
+
+        return;
+    }
+
+    // `Array.isArray` widens the readonly element type to `any`; restore it.
+    const entries = consumers as ReadonlyArray<WranglerQueueConsumer | null | undefined>;
+
+    for (const [index, entry] of entries.entries()) {
+        const label = `queues.consumers[${String(index)}]`;
+
+        if (!entry || typeof entry !== "object") {
+            errors.push(`${label} must be a { queue } object`);
+
+            continue;
+        }
+
+        if (typeof entry.queue !== "string" || entry.queue.length === 0) {
+            errors.push(`${label} must have a non-empty "queue" naming the consumed queue`);
+        }
+    }
+};
+
+/**
+ * Validate the `queues` block: each producer needs a `{ binding, queue }` pair
+ * (Lunora reconciles both from `lunora/queues.ts`), and each consumer needs a
+ * `queue` (push or `type: "http_pull"`). Like workflows, queues are not Durable
+ * Objects — only the shape matters; the queue resources are reconciled/created
+ * separately.
+ */
+const validateQueues = (wrangler: WranglerConfig, errors: string[]): void => {
+    if (wrangler.queues === undefined) {
+        return;
+    }
+
+    if (typeof wrangler.queues !== "object" || Array.isArray(wrangler.queues)) {
+        errors.push("queues must be a { producers, consumers } object");
+
+        return;
+    }
+
+    validateQueueProducers(wrangler.queues.producers, errors);
+    validateQueueConsumers(wrangler.queues.consumers, errors);
+};
+
+/**
+ * Validate `secrets_store_secrets[]`: each entry references a remote store +
+ * secret by name (both created out-of-band), so only the `{ binding, store_id,
+ * secret_name }` shape is checked — Lunora can't mint the store/secret.
+ */
+const validateSecretsStore = (wrangler: WranglerConfig, errors: string[]): void => {
+    if (wrangler.secrets_store_secrets === undefined) {
+        return;
+    }
+
+    if (!Array.isArray(wrangler.secrets_store_secrets)) {
+        errors.push("secrets_store_secrets must be an array of { binding, store_id, secret_name } entries");
+
+        return;
+    }
+
+    const entries = wrangler.secrets_store_secrets as ReadonlyArray<{ binding?: string; secret_name?: string; store_id?: string } | null | undefined>;
+
+    for (const [index, entry] of entries.entries()) {
+        const label = `secrets_store_secrets[${String(index)}]`;
+
+        if (!entry || typeof entry !== "object") {
+            errors.push(`${label} must be a { binding, store_id, secret_name } object`);
+
+            continue;
+        }
+
+        for (const field of ["binding", "store_id", "secret_name"] as const) {
+            if (typeof entry[field] !== "string" || entry[field].length === 0) {
+                errors.push(`${label} must have a non-empty "${field}"`);
+            }
         }
     }
 };
@@ -812,6 +962,8 @@ const validateWranglerConfig = (wrangler: WranglerConfig | undefined, schema?: S
     validateTailConsumers(wrangler, errors);
     validateContainers(wrangler, errors, warnings);
     validateWorkflows(wrangler, errors);
+    validateQueues(wrangler, errors);
+    validateSecretsStore(wrangler, errors);
 
     // Cloudflare-coverage bindings (plans 027-043), driven by descriptor tables.
     // Hint bindings warn on a missing remote id; self-describing + passthrough

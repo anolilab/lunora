@@ -57,6 +57,7 @@ const ADMIN_FUNCTIONS = {
     // eslint-disable-next-line no-secrets/no-secrets -- reserved admin RPC path constant, not a credential
     getWorkflowInstanceStatus: "__lunora_admin__:getWorkflowInstanceStatus",
     importShard: "__lunora_admin__:importShard",
+    listQueues: "__lunora_admin__:listQueues",
     listTables: "__lunora_admin__:listTables",
     listWorkflows: "__lunora_admin__:listWorkflows",
     maskPolicies: "__lunora_admin__:maskPolicies",
@@ -389,6 +390,8 @@ interface StudioFeaturesResult {
     mail: boolean;
     /** `@lunora/payment` is used (import or `ctx.payments`) or a declared dependency. */
     payments: boolean;
+    /** `@lunora/queue` / `ctx.queues` is used, the app declares queues, or it is a declared dependency. */
+    queues: boolean;
     /** `@lunora/scheduler` / `ctx.scheduler` is used, the app declares crons, or it is a declared dependency. */
     scheduler: boolean;
     /** `@lunora/storage` / `ctx.storage` is used, the schema declares storage columns/rules, or it is a declared dependency. */
@@ -419,6 +422,30 @@ interface WorkflowMetadata {
 /** Payload of a `__lunora_admin__:listWorkflows` call: every declared workflow, sorted by export name. */
 interface WorkflowsResult {
     workflows: WorkflowMetadata[];
+}
+
+/**
+ * One declared Cloudflare Queue, surfaced by `__lunora_admin__:listQueues` for
+ * the studio's Queues page. Statically discovered by `@lunora/codegen` from
+ * `lunora/queues.ts` (the codegen subclass overrides the base hook); queues are
+ * not Durable Objects and carry no runtime state in the shard, so this is pure
+ * declaration metadata. `binding` is the generated `QUEUE_*` producer binding,
+ * `name` the deployed `queues.producers[].queue`, `exportName` the
+ * `lunora/queues.ts` export (`ctx.queues.&lt;exportName>`), `mode` whether the
+ * queue is consumed by a worker (`push`) or polled externally (`pull`), and
+ * `deadLetterQueue` the optional DLQ a push consumer dead-letters to.
+ */
+interface QueueMetadata {
+    binding: string;
+    deadLetterQueue?: string;
+    exportName: string;
+    mode: "pull" | "push";
+    name: string;
+}
+
+/** Payload of a `__lunora_admin__:listQueues` call: every declared queue, sorted by export name. */
+interface QueuesResult {
+    queues: QueueMetadata[];
 }
 
 /* eslint-disable no-secrets/no-secrets -- reserved admin RPC names (`createWorkflowInstance`/`getWorkflowInstanceStatus`) are framework constants, not credentials */
@@ -1242,6 +1269,8 @@ export type {
     MaskColumnMetadata,
     MaskPoliciesResult,
     OrderByClause,
+    QueueMetadata,
+    QueuesResult,
     ReadTablePageOptions,
     RlsPoliciesResult,
     RlsPolicyMetadata,

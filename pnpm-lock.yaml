@@ -637,6 +637,7 @@ overrides:
   '@lunora/mcp': workspace:*
   '@lunora/nuxt': workspace:*
   '@lunora/payment': workspace:*
+  '@lunora/queue': workspace:*
   '@lunora/r2sql': workspace:*
   '@lunora/ratelimit': workspace:*
   '@lunora/react': workspace:*
@@ -1801,6 +1802,9 @@ importers:
       '@lunora/container':
         specifier: workspace:*
         version: link:../container
+      '@lunora/queue':
+        specifier: workspace:*
+        version: link:../queue
       '@lunora/scheduler':
         specifier: workspace:*
         version: link:../scheduler
@@ -2343,6 +2347,33 @@ importers:
       stripe:
         specifier: ^19.0.0
         version: 19.3.0(@types/node@25.9.3)
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: catalog:cloudflare
+        version: 4.20260617.1
+      '@types/node':
+        specifier: catalog:types
+        version: 25.9.3
+      '@visulima/packem':
+        specifier: catalog:build
+        version: 2.0.0-alpha.93(39db6a19757a33ecfffbf3102bc29244)
+      '@vitest/coverage-v8':
+        specifier: catalog:test
+        version: 4.1.9(vitest@4.1.9)
+      esbuild:
+        specifier: catalog:build
+        version: 0.28.1
+      fallow:
+        specifier: catalog:lint
+        version: 2.101.0
+      typescript:
+        specifier: catalog:tsc
+        version: 6.0.3
+      vitest:
+        specifier: catalog:test
+        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
+
+  packages/queue:
     devDependencies:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare

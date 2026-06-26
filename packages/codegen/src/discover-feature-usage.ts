@@ -68,7 +68,11 @@ const PROBES: Record<keyof FeatureUsage, FeatureProbe> = {
     kv: { contextProperty: "kv", moduleSpecifier: "@lunora/kv" },
     mail: { moduleSpecifier: "@lunora/mail" },
     payments: { contextProperty: "payments", moduleSpecifier: "@lunora/payment" },
-    pipelines: { contextProperty: "pipelines", moduleSpecifier: "@lunora/pipelines" },
+    // Pipelines ships from `@lunora/analytics`, but a plain analytics import must
+    // NOT flip `hasPipelines` (that would wire `ctx.pipelines` for analytics-only
+    // apps). So key it solely on the `ctx.pipelines` read via a sentinel specifier
+    // that no real import ever matches.
+    pipelines: { contextProperty: "pipelines", moduleSpecifier: "@lunora/analytics#pipelines" },
     r2sql: { contextProperty: "r2sql", moduleSpecifier: "@lunora/r2sql" },
     scheduler: { contextProperty: "scheduler", moduleSpecifier: "@lunora/scheduler" },
     storage: { contextProperty: "storage", moduleSpecifier: "@lunora/storage" },
@@ -89,6 +93,8 @@ interface StudioFeatureSignals {
     cronCount: number;
     /** The `@lunora/*` packages this app depends on (from its `package.json`). */
     dependencies: ReadonlySet<string>;
+    /** Number of declared queues — any `defineQueue` means the queues page is relevant. */
+    queueCount: number;
     /** Number of tables carrying a scalar `v.storage()` column — drives the file browser even with no `ctx.storage` use. */
     storageColumnCount: number;
     /** Number of declared storage access rules. */
@@ -198,6 +204,7 @@ const buildStudioFeatures = (usage: FeatureUsage, signals: StudioFeatureSignals)
     return {
         mail: usage.mail || signals.dependencies.has("@lunora/mail"),
         payments: usage.payments || signals.dependencies.has("@lunora/payment"),
+        queues: signals.queueCount > 0 || signals.dependencies.has("@lunora/queue"),
         scheduler: usage.scheduler || signals.cronCount > 0 || signals.dependencies.has("@lunora/scheduler"),
         storage: usage.storage || signals.storageRuleCount > 0 || signals.storageColumnCount > 0 || signals.dependencies.has("@lunora/storage"),
         vectors: usage.vectors || signals.vectorIndexCount > 0 || signals.dependencies.has("@lunora/vectors"),

@@ -15,6 +15,7 @@ export type {
     TerminalKind,
 } from "./builder/index";
 export { initLunora } from "./builder/index";
+export { createSecrets } from "./create-secrets";
 export type { EnvAccessor, EnvKeyFailure, EnvShape, InferEnv } from "./env";
 export { defineEnv, LunoraEnvError, redactSecrets } from "./env";
 export type { LunoraErrorCode } from "./error";

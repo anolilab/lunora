@@ -27,6 +27,8 @@ import { init as initLexer, parse as lexModule } from "es-module-lexer";
 import type { ContainerIR } from "./container-info";
 import { discoverContainerInfo } from "./container-info";
 import join from "./path";
+import type { QueueIR } from "./queue-info";
+import { discoverQueueInfo } from "./queue-info";
 import { discoverSchemaInfo } from "./schema-info";
 import type { WorkflowIR } from "./workflow-info";
 import { discoverWorkflowInfo } from "./workflow-info";
@@ -146,6 +148,14 @@ interface InferredWorkflow extends WorkflowIR {
     exported: boolean;
 }
 
+/**
+ * A queue declared in `lunora/queues.ts`. Unlike workflows, a queue needs no
+ * worker-entry class export (its `queue()` handler rides `createWorker`), so
+ * there is no `exported` flag — every declared queue is reconcilable into the
+ * wrangler `queues.producers[]` / `queues.consumers[]`.
+ */
+type InferredQueue = QueueIR;
+
 interface InferredBindings {
     /** Containers declared in `lunora/containers.ts` (exported or not — see {@link InferredContainer.exported}). */
     containers: InferredContainer[];
@@ -153,6 +163,8 @@ interface InferredBindings {
     durableObjects: DurableObjectSpec[];
     /** Schema declares a `.global()` table → needs the `DB` D1 binding. */
     needsD1: boolean;
+    /** Queues declared in `lunora/queues.ts` → reconciled into `queues.producers[]` / `queues.consumers[]`. */
+    queues: InferredQueue[];
     /** Human-readable provenance for each inferred binding / hint, for logging. */
     signals: string[];
     /** `@lunora/ai` is imported or `env.AI` is used → needs the `ai` Workers AI binding. */
@@ -587,6 +599,9 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     const needsD1 = capabilities.needsD1 || schemaNeedsD1(options.projectRoot, schemaDirectory);
     const containers = detectContainerExports(entryPath, discoverContainerInfo(options.projectRoot, schemaDirectory).containers);
     const workflows = detectWorkflowExports(entryPath, discoverWorkflowInfo(options.projectRoot, schemaDirectory).workflows);
+    // Queues need no worker-entry export (their `queue()` handler rides
+    // `createWorker`), so the discovered list is reconcilable as-is.
+    const queues = [...discoverQueueInfo(options.projectRoot, schemaDirectory).queues];
 
     // The import-driven `uses*` flags are projected straight off the scanned
     // capabilities (keyed by CAPABILITY_SOURCES); `needsD1` is overridden with
@@ -601,6 +616,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         containers,
         durableObjects,
         needsD1,
+        queues,
         signals: describeSignals(durableObjects, needsD1, capabilities, containers, workflows),
         workflows,
         ...capabilityFlags,
@@ -629,5 +645,5 @@ const packageNamesFromBindings = (bindings: InferredBindings): string[] => {
     return names;
 };
 
-export type { DurableObjectClass, DurableObjectSpec, InferOptions, InferredBindings, InferredContainer, InferredWorkflow };
+export type { DurableObjectClass, DurableObjectSpec, InferOptions, InferredBindings, InferredContainer, InferredQueue, InferredWorkflow };
 export { inferLunoraBindings, packageNamesFromBindings };
