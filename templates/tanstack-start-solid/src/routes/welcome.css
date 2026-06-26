@@ -7,99 +7,400 @@ body {
 }
 
 .lunora-welcome {
-  --cyan: hsl(186 84% 56%); --violet: hsl(256 72% 68%); --rose: hsl(330 80% 64%);
-  --ribbon: linear-gradient(115deg, var(--cyan), var(--violet) 52%, var(--rose));
-  --sans: "Geist Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  /* NIGHT (default) */
-  --bg: #0e0e11; --surface: hsl(240 12% 8% / 0.72); --surface-2: hsl(240 11% 11% / 0.82);
-  --line: hsl(0 0% 100% / 0.08); --line-2: hsl(0 0% 100% / 0.14);
-  --t-display: hsl(228 30% 97%); --t-primary: hsl(228 26% 90%); --t-secondary: hsl(228 12% 62%); --t-faint: hsl(228 10% 44%);
-  --logo: hsl(228 30% 97%); --accent: var(--violet); --shot-bg: hsl(240 12% 6%);
-  --glow-1: hsl(256 80% 52% / 0.30); --glow-2: hsl(196 84% 52% / 0.13); --arc: hsl(256 60% 70% / 0.11);
+    --cyan: hsl(186 84% 56%);
+    --violet: hsl(256 72% 68%);
+    --rose: hsl(330 80% 64%);
+    --ribbon: linear-gradient(115deg, var(--cyan), var(--violet) 52%, var(--rose));
+    --sans: "Geist Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    /* NIGHT (default) */
+    --bg: #0e0e11;
+    --surface: hsl(240 12% 8% / 0.72);
+    --surface-2: hsl(240 11% 11% / 0.82);
+    --line: hsl(0 0% 100% / 0.08);
+    --line-2: hsl(0 0% 100% / 0.14);
+    --t-display: hsl(228 30% 97%);
+    --t-primary: hsl(228 26% 90%);
+    --t-secondary: hsl(228 12% 62%);
+    --t-faint: hsl(228 10% 44%);
+    --logo: hsl(228 30% 97%);
+    --accent: var(--violet);
+    --shot-bg: hsl(240 12% 6%);
+    --glow-1: hsl(256 80% 52% / 0.3);
+    --glow-2: hsl(196 84% 52% / 0.13);
+    --arc: hsl(256 60% 70% / 0.11);
 
-  position: relative; min-height: 100vh; background: var(--bg); color: var(--t-primary);
-  font-family: var(--sans); line-height: 1.55; -webkit-font-smoothing: antialiased; overflow-x: hidden;
-  transition: background .3s, color .3s;
+    position: relative;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--t-primary);
+    font-family: var(--sans);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+    transition:
+        background 0.3s,
+        color 0.3s;
 }
 .lunora-welcome[data-theme="light"] {
-  --bg: hsl(228 32% 97%); --surface: hsl(0 0% 100% / 0.82); --surface-2: hsl(0 0% 100% / 0.95);
-  --line: hsl(228 16% 88%); --line-2: hsl(228 14% 80%);
-  --t-display: hsl(240 14% 10%); --t-primary: hsl(240 12% 18%); --t-secondary: hsl(235 9% 42%); --t-faint: hsl(235 8% 58%);
-  --logo: hsl(240 16% 9%); --accent: hsl(256 58% 56%); --shot-bg: hsl(228 26% 99%);
-  --glow-1: hsl(256 80% 60% / 0.14); --glow-2: hsl(196 84% 58% / 0.08); --arc: hsl(256 40% 55% / 0.12);
+    --bg: hsl(228 32% 97%);
+    --surface: hsl(0 0% 100% / 0.82);
+    --surface-2: hsl(0 0% 100% / 0.95);
+    --line: hsl(228 16% 88%);
+    --line-2: hsl(228 14% 80%);
+    --t-display: hsl(240 14% 10%);
+    --t-primary: hsl(240 12% 18%);
+    --t-secondary: hsl(235 9% 42%);
+    --t-faint: hsl(235 8% 58%);
+    --logo: hsl(240 16% 9%);
+    --accent: hsl(256 58% 56%);
+    --shot-bg: hsl(228 26% 99%);
+    --glow-1: hsl(256 80% 60% / 0.14);
+    --glow-2: hsl(196 84% 58% / 0.08);
+    --arc: hsl(256 40% 55% / 0.12);
 }
-.lunora-welcome *, .lunora-welcome *::before, .lunora-welcome *::after { box-sizing: border-box; }
-.lunora-welcome a { color: inherit; text-decoration: none; }
-.lunora-welcome button { font-family: inherit; cursor: pointer; }
-.lunora-welcome ::selection { background: hsl(256 72% 68% / 0.3); }
-.lunora-welcome code { font-family: var(--mono); }
+.lunora-welcome *,
+.lunora-welcome *::before,
+.lunora-welcome *::after {
+    box-sizing: border-box;
+}
+.lunora-welcome a {
+    color: inherit;
+    text-decoration: none;
+}
+.lunora-welcome button {
+    font-family: inherit;
+    cursor: pointer;
+}
+.lunora-welcome ::selection {
+    background: hsl(256 72% 68% / 0.3);
+}
+.lunora-welcome code {
+    font-family: var(--mono);
+}
 
 /* glow background */
-.lunora-welcome .lw-bg { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
-.lunora-welcome .lw-bg .glow { position: absolute; left: 50%; top: -4%; width: 860px; height: 720px; transform: translateX(-50%);
-  border-radius: 50%; background: radial-gradient(circle at 50% 50%, var(--glow-1), var(--glow-2) 40%, transparent 66%); }
-.lunora-welcome .lw-bg .arc { position: absolute; left: 50%; border-radius: 50%; border: 1px solid var(--arc); transform: translateX(-50%); }
-.lunora-welcome .lw-bg .arc.a1 { top: -340px; width: 980px; height: 980px; }
-.lunora-welcome .lw-bg .arc.a2 { top: -240px; width: 720px; height: 720px; opacity: .7; }
+.lunora-welcome .lw-bg {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    overflow: hidden;
+}
+.lunora-welcome .lw-bg .glow {
+    position: absolute;
+    left: 50%;
+    top: -4%;
+    width: 860px;
+    height: 720px;
+    transform: translateX(-50%);
+    border-radius: 50%;
+    background: radial-gradient(circle at 50% 50%, var(--glow-1), var(--glow-2) 40%, transparent 66%);
+}
+.lunora-welcome .lw-bg .arc {
+    position: absolute;
+    left: 50%;
+    border-radius: 50%;
+    border: 1px solid var(--arc);
+    transform: translateX(-50%);
+}
+.lunora-welcome .lw-bg .arc.a1 {
+    top: -340px;
+    width: 980px;
+    height: 980px;
+}
+.lunora-welcome .lw-bg .arc.a2 {
+    top: -240px;
+    width: 720px;
+    height: 720px;
+    opacity: 0.7;
+}
 
 /* theme toggle */
-.lunora-welcome .lw-toggle { position: fixed; z-index: 5; top: 20px; right: clamp(16px,4vw,36px); display: inline-flex; align-items: center;
-  gap: 7px; border: 1px solid var(--line-2); background: var(--surface); backdrop-filter: blur(12px); color: var(--t-secondary);
-  font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; padding: 7px 11px; transition: .15s; }
-.lunora-welcome .lw-toggle:hover { color: var(--t-display); border-color: var(--accent); }
-.lunora-welcome .lw-toggle svg { width: 13px; height: 13px; }
+.lunora-welcome .lw-toggle {
+    position: fixed;
+    z-index: 5;
+    top: 20px;
+    right: clamp(16px, 4vw, 36px);
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    border: 1px solid var(--line-2);
+    background: var(--surface);
+    backdrop-filter: blur(12px);
+    color: var(--t-secondary);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 7px 11px;
+    transition: 0.15s;
+}
+.lunora-welcome .lw-toggle:hover {
+    color: var(--t-display);
+    border-color: var(--accent);
+}
+.lunora-welcome .lw-toggle svg {
+    width: 13px;
+    height: 13px;
+}
 
-.lunora-welcome .lw-wrap { position: relative; z-index: 2; width: 100%; max-width: 1080px; margin: 0 auto;
-  padding: clamp(44px,8vh,92px) clamp(20px,5vw,48px); display: flex; flex-direction: column; min-height: 100vh; }
-.lunora-welcome .brand { display: flex; align-items: center; justify-content: center; gap: 15px; margin-bottom: clamp(38px,6vh,68px); color: var(--logo); }
-.lunora-welcome .brand svg { width: 54px; height: auto; display: block; }
-.lunora-welcome .brand .word { font-size: 34px; font-weight: 600; letter-spacing: -0.03em; color: var(--t-display); }
+.lunora-welcome .lw-wrap {
+    position: relative;
+    z-index: 2;
+    width: 100%;
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: clamp(44px, 8vh, 92px) clamp(20px, 5vw, 48px);
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+}
+.lunora-welcome .brand {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 15px;
+    margin-bottom: clamp(38px, 6vh, 68px);
+    color: var(--logo);
+}
+.lunora-welcome .brand svg {
+    width: 54px;
+    height: auto;
+    display: block;
+}
+.lunora-welcome .brand .word {
+    font-size: 34px;
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    color: var(--t-display);
+}
 
-.lunora-welcome .grid { display: grid; grid-template-columns: 1.06fr 0.94fr; gap: 16px; align-items: stretch; flex: 1; max-height: 580px; }
-@media (max-width: 820px) { .lunora-welcome .grid { grid-template-columns: 1fr; max-height: none; } }
+.lunora-welcome .grid {
+    display: grid;
+    grid-template-columns: 1.06fr 0.94fr;
+    gap: 16px;
+    align-items: stretch;
+    flex: 1;
+    max-height: 580px;
+}
+@media (max-width: 820px) {
+    .lunora-welcome .grid {
+        grid-template-columns: 1fr;
+        max-height: none;
+    }
+}
 
-.lunora-welcome .card { border: 1px solid var(--line); background: var(--surface); backdrop-filter: blur(10px); transition: border-color .2s, background .2s; }
-.lunora-welcome .card:hover { border-color: var(--line-2); background: var(--surface-2); }
-.lunora-welcome .card:hover .arrow { color: var(--accent); transform: translateX(3px); }
-.lunora-welcome .arrow { color: var(--t-faint); transition: color .2s, transform .2s; }
-.lunora-welcome .arrow svg { width: 20px; height: 20px; display: block; }
-.lunora-welcome .ic { display: grid; place-items: center; color: var(--accent);
-  border: 1px solid color-mix(in oklab, var(--accent) 36%, transparent); background: color-mix(in oklab, var(--accent) 12%, transparent); }
-.lunora-welcome .ic svg { display: block; }
+.lunora-welcome .card {
+    border: 1px solid var(--line);
+    background: var(--surface);
+    backdrop-filter: blur(10px);
+    transition:
+        border-color 0.2s,
+        background 0.2s;
+}
+.lunora-welcome .card:hover {
+    border-color: var(--line-2);
+    background: var(--surface-2);
+}
+.lunora-welcome .card:hover .arrow {
+    color: var(--accent);
+    transform: translateX(3px);
+}
+.lunora-welcome .arrow {
+    color: var(--t-faint);
+    transition:
+        color 0.2s,
+        transform 0.2s;
+}
+.lunora-welcome .arrow svg {
+    width: 20px;
+    height: 20px;
+    display: block;
+}
+.lunora-welcome .ic {
+    display: grid;
+    place-items: center;
+    color: var(--accent);
+    border: 1px solid color-mix(in oklab, var(--accent) 36%, transparent);
+    background: color-mix(in oklab, var(--accent) 12%, transparent);
+}
+.lunora-welcome .ic svg {
+    display: block;
+}
 
 /* left feature card — stretches to fill the box height */
-.lunora-welcome .feature { padding: clamp(18px,2vw,24px); display: flex; flex-direction: column; }
-.lunora-welcome .shot { border: 1px solid var(--line); overflow: hidden; background: var(--shot-bg);
-  -webkit-mask-image: linear-gradient(to bottom, #000 56%, transparent 100%); mask-image: linear-gradient(to bottom, #000 56%, transparent 100%); }
-.lunora-welcome .shot .top { display: flex; align-items: center; gap: 12px; padding: 11px 14px; border-bottom: 1px solid var(--line); }
-.lunora-welcome .shot .wm { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: var(--t-primary); }
-.lunora-welcome .shot .wm i { width: 11px; height: 11px; background: var(--ribbon); -webkit-mask: radial-gradient(circle,#000 60%,transparent 62%); mask: radial-gradient(circle,#000 60%,transparent 62%); }
-.lunora-welcome .shot .search { flex: 1; height: 22px; border: 1px solid var(--line); border-radius: 4px; }
-.lunora-welcome .shot .ver { font-family: var(--mono); font-size: 8px; letter-spacing: .08em; color: var(--t-faint); }
-.lunora-welcome .shot .body { display: grid; grid-template-columns: 92px 1fr; min-height: 224px; }
-.lunora-welcome .shot .nav { border-right: 1px solid var(--line); padding: 14px 12px; display: flex; flex-direction: column; gap: 11px; }
-.lunora-welcome .shot .nav i, .lunora-welcome .shot .doc i { height: 5px; border-radius: 2px; background: var(--line); }
-.lunora-welcome .shot .doc { padding: 16px 18px; display: flex; flex-direction: column; gap: 9px; }
-.lunora-welcome .shot .doc .h { height: 8px; width: 46%; border-radius: 2px; background: var(--line-2); margin-bottom: 5px; }
-.lunora-welcome .shot .doc .accent { height: 5px; width: 26%; border-radius: 2px; background: var(--accent); }
-.lunora-welcome .feature .info { margin-top: auto; padding-top: clamp(18px,2.4vh,28px); }
-.lunora-welcome .feature .ic { width: 40px; height: 40px; margin-bottom: 15px; }
-.lunora-welcome .feature .ic svg { width: 19px; height: 19px; }
-.lunora-welcome .feature h2 { margin: 0 0 10px; font-size: 19px; font-weight: 600; letter-spacing: -0.015em; color: var(--t-display); }
-.lunora-welcome .feature .row { display: flex; align-items: flex-end; gap: 16px; }
-.lunora-welcome .feature p { margin: 0; color: var(--t-secondary); font-size: 14px; max-width: 50ch; }
-.lunora-welcome .feature .row .arrow { margin-left: auto; }
+.lunora-welcome .feature {
+    padding: clamp(18px, 2vw, 24px);
+    display: flex;
+    flex-direction: column;
+}
+.lunora-welcome .shot {
+    border: 1px solid var(--line);
+    overflow: hidden;
+    background: var(--shot-bg);
+    -webkit-mask-image: linear-gradient(to bottom, #000 56%, transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 56%, transparent 100%);
+}
+.lunora-welcome .shot .top {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--line);
+}
+.lunora-welcome .shot .wm {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--t-primary);
+}
+.lunora-welcome .shot .wm i {
+    width: 11px;
+    height: 11px;
+    background: var(--ribbon);
+    -webkit-mask: radial-gradient(circle, #000 60%, transparent 62%);
+    mask: radial-gradient(circle, #000 60%, transparent 62%);
+}
+.lunora-welcome .shot .search {
+    flex: 1;
+    height: 22px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+}
+.lunora-welcome .shot .ver {
+    font-family: var(--mono);
+    font-size: 8px;
+    letter-spacing: 0.08em;
+    color: var(--t-faint);
+}
+.lunora-welcome .shot .body {
+    display: grid;
+    grid-template-columns: 92px 1fr;
+    min-height: 224px;
+}
+.lunora-welcome .shot .nav {
+    border-right: 1px solid var(--line);
+    padding: 14px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 11px;
+}
+.lunora-welcome .shot .nav i,
+.lunora-welcome .shot .doc i {
+    height: 5px;
+    border-radius: 2px;
+    background: var(--line);
+}
+.lunora-welcome .shot .doc {
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+}
+.lunora-welcome .shot .doc .h {
+    height: 8px;
+    width: 46%;
+    border-radius: 2px;
+    background: var(--line-2);
+    margin-bottom: 5px;
+}
+.lunora-welcome .shot .doc .accent {
+    height: 5px;
+    width: 26%;
+    border-radius: 2px;
+    background: var(--accent);
+}
+.lunora-welcome .feature .info {
+    margin-top: auto;
+    padding-top: clamp(18px, 2.4vh, 28px);
+}
+.lunora-welcome .feature .ic {
+    width: 40px;
+    height: 40px;
+    margin-bottom: 15px;
+}
+.lunora-welcome .feature .ic svg {
+    width: 19px;
+    height: 19px;
+}
+.lunora-welcome .feature h2 {
+    margin: 0 0 10px;
+    font-size: 19px;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    color: var(--t-display);
+}
+.lunora-welcome .feature .row {
+    display: flex;
+    align-items: flex-end;
+    gap: 16px;
+}
+.lunora-welcome .feature p {
+    margin: 0;
+    color: var(--t-secondary);
+    font-size: 14px;
+    max-width: 50ch;
+}
+.lunora-welcome .feature .row .arrow {
+    margin-left: auto;
+}
 
 /* right stack — smaller cards, spread to align bottoms with the feature */
-.lunora-welcome .stack { display: flex; flex-direction: column; gap: 16px; height: 100%; }
-.lunora-welcome .mini { flex: 1; padding: 15px 17px; display: flex; align-items: center; gap: 16px; min-height: 0; }
-.lunora-welcome .mini .mc { flex: 1; }
-.lunora-welcome .mini .ic { width: 32px; height: 32px; margin-bottom: 10px; }
-.lunora-welcome .mini .ic svg { width: 16px; height: 16px; }
-.lunora-welcome .mini h3 { margin: 0 0 5px; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; color: var(--t-display); }
-.lunora-welcome .mini p { margin: 0; color: var(--t-secondary); font-size: 12.5px; line-height: 1.45; }
+.lunora-welcome .stack {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    height: 100%;
+}
+.lunora-welcome .mini {
+    flex: 1;
+    padding: 15px 17px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    min-height: 0;
+}
+.lunora-welcome .mini .mc {
+    flex: 1;
+}
+.lunora-welcome .mini .ic {
+    width: 32px;
+    height: 32px;
+    margin-bottom: 10px;
+}
+.lunora-welcome .mini .ic svg {
+    width: 16px;
+    height: 16px;
+}
+.lunora-welcome .mini h3 {
+    margin: 0 0 5px;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--t-display);
+}
+.lunora-welcome .mini p {
+    margin: 0;
+    color: var(--t-secondary);
+    font-size: 12.5px;
+    line-height: 1.45;
+}
 
-.lunora-welcome .lw-foot { text-align: center; padding-top: 26px; font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--t-faint); }
+.lunora-welcome .lw-foot {
+    text-align: center;
+    padding-top: 26px;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--t-faint);
+}
 
-@media (prefers-reduced-motion: reduce) { .lunora-welcome * { transition: none !important; } }
+@media (prefers-reduced-motion: reduce) {
+    .lunora-welcome * {
+        transition: none !important;
+    }
+}
