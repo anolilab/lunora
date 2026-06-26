@@ -6,6 +6,7 @@ import { basename, join } from "@visulima/path";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
+import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import type { TextPrompt } from "../../util/tui-prompts";
 import { tuiSelect, tuiText } from "../../util/tui-prompts";
 import { runAddCommand } from "../registry";
@@ -278,6 +279,18 @@ const runAddFeature = async (options: AddFeatureOptions): Promise<AddFeatureResu
 
 /** `lunora add &lt;feature>` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<AddOptions> = defineHandler<AddOptions>(async ({ argument, cwd, logger, options }) => {
+    const formatError = validateOutputFormat("add", options.format);
+
+    if (formatError !== undefined) {
+        logger.error(formatError);
+
+        return { code: 1 };
+    }
+
+    // In `--format json` mode every human/progress line goes to stderr so
+    // stdout carries only the serialized structured result.
+    const effectiveLogger = loggerForFormat(options.format, logger);
+
     const result = await runAddFeature({
         allowUnsafeSource: options.allowUnsafeSource === true,
         bucket: options.bucket,
@@ -285,13 +298,17 @@ const execute: CommandHandler<AddOptions> = defineHandler<AddOptions>(async ({ a
         db: options.db,
         feature: argument[0],
         from: options.from,
-        logger,
+        logger: effectiveLogger,
         mailTo: options.mailTo,
         provider: options.provider,
         ref: options.ref,
         source: options.source,
         yes: options.yes === true,
     });
+
+    if (isJsonFormat(options.format)) {
+        printJson({ code: result.code, items: result.items });
+    }
 
     return { code: result.code };
 });

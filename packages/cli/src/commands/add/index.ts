@@ -40,6 +40,7 @@ const addCommand: Command = {
             type: String,
         },
         { description: "Permit --source values outside gh:/github:/https://", name: "allow-unsafe-source", type: Boolean },
+        { description: "Output format: pretty (default) or json", name: "format", type: String },
     ],
 };
 
@@ -49,6 +50,7 @@ export type AddOptions = CreateOptions<{
     "allow-unsafe-source": boolean | undefined;
     bucket: string | undefined;
     db: string | undefined;
+    format: string | undefined;
     from: string | undefined;
     "mail-to": string | undefined;
     provider: string | undefined;
