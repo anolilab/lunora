@@ -6,8 +6,8 @@ This guide covers what you need to hack on the monorepo. By participating you ag
 
 ## Prerequisites
 
-- **Node.js** `^22.14.0 || >=24.10.0` (see [`.nvmrc`](../.nvmrc); `nvm use` works).
-- **pnpm** `10.32.1` exactly. Enable corepack (`corepack enable`) and it picks up the version pinned in [`package.json`](../package.json).
+- **Node.js** `^22.15.0 || >=24.11.0` (see [`.nvmrc`](../.nvmrc); `nvm use` works).
+- **pnpm** `11.5.3` exactly. Enable corepack (`corepack enable`) and it picks up the version pinned in [`package.json`](../package.json).
 - **A Cloudflare account.** The free tier is fine. You only need one for running workerd integration tests against your own resources — local unit tests do not require an account.
 - Git, a recent shell, and the usual.
 
