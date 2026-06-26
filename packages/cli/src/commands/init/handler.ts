@@ -17,12 +17,12 @@ import type { PackageManager, PackageManagerProbe } from "../../util/detect-pack
 import { detectInstalledManagers, installArgsFor } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
 import { patchViteConfig } from "../../util/patch-vite-config";
+import { PromptCancelledError } from "../../util/prompt-cancelled";
 import { resolveDistTag, resolveSourceRef, resolveTagVersions } from "../../util/source-ref";
 import type { Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import type { NextStep } from "../../util/tui-prompts";
 import {
-    PromptCancelledError,
     tuiConfirm,
     tuiHeadline,
     tuiInfo,
@@ -37,6 +37,7 @@ import {
 } from "../../util/tui-prompts";
 import type { FeatureItem } from "../add/features";
 import { runAddCommand } from "../registry";
+import describeDownloadFailure from "./download-failure";
 import { emitMascot, emitStep } from "./flow";
 import type { InitOptions } from "./index";
 import type { FeatureApply, OfferDeps } from "./offer-extras";
@@ -768,9 +769,17 @@ const scaffoldFromRemote = async (options: {
             throw error;
         }
 
-        const message = error instanceof Error ? error.message : String(error);
+        const { hints, message } = describeDownloadFailure(error, {
+            ref: resolveSourceRef(ref),
+            remote: resolveTemplateSource(templateType, source, ref),
+            templateType,
+        });
 
-        logger.error(`failed to download template: ${message}`);
+        logger.error(message);
+
+        for (const hint of hints) {
+            logger.warn(hint);
+        }
 
         return { code: 1, files: [], target };
     } finally {
