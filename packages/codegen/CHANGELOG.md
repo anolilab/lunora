@@ -1,3 +1,13 @@
+## @lunora/codegen [1.0.0-alpha.8](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.7...@lunora/codegen@1.0.0-alpha.8) (2026-06-26)
+
+### Bug Fixes
+
+* **codegen:** pinpoint cron and migration errors to file:line ([7afadd3](https://github.com/anolilab/lunora/commit/7afadd3afce300df091aaf0d0a155a1d2ce4b8ac))
+
+### Performance Improvements
+
+* **codegen:** add opt-in codegen timing instrumentation ([9443e7f](https://github.com/anolilab/lunora/commit/9443e7f642f2081c086626e64a4f754ed8f65e19))
+
 ## @lunora/codegen [1.0.0-alpha.7](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.6...@lunora/codegen@1.0.0-alpha.7) (2026-06-25)
 
 ### Bug Fixes
