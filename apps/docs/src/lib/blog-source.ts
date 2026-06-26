@@ -61,6 +61,27 @@ const toTime = (value?: string): number => {
     return new Date(value).getTime();
 };
 
+interface CompiledPost {
+    data: BlogFrontmatter;
+    mdx: string;
+}
+
+// Compiling MDX is the expensive part of loading a post — shiki (via rehypeCode)
+// re-highlights on every call. The compiler is heavy, so load it lazily; this
+// keeps list-only consumers (the index route, RSS, sitemap) from bundling it.
+const loadCompiler = async () => {
+    const { createCompiler } = await import("@fumadocs/mdx-remote");
+
+    return createCompiler({ development: false });
+};
+
+let compilerPromise: ReturnType<typeof loadCompiler> | undefined;
+
+// Blog content is bundled per deployment (see the import.meta.glob note above)
+// and therefore static, so compile each post at most once and reuse it. Only
+// real posts are cached, so requests for unknown slugs can't grow the map.
+const compiledPosts = new Map<string, CompiledPost>();
+
 export interface BlogFrontmatter {
     author?: string;
     category?: string;
@@ -114,3 +135,33 @@ export const listBlogPosts = (): BlogPostSummary[] =>
             };
         })
         .toSorted((a, b) => toTime(b.publishedAt) - toTime(a.publishedAt));
+
+/**
+ * Compile a post's MDX to its renderable form, memoised by slug. Returns
+ * undefined for an unknown slug (without caching it). Server-only.
+ */
+export const getCompiledPost = async (slug: string): Promise<CompiledPost | undefined> => {
+    const cached = compiledPosts.get(slug);
+
+    if (cached) {
+        return cached;
+    }
+
+    const page = source.getPage([slug]);
+
+    if (!page) {
+        return undefined;
+    }
+
+    const data = page.data as BlogFrontmatter;
+
+    compilerPromise ??= loadCompiler();
+
+    const compiler = await compilerPromise;
+    const { compiled } = await compiler.compile({ source: data.content });
+    const entry: CompiledPost = { data, mdx: compiled };
+
+    compiledPosts.set(slug, entry);
+
+    return entry;
+};

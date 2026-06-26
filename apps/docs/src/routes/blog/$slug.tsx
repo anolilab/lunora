@@ -1,4 +1,3 @@
-import { createCompiler } from "@fumadocs/mdx-remote";
 import { executeMdxSync } from "@fumadocs/mdx-remote/client";
 import { createFileRoute, notFound } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
@@ -11,16 +10,7 @@ import BlogPost from "@/pages/blog/content";
 
 import { NotFound } from "../../pages/not-found";
 
-const compiler = createCompiler({ development: false });
 const WORD_SPLIT = /\s+/;
-
-// Blog content is static for the life of a deployment (bundled via
-// import.meta.glob), and compiling MDX is expensive — ~240ms for a post with
-// code blocks because rehypeCode (shiki) re-highlights on every call. Memoise
-// the whole per-slug payload so each post compiles at most once per server
-// process; warm invocations return instantly instead of recompiling.
-type LoadedPost = Awaited<ReturnType<typeof buildPost>>;
-const postCache = new Map<string, LoadedPost | null>();
 
 const toLink = (post?: { slug: string; title?: string }): PostLink | null => {
     if (!post) {
@@ -31,16 +21,14 @@ const toLink = (post?: { slug: string; title?: string }): PostLink | null => {
 };
 
 const buildPost = async (slug: string) => {
-    const { listBlogPosts, source } = await import("@/lib/blog-source");
-    const page = source.getPage([slug]);
+    const { getCompiledPost, listBlogPosts } = await import("@/lib/blog-source");
+    const post = await getCompiledPost(slug);
 
-    if (!page) {
+    if (!post) {
         return null;
     }
 
-    const data = page.data as BlogPostMeta & { content: string };
-    const result = await compiler.compile({ source: data.content });
-
+    const { data } = post;
     const words = data.content.trim().split(WORD_SPLIT).filter(Boolean).length;
     const readingMinutes = Math.max(1, Math.round(words / 200));
 
@@ -64,7 +52,7 @@ const buildPost = async (slug: string) => {
         });
 
     return {
-        compiled: result.compiled,
+        compiled: post.mdx,
         meta: {
             author: data.author,
             category: data.category,
@@ -82,24 +70,13 @@ const buildPost = async (slug: string) => {
 
 const loadPost = createServerFn({ method: "GET" })
     .inputValidator((slug: string) => slug)
-    .handler(async ({ data: slug }) => {
-        const cached = postCache.get(slug);
-
-        if (cached !== undefined) {
-            return cached;
-        }
-
-        const built = await buildPost(slug);
-
-        postCache.set(slug, built);
-
-        return built;
-    });
+    .handler(({ data: slug }) => buildPost(slug));
 
 const BaseImg = defaultMdxComponents.img;
 
 // Inline post images sit below the fold; lazy-load them so they don't compete
-// with the initial render. Keeps fumadocs' ImageZoom behaviour.
+// with the initial render. `defaultMdxComponents.img` is fumadocs' Image wrapper;
+// spreading props last preserves remarkImage's width/height and the alt text.
 const mdxComponents = {
     ...defaultMdxComponents,
     img: (props: ComponentProps<"img">) => <BaseImg decoding="async" loading="lazy" {...props} />,
@@ -118,8 +95,8 @@ const RouteComponent = () => {
 
 export const Route = createFileRoute("/blog/$slug")({
     component: RouteComponent,
-    // Posts are static for the life of a deployment, so never re-run the loader
-    // (a server round-trip that recompiles the MDX) on client-side navigation.
+    // Posts are static for the life of a deployment (compiled MDX is memoised in
+    // blog-source), so don't re-run the loader on client-side navigation.
     staleTime: Number.POSITIVE_INFINITY,
     loader: async ({ params }) => {
         const data = await loadPost({ data: params.slug });
