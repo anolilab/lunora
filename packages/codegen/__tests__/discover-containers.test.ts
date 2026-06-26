@@ -243,4 +243,12 @@ describe("emit (containers)", () => {
 
         expect(emitShard({ schema: EMPTY_SCHEMA })).not.toContain("LUNORA_CONTAINERS");
     });
+
+    it("emitShard pins ctx.containers to the schema jurisdiction when declared", () => {
+        expect.assertions(1);
+
+        const shard = emitShard({ schema: { ...EMPTY_SCHEMA, jurisdiction: "us" }, containers: discover() });
+
+        expect(shard).toContain('const containers = createContainerContext(env, LUNORA_CONTAINERS, "us");');
+    });
 });

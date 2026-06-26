@@ -1940,7 +1940,10 @@ ${classes}`;
  * Durable Object bindings off `env` lazily (a missing binding only throws when
  * the handle is used).
  */
-const emitContainerFragments = (containers: ReadonlyArray<ContainerIR>): { build: string; contextField: string; importLines: string[]; specs: string } => {
+const emitContainerFragments = (
+    containers: ReadonlyArray<ContainerIR>,
+    jurisdiction?: "eu" | "fedramp" | "us",
+): { build: string; contextField: string; importLines: string[]; specs: string } => {
     if (containers.length === 0) {
         return { build: "", contextField: "", importLines: [], specs: "" };
     }
@@ -1959,8 +1962,11 @@ const emitContainerFragments = (containers: ReadonlyArray<ContainerIR>): { build
         .join("\n");
 
     return {
+        // Schema `.jurisdiction("…")` pins every container DO this shard reaches
+        // to the data-residency region; the arg is omitted when undeclared so
+        // existing generated output is unchanged.
         build: `
-            const containers = createContainerContext(env, LUNORA_CONTAINERS);
+            const containers = createContainerContext(env, LUNORA_CONTAINERS${jurisdiction ? `, ${JSON.stringify(jurisdiction)}` : ""});
 `,
         contextField: `\n                containers,`,
         importLines: [`import type { ContainerBindingSpec } from "@lunora/container";`, `import { createContainerContext } from "@lunora/container";`],
@@ -2264,7 +2270,7 @@ const emitShard = ({
         contextField: containersContextField,
         importLines: containerImportLines,
         specs: containerSpecs,
-    } = emitContainerFragments(containers);
+    } = emitContainerFragments(containers, schema.jurisdiction);
     const {
         build: workflowsBuild,
         contextField: workflowsContextField,
