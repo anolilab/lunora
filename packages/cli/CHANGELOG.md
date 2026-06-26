@@ -1,3 +1,20 @@
+## @lunora/cli [1.0.0-alpha.24](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.23...@lunora/cli@1.0.0-alpha.24) (2026-06-26)
+
+### Features
+
+* **cli:** add --format json to lunora add ([9bb5291](https://github.com/anolilab/lunora/commit/9bb529139844619d11fd12ba9fcc360d6b50103d))
+* **cli:** classify init template-download failures with next steps ([2c27c85](https://github.com/anolilab/lunora/commit/2c27c85bf9a03cd83638c577adef1e9ec1395a7b))
+
+### Bug Fixes
+
+* **cli:** exit cleanly when an interactive prompt is cancelled ([6bbc412](https://github.com/anolilab/lunora/commit/6bbc412daec3ce6e1261003e770d436ed3a63f17))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.8
+* **@lunora/config:** upgraded to 1.0.0-alpha.14
+
 ## @lunora/cli [1.0.0-alpha.23](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.22...@lunora/cli@1.0.0-alpha.23) (2026-06-25)
 
 ### Features
