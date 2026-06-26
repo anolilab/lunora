@@ -26,13 +26,20 @@ export class CodegenDiagnosticError extends Error {
  * ts-morph `Node`'s position in its source file.
  *
  * Message format: `@lunora/codegen: &lt;detail> (&lt;file>:&lt;line>:&lt;column>)`
+ *
+ * `meta` is merged onto the returned error for callers that also carry the
+ * project-wide `LunoraError` envelope (`code`/`name`/`status`) — it never
+ * touches `file`/`line`/`column`, and the error stays an instance of
+ * {@link CodegenDiagnosticError} so the Vite overlay's `instanceof` location
+ * lookup is unaffected.
  */
-export const diagnosticAt = (node: Node, detail: string): CodegenDiagnosticError => {
+export const diagnosticAt = (node: Node, detail: string, meta?: Record<string, unknown>): CodegenDiagnosticError => {
     const sourceFile = node.getSourceFile();
     const file = sourceFile.getFilePath();
     const line = node.getStartLineNumber();
     const { column } = sourceFile.getLineAndColumnAtPos(node.getStart());
     const message = `@lunora/codegen: ${detail} (${file}:${line.toString()}:${column.toString()})`;
+    const error = new CodegenDiagnosticError(message, file, line, column);
 
-    return new CodegenDiagnosticError(message, file, line, column);
+    return meta ? Object.assign(error, meta) : error;
 };

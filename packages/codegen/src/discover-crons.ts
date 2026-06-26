@@ -2,6 +2,7 @@ import { compileCronSchedule, CRON_SCHEDULE_KINDS, isValidCronExpression } from 
 import type { CallExpression, Identifier, ObjectLiteralExpression, Project, PropertyAccessExpression, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
+import { diagnosticAt } from "./diagnostics";
 import { listLunoraSourceFiles } from "./discover-functions";
 import type { CronJobIR, WorkflowIR } from "./ir";
 import sanitizeNamespace from "./paths";
@@ -122,7 +123,7 @@ const literalValue = (node: Node, jobName: string): unknown => {
         return node.getElements().map((element) => literalValue(element, jobName));
     }
 
-    throw Object.assign(new Error(`Cron job "${jobName}" passes a non-static value where a literal is required; codegen can only read literals.`), {
+    throw diagnosticAt(node, `Cron job "${jobName}" passes a non-static value where a literal is required; codegen can only read literals.`, {
         code: "CRON_NON_STATIC_VALUE",
         name: "LunoraError",
         status: 500,
@@ -135,8 +136,9 @@ const objectLiteralValue = (object: ObjectLiteralExpression, jobName: string): R
 
     for (const property of object.getProperties()) {
         if (!Node.isPropertyAssignment(property)) {
-            throw Object.assign(
-                new Error(`Cron job "${jobName}" uses an unsupported object property (shorthand/spread/method) where a static literal is required.`),
+            throw diagnosticAt(
+                property,
+                `Cron job "${jobName}" uses an unsupported object property (shorthand/spread/method) where a static literal is required.`,
                 {
                     code: "CRON_NON_STATIC_VALUE",
                     name: "LunoraError",
@@ -160,8 +162,9 @@ const functionPathFromArgument = (call: CallExpression, index: number, jobName: 
     const argument = call.getArguments()[index];
 
     if (!argument || !Node.isPropertyAccessExpression(argument)) {
-        throw Object.assign(
-            new Error(`Cron job "${jobName}" must reference a function statically (e.g. internal.email.digest); codegen cannot resolve a dynamic reference.`),
+        throw diagnosticAt(
+            call,
+            `Cron job "${jobName}" must reference a function statically (e.g. internal.email.digest); codegen cannot resolve a dynamic reference.`,
             {
                 code: "CRON_NON_STATIC_FN",
                 name: "LunoraError",
@@ -177,7 +180,7 @@ const functionPathFromArgument = (call: CallExpression, index: number, jobName: 
     const receiver = argument.getExpression();
 
     if (!Node.isPropertyAccessExpression(receiver)) {
-        throw Object.assign(new Error(`Cron job "${jobName}" function reference must be of the form internal.file.fn (two property accesses).`), {
+        throw diagnosticAt(argument, `Cron job "${jobName}" function reference must be of the form internal.file.fn (two property accesses).`, {
             code: "CRON_NON_STATIC_FN",
             name: "LunoraError",
             status: 500,
@@ -229,8 +232,9 @@ const resolveTarget = (
                 return workflowTarget(workflow);
             }
 
-            throw Object.assign(
-                new Error(`Cron job "${jobName}" targets workflows.${argument.getName()}, but no such workflow is declared in lunora/workflows.ts.`),
+            throw diagnosticAt(
+                argument,
+                `Cron job "${jobName}" targets workflows.${argument.getName()}, but no such workflow is declared in lunora/workflows.ts.`,
                 {
                     code: "CRON_NON_STATIC_FN",
                     name: "LunoraError",
@@ -251,10 +255,9 @@ const resolveTarget = (
             return workflowTarget(workflow);
         }
 
-        throw Object.assign(
-            new Error(
-                `Cron job "${jobName}" references "${argument.getText()}", which is neither a function (internal.file.fn / api.file.fn) nor a declared workflow in lunora/workflows.ts.`,
-            ),
+        throw diagnosticAt(
+            argument,
+            `Cron job "${jobName}" references "${argument.getText()}", which is neither a function (internal.file.fn / api.file.fn) nor a declared workflow in lunora/workflows.ts.`,
             {
                 code: "CRON_NON_STATIC_FN",
                 name: "LunoraError",
@@ -286,7 +289,7 @@ const cronFromCall = (
     const name = stringArgument(call, 0);
 
     if (name === undefined || name.trim() === "") {
-        throw Object.assign(new Error(`A cron ".${method}(...)" registration must pass a non-empty string-literal name as its first argument.`), {
+        throw diagnosticAt(call, `A cron ".${method}(...)" registration must pass a non-empty string-literal name as its first argument.`, {
             code: "CRON_NAME_NOT_STATIC",
             name: "LunoraError",
             status: 500,
@@ -299,7 +302,7 @@ const cronFromCall = (
         const expression = stringArgument(call, 1);
 
         if (expression === undefined) {
-            throw Object.assign(new Error(`Cron job "${name}" must pass a string-literal cron expression to ".cron(...)".`), {
+            throw diagnosticAt(call, `Cron job "${name}" must pass a string-literal cron expression to ".cron(...)".`, {
                 code: "CRON_EXPR_NOT_STATIC",
                 name: "LunoraError",
                 status: 500,
@@ -307,7 +310,7 @@ const cronFromCall = (
         }
 
         if (!isValidCronExpression(expression)) {
-            throw Object.assign(new Error(`Cron job "${name}" has an invalid cron expression "${expression}" — expected 5 or 6 space-separated fields.`), {
+            throw diagnosticAt(call, `Cron job "${name}" has an invalid cron expression "${expression}" — expected 5 or 6 space-separated fields.`, {
                 code: "CRON_EXPR_INVALID",
                 name: "LunoraError",
                 status: 500,
@@ -319,7 +322,7 @@ const cronFromCall = (
         const scheduleArgument = call.getArguments()[1];
 
         if (!scheduleArgument || !Node.isObjectLiteralExpression(scheduleArgument)) {
-            throw Object.assign(new Error(`Cron job "${name}" must pass an object-literal schedule to ".${method}(...)".`), {
+            throw diagnosticAt(call, `Cron job "${name}" must pass an object-literal schedule to ".${method}(...)".`, {
                 code: "CRON_SCHEDULE_NOT_STATIC",
                 name: "LunoraError",
                 status: 500,

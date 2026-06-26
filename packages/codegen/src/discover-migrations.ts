@@ -3,6 +3,7 @@ import { relative, sep } from "node:path";
 import type { CallExpression, Identifier, ObjectLiteralExpression, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
+import { diagnosticAt } from "./diagnostics";
 import { listLunoraSourceFiles } from "./discover-functions";
 import type { MigrationIR } from "./ir";
 
@@ -79,9 +80,14 @@ const migrationFromDeclaration = (declaration: VariableDeclaration, relativePath
     const exportName = declaration.getName();
 
     if (id === undefined || id.trim() === "") {
-        throw Object.assign(
-            new Error(`Migration "${exportName}" in "${relativePath}" must declare \`id\` as a non-empty string literal so codegen can key the registry.`),
-            { code: "MIGRATION_ID_NOT_STATIC", name: "LunoraError", status: 500 },
+        throw diagnosticAt(
+            argument,
+            `Migration "${exportName}" in "${relativePath}" must declare \`id\` as a non-empty string literal so codegen can key the registry.`,
+            {
+                code: "MIGRATION_ID_NOT_STATIC",
+                name: "LunoraError",
+                status: 500,
+            },
         );
     }
 

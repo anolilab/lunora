@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { CodegenDiagnosticError } from "../src/diagnostics";
 import discoverCrons from "../src/discover-crons";
 import { discoverWorkflows } from "../src/discover-workflows";
 import { emitCrons, emitWranglerCronTriggers } from "../src/emit";
@@ -206,6 +207,44 @@ describe("discover-crons", () => {
         );
 
         expect(() => discoverCrons(newProject(), workdir)).toThrow(/non-empty string-literal name/u);
+    });
+
+    it("throws a CodegenDiagnosticError with file:line:column when a cron passes a non-static value", () => {
+        expect.assertions(5);
+
+        // The schedule's `minutes` references a variable, so codegen cannot read
+        // it as a literal — this drives the CRON_NON_STATIC_VALUE path through
+        // literalValue, whose AST node must now carry a source location.
+        writeSource(
+            "crons.ts",
+            `
+            import { cronJobs } from "@lunora/scheduler";
+            import { internal } from "./_generated/api.js";
+            const everyMinutes = 30;
+            const crons = cronJobs();
+            crons.interval("clear presence", { minutes: everyMinutes }, internal.presence.clear, {});
+            export default crons;
+        `,
+        );
+
+        const cronPath = join(workdir, "crons.ts");
+
+        let thrown: unknown;
+
+        try {
+            discoverCrons(newProject(), workdir);
+        } catch (error) {
+            thrown = error;
+        }
+
+        expect(thrown).toBeInstanceOf(CodegenDiagnosticError);
+
+        const diagnostic = thrown as CodegenDiagnosticError;
+
+        expect(diagnostic.file).toBe(cronPath);
+        expect(diagnostic.line).toBeGreaterThan(0);
+        expect(diagnostic.message).toMatch(/@lunora\/codegen:/u);
+        expect(diagnostic.message).toMatch(/non-static value/u);
     });
 
     it("resolves the generated `workflows.<name>` reference into a workflow target", () => {
