@@ -360,6 +360,13 @@ interface ScheduledControllerLike {
 type CronHandler = (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
 
 /**
+ * A Cloudflare Queues push-consumer handler — the worker's `queue()` entry
+ * forwards each delivered `MessageBatch` (typed `unknown` here to keep the
+ * runtime decoupled from `@lunora/queue`'s structural batch type).
+ */
+type QueueConsumerHandler = (batch: unknown, env: unknown, context: ExecutionContextLike) => Promise<void>;
+
+/**
  * A single code-defined cron job, shaped like an entry of the generated
  * `LUNORA_CRONS` map. `functionPath` is the `"namespace:fn"` to run, `args` its
  * bound arguments, and `name` the human label from the `cronJobs()` builder.
@@ -740,6 +747,15 @@ interface WorkerOptions {
      * `createQueryCoordinator({ registry })`.
      */
     queryCoordinator?: QueryCoordinator;
+
+    /**
+     * Cloudflare Queues push-consumer handler — the worker's `queue(batch, …)`
+     * entry forwards every delivered `MessageBatch` here. Built by codegen from
+     * `lunora/queues.ts` (via `@lunora/queue`'s `dispatchQueueBatch`, which routes
+     * by `batch.queue` to the matching `defineQueue` handler), so the runtime
+     * stays decoupled from the queue package. Omitted when no push queues exist.
+     */
+    queue?: QueueConsumerHandler;
 
     /**
      * Resolve the calling identity from the inbound RPC request. Called once
@@ -1282,6 +1298,13 @@ const checkAdminWsToken = (request: Request, expected: string | undefined): bool
  */
 interface LunoraWorker {
     fetch: (request: Request, env: unknown, context: ExecutionContextLike) => Promise<Response>;
+
+    /**
+     * Cloudflare Queues consumer entry — present only when the app declares push
+     * queues. Forwards each delivered `MessageBatch` to the configured
+     * {@link WorkerOptions.queue} handler; a no-op when none is set.
+     */
+    queue?: (batch: unknown, env: unknown, context: ExecutionContextLike) => Promise<void>;
     scheduled: (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void>;
 
     /**
@@ -2655,6 +2678,12 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 return decorateResponse(toErrorResponse(error), request, resolvedSecurity);
             }
         },
+        async queue(batch, env, context) {
+            // Forward to the codegen-built push-consumer handler (which routes by
+            // `batch.queue` via `@lunora/queue`). A no-op when the app declares no
+            // push queues, so re-exporting `queue` unconditionally is harmless.
+            await options.queue?.(batch, env, context);
+        },
         async scheduled(controller, env, context) {
             await handleScheduled(controller, env, context);
         },
@@ -2772,6 +2801,7 @@ const withFrameworkWorker = (host: FrameworkHostHandler, optionsInput: Framework
 
     return {
         fetch: (request, env, context) => build(optionsFactory(env)).fetch(request, env, context),
+        queue: (batch, env, context) => build(optionsFactory(env)).queue?.(batch, env, context) ?? Promise.resolve(),
         scheduled: (controller, env, context) => build(optionsFactory(env)).scheduled(controller, env, context),
         serverQuery: (request, env, reference, args, options) => build(optionsFactory(env)).serverQuery(request, env, reference, args, options),
     };
@@ -2806,6 +2836,7 @@ export type {
     HttpActionLike,
     HttpRouterLike,
     LunoraWorker,
+    QueueConsumerHandler,
     ResolvedIdentity,
     Route,
     RpcContext,

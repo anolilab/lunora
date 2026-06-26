@@ -8,6 +8,7 @@ const { action, internalAction, internalMutation, internalQuery, mutation, query
 const makeQueryContext = (): QueryContext => {
     return {
         auth: { getIdentity: async () => null, userId: null },
+        secrets: { get: async () => "secret" },
         db: {} as QueryContext["db"],
         log: {} as QueryContext["log"],
         now: 0,
@@ -20,6 +21,7 @@ const makeQueryContext = (): QueryContext => {
 const makeMutationContext = (): MutationContext => {
     return {
         auth: { getIdentity: async () => null, userId: null },
+        secrets: { get: async () => "secret" },
         db: {} as MutationContext["db"],
         log: {} as MutationContext["log"],
         now: 0,
@@ -35,6 +37,7 @@ const makeMutationContext = (): MutationContext => {
 const makeActionContext = (): ActionContext => {
     return {
         auth: { getIdentity: async () => null, userId: null },
+        secrets: { get: async () => "secret" },
         db: {} as ActionContext["db"],
         fetch: globalThis.fetch,
         log: {} as ActionContext["log"],

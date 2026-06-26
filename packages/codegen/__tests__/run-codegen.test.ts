@@ -1147,6 +1147,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 studioFeatures: {
                     mail: false,
                     payments: true,
+                    queues: false,
                     scheduler: false,
                     storage: true,
                     vectors: false,
@@ -1758,10 +1759,47 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const withPipelines = emitServer({ hasPipelines: true });
 
-            expect(ctxInterface(withPipelines, "ActionCtx")).toContain('readonly pipelines: import("@lunora/pipelines").PipelineClient;');
+            expect(ctxInterface(withPipelines, "ActionCtx")).toContain('readonly pipelines: import("@lunora/analytics").PipelineClient;');
             expect(ctxInterface(withPipelines, "QueryCtx")).not.toContain("readonly pipelines:");
             expect(ctxInterface(withPipelines, "MutationCtx")).not.toContain("readonly pipelines:");
-            expect(emitServer({})).not.toContain("@lunora/pipelines");
+            expect(emitServer({})).not.toContain("PipelineClient");
+        });
+
+        it("wires ctx.queues producers onto Mutation + Action ctx — never query — and the runtime specs into the shard", () => {
+            expect.assertions(7);
+
+            const queues = [{ bindingName: "QUEUE_EMAIL", exportName: "emailQueue", mode: "push" as const, name: "email-queue", tuning: {} }];
+            const withQueues = emitServer({ queues });
+
+            // The typed producer lands on Mutation + Action (enqueue is a side effect), never the deterministic Query ctx.
+            expect(withQueues).toContain("export interface LunoraQueues");
+            expect(withQueues).toContain("readonly emailQueue: QueueProducer<QueueBodyOf<typeof lunoraQueueDefinitions.emailQueue>>;");
+            expect(ctxInterface(withQueues, "MutationCtx")).toContain("readonly queues: LunoraQueues;");
+            expect(ctxInterface(withQueues, "ActionCtx")).toContain("readonly queues: LunoraQueues;");
+            expect(ctxInterface(withQueues, "QueryCtx")).not.toContain("readonly queues:");
+
+            // The shard resolves producers from env via the codegen-emitted specs.
+            const shard = emitShard({ queues, schema: { tables: [], vectorIndexes: [] } });
+
+            expect(shard).toContain("createQueueContext(env, LUNORA_QUEUES)");
+            expect(shard).toContain('{ binding: "QUEUE_EMAIL", exportName: "emailQueue", name: "email-queue" }');
+        });
+
+        it("emits the queues studio metadata constant + override when queues are declared, and omits both otherwise", () => {
+            expect.assertions(5);
+
+            const queues = [
+                { bindingName: "QUEUE_EMAIL", exportName: "emailQueue", mode: "pull" as const, name: "email-queue", tuning: { deadLetterQueue: "email-dlq" } },
+            ];
+            const shard = emitShard({ queues, schema: { tables: [], vectorIndexes: [] } });
+
+            expect(shard).toContain("const LUNORA_QUEUES_INFO: QueuesResult = {");
+            expect(shard).toContain("protected override queuesMetadata(): QueuesResult {");
+            expect(shard).toContain('"mode": "pull"');
+            expect(shard).toContain('"deadLetterQueue": "email-dlq"');
+
+            // A queue-free app stays byte-identical: no metadata constant/override.
+            expect(emitShard({ schema: { tables: [], vectorIndexes: [] } })).not.toContain("LUNORA_QUEUES_INFO");
         });
 
         it("binds every table facade through the shard ctx-db (which routes `.global()` ops to D1)", () => {

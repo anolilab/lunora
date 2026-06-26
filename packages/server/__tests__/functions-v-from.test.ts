@@ -28,6 +28,7 @@ const makeMutationContext = (): MutationContext => {
         log: {} as MutationContext["log"],
         now: 0,
         runMutation: vi.fn<MutationContext["runMutation"]>() as MutationContext["runMutation"],
+        secrets: { get: async () => "secret" },
         runQuery: vi.fn<MutationContext["runQuery"]>() as MutationContext["runQuery"],
         scheduler: {} as MutationContext["scheduler"],
         storage: {} as MutationContext["storage"],

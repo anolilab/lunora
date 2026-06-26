@@ -40,6 +40,7 @@ overrides:
   "@lunora/mcp": "workspace:*"
   "@lunora/nuxt": "workspace:*"
   "@lunora/payment": "workspace:*"
+  "@lunora/queue": "workspace:*"
   "@lunora/r2sql": "workspace:*"
   "@lunora/ratelimit": "workspace:*"
   "@lunora/react": "workspace:*"

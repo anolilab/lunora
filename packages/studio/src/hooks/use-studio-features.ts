@@ -18,6 +18,7 @@ const STUDIO_FEATURES = adminRef(ADMIN_FUNCTIONS.studioFeatures);
 const DEFAULT_STUDIO_FEATURES: StudioFeaturesResult = {
     mail: true,
     payments: true,
+    queues: true,
     scheduler: true,
     storage: true,
     vectors: true,
@@ -36,6 +37,7 @@ const coerceFeatures = (raw: unknown): StudioFeaturesResult => {
     return {
         mail: flag("mail"),
         payments: flag("payments"),
+        queues: flag("queues"),
         scheduler: flag("scheduler"),
         storage: flag("storage"),
         vectors: flag("vectors"),

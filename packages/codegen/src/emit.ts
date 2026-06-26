@@ -1,5 +1,13 @@
 import type { Finding } from "@lunora/advisor";
-import type { AdvisoryFinding, MaskPoliciesResult, RlsPoliciesResult, StorageRulesResult, StudioFeaturesResult, WorkflowsResult } from "@lunora/do";
+import type {
+    AdvisoryFinding,
+    MaskPoliciesResult,
+    QueuesResult,
+    RlsPoliciesResult,
+    StorageRulesResult,
+    StudioFeaturesResult,
+    WorkflowsResult,
+} from "@lunora/do";
 
 import compileArgsValidator from "./compile-validator";
 import type {
@@ -10,6 +18,7 @@ import type {
     JurisdictionIR,
     MaskMetadataIR,
     MigrationIR,
+    QueueIR,
     RlsMetadataIR,
     SchemaIR,
     StorageRulesMetadataIR,
@@ -930,6 +939,8 @@ interface EmitServerOptions {
     hasPipelines?: boolean;
     /** A `lunora/` source uses `@lunora/r2sql` / `ctx.r2sql` — wires `ctx.r2sql` onto ActionCtx only. */
     hasR2sql?: boolean;
+    /** Queues declared via `defineQueue` exports — wires the typed `ctx.queues` producers onto Mutation/Action contexts. */
+    queues?: ReadonlyArray<QueueIR>;
     schema?: SchemaIR;
     storageRuleBuckets?: ReadonlyArray<string>;
     /** The project depends on the `lunora` umbrella — import base packages via its subpaths. */
@@ -949,6 +960,7 @@ const emitServer = ({
     hasPayments = false,
     hasPipelines = false,
     hasR2sql = false,
+    queues = [],
     schema,
     storageRuleBuckets = [],
     useUmbrella = false,
@@ -1007,6 +1019,11 @@ const emitServer = ({
 
             return `    /** Workflow binding for the \`${workflow.exportName}\` workflow. */\n    readonly ${workflow.bindingName}?: unknown;`;
         }),
+        ...queues.map((queue) => {
+            assertIdentifier(queue.bindingName, `queue binding "${queue.bindingName}"`);
+
+            return `    /** Queue producer binding for the \`${queue.exportName}\` queue. */\n    readonly ${queue.bindingName}?: unknown;`;
+        }),
     ].join("\n");
     const envBlock = `
 
@@ -1061,7 +1078,7 @@ export type Env = CloudflareBindings;`;
     // `ctx.pipelines` — Pipelines (R2-backed) ingestion sink. ActionCtx ONLY
     // (write-only fire-and-forget, but external I/O — kept off query/mutation).
     const pipelinesActionField = hasPipelines
-        ? `\n    /** Pipelines ingestion sink (durable, R2-backed). Fire-and-forget and batched; do not read it back in-handler. */\n    readonly pipelines: import("@lunora/pipelines").PipelineClient;`
+        ? `\n    /** Pipelines ingestion sink (durable, R2-backed). Fire-and-forget and batched; do not read it back in-handler. */\n    readonly pipelines: import("@lunora/analytics").PipelineClient;`
         : "";
     // `ctx.r2sql` — R2 SQL (serverless query engine over Apache Iceberg tables).
     // ActionCtx ONLY: external REST I/O, non-deterministic, and non-reactive
@@ -1097,6 +1114,27 @@ ${workflows.map((workflow) => `    get(name: ${JSON.stringify(workflow.exportNam
     const workflowsOmit = hasWorkflows ? ` | "workflows"` : "";
     const workflowsContextField = hasWorkflows ? `\n    readonly workflows: LunoraWorkflows;` : "";
 
+    // Queues live on BOTH MutationCtx and ActionCtx (enqueue is a side effect, so
+    // — like `ctx.scheduler` / `ctx.workflows` — never the deterministic QueryCtx).
+    // Each declared queue becomes a typed `QueueProducer<Body>`, the body inferred
+    // from the `defineQueue` definition's phantom carrier.
+    const hasQueues = queues.length > 0;
+    const queuesTypeImport = hasQueues
+        ? `import type { QueueProducer } from "@lunora/queue";\nimport type * as lunoraQueueDefinitions from "../queues.js";\n`
+        : "";
+    const queuesTypeBlock = hasQueues
+        ? `
+
+/** Message body type carried by a \`defineQueue\` definition (its phantom \`__lunoraBody\`). */
+type QueueBodyOf<Definition> = Definition extends { __lunoraBody?: infer Body } ? (unknown extends Body ? unknown : NonNullable<Body>) : unknown;
+
+/** This project's declared queues, addressable from \`ctx.queues\` by their \`lunora/queues.ts\` export name. */
+export interface LunoraQueues {
+${queues.map((queue) => `    readonly ${queue.exportName}: QueueProducer<QueueBodyOf<typeof lunoraQueueDefinitions.${queue.exportName}>>;`).join("\n")}
+}`
+        : "";
+    const queuesContextField = hasQueues ? `\n    readonly queues: LunoraQueues;` : "";
+
     const server = `${GENERATED_HEADER}import { createPolicyDsl, initLunora, v as vBase } from "${base.server}";
 import type {
     ActionBuilder,
@@ -1118,11 +1156,11 @@ import type {
 } from "${base.server}";
 
 import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, Relations, TableName } from "./dataModel.js";
-${aiTypeImport}${paymentsTypeImport}${containersTypeImport}${workflowsTypeImport}
+${aiTypeImport}${paymentsTypeImport}${containersTypeImport}${workflowsTypeImport}${queuesTypeImport}
 export type { DataModel, Doc, Id, TableName } from "./dataModel.js";
 
 /** Storage buckets this schema declares (\`v.storage("name")\`), narrowing \`ctx.storage.bucket(name)\`. */
-export type StorageBucketName = ${storageBucketUnion};${envBlock}${workflowsTypeBlock}
+export type StorageBucketName = ${storageBucketUnion};${envBlock}${workflowsTypeBlock}${queuesTypeBlock}
 
 /**
  * Project-typed contexts. The base contexts from \`@lunora/server\` are
@@ -1160,13 +1198,13 @@ export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"> {
 export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${workflowsOmit}> {
     readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: ReadOnlyStorage<StorageBucketName>;${kvContextField}${analyticsContextField}${workflowsContextField}
+    readonly storage: ReadOnlyStorage<StorageBucketName>;${kvContextField}${analyticsContextField}${workflowsContextField}${queuesContextField}
 }
 
 export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${workflowsOmit}> {
     readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: StorageBase<StorageBucketName>;${aiActionField}${paymentsActionField}${containersActionField}${kvContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${workflowsContextField}
+    readonly storage: StorageBase<StorageBucketName>;${aiActionField}${paymentsActionField}${containersActionField}${kvContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${workflowsContextField}${queuesContextField}
 }
 
 /**
@@ -1924,6 +1962,41 @@ const r2sqlStub: R2SqlClient = {
 /* eslint-enable no-secrets/no-secrets */
 
 /**
+ * `ctx.pipelines` (Cloudflare Pipelines — R2-backed streaming ingestion)
+ * fragments. ActionCtx ONLY: ingestion is external, fire-and-forget I/O (like
+ * `ctx.images`). The client ships from `@lunora/analytics` (the other "emit data
+ * to a sink" surface). The binding resolves from a `config.pipelines` thunk
+ * override, else the conventional `env.PIPELINES`; absent both, `send` throws via
+ * `pipelinesStub`.
+ */
+const emitPipelinesFragments = (hasPipelines: boolean): HelperFragments => {
+    if (!hasPipelines) {
+        return EMPTY_HELPER_FRAGMENTS;
+    }
+
+    const pipelinesMissing = `throw new Error("ctx.pipelines: no Pipelines binding found. Add a \\\`pipelines\\\` binding (env.PIPELINES) to wrangler.jsonc, or pass \\\`pipelines\\\` to createShardDO().");`;
+
+    return {
+        build: `
+            const pipelinesBinding = config.pipelines?.(env) ?? (env as Record<string, unknown>).PIPELINES;
+            const pipelines: PipelineClient = pipelinesBinding ? createPipelines({ binding: pipelinesBinding as PipelineBindingLike }) : pipelinesStub;
+`,
+        configField: `\n    pipelines?: (env: Record<string, unknown>) => PipelineBindingLike;`,
+        // ActionCtx-only: attached via the \`ctx.pipelines = pipelines\` assignment
+        // in the \`isAction\` block, never the every-ctx object literal.
+        contextField: "",
+        importLines: [`import type { PipelineBindingLike, PipelineClient } from "@lunora/analytics";`, `import { createPipelines } from "@lunora/analytics";`],
+        stub: `
+const pipelinesStub: PipelineClient = {
+    send: async () => {
+        ${pipelinesMissing}
+    },
+};
+`,
+    };
+};
+
+/**
  * Emit `_generated/containers.ts` — one container-enabled Durable Object class
  * per `defineContainer` export, each a thin subclass of `LunoraContainer`
  * (`@lunora/container/do`) constructed with the user's definition object. The
@@ -2078,6 +2151,47 @@ ${classes}`;
 /* eslint-enable no-secrets/no-secrets */
 
 /**
+ * Emit `_generated/queues.ts` — the push-consumer registry the worker `queue()`
+ * handler dispatches through. Maps each push queue's stable wrangler name (which
+ * `batch.queue` carries) to its `defineQueue` definition + export name. Pull
+ * queues are consumed by an external worker, so they carry no handler and are
+ * omitted here. Returns "" (and the file is not written) when no push queues are
+ * declared — a pull-only or queue-free app keeps a clean `_generated/`.
+ */
+const emitQueues = (queues: ReadonlyArray<QueueIR>): string => {
+    const pushQueues = queues.filter((queue) => queue.mode === "push");
+
+    if (pushQueues.length === 0) {
+        return "";
+    }
+
+    for (const queue of pushQueues) {
+        assertIdentifier(queue.exportName, `queue export "${queue.exportName}"`);
+    }
+
+    const imports = pushQueues.map((queue) => queue.exportName).join(", ");
+    const entries = pushQueues
+        .map((queue) => `    ${JSON.stringify(queue.name)}: { definition: ${queue.exportName}, exportName: ${JSON.stringify(queue.exportName)} },`)
+        .join("\n");
+
+    return `${GENERATED_HEADER}/**
+ * Push-consumer registry for the queues declared in \`lunora/queues.ts\`. The
+ * composed worker's \`queue(batch, env, ctx)\` entry routes each delivered batch
+ * by \`batch.queue\` to the matching \`defineQueue\` handler. Wired automatically
+ * by \`defineApp\` — you don't import this directly.
+ */
+import type { QueueRegistry } from "@lunora/queue";
+
+import { ${imports} } from "../queues.js";
+
+/** Stable wrangler queue name → { definition, exportName } for batch routing. */
+export const LUNORA_QUEUE_REGISTRY: QueueRegistry = {
+${entries}
+};
+`;
+};
+
+/**
  * The `ctx.workflows` code fragments woven into the generated ShardDO, or empty
  * strings when the project declares no workflows. Mirrors
  * {@link emitContainerFragments}: the spec list is emitted as a
@@ -2107,6 +2221,44 @@ const emitWorkflowFragments = (workflows: ReadonlyArray<WorkflowIR>): { build: s
         specs: `
 /** Wiring specs for \`ctx.workflows\` (codegen-derived from \`lunora/workflows.ts\`). */
 const LUNORA_WORKFLOWS: ReadonlyArray<WorkflowBindingSpec> = [
+${specEntries}
+];
+`,
+    };
+};
+
+/**
+ * The `ctx.queues` producer fragments, mirroring {@link emitWorkflowFragments}.
+ * Every declared queue (push or pull) gets a producer binding, so all of them
+ * land in `LUNORA_QUEUES` and are resolved off `env` by `createQueueContext`.
+ * `ctx.queues` rides Mutation + Action contexts (enqueue is a side effect — the
+ * type omits it from QueryCtx), but at runtime it is woven onto the shared ctx
+ * literal exactly like `ctx.workflows`.
+ */
+const emitQueueFragments = (queues: ReadonlyArray<QueueIR>): { build: string; contextField: string; importLines: string[]; specs: string } => {
+    if (queues.length === 0) {
+        return { build: "", contextField: "", importLines: [], specs: "" };
+    }
+
+    for (const queue of queues) {
+        assertIdentifier(queue.exportName, `queue export "${queue.exportName}"`);
+        assertIdentifier(queue.bindingName, `queue binding "${queue.bindingName}"`);
+    }
+
+    const specEntries = queues
+        .map((queue) => `    { binding: "${queue.bindingName}", exportName: "${queue.exportName}", name: ${JSON.stringify(queue.name)} },`)
+        .join("\n");
+
+    return {
+        build: `
+            const queues = createQueueContext(env, LUNORA_QUEUES);
+`,
+        contextField: `\n                queues,`,
+        importLines: [`import type { QueueBindingSpec } from "@lunora/queue";`, `import { createQueueContext } from "@lunora/queue";`],
+        // eslint-disable-next-line no-secrets/no-secrets -- the emitted readonly-array type annotation is dense generated TS, not a credential
+        specs: `
+/** Wiring specs for \`ctx.queues\` (codegen-derived from \`lunora/queues.ts\`). */
+const LUNORA_QUEUES: ReadonlyArray<QueueBindingSpec> = [
 ${specEntries}
 ];
 `,
@@ -2145,6 +2297,44 @@ const LUNORA_WORKFLOWS_INFO: WorkflowsResult = ${JSON.stringify(metadata, undefi
         override: `
         protected override workflowsMetadata(): WorkflowsResult {
             return LUNORA_WORKFLOWS_INFO;
+        }
+`,
+    };
+};
+
+/**
+ * Read-only declared-queue metadata fragments for the studio's queues view: the
+ * `LUNORA_QUEUES_INFO` constant (the discovered {@link QueueIR} set mapped to the
+ * DO's `QueueMetadata` wire shape) and the `queuesMetadata()` override that
+ * returns it. Both are empty strings unless the project declares queues — when it
+ * has none the base-class hook (an empty list) stands, so the generated shard
+ * stays byte-identical to a queue-free app.
+ */
+const emitQueuesMetadataFragments = (queues: ReadonlyArray<QueueIR>): { constant: string; override: string } => {
+    if (queues.length === 0) {
+        return { constant: "", override: "" };
+    }
+
+    const metadata: QueuesResult = {
+        queues: queues.map((queue) => {
+            return {
+                binding: queue.bindingName,
+                ...(queue.tuning.deadLetterQueue === undefined ? {} : { deadLetterQueue: queue.tuning.deadLetterQueue }),
+                exportName: queue.exportName,
+                mode: queue.mode,
+                name: queue.name,
+            };
+        }),
+    };
+
+    return {
+        constant: `
+/** Read-only declared-queue metadata (discovered from \`lunora/queues.ts\`) served via \`__lunora_admin__:listQueues\` for the studio's queues view. */
+const LUNORA_QUEUES_INFO: QueuesResult = ${JSON.stringify(metadata, undefined, 4)};
+`,
+        override: `
+        protected override queuesMetadata(): QueuesResult {
+            return LUNORA_QUEUES_INFO;
         }
 `,
     };
@@ -2216,18 +2406,19 @@ const paymentStub: LunoraPayment = {
 
 /**
  * The `@lunora/do` type names the generated shard imports. The base set is always
- * present; `WorkflowsResult` is added only when the project declares workflows
- * (its `workflowsMetadata()` override references it) and `WriteHook` only when it
- * has vector indexes (the auto-sync write hook), so a workflow-/vector-free app's
- * import line stays minimal.
+ * present; `WorkflowsResult` / `QueuesResult` are added only when the project
+ * declares workflows / queues (their `*Metadata()` overrides reference them) and
+ * `WriteHook` only when it has vector indexes (the auto-sync write hook), so a
+ * workflow-/queue-/vector-free app's import line stays minimal.
  */
-const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean): string[] => [
+const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueues: boolean): string[] => [
     "AdvisoryFinding",
     "DatabaseWriterLike",
     "DataMigrationLike",
     "LogSink",
     "MaskPoliciesResult",
     "MigrationRunResult",
+    ...(hasQueues ? ["QueuesResult"] : []),
     "RunShardApplyCdcArgs",
     "RunShardMigrationArgs",
     "RlsPoliciesResult",
@@ -2262,9 +2453,13 @@ interface EmitShardOptions {
     /** A `lunora/` source reads `ctx.kv` — wires `ctx.kv` onto every ctx. */
     hasKv?: boolean;
     hasPayments?: boolean;
+    /** A `lunora/` source reads `ctx.pipelines` — wires `ctx.pipelines` onto the ActionCtx only. */
+    hasPipelines?: boolean;
     /** A `lunora/` source reads `ctx.r2sql` (R2 SQL) — wires `ctx.r2sql` onto the ActionCtx only. */
     hasR2sql?: boolean;
     maskMetadata?: MaskMetadataIR;
+    /** Queues declared via `defineQueue` exports in `lunora/queues.ts` — wires the typed `ctx.queues` producers. */
+    queues?: ReadonlyArray<QueueIR>;
     rlsMetadata?: RlsMetadataIR;
     schema: SchemaIR;
     storageRules?: StorageRulesMetadataIR;
@@ -2285,8 +2480,10 @@ const emitShard = ({
     hasImages = false,
     hasKv = false,
     hasPayments = false,
+    hasPipelines = false,
     hasR2sql = false,
     maskMetadata,
+    queues = [],
     rlsMetadata,
     schema,
     storageRules,
@@ -2306,6 +2503,8 @@ const emitShard = ({
     const hyperdriveFragments = emitHyperdriveFragments(hasHyperdrive);
     const browserFragments = emitBrowserFragments(hasBrowser);
     const r2sqlFragments = emitR2sqlFragments(hasR2sql);
+    const pipelinesFragments = emitPipelinesFragments(hasPipelines);
+    const { build: queuesBuild, contextField: queuesContextField, importLines: queueImportLines, specs: queueSpecs } = emitQueueFragments(queues);
     const {
         build: containersBuild,
         contextField: containersContextField,
@@ -2354,6 +2553,7 @@ const emitShard = ({
     const studioFeaturesData: StudioFeaturesResult = studioFeatures ?? {
         mail: false,
         payments: false,
+        queues: false,
         scheduler: false,
         storage: false,
         vectors: false,
@@ -2363,6 +2563,7 @@ const emitShard = ({
     // view (the `LUNORA_WORKFLOWS_INFO` constant + the `workflowsMetadata()`
     // override), both empty unless the project declares workflows.
     const { constant: workflowsMetadataConst, override: workflowsMetadataOverride } = emitWorkflowsMetadataFragments(workflows);
+    const { constant: queuesMetadataConst, override: queuesMetadataOverride } = emitQueuesMetadataFragments(queues);
     const hasVectors = schema.vectorIndexes.length > 0;
     const hasGlobalTables = schema.tables.some((table) => table.shardMode === "global");
     // Which `.global()` backend(s) the schema uses. A `.global()` table defaults
@@ -2389,7 +2590,7 @@ const emitShard = ({
     // The facade option types (AggregateOptions/QueryArgs/RestrictableQueryOptions/
     // SearchFilterBuilderLike/…) are no longer imported here — `bindTableFacade`
     // (from `@lunora/server`) now owns the per-table accessor binding.
-    const doTypeImports = buildDoTypeImports(hasVectors, workflows.length > 0);
+    const doTypeImports = buildDoTypeImports(hasVectors, workflows.length > 0, queues.length > 0);
 
     // Reverse cross-backend relation override + its `@lunora/do` import fragment
     // (both empty unless the project has `.global()` tables). See `emitRelationFanout`.
@@ -2398,10 +2599,11 @@ const emitShard = ({
     const importLines = [
         `import type { ${doTypeImports.join(", ")} } from "${base.do}";`,
         `import { applyCdcChanges, createShardCtxDb, runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
-        // `asBucketStorage` (the bucket-aware `ctx.storage` wrapper) lives in
+        // `asBucketStorage` (the bucket-aware `ctx.storage` wrapper) and
+        // `createSecrets` (the `ctx.secrets` core built-in) live in
         // `@lunora/server`, the single source — imported here rather than stamped
         // inline into every generated shard.
-        `import { asBucketStorage } from "${base.server}";`,
+        `import { asBucketStorage, createSecrets } from "${base.server}";`,
     ];
 
     // The per-table facade binding lives in `@lunora/server` so codegen and the
@@ -2429,8 +2631,10 @@ const emitShard = ({
         ...hyperdriveFragments.importLines,
         ...browserFragments.importLines,
         ...r2sqlFragments.importLines,
+        ...pipelinesFragments.importLines,
         ...containerImportLines,
         ...workflowImportLines,
+        ...queueImportLines,
         ...paymentsImports,
         ``,
         `import schema from "../schema.js";`,
@@ -2629,8 +2833,13 @@ ${schema.tables
 
     // `ctx.kv` / `ctx.analytics` ride EVERY ctx: their builds run inline before
     // the ctx object literal and their props are spliced into it (like `ctx.ai`).
-    const everyContextBuild = `${kvFragments.build}${analyticsFragments.build}`;
-    const everyContextField = `${kvFragments.contextField}${analyticsFragments.contextField}`;
+    // `ctx.secrets` is a CORE built-in — always present on every ctx (a lazy
+    // Secrets Store reader over `env`), so its build/field are unconditional.
+    const secretsBuild = `
+            const secrets = createSecrets(env);
+`;
+    const everyContextBuild = `${kvFragments.build}${analyticsFragments.build}${secretsBuild}`;
+    const everyContextField = `${kvFragments.contextField}${analyticsFragments.contextField}\n                secrets,`;
 
     // `ctx.images` / `ctx.sql` (Hyperdrive) / `ctx.browser` are ActionCtx-ONLY:
     // external, non-deterministic I/O the typed `ActionCtx` exposes but
@@ -2639,17 +2848,18 @@ ${schema.tables
     // is an `action`, so a query/mutation handler never even has `ctx.sql` on the
     // object (its type already forbids it; this makes the runtime match). Gated
     // behind a single `isAction` check derived from the dispatch registry.
-    const actionOnlyHasAny = hasImages || hasHyperdrive || hasBrowser || hasR2sql;
+    const actionOnlyHasAny = hasImages || hasHyperdrive || hasBrowser || hasR2sql || hasPipelines;
     const actionOnlyBlock = actionOnlyHasAny
         ? `
             // ActionCtx-only helpers (external, non-deterministic I/O): constructed
             // and attached only for an \`action\` so query/mutation ctx never carry them.
             if (isAction) {
-${imagesFragments.build}${hyperdriveFragments.build}${browserFragments.build}${r2sqlFragments.build}${[
+${imagesFragments.build}${hyperdriveFragments.build}${browserFragments.build}${r2sqlFragments.build}${pipelinesFragments.build}${[
               ...(hasImages ? ["                ctx.images = images;"] : []),
               ...(hasHyperdrive ? ["                ctx.sql = sql;"] : []),
               ...(hasBrowser ? ["                ctx.browser = browser;"] : []),
               ...(hasR2sql ? ["                ctx.r2sql = r2sql;"] : []),
+              ...(hasPipelines ? ["                ctx.pipelines = pipelines;"] : []),
           ].join("\n")}
             }
 `
@@ -2694,14 +2904,14 @@ const LUNORA_STORAGE_RULES: StorageRulesResult = ${JSON.stringify(storageRulesDa
 
 /** Which optional package-backed features this app wires up (discovered from imports / \`ctx.*\` reads / schema signals) served via \`__lunora_admin__:studioFeatures\` so the studio hides nav pages whose package isn't enabled. */
 const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = ${JSON.stringify(studioFeaturesData, undefined, 4)};
-${workflowsMetadataConst}${containerSpecs}${workflowSpecs}
+${workflowsMetadataConst}${queuesMetadataConst}${containerSpecs}${workflowSpecs}${queueSpecs}
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to \`__cdc_log\` on every write (backs streaming export + replay-PITR). */
     cdc?: boolean;
     /** Optional telemetry sink. When supplied, each \`ctx.log.*\` call is forwarded to \`sink.onLog\`. Pass the SAME sink you give \`createWorker({ observability })\` (which drives \`onRpc\`) to route both RPC and log events. */
     observability?: (env: Record<string, unknown>) => LogSink | undefined;
     scheduler?: (env: Record<string, unknown>) => unknown;
-    storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}${aiConfigField}${kvFragments.configField}${analyticsFragments.configField}${imagesFragments.configField}${hyperdriveFragments.configField}${browserFragments.configField}${r2sqlFragments.configField}${paymentsConfigField}${d1ConfigField}${hyperdriveGlobalConfigField}
+    storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}${aiConfigField}${kvFragments.configField}${analyticsFragments.configField}${imagesFragments.configField}${hyperdriveFragments.configField}${browserFragments.configField}${r2sqlFragments.configField}${pipelinesFragments.configField}${paymentsConfigField}${d1ConfigField}${hyperdriveGlobalConfigField}
 }
 
 const schedulerStub = {
@@ -2739,7 +2949,7 @@ const storageStub = {
         throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
     },
 };
-${globalDatabaseStub}${vectorsStub}${aiStub}${kvFragments.stub}${analyticsFragments.stub}${imagesFragments.stub}${hyperdriveFragments.stub}${browserFragments.stub}${r2sqlFragments.stub}${paymentStub}${bindTableHelper}
+${globalDatabaseStub}${vectorsStub}${aiStub}${kvFragments.stub}${analyticsFragments.stub}${imagesFragments.stub}${hyperdriveFragments.stub}${browserFragments.stub}${r2sqlFragments.stub}${pipelinesFragments.stub}${paymentStub}${bindTableHelper}
 // Bound in-process \`ctx.run*\` composition depth so a self- or cyclically-
 // referencing call fails loudly with a clear error instead of overflowing the
 // stack. Tracked across the awaited handler chain (one DO invocation is
@@ -2884,7 +3094,7 @@ ${relationFanout.override}
         protected override studioFeatures(): StudioFeaturesResult {
             return LUNORA_STUDIO_FEATURES;
         }
-${workflowsMetadataOverride}
+${workflowsMetadataOverride}${queuesMetadataOverride}
         protected override advisories(): AdvisoryFinding[] {
             return LUNORA_ADVISORIES;
         }
@@ -3118,7 +3328,7 @@ ${workflowsMetadataOverride}
             // dispatch path) fall back to the per-request fields as before.
             const userId = options.identity ? options.identity.userId : this.getCurrentUserId();
             const identity = options.identity ? options.identity.identity : this.getCurrentIdentity();
-${vectorsBuild}${aiBuild}${everyContextBuild}${containersBuild}${workflowsBuild}
+${vectorsBuild}${aiBuild}${everyContextBuild}${containersBuild}${workflowsBuild}${queuesBuild}
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             // Build the storage adapter once and share it between \`ctx.storage\`
             // and \`ctx.db.system._storage\` so both read the same R2 binding. The
@@ -3160,7 +3370,7 @@ ${facadeBlock}${paymentsBuild}
                 log,
                 now,${ormContextField}
                 scheduler,
-                storage,${vectorsContextField}${aiContextField}${everyContextField}${paymentsContextField}${containersContextField}${workflowsContextField}
+                storage,${vectorsContextField}${aiContextField}${everyContextField}${paymentsContextField}${containersContextField}${workflowsContextField}${queuesContextField}
             };
 ${isActionLine}${actionOnlyBlock}
             ctx.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__lunoraRef, fnArgs, ctx);
@@ -3568,6 +3778,7 @@ export {
     emitDataModel,
     emitDrizzleSchema,
     emitFunctions,
+    emitQueues,
     emitSeed,
     emitServer,
     emitShard,

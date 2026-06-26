@@ -3,7 +3,7 @@
 
 import type { AdvisoryFinding, DatabaseWriterLike, DataMigrationLike, LogSink, MaskPoliciesResult, MigrationRunResult, RunShardApplyCdcArgs, RunShardMigrationArgs, RlsPoliciesResult, RunShardRankBeforeArgs, RunShardRankPageArgs, RunShardWriteArgs, RunShardWriteResult, SchedulerLike, SchemaLike, ShardDOState, ShardRankPageResult, SqlExec, StorageRulesResult, StudioFeaturesResult, SystemReaderStorageLike } from "@lunora/do";
 import { applyCdcChanges, createShardCtxDb, runDataMigration, runShardMigrations, serveRelationFanout, ShardDO as ShardDOBase } from "@lunora/do";
-import { asBucketStorage } from "@lunora/server";
+import { asBucketStorage, createSecrets } from "@lunora/server";
 import { bindOrm, bindTableFacade } from "@lunora/server";
 
 import schema from "../schema.js";
@@ -192,6 +192,7 @@ const LUNORA_STORAGE_RULES: StorageRulesResult = {
 const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {
     "mail": false,
     "payments": false,
+    "queues": false,
     "scheduler": false,
     "storage": true,
     "vectors": false,
@@ -679,6 +680,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const userId = options.identity ? options.identity.userId : this.getCurrentUserId();
             const identity = options.identity ? options.identity.identity : this.getCurrentIdentity();
 
+            const secrets = createSecrets(env);
+
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             // Build the storage adapter once and share it between `ctx.storage`
             // and `ctx.db.system._storage` so both read the same R2 binding. The
@@ -742,6 +745,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 orm: bindOrm(facade),
                 scheduler,
                 storage,
+                secrets,
             };
 
             ctx.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__lunoraRef, fnArgs, ctx);

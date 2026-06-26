@@ -868,6 +868,15 @@ const MESSAGE_IDS = [
     "Operation",
     "Storage rules are declared in code with defineStorageRule and gate ctx.storage access per bucket. This view is read-only.",
     "Write",
+    // Queues view.
+    "Queues",
+    "Queue",
+    "Mode",
+    "Dead-letter",
+    "No queues defined",
+    "Inspect declared Cloudflare Queues — their producer bindings, consumer mode, and dead-letter queue.",
+    "No defineQueue is declared in lunora/queues.ts in this deployment. Add one to offload async work to a Cloudflare Queue.",
+    "Queues are declared in code with defineQueue. Enqueue from a mutation or action with ctx.queues.<name>.send(...); push consumers process batches in the worker.",
     // Workflows view.
     "Workflows",
     "Inspect declared Cloudflare Workflows and their bindings.",

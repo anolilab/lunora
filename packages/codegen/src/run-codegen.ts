@@ -21,6 +21,7 @@ import discoverNondeterministicCalls from "./discover-nondeterministic-calls";
 import discoverPackageDependencies from "./discover-package-dependencies";
 import discoverProcedureMiddleware from "./discover-procedure-middleware";
 import discoverQueries from "./discover-queries";
+import { discoverQueues } from "./discover-queues";
 import discoverR2sqlCalls from "./discover-r2sql-calls";
 import discoverRlsProcedures, { discoverRlsMetadata } from "./discover-rls-procedures";
 import discoverSchema from "./discover-schema";
@@ -37,6 +38,7 @@ import {
     emitDataModel,
     emitDrizzleSchema,
     emitFunctions,
+    emitQueues,
     emitSeed,
     emitServer,
     emitShard,
@@ -45,7 +47,7 @@ import {
     emitWranglerCronTriggers,
 } from "./emit";
 import { emitApp } from "./emit-app";
-import type { ContainerIR, WorkflowIR } from "./ir";
+import type { ContainerIR, QueueIR, WorkflowIR } from "./ir";
 import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
 import { buildOpenRpcDocument, emitOpenRpcModule } from "./openrpc";
 import type { SchemaSnapshot } from "./schema-drift";
@@ -256,6 +258,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // workflow by its export name (the cron then starts a durable instance per
     // fire instead of dispatching a one-shot function).
     const workflows = discoverWorkflows(project, lunoraDirectory);
+    // Queues declared via `defineQueue` exports in `lunora/queues.ts` — the typed
+    // `ctx.queues` producers, the generated push-consumer registry
+    // (`_generated/queues.ts` → the worker `queue()` dispatch), and the config
+    // layer's wrangler `queues.producers[]` / `queues.consumers[]` reconciliation.
+    const queues = discoverQueues(project, lunoraDirectory);
     const crons = discoverCrons(project, lunoraDirectory, workflows);
 
     // Static advisories (unindexed FKs, redundant indexes, unknown index/relation
@@ -346,6 +353,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const studioFeatures = buildStudioFeatures(featureUsage, {
         cronCount: crons.length,
         dependencies,
+        queueCount: queues.length,
         storageColumnCount: Object.keys(buildStorageColumns(schema)).length,
         storageRuleCount: storageRulesMetadata.rules.length,
         vectorIndexCount: schema.vectorIndexes.length,
@@ -376,6 +384,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasPayments,
         hasPipelines,
         hasR2sql,
+        queues,
         schema,
         storageRuleBuckets: storageRulesMetadata.rules.map((rule) => rule.bucket),
         useUmbrella,
@@ -392,8 +401,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasImages,
         hasKv,
         hasPayments,
+        hasPipelines,
         hasR2sql,
         maskMetadata,
+        queues,
         rlsMetadata,
         schema,
         storageRules: storageRulesMetadata,
@@ -403,6 +414,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     });
     const containersContent = emitContainers(containers, schema.jurisdiction);
     const workflowsContent = emitWorkflows(workflows);
+    const queuesContent = emitQueues(queues);
     const cronsContent = emitCrons(crons);
     const vectorsContent = emitVectors(schema.vectorIndexes);
     const drizzleFiles = emitDrizzleSchema(schema, useUmbrella);
@@ -440,6 +452,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasKv,
         hasPayments,
         hasR2sql,
+        hasQueue: queues.some((queue) => queue.mode === "push"),
         hasScheduler: studioFeatures.scheduler,
         hasStorage: studioFeatures.storage,
         hasVectors: schema.vectorIndexes.length > 0,
@@ -505,6 +518,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         //   - seed.ts        → `@lunora/seed`, when it's a declared dependency
         writeIfPresent(join(outputDirectory, "containers.ts"), containersContent);
         writeIfPresent(join(outputDirectory, "workflows.ts"), workflowsContent);
+        writeIfPresent(join(outputDirectory, "queues.ts"), queuesContent);
         writeIfPresent(join(outputDirectory, "seed.ts"), seedContent);
 
         if (wantsOpenApi) {
@@ -558,6 +572,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             openApiModule: openApiModuleContent,
             openRpc: openRpcContent,
             openRpcModule: openRpcModuleContent,
+            queues: queuesContent,
             seed: seedContent,
             server: serverContent,
             shard: shardContent,
@@ -565,6 +580,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             workflows: workflowsContent,
         },
         outputDirectory,
+        queues,
         schemaSnapshot,
         schemaSnapshotPath,
         workflows,
@@ -651,6 +667,7 @@ export interface CodegenResult {
      * `triggers.crons`. Empty when the project declares no crons.
      */
     cronTriggers: ReadonlyArray<string>;
+
     generated: {
         api: string;
         /** Fluent worker-composition builder (`_generated/app.ts`) — `defineApp()`. Always written. */
@@ -682,6 +699,8 @@ export interface CodegenResult {
          * `apiSpec` includes `openrpc`.
          */
         openRpcModule: string;
+        /** Push-consumer queue registry (`_generated/queues.ts`); `""` (and not written) when no push queues are declared. */
+        queues: string;
         /** Project-bound seed client (`_generated/seed.ts`); `""` (and not written) when `@lunora/seed` is not a declared dependency. */
         seed: string;
         server: string;
@@ -692,6 +711,14 @@ export interface CodegenResult {
         workflows: string;
     };
     outputDirectory: string;
+
+    /**
+     * Queues discovered from `defineQueue` exports in `lunora/queues.ts` — the
+     * list the config layer reconciles into wrangler's `queues.producers[]` /
+     * `queues.consumers[]`. Queues are NOT Durable Objects, so this adds no
+     * binding or migration. Empty when the project declares no queues.
+     */
+    queues: ReadonlyArray<QueueIR>;
 
     /**
      * The CURRENT structural schema snapshot computed this run (tables + field

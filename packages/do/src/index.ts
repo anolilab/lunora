@@ -119,6 +119,8 @@ export type {
     FunctionStatsResult,
     MaskColumnMetadata,
     MaskPoliciesResult,
+    QueueMetadata,
+    QueuesResult,
     ReadTablePageOptions,
     RlsPoliciesResult,
     RlsPolicyMetadata,
