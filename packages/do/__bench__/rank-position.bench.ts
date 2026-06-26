@@ -54,12 +54,19 @@ const scanSchema: SchemaLike = {
 const seed = async (writer: DatabaseWriterLike): Promise<void> => {
     for (let channel = 0; channel < CHANNEL_COUNT; channel += 1) {
         for (let index = 0; index < ROWS_PER_CHANNEL; index += 1) {
+            // allowExplicitId so the row lands under its `m-c{channel}-{index}`
+            // id — the default insert path mints a fresh id and ignores `_id`,
+            // which leaves the scan/`rank()` unable to find TARGET_ID.
             // eslint-disable-next-line no-await-in-loop -- sequential seed writes into the same DB
-            await writer.insert("messages", {
-                _id: `m-c${String(channel)}-${String(index).padStart(5, "0")}`,
-                channelId: `c${String(channel)}`,
-                seq: index,
-            });
+            await writer.insert(
+                "messages",
+                {
+                    _id: `m-c${String(channel)}-${String(index).padStart(5, "0")}`,
+                    channelId: `c${String(channel)}`,
+                    seq: index,
+                },
+                { allowExplicitId: true },
+            );
         }
     }
 };
@@ -72,10 +79,10 @@ const TARGET_ID = `m-${TARGET_CHANNEL}-${String(TARGET_INDEX).padStart(5, "0")}`
 let indexedWriter: DatabaseWriterLike;
 let scanWriter: DatabaseWriterLike;
 
-// Build + seed the writers in a ROOT-level beforeAll, NOT inside the describe:
-// CodSpeed's analysis runner only fires the root suite's beforeAll, so a
-// describe-scoped hook never runs and the bench body queries an empty DB
-// ("row not found in emulated scan").
+// Build + seed the writers in beforeAll (not at module top level, whose await
+// state CodSpeed's runner doesn't pick up). The seed itself must use
+// `allowExplicitId` (see `seed`) or the rows land under generated ids and the
+// scan/`rank()` can't find TARGET_ID ("row not found in emulated scan").
 beforeAll(async () => {
     indexedWriter = makeWriter(indexedSchema);
     await seed(indexedWriter);

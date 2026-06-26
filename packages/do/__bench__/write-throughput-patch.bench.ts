@@ -25,12 +25,14 @@ const schema: SchemaLike = {
 let writer: DatabaseWriterLike;
 let counter = 0;
 
-// Root-level beforeAll (NOT inside describe): CodSpeed's analysis runner only
-// fires the root suite's beforeAll, not a nested describe's — a describe-scoped
-// hook never runs, leaving the body to query an empty DB ("document not found").
+// Seed the row with `allowExplicitId` so it actually lands under SEED_ID: the
+// default insert path mints a fresh id and IGNORES an explicit `_id`
+// (ctx-db.ts), so without this the row exists under a generated id and
+// `patch(SEED_ID)` throws "document not found". Plain `vitest bench` swallows
+// that throw; CodSpeed's analysis runner surfaces it.
 beforeAll(async () => {
     writer = makeWriter(schema);
-    await writer.insert("todos", { _id: SEED_ID, projectId: "p1", seq: 0 });
+    await writer.insert("todos", { _id: SEED_ID, projectId: "p1", seq: 0 }, { allowExplicitId: true });
 });
 
 describe("write throughput — bare patch", () => {

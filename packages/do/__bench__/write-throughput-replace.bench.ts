@@ -24,12 +24,13 @@ const schema: SchemaLike = {
 let writer: DatabaseWriterLike;
 let counter = 0;
 
-// Root-level beforeAll (NOT inside describe): CodSpeed's analysis runner only
-// fires the root suite's beforeAll, not a nested describe's. See
+// Seed with `allowExplicitId` so the row lands under SEED_ID — the default
+// insert path ignores an explicit `_id` and mints a fresh one, so without this
+// `replace(SEED_ID, …)` throws "document not found". See
 // `write-throughput-patch.bench.ts`.
 beforeAll(async () => {
     writer = makeWriter(schema);
-    await writer.insert("todos", { _id: SEED_ID, projectId: "p1", seq: 0 });
+    await writer.insert("todos", { _id: SEED_ID, projectId: "p1", seq: 0 }, { allowExplicitId: true });
 });
 
 describe("write throughput — bare replace", () => {
