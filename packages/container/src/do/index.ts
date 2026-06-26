@@ -12,6 +12,7 @@ import { Container } from "@cloudflare/containers";
 import { resolveContainerEnvVars as resolveContainerEnvVariables } from "../define-container";
 import { emitContainerLifecycle } from "../lifecycle-event";
 import type { ContainerDefinition } from "../types";
+import type { DurableObjectJurisdiction } from "./report-lifecycle";
 import { reportContainerLifecycle } from "./report-lifecycle";
 
 type DurableObjectContext = ConstructorParameters<typeof Container>[0];
@@ -34,10 +35,22 @@ type DurableObjectContext = ConstructorParameters<typeof Container>[0];
  * ```
  */
 class LunoraContainer<Env = unknown> extends Container<Env> {
+    /**
+     * Data-residency jurisdiction the app's DOs are pinned to (codegen passes the
+     * schema's `.jurisdiction("…")`). Used to pin the best-effort lifecycle report
+     * to the same region as the root shard. `undefined` ⇒ un-pinned.
+     */
+    private readonly lunoraJurisdiction?: DurableObjectJurisdiction;
     /** The `lunora/containers.ts` export name, for lifecycle log correlation. */
     private readonly lunoraName: string;
 
-    public constructor(context: DurableObjectContext, env: Env, definition: ContainerDefinition, exportName?: string) {
+    public constructor(
+        context: DurableObjectContext,
+        env: Env,
+        definition: ContainerDefinition,
+        exportName?: string,
+        jurisdiction?: DurableObjectJurisdiction,
+    ) {
         super(context, env, {
             defaultPort: definition.defaultPort,
             envVars: resolveContainerEnvVariables(definition, env as Record<string, unknown>, exportName),
@@ -49,6 +62,7 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         }
 
         this.lunoraName = exportName ?? "container";
+        this.lunoraJurisdiction = jurisdiction;
     }
 
     public override onError(error: unknown): unknown {
@@ -86,7 +100,7 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         // Fire-and-forget. `reportContainerLifecycle` already swallows every
         // failure internally; the trailing `.catch` is belt-and-suspenders so a
         // rejected promise can never become an unhandled rejection out of a hook.
-        reportContainerLifecycle(this.env, envelope).catch(() => {});
+        reportContainerLifecycle(this.env, envelope, this.lunoraJurisdiction).catch(() => {});
     }
 
     /**

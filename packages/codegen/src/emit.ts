@@ -1895,10 +1895,15 @@ const r2sqlStub: R2SqlClient = {
  * `containers[].class_name` to be exported by the deployed worker. Returns ""
  * when the project declares no containers (the file is not written then).
  */
-const emitContainers = (containers: ReadonlyArray<ContainerIR>): string => {
+const emitContainers = (containers: ReadonlyArray<ContainerIR>, jurisdiction?: "eu" | "fedramp" | "us"): string => {
     if (containers.length === 0) {
         return "";
     }
+
+    // Schema `.jurisdiction("…")` pins the container's best-effort lifecycle
+    // report to the same region as the root shard; emitted only when declared so
+    // existing generated output is unchanged.
+    const jurisdictionArgument = jurisdiction ? `, ${JSON.stringify(jurisdiction)}` : "";
 
     const classes = containers
         .map((container) => {
@@ -1908,7 +1913,7 @@ const emitContainers = (containers: ReadonlyArray<ContainerIR>): string => {
             return `/** Container DO for the \`${container.exportName}\` definition (binding \`${container.bindingName}\`). */
 export class ${container.className} extends LunoraContainer {
     public constructor(ctx: ConstructorParameters<typeof LunoraContainer>[0], env: Record<string, unknown>) {
-        super(ctx, env, ${container.exportName}, "${container.exportName}");
+        super(ctx, env, ${container.exportName}, "${container.exportName}"${jurisdictionArgument});
     }
 }
 `;

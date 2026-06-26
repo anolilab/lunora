@@ -39,7 +39,34 @@ interface ShardNamespaceLike {
     get: (id: unknown) => ShardStubLike;
     getByName?: (name: string) => ShardStubLike;
     idFromName: (name: string) => unknown;
+    jurisdiction?: (jurisdiction: DurableObjectJurisdiction) => ShardNamespaceLike;
 }
+
+/**
+ * Cloudflare Durable Object data-residency jurisdiction. Widening union —
+ * Cloudflare adds values over time.
+ * @see https://developers.cloudflare.com/durable-objects/reference/data-location/
+ */
+type DurableObjectJurisdiction = "eu" | "fedramp" | "us";
+
+/**
+ * Return a jurisdiction-restricted view of `namespace`, or `namespace`
+ * unchanged when none is configured. Fail-closed: throws when a jurisdiction is
+ * requested but the binding can't honor it — the caller (a best-effort lifecycle
+ * report) swallows the throw, so the event is dropped rather than written to the
+ * un-pinned, out-of-region root shard.
+ */
+const applyJurisdiction = (namespace: ShardNamespaceLike, jurisdiction?: DurableObjectJurisdiction): ShardNamespaceLike => {
+    if (jurisdiction === undefined) {
+        return namespace;
+    }
+
+    if (typeof namespace.jurisdiction !== "function") {
+        throw new TypeError(`@lunora/container: Durable Object namespace does not support jurisdiction("${jurisdiction}")`);
+    }
+
+    return namespace.jurisdiction(jurisdiction);
+};
 
 /** Whether `value` looks like a usable ShardDO namespace binding. */
 const isShardNamespace = (value: unknown): value is ShardNamespaceLike => {
@@ -52,13 +79,15 @@ const isShardNamespace = (value: unknown): value is ShardNamespaceLike => {
     return typeof candidate.get === "function" && typeof candidate.idFromName === "function";
 };
 
-/** Resolve the root-shard stub, preferring `getByName` when present. */
-const resolveRootShard = (namespace: ShardNamespaceLike): ShardStubLike => {
-    if (typeof namespace.getByName === "function") {
-        return namespace.getByName(ROOT_SHARD_NAME);
+/** Resolve the root-shard stub, preferring `getByName` when present. Pins to `jurisdiction` when set. */
+const resolveRootShard = (namespace: ShardNamespaceLike, jurisdiction?: DurableObjectJurisdiction): ShardStubLike => {
+    const pinned = applyJurisdiction(namespace, jurisdiction);
+
+    if (typeof pinned.getByName === "function") {
+        return pinned.getByName(ROOT_SHARD_NAME);
     }
 
-    return namespace.get(namespace.idFromName(ROOT_SHARD_NAME));
+    return pinned.get(pinned.idFromName(ROOT_SHARD_NAME));
 };
 
 /**
@@ -69,7 +98,7 @@ const resolveRootShard = (namespace: ShardNamespaceLike): ShardStubLike => {
  * failure path (missing binding, missing token, fetch error) resolves to
  * `undefined` — so the caller can `void` it from a lifecycle hook safely.
  */
-const reportContainerLifecycle = async (env: unknown, envelope: ContainerLifecycleEvent): Promise<void> => {
+const reportContainerLifecycle = async (env: unknown, envelope: ContainerLifecycleEvent, jurisdiction?: DurableObjectJurisdiction): Promise<void> => {
     try {
         const envRecord = (env ?? {}) as Record<string, unknown>;
         const namespace = envRecord["SHARD"];
@@ -93,12 +122,12 @@ const reportContainerLifecycle = async (env: unknown, envelope: ContainerLifecyc
             method: "POST",
         });
 
-        await resolveRootShard(namespace).fetch(request);
+        await resolveRootShard(namespace, jurisdiction).fetch(request);
     } catch {
         // Best-effort: the console path (emitContainerLifecycle) is the source of
         // truth. A push failure must never break a container lifecycle hook.
     }
 };
 
-export type { ShardNamespaceLike, ShardStubLike };
+export type { DurableObjectJurisdiction, ShardNamespaceLike, ShardStubLike };
 export { RECORD_CONTAINER_EVENT_OP, reportContainerLifecycle, ROOT_SHARD_NAME };

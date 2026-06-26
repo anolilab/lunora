@@ -401,7 +401,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         useUmbrella,
         workflows,
     });
-    const containersContent = emitContainers(containers);
+    const containersContent = emitContainers(containers, schema.jurisdiction);
     const workflowsContent = emitWorkflows(workflows);
     const cronsContent = emitCrons(crons);
     const vectorsContent = emitVectors(schema.vectorIndexes);
