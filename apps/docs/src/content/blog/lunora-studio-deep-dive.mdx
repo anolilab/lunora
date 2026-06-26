@@ -4,7 +4,7 @@ description: A local admin UI for your schema, data, SQL, dashboards, time-trave
 publishedAt: 2026-06-12
 author: Daniel Bannert
 category: Updates
-image: /blog/studio/home.png
+image: /blog/studio/home.webp
 tags:
     - studio
     - dx
@@ -40,7 +40,7 @@ it on a second monitor while you build and you'll see every mutation land in rea
 
 ## Browse and edit your data
 
-![The Studio data browser — pick a storage tier and shard, then browse and edit rows table by table](/blog/studio/data.png)
+![The Studio data browser — pick a storage tier and shard, then browse and edit rows table by table](/blog/studio/data.webp)
 
 The data view lists every table with its row count. Pick a **storage tier** (shard-local or global),
 optionally pin a shard key, and browse or edit rows directly. Because Studio subscribes to the same
@@ -49,7 +49,7 @@ usually faster to watch Studio for a few seconds than to add a log line and relo
 
 ## Run SQL, chart the result
 
-![The Studio SQL editor — write a query, run it against a shard, and switch between Results, Chart, and Explain](/blog/studio/sql-editor.png)
+![The Studio SQL editor — write a query, run it against a shard, and switch between Results, Chart, and Explain](/blog/studio/sql-editor.webp)
 
 The SQL editor runs queries straight against a shard's SQLite, with **Results**, **Chart**, and
 **Explain** tabs. Save the queries you reach for often, drop in a shard key when you need a specific
@@ -58,7 +58,7 @@ unfamiliar schema.
 
 ## Build dashboards from saved queries
 
-![The Studio dashboards view — chart widgets backed by saved read-only SQL queries](/blog/studio/dashboards.png)
+![The Studio dashboards view — chart widgets backed by saved read-only SQL queries](/blog/studio/dashboards.webp)
 
 Promote any saved read-only query into a **chart widget** and pin it to a dashboard. It's a fast way
 to keep an eye on the numbers that matter — signups today, messages per hour, error rates — without
@@ -66,7 +66,7 @@ standing up a separate analytics stack.
 
 ## See your schema — shards and global tables
 
-![The Studio schema view — shard-local tables and global D1 tables, with a list and graph view](/blog/studio/schema.png)
+![The Studio schema view — shard-local tables and global D1 tables, with a list and graph view](/blog/studio/schema.webp)
 
 The schema view separates **shard-local tables** (stored per shard key inside each Durable Object's
 SQLite) from **global tables** (declared `.global()` and stored once in Cloudflare D1, shared across
@@ -75,7 +75,7 @@ graph to understand how everything connects.
 
 ## Rewind any shard with Time Travel
 
-![The Studio Time Travel view — in-place point-in-time recovery to any moment in the last 30 days](/blog/studio/time-travel.png)
+![The Studio Time Travel view — in-place point-in-time recovery to any moment in the last 30 days](/blog/studio/time-travel.webp)
 
 Every shard is a SQLite database with point-in-time history. Time Travel lets you scrub back to any
 moment in the last 30 days — by timestamp or bookmark — preview the state, and restore it in place.
@@ -83,7 +83,7 @@ There's no backup job to set up first; the history is just there.
 
 ## Drive durable Workflows
 
-![The Studio workflows view — start durable Cloudflare Workflow instances and watch their status](/blog/studio/workflows.png)
+![The Studio workflows view — start durable Cloudflare Workflow instances and watch their status](/blog/studio/workflows.webp)
 
 Workflows declared with `defineWorkflow` run as durable Cloudflare Workflows. From Studio you can see
 every registered workflow, start an instance with optional JSON params, and watch its status in the
