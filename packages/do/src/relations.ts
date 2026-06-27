@@ -34,6 +34,7 @@
 
 import type { TableDefinitionLike } from "./ctx-db";
 import type { OrderByInput, QueryArgs, QueryPage } from "./query-args";
+import { applySelect } from "./query-args";
 import type { WhereInput } from "./where-types";
 
 /** FK behaviour when a referenced parent row is deleted (mirrors SQL `ON DELETE`). */
@@ -52,13 +53,25 @@ interface RelationDefinitionLike {
     readonly table: string;
 }
 
-/** Per-relation refinements: filter / order / cap / recurse into the children. */
+/** Per-relation refinements: filter / order / cap / project / recurse into the children. */
 interface NestedWith {
     limit?: number;
     orderBy?: OrderByInput[];
+
+    /**
+     * Project each loaded child down to these fields (like the top-level
+     * `findMany` `select`). Applied AFTER grouping, so the join key stays
+     * available to map children to parents; `_id`/`_creationTime` and any deeper
+     * `with` relations are always retained.
+     */
+    select?: ReadonlyArray<string>;
     where?: WhereInput;
     with?: WithInput;
 }
+
+/** Project a loaded child (or page) per `nested.select`, keeping system + nested-`with` keys. Returns the input unchanged when no select. */
+const projectChildren = (documents: Record<string, unknown>[], nested: NestedWith): Record<string, unknown>[] =>
+    nested.select ? applySelect(documents, nested.select, nested.with) : documents;
 
 /**
  * The `with` argument. Each key is a relation name resolving to either `true`
@@ -167,8 +180,10 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
         }
 
         for (const parent of parents) {
+            const child = byReference.get(parent[relation.field]);
+
             // eslint-disable-next-line unicorn/no-null -- documented `one`-relation result shape (Doc | null) sent to the client
-            parent[name] = byReference.get(parent[relation.field]) ?? null;
+            parent[name] = child ? (projectChildren([child], nested)[0] ?? null) : null;
         }
     };
 
@@ -213,7 +228,7 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
         for (const parent of parents) {
             const group = groups.get(parent[relation.references]) ?? [];
 
-            parent[name] = cap === undefined ? group : group.slice(0, cap);
+            parent[name] = projectChildren(cap === undefined ? group : group.slice(0, cap), nested);
         }
     };
 

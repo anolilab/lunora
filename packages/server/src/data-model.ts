@@ -142,27 +142,35 @@ export interface QueryPage<TDocument> {
 /** The nested `with` sub-argument inside a relation's with-value, or `{}`. */
 type NestedWithArgument<WK> = WK extends { with: infer NW } ? NW : {};
 
+/** The nested `select` tuple inside a relation's with-value, or `undefined` (no projection). */
+type NestedSelectArgument<WK> = WK extends { select: infer S } ? S : undefined;
+
 /**
  * The `with` argument for table `T`: each relation can be `true` (load with no
- * refinements) or an object. `many` relations accept `where`/`orderBy`/`limit`
- * plus a nested `with`; `one` relations accept only a nested `with`. The
- * reserved `_count` key requests per-relation aggregate counts.
+ * refinements) or an object. `many` relations accept `where`/`orderBy`/`limit`/
+ * `select` plus a nested `with`; `one` relations accept `select` + a nested
+ * `with`. The reserved `_count` key requests per-relation aggregate counts.
  */
 export type WithArg<DM, REL extends Record<keyof DM, object>, T extends keyof DM> = {
     [K in keyof REL[T]]?: REL[T][K] extends { __relationKind: "many"; __target: infer Target extends keyof DM }
         ? boolean | (QueryArgs<DM[Target]> & { with?: WithArg<DM, REL, Target> })
         : REL[T][K] extends { __relationKind: "one"; __target: infer Target extends keyof DM }
-          ? boolean | { with?: WithArg<DM, REL, Target> }
+          ? boolean | { select?: ReadonlyArray<keyof DM[Target] & string>; with?: WithArg<DM, REL, Target> }
           : never;
 } & {
     _count?: { [K in keyof REL[T]]?: true };
 };
 
-/** Resolve a single relation descriptor + its with-value to the loaded type. */
+/**
+ * Resolve a single relation descriptor + its with-value to the loaded type,
+ * threading the nested `select` tuple into the projected child shape (the 5th
+ * `LoadWith` arg) so `with: { author: { select: ["name"] } }` narrows the loaded
+ * `author` to the selected columns + system fields.
+ */
 type LoadRelation<DM, REL extends Record<keyof DM, object>, R, WK> = R extends { __relationKind: "one"; __target: infer Target extends keyof DM }
-    ? LoadWith<DM, REL, Target, NestedWithArgument<WK>> | null
+    ? LoadWith<DM, REL, Target, NestedWithArgument<WK>, NestedSelectArgument<WK>> | null
     : R extends { __relationKind: "many"; __target: infer Target extends keyof DM }
-      ? LoadWith<DM, REL, Target, NestedWithArgument<WK>>[]
+      ? LoadWith<DM, REL, Target, NestedWithArgument<WK>, NestedSelectArgument<WK>>[]
       : never;
 
 /** The relation keys of `W` that were actually requested (not `false`/`undefined`). */
