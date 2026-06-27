@@ -43,6 +43,32 @@ describe("discoverSchema", () => {
         expect(schema.tables.find((table) => table.name === "messages")?.externallyManaged).toBe(false);
     });
 
+    it("captures `.softDelete()`, injecting the marker column so Doc carries it", () => {
+        expect.assertions(4);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                posts: defineTable({ title: v.string() }).softDelete(),
+                logs: defineTable({ line: v.string() }).softDelete({ field: "removedAt" }),
+            });
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+        const posts = schema.tables.find((table) => table.name === "posts");
+        const logs = schema.tables.find((table) => table.name === "logs");
+
+        expect(posts?.softDelete).toStrictEqual({ field: "deletedAt" });
+        expect(logs?.softDelete).toStrictEqual({ field: "removedAt" });
+
+        // The injected column flows into the emitted Doc as an optional number.
+        const dataModel = emitDataModel(schema);
+
+        expect(dataModel).toContain("deletedAt?: number;");
+        expect(dataModel).toContain("removedAt?: number;");
+    });
+
     it("captures searchIndex name + field + filterFields", () => {
         expect.assertions(3);
 

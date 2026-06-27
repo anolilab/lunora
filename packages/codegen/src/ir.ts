@@ -136,6 +136,8 @@ export interface TableIR {
     searchIndexes: ReadonlyArray<SearchIndexIR>;
     shape: Record<string, ValidatorIR>;
     shardMode: "global" | "root" | { field: string; kind: "shardBy" };
+    /** Set when the chain carried `.softDelete()` — the marker column's name (default `deletedAt`). The column is injected into `shape` so `Doc_*` carries it. */
+    softDelete?: { field: string };
     /** Vector indexes declared inline via `.vectorize()` (DSL Shape A). */
     vectorIndexes: ReadonlyArray<VectorIndexIR>;
 }

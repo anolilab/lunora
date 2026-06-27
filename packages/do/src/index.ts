@@ -148,7 +148,7 @@ export { default as NotFoundError } from "./not-found-error";
 export type { PitrBookmarkResult, PitrRestoreArgs, PitrRestoreResult, PitrStorage } from "./pitr";
 export { armRestore, readBookmark } from "./pitr";
 export type { OrderByInput, OrderKey, QueryArgs, QueryPage, SortDirection } from "./query-args";
-export { buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args";
+export { applySelect, buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys, softDeleteScope } from "./query-args";
 export type {
     RankDirection,
     RankIndexDefinitionLike,
