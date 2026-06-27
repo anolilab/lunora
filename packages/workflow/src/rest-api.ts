@@ -9,7 +9,7 @@
  * `GET .../instances/{id}` returns one with its step array, and
  * `PATCH .../instances/{id}` pauses, resumes, or terminates it.
  *
- * Auth mirrors the `@lunora/analytics` SQL-API client: a Cloudflare account id
+ * Auth mirrors the `@lunora/bindings/analytics` SQL-API client: a Cloudflare account id
  * plus an API token (scoped `Workflows: Read`, or `Edit` for the status PATCH),
  * both sourced from env / `.dev.vars` and sent as a bearer token. The token is a
  * secret — it stays server-side and is never shipped to the browser (the studio

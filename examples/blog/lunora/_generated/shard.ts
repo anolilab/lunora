@@ -5,8 +5,8 @@ import type { AdvisoryFinding, DatabaseWriterLike, DataMigrationLike, LogSink, M
 import { applyCdcChanges, createShardCtxDb, runDataMigration, runShardMigrations, serveRelationFanout, ShardDO as ShardDOBase } from "lunorash/do";
 import { asBucketStorage } from "lunorash/server";
 import { bindOrm, bindTableFacade } from "lunorash/server";
-import type { SchemaLike as VectorSchemaLike, VectorizeIndexLike, VectorSearchLike } from "@lunora/vectors";
-import { createContextVectors, createVectors, createVectorSyncHook } from "@lunora/vectors";
+import type { SchemaLike as VectorSchemaLike, VectorizeIndexLike, VectorSearchLike } from "@lunora/bindings/vectors";
+import { createContextVectors, createVectors, createVectorSyncHook } from "@lunora/bindings/vectors";
 
 import schema from "../schema.js";
 import { LUNORA_FUNCTIONS, LUNORA_LIFECYCLE_HOOKS, LUNORA_MIGRATIONS } from "./functions.js";

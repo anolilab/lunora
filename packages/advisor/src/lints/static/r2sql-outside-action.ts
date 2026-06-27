@@ -5,7 +5,7 @@ import type { Lint } from "../../types";
  * Flags an R2 SQL `ctx.r2sql` access inside a `query(...)` or `mutation(...)`
  * handler body.
  *
- * R2 SQL (`@lunora/r2sql`) queries Apache Iceberg tables over an **external**
+ * R2 SQL (`@lunora/bindings/r2sql`) queries Apache Iceberg tables over an **external**
  * REST endpoint Lunora does not own — there is no Workers binding, every query
  * is an HTTPS round-trip. A `ctx.r2sql` query is therefore non-deterministic
  * (exactly like `fetch`), which breaks the determinism the coordinator relies on

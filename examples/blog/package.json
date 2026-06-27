@@ -18,7 +18,7 @@
         "@lunora/react": "workspace:*",
         "@lunora/scheduler": "workspace:*",
         "@lunora/storage": "workspace:*",
-        "@lunora/vectors": "workspace:*",
+        "@lunora/bindings": "workspace:*",
         "@lunora/vite": "workspace:*",
         "better-auth": "catalog:auth",
         "lunorash": "workspace:*",

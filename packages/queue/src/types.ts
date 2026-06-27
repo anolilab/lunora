@@ -10,6 +10,7 @@
  * names and reconcile wrangler config from the same definitions the runtime
  * uses.
  */
+import type { DispatchLogger, DispatchRunFunction } from "@lunora/dispatch";
 
 /** How a queue message body is serialized on the wire (Cloudflare default `"json"`). */
 export type QueueContentType = "bytes" | "json" | "text" | "v8";
@@ -102,30 +103,10 @@ export interface LunoraQueuesOptions {
 
 // ─── Consumer side (the `defineQueue` handler) ──────────────────────────────
 
-/** Opaque generated function reference (`api.foo.bar`), carrying its dispatch id. */
-export interface FunctionReference {
-    __lunoraRef: string;
-}
-
-/** Infer the args object a {@link FunctionReference} expects (loose at the boundary). */
-export type ArgsOf<F> = F extends FunctionReference ? Record<string, unknown> : never;
-
-/** Options for a function call made from a queue handler via `ctx.run`. */
-export interface RunFunctionOptions {
-    /** Route the call to a specific shard (defaults to the worker's root shard). */
-    shardKey?: string;
-}
-
-/** Dispatch a Lunora function from inside a queue handler. Mirrors `ctx.run` in workflows. */
-export type QueueRunFunction = <F extends FunctionReference>(function_: F, args?: ArgsOf<F>, options?: RunFunctionOptions) => Promise<unknown>;
-
-/** Console-style logger prefixed with the queue name, routed to tail / Studio. */
-export interface QueueLogger {
-    debug: (message: unknown, ...rest: unknown[]) => void;
-    error: (message: unknown, ...rest: unknown[]) => void;
-    info: (message: unknown, ...rest: unknown[]) => void;
-    warn: (message: unknown, ...rest: unknown[]) => void;
-}
+// The dispatch primitives (`ctx.run` shape, function refs, the logger) are
+// shared with `@lunora/workflow` via `@lunora/dispatch`, re-exported here so
+// queue's public surface stays self-describing.
+export type { ArgsOf, FunctionReference, DispatchLogger as QueueLogger, DispatchRunFunction as QueueRunFunction, RunFunctionOptions } from "@lunora/dispatch";
 
 /**
  * The context handed to a `defineQueue` handler. Decoupled from `@lunora/server`
@@ -137,9 +118,9 @@ export interface QueueRunContext {
     /** The worker `env` (bindings + vars). */
     readonly env: Record<string, unknown>;
     /** Queue-name-prefixed logger. */
-    readonly log: QueueLogger;
+    readonly log: DispatchLogger;
     /** Invoke a Lunora function (query/mutation/action) by reference. */
-    readonly run: QueueRunFunction;
+    readonly run: DispatchRunFunction;
 }
 
 /** Whether a declared queue is consumed by this worker (push) or polled externally (pull). */

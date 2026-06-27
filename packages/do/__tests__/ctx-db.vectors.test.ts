@@ -1,5 +1,5 @@
-import type { SchemaLike as VectorSchemaLike, VectorSearchLike } from "@lunora/vectors";
-import { createVectorSyncHook } from "@lunora/vectors";
+import type { SchemaLike as VectorSchemaLike, VectorSearchLike } from "@lunora/bindings/vectors";
+import { createVectorSyncHook } from "@lunora/bindings/vectors";
 import { describe, expect, it, vi } from "vitest";
 
 import type { WriteHook } from "../src/ctx-db";

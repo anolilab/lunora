@@ -175,7 +175,7 @@ const collectHintBindingWarnings = (inferred: InferredBindings, parsed?: Wrangle
     const rules: ReadonlyArray<[boolean, string]> = [
         [
             inferred.usesKv && (parsed?.kv_namespaces?.length ?? 0) === 0,
-            "@lunora/kv is used but no kv_namespaces binding exists; add a kv_namespaces entry ({ binding, id }) and pass env.<BINDING> to createKv() — the namespace id can't be auto-provisioned.",
+            "@lunora/bindings/kv is used but no kv_namespaces binding exists; add a kv_namespaces entry ({ binding, id }) and pass env.<BINDING> to createKv() — the namespace id can't be auto-provisioned.",
         ],
         [
             inferred.usesHyperdrive && (parsed?.hyperdrive?.length ?? 0) === 0,
@@ -345,7 +345,7 @@ const reconcileSelfDescribing = (text: string, parsed: WranglerShape, key: "ai" 
 };
 
 /**
- * Add the `analytics_engine_datasets` binding for `@lunora/analytics` usage, if
+ * Add the `analytics_engine_datasets` binding for `@lunora/bindings/analytics` usage, if
  * absent. Self-describing: the `dataset` name is user-chosen and created lazily
  * on first write (no remote id to mint), so it auto-writes like the DO bindings.
  * The dataset defaults to the binding name on Cloudflare's side; we write it

@@ -108,11 +108,11 @@ so the surface is typed and present at runtime. Add-ons that wire a `ctx`
 surface include:
 
 - `@lunora/ai` → `ctx.ai` (action context)
-- `@lunora/analytics` → `ctx.analytics`
-- `@lunora/kv` → `ctx.kv`
+- `@lunora/bindings/analytics` → `ctx.analytics`
+- `@lunora/bindings/kv` → `ctx.kv`
 - `@lunora/hyperdrive` → `ctx.sql` (action context)
 - `@lunora/browser` → `ctx.browser` (action context)
-- `@lunora/images` → `ctx.images`
+- `@lunora/bindings/images` → `ctx.images`
 - `@lunora/container` → `ctx.containers`
 
 The base `QueryCtx` / `MutationCtx` / `ActionCtx` in `@lunora/server` do not
