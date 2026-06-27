@@ -1,3 +1,26 @@
+## @lunora/server [1.0.0-alpha.3](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.2...@lunora/server@1.0.0-alpha.3) (2026-06-27)
+
+### Features
+
+* extending db  ([#32](https://github.com/anolilab/lunora/issues/32)) ([6b77a16](https://github.com/anolilab/lunora/commit/6b77a16996e6aa59c19c801c3ea18004deccd6dc))
+
+### Performance Improvements
+
+* **runtime:** skip route lookup when no custom routes ([#33](https://github.com/anolilab/lunora/issues/33)) ([e829b9b](https://github.com/anolilab/lunora/commit/e829b9b7d2a5c8a9f533f91706cdae8dd75b564d))
+
+### Documentation
+
+* document ctx.now across server, testing, and the docs site ([04db307](https://github.com/anolilab/lunora/commit/04db30703beee17a322ff5dd6251f8f954232dcb))
+
+### Miscellaneous Chores
+
+* update our og pacakge image ([63e6811](https://github.com/anolilab/lunora/commit/63e6811e2dfb94bc2cc38c05292b527e884660b5))
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.2
+
 ## @lunora/server [1.0.0-alpha.2](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.1...@lunora/server@1.0.0-alpha.2) (2026-06-25)
 
 ### Features
