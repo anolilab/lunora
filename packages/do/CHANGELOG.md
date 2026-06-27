@@ -1,3 +1,18 @@
+## @lunora/do [1.0.0-alpha.6](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.5...@lunora/do@1.0.0-alpha.6) (2026-06-27)
+
+### Features
+
+* **queue:** add queues, pipelines, secrets bindings + studio queues page ([#30](https://github.com/anolilab/lunora/issues/30)) ([131460c](https://github.com/anolilab/lunora/commit/131460c5826f2ef600fa0ef81248ede91835dd0c)), closes [#29](https://github.com/anolilab/lunora/issues/29) [#31](https://github.com/anolilab/lunora/issues/31) [visulima#714](https://github.com/anolilab/visulima/issues/714)
+
+### Tests
+
+* **do:** benchmark soft-delete write round-trip + upsert ([af9e7f1](https://github.com/anolilab/lunora/commit/af9e7f10e2bf1ff84f2d12cd9e97daedacb73bc6))
+
+
+### Dependencies
+
+* **@lunora/bindings:** upgraded to 1.0.0-alpha.1
+
 ## @lunora/do [1.0.0-alpha.5](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.4...@lunora/do@1.0.0-alpha.5) (2026-06-27)
 
 ### Features
