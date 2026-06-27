@@ -1,3 +1,11 @@
+## @lunora/studio [1.0.0-alpha.7](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.6...@lunora/studio@1.0.0-alpha.7) (2026-06-27)
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.5
+* **@lunora/mail:** upgraded to 1.0.0-alpha.2
+
 ## @lunora/studio [1.0.0-alpha.6](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.5...@lunora/studio@1.0.0-alpha.6) (2026-06-27)
 
 ### Miscellaneous Chores
