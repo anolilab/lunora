@@ -1,3 +1,17 @@
+## @lunora/codegen [1.0.0-alpha.10](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.9...@lunora/codegen@1.0.0-alpha.10) (2026-06-27)
+
+### Features
+
+* **server:** pin durable objects to a data-residency jurisdiction ([#29](https://github.com/anolilab/lunora/issues/29)) ([0fcdc94](https://github.com/anolilab/lunora/commit/0fcdc94a836ea1b54a0eba78b6926de52aa3a767))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.5
+* **@lunora/container:** upgraded to 1.0.0-alpha.2
+* **@lunora/scheduler:** upgraded to 1.0.0-alpha.2
+* **@lunora/server:** upgraded to 1.0.0-alpha.4
+
 ## @lunora/codegen [1.0.0-alpha.9](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.8...@lunora/codegen@1.0.0-alpha.9) (2026-06-27)
 
 ### Features
