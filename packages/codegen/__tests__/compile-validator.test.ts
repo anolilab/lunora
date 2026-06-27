@@ -173,4 +173,15 @@ describe("compileArgsValidator — modelled behaviour", () => {
 
         expect(compileArgsValidator(irFromSnippet("{ r: v.record(v.string(), v.number()) }") as never)).toBeUndefined();
     });
+
+    it("declines a referenced-validator arg (IR `any` with sourceText) instead of bypassing it", () => {
+        expect.assertions(2);
+
+        // `args: { name: sharedV }` lowers to `{ kind: "any", sourceText: "sharedV" }`.
+        // The real runtime validator is unknown to codegen, so compiling it as an
+        // unconditional pass-through would silently skip validation — must decline.
+        expect(compileArgsValidator(irFromSnippet("{ name: sharedV }") as never)).toBeUndefined();
+        // Genuine `v.any()` (no sourceText) still compiles to a pass-through.
+        expect(compileArgsValidator(irFromSnippet("{ x: v.any() }") as never)).toBeDefined();
+    });
 });

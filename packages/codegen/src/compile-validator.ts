@@ -117,6 +117,19 @@ const compileNode = (node: ValidatorIR, inExpr: string, context: EmitContext): N
         return undefined;
     }
 
+    // A `sourceText` field marks an expression the AST→IR step could NOT resolve
+    // to a concrete validator — most importantly a referenced validator
+    // identifier (`args: { name: sharedV }`), which `parseValidator` lowers to
+    // `{ kind: "any", sourceText: "sharedV" }`. The real runtime validator is
+    // unknown here, so the fast path must NOT treat it as `v.any()` (an
+    // unconditional pass-through) — that would bypass the actual validator and
+    // accept input the interpreted parser rejects. Decline so the function keeps
+    // the interpreted path. Genuine `v.any()` carries no `sourceText`, so it still
+    // compiles to a pass-through below.
+    if (node.sourceText !== undefined) {
+        return undefined;
+    }
+
     if (PASS_THROUGH_KINDS.has(node.kind)) {
         if (node.kind === "any") {
             // `v.any()` accepts anything and returns it unchanged — no guard.
