@@ -64,6 +64,11 @@
         "description": "defineCollections wires Lunora queries/mutations into live, indexed client collections + a durable offline outbox.",
         "features": ["TanStack DB collections", "Live, indexed queries", "Durable offline outbox"]
     },
+    "dispatch": {
+        "displayName": "Dispatch",
+        "description": "Internal: the shared dispatch runner workflow/queue use to call back into Lunora functions.",
+        "features": ["createDispatchRunner (ctx.run)", "createDispatchLogger", "Shared by workflow + queue"]
+    },
     "do": {
         "displayName": "Durable Objects",
         "description": "ShardDO (SQLite, OCC, hibernated WebSocket subscriptions) and SessionDO.",
