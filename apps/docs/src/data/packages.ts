@@ -302,15 +302,6 @@ export const packages: PackageInfo[] = [
     {
         accentColor: categoryColors["Add-ons"]!,
         category: "Add-ons",
-        description: "Internal: the shared dispatch runner workflow/queue use to call back into Lunora functions.",
-        features: ["createDispatchRunner (ctx.run)", "createDispatchLogger", "Shared by workflow + queue"],
-        name: "Dispatch",
-        npmName: "@lunora/dispatch",
-        slug: "dispatch",
-    },
-    {
-        accentColor: categoryColors["Add-ons"]!,
-        category: "Add-ons",
         description: "Connect an external Postgres/MySQL database via Cloudflare Hyperdrive (ctx.sql).",
         docsPath: "/docs/packages/hyperdrive",
         features: ["BYO Postgres / MySQL", "Driver-agnostic ctx.sql", "Hyperdrive connection pooling"],

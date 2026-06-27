@@ -1,7 +1,8 @@
 {
     "name": "@lunora/dispatch",
     "version": "1.0.0-alpha.1",
-    "description": "Shared dispatch runner for Lunora: call a Lunora function from a server-initiated context (workflow/queue/scheduled job) via /_lunora/scheduler/dispatch",
+    "private": true,
+    "description": "Internal: shared dispatch runner bundled into @lunora/queue and @lunora/workflow (call a Lunora function from a server-initiated context via /_lunora/scheduler/dispatch). Not published — inlined at build.",
     "keywords": [
         "cloudflare",
         "lunora",

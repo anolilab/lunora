@@ -59,6 +59,7 @@
     },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",
+        "@lunora/dispatch": "1.0.0-alpha.1",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
@@ -69,8 +70,5 @@
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"
-    },
-    "dependencies": {
-        "@lunora/dispatch": "1.0.0-alpha.1"
     }
 }

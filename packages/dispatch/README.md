@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">Shared dispatch runner for Lunora: call a Lunora function from a server-initiated context (workflow/queue/scheduled job) via /_lunora/scheduler/dispatch</h3>
+<h3 align="center">Internal: shared dispatch runner bundled into @lunora/queue and @lunora/workflow (call a Lunora function from a server-initiated context via /_lunora/scheduler/dispatch). Not published — inlined at build.</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 

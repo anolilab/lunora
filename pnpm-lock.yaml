@@ -2329,14 +2329,13 @@ importers:
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
   packages/queue:
-    dependencies:
-      '@lunora/dispatch':
-        specifier: workspace:*
-        version: link:../dispatch
     devDependencies:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 4.20260617.1
+      '@lunora/dispatch':
+        specifier: workspace:*
+        version: link:../dispatch
       '@types/node':
         specifier: catalog:types
         version: 25.9.3
@@ -3068,9 +3067,6 @@ importers:
 
   packages/workflow:
     dependencies:
-      '@lunora/dispatch':
-        specifier: workspace:*
-        version: link:../dispatch
       '@lunora/values':
         specifier: workspace:*
         version: link:../values
@@ -3078,6 +3074,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 4.20260617.1
+      '@lunora/dispatch':
+        specifier: workspace:*
+        version: link:../dispatch
       '@types/node':
         specifier: catalog:types
         version: 25.9.3
