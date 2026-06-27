@@ -1,3 +1,10 @@
+## @lunora/auth [1.0.0-alpha.5](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.4...@lunora/auth@1.0.0-alpha.5) (2026-06-27)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.4
+
 ## @lunora/auth [1.0.0-alpha.4](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.3...@lunora/auth@1.0.0-alpha.4) (2026-06-27)
 
 ### Miscellaneous Chores
