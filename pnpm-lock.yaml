@@ -629,6 +629,7 @@ overrides:
   '@lunora/container': workspace:*
   '@lunora/d1': workspace:*
   '@lunora/db': workspace:*
+  '@lunora/dispatch': workspace:*
   '@lunora/do': workspace:*
   '@lunora/hyperdrive': workspace:*
   '@lunora/mail': workspace:*
@@ -2008,6 +2009,30 @@ importers:
         specifier: catalog:test
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
+  packages/dispatch:
+    devDependencies:
+      '@types/node':
+        specifier: catalog:types
+        version: 25.9.3
+      '@visulima/packem':
+        specifier: catalog:build
+        version: 2.0.0-alpha.93(39db6a19757a33ecfffbf3102bc29244)
+      '@vitest/coverage-v8':
+        specifier: catalog:test
+        version: 4.1.9(vitest@4.1.9)
+      esbuild:
+        specifier: catalog:build
+        version: 0.28.1
+      fallow:
+        specifier: catalog:lint
+        version: 2.101.0
+      typescript:
+        specifier: catalog:tsc
+        version: 6.0.3
+      vitest:
+        specifier: catalog:test
+        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
+
   packages/do:
     dependencies:
       '@visulima/redact':
@@ -2304,6 +2329,10 @@ importers:
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
   packages/queue:
+    dependencies:
+      '@lunora/dispatch':
+        specifier: workspace:*
+        version: link:../dispatch
     devDependencies:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
@@ -3039,6 +3068,9 @@ importers:
 
   packages/workflow:
     dependencies:
+      '@lunora/dispatch':
+        specifier: workspace:*
+        version: link:../dispatch
       '@lunora/values':
         specifier: workspace:*
         version: link:../values

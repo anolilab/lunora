@@ -32,6 +32,7 @@ overrides:
   "@lunora/container": "workspace:*"
   "@lunora/d1": "workspace:*"
   "@lunora/db": "workspace:*"
+  "@lunora/dispatch": "workspace:*"
   "@lunora/do": "workspace:*"
   "@lunora/hyperdrive": "workspace:*"
   "@lunora/mail": "workspace:*"

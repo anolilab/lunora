@@ -3,7 +3,7 @@ export { default as createQueues } from "./create-queues";
 export { defineQueue, isQueueDefinition, queueBindingName, queueDefaultName } from "./define-queue";
 export type { QueueRegistry, QueueRegistryEntry } from "./dispatch";
 export { dispatchQueueBatch } from "./dispatch";
-export { createQueueLogger, createQueueRunContext, createQueueRunner } from "./run-context";
+export { createQueueRunContext } from "./run-context";
 export type {
     ArgsOf,
     FunctionReference,

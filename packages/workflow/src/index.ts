@@ -15,7 +15,7 @@ export type {
     WorkflowStepDetail,
 } from "./rest-api";
 export { createWorkflowsRestClient, WorkflowsRestError } from "./rest-api";
-export { createWorkflowLogger, createWorkflowRunContext, createWorkflowRunner } from "./run-context";
+export { createWorkflowRunContext } from "./run-context";
 export { createRunStep, validateStepArgs } from "./run-step";
 export type {
     ArgsOf,

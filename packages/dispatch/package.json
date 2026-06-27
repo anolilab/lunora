@@ -1,14 +1,12 @@
 {
-    "name": "@lunora/workflow",
-    "version": "1.0.0-alpha.2",
-    "description": "Durable workflows for Lunora: defineWorkflow over Cloudflare Workflows, generated WorkflowEntrypoint classes, and the ctx.workflows surface",
+    "name": "@lunora/dispatch",
+    "version": "1.0.0-alpha.1",
+    "description": "Shared dispatch runner for Lunora: call a Lunora function from a server-initiated context (workflow/queue/scheduled job) via /_lunora/scheduler/dispatch",
     "keywords": [
         "cloudflare",
-        "durable-execution",
         "lunora",
-        "saga",
-        "workers",
-        "workflows"
+        "dispatch",
+        "workers"
     ],
     "homepage": "https://lunora.sh",
     "bugs": "https://github.com/anolilab/lunora/issues",
@@ -20,7 +18,7 @@
     "repository": {
         "type": "git",
         "url": "git+https://github.com/anolilab/lunora.git",
-        "directory": "packages/workflow"
+        "directory": "packages/dispatch"
     },
     "files": [
         "dist",
@@ -37,10 +35,6 @@
         ".": {
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
-        },
-        "./do": {
-            "types": "./dist/do/index.d.ts",
-            "import": "./dist/do/index.mjs"
         },
         "./package.json": "./package.json"
     },
@@ -61,12 +55,7 @@
         "fallow:dead-code": "fallow dead-code",
         "fallow:health": "fallow health --score"
     },
-    "dependencies": {
-        "@lunora/dispatch": "1.0.0-alpha.1",
-        "@lunora/values": "1.0.0-alpha.2"
-    },
     "devDependencies": {
-        "@cloudflare/workers-types": "catalog:cloudflare",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
