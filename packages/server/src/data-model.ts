@@ -121,6 +121,13 @@ export type WhereOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM
 /** {@link QueryArgs} with the relation-aware {@link WhereOf} `where` typing. */
 export interface QueryArgsOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> {
     cursor?: null | string;
+
+    /**
+     * Include soft-deleted rows (`.softDelete()` tables only). Default hides them;
+     * `true` returns deleted rows alongside live ones. No effect on a table
+     * without `.softDelete()`.
+     */
+    includeDeleted?: boolean;
     limit?: number;
     orderBy?: OrderBy<DM[T]>[];
     where?: WhereOf<DM, REL, T>;
@@ -370,9 +377,17 @@ export interface TableWriterFacade<
     SEARCH extends Record<keyof DM, string>,
     T extends keyof DM,
 > extends TableReaderFacade<DM, REL, RANK, SEARCH, T> {
+    /**
+     * Delete a row by id. On a `.softDelete()` table this flips the marker column
+     * (and cascades as a soft delete) instead of removing the row; use
+     * {@link TableWriterFacade.hardDelete} to force physical removal.
+     */
     delete: (id: Id<string & T>) => Promise<void>;
     /** Delete many rows in this table by id in one call; returns the *requested* id count (unknown ids are no-ops). Atomic within a mutation (a throw rolls the mutation back); an action has no transaction span. */
     deleteMany: (ids: ReadonlyArray<Id<string & T>>, options?: { limit?: number }) => Promise<{ deleted: number }>;
+
+    /** Physically remove a row (and physically cascade `onDelete`), bypassing `.softDelete()`. Same as `delete()` on a non-soft table. */
+    hardDelete: (id: Id<string & T>) => Promise<void>;
 
     /**
      * Insert a document, returning its minted id. With `{ skipDuplicates: true }`
@@ -389,6 +404,9 @@ export interface TableWriterFacade<
     /** Patch many rows in this table by id in one call. Atomic within a mutation (a throw rolls the mutation back); an action has no transaction span. */
     patchMany: (patches: ReadonlyArray<{ id: Id<string & T>; values: Partial<IM[T]> }>, options?: { limit?: number }) => Promise<void>;
     replace: (id: Id<string & T>, values: IM[T]) => Promise<void>;
+
+    /** Un-soft-delete a row by id: clears the `.softDelete()` marker so list reads see it again. Throws on a non-soft table. */
+    restore: (id: Id<string & T>) => Promise<void>;
 
     /**
      * Insert when no existing row matches `target`, otherwise patch the match with

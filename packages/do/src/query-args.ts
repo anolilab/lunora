@@ -35,6 +35,13 @@ interface QueryArgs {
      */
     baseWhere?: WhereInput;
     cursor?: null | string;
+
+    /**
+     * Opt a list read OUT of soft-delete scoping: when `true`, rows whose
+     * soft-delete column is set are INCLUDED. Has no effect on a table without
+     * `.softDelete()`. Default (absent/false) hides soft-deleted rows.
+     */
+    includeDeleted?: boolean;
     limit?: number;
     orderBy?: OrderByInput[];
 
@@ -297,5 +304,15 @@ const applySelect = (
     });
 };
 
-export { applySelect, buildSeekBeforeWhere, buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys };
+/**
+ * The read-scope predicate that hides soft-deleted rows — `{ [field]: { isNull:
+ * true } }` matching the live rows whose soft-delete column is null/absent — or
+ * `undefined` when the table isn't `.softDelete()` or the read opted in via
+ * `includeDeleted`. AND-merge it into a list read's `where` (the by-id path
+ * never calls this, so `get`/`patch`/`replace`/`restore` still address the row).
+ */
+const softDeleteScope = (softDeleteMode: { field: string } | undefined, includeDeleted: boolean | undefined): undefined | WhereInput =>
+    softDeleteMode && includeDeleted !== true ? { [softDeleteMode.field]: { isNull: true } } : undefined;
+
+export { applySelect, buildSeekBeforeWhere, buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys, softDeleteScope };
 export type { OrderByInput, OrderKey, QueryArgs, QueryPage, SortDirection };

@@ -79,6 +79,7 @@ import {
     selectIndexForAggregate,
     selectIndexForCount,
     selectIndexForGroupBy,
+    softDeleteScope,
     sortColumnName,
     stringifySearchText,
     throwingScheduler,
@@ -635,6 +636,12 @@ const searchViaFts = async (
         conditions.push(sql`m.${columnRefSql(filter.field)} = ${serializeColumnValue(filter.value)}`);
     }
 
+    // Soft delete: hide soft-deleted rows from search (qualified to the joined
+    // doc table `m`).
+    if (definition.softDeleteMode) {
+        conditions.push(sql`m.${columnRefSql(definition.softDeleteMode.field)} IS NULL`);
+    }
+
     // `f.rank` is FTS5's bm25 relevance (best first); the `_creationTime DESC`
     // tiebreak matches the scan fallback so equal-rank rows order newest-first
     // on both engines.
@@ -671,6 +678,11 @@ const searchViaScan = async (
     }
 
     const conditions = search.filters.map((filter) => sql`${columnRefSql(filter.field)} = ${serializeColumnValue(filter.value)}`);
+
+    // Soft delete: hide soft-deleted rows from the scan fallback too.
+    if (definition.softDeleteMode) {
+        conditions.push(sql`${columnRefSql(definition.softDeleteMode.field)} IS NULL`);
+    }
 
     let query = sql`SELECT * FROM ${sql.identifier(tableName)}`;
 
@@ -2347,7 +2359,10 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 throw new Error(`aggregate(${tableName}, { op: "${aggOptions.op}" }): "field" is required for non-count reducers`);
             }
 
-            const effective = mergeWhere(aggOptions.baseWhere, aggOptions.where);
+            // Soft delete: aggregate over LIVE rows only; force the scan path (the
+            // indexed companion counts deleted rows too).
+            const aggScope = softDeleteScope(definition.softDeleteMode, undefined);
+            const effective = mergeWhere(mergeWhere(aggOptions.baseWhere, aggOptions.where), aggScope);
             // Rewrite any relation-crossing predicate to a flat semijoin clause
             // before compiling. The resolver returns `effective` unchanged when
             // there is none, so `hasRelation` skips the no-op fetch and disables
@@ -2362,7 +2377,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // counter is materialized answers sum/avg/min/max in one row lookup.
             // We only attempt it when no baseWhere is set; the RLS predicate
             // falls through to the SQL scan below.
-            if (definition.aggregateIndexes && !aggOptions.baseWhere && !hasRelation) {
+            if (definition.aggregateIndexes && !aggOptions.baseWhere && !hasRelation && !aggScope) {
                 const planned = selectIndexForAggregate(definition.aggregateIndexes, aggOptions.op, aggOptions.field, aggOptions.where);
 
                 if (planned) {
@@ -2410,7 +2425,9 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 throw new CountRlsUnsupportedError(tableName);
             }
 
-            const effective = mergeWhere(countOptions.baseWhere, countOptions.where);
+            // Soft delete: a `count()` reflects LIVE rows; force the scan path.
+            const countScope = softDeleteScope(definition.softDeleteMode, undefined);
+            const effective = mergeWhere(mergeWhere(countOptions.baseWhere, countOptions.where), countScope);
             // Rewrite any relation-crossing predicate to a flat semijoin clause
             // before compiling. `hasRelation` (resolver returned a new tree)
             // disables the indexed counter, which can't honour a relation filter.
@@ -2420,7 +2437,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // Indexed path: same planner as the DO dialect (see ctx-db.ts).
             // We only attempt the counter when no baseWhere is set; otherwise
             // we route uniformly through SQL so the RLS predicate participates.
-            if (definition.aggregateIndexes && !countOptions.baseWhere && !hasRelation) {
+            if (definition.aggregateIndexes && !countOptions.baseWhere && !hasRelation && !countScope) {
                 const planned = selectIndexForCount(definition.aggregateIndexes, countOptions.where);
 
                 if (planned) {
@@ -2447,7 +2464,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             return Number(rows[0]?.["count"] ?? 0);
         },
 
-        async delete(id, expectedTable) {
+        async delete(id, expectedTable, deleteOptions) {
             const tableName = await resolveTableName(id, expectedTable);
 
             if (!tableName) {
@@ -2466,6 +2483,16 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             const snapshot = await rawRow(tableName, id);
             const existing = decodeRow(definition, snapshot);
+            // Soft delete unless `hard` was forced; `softField` undefined ⇒ legacy
+            // physical path. A delete cascades as a delete (soft→soft, hard→hard).
+            const hard = deleteOptions?.hard === true;
+            const softField = !hard && definition.softDeleteMode ? definition.softDeleteMode.field : undefined;
+
+            // Idempotent: re-soft-deleting an already-soft-deleted (or absent) row
+            // is a no-op so the cascade + companion sync don't fire spuriously.
+            if (softField && (!existing || (existing[softField] !== null && existing[softField] !== undefined))) {
+                return;
+            }
 
             // `before` fires ahead of cascade resolution so a throwing guard
             // aborts the delete before any holder rows are touched.
@@ -2489,11 +2516,13 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                         );
                     }
 
-                    const holders = await writer.findMany(holderTable, { where: { [field]: value } });
+                    // A hard delete must see soft-deleted holders to remove them; a
+                    // soft delete skips already-deleted holders.
+                    const holders = await writer.findMany(holderTable, { includeDeleted: hard, where: { [field]: value } });
 
                     return holders.page;
                 },
-                onCascade: (_holderTable, holderId) => writer.delete(holderId),
+                onCascade: (_holderTable, holderId) => writer.delete(holderId, undefined, deleteOptions),
                 onRestrict: (message) => {
                     throw new ConflictError(message, "restrict");
                 },
@@ -2505,6 +2534,33 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             await ensureBackfilledForTable(tableName);
             await ensureRankBackfilledForTable(tableName);
+
+            if (softField && existing) {
+                // Soft delete: keep the row, stamp the marker via an all-column
+                // UPDATE (same encoding as `patch`). Companions re-sync to the
+                // merged row; read scoping (not companion removal) hides it.
+                const merged: Record<string, unknown> = { ...existing, [softField]: clock() };
+                const assignments = sql.join(
+                    // eslint-disable-next-line unicorn/no-null -- SQL bind value: an absent column binds `null`, matching the patch path.
+                    Object.keys(definition.shape).map((field) => sql`${sql.identifier(field)} = ${serializeColumnValue(merged[field] ?? null)}`),
+                    sql`, `,
+                );
+
+                await runGuardedWrite(tableName, "UPDATE", assignments, snapshot);
+
+                await syncAggregates(tableName, existing, merged);
+                await syncRanks(tableName, id, existing, merged);
+                await syncSearch(tableName, id, merged);
+                await recordCdc(tableName, id, "update", merged);
+
+                // `delete()` was called → fire the DELETE triggers (the flag flip
+                // is the storage detail of how the delete is recorded).
+                if (hasMatchingTrigger(tableName, "after", "delete")) {
+                    await fireTriggers("after", "delete", { id, op: "delete", previous: existing, table: tableName });
+                }
+
+                return;
+            }
 
             await runGuardedWrite(tableName, "DELETE", undefined, snapshot);
 
@@ -2571,6 +2627,11 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // RLS (3.2) / aggregates (3.1) inject `baseWhere` we AND-merge
             // before the keyset seek so policy + cursor compose cleanly.
             let predicate: undefined | WhereInput = mergeWhere(args.baseWhere, args.where);
+
+            // Soft delete: hide rows whose marker column is set unless the caller
+            // opted in via `includeDeleted`. Relation `with` loads route back
+            // through this `findMany`, so they inherit the scope automatically.
+            predicate = mergeWhere(predicate, softDeleteScope(definition.softDeleteMode, args.includeDeleted));
 
             // Rewrite relation-crossing predicates into flat `IN`/`NOT IN` via a
             // backend-routed child fetch before compiling. `relationBaseWhere` is
@@ -2677,7 +2738,9 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 throw new Error(`groupBy(${tableName}, { agg: { op: "${agg.op}" } }): "field" is required for non-count reducers`);
             }
 
-            const effective = mergeWhere(groupOptions.baseWhere, groupOptions.where);
+            // Soft delete: group over LIVE rows only; force the scan path.
+            const groupScope = softDeleteScope(definition.softDeleteMode, undefined);
+            const effective = mergeWhere(mergeWhere(groupOptions.baseWhere, groupOptions.where), groupScope);
             // Rewrite any relation-crossing predicate to a flat semijoin clause
             // before compiling. `hasRelation` disables the indexed companion,
             // which can't honour a relation filter and would over-aggregate.
@@ -2689,7 +2752,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // already in the reducer-aware companion table — covers every op
             // (count/sum/avg/min/max) now that `__value__`/`__count__` are
             // maintained per op. baseWhere falls through to scan so RLS composes.
-            if (definition.aggregateIndexes && !groupOptions.baseWhere && !hasRelation) {
+            if (definition.aggregateIndexes && !groupOptions.baseWhere && !hasRelation && !groupScope) {
                 const indexed = await tryIndexedGroupBy(tableName, definition.aggregateIndexes, agg, groupOptions);
 
                 if (indexed !== undefined) {
@@ -2883,6 +2946,23 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             if (hasMatchingTrigger(tableName, "after", "update")) {
                 await fireTriggers("after", "update", { doc: merged, id, op: "update", previous: existing, table: tableName });
             }
+        },
+
+        async restore(id, expectedTable) {
+            const tableName = await resolveTableName(id, expectedTable);
+
+            if (!tableName) {
+                throw new Error(`document not found: ${id}`);
+            }
+
+            const field = schema.tables[tableName]?.softDeleteMode?.field;
+
+            if (!field) {
+                throw new Error(`ctx.db.restore: table "${tableName}" is not a .softDelete() table`);
+            }
+
+            // eslint-disable-next-line unicorn/no-null -- clearing the soft-delete marker writes SQL NULL into the column
+            await writer.patch(id, { [field]: null }, expectedTable);
         },
 
         query(tableName) {

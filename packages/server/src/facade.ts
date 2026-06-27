@@ -61,7 +61,7 @@ const buildUpsertWhere = (tableName: string, target: ReadonlyArray<string> | str
 export interface FacadeWriterLike {
     aggregate(tableName: string, options: unknown): Promise<unknown>;
     count(tableName: string, where?: unknown): Promise<number>;
-    delete(id: string, expectedTable?: string): Promise<void>;
+    delete(id: string, expectedTable?: string, options?: { hard?: boolean }): Promise<void>;
     // Optional: some writers (e.g. the `.global()` path) have no batch method and
     // delete row-by-row instead, mirroring `@lunora/do`'s `DatabaseWriterLike`.
     deleteMany?(ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string): Promise<{ deleted: number }>;
@@ -80,6 +80,8 @@ export interface FacadeWriterLike {
     rank(tableName: string, indexName: string, options: unknown): Promise<unknown>;
     rankPage(tableName: string, indexName: string, options?: unknown): Promise<unknown>;
     replace(id: string, document: Record<string, unknown>, expectedTable?: string): Promise<void>;
+    // Optional: only writers over a `.softDelete()` schema implement it.
+    restore?(id: string, expectedTable?: string): Promise<void>;
 }
 /* eslint-enable @typescript-eslint/method-signature-style */
 
@@ -96,6 +98,8 @@ export interface FacadeEntry {
     findMany: (args?: unknown) => Promise<unknown>;
     get: (id: string) => Promise<unknown>;
     groupBy: (options: unknown) => Promise<unknown>;
+    /** Physically remove a row (and physically cascade), bypassing `.softDelete()`. */
+    hardDelete: (id: string) => Promise<void>;
     insert: (document: Record<string, unknown>, options?: FacadeInsertOptions) => Promise<null | string>;
     insertMany: (documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number }) => Promise<string[]>;
     // NOTE: `insertManyUnsafe` is DELIBERATELY absent from the per-table facade
@@ -109,6 +113,8 @@ export interface FacadeEntry {
     rank: (indexName: string, options: unknown) => Promise<unknown>;
     rankPage: (indexName: string, options?: unknown) => Promise<unknown>;
     replace: (id: string, document: Record<string, unknown>) => Promise<void>;
+    /** Un-soft-delete a row: clears the `.softDelete()` marker (by-id, so it reaches a row list reads hide). */
+    restore: (id: string) => Promise<void>;
     /** Insert when no row matches `target`, else patch the match. Composes `findFirst` + `insert`/`patch`, so RLS applies to each step. */
     upsert: (args: UpsertArgs) => Promise<UpsertResult>;
     /** Sequential `upsert` over many rows sharing one `target`; returns one result per input row in order. */
@@ -229,6 +235,8 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
         findMany: (args) => writer.findMany(tableName, args),
         get: (id) => writer.get(id, tableName),
         groupBy: (options) => writer.groupBy(tableName, options),
+        // Physical removal — bypasses `.softDelete()`. RLS gates it as a delete.
+        hardDelete: (id) => writer.delete(id, tableName, { hard: true }),
         insert,
         insertMany: (documents, options) => {
             if (writer.insertMany === undefined) {
@@ -254,6 +262,13 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
         rank: (indexName, options) => writer.rank(tableName, indexName, options),
         rankPage: (indexName, options) => writer.rankPage(tableName, indexName, options),
         replace: (id, document) => writer.replace(id, document, tableName),
+        restore: async (id) => {
+            if (!writer.restore) {
+                throw new Error(`ctx.db.${tableName}.restore is unavailable: this writer has no restore (is the table .softDelete()?)`);
+            }
+
+            await writer.restore(id, tableName);
+        },
         upsert,
         upsertMany: async ({ rows, target }) => {
             // Sequential so each upsert sees the prior one's write (two rows that

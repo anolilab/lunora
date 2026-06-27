@@ -184,6 +184,19 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
     shardMode: ShardMode;
 
     /**
+     * Set by `.softDelete()` (named `softDeleteMode`, not `softDelete`, so the
+     * data field doesn't collide with the fluent `.softDelete()` builder method —
+     * same convention as `shardBy()`/`shardMode`). When present, the table carries
+     * a nullable timestamp column (`field`, default `deletedAt`):
+     * `ctx.db.&lt;table>.delete()` flips it instead of physically removing the row,
+     * and **list reads** (`findMany`/`findFirst`/`query()`/`count`/`aggregate`/
+     * relation loads) hide rows whose `field` is set unless
+     * `includeDeleted`/`withDeleted` is passed. By-id `get`/`patch`/`replace` and
+     * `restore` are unaffected. Absent ⇒ deletes are physical, as before.
+     */
+    softDeleteMode?: { field: string };
+
+    /**
      * Declared lifecycle triggers keyed by accessor name; empty unless
      * `.triggers()` was called. Named `triggerMap` (not `triggers`) so the
      * fluent `.triggers((t) => …)` builder method doesn't collide with this

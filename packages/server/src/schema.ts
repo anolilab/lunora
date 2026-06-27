@@ -1,5 +1,5 @@
 import type { Validator } from "@lunora/values";
-import { isOrWrapsFromValidator } from "@lunora/values";
+import { isOrWrapsFromValidator, v } from "@lunora/values";
 
 import type { PrefixedTables, SchemaExtension } from "./plugin";
 import { mergeSchemaExtension } from "./plugin";
@@ -133,6 +133,18 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
     searchIndex: (name: string, options: { field: string; filterFields?: ReadonlyArray<string> }) => TableBuilder<Shape>;
     /** Route storage by the named field — one DO per distinct value. */
     shardBy: (field: keyof Shape & string) => TableBuilder<Shape>;
+
+    /**
+     * Turn on soft delete. Adds a nullable timestamp column (`options.field`,
+     * default `deletedAt`) and changes `ctx.db.&lt;table>.delete()` to **set** it
+     * instead of removing the row; `onDelete: "cascade"` children are recursively
+     * soft-deleted too. **List reads** (`findMany`/`findFirst`/`query()`/`count`/
+     * `aggregate`/relation loads) then hide soft-deleted rows unless they pass
+     * `includeDeleted`/`withDeleted`; by-id `get`/`patch`/`replace` and the new
+     * `restore()` still address the row directly. `hardDelete()` physically
+     * removes it (cascading as a real delete).
+     */
+    softDelete: (options?: { field?: string }) => TableBuilder<Shape>;
     /** Declare named lifecycle triggers fired inline within the write path. */
     triggers: (build: (t: TriggerBuilder<Shape>) => Record<string, TriggerDefinition>) => TableBuilder<Shape>;
     /** Declare a vector index over a single text field on this table. */
@@ -186,7 +198,11 @@ interface VectorIndexOptions {
  * Build a table definition. Returned object is both the table definition (for
  * `defineSchema`) and a fluent builder for indexes + sharding metadata.
  */
-const defineTable = <Shape extends Record<string, Validator>>(shape: Shape): TableBuilder<Shape> => {
+const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape): TableBuilder<Shape> => {
+    // Work on a shallow copy so `.softDelete()` can inject its marker column
+    // without mutating the caller's object literal.
+    const shape = { ...inputShape };
+
     // v.from() validators are args-only — they delegate to an external Standard
     // Schema library and do not map to a concrete SQL column type. Reject them
     // anywhere in a column, including nested under v.optional/array/object/etc.
@@ -207,6 +223,7 @@ const defineTable = <Shape extends Record<string, Validator>>(shape: Shape): Tab
     let shardMode: ShardMode = { kind: "root" };
     let isExternallyManaged = false;
     let isPublic = false;
+    let softDelete: { field: string } | undefined;
 
     const builder: TableBuilder<Shape> = {
         aggregateIndex(name, options) {
@@ -314,6 +331,25 @@ const defineTable = <Shape extends Record<string, Validator>>(shape: Shape): Tab
         },
         get shardMode() {
             return shardMode;
+        },
+        get softDeleteMode() {
+            return softDelete;
+        },
+        softDelete(options) {
+            const field = options?.field ?? "deletedAt";
+
+            softDelete = { field };
+
+            // Auto-add the marker column so the generated `Doc` carries it and the
+            // write path validates it. Optional on insert (absent on a live row)
+            // and nullable so `restore()` can clear it with `patch({ [field]: null })`;
+            // set to `Date.now()` on soft delete. Idempotent — if the user already
+            // declared the column, their validator wins.
+            if (!(field in shape)) {
+                (shape as Record<string, Validator>)[field] = v.optional(v.number().nullable());
+            }
+
+            return builder;
         },
         get triggerMap() {
             return triggers;
