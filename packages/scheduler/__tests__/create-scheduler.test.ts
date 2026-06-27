@@ -247,7 +247,9 @@ describe("createScheduler jurisdiction", () => {
         await scheduler.runAfter(1000, fnRef, {});
 
         expect(jurisdictionCalls).toStrictEqual(["us"]);
-        expect(inner.get as ReturnType<typeof vi.fn>).toHaveBeenCalledWith();
+        // The pinned subnamespace resolves the default instance — proving routing
+        // went through it (its `get`/`idFromName`, not the root namespace's, which throw).
+        expect(inner.idFromName as ReturnType<typeof vi.fn>).toHaveBeenCalledWith("default");
     });
 
     it("fails closed when the binding lacks jurisdiction support", async () => {
