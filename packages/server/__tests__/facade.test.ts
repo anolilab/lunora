@@ -83,3 +83,209 @@ describe("bindTableFacade — per-table batch forms", () => {
         expect(patchOne).toHaveBeenCalledWith("a", { body: "x" }, "messages");
     });
 });
+
+/** A ConflictError-shaped value (matched structurally by the facade, no `@lunora/do` import). */
+const uniqueConflict = (): Error => Object.assign(new Error(`unique constraint violation on "users"`), { code: "CONFLICT", kind: "unique" });
+
+/** A writer with individually-controllable findFirst/insert/patch, bound to the `users` table. */
+const makeComposingWriter = () => {
+    const findFirst = vi.fn();
+    const insert = vi.fn();
+    const patch = vi.fn();
+
+    const writer = {
+        aggregate: vi.fn(),
+        count: vi.fn(),
+        delete: vi.fn(),
+        deleteMany: vi.fn(),
+        findFirst,
+        findFirstOrThrow: vi.fn(),
+        findMany: vi.fn(),
+        get: vi.fn(),
+        groupBy: vi.fn(),
+        insert,
+        insertMany: vi.fn(),
+        patch,
+        patchMany: vi.fn(),
+        query: vi.fn(),
+        rank: vi.fn(),
+        rankPage: vi.fn(),
+        replace: vi.fn(),
+    } as unknown as FacadeWriterLike;
+
+    return { entry: bindTableFacade(writer, "users"), findFirst, insert, patch };
+};
+
+describe("bindTableFacade — exists", () => {
+    it("returns true when findFirst matches and forwards the where", async () => {
+        expect.assertions(2);
+
+        const { entry, findFirst } = makeComposingWriter();
+
+        findFirst.mockResolvedValue({ _id: "u1", email: "a@b.c" });
+
+        await expect(entry.exists({ email: "a@b.c" })).resolves.toBe(true);
+        expect(findFirst).toHaveBeenCalledWith("users", { where: { email: "a@b.c" } });
+    });
+
+    it("returns false when findFirst finds nothing, and probes for any row when no where is given", async () => {
+        expect.assertions(2);
+
+        const { entry, findFirst } = makeComposingWriter();
+
+        findFirst.mockResolvedValue(null);
+
+        await expect(entry.exists()).resolves.toBe(false);
+        expect(findFirst).toHaveBeenCalledWith("users", undefined);
+    });
+});
+
+describe("bindTableFacade — insert skipDuplicates", () => {
+    it("returns the id on a successful insert", async () => {
+        expect.assertions(1);
+
+        const { entry, insert } = makeComposingWriter();
+
+        insert.mockResolvedValue("u1");
+
+        await expect(entry.insert({ email: "a@b.c" }, { skipDuplicates: true })).resolves.toBe("u1");
+    });
+
+    it("resolves to null when the insert hits a unique conflict", async () => {
+        expect.assertions(1);
+
+        const { entry, insert } = makeComposingWriter();
+
+        insert.mockRejectedValue(uniqueConflict());
+
+        await expect(entry.insert({ email: "a@b.c" }, { skipDuplicates: true })).resolves.toBeNull();
+    });
+
+    it("rethrows a non-unique error even with skipDuplicates", async () => {
+        expect.assertions(1);
+
+        const { entry, insert } = makeComposingWriter();
+
+        insert.mockRejectedValue(new Error("disk full"));
+
+        await expect(entry.insert({ email: "a@b.c" }, { skipDuplicates: true })).rejects.toThrow("disk full");
+    });
+
+    it("propagates a unique conflict when skipDuplicates is not set", async () => {
+        expect.assertions(1);
+
+        const { entry, insert } = makeComposingWriter();
+
+        insert.mockRejectedValue(uniqueConflict());
+
+        await expect(entry.insert({ email: "a@b.c" })).rejects.toThrow("unique constraint");
+    });
+});
+
+describe("bindTableFacade — upsert / upsertMany", () => {
+    it("patches the matched row (update defaults to create) and reports created:false", async () => {
+        expect.assertions(4);
+
+        const { entry, findFirst, insert, patch } = makeComposingWriter();
+
+        findFirst.mockResolvedValue({ _id: "u1", email: "a@b.c", name: "old" });
+
+        await expect(entry.upsert({ create: { email: "a@b.c", name: "new" }, target: "email" })).resolves.toStrictEqual({ created: false, id: "u1" });
+        // The lookup uses the target value from `create`; the patch scopes to the bound table.
+        expect(findFirst).toHaveBeenCalledWith("users", { where: { email: "a@b.c" } });
+        expect(patch).toHaveBeenCalledWith("u1", { email: "a@b.c", name: "new" }, "users");
+        expect(insert).not.toHaveBeenCalled();
+    });
+
+    it("applies an explicit update payload when the row exists", async () => {
+        expect.assertions(1);
+
+        const { entry, findFirst, patch } = makeComposingWriter();
+
+        findFirst.mockResolvedValue({ _id: "u1", email: "a@b.c" });
+
+        await entry.upsert({ create: { email: "a@b.c", name: "n" }, target: "email", update: { name: "patched" } });
+
+        expect(patch).toHaveBeenCalledWith("u1", { name: "patched" }, "users");
+    });
+
+    it("inserts and reports created:true when no row matches", async () => {
+        expect.assertions(3);
+
+        const { entry, findFirst, insert, patch } = makeComposingWriter();
+
+        findFirst.mockResolvedValue(null);
+        insert.mockResolvedValue("u2");
+
+        await expect(entry.upsert({ create: { email: "x@y.z", name: "n" }, target: "email" })).resolves.toStrictEqual({ created: true, id: "u2" });
+        expect(insert).toHaveBeenCalledWith("users", { email: "x@y.z", name: "n" });
+        expect(patch).not.toHaveBeenCalled();
+    });
+
+    it("builds a composite where for a multi-field target", async () => {
+        expect.assertions(1);
+
+        const { entry, findFirst } = makeComposingWriter();
+
+        findFirst.mockResolvedValue(null);
+
+        await entry.upsert({ create: { name: "n", orgId: "o1", slug: "s1" }, target: ["orgId", "slug"] });
+
+        expect(findFirst).toHaveBeenCalledWith("users", { where: { orgId: "o1", slug: "s1" } });
+    });
+
+    it("throws when a target field is missing from the create document", async () => {
+        expect.assertions(1);
+
+        const { entry } = makeComposingWriter();
+
+        await expect(entry.upsert({ create: { name: "n" }, target: "email" })).rejects.toThrow('target field "email" is missing');
+    });
+
+    it("upsertMany applies one upsert per row, in order", async () => {
+        expect.assertions(2);
+
+        const { entry, findFirst, insert } = makeComposingWriter();
+
+        // First row is new (insert), second already exists (patch).
+        findFirst.mockResolvedValueOnce(null).mockResolvedValueOnce({ _id: "u9", email: "b@b.c" });
+        insert.mockResolvedValue("u8");
+
+        const results = await entry.upsertMany({
+            rows: [{ create: { email: "a@b.c" } }, { create: { email: "b@b.c" }, update: { name: "z" } }],
+            target: "email",
+        });
+
+        expect(results).toStrictEqual([
+            { created: true, id: "u8" },
+            { created: false, id: "u9" },
+        ]);
+        expect(insert).toHaveBeenCalledTimes(1);
+    });
+
+    it("propagates a write denial from the underlying writer (RLS gating on the insert path)", async () => {
+        expect.assertions(1);
+
+        const { entry, findFirst, insert } = makeComposingWriter();
+
+        // No existing row → insert path. When this facade is bound over the
+        // RLS-wrapped writer, an insert policy denial surfaces here as a throw;
+        // upsert must propagate it rather than swallow it.
+        findFirst.mockResolvedValue(null);
+        insert.mockRejectedValue(new Error('insert on "users" denied by policy'));
+
+        await expect(entry.upsert({ create: { email: "a@b.c" }, target: "email" })).rejects.toThrow(/denied by policy/u);
+    });
+
+    it("propagates a write denial on the update path (patch gated)", async () => {
+        expect.assertions(1);
+
+        const { entry, findFirst, patch } = makeComposingWriter();
+
+        // Existing row → patch path; an update-policy denial must propagate.
+        findFirst.mockResolvedValue({ _id: "u1", email: "a@b.c" });
+        patch.mockRejectedValue(new Error('update on "users" denied by policy'));
+
+        await expect(entry.upsert({ create: { email: "a@b.c", name: "x" }, target: "email" })).rejects.toThrow(/denied by policy/u);
+    });
+});

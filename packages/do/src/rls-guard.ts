@@ -72,7 +72,7 @@ type TableOfId = (id: string, expectedTable?: string) => Promise<string | undefi
 interface GuardableWriter {
     aggregate: (tableName: string, options: unknown) => unknown;
     count: (tableName: string, whereOrArgs?: unknown) => unknown;
-    delete: (id: string, expectedTable?: string) => unknown;
+    delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => unknown;
     deleteMany: (ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string) => unknown;
     findFirst: (tableName: string, args?: unknown) => unknown;
     findFirstOrThrow: (tableName: string, args?: unknown) => unknown;
@@ -93,6 +93,7 @@ interface GuardableWriter {
     rankBefore?: (tableName: string, indexName: string, options: unknown) => unknown;
     rankPage: (tableName: string, indexName: string, options?: unknown) => unknown;
     replace: (id: string, document: unknown, expectedTable?: string) => unknown;
+    restore?: (id: string, expectedTable?: string) => unknown;
 }
 
 /**
@@ -168,10 +169,10 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId): 
 
             return base.count(tableName, whereOrArgs);
         },
-        delete: async (id: string, expectedTable?: string) => {
+        delete: async (id: string, expectedTable?: string, options?: { hard?: boolean }) => {
             await guardById(id, expectedTable);
 
-            return base.delete(id, expectedTable);
+            return base.delete(id, expectedTable, options);
         },
         deleteMany: async (ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string) => {
             // Gate every id like a single delete (a protected, policy-less row
@@ -263,6 +264,14 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId): 
             await guardById(id, expectedTable);
 
             return base.replace(id, document, expectedTable);
+        },
+        restore: async (id: string, expectedTable?: string) => {
+            // Restore is a by-id write (clears the soft-delete marker); gate it
+            // like patch so a protected, policy-less row can't be un-deleted
+            // through the raw method the `...raw` spread would otherwise expose.
+            await guardById(id, expectedTable);
+
+            return base.restore?.(id, expectedTable);
         },
     };
 

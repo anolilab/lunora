@@ -713,7 +713,12 @@ const discoverFromCall = (call: CallExpression): DiscoveredFunction | undefined 
         return { args: {}, kind: classified.kind, lifecycle: classified.lifecycle, returnType: "void", visibility: classified.visibility };
     }
 
-    return { args: argsFromCall(call), kind: classified.kind, returnType: returnTypeFromCall(call), visibility: classified.visibility };
+    return {
+        args: argsFromCall(call),
+        kind: classified.kind,
+        returnType: returnTypeFromCall(call),
+        visibility: classified.visibility,
+    };
 };
 
 /**

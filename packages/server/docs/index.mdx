@@ -34,6 +34,7 @@ Create a `TableBuilder`. Fluent methods:
 - `.index(name, fields, { unique? })` — secondary index
 - `.searchIndex(name, { field, filterFields? })` — full-text index
 - `.public()` — exempt this table from `.rls("required")` (when secure-by-default is on)
+- `.softDelete({ field? })` — soft delete: `delete()` flips a marker column (default `deletedAt`) instead of removing the row, and list reads hide soft-deleted rows
 
 ## Validators (`v.*`)
 
@@ -87,6 +88,34 @@ ctx.db.insert("messages", doc, { clientId });
 primary-key uniqueness constraint, so a client can't collide with, overwrite, or
 forge a peer row. This is the mechanism [`@lunora/db`](/docs/packages/db#client-generated-ids)
 uses to reconcile an optimistic row with its persisted server row.
+
+### Per-table accessor (`ctx.db.<table>`)
+
+Each table exposes a typed delegate with the common read/write helpers:
+
+- `findMany(args)` / `findFirst(args)` — `args` takes `where`, `orderBy`, `with`
+  (relation loading), `select` (column projection, top-level and per-relation via
+  `with: { rel: { select: [...] } }`), `cursor` / `limit`, and `includeDeleted`.
+- `exists(where?)` — boolean existence check (reuses `findFirst`, no count scan).
+- `insert(doc, { skipDuplicates? })` — `skipDuplicates: true` resolves to `null`
+  on a unique conflict instead of throwing.
+- `upsert({ target, create, update? })` / `upsertMany({ target, rows })` —
+  insert-or-update keyed by a `.unique()` column (or tuple); returns `{ id, created }`.
+- `patch` / `replace` / `delete` (plus the `*Many` batch forms).
+
+On a `.softDelete()` table, `delete(id)` flips the marker (cascading as a soft
+delete), `restore(id)` clears it, and `hardDelete(id)` physically removes the row
+(real cascade). List reads hide soft-deleted rows; pass
+`findMany({ includeDeleted: true })` to include them.
+
+### Transactions & atomicity
+
+There is no explicit `transaction()` API — a **mutation _is_ a transaction**.
+Every `ctx.db` write in a single mutation commits atomically and rolls back
+together if the handler throws. To run a side effect only after the write
+commits, schedule it: `ctx.scheduler.runAfter(0, internalFn, args)` — the
+deterministic equivalent of an `afterCommit` hook (a registered function with
+serializable args, not an inline closure).
 
 ## Subpaths
 

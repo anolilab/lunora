@@ -1,10 +1,10 @@
 ---
 title: "Lunora Studio: your backend, in the open"
-description: A local admin UI for your schema, data, SQL, logs, and time-travel, running against your live edge database.
+description: A local admin UI for your schema, data, SQL, dashboards, time-travel, and workflows — running against your live edge database, with nothing to install.
 publishedAt: 2026-06-12
 author: Daniel Bannert
 category: Updates
-image: /og-default.jpg
+image: /blog/studio/home.webp
 tags:
     - studio
     - dx
@@ -13,23 +13,90 @@ tags:
 
 Every Lunora app ships with **Studio**, a local admin UI for your schema, data, SQL, logs, and
 time-travel that runs against your live edge database. Nothing to install, no separate dashboard to
-host. Run `pnpm dev` and it's there.
+host, no credentials to wire up. Run `pnpm dev` and it's there, sitting next to your app on the same
+dev server.
 
-## Watch your data change in real time
+It's the missing console for a Cloudflare-native backend: one place to watch state change, poke at
+data, run a query, rewind a shard, and catch schema mistakes — all without leaving your machine.
 
-Studio subscribes to the same live queries your app does, so the data view updates as mutations
-land. When something looks off, it's usually faster to watch Studio for a few seconds than to add a
-log line and reload.
+## What you get
 
-## Rewind any shard
+- **A live overview** — requests, errors, latency, database size, top functions, and live socket counts at a glance.
+- **A data browser** — every table, every shard, edit rows inline.
+- **A SQL editor** — run read or write SQL, chart the result, or `EXPLAIN` it.
+- **Dashboards** — pin saved queries as chart widgets.
+- **A schema view** — shard-local and global (D1) tables, as a list or a graph.
+- **Time Travel** — scrub any shard back to any moment in the last 30 days and restore it.
+- **Workflows** — start durable Cloudflare Workflows and watch each instance run.
+- **Auth & storage** — browse users, organizations, sessions, and bucket contents.
+- **Advisors** — schema and query lints that flag the footguns before they ship.
 
-Every shard is a SQLite database with point-in-time history. Studio lets you scrub back to any
-moment in the last 30 days, see what the state was, and restore it if you need to. There's no backup
-job to set up first.
+## A live overview
+
+The home screen is the pulse of your backend: request and error counts, average latency, database
+size, your busiest functions, live WebSocket connections, and the most recent writes — plus a
+**Get connected** panel with the exact install snippets for the client SDK, React, and the CLI. Open
+it on a second monitor while you build and you'll see every mutation land in real time.
+
+## Browse and edit your data
+
+![The Studio data browser — pick a storage tier and shard, then browse and edit rows table by table](/blog/studio/data.webp)
+
+The data view lists every table with its row count. Pick a **storage tier** (shard-local or global),
+optionally pin a shard key, and browse or edit rows directly. Because Studio subscribes to the same
+live queries your app does, the data updates as mutations land — when something looks off, it's
+usually faster to watch Studio for a few seconds than to add a log line and reload.
+
+## Run SQL, chart the result
+
+![The Studio SQL editor — write a query, run it against a shard, and switch between Results, Chart, and Explain](/blog/studio/sql-editor.webp)
+
+The SQL editor runs queries straight against a shard's SQLite, with **Results**, **Chart**, and
+**Explain** tabs. Save the queries you reach for often, drop in a shard key when you need a specific
+partition, and use the reference snippets (list tables, row counts, index list) to orient in an
+unfamiliar schema.
+
+## Build dashboards from saved queries
+
+![The Studio dashboards view — chart widgets backed by saved read-only SQL queries](/blog/studio/dashboards.webp)
+
+Promote any saved read-only query into a **chart widget** and pin it to a dashboard. It's a fast way
+to keep an eye on the numbers that matter — signups today, messages per hour, error rates — without
+standing up a separate analytics stack.
+
+## See your schema — shards and global tables
+
+![The Studio schema view — shard-local tables and global D1 tables, with a list and graph view](/blog/studio/schema.webp)
+
+The schema view separates **shard-local tables** (stored per shard key inside each Durable Object's
+SQLite) from **global tables** (declared `.global()` and stored once in Cloudflare D1, shared across
+every shard and tenant — including the auth tables). Toggle between a table list and a relationship
+graph to understand how everything connects.
+
+## Rewind any shard with Time Travel
+
+![The Studio Time Travel view — in-place point-in-time recovery to any moment in the last 30 days](/blog/studio/time-travel.webp)
+
+Every shard is a SQLite database with point-in-time history. Time Travel lets you scrub back to any
+moment in the last 30 days — by timestamp or bookmark — preview the state, and restore it in place.
+There's no backup job to set up first; the history is just there.
+
+## Drive durable Workflows
+
+![The Studio workflows view — start durable Cloudflare Workflow instances and watch their status](/blog/studio/workflows.webp)
+
+Workflows declared with `defineWorkflow` run as durable Cloudflare Workflows. From Studio you can see
+every registered workflow, start an instance with optional JSON params, and watch its status in the
+instance history — handy for kicking off and debugging long-running jobs without writing a trigger.
 
 ## Advisors catch the footguns
 
-Schema and query lints flag the usual mistakes, unindexed foreign keys, duplicate indexes, a filter
-with no index behind it, right in the Advisors table, before they turn into a production incident.
+Schema and query lints flag the usual mistakes — unindexed foreign keys, duplicate indexes, a filter
+with no index behind it — right in the **Advisors** table, surfaced as security findings and
+performance issues on the home screen, before they turn into a production incident.
 
-Studio comes with every project. Run `pnpm dev` and open it next to your app.
+## It comes with every project
+
+Studio isn't a separate product or a hosted dashboard — it's part of the dev loop. Run `pnpm dev`,
+open it next to your app, and you have a console for your entire Cloudflare-native backend. See the
+[Studio docs](/docs) to go deeper, or [get started](/docs/getting-started) and open it for yourself.

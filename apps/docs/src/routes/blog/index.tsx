@@ -19,6 +19,8 @@ const RouteComponent = () => {
 
 export const Route = createFileRoute("/blog/")({
     component: RouteComponent,
+    // The list is static per deployment; don't refetch on navigation back to /blog.
+    staleTime: Number.POSITIVE_INFINITY,
     validateSearch: (search: Record<string, unknown>): { page?: number } => {
         const page = Number(search.page);
 

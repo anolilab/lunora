@@ -2493,6 +2493,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         return authResponse;
     };
 
+    // Resolved once at construction so the per-request handler can skip the custom-route
+    // lookup entirely when there are none. Treat an empty object as "no routes": the
+    // generated composed/app workers always pass a literal `routes: {}` (never `undefined`),
+    // so a truthiness check alone would never actually skip the work it claims to. Holding
+    // the narrowed map (not just a boolean) lets the handler index it without a non-null
+    // assertion.
+    const customRoutes = options.routes !== undefined && Object.keys(options.routes).length > 0 ? options.routes : undefined;
+
     const internalRoutes: Record<string, InternalRoute> = {
         [WS_PATH]: (request, env, url) => handleWebSocketUpgrade(request, env, url),
         [RPC_PATH]: (request, env, _url, context) => handleRpc(request, env, context),
@@ -2572,12 +2580,17 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
 
         // Auth providers register routes as `"METHOD path"` (e.g. `"GET /auth/signin"`).
-        // We also accept legacy pathname-only keys for ad-hoc handlers.
-        const methodAndPath = `${request.method} ${url.pathname}`;
-        const route = options.routes?.[methodAndPath] ?? options.routes?.[url.pathname];
+        // We also accept legacy pathname-only keys for ad-hoc handlers. Guard the
+        // whole lookup behind `customRoutes` (resolved once at construction) so the
+        // common composed-worker path (no custom routes) skips the `"METHOD path"`
+        // string allocation and the two object reads on every request.
+        if (customRoutes) {
+            const methodAndPath = `${request.method} ${url.pathname}`;
+            const route = customRoutes[methodAndPath] ?? customRoutes[url.pathname];
 
-        if (route) {
-            return route(request, env, context);
+            if (route) {
+                return route(request, env, context);
+            }
         }
 
         // Internal `/_lunora/*` endpoints, keyed by pathname. Each entry adapts
