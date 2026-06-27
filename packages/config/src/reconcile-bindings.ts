@@ -183,7 +183,7 @@ const collectHintBindingWarnings = (inferred: InferredBindings, parsed?: Wrangle
         ],
         [
             inferred.usesPipelines && (parsed?.pipelines?.length ?? 0) === 0,
-            "@lunora/pipelines is used but no pipelines binding exists; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding, pipeline }) — the pipeline resource can't be auto-provisioned.",
+            "ctx.pipelines is used but no pipelines binding exists; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding, pipeline }) — the pipeline resource can't be auto-provisioned.",
         ],
     ];
 
