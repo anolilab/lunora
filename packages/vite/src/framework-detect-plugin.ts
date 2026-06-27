@@ -31,6 +31,7 @@ const FRAMEWORK_LABELS: Record<FrameworkDetection["framework"], string> = {
     sveltekit: "SvelteKit",
     "tanstack-start": "TanStack Start",
     "tanstack-start-solid": "TanStack Start (Solid)",
+    vinext: "Next.js on Vite (vinext)",
 };
 
 /**

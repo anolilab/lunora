@@ -1,0 +1,27 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    // SINGLE worker for Next.js (vinext, App Router) + Lunora realtime.
+    //
+    // `main` points at `virtual:lunora/worker` — a virtual entry resolved by
+    // Lunora's `frameworkComposePlugin` (in the `lunora()` Vite plugin). It emits
+    // a composed worker that routes the reserved `/_lunora/{rpc,ws,admin}` paths
+    // into Lunora (forwarded to the `SHARD` Durable Object) and delegates
+    // everything else — pages, RSC, API routes — to vinext's App-Router SSR
+    // handler. `vinext build` runs the Vite build (resolving the virtual), so the
+    // one deployed Worker carries both planes.
+    "name": "{{name}}",
+    "main": "virtual:lunora/worker",
+    "compatibility_date": "2026-06-10",
+    "compatibility_flags": ["nodejs_compat"],
+    // vinext serves the client bundle through the ASSETS binding and resizes
+    // `next/image` sources programmatically, so expose assets to the Worker.
+    "assets": {
+        "binding": "ASSETS",
+        "not_found_handling": "none",
+    },
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
+}

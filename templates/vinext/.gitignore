@@ -1,0 +1,12 @@
+node_modules
+dist
+build
+.next
+.vinext
+.wrangler
+.env
+.env.*
+!.env.example
+.lunora/
+.lunora-cache
+lunora/_generated

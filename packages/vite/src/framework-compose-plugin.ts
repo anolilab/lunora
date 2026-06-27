@@ -88,6 +88,16 @@ const CLASS_A_WIRING: Readonly<Partial<Record<DetectedFramework, ClassAWiring>>>
         handler: "ssrModule.default",
         imports: 'import * as ssrModule from "@tanstack/solid-start/server-entry";',
     },
+    vinext: {
+        // vinext (Next.js on Vite) ships its App-Router worker as a default-export
+        // `{ fetch(request, env, ctx) }` handler — exactly the `httpRouter`
+        // contract. `composeWorker` forwards `env` (with `__lunoraCtx`) and the
+        // execution `ctx`, so vinext's bindings + `ctx.waitUntil` cache writes work
+        // unchanged. (Pages Router has no equivalent clean entry — its starter
+        // ships a hand-wired worker instead, so only App Router auto-composes.)
+        handler: "ssrModule.default",
+        imports: 'import * as ssrModule from "vinext/server/app-router-entry";',
+    },
 };
 
 /**

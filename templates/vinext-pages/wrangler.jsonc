@@ -1,0 +1,26 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    // SINGLE worker for Next.js Pages Router (vinext) + Lunora realtime.
+    //
+    // `main` points at `worker/index.ts` — a hand-wired entry that folds vinext's
+    // generated Pages worker (`worker/vinext-pages.ts`) in as the framework host
+    // via the generated `defineApp().buildFrameworkWorker()`. The reserved
+    // `/_lunora/{rpc,ws,admin}` paths route into Lunora (forwarded to the `SHARD`
+    // Durable Object) and everything else delegates to vinext's Pages pipeline.
+    // `vinext build` resolves vinext's build-time virtual modules and bundles this
+    // entry; `lunora deploy` ships the one Worker.
+    "name": "{{name}}",
+    "main": "worker/index.ts",
+    "compatibility_date": "2026-06-10",
+    "compatibility_flags": ["nodejs_compat"],
+    // vinext serves the client bundle through the ASSETS binding.
+    "assets": {
+        "binding": "ASSETS",
+        "not_found_handling": "none",
+    },
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
+}
