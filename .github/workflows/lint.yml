@@ -23,9 +23,9 @@
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 5
         "outputs":
-            "frontend_lintable": "${{ steps.changes.outputs.frontend_lintable || steps.changes_retry.outputs.frontend_lintable }}"
-            "package_json_lintable": "${{ steps.changes.outputs.package_json_lintable || steps.changes_retry.outputs.package_json_lintable }}"
-            "yaml_lintable": "${{ steps.changes.outputs.yaml_lintable || steps.changes_retry.outputs.yaml_lintable }}"
+            "frontend_lintable": "${{ steps.changes.outputs.frontend_lintable }}"
+            "package_json_lintable": "${{ steps.changes.outputs.package_json_lintable }}"
+            "yaml_lintable": "${{ steps.changes.outputs.yaml_lintable }}"
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -33,34 +33,24 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
-              "with":
-                  "persist-credentials": false
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
+            # checkout-with-retry rides out the transient GITHUB_TOKEN 401 that
+            # used to hit mid-checkout, so the paths-filter call no longer needs
+            # its own continue-on-error + sleep + retry dance.
             - "name": "Check for file changes"
               "id": "changes"
-              "continue-on-error": true
               "uses": "dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d" # v4.0.1
               "with":
                   "token": "${{ github.token }}"
                   "filters": ".github/file-filters.yml"
 
-            - "name": "Wait before retrying path filter"
-              "if": "steps.changes.outcome == 'failure'"
-              "shell": "bash"
-              "run": "sleep 30"
-
-            - "name": "Check for file changes (retry)"
-              "if": "steps.changes.outcome == 'failure'"
-              "id": "changes_retry"
-              "uses": "dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d" # v4.0.1
-              "with":
-                  "token": "${{ github.token }}"
-                  "filters": ".github/file-filters.yml"
-
-    # Build once, then eslint + tsc (incl. registry) over the affected graph.
-    "ts-lint":
-        "name": "Lint (eslint + types)"
+    # eslint over the affected graph, split from typecheck into its own required
+    # check. Type-aware eslint needs the upstream packages' declarations on disk,
+    # so build the affected graph first (the vis tasks also codegen the apps'
+    # generated dirs via their `codegen` dependsOn).
+    "eslint":
+        "name": "Lint (eslint)"
         "if": "needs.files-changed.outputs.frontend_lintable == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
@@ -72,14 +62,9 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
               "with":
-                  "persist-credentials": false
-                  "fetch-depth": 0
-              "env":
-                  "GIT_COMMITTER_NAME": "GitHub Actions Shell"
-                  "GIT_AUTHOR_NAME": "GitHub Actions Shell"
-                  "EMAIL": "github-actions[bot]@users.noreply.github.com"
+                  "fetch-depth": "0"
 
             - "name": "Setup resources and environment"
               "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
@@ -92,22 +77,58 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # Type-aware eslint + tsc need the upstream packages' declarations on
-            # disk; build the affected graph first (the vis tasks also codegen the
-            # apps' generated dirs via their `codegen` dependsOn).
             - "name": "Build affected packages"
               "run": "pnpm run build:affected:packages"
 
             - "name": "Lint (eslint)"
               "run": "pnpm run lint:affected:eslint"
 
-            - "name": "Typecheck"
-              "run": "pnpm run lint:affected:types"
+    # tsc over the affected graph plus the registry typecheck, split from eslint
+    # into its own required check. registry/ isn't a vis project; it imports
+    # @lunora/* and is typechecked against the full built dist. Both tsc
+    # invocations read the built dist without mutating it, so they run
+    # concurrently via the `parallel:` step group.
+    #
+    # NOTE: lint:affected:types is a `vis affected` invocation; lint:types:registry
+    # is a plain tsc. If the .vis/ cache lock ever surfaces as flaky errors, make
+    # these sequential steps instead of a parallel group.
+    "types":
+        "name": "Lint (types)"
+        "if": "needs.files-changed.outputs.frontend_lintable == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 30
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
 
-            # registry/ isn't a vis project; it imports @lunora/* and is
-            # typechecked against the full built dist.
-            - "name": "Typecheck registry items"
-              "run": "pnpm run lint:types:registry"
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "with":
+                  "fetch-depth": "0"
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "with":
+                  "node-version": "22.15"
+                  "cache-prefix": "lint"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "name": "Build affected packages"
+              "run": "pnpm run build:affected:packages"
+
+            - "parallel":
+                  - "name": "Typecheck"
+                    "run": "pnpm run lint:affected:types"
+
+                  - "name": "Typecheck registry items"
+                    "run": "pnpm run lint:types:registry"
 
     # fallow codebase-intelligence over the affected graph. `health` is a report
     # (prints each project's score, exits 0) — it surfaces dead code / dupes /
@@ -126,10 +147,9 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
               "with":
-                  "persist-credentials": false
-                  "fetch-depth": 0
+                  "fetch-depth": "0"
 
             - "name": "Setup resources and environment"
               "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
@@ -164,9 +184,7 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
-              "with":
-                  "persist-credentials": false
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
             - "name": "Setup resources and environment"
               "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
@@ -194,9 +212,7 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
-              "with":
-                  "persist-credentials": false
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
             - "name": "Setup resources and environment"
               "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
@@ -229,9 +245,7 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
-              "with":
-                  "persist-credentials": false
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
             - "name": "Setup resources and environment"
               "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
@@ -259,9 +273,7 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
-              "with":
-                  "persist-credentials": false
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
             - "name": "Lint YAML files"
               "uses": "ibiqlik/action-yamllint@2576378a8e339169678f9939646ee3ee325e845c" # v3.1.1
@@ -273,7 +285,7 @@
     # Single required check for the Lint workflow.
     "lint-required-check":
         "name": "Check Lint Run"
-        "needs": ["files-changed", "ts-lint", "fallow", "prettier", "package-json-sort", "secrets", "yaml-lint"]
+        "needs": ["files-changed", "eslint", "types", "fallow", "prettier", "package-json-sort", "secrets", "yaml-lint"]
         "if": "always()"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 5

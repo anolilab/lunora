@@ -3,6 +3,7 @@
 
 import * as lunora_documents_0 from "../documents.js";
 
+import { DEFER_VALIDATION as DEFER, installCompiledValidatorMap } from "lunorash/values";
 import type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";
 import type { Id } from "./dataModel.js";
 
@@ -33,6 +34,24 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "documents:create": lunora_documents_0.create as unknown as RegisteredLunoraFunction,
     "documents:list": lunora_documents_0.list as unknown as RegisteredLunoraFunction,
 };
+
+/**
+ * AOT-compiled argument validators (Worker-safe, no `eval`). Each is installed
+ * onto its function's live `.args` object and consulted by the interpreted
+ * parser as a zero-allocation fast path; anything it can't model is deferred.
+ */
+installCompiledValidatorMap(lunora_documents_0.create.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+if (typeof source["title"] !== "string") return DEFER;
+if (typeof source["body"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"], "title": source["title"], "body": source["body"] };
+});
+installCompiledValidatorMap(lunora_documents_0.list.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"] };
+});
 
 /**
  * Connection-lifecycle manifest: the function paths the generated ShardDO

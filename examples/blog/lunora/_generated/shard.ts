@@ -3,7 +3,7 @@
 
 import type { AdvisoryFinding, DatabaseWriterLike, DataMigrationLike, LogSink, MaskPoliciesResult, MigrationRunResult, RunShardApplyCdcArgs, RunShardMigrationArgs, RlsPoliciesResult, RunShardRankBeforeArgs, RunShardRankPageArgs, RunShardWriteArgs, RunShardWriteResult, SchedulerLike, SchemaLike, ShardDOState, ShardRankPageResult, SqlExec, StorageRulesResult, StudioFeaturesResult, SystemReaderStorageLike, WriteHook } from "lunorash/do";
 import { applyCdcChanges, createShardCtxDb, runDataMigration, runShardMigrations, serveRelationFanout, ShardDO as ShardDOBase } from "lunorash/do";
-import { asBucketStorage } from "lunorash/server";
+import { asBucketStorage, createSecrets } from "lunorash/server";
 import { bindOrm, bindTableFacade } from "lunorash/server";
 import type { SchemaLike as VectorSchemaLike, VectorizeIndexLike, VectorSearchLike } from "@lunora/bindings/vectors";
 import { createContextVectors, createVectors, createVectorSyncHook } from "@lunora/bindings/vectors";
@@ -521,6 +521,7 @@ const LUNORA_STORAGE_RULES: StorageRulesResult = {
 const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {
     "mail": false,
     "payments": false,
+    "queues": false,
     "scheduler": true,
     "storage": true,
     "vectors": true,
@@ -576,49 +577,49 @@ const storageStub = {
 
 const globalDbStub: DatabaseWriterLike = {
     aggregate: async () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     count: async () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     delete: async () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     findFirst: async () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     findFirstOrThrow: async () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     findMany: async () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     get: async () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     groupBy: async () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     insert: async () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     normalizeId: () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     patch: async () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     query: () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     rank: async () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     rankPage: async () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     replace: async () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
 };
 
@@ -700,7 +701,20 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             this.ensureMigrated();
 
-            return registered.handler(this.buildCtx({ functionPath }), args);
+            const ctx = this.buildCtx({ functionPath });
+
+            // A mutation's writes must commit all-or-nothing: wrap its dispatch in
+            // the DO's BEGIN/COMMIT span so any throw (a validator, an RLS denial,
+            // an OCC conflict, a failed row mid-`insertMany`/`patchMany`) rolls
+            // back every write the mutation made. Queries are read-only and actions
+            // do external I/O that can't be rolled back, so both dispatch directly.
+            // `ctx.run*` composition runs inside this span (it never re-enters
+            // handleRpc); runInTransaction's own guard rejects accidental nesting.
+            if (registered.kind === "mutation") {
+                return this.runInTransaction(() => registered.handler(ctx, args));
+            }
+
+            return registered.handler(ctx, args);
         }
 
         protected override async runRelationFanoutRead(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
@@ -1027,6 +1041,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 onWrite = undefined;
             }
 
+            const secrets = createSecrets(env);
+
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             // Build the storage adapter once and share it between `ctx.storage`
             // and `ctx.db.system._storage` so both read the same R2 binding. The
@@ -1070,6 +1086,14 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 warn: (...args: unknown[]) => { this.recordUserLog(logFunctionPath, "warn", args, observability); },
             };
 
+            // `ctx.now`: the wall-clock instant (epoch ms) this function began,
+            // captured ONCE so the whole handler body sees a single stable value.
+            // Query/mutation handlers must be deterministic (they may be re-run on
+            // OCC retry / subscription re-eval), so they must read time through
+            // `ctx.now` instead of `Date.now()` — the `nondeterministic_query_mutation`
+            // advisor flags the latter. Actions may still use ambient `Date.now()`.
+            const now = Date.now();
+
             const ctx: Record<string, unknown> = {
                 auth: {
                     getIdentity: async () => identity ?? null,
@@ -1079,10 +1103,12 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 fetch: globalThis.fetch.bind(globalThis),
                 ip: this.getCurrentIp(),
                 log,
+                now,
                 orm: bindOrm(facade),
                 scheduler,
                 storage,
                 vectors,
+                secrets,
             };
 
             ctx.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__lunoraRef, fnArgs, ctx);

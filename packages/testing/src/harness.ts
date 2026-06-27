@@ -556,6 +556,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             now: harnessNow,
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runQuery, after construction completes
             runQuery: (reference, args) => runInternal("query", reference, queryContext, args) as Promise<never>,
+            secrets: stubProxy("secrets") as QueryCtx["secrets"],
             storage: stubProxy("storage") as QueryCtx["storage"],
             vectors: stubProxy("vectors") as QueryCtx["vectors"],
         };
@@ -570,6 +571,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runQuery, after construction completes
             runQuery: (reference, args) => runInternal("query", reference, queryContext, args) as Promise<never>,
             scheduler: fakeScheduler,
+            secrets: stubProxy("secrets") as MutationCtx["secrets"],
             storage: stubProxy("storage") as MutationCtx["storage"],
             vectors: stubProxy("vectors") as MutationCtx["vectors"],
             workflows: stubProxy("workflows") as MutationCtx["workflows"],
@@ -594,6 +596,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runQuery, after construction completes
             runQuery: (reference, args) => runInternal("query", reference, queryContext, args) as Promise<never>,
             scheduler: fakeScheduler,
+            secrets: stubProxy("secrets") as ActionCtx["secrets"],
             storage: stubProxy("storage") as ActionCtx["storage"],
             vectors: stubProxy("vectors") as ActionCtx["vectors"],
             workflows: stubProxy("workflows") as ActionCtx["workflows"],
