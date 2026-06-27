@@ -41,12 +41,19 @@ const profile = useQuery(api.users.me, signedIn ? {} : "skip");
 
 ## `useMutation(fn)`
 
-Returns a callable with a `.pending` property:
+Returns `{ mutate, pending, data, error, reset, withOptimisticUpdate }`.
+`mutate` is the awaitable call; `pending` is ref-counted across overlapping
+calls from this hook, so it stays `true` until the last one settles. Destructure
+what you need:
 
 ```tsx
-const send = useMutation(api.messages.send);
-await send({ channelId, text }, { optimistic: (current) => [...(current ?? []), draft] });
+const { mutate, pending } = useMutation(api.messages.send);
+await mutate({ channelId, text }, { optimistic: (current) => [...(current ?? []), draft] });
 ```
+
+For a multi-query optimistic update bound to every call, use
+`withOptimisticUpdate(update)`, which returns the same handle with the update
+applied by default.
 
 ## `useSubscription(fn, args)`
 
@@ -123,7 +130,7 @@ export function PostList() {
 ```
 
 Drop the `await` before `prefetchQuery` for fire-and-forget prefetch when you
-don't need the data on the very first paint.
+don't need the data on the first paint.
 
 ### 2. Preload an explicit token
 

@@ -6,9 +6,9 @@ description: Vue 3 composables built on @lunora/client — live queries, optimis
 `@lunora/vue` is the Vue 3 adapter for Lunora. It's a thin, idiomatic layer over
 the framework-neutral [`@lunora/client`](/docs/packages/client) — which owns the
 WebSocket transport, subscription registry, offline queue, and delta-merge — and
-re-expresses that contract as Vue composables. A live query is just a
-`shallowRef` the socket writes to; an optimistic mutation is a small bundle of
-refs plus an awaitable `mutate`.
+re-expresses that contract as Vue composables. A live query is a `shallowRef`
+the socket writes to; an optimistic mutation is a small bundle of refs plus an
+awaitable `mutate`.
 
 <Callout type="warn">
     **Preview.** The Vue adapter exists and exposes the same hydrate-then-subscribe handoff as React, but it is **preview** maturity — not yet proven end-to-end

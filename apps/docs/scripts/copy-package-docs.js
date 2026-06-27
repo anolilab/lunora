@@ -413,20 +413,44 @@ async function rewriteDocsLinks(destPath, pkgName, pkgRoot) {
             const original = await fs.readFile(fullPath, "utf8");
             let content = original;
 
-            // Rewrite /docs/ links (markdown syntax)
-            content = content.replaceAll(/(\[.*?\]\()\/docs\/(?!packages\/)(.*?\))/g, (match, prefix, restPath) => {
-                if (restPath.startsWith(`${pkgName}/`) || restPath.startsWith(`${pkgName})`)) {
-                    return `${prefix}/docs/packages/${restPath}`;
+            // Rewrite /docs/ links (markdown syntax). Only re-home a /docs/<x> link under
+            // this package when <x> is actually a page inside the package; otherwise it's a
+            // cross-section link to a top-level doc route (/docs/concepts, /docs/architecture,
+            // …) and must be left intact — rewriting it would create a dead path that the
+            // broken-link pass then strips to plain text.
+            content = content.replaceAll(/(\[.*?\]\()\/docs\/(?!packages\/)(.*?)(\))/g, (match, prefix, restPath, close) => {
+                if (restPath.startsWith(`${pkgName}/`) || restPath === pkgName) {
+                    return `${prefix}/docs/packages/${restPath}${close}`;
                 }
-                return `${prefix}/docs/packages/${pkgName}/${restPath}`;
+                const cleanPath = restPath.replace(/#.*$/, "").replace(/\/$/, "");
+                const resolved = path.join(pkgRoot, cleanPath);
+                if (
+                    existsSync(`${resolved}.mdx`) ||
+                    existsSync(`${resolved}.md`) ||
+                    existsSync(path.join(resolved, "index.mdx")) ||
+                    existsSync(path.join(resolved, "index.md"))
+                ) {
+                    return `${prefix}/docs/packages/${pkgName}/${restPath}${close}`;
+                }
+                return match;
             });
 
-            // Rewrite /docs/ links (JSX href syntax)
+            // Rewrite /docs/ links (JSX href syntax) — same package-vs-cross-section guard.
             content = content.replaceAll(/href="\/docs\/(?!packages\/)(.*?)"/g, (match, restPath) => {
                 if (restPath.startsWith(`${pkgName}/`) || restPath === pkgName) {
                     return `href="/docs/packages/${restPath}"`;
                 }
-                return `href="/docs/packages/${pkgName}/${restPath}"`;
+                const cleanPath = restPath.replace(/#.*$/, "").replace(/\/$/, "");
+                const resolved = path.join(pkgRoot, cleanPath);
+                if (
+                    existsSync(`${resolved}.mdx`) ||
+                    existsSync(`${resolved}.md`) ||
+                    existsSync(path.join(resolved, "index.mdx")) ||
+                    existsSync(path.join(resolved, "index.md"))
+                ) {
+                    return `href="/docs/packages/${pkgName}/${restPath}"`;
+                }
+                return match;
             });
 
             // Rewrite root-relative links (e.g. /usage/foo, /usage#anchor) that match existing package docs (markdown syntax)

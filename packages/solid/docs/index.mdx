@@ -7,8 +7,8 @@ description: SolidJS bindings built on @lunora/client — live query signals, op
 over the framework-neutral [`@lunora/client`](/docs/packages/client) — which owns the
 WebSocket transport, subscription registry, offline queue, and delta-merge.
 Solid's fine-grained signals map directly onto Lunora's per-subscription deltas,
-so a live query is just a signal the socket writes to: only the components that
-read the accessor re-render.
+so a live query is a signal the socket writes to: only the components that read
+the accessor re-render.
 
 <Callout type="warn">
     **Preview.** The Solid adapter exists and exposes the same hydrate-then-subscribe handoff as React, but it is **preview** maturity — not yet proven

@@ -176,9 +176,8 @@ best-effort: a reporting failure is observed, never thrown, and the local ledger
 
 Signature verification needs the **raw** request body, so the webhook endpoint
 runs at the Worker edge via `httpAction` (no `ctx.db`). It forwards the raw body
-
-- signature into the shard via `ctx.runAction`, where `ctx.payments` and its
-  store exist:
+and signature into the shard via `ctx.runAction`, where `ctx.payments` and its
+store exist:
 
 ```ts
 // lunora/http.ts

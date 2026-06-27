@@ -52,8 +52,8 @@ v.union(v.string(), v.number());
 v.optional(v.string());
 ```
 
-A validator throws `ValidationError` on mismatch. The runtime wraps thrown
-errors in an `args.<field>` path for fast debugging.
+A validator throws `ValidationError` on mismatch. The runtime wraps the error
+with an `args.<field>` path so it points at the field that failed.
 
 ## `query / mutation / action`
 

@@ -198,7 +198,7 @@ plain `query` store.
 ```
 
 Pass `client` as a second argument to override the ambient client. On the server
-`readable`'s start callback never runs (no subscriber), so the store just holds
+`readable`'s start callback never runs (no subscriber), so the store only holds
 the seeded value and opens no socket — the token's `value` is the single source
 of truth for the first paint.
 

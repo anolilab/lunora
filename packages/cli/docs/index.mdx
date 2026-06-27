@@ -34,7 +34,8 @@ lunora prepare [--api-spec <spec>]      # codegen + wrangler validation — for 
 lunora build [--out-dir <dir>]          # bundle the worker to disk without deploying
 lunora deploy [--env <name>]            # codegen, validate wrangler, then wrangler deploy
               [--migrate] [--prebuilt]  #   --preview uploads a version (no live traffic)
-              [--preview]
+              [--preview] [--dry-run]   #   --dry-run validates + bundles, never publishes
+              [--temporary]             #   --temporary deploys with no account (~60min, then claim)
 lunora link --url <url> [--env <name>]  # link this checkout to its deployed worker
 lunora deployments <list|inspect|rollback|promote>   # history + traffic control
              [--env <name>] [--yes]
@@ -117,7 +118,18 @@ immediately after a successful deploy.
 lunora deploy
 lunora deploy --env staging
 lunora deploy --migrate --migrate-token $LUNORA_ADMIN_TOKEN
+lunora deploy --temporary    # no Cloudflare account needed
+lunora deploy --dry-run      # run every pre-deploy gate, publish nothing
 ```
+
+You don't need a Cloudflare account to try a deploy. `--temporary` ships to a
+temporary account (`wrangler deploy --temporary`): the Worker is live for about
+60 minutes, then you either claim it into an account or it's deleted. An account
+is only required to keep a deployment. (Wrangler errors if you're already
+authenticated, so drop `--temporary` once you've signed in.)
+
+`--dry-run` runs the full pre-deploy pipeline — codegen, the schema-drift gate,
+`wrangler.jsonc` validation, and the wrangler bundle — without publishing.
 
 A successful first deploy auto-writes `.lunora/project.json` (see `lunora link`)
 from the deployed URL, so follow-up commands don't need `--url`.

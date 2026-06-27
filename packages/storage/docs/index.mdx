@@ -64,7 +64,7 @@ export const uploadAvatar = action.input({ key: v.string(), contentType: v.strin
 
 <Callout type="warn">
     Client-supplied keys can address peer data. Always namespace keys with a per-tenant prefix (`scopeKey(userId, key)` or a manual `` `users/${userId}/${key}`
-    ``). `validateKey` blocks `..`, NUL bytes, and leading `/`, but it does not enforce tenancy.
+    ``). Lunora rejects `..`, NUL bytes, and leading `/` on every key automatically, but that check does not enforce tenancy.
 </Callout>
 
 ## Reading

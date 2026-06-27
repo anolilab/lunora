@@ -16,7 +16,9 @@ all pointing at a `wrangler.jsonc` you can deploy straight to your own account.
 
 - **Node** `^22.14.0 || >=24.10.0`
 - **pnpm** `>=10.32.1`
-- A Cloudflare account (the Free plan works for development)
+- A Cloudflare account — only needed to keep a deployment. Local dev needs none,
+  and `lunora deploy --temporary` publishes a live URL without one (the Free plan
+  works once you're ready to claim it).
 
 <Steps>
 
@@ -95,6 +97,11 @@ pnpm lunora deploy
 This calls `wrangler deploy`, runs pending D1 migrations, and publishes the
 Worker. Everything lives on your account, reachable through your own
 `*.workers.dev` hostname or a custom domain.
+
+<Callout type="info">
+    No account yet? `pnpm lunora deploy --temporary` deploys to a Wrangler-provisioned short-lived account — your Worker is live for ~60 minutes, then you claim
+    it to make it permanent or it's deleted.
+</Callout>
 
 </Step>
 

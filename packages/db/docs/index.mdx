@@ -220,6 +220,6 @@ types are inferred from each binding's `list` return and `optimistic` input, so
 ## Advisor
 
 Because the data layer keys writes off `ctx.db.insert` attribution, codegen runs
-a [`table_without_insert`](/docs/packages/studio) advisory: an `INFO` nudge for any
+a [`table_without_insert`](/docs/packages/advisor) advisory: an `INFO` nudge for any
 schema table no function inserts into. It's a confirm-intent signal (the table
 may be read-only, seeded by a migration, or written elsewhere), not an error.

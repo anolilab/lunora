@@ -74,7 +74,7 @@ const runner = new MigrationRunner(env.DB, [{ version: 1, name: "init", sql: rea
 const { applied, skipped } = await runner.run();
 ```
 
-`MigrationRunnerResult.applied` is the migrations just applied (each `{ name,
+`MigrationRunnerResult.applied` is the migrations applied this run (each `{ name,
 version }`); `skipped` is the ones whose SQL hash was already recorded. The
 constructor accepts a `D1Client` or a bare D1 binding (it wraps the binding for
 you). It rejects duplicate versions and two migrations with identical SQL at

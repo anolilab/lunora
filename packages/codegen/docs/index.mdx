@@ -3,9 +3,109 @@ title: "@lunora/codegen"
 description: "Emits _generated/{api,server,dataModel}.ts from your schema.ts."
 ---
 
-`@lunora/codegen` emits the `_generated/{api,server,dataModel}.ts` files from your `schema.ts`.
+`@lunora/codegen` reads your backend and writes the types that make it
+type-safe end to end. It parses `lunora/schema.ts` plus every function file
+under `lunora/`, then writes `lunora/_generated/` so the rest of your app gets
+typed access to its own queries, mutations, actions, and tables.
 
-<Callout type="info">
-    Reference documentation for this package is in progress. In the meantime, see the [getting started guide](/docs/getting-started) and the
-    [concepts](/docs/concepts/schema) section.
-</Callout>
+You rarely call this package directly. The [`@lunora/vite`](/docs/packages/vite)
+plugin runs it on every schema change, and the [`lunora codegen`](/docs/packages/cli)
+command runs it once on demand. Both share this same core, so the output is
+identical regardless of how it was produced.
+
+## What it generates
+
+The core outputs, always written:
+
+- `api.ts` — the typed `api.<file>.<function>` (and `internal.*`) function
+  references your client and server code call through.
+- `server.ts` — the `query` / `mutation` / `action` / `internalQuery` /
+  `internalMutation` / `internalAction` / `definePolicy` procedure builders,
+  bound to your schema.
+- `dataModel.ts` — the `Doc<"messages">` / `Id<"users">` types derived from your
+  tables.
+
+It also emits `app.ts`, `functions.ts`, `shard.ts`, and Drizzle schemas, plus —
+only when you use the matching feature — `crons.ts`, `containers.ts`,
+`workflows.ts`, `vectors.ts`, `seed.ts`, and the OpenAPI / OpenRPC spec files.
+
+## When it runs
+
+<Tabs items={["Vite plugin", "CLI"]}>
+
+```ts tab="Vite plugin"
+// vite.config.ts — codegen runs on startup and on every schema change
+import { lunora } from "@lunora/vite";
+
+export default defineConfig({ plugins: [lunora()] });
+```
+
+```bash tab="CLI"
+lunora codegen                 # one-shot
+lunora codegen --api-spec both # also emit OpenAPI + OpenRPC
+```
+
+</Tabs>
+
+Under `lunora dev`, codegen runs in watch mode: save a function or change the
+schema and the regenerated types are in the module graph before you switch
+windows.
+
+## Don't edit `_generated/`
+
+These files are derived from your schema and overwritten on every run, so any
+hand edit is lost the next time codegen runs. Change `schema.ts` or your
+function files instead, then let codegen catch up.
+
+Commit `lunora/_generated/`. The output is deterministic, and CI re-runs codegen
+and diffs the result (`lunora verify` / `lunora prepare`) to catch drift between
+your schema and the committed types.
+
+## The `.js` extension exception
+
+The emitted modules are consumed under NodeNext, where relative imports need a
+file extension. So codegen deliberately writes `.js` into the imports it
+generates:
+
+```ts
+import { api } from "./_generated/api.js";
+```
+
+This is the one place in a Lunora project where hand-written `.js` extensions
+are correct. Your own `lunora/` source still omits extensions like the rest of
+the codebase.
+
+## Calling it programmatically
+
+If you need codegen in your own tooling, `runCodegen` takes a single options
+object and returns the result, including any static schema advisories found this
+run:
+
+```ts
+import { formatAdvisories, runCodegen } from "@lunora/codegen";
+
+const result = runCodegen({ projectRoot: process.cwd() });
+
+console.log(`wrote _generated/ -> ${result.outputDirectory}`);
+
+if (result.advisories.length > 0) {
+    console.warn(formatAdvisories(result.advisories));
+}
+```
+
+Common options:
+
+- `projectRoot` (required) — the directory containing the `lunora/` folder.
+- `dryRun` — run discovery and emit (so parse errors still surface) without
+  writing files. `outputDirectory` is still the path that would have been
+  written.
+- `lint` — run the static schema advisor (default `true`); when `false`,
+  `result.advisories` is empty.
+- `apiSpec` — `"openapi"` (default), `"openrpc"`, `"both"`, or `"none"`.
+- `lunoraDirectory` — override the `lunora` subdirectory name.
+
+## See also
+
+- [@lunora/vite](/docs/packages/vite) — runs codegen on schema changes during dev
+- [@lunora/cli](/docs/packages/cli) — the `lunora codegen` command
+- [@lunora/values](/docs/packages/values) — the `v.*` validators the parser understands

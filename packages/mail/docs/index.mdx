@@ -6,7 +6,7 @@ description: Transactional email for Lunora — Cloudflare Email Workers or Rese
 `@lunora/mail` wraps `@visulima/email` so you can send transactional email
 from inside an `action`. The default transport is Cloudflare Email Workers;
 Resend is a built-in option, and you can pass any transport you wire
-yourself. It renders React Email templates inline and offloads delivery to a
+yourself. It renders React Email templates inline and can offload delivery to a
 Cloudflare Queue.
 
 `createMailer` needs `from` plus exactly one transport: `cloudflareSend` (the

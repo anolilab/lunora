@@ -5,19 +5,21 @@ description: Browse the Lunora package ecosystem — the server runtime, validat
 
 import { Cards, Card } from "fumadocs-ui/components/card";
 
-Lunora ships as a set of focused, independently versioned `@lunora/*` packages. Install the unscoped [`lunora`](/packages/lunorash) umbrella for the base (server, values, runtime, Durable Objects, client) in a single dependency, then add only the opt-in packages you need.
+Lunora ships as a set of focused, independently versioned `@lunora/*` packages. Install the unscoped [`lunorash`](/docs/packages/lunorash) umbrella for the base (server, values, runtime, Durable Objects, client) in a single dependency, then add only the opt-in packages you need. (The CLI bin stays `lunora`; the npm name is `lunorash` because `lunora` is already taken.)
+
+<Callout type="info">Lunora is in **alpha**. The packages below are usable today, but APIs can still change between releases.</Callout>
 
 ## Core Runtime
 
 The type-safe server API, validators, and the Worker + Durable Object runtime.
 
 <Cards>
-    <Card title="lunora" description="Unscoped umbrella — the base in one install, plus the CLI bin" href="/packages/lunorash" />
-    <Card title="Server" description="defineSchema, defineTable, query, mutation, action" href="/packages/server" />
-    <Card title="Values" description="v.* validators and return-type inference" href="/packages/values" />
-    <Card title="Runtime" description="Worker entry: RPC router, shard resolver, query coordinator" href="/packages/runtime" />
-    <Card title="Durable Objects" description="ShardDO and SessionDO — SQLite, OCC, hibernated subscriptions" href="/packages/do" />
-    <Card title="Codegen" description="Emits _generated/{api,server,dataModel}.ts from schema.ts" href="/packages/codegen" />
+    <Card title="lunorash" description="Unscoped umbrella — the base in one install, plus the CLI bin" href="/docs/packages/lunorash" />
+    <Card title="Server" description="defineSchema, defineTable, query, mutation, action" href="/docs/packages/server" />
+    <Card title="Values" description="v.* validators and return-type inference" href="/docs/packages/values" />
+    <Card title="Runtime" description="Worker entry: RPC router, shard resolver, query coordinator" href="/docs/packages/runtime" />
+    <Card title="Durable Objects" description="ShardDO and SessionDO — SQLite, OCC, hibernated subscriptions" href="/docs/packages/do" />
+    <Card title="Codegen" description="Emits _generated/{api,server,dataModel}.ts from schema.ts" href="/docs/packages/codegen" />
 </Cards>
 
 ## Client & Frameworks
@@ -25,13 +27,13 @@ The type-safe server API, validators, and the Worker + Durable Object runtime.
 The browser SDK plus reactive adapters for React, Vue, Solid, Svelte, and Astro.
 
 <Cards>
-    <Card title="Client" description="Browser SDK: WebSocket, optimistic updates, offline queue" href="/packages/client" />
-    <Card title="React" description="useQuery / useMutation / useSubscription / useAuth" href="/packages/react" />
-    <Card title="Vue" description="Live composables and optimistic mutations" href="/packages/vue" />
-    <Card title="Solid" description="Live queries, optimistic mutations, reactive loaders" href="/packages/solid" />
-    <Card title="Svelte" description="Live stores, optimistic mutations, reactive loaders" href="/packages/svelte" />
-    <Card title="Astro" description="Single-worker composition and reactive-loader helpers" href="/packages/astro" />
-    <Card title="DB" description="TanStack DB binding with a durable offline outbox" href="/packages/db" />
+    <Card title="Client" description="Browser SDK: WebSocket, optimistic updates, offline queue" href="/docs/packages/client" />
+    <Card title="React" description="useQuery / useMutation / useSubscription / useAuth" href="/docs/packages/react" />
+    <Card title="Vue" description="Live composables and optimistic mutations" href="/docs/packages/vue" />
+    <Card title="Solid" description="Live queries, optimistic mutations, reactive loaders" href="/docs/packages/solid" />
+    <Card title="Svelte" description="Live stores, optimistic mutations, reactive loaders" href="/docs/packages/svelte" />
+    <Card title="Astro" description="Single-worker composition and reactive-loader helpers" href="/docs/packages/astro" />
+    <Card title="DB" description="TanStack DB binding with a durable offline outbox" href="/docs/packages/db" />
 </Cards>
 
 ## Tooling
@@ -39,14 +41,14 @@ The browser SDK plus reactive adapters for React, Vue, Solid, Svelte, and Astro.
 The CLI, Vite plugin, local Studio, and the shared config layer.
 
 <Cards>
-    <Card title="CLI" description="init, dev, deploy, codegen, run, reset, migrate" href="/packages/cli" />
-    <Card title="Vite" description="Codegen, wrangler validator, and error overlay" href="/packages/vite" />
-    <Card title="Studio" description="Local admin UI for schema, data, logs, and advisors" href="/packages/studio" />
-    <Card title="Config" description="Shared CLI + Vite config and scaffolding layer" href="/packages/config" />
-    <Card title="Testing" description="In-memory harness for queries, mutations, and actions" href="/packages/testing" />
-    <Card title="Advisor" description="Schema and query lints feeding the Studio Advisors table" href="/packages/advisor" />
-    <Card title="Seed" description="Snaplet-style deterministic seeding from defineSchema" href="/packages/seed" />
-    <Card title="MCP" description="Model Context Protocol server for AI agents" href="/packages/mcp" />
+    <Card title="CLI" description="init, dev, deploy, codegen, run, reset, migrate" href="/docs/packages/cli" />
+    <Card title="Vite" description="Codegen, wrangler validator, and error overlay" href="/docs/packages/vite" />
+    <Card title="Studio" description="Local admin UI for schema, data, logs, and advisors" href="/docs/packages/studio" />
+    <Card title="Config" description="Shared CLI + Vite config and scaffolding layer" href="/docs/packages/config" />
+    <Card title="Testing" description="In-memory harness for queries, mutations, and actions" href="/docs/packages/testing" />
+    <Card title="Advisor" description="Schema and query lints feeding the Studio Advisors table" href="/docs/packages/advisor" />
+    <Card title="Seed" description="Snaplet-style deterministic seeding from defineSchema" href="/docs/packages/seed" />
+    <Card title="MCP" description="Model Context Protocol server for AI agents" href="/docs/packages/mcp" />
 </Cards>
 
 ## Add-ons
@@ -54,27 +56,28 @@ The CLI, Vite plugin, local Studio, and the shared config layer.
 Opt-in packages for auth, mail, storage, AI, scheduling, and more.
 
 <Cards>
-    <Card title="Auth" description="better-auth, D1-backed: email/password, OAuth, passkeys, 2FA" href="/packages/auth" />
-    <Card title="Mail" description="Resend adapter, TSX templates, queue-backed sends" href="/packages/mail" />
-    <Card title="Storage" description="R2 typed buckets and signed URLs" href="/packages/storage" />
-    <Card title="AI" description="Workers AI helper on the Vercel AI SDK" href="/packages/ai" />
-    <Card title="Scheduler" description="runAfter / runAt plus Cron Triggers via SchedulerDO" href="/packages/scheduler" />
-    <Card title="Container" description="Cloudflare Containers: defineContainer and typed ctx.containers" href="/packages/container" />
-    <Card title="Workflow" description="Durable, multi-step workflows" href="/packages/workflow" />
-    <Card title="Rate Limit" description="Token-bucket, fixed- and sliding-window limiting" href="/packages/ratelimit" />
+    <Card title="Auth" description="better-auth, D1-backed: email/password, OAuth, passkeys, 2FA" href="/docs/packages/auth" />
+    <Card title="Mail" description="Resend adapter, TSX templates, queue-backed sends" href="/docs/packages/mail" />
+    <Card title="Storage" description="R2 typed buckets and signed URLs" href="/docs/packages/storage" />
+    <Card title="AI" description="Workers AI helper on the Vercel AI SDK" href="/docs/packages/ai" />
+    <Card title="Scheduler" description="runAfter / runAt plus Cron Triggers via SchedulerDO" href="/docs/packages/scheduler" />
+    <Card title="Container" description="Cloudflare Containers: defineContainer and typed ctx.containers" href="/docs/packages/container" />
+    <Card title="Workflow" description="Durable, multi-step workflows" href="/docs/packages/workflow" />
+    <Card title="Rate Limit" description="Token-bucket, fixed- and sliding-window limiting" href="/docs/packages/ratelimit" />
 </Cards>
 
 ## Data & Edge
 
-Adapters for global state, external databases, vectors, and KV.
+Adapters for global state, external databases, and Cloudflare bindings.
 
 <Cards>
-    <Card title="D1" description="D1 adapter for .global() tables with read-your-writes" href="/packages/d1" />
-    <Card title="Hyperdrive" description="Connect external Postgres / MySQL via Hyperdrive" href="/packages/hyperdrive" />
-    <Card title="Vectors" description="Cloudflare Vectorize adapter for similarity search" href="/packages/vectors" />
-    <Card title="KV" description="Typed Cloudflare KV access" href="/packages/kv" />
-    <Card title="Images" description="Cloudflare Images helpers" href="/packages/images" />
-    <Card title="Analytics" description="Analytics integration for Lunora apps" href="/packages/analytics" />
-    <Card title="Payment" description="Payment integration for Lunora apps" href="/packages/payment" />
-    <Card title="Browser" description="Browser-side utilities" href="/packages/browser" />
+    <Card title="D1" description="D1 adapter for .global() tables with read-your-writes" href="/docs/packages/d1" />
+    <Card title="Hyperdrive" description="Connect external Postgres / MySQL via Hyperdrive" href="/docs/packages/hyperdrive" />
+    <Card
+        title="Bindings"
+        description="ctx.kv, ctx.images, ctx.analytics, ctx.pipelines, ctx.vectors, ctx.r2sql in one install"
+        href="/docs/packages/bindings"
+    />
+    <Card title="Payment" description="Provider-agnostic payments: Stripe and Polar adapters, webhook sync" href="/docs/packages/payment" />
+    <Card title="Browser" description="Cloudflare Browser Rendering: screenshots, PDFs, scraping in actions" href="/docs/packages/browser" />
 </Cards>

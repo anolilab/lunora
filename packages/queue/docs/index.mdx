@@ -5,13 +5,29 @@ description: Cloudflare Queues for Lunora — defineQueue producers, a generated
 
 `@lunora/queue` brings Cloudflare Queues to Lunora. Declare a queue with `defineQueue` in `lunora/queues.ts`; codegen wires a typed `ctx.queues.<name>` producer onto mutations and actions and generates the worker `queue()` push consumer. The config layer reconciles the wrangler `queues.producers[]` / `queues.consumers[]` entries from the same definition.
 
-```sh
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```bash tab="pnpm"
 pnpm add @lunora/queue
 ```
 
+```bash tab="npm"
+npm install @lunora/queue
+```
+
+```bash tab="yarn"
+yarn add @lunora/queue
+```
+
+```bash tab="bun"
+bun add @lunora/queue
+```
+
+</Tabs>
+
 Scaffold a queue:
 
-```sh
+```bash
 vis generate lunora-queue --name=emailQueue
 ```
 

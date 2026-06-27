@@ -52,7 +52,8 @@ import { action } from "@/lunora/_generated/server";
 
 export const thumbnail = action({
     handler: async (ctx) => {
-        const out = await ctx.images.transform(sourceStream, { width: 128, format: "webp" });
+        // transform(input, transformOptions?, outputOptions?) — sizing and output format are separate args.
+        const out = await ctx.images.transform(sourceStream, { width: 128 }, { format: "image/webp" });
         return out;
     },
 });
@@ -104,12 +105,15 @@ Cloudflare Vectorize: typed vector indexes and similarity search, wired from `de
 
 ```ts
 import { action } from "@/lunora/_generated/server";
+import { v } from "@lunora/values";
 
 export const search = action({
     args: { query: v.string() },
-    handler: async (ctx, { query }) => ctx.vectors.search("docs", query, { topK: 5 }),
+    handler: async (ctx, { query }) => ctx.vectors.query("docs", { input: query, topK: 5 }),
 });
 ```
+
+`query(index, { input })` embeds `input` with the index's configured embedder, then runs the search; pass a precomputed `vector` instead of `input` to skip embedding. `upsert` / `upsertMany` write vectors back.
 
 ## R2 SQL — `@lunora/bindings/r2sql`
 
@@ -117,8 +121,11 @@ A typed, chainable query builder over R2 SQL (serverless queries against Apache 
 
 ```ts
 import { action } from "@/lunora/_generated/server";
+import { desc } from "@lunora/bindings/r2sql";
 
 export const topEvents = action({
-    handler: async (ctx) => ctx.r2sql.from("events").select("type").count().groupBy("type").orderBy("count", "desc").limit(10),
+    handler: async (ctx) => ctx.r2sql.from("events").select("type", "COUNT(*) AS total").groupBy("type").orderBy(desc("total")).limit(10),
 });
 ```
+
+Tag descending order with `desc(...)` (or `asc(...)`); a bare string column sorts ascending. Aggregates go in the `select` list as raw SQL expressions.

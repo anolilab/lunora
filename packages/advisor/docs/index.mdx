@@ -1,11 +1,156 @@
 ---
 title: "@lunora/advisor"
-description: "Schema & query lints (splinter-style advisors) feeding the Studio Advisors table."
+description: "Schema and query lints — splinter-style advisors that surface in the Studio Advisors view, most of them at codegen time before you ship."
 ---
 
-`@lunora/advisor` — Schema & query lints (splinter-style advisors) feeding the Studio Advisors table.
+`@lunora/advisor` is a set of lints over your Lunora app, modeled on Supabase's
+[splinter](https://github.com/supabase/splinter). Each lint is a pure rule over a
+normalized `LintContext`; `runAdvisor()` runs a set of them and flattens the
+results into a flat list of findings that the CLI, the Vite plugin, and the
+Studio Advisors view all render.
 
-<Callout type="info">
-    Reference documentation for this package is in progress. In the meantime, see the [getting started guide](/docs/getting-started) and the
-    [concepts](/docs/concepts/schema) section.
-</Callout>
+You rarely call this package directly. `@lunora/codegen` runs the static lints
+during `lunora dev` and `lunora codegen`, so a problem shows up in your terminal
+and in Studio while you work — most of them **before the code ships**, which is
+the edge over an advisor that can only inspect a live database.
+
+## Two evidence tiers
+
+A lint draws its evidence from one of two sources:
+
+- **`static`** — runs against the declared `defineSchema` (tables, indexes,
+  relations) plus the query reads and inserts the codegen feeder discovers in
+  your function bodies. Deterministic and runnable at build time. Most lints are
+  static.
+- **`runtime`** — reads observed signal from a running deployment (per-shard
+  traffic, table scans, index hits, row samples). Three lints are runtime-only;
+  they need a live worker.
+
+Every finding carries a `level` — `ERROR`, `WARN`, or `INFO` — and a `category`
+of `SECURITY`, `PERFORMANCE`, or `SCHEMA`.
+
+## How findings surface
+
+<Steps>
+
+<Step>Write or change a schema, query, or mutation in `lunora/`.</Step>
+
+<Step>`lunora dev` / `lunora codegen` runs the static lints through `@lunora/codegen`. Findings print in the terminal.</Step>
+
+<Step>The Studio **Advisors** view renders the same findings, grouped by category and level, with the remediation text for each.</Step>
+
+</Steps>
+
+The runtime tier is filled by the Studio backend from each shard's durable
+counters; it appears in the same Advisors view once a deployment has traffic.
+
+## Static lints
+
+### Security
+
+| Lint                                     | Level   | Flags                                                      |
+| ---------------------------------------- | ------- | ---------------------------------------------------------- |
+| `hardcoded_secret`                       | `ERROR` | A secret literal committed in source                       |
+| `sql_injection_risk`                     | `ERROR` | Unsafe interpolation in a `ctx.sql` string                 |
+| `rls_uncovered_table`                    | `WARN`  | An RLS-gated table read without the `rls()` middleware     |
+| `mask_uncovered_pii_column`              | `WARN`  | A maskable column returned without the `mask()` middleware |
+| `admin_route_without_guard`              | `WARN`  | An admin route with no auth guard                          |
+| `auth_api_call_without_headers`          | `WARN`  | A privileged `ctx.authApi` call missing request headers    |
+| `policy_references_unknown_table`        | `WARN`  | An RLS policy bound to a table that doesn't exist          |
+| `public_arg_uses_any`                    | `WARN`  | A public argument typed `v.any()`                          |
+| `public_mutation_without_ratelimit`      | `WARN`  | A public write with no rate limit                          |
+| `user_creating_mutation_without_captcha` | `WARN`  | An account-creating / mail-sending write with no CAPTCHA   |
+| `container_public_internet`              | `INFO`  | A container with public egress enabled by default          |
+| `unbounded_string_arg`                   | `INFO`  | A public string argument with no length bound              |
+
+### Performance
+
+| Lint                           | Level  | Flags                                                  |
+| ------------------------------ | ------ | ------------------------------------------------------ |
+| `filter_without_index`         | `WARN` | A query filter on a column no index covers             |
+| `unindexed_foreign_key`        | `INFO` | A foreign-key column with no index on the owning table |
+| `unindexed_relation_target`    | `INFO` | The `many`-side foreign key of a relation is unindexed |
+| `duplicate_index`              | `INFO` | A redundant index already covered by another           |
+| `container_oversized_instance` | `INFO` | A container instance larger than its workload needs    |
+
+### Schema
+
+| Lint                                | Level   | Flags                                                       |
+| ----------------------------------- | ------- | ----------------------------------------------------------- |
+| `index_references_unknown_field`    | `ERROR` | An index naming a field the table doesn't have              |
+| `relation_references_unknown_field` | `ERROR` | A relation pointing at a field that doesn't exist           |
+| `relation_references_unknown_table` | `ERROR` | A relation pointing at a table that doesn't exist           |
+| `workflow_unknown_target`           | `ERROR` | A workflow call naming a workflow that doesn't exist        |
+| `circular_fk`                       | `WARN`  | A circular foreign-key dependency between tables            |
+| `empty_index`                       | `WARN`  | An index declared with no fields                            |
+| `nondeterministic_query_mutation`   | `WARN`  | `fetch` / `Date.now` / `Math.random` in a query or mutation |
+| `hyperdrive_outside_action`         | `WARN`  | `ctx.sql` used outside an action                            |
+| `r2sql_outside_action`              | `WARN`  | `ctx.r2sql` used outside an action                          |
+| `table_without_insert`              | `INFO`  | A table no function inserts into                            |
+| `workflow_unused`                   | `INFO`  | A workflow that is never started                            |
+
+## Runtime lints
+
+These read observed signal off a live deployment, so they only fire once a
+worker has traffic.
+
+| Lint                   | Level  | Category      | Flags                                              |
+| ---------------------- | ------ | ------------- | -------------------------------------------------- |
+| `hot_shard`            | `WARN` | `PERFORMANCE` | A shard taking a disproportionate share of traffic |
+| `index_utilization`    | `INFO` | `PERFORMANCE` | A declared index that observed queries never use   |
+| `constraint_validator` | `WARN` | `SCHEMA`      | A constraint violated by rows already in the store |
+
+## Run the lints yourself
+
+Adapt your schema with `fromServerSchema` and pass it to `runAdvisor`. The
+`source` option restricts to one tier — pass `"static"` to skip the runtime
+lints, which need a live deployment:
+
+```ts
+import { fromServerSchema, runAdvisor } from "@lunora/advisor";
+
+import schema from "./lunora/schema";
+
+const findings = runAdvisor({ schema: fromServerSchema(schema) }, { source: "static" });
+
+for (const finding of findings) {
+    console.log(`[${finding.level}] ${finding.name}: ${finding.detail}`);
+}
+```
+
+`runAdvisor(context, options)` returns a flat `Finding[]` in lint-declaration
+order. Each finding has `level`, `name`, `title`, `detail`, `description`,
+`remediation`, `categories`, `source`, and `metadata`. Options:
+
+- `lints` — the set to run. Defaults to `ALL_LINTS`; `STATIC_LINTS` and
+  `RUNTIME_LINTS` are also exported, as is each lint by name (e.g.
+  `unindexedForeignKey`).
+- `source` — restrict to `"static"` or `"runtime"`. Omit to run both.
+
+### Feeding the runtime lints
+
+The runtime tier reads `shardTraffic`, `tableScans`, `indexHits`, and
+`tableSamples` off the `LintContext`. The Studio backend fills those from each
+shard's durable counters. As an alternative feeder,
+`loadAnalyticsRuntimeMetrics` reconstructs the same arrays from the Analytics
+Engine SQL API:
+
+```ts
+import { fromServerSchema, loadAnalyticsRuntimeMetrics, runAdvisor } from "@lunora/advisor";
+
+import schema from "./lunora/schema";
+
+// `client` is an `@lunora/bindings/analytics` SQL client (anything with `query(sql)`).
+const metrics = await loadAnalyticsRuntimeMetrics(client, { dataset: "ANALYTICS" });
+const findings = runAdvisor({ schema: fromServerSchema(schema), ...metrics }, { source: "runtime" });
+```
+
+A missing metric degrades to an empty array rather than throwing, so a partially
+configured read path still returns what it can.
+
+## See also
+
+- [@lunora/server](/docs/packages/server) — the `defineSchema` / `defineTable` these lints analyze
+- [@lunora/studio](/docs/packages/studio) — renders the Advisors view
+- [@lunora/hyperdrive](/docs/packages/hyperdrive) — the `hyperdrive_outside_action` lint
+- [@lunora/bindings](/docs/packages/bindings) — the `r2sql_outside_action` lint and the Analytics SQL client the runtime feeder reads

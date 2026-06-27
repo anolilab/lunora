@@ -1,20 +1,16 @@
 ---
 title: Overview
-description: A type-safe real-time backend on your own Cloudflare account.
+description: The Convex-style real-time backend that runs on your own Cloudflare account — typed end to end, live by default, ~$0 at idle.
 ---
 
-Lunora is a Convex-style backend framework that runs entirely on **your own
-Cloudflare Workers + Durable Objects account**. It gives you typed functions,
-live subscriptions, schema-driven storage, first-party auth, file storage, a
-scheduler, durable workflows, and server-side authorization (row-level security
-and data masking), plus a local admin studio. You keep ownership of your data,
-and there is no per-seat platform fee.
+Lunora is a type-safe, real-time backend that runs entirely on **your own
+Cloudflare Workers + Durable Objects account**. You write a schema and some
+TypeScript functions. Lunora turns them into edge Workers with end-to-end types
+and reactive hooks that update live over WebSockets.
 
-Convex ties you to its hosted runtime. Lunora gives you the same developer
-experience on infrastructure you control. Earlier Cloudflare projects like
-`convex.do` and `zeroback` topped out at a single Durable Object. Lunora keeps
-your tables in one root DO until you opt into sharding, and once you do, every
-call site routes itself.
+It's the developer experience of a managed platform like Convex — without handing
+over your data or watching the bill climb with your traffic. You own your data,
+you pay Cloudflare's edge prices, and it's open source.
 
 ```ts
 // lunora/messages.ts
@@ -31,6 +27,92 @@ export const list = query.input({ channelId: v.id("channels") }).query(async ({ 
         .collect(),
 );
 ```
+
+That `list` query streams to the browser over WebSocket. Anyone sends a message,
+every open client updates — no cache to invalidate, no endpoint to wire up.
+
+<Callout type="warn">
+    Lunora is in **alpha**. Install from the `@alpha` dist-tag and expect breaking changes until the first stable release. You can build something real with it
+    today, but don't ship it to production yet.
+</Callout>
+
+## Why Lunora
+
+Every real-time app eventually hits the same fork in the road.
+
+**Managed platforms** like Convex and Firebase are a joy to build on, but your
+data lives on someone else's servers. **Raw Cloudflare** gives you ownership and
+edge prices, but you spend your weekends hand-wiring RPC, types, and
+subscriptions — good bones, no developer experience.
+
+Lunora is the third option: managed-platform DX, on the Cloudflare account you
+already pay for.
+
+<Cards>
+    <Card
+        title="Type-safe, end to end"
+        description="Schema, validators, query results, and hooks share one source of truth. Rename a field and the build breaks — in your editor, not in production."
+        href="/docs/concepts/queries-mutations"
+    />
+    <Card
+        title="Real-time by default"
+        description="Every query is a live subscription over WebSocket, with optimistic writes and an offline queue. No cache to invalidate."
+        href="/docs/concepts/realtime"
+    />
+    <Card
+        title="Runs on your account"
+        description="Workers + Durable Objects on your own Cloudflare account. Your data, your hostname, roughly $0 at idle on the free tier."
+        href="/docs/architecture"
+    />
+    <Card
+        title="Scales when you need it"
+        description="Start with one Durable Object. Opt into sharding per function when you outgrow it — no rewrite, same call sites."
+        href="/docs/concepts/sharding"
+    />
+    <Card
+        title="Secure by default"
+        description="Opt-in, server-side row-level security and data masking. Authorization lives next to your data, not scattered across handlers."
+        href="/docs/concepts/rls"
+    />
+    <Card
+        title="Batteries, not lock-in"
+        description="First-party auth, mail, storage, scheduler, workflows, payments, and AI — each a separate install, never a hard dependency."
+        href="/docs/packages"
+    />
+</Cards>
+
+## Own it, or let us run it
+
+The same code runs two ways, and you're never stuck with one:
+
+- **Self-host** on your own Cloudflare account. Free, open source, your data,
+  roughly $0 at idle on the free tier.
+- **Lunora Cloud** _(soon)_ — the same code, managed for you, for teams that
+  would rather ship than babysit infrastructure.
+
+You can always grab the open source and self-host. That's the whole point.
+
+## How Lunora compares
+
+|                                                  | **Lunora**             | Convex            | Firebase          | Plain Cloudflare |
+| ------------------------------------------------ | ---------------------- | ----------------- | ----------------- | ---------------- |
+| Type-safe end-to-end                             | Yes                    | Yes               | Partial           | DIY              |
+| Real-time subscriptions                          | Yes (WS, reactive)     | Yes               | Yes               | DIY              |
+| Runs on your account                             | **Yes (Cloudflare)**   | No (managed SaaS) | No (managed SaaS) | Yes              |
+| Scales past a single DO                          | **Yes (`.shardBy()`)** | n/a               | n/a               | DIY (manual)     |
+| Vite-first DX                                    | **Yes**                | n/a               | n/a               | DIY              |
+| Feature breadth (auth, mail, storage, scheduler) | Add-ons (alpha)        | Broad (built-in)  | Broad (built-in)  | DIY              |
+| Cost at idle                                     | ≈ $0 (CF free tier)    | Paid              | ≈ $0 (Spark tier) | ≈ $0             |
+
+Want the full breakdown against Convex, Supabase, Firebase, and Appwrite? See the
+[detailed comparison](/compare).
+
+## Where it's rough
+
+Lunora has fewer built-in features than Convex right now, and it's alpha, so
+expect breaking changes before the first stable tag. If you need production-ready
+today, pick something mature. We'd rather say it here than have you find out the
+hard way.
 
 ## What ships in v1.0.0-alpha.1
 
@@ -49,19 +131,22 @@ export const list = query.input({ channelId: v.id("channels") }).query(async ({ 
 - **`@lunora/testing` / `@lunora/mcp`** — an in-memory test harness and an MCP server for AI agents
 - **`@lunora/studio`** — a local admin console for data, functions, logs, and advisors
 
-## How Lunora compares
+## Start building
 
-|                                                  | **Lunora**             | Convex            | Firebase          | Plain Cloudflare |
-| ------------------------------------------------ | ---------------------- | ----------------- | ----------------- | ---------------- |
-| Type-safe end-to-end                             | Yes                    | Yes               | Partial           | DIY              |
-| Real-time subscriptions                          | Yes (WS, reactive)     | Yes               | Yes               | DIY              |
-| Runs on your account                             | **Yes (Cloudflare)**   | No (managed SaaS) | No (managed SaaS) | Yes              |
-| Scales past a single DO                          | **Yes (`.shardBy()`)** | n/a               | n/a               | DIY (manual)     |
-| Vite-first DX                                    | **Yes**                | n/a               | n/a               | DIY              |
-| Feature breadth (auth, mail, storage, scheduler) | Add-ons (alpha)        | Broad (built-in)  | Broad (built-in)  | DIY              |
-| Cost at idle                                     | ≈ $0 (CF free tier)    | Paid              | ≈ $0 (Spark tier) | ≈ $0             |
+One command gives you a typed, live-syncing app on your own account:
 
-## See also
+```bash
+pnpm dlx lunorash@alpha init my-app
+```
 
-- [Getting started](/docs/getting-started)
-- [Architecture](/docs/architecture)
+`pnpm dev` boots workerd — the real production runtime — generates your types,
+and starts Vite with a local Studio. No Cloudflare account required: develop
+locally, then `lunora deploy --temporary` pushes a live URL on a short-lived
+account you can claim later. Sign up only when you're ready to keep it.
+
+<Cards>
+    <Card title="Getting started" description="Scaffold a project and run the dev loop in under a minute." href="/docs/getting-started" />
+    <Card title="Build a realtime chat" description="A full walkthrough — schema, functions, and a live client." href="/docs/tutorial/realtime-chat" />
+    <Card title="Architecture" description="How Worker, ShardDO, D1, R2, and Queues fit together." href="/docs/architecture" />
+    <Card title="Star the repo" description="Lunora is open source. Follow along and tell us where it breaks." href="https://github.com/anolilab/lunora" />
+</Cards>
