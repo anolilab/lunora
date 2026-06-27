@@ -1,3 +1,19 @@
+## lunorash [1.0.0-alpha.27](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.26...lunorash@1.0.0-alpha.27) (2026-06-27)
+
+### Features
+
+* **queue:** add queues, pipelines, secrets bindings + studio queues page ([#30](https://github.com/anolilab/lunora/issues/30)) ([131460c](https://github.com/anolilab/lunora/commit/131460c5826f2ef600fa0ef81248ede91835dd0c)), closes [#29](https://github.com/anolilab/lunora/issues/29) [#31](https://github.com/anolilab/lunora/issues/31) [visulima#714](https://github.com/anolilab/visulima/issues/714)
+
+
+### Dependencies
+
+* **@lunora/cli:** upgraded to 1.0.0-alpha.27
+* **@lunora/client:** upgraded to 1.0.0-alpha.3
+* **@lunora/do:** upgraded to 1.0.0-alpha.6
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.5
+* **@lunora/server:** upgraded to 1.0.0-alpha.5
+* **@lunora/values:** upgraded to 1.0.0-alpha.3
+
 ## lunorash [1.0.0-alpha.26](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.25...lunorash@1.0.0-alpha.26) (2026-06-27)
 
 
