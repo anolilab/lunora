@@ -8,7 +8,7 @@
 paths:
     ".github/workflows/lint.yml":
         ignore:
-            - 'step must run script with "run" section or run action with "uses" section'
+            - 'step must run script with "run" section or run action with "uses" section' # yamllint disable-line rule:quoted-strings
     ".github/workflows/test.yml":
         ignore:
-            - 'step must run script with "run" section or run action with "uses" section'
+            - 'step must run script with "run" section or run action with "uses" section' # yamllint disable-line rule:quoted-strings
