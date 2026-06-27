@@ -138,6 +138,19 @@ export interface SchemaIR {
 
 export interface FunctionIR {
     args: Record<string, ValidatorIR>;
+
+    /**
+     * `true` when the args carry a `.check(...)` refinement. Refinement
+     * predicates are runtime closures the AST→IR step drops, so {@link FunctionIR.args}
+     * cannot represent them — the AOT args-validator compiler must therefore
+     * NOT compile such a function (it would silently skip the predicate) and
+     * leaves it on the interpreted path. Coarse-but-sound: detected by scanning
+     * the args source for `.check(`, so a `.check(` inside a string literal
+     * over-skips (a missed optimization, never a correctness loss). `.meta(...)`
+     * is pure metadata with no parse effect and does NOT set this.
+     */
+    argsHaveRefinement?: boolean;
+
     exportName: string;
     /** Path relative to `&lt;projectRoot>/lunora/` without extension, e.g. "messages". */
     filePath: string;

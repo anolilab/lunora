@@ -1,3 +1,4 @@
+import { DEFER_VALIDATION, installCompiledValidatorMap } from "@lunora/values";
 import { describe, expect, it, vi } from "vitest";
 
 import { initLunora, LunoraError, v, ValidationError } from "../src/index";
@@ -31,6 +32,38 @@ describe("builder terminal", () => {
         expect((c.query as unknown as { __lunoraProcedure: string }).__lunoraProcedure).toBe("query");
         expect((c.mutation as unknown as { __lunoraProcedure: string }).__lunoraProcedure).toBe("mutation");
         expect((c.action as unknown as { __lunoraProcedure: string }).__lunoraProcedure).toBe("action");
+    });
+});
+
+describe("compiled-args integration (the codegen AOT seam)", () => {
+    it("dispatch validates through a compiled parser installed on the registered function's .args", async () => {
+        expect.assertions(2);
+
+        const list = c.query.input({ limit: v.number() }).query(({ args }) => args.limit * 2);
+        let fastCalls = 0;
+
+        // `list.args` must be the exact object the handler validates against —
+        // installing here and seeing the handler use it proves the codegen wiring
+        // (`installCompiledValidatorMap(alias.fn.args, …)`) actually accelerates dispatch.
+        installCompiledValidatorMap(list.args, (source) => {
+            fastCalls += 1;
+
+            return { limit: source["limit"] };
+        });
+
+        await expect(list.handler({}, { limit: 5 })).resolves.toBe(10);
+        expect(fastCalls).toBe(1);
+    });
+
+    it("falls back to interpreted validation (errors included) when the compiled parser defers", async () => {
+        expect.assertions(2);
+
+        const send = c.mutation.input({ text: v.string() }).mutation(({ args }) => args.text);
+
+        installCompiledValidatorMap(send.args, () => DEFER_VALIDATION);
+
+        await expect(send.handler({}, { text: "hi" })).resolves.toBe("hi");
+        await expect(send.handler({}, { text: 123 as unknown as string })).rejects.toBeInstanceOf(ValidationError);
     });
 });
 

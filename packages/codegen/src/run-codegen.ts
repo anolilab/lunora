@@ -381,7 +381,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         useUmbrella,
         workflows,
     });
-    const functionsContent = emitFunctions(functions, migrations);
+    const functionsContent = emitFunctions(functions, migrations, useUmbrella);
     const shardContent = emitShard({
         advisories,
         containers,

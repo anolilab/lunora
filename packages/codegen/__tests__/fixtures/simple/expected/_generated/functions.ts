@@ -4,6 +4,7 @@
 import * as lunora_messages_0 from "../messages.js";
 import * as lunora_migrations_1 from "../migrations.js";
 
+import { DEFER_VALIDATION as DEFER, installCompiledValidatorMap } from "@lunora/values";
 import type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";
 import type { Id } from "./dataModel.js";
 
@@ -35,6 +36,29 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "messages:purge": lunora_messages_0.purge as unknown as RegisteredLunoraFunction,
     "messages:send": lunora_messages_0.send as unknown as RegisteredLunoraFunction,
 };
+
+/**
+ * AOT-compiled argument validators (Worker-safe, no `eval`). Each is installed
+ * onto its function's live `.args` object and consulted by the interpreted
+ * parser as a zero-allocation fast path; anything it can't model is deferred.
+ */
+installCompiledValidatorMap(lunora_messages_0.list.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["channelId"] !== "string") return DEFER;
+let __has1 = false;
+let __val1;
+if (source["limit"] !== undefined) {
+if (typeof source["limit"] !== "number" || !Number.isFinite(source["limit"])) return DEFER;
+__val1 = source["limit"];
+__has1 = true;
+}
+return { "channelId": source["channelId"], ...(__has1 ? { "limit": __val1 } : {}) };
+});
+installCompiledValidatorMap(lunora_messages_0.purge.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["channelId"] !== "string") return DEFER;
+return { "channelId": source["channelId"] };
+});
 
 /**
  * Connection-lifecycle manifest: the function paths the generated ShardDO

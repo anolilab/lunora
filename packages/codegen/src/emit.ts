@@ -1,6 +1,7 @@
 import type { Finding } from "@lunora/advisor";
 import type { AdvisoryFinding, MaskPoliciesResult, RlsPoliciesResult, StorageRulesResult, StudioFeaturesResult, WorkflowsResult } from "@lunora/do";
 
+import compileArgsValidator from "./compile-validator";
 import type {
     ContainerIR,
     CronJobIR,
@@ -39,6 +40,7 @@ interface BaseSpecifiers {
     readonly serverDataModel: string;
     readonly serverDrizzle: string;
     readonly serverTypes: string;
+    readonly values: string;
 }
 
 const baseSpecifiers = (useUmbrella = false): BaseSpecifiers =>
@@ -50,6 +52,7 @@ const baseSpecifiers = (useUmbrella = false): BaseSpecifiers =>
               serverDataModel: "lunorash/server/data-model",
               serverDrizzle: "lunorash/server/drizzle",
               serverTypes: "lunorash/server/types",
+              values: "lunorash/values",
           }
         : {
               client: "@lunora/client",
@@ -58,6 +61,7 @@ const baseSpecifiers = (useUmbrella = false): BaseSpecifiers =>
               serverDataModel: "@lunora/server/data-model",
               serverDrizzle: "@lunora/server/drizzle",
               serverTypes: "@lunora/server/types",
+              values: "@lunora/values",
           };
 
 /**
@@ -730,7 +734,7 @@ const CALL_REGISTERED_HELPER = `const callRegistered = async <R>(context: Caller
 const renderFunctionRegistry = (
     functions: ReadonlyArray<FunctionIR>,
     migrations: ReadonlyArray<MigrationIR>,
-): { dispatchBody: string; importBlock: string; migrationBody: string } => {
+): { dispatchBody: string; importBlock: string; installBlock: string; migrationBody: string } => {
     const aliasByPath = new Map<string, string>();
 
     const registerPath = (filePath: string): void => {
@@ -773,9 +777,37 @@ const renderFunctionRegistry = (
         )
         .join("\n");
 
+    // AOT-compiled argument validators. For each function whose args are fully
+    // structural (no `.check(...)` refinement, no unmodelled validator kind) we
+    // emit a specialised fast-path parser and install it onto the function's live
+    // `.args` object — the same reference the procedure builder validates against,
+    // so dispatch transparently uses it (and falls back to the interpreted parser
+    // for anything the fast path defers). See `./compile-validator`.
+    const installLines = functions
+        .map((definition) => {
+            // Skip refined args (the IR can't represent the predicate), argless
+            // functions (nothing to accelerate), and lifecycle hooks (no `.args`).
+            if (definition.argsHaveRefinement || definition.lifecycle || Object.keys(definition.args).length === 0) {
+                return undefined;
+            }
+
+            const compiled = compileArgsValidator(definition.args);
+
+            if (compiled === undefined) {
+                return undefined;
+            }
+
+            const alias = aliasByPath.get(definition.filePath) ?? "";
+
+            return `installCompiledValidatorMap(${alias}.${definition.exportName}.args, ${compiled});`;
+        })
+        .filter((line): line is string => line !== undefined)
+        .join("\n");
+
     return {
         dispatchBody: dispatchEntries.length > 0 ? `\n${dispatchEntries}\n` : "",
         importBlock: importLines.length > 0 ? `${importLines}\n\n` : "",
+        installBlock: installLines,
         migrationBody: migrationEntries.length > 0 ? `\n${migrationEntries}\n` : "",
     };
 };
@@ -1237,10 +1269,19 @@ const renderLifecycleManifest = (functions: ReadonlyArray<FunctionIR>): { connec
     return manifest;
 };
 
-const emitFunctions = (functions: ReadonlyArray<FunctionIR>, migrations: ReadonlyArray<MigrationIR> = []): string => {
+const emitFunctions = (functions: ReadonlyArray<FunctionIR>, migrations: ReadonlyArray<MigrationIR> = [], useUmbrella = false): string => {
     const hasFunctions = functions.length > 0;
-    const { dispatchBody, importBlock, migrationBody } = renderFunctionRegistry(functions, migrations);
+    const base = baseSpecifiers(useUmbrella);
+    const { dispatchBody, importBlock, installBlock, migrationBody } = renderFunctionRegistry(functions, migrations);
     const lifecycleHooks = renderLifecycleManifest(functions);
+
+    // Pull in the compiled-args seam only when at least one function compiled —
+    // an unused import would trip `noUnusedLocals`.
+    const compiledArgsImport = installBlock.length > 0 ? `import { DEFER_VALIDATION as DEFER, installCompiledValidatorMap } from "${base.values}";\n` : "";
+    const compiledArgsInstall =
+        installBlock.length > 0
+            ? `\n/**\n * AOT-compiled argument validators (Worker-safe, no \`eval\`). Each is installed\n * onto its function's live \`.args\` object and consulted by the interpreted\n * parser as a zero-allocation fast path; anything it can't model is deferred.\n */\n${installBlock}\n`
+            : "";
 
     const caller = renderCaller(functions);
     const callerTypes = caller.types ? `\n${caller.types}\n` : "";
@@ -1258,7 +1299,7 @@ const emitFunctions = (functions: ReadonlyArray<FunctionIR>, migrations: Readonl
     const callerParameter = hasFunctions ? "context" : "_context";
     const callRegisteredHelper = hasFunctions ? `${CALL_REGISTERED_HELPER}\n\n` : "";
 
-    return `${GENERATED_HEADER}${importBlock}import type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";
+    return `${GENERATED_HEADER}${importBlock}${compiledArgsImport}import type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";
 ${dataModelImport}
 /**
  * Single registered function, narrowed to the shape \`handleRpc\` needs.
@@ -1284,7 +1325,7 @@ export interface RegisteredLunoraFunction {
  * emits (\`api[namespace][fn].__lunoraRef === "namespace:fn"\`).
  */
 export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {${dispatchBody}};
-
+${compiledArgsInstall}
 /**
  * Connection-lifecycle manifest: the function paths the generated ShardDO
  * dispatches when a client's WebSocket connects (\`connect\`) or disconnects

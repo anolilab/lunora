@@ -23,7 +23,7 @@ export type {
     ValidatorKind,
 } from "./v";
 export { isOrWrapsFromValidator, optionalInner, v } from "./v";
-export type { InferValidatorMap, ValidatorMap } from "./validator-map";
-export { parseValidatorMap } from "./validator-map";
+export type { CompiledValidatorMap, InferValidatorMap, ValidatorMap } from "./validator-map";
+export { DEFER_VALIDATION, installCompiledValidatorMap, parseValidatorMap } from "./validator-map";
 
 export const VERSION = "0.0.0";
