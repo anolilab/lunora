@@ -207,6 +207,17 @@ const compileField = (key: string, node: ValidatorIR, access: string, context: E
     const keyLiteral = JSON.stringify(key);
 
     if (node.kind === "optional") {
+        // The optional wrapper itself may carry a `.check(...)` refinement, an
+        // unresolved `sourceText`, or a column modifier — e.g.
+        // `v.optional(v.string()).check(isEmail)` lowers to an optional node with
+        // `hasRefinement: true`. Recursing into `inner` alone would compile a bare
+        // string guard and silently skip the predicate, accepting input the
+        // interpreted parser rejects. Decline here exactly as compileNode does for
+        // every other node so the function keeps the interpreted path.
+        if (node.hasRefinement || node.sourceText !== undefined || hasColumnModifier(node)) {
+            return undefined;
+        }
+
         const { inner } = node;
 
         if (!inner) {

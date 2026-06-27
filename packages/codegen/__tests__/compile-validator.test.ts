@@ -160,4 +160,17 @@ describe("compileArgsValidator — modelled behaviour", () => {
         expect(compileArgsValidator(irFromSnippet("{ name: v.string().check((s) => s.length > 0) }") as never)).toBeUndefined();
         expect(compileArgsValidator(irFromSnippet("{ name: v.string().meta({ schema: { maxLength: 4 } }) }") as never)).toBeDefined();
     });
+
+    it("declines a `.check(...)` refinement on an OPTIONAL field so the predicate is never skipped", () => {
+        expect.assertions(3);
+
+        // `v.optional(v.string()).check(...)` lowers to an `optional` node carrying
+        // `hasRefinement: true`. The optional field branch must consult the wrapper's
+        // own flags (not just `inner`), else it compiles a bare string guard and the
+        // hot path accepts input the interpreted parser rejects — a validation bypass.
+        expect(compileArgsValidator(irFromSnippet("{ nick: v.optional(v.string()).check((s) => s.length > 0) }") as never)).toBeUndefined();
+        expect(compileArgsValidator(irFromSnippet("{ limit: v.optional(v.number()).check((n) => n <= 100) }") as never)).toBeUndefined();
+        // A plain optional with no refinement still compiles.
+        expect(compileArgsValidator(irFromSnippet("{ nick: v.optional(v.string()) }") as never)).toBeDefined();
+    });
 });
