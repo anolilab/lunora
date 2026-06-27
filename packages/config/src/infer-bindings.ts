@@ -75,6 +75,11 @@ const TYPE_ONLY_EXPORT_PATTERNS: Record<DurableObjectClass, RegExp> = {
 
 const ENV_DB_PATTERN = /\benv\s*\.\s*DB\b/;
 const ENV_AI_PATTERN = /\benv\s*\.\s*AI\b/;
+// Pipelines ships from `@lunora/analytics` and is reached via `ctx.pipelines` —
+// there is no dedicated `@lunora/pipelines` import to key off (an analytics
+// import alone must NOT flip the pipelines binding hint). So detect the
+// `ctx.pipelines` access directly, mirroring the codegen feature probe.
+const CTX_PIPELINES_PATTERN = /\bctx\s*\.\s*pipelines\b/;
 const TYPE_ONLY_IMPORT_PATTERN = /^\s*import\s+type\b/;
 
 /**
@@ -93,7 +98,7 @@ const TYPE_ONLY_IMPORT_PATTERN = /^\s*import\s+type\b/;
 //   @lunora/browser    → browser                   → self-describing (binding name only)
 //   @lunora/images     → images                    → self-describing (binding name only)
 //   @lunora/analytics  → analytics_engine_datasets → self-describing (dataset == binding name)
-//   @lunora/pipelines  → pipelines                 → hint (un-mintable remote pipeline name)
+//   ctx.pipelines      → pipelines                 → hint (un-mintable remote pipeline name; ships from @lunora/analytics)
 const CAPABILITY_SOURCES = {
     usesAi: { pattern: /\bfrom\s+["']@lunora\/ai["']/, source: "@lunora/ai" },
     usesAnalytics: { pattern: /\bfrom\s+["']@lunora\/analytics["']/, source: "@lunora/analytics" },
@@ -104,7 +109,10 @@ const CAPABILITY_SOURCES = {
     usesKv: { pattern: /\bfrom\s+["']@lunora\/kv["']/, source: "@lunora/kv" },
     usesMail: { pattern: /\bfrom\s+["']@lunora\/mail["']/, source: "@lunora/mail" },
     usesPayment: { pattern: /\bfrom\s+["']@lunora\/payment["']/, source: "@lunora/payment" },
-    usesPipelines: { pattern: /\bfrom\s+["']@lunora\/pipelines["']/, source: "@lunora/pipelines" },
+    // Keyed off the `ctx.pipelines` access (not an import) — see CTX_PIPELINES_PATTERN.
+    // The sentinel `source` never equals a real import specifier, so an
+    // `@lunora/analytics` import resolves to `usesAnalytics` alone, never this flag.
+    usesPipelines: { pattern: CTX_PIPELINES_PATTERN, source: "@lunora/analytics#pipelines" },
     usesScheduler: { pattern: /\bfrom\s+["']@lunora\/scheduler["']/, source: "@lunora/scheduler" },
     usesStorage: { pattern: /\bfrom\s+["']@lunora\/storage["']/, source: "@lunora/storage" },
 } as const satisfies Record<string, { pattern: RegExp; source: string }>;
@@ -185,7 +193,7 @@ interface InferredBindings {
     usesMail: boolean;
     /** `@lunora/payment` is imported (provider secrets must be set in `.dev.vars`; no binding). */
     usesPayment: boolean;
-    /** `@lunora/pipelines` is imported (binding needs an un-mintable remote pipeline name; hint-only). */
+    /** `ctx.pipelines` is used (binding needs an un-mintable remote pipeline name; hint-only). */
     usesPipelines: boolean;
     /** `@lunora/scheduler` is imported. */
     usesScheduler: boolean;
@@ -284,7 +292,12 @@ const capabilitiesFromSource = (code: string): Capabilities => {
         capabilities = regexCapabilities(code);
     }
 
-    return mergeCapabilities(capabilities, { ...NO_CAPABILITIES, needsD1: ENV_DB_PATTERN.test(code), usesAi: ENV_AI_PATTERN.test(code) });
+    return mergeCapabilities(capabilities, {
+        ...NO_CAPABILITIES,
+        needsD1: ENV_DB_PATTERN.test(code),
+        usesAi: ENV_AI_PATTERN.test(code),
+        usesPipelines: CTX_PIPELINES_PATTERN.test(code),
+    });
 };
 
 /** Recursively collect scannable source files under `directory`. */
@@ -554,7 +567,7 @@ const describeCapabilitySignals = (capabilities: Capabilities, exported: Readonl
         ],
         [
             capabilities.usesPipelines,
-            "hint: @lunora/pipelines is imported; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding, pipeline }) — the pipeline resource can't be auto-provisioned",
+            "hint: ctx.pipelines is used; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding, pipeline }) — the pipeline resource can't be auto-provisioned",
         ],
     ];
 

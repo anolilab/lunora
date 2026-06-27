@@ -362,12 +362,13 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
 
     // Cloudflare-coverage capability arms (plans 027/028/031/032/035/036).
     // Each maps an `@lunora/*` import to a capability flag + signal. Hint
-    // bindings (kv/hyperdrive/pipelines) emit a `hint:` signal; self-describing
-    // bindings (browser/images/analytics) emit a plain provisioning signal.
+    // bindings (kv/hyperdrive) emit a `hint:` signal; self-describing bindings
+    // (browser/images/analytics) emit a plain provisioning signal. Pipelines is
+    // NOT import-driven (it ships from @lunora/analytics, reached via
+    // ctx.pipelines) and is covered by its own test below.
     it.each([
         ["@lunora/kv", "usesKv", /hint: @lunora\/kv/u],
         ["@lunora/hyperdrive", "usesHyperdrive", /hint: @lunora\/hyperdrive/u],
-        ["@lunora/pipelines", "usesPipelines", /hint: @lunora\/pipelines/u],
         ["@lunora/browser", "usesBrowser", /browser \(@lunora\/browser/u],
         ["@lunora/images", "usesImages", /images \(@lunora\/images/u],
         ["@lunora/analytics", "usesAnalytics", /analytics_engine_datasets/u],
@@ -398,6 +399,34 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
         expect(result.usesBrowser).toBe(false);
         expect(result.usesImages).toBe(false);
         expect(result.usesAnalytics).toBe(false);
+    });
+
+    it("infers pipelines from a ctx.pipelines access and emits the hint signal", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        // Pipelines ships from @lunora/analytics; the binding hint keys off the
+        // `ctx.pipelines` read, not a (non-existent) @lunora/pipelines import.
+        write("lunora/ingest.ts", `import { createPipelines } from "@lunora/analytics";\nexport const handler = (ctx) => ctx.pipelines.send([]);`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesPipelines).toBe(true);
+        expect(result.signals.some((signal) => signal.includes("wrangler pipelines create"))).toBe(true);
+    });
+
+    it("does not flip pipelines for an analytics-only project (no ctx.pipelines read)", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/metrics.ts", `import { thing } from "@lunora/analytics";\nexport const handler = (ctx) => ctx.analytics.writeDataPoint(thing);`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesAnalytics).toBe(true);
+        expect(result.usesPipelines).toBe(false);
     });
 
     it("infers mail from a @lunora/mail import and emits a hint signal (LOW 3 regression)", async () => {
