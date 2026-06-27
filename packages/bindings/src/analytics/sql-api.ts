@@ -9,7 +9,7 @@
  * The token is an **account-scoped API token with Analytics Engine read** — a
  * secret*, never a binding and never auto-scaffolded with a real value. The
  * caller provides `accountId` + `apiToken` from env/`.dev.vars`. This module is
- * deliberately placed in `@lunora/analytics` (not Studio) so both the Studio
+ * deliberately placed in `@lunora/bindings/analytics` (not Studio) so both the Studio
  * read panel and `@lunora/advisor`'s runtime lints can import one client.
  */
 

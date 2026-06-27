@@ -1,6 +1,6 @@
 import { createConfig } from "@anolilab/eslint-config";
 
-// Self-contained flat config for @lunora/analytics. Each package owns its own
+// Self-contained flat config for @lunora/bindings. Each package owns its own
 // setup (no shared local preset); rules build on @anolilab/eslint-config.
 export default createConfig(
     {

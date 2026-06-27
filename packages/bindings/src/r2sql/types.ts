@@ -1,5 +1,5 @@
 /**
- * Public types for `@lunora/r2sql`.
+ * Public types for `@lunora/bindings/r2sql`.
  *
  * R2 SQL is Cloudflare's serverless, distributed query engine over **Apache
  * Iceberg** tables in [R2 Data Catalog](https://developers.cloudflare.com/r2/data-catalog/).
@@ -12,7 +12,7 @@
  * Everything here is deliberately structural (no hard dependency on
  * `@cloudflare/workers-types`) so unit tests can inject a plain `fetch` double
  * and never touch the network — mirroring `AnalyticsSqlConfig` in
- * `@lunora/analytics`.
+ * `@lunora/bindings/analytics`.
  */
 
 /**

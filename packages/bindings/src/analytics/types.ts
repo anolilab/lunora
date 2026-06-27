@@ -71,7 +71,7 @@ export interface TrackSchema {
 
 /**
  * The write-side client bound to `ctx.analytics` (the generated context imports
- * this exact type as `import("@lunora/analytics").AnalyticsClient`). Telemetry
+ * this exact type as `import("@lunora/bindings/analytics").AnalyticsClient`). Telemetry
  * is fire-and-forget and sampled — never read a data point back in-handler.
  */
 export interface AnalyticsClient {

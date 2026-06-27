@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">Lightweight Cloudflare binding helpers for Lunora — ctx.kv, ctx.images, ctx.analytics (+ Pipelines), ctx.vectors, ctx.r2sql — one install, per-binding subpaths</h3>
+<h3 align="center">Lightweight Cloudflare binding helpers for Lunora — ctx.kv, ctx.images, ctx.analytics, ctx.pipelines, ctx.vectors, ctx.r2sql — one install, per-binding subpaths</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
@@ -16,13 +16,14 @@ The lightweight Cloudflare binding helpers for Lunora, in one install with
 per-binding subpaths — each is a thin, zero-dependency `ctx.*` facade over its
 Cloudflare binding:
 
-| Subpath                      | `ctx.*`         | Cloudflare binding                             |
-| ---------------------------- | --------------- | ---------------------------------------------- |
-| `@lunora/bindings/kv`        | `ctx.kv`        | Workers KV                                     |
-| `@lunora/bindings/images`    | `ctx.images`    | Cloudflare Images                              |
-| `@lunora/bindings/analytics` | `ctx.analytics` | Analytics Engine + Pipelines (`ctx.pipelines`) |
-| `@lunora/bindings/vectors`   | `ctx.vectors`   | Vectorize                                      |
-| `@lunora/bindings/r2sql`     | `ctx.r2sql`     | R2 SQL                                         |
+| Subpath                      | `ctx.*`         | Cloudflare binding |
+| ---------------------------- | --------------- | ------------------ |
+| `@lunora/bindings/kv`        | `ctx.kv`        | Workers KV         |
+| `@lunora/bindings/images`    | `ctx.images`    | Cloudflare Images  |
+| `@lunora/bindings/analytics` | `ctx.analytics` | Analytics Engine   |
+| `@lunora/bindings/pipelines` | `ctx.pipelines` | Pipelines          |
+| `@lunora/bindings/vectors`   | `ctx.vectors`   | Vectorize          |
+| `@lunora/bindings/r2sql`     | `ctx.r2sql`     | R2 SQL             |
 
 ```ts
 import { createKv } from "@lunora/bindings/kv";

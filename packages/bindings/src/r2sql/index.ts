@@ -1,5 +1,5 @@
 /**
- * `@lunora/r2sql` — typed, chainable R2 SQL for Lunora.
+ * `@lunora/bindings/r2sql` — typed, chainable R2 SQL for Lunora.
  *
  * Query Cloudflare [R2 SQL](https://developers.cloudflare.com/r2-sql/) — the
  * serverless engine over Apache Iceberg tables in R2 Data Catalog — from a

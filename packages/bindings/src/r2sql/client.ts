@@ -5,9 +5,9 @@
  * R2 SQL has **no Workers binding** — `query` POSTs `{ query }` to
  * `…/r2-sql/query/{bucket}` with the bearer token and normalises the Cloudflare
  * envelope (`{ success, result, errors }`) into an {@link R2SqlResult}. The
- * factory deliberately lives in `@lunora/r2sql` (not Studio) so the Studio data
+ * factory deliberately lives in `@lunora/bindings/r2sql` (not Studio) so the Studio data
  * panel and the `@lunora/advisor` runtime lints can share one client — mirroring
- * `createAnalyticsSqlClient` in `@lunora/analytics`.
+ * `createAnalyticsSqlClient` in `@lunora/bindings/analytics`.
  *
  * Surfaces: `query(sql)` / `explain(sql)` (raw escape hatches, typed rows);
  * `from&lt;Row>(table)` (the chainable {@link SelectBuilder} — window functions,
@@ -71,7 +71,7 @@ export class R2SqlError extends Error {
 /**
  * The typed R2 SQL surface bound to `ctx.r2sql` on **`ActionCtx` only**. This is
  * the exact type the generated ctx imports as
- * `import("@lunora/r2sql").R2SqlClient` — keep the name and shape stable.
+ * `import("@lunora/bindings/r2sql").R2SqlClient` — keep the name and shape stable.
  */
 export interface R2SqlClient {
     /** Run `DESCRIBE namespace.table` — column names and Iceberg types. */
