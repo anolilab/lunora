@@ -2541,12 +2541,16 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
 
         // Auth providers register routes as `"METHOD path"` (e.g. `"GET /auth/signin"`).
-        // We also accept legacy pathname-only keys for ad-hoc handlers.
-        const methodAndPath = `${request.method} ${url.pathname}`;
-        const route = options.routes?.[methodAndPath] ?? options.routes?.[url.pathname];
+        // We also accept legacy pathname-only keys for ad-hoc handlers. Guard the
+        // whole lookup behind `options.routes` so the common composed-worker path
+        // (no custom routes) skips the `"METHOD path"` string allocation and the
+        // two object reads on every request.
+        if (options.routes) {
+            const route = options.routes[`${request.method} ${url.pathname}`] ?? options.routes[url.pathname];
 
-        if (route) {
-            return route(request, env, context);
+            if (route) {
+                return route(request, env, context);
+            }
         }
 
         // Internal `/_lunora/*` endpoints, keyed by pathname. Each entry adapts
