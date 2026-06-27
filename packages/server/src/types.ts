@@ -191,7 +191,7 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
      * `ctx.db.&lt;table>.delete()` flips it instead of physically removing the row,
      * and **list reads** (`findMany`/`findFirst`/`query()`/`count`/`aggregate`/
      * relation loads) hide rows whose `field` is set unless
-     * `includeDeleted`/`withDeleted` is passed. By-id `get`/`patch`/`replace` and
+     * `includeDeleted: true` is passed. By-id `get`/`patch`/`replace` and
      * `restore` are unaffected. Absent ⇒ deletes are physical, as before.
      */
     softDeleteMode?: { field: string };

@@ -140,9 +140,12 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
      * instead of removing the row; `onDelete: "cascade"` children are recursively
      * soft-deleted too. **List reads** (`findMany`/`findFirst`/`query()`/`count`/
      * `aggregate`/relation loads) then hide soft-deleted rows unless they pass
-     * `includeDeleted`/`withDeleted`; by-id `get`/`patch`/`replace` and the new
+     * `includeDeleted: true`; by-id `get`/`patch`/`replace` and the new
      * `restore()` still address the row directly. `hardDelete()` physically
-     * removes it (cascading as a real delete).
+     * removes it (cascading as a real delete). Note: `includeDeleted` is a read
+     * scope, not access control — anyone who can run the read can set it; a unique
+     * index still rejects a new row that collides with a soft-deleted one (the row
+     * physically persists).
      */
     softDelete: (options?: { field?: string }) => TableBuilder<Shape>;
     /** Declare named lifecycle triggers fired inline within the write path. */
