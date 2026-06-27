@@ -155,7 +155,7 @@ interface DatabaseWriterLike {
      */
     aggregate: (tableName: string, options: AggregateArgs) => Promise<null | number>;
     count: (tableName: string, whereOrArgs?: CountArgs | WhereInput) => Promise<number>;
-    delete: (id: string, expectedTable?: string) => Promise<void>;
+    delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => Promise<void>;
     deleteMany: (ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string) => Promise<{ deleted: number }>;
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
@@ -209,6 +209,7 @@ interface DatabaseWriterLike {
      */
     rankPage: (tableName: string, indexName: string, options?: RankPageArgs) => Promise<QueryPage>;
     replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
+    restore?: (id: string, expectedTable?: string) => Promise<void>;
 }
 
 /**
@@ -1019,7 +1020,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
             });
         },
 
-        delete: (id, expectedTable) => gateById(id, "delete", (writer) => writer.delete(id, expectedTable), undefined, expectedTable),
+        delete: (id, expectedTable, options) => gateById(id, "delete", (writer) => writer.delete(id, expectedTable, options), undefined, expectedTable),
 
         async deleteMany(ids, options, expectedTable) {
             assertBatchLimit(ids.length, options?.limit, "deleteMany");
@@ -1236,6 +1237,26 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
             // We compile the predicate once into a JS-side checker.
             return reader.filter((document) => matchesWhere(document, baseWhere));
         },
+
+        // Restore clears the soft-delete marker — a by-id un-delete, gated as an
+        // "update" (the policy that governs patch). No post-image check: the
+        // writer owns the marker field, so we only enforce the pre-image USING.
+        restore: (id, expectedTable) =>
+            gateById(
+                id,
+                "update",
+                async (writer) => {
+                    const perform = writer.restore ?? raw.restore;
+
+                    if (!perform) {
+                        throw new LunoraError("BAD_REQUEST", "restore is not supported by this writer");
+                    }
+
+                    await perform(id, expectedTable);
+                },
+                undefined,
+                expectedTable,
+            ),
 
         replace: (id, document, expectedTable) =>
             gateById(

@@ -38,7 +38,7 @@ interface FakeDatabase {
     writer: {
         aggregate: (tableName: string, options: unknown) => Promise<null | number>;
         count: (tableName: string, whereOrArgs?: unknown) => Promise<number>;
-        delete: (id: string) => Promise<void>;
+        delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => Promise<void>;
         deleteMany: (ids: ReadonlyArray<string>, options?: { limit?: number }) => Promise<{ deleted: number }>;
         findFirst: (tableName: string, args?: unknown) => Promise<Record<string, unknown> | null>;
         findFirstOrThrow: (tableName: string, args?: unknown) => Promise<Record<string, unknown>>;
@@ -64,6 +64,7 @@ interface FakeDatabase {
             options?: unknown,
         ) => Promise<{ continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }>;
         replace: (id: string, document: Record<string, unknown>) => Promise<void>;
+        restore: (id: string, expectedTable?: string) => Promise<void>;
     };
 }
 
@@ -91,8 +92,8 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
 
                 return rowsOfTable(tableName).length;
             },
-            async delete(id) {
-                calls.push({ args: undefined, method: "delete", tableOrId: id });
+            async delete(id, _expectedTable, options) {
+                calls.push({ args: options, method: "delete", tableOrId: id });
             },
             async deleteMany(ids) {
                 calls.push({ args: ids, method: "deleteMany", tableOrId: "" });
@@ -157,6 +158,9 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
             },
             query() {
                 throw new Error("query() not used in these tests");
+            },
+            async restore(id) {
+                calls.push({ args: undefined, method: "restore", tableOrId: id });
             },
             async rank(tableName, _indexName, options) {
                 calls.push({ args: options, method: "rank", tableOrId: tableName });
@@ -1572,5 +1576,81 @@ describe("rls — permissions / can()", () => {
         await handler.handler(makeContext(database, "u1", ["editor"]), {});
 
         expect(database.calls.some((call) => call.method === "insert")).toBe(true);
+    });
+});
+
+describe("rls — soft-delete write methods (restore / hardDelete)", () => {
+    it("restore is gated as an update — denied for a non-owner", async () => {
+        expect.assertions(2);
+
+        const policy = definePolicy<TestContext>({
+            on: "update",
+            table: "documents",
+            when: ({ auth }) => {
+                return { ownerId: auth.userId };
+            },
+        });
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u2", table: "documents" }]);
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.restore("d1"));
+
+        // u1 is not the owner → the update policy denies the restore.
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toThrow(/denied/u);
+        // And the underlying writer was never reached.
+        expect(database.calls.some((call) => call.method === "restore")).toBe(false);
+    });
+
+    it("restore reaches the writer for the owner", async () => {
+        expect.assertions(1);
+
+        const policy = definePolicy<TestContext>({
+            on: "update",
+            table: "documents",
+            when: ({ auth }) => {
+                return { ownerId: auth.userId };
+            },
+        });
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.restore("d1"));
+
+        await handler.handler(makeContext(database, "u1"), {});
+
+        expect(database.calls.some((call) => call.method === "restore")).toBe(true);
+    });
+
+    it("hardDelete forwards `{ hard: true }` through the delete gate", async () => {
+        expect.assertions(2);
+
+        const policy = definePolicy<TestContext>({
+            on: "delete",
+            table: "documents",
+            when: () => true,
+        });
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.delete("d1", undefined, { hard: true }));
+
+        await handler.handler(makeContext(database, "u1"), {});
+
+        const deleteCall = database.calls.find((call) => call.method === "delete");
+
+        expect(deleteCall?.tableOrId).toBe("d1");
+        // The `{ hard: true }` option survives the RLS wrapper → the writer soft/hard branch sees it.
+        expect(deleteCall?.args).toStrictEqual({ hard: true });
+    });
+
+    it("hardDelete is still denied by the delete policy", async () => {
+        expect.assertions(2);
+
+        const policy = definePolicy<TestContext>({
+            on: "delete",
+            table: "documents",
+            when: ({ auth }) => {
+                return { ownerId: auth.userId };
+            },
+        });
+        const database = createFakeDatabase([{ _id: "d1", ownerId: "u2", table: "documents" }]);
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.delete("d1", undefined, { hard: true }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toThrow(/denied/u);
+        expect(database.calls.some((call) => call.method === "delete")).toBe(false);
     });
 });

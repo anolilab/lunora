@@ -315,8 +315,26 @@ interface TableBuilderAccumulator {
     relations: RelationIR[];
     searchIndexes: SearchIndexIR[];
     shardMode: TableIR["shardMode"];
+    softDelete?: { field: string };
     vectorIndexes: VectorIndexIR[];
 }
+
+/** Read the marker-column name off a `.softDelete({ field })` options arg; defaults to `deletedAt`. */
+const softDeleteFieldOf = (optionsArgument: Node | undefined): string => {
+    if (optionsArgument && Node.isObjectLiteralExpression(optionsArgument)) {
+        const fieldProperty = optionsArgument.getProperty("field");
+
+        if (fieldProperty && Node.isPropertyAssignment(fieldProperty)) {
+            const initializer = fieldProperty.getInitializer();
+
+            if (initializer && Node.isStringLiteral(initializer)) {
+                return initializer.getLiteralText();
+            }
+        }
+    }
+
+    return "deletedAt";
+};
 
 /** Apply one chained method call (`.index`, `.shardBy`, …) to the accumulator. */
 const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, args: ReadonlyArray<Node>, name: string): void => {
@@ -366,6 +384,14 @@ const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, 
             const field = args[0];
 
             accumulator.shardMode = { field: field && Node.isStringLiteral(field) ? field.getLiteralText() : "_unknown_", kind: "shardBy" };
+
+            break;
+        }
+
+        case "softDelete": {
+            // `.softDelete()` or `.softDelete({ field: "removedAt" })` — read the
+            // optional marker-column name off the options object (default `deletedAt`).
+            accumulator.softDelete = { field: softDeleteFieldOf(args[0]) };
 
             break;
         }
@@ -421,6 +447,14 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
         }
     }
 
+    // `.softDelete()` injects the marker column into the shape (mirrors the
+    // runtime builder) so `Doc_*`/`Insert_*` carry it — optional + nullable
+    // (`number | null | undefined`), absent on a live row. The user's own
+    // declaration of the column wins (matches the runtime `if (!(field in shape))`).
+    if (accumulator.softDelete && !(accumulator.softDelete.field in shape)) {
+        shape = { ...shape, [accumulator.softDelete.field]: { inner: { kind: "number" }, kind: "optional" } };
+    }
+
     return {
         externallyManaged: accumulator.externallyManaged,
         globalBackend: accumulator.shardMode === "global" ? (accumulator.globalBackend ?? "d1") : undefined,
@@ -431,6 +465,7 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
         searchIndexes: accumulator.searchIndexes,
         shape,
         shardMode: accumulator.shardMode,
+        softDelete: accumulator.softDelete,
         vectorIndexes: accumulator.vectorIndexes,
     };
 };
