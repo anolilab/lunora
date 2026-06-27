@@ -406,9 +406,9 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
 
         write("wrangler.jsonc", WRANGLER);
         write("src/server/index.ts", ENTRY_SHARD_ONLY);
-        // Pipelines ships from @lunora/analytics; the binding hint keys off the
-        // `ctx.pipelines` read, not a (non-existent) @lunora/pipelines import.
-        write("lunora/ingest.ts", `import { createPipelines } from "@lunora/analytics";\nexport const handler = (ctx) => ctx.pipelines.send([]);`);
+        // Pipelines ships from @lunora/bindings/pipelines but is codegen-wired onto
+        // ActionCtx; the binding hint keys off the `ctx.pipelines` read, not the import.
+        write("lunora/ingest.ts", `import { createPipelines } from "@lunora/bindings/pipelines";\nexport const handler = (ctx) => ctx.pipelines.send([]);`);
 
         const result = await inferLunoraBindings({ projectRoot: root });
 
@@ -421,7 +421,7 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
 
         write("wrangler.jsonc", WRANGLER);
         write("src/server/index.ts", ENTRY_SHARD_ONLY);
-        write("lunora/metrics.ts", `import { thing } from "@lunora/analytics";\nexport const handler = (ctx) => ctx.analytics.writeDataPoint(thing);`);
+        write("lunora/metrics.ts", `import { thing } from "@lunora/bindings/analytics";\nexport const handler = (ctx) => ctx.analytics.writeDataPoint(thing);`);
 
         const result = await inferLunoraBindings({ projectRoot: root });
 

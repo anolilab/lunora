@@ -70,7 +70,7 @@ describe("buildImageDeliveryUrl", () => {
                 transform: { background: "rgb(1,2,3)", width: 128 },
             });
 
-        expect(build).toThrow("@lunora/images:");
+        expect(build).toThrow("@lunora/bindings/images:");
         expect(build).toThrow(/background/);
     });
 
@@ -83,7 +83,7 @@ describe("buildImageDeliveryUrl", () => {
                 key: "a.png",
                 transform: { background: "a=b" },
             }),
-        ).toThrow("@lunora/images:");
+        ).toThrow("@lunora/bindings/images:");
     });
 
     it("accepts a hex background color (no comma) and builds the option string", () => {

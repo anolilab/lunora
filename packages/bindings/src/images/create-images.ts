@@ -52,7 +52,7 @@ const toStream = (input: ImageInput): ReadableStream<Uint8Array> => {
 
     if (isR2ObjectBody(input)) {
         if (input.body === null) {
-            throw new Error("@lunora/images: R2 object body is null (object missing or already consumed)");
+            throw new Error("@lunora/bindings/images: R2 object body is null (object missing or already consumed)");
         }
 
         return input.body as ReadableStream<Uint8Array>;
@@ -88,7 +88,7 @@ const sanitizeTransform = (transform: TransformOptions | undefined, maxDimension
 
     const clampDimension = (value: number): number => {
         if (!Number.isFinite(value) || value <= 0) {
-            throw new Error("@lunora/images: width/height must be a positive finite number");
+            throw new Error("@lunora/bindings/images: width/height must be a positive finite number");
         }
 
         return Math.min(Math.floor(value), maxDimension);
@@ -117,7 +117,7 @@ const resolveOutput = (output: OutputOptions | undefined): OutputOptions & { for
     const format = output?.format ?? DEFAULT_OUTPUT_FORMAT;
 
     if (!ALLOWED_OUTPUT_FORMATS.has(format)) {
-        throw new Error(`@lunora/images: unsupported output format "${format}" (allowed: ${[...ALLOWED_OUTPUT_FORMATS].join(", ")})`);
+        throw new Error(`@lunora/bindings/images: unsupported output format "${format}" (allowed: ${[...ALLOWED_OUTPUT_FORMATS].join(", ")})`);
     }
 
     return { ...output, format };

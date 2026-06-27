@@ -29,15 +29,15 @@ const MAX_LIST_LIMIT = 1000;
  */
 const validateKey = (key: string): void => {
     if (typeof key !== "string" || key.length === 0) {
-        throw new Error("@lunora/kv: key must be a non-empty string");
+        throw new Error("@lunora/bindings/kv: key must be a non-empty string");
     }
 
     if (key.length > MAX_KEY_LENGTH) {
-        throw new Error(`@lunora/kv: key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
+        throw new Error(`@lunora/bindings/kv: key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
     }
 
     if (key.includes("\0")) {
-        throw new Error("@lunora/kv: key contains NUL byte");
+        throw new Error("@lunora/bindings/kv: key contains NUL byte");
     }
 
     // `.` and `..` are reserved by KV's list semantics and traversal; reject
@@ -47,7 +47,7 @@ const validateKey = (key: string): void => {
 
     for (const segment of segments) {
         if (segment === "." || segment === "..") {
-            throw new Error("@lunora/kv: key contains a `.`/`..` path component");
+            throw new Error("@lunora/bindings/kv: key contains a `.`/`..` path component");
         }
     }
 };
@@ -64,18 +64,18 @@ const validatePrefix = (prefix: string): void => {
     }
 
     if (prefix.length > MAX_KEY_LENGTH) {
-        throw new Error(`@lunora/kv: prefix exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
+        throw new Error(`@lunora/bindings/kv: prefix exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
     }
 
     if (prefix.includes("\0")) {
-        throw new Error("@lunora/kv: prefix contains NUL byte");
+        throw new Error("@lunora/bindings/kv: prefix contains NUL byte");
     }
 
     const segments = prefix.split("/");
 
     for (const segment of segments) {
         if (segment === "." || segment === "..") {
-            throw new Error("@lunora/kv: prefix contains a `.`/`..` path component");
+            throw new Error("@lunora/bindings/kv: prefix contains a `.`/`..` path component");
         }
     }
 };
@@ -96,7 +96,7 @@ export const scopeKey = (prefix: string, key: string): string => {
     const composed = `${trimmedPrefix}/${key}`;
 
     if (composed.length > MAX_KEY_LENGTH) {
-        throw new Error(`@lunora/kv: scoped key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
+        throw new Error(`@lunora/bindings/kv: scoped key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
     }
 
     return composed;
@@ -109,7 +109,7 @@ const toPutOptions = (options: KvPutOptions): KvNamespacePutOptions | undefined 
     // `expiration` and `expirationTtl` are mutually exclusive — forwarding both
     // makes the binding throw a cryptic error, so fail fast with a clear one.
     if (options.expiration !== undefined && options.expirationTtl !== undefined) {
-        throw new Error("@lunora/kv: `expiration` and `expirationTtl` are mutually exclusive");
+        throw new Error("@lunora/bindings/kv: `expiration` and `expirationTtl` are mutually exclusive");
     }
 
     if (options.expiration !== undefined) {
@@ -132,7 +132,7 @@ export const createKv = (options: LunoraKvOptions): Kv => {
     // callers (and `createKv({})` misuse — exercised by a test) can omit it.
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the type
     if (!options.namespace) {
-        throw new Error("@lunora/kv: `namespace` is required");
+        throw new Error("@lunora/bindings/kv: `namespace` is required");
     }
 
     const { keyPrefix, namespace } = options;
@@ -205,7 +205,7 @@ export const createKv = (options: LunoraKvOptions): Kv => {
         // coercing it (a `limit: 0` previously yielded a 1-row page). The upper
         // bound is still clamped to KV's per-page ceiling below.
         if (listOptions.limit !== undefined && (!Number.isInteger(listOptions.limit) || listOptions.limit <= 0)) {
-            throw new Error("@lunora/kv: `limit` must be a positive integer");
+            throw new Error("@lunora/bindings/kv: `limit` must be a positive integer");
         }
 
         // Combine the instance keyPrefix with a caller-supplied prefix so a

@@ -144,11 +144,11 @@ export const buildSignedImageUrl = async (options: SignedImageUrlOptions): Promi
     const expiresInSeconds = options.expiresInSeconds ?? 60 * 60;
 
     if (!Number.isFinite(expiresInSeconds) || expiresInSeconds <= 0) {
-        throw new Error("@lunora/images: expiresInSeconds must be a positive finite number");
+        throw new Error("@lunora/bindings/images: expiresInSeconds must be a positive finite number");
     }
 
     if (expiresInSeconds > MAX_EXPIRES_IN_SECONDS) {
-        throw new Error(`@lunora/images: expiresInSeconds must not exceed ${String(MAX_EXPIRES_IN_SECONDS)} (7 days)`);
+        throw new Error(`@lunora/bindings/images: expiresInSeconds must not exceed ${String(MAX_EXPIRES_IN_SECONDS)} (7 days)`);
     }
 
     const exp = Math.floor(Date.now() / 1000) + expiresInSeconds;

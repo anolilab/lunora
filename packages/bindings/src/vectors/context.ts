@@ -183,7 +183,7 @@ const warnSharedNamespace = (indexName: string): void => {
 
     // eslint-disable-next-line no-console
     console.warn(
-        `[@lunora/vectors] index "${indexName}" syncs vectors without a namespace — in a\n` +
+        `[@lunora/bindings/vectors] index "${indexName}" syncs vectors without a namespace — in a\n` +
             "multi-tenant/sharded app this exposes one tenant's vectors (and any captured\n" +
             "metadata) to every other tenant, since Vectorize indexes are account-global.\n" +
             "Pass `namespace` (the shard/tenant key) on both write and query — query-side\n" +
@@ -285,7 +285,7 @@ const createVectorSyncHook = (options: { allowSharedNamespace?: boolean; namespa
         for (const { index, value } of inlineToUpsert) {
             if (typeof value !== "string") {
                 throw new TypeError(
-                    `@lunora/vectors: inline index "${index.name}" expects a string source at "${index.field}" on table "${event.table}" (got ${typeof value}); use a standalone defineVectorIndex with a select() to derive text from non-string columns`,
+                    `@lunora/bindings/vectors: inline index "${index.name}" expects a string source at "${index.field}" on table "${event.table}" (got ${typeof value}); use a standalone defineVectorIndex with a select() to derive text from non-string columns`,
                 );
             }
         }

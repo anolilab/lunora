@@ -43,14 +43,14 @@ const byteLengthOf = (value: ArrayBuffer | null | string): number => {
 /** Guard one positional array against AE's per-data-point cap; throws on overflow. */
 const assertWithin = (kind: string, length: number, max: number): void => {
     if (length > max) {
-        throw new RangeError(`@lunora/analytics: a data point may carry at most ${String(max)} ${kind} (got ${String(length)}).`);
+        throw new RangeError(`@lunora/bindings/analytics: a data point may carry at most ${String(max)} ${kind} (got ${String(length)}).`);
     }
 };
 
 /** Guard a measured UTF-8 byte size against AE's per-data-point byte budget; throws on overflow. */
 const assertByteBudget = (kind: string, bytes: number, max: number): void => {
     if (bytes > max) {
-        throw new RangeError(`@lunora/analytics: a data point's ${kind} may total at most ${String(max)} bytes (got ${String(bytes)}).`);
+        throw new RangeError(`@lunora/bindings/analytics: a data point's ${kind} may total at most ${String(max)} bytes (got ${String(bytes)}).`);
     }
 };
 

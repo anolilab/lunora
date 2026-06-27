@@ -43,7 +43,7 @@ const serializeTransform = (transform: TransformOptions): string =>
             // form (e.g. `%23RRGGBB`), not `rgb(r,g,b)`.
             if (serialized.includes(",") || serialized.includes("=")) {
                 throw new Error(
-                    `@lunora/images: transform option \`${key}\` value \`${serialized}\` contains a \`,\` or \`=\`, which the /cdn-cgi/image/ option list cannot represent` +
+                    `@lunora/bindings/images: transform option \`${key}\` value \`${serialized}\` contains a \`,\` or \`=\`, which the /cdn-cgi/image/ option list cannot represent` +
                         " (these are the option/key-value separators). For colors, use the hex form (e.g. `#RRGGBB`/`%23RRGGBB`) instead of `rgb(r,g,b)`.",
                 );
             }
@@ -98,7 +98,7 @@ export const buildImageDeliveryUrl = (options: ImageDeliveryUrlOptions): string 
     }
 
     if (options.key === undefined) {
-        throw new Error("@lunora/images: buildImageDeliveryUrl requires either `imageId` or `key`");
+        throw new Error("@lunora/bindings/images: buildImageDeliveryUrl requires either `imageId` or `key`");
     }
 
     const optionString = options.transform === undefined ? "" : serializeTransform(options.transform);

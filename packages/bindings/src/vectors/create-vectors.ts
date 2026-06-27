@@ -16,7 +16,7 @@ const resolveIndex = (indexes: Record<string, VectorizeIndexLike>, name: string)
     const index = indexes[name];
 
     if (!index) {
-        throw new Error(`@lunora/vectors: no index registered for "${name}". Known indexes: ${Object.keys(indexes).join(", ") || "(none)"}`);
+        throw new Error(`@lunora/bindings/vectors: no index registered for "${name}". Known indexes: ${Object.keys(indexes).join(", ") || "(none)"}`);
     }
 
     return index;
@@ -54,7 +54,7 @@ const MAX_UPSERT_BATCH = 1000;
 
 const createVectors = (options: LunoraVectorsOptions): LunoraVectors => {
     if (Object.keys(options.indexes).length === 0) {
-        throw new Error("@lunora/vectors: at least one index binding is required");
+        throw new Error("@lunora/bindings/vectors: at least one index binding is required");
     }
 
     const upsert = async <TInput>(indexName: string, input: UpsertInput<TInput>): Promise<VectorizeUpsertMutation> => {
@@ -68,7 +68,9 @@ const createVectors = (options: LunoraVectorsOptions): LunoraVectors => {
         const index = resolveIndex(options.indexes, indexName);
 
         if (inputs.length > MAX_UPSERT_BATCH) {
-            throw new RangeError(`@lunora/vectors: upsertMany batch exceeds ${String(MAX_UPSERT_BATCH)} (got ${String(inputs.length)}) — split across calls`);
+            throw new RangeError(
+                `@lunora/bindings/vectors: upsertMany batch exceeds ${String(MAX_UPSERT_BATCH)} (got ${String(inputs.length)}) — split across calls`,
+            );
         }
 
         // Bound the parallel embedder fan-out so a 1000-vector batch doesn't
@@ -90,7 +92,7 @@ const createVectors = (options: LunoraVectorsOptions): LunoraVectors => {
         if (input.topK !== undefined && (!Number.isInteger(input.topK) || input.topK < 1 || input.topK > topKCeiling)) {
             const reason = wantsHeavyPayload ? ' (lowered to 20 because returnValues/returnMetadata:"all" is set)' : "";
 
-            throw new RangeError(`@lunora/vectors: topK must be an integer in [1, ${String(topKCeiling)}]${reason} (got ${String(input.topK)})`);
+            throw new RangeError(`@lunora/bindings/vectors: topK must be an integer in [1, ${String(topKCeiling)}]${reason} (got ${String(input.topK)})`);
         }
 
         let values: ReadonlyArray<number>;
@@ -103,7 +105,7 @@ const createVectors = (options: LunoraVectorsOptions): LunoraVectors => {
             values = input.vector;
         } else {
             if (!input.embed || input.input === undefined) {
-                throw new Error("@lunora/vectors: query requires either `vector` or both `input` and `embed`");
+                throw new Error("@lunora/bindings/vectors: query requires either `vector` or both `input` and `embed`");
             }
 
             values = await input.embed(input.input);
@@ -122,7 +124,7 @@ const createVectors = (options: LunoraVectorsOptions): LunoraVectors => {
         const index = resolveIndex(options.indexes, indexName);
 
         if (ids.length > MAX_ID_BATCH) {
-            throw new RangeError(`@lunora/vectors: getByIds accepts at most ${String(MAX_ID_BATCH)} ids (got ${String(ids.length)})`);
+            throw new RangeError(`@lunora/bindings/vectors: getByIds accepts at most ${String(MAX_ID_BATCH)} ids (got ${String(ids.length)})`);
         }
 
         return index.getByIds(ids);
@@ -132,7 +134,7 @@ const createVectors = (options: LunoraVectorsOptions): LunoraVectors => {
         const index = resolveIndex(options.indexes, indexName);
 
         if (ids.length > MAX_ID_BATCH) {
-            throw new RangeError(`@lunora/vectors: deleteByIds accepts at most ${String(MAX_ID_BATCH)} ids (got ${String(ids.length)})`);
+            throw new RangeError(`@lunora/bindings/vectors: deleteByIds accepts at most ${String(MAX_ID_BATCH)} ids (got ${String(ids.length)})`);
         }
 
         return index.deleteByIds(ids);
@@ -142,7 +144,7 @@ const createVectors = (options: LunoraVectorsOptions): LunoraVectors => {
         const index = resolveIndex(options.indexes, indexName);
 
         if (!index.describe) {
-            throw new Error(`@lunora/vectors: binding for "${indexName}" does not implement describe()`);
+            throw new Error(`@lunora/bindings/vectors: binding for "${indexName}" does not implement describe()`);
         }
 
         return index.describe();
