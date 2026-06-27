@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import { queueBindingName, queueDefaultName } from "@lunora/queue";
-import type { CallExpression, Expression, Identifier, Project, SourceFile } from "ts-morph";
+import type { CallExpression, Expression, Identifier, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "./diagnostics";
@@ -63,6 +63,28 @@ const numberProperty = (expression: Expression, exportName: string, property: st
     );
 };
 
+/**
+ * Resolve an explicit `name` override, or `undefined` when none is declared.
+ * Mirrors the runtime `defineQueue` guard: an empty `name` would flow into the
+ * registry key and the reconciled wrangler queue name, so it is rejected here
+ * with a located diagnostic rather than failing downstream validation.
+ */
+const queueNameOverride = (argument: ObjectLiteralExpression, exportName: string): string | undefined => {
+    const nameProperty = argument.getProperty("name");
+
+    if (!nameProperty || !Node.isPropertyAssignment(nameProperty)) {
+        return undefined;
+    }
+
+    const name = stringProperty(nameProperty.getInitializerOrThrow(), exportName, "name");
+
+    if (name.length === 0) {
+        throw diagnosticAt(nameProperty, `queue "${exportName}": \`name\` must be a non-empty string when provided`);
+    }
+
+    return name;
+};
+
 /** Lift one exported `defineQueue({...})` declaration into {@link QueueIR}. */
 const queueFromCall = (call: CallExpression, exportName: string): QueueIR => {
     const argument = call.getArguments()[0];
@@ -75,15 +97,9 @@ const queueFromCall = (call: CallExpression, exportName: string): QueueIR => {
         bindingName: queueBindingName(exportName),
         exportName,
         mode: "push",
-        name: queueDefaultName(exportName),
+        name: queueNameOverride(argument, exportName) ?? queueDefaultName(exportName),
         tuning: {},
     };
-
-    const nameProperty = argument.getProperty("name");
-
-    if (nameProperty && Node.isPropertyAssignment(nameProperty)) {
-        ir.name = stringProperty(nameProperty.getInitializerOrThrow(), exportName, "name");
-    }
 
     const modeProperty = argument.getProperty("mode");
 
