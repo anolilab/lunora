@@ -55,16 +55,11 @@ const LIFECYCLE_FACTORIES: Record<string, "connect" | "disconnect"> = {
 
 interface DiscoveredFunction {
     args: Record<string, ValidatorIR>;
-    /** `true` when the args source carries a `.check(...)` refinement — see {@link FunctionIR.argsHaveRefinement}. */
-    argsHaveRefinement?: boolean;
     kind: string;
     lifecycle?: "connect" | "disconnect";
     returnType: string;
     visibility: "internal" | "public";
 }
-
-/** Coarse, sound detector for an args `.check(...)` refinement the IR can't represent (see {@link FunctionIR.argsHaveRefinement}). */
-const REFINEMENT_RE = /\.check\s*\(/u;
 
 /**
  * Module specifiers a registration factory (`query`/`mutation`/`action`/their
@@ -205,25 +200,6 @@ const argsFromCall = (call: CallExpression): Record<string, ValidatorIR> => {
     }
 
     return parseObjectShape(initializer);
-};
-
-/** True when the bare-factory call's `args:` initializer source carries a `.check(...)` refinement. */
-const argsHaveCheckRefinement = (call: CallExpression): boolean => {
-    const first = call.getArguments()[0];
-
-    if (!first || !Node.isObjectLiteralExpression(first)) {
-        return false;
-    }
-
-    const argsProperty = first.getProperty("args");
-
-    if (!argsProperty || !Node.isPropertyAssignment(argsProperty)) {
-        return false;
-    }
-
-    const initializer = argsProperty.getInitializer();
-
-    return initializer !== undefined && REFINEMENT_RE.test(initializer.getText());
 };
 
 /**
@@ -722,11 +698,8 @@ const discoverFromCall = (call: CallExpression): DiscoveredFunction | undefined 
 
     // Builder terminal: pull args/return type from the chain; bare factory: from the call.
     if (classified.receiver) {
-        // The receiver is the builder chain left of the terminal (`c.input({...}).use(...)`),
-        // never the handler — so a `.check(` here is genuinely on an args validator.
         return {
             args: argsFromBuilderChain(classified.receiver),
-            argsHaveRefinement: REFINEMENT_RE.test(classified.receiver.getText()),
             kind: classified.kind,
             returnType: returnTypeFromBuilderCall(call),
             visibility: classified.visibility,
@@ -742,7 +715,6 @@ const discoverFromCall = (call: CallExpression): DiscoveredFunction | undefined 
 
     return {
         args: argsFromCall(call),
-        argsHaveRefinement: argsHaveCheckRefinement(call),
         kind: classified.kind,
         returnType: returnTypeFromCall(call),
         visibility: classified.visibility,
@@ -877,7 +849,6 @@ const functionIrFromCall = (call: CallExpression, exportName: string, relativePa
         kind: discovered.kind as FunctionIR["kind"],
         returnType: discovered.returnType,
         visibility: discovered.visibility,
-        ...(discovered.argsHaveRefinement ? { argsHaveRefinement: true } : {}),
         ...(discovered.lifecycle ? { lifecycle: discovered.lifecycle } : {}),
     };
 };

@@ -1,4 +1,5 @@
 import type { ValidatorIR } from "./ir";
+import LITERAL_VALUE_RE from "./literal-value";
 
 /**
  * Ahead-of-time compiler from {@link ValidatorIR} to a self-contained JavaScript
@@ -37,15 +38,6 @@ import type { ValidatorIR } from "./ir";
 
 /** Validator kinds whose runtime value is the input unchanged (returned by reference). */
 const PASS_THROUGH_KINDS = new Set(["any", "bigint", "boolean", "date", "id", "null", "number", "storage", "string", "timestamp"]);
-
-/**
- * A primitive literal source text we can inline into a `===` comparison safely:
- * a double- or single-quoted string with no escapes, an integer/decimal (optional
- * leading `-`), or `true`/`false`/`null`. Deliberately conservative — anything
- * fancier (escapes, exponents, a const reference) declines to the interpreted
- * path rather than risk inlining an unsafe expression.
- */
-const PRIMITIVE_LITERAL_RE = /^(?:"[^"\\]*"|'[^'\\]*'|-?\d+(?:\.\d+)?|true|false|null)$/u;
 
 /** Monotonic id source for unique temp variable names within one emitted function. */
 interface EmitContext {
@@ -97,7 +89,7 @@ const emitScalarGuard = (kind: string, inExpr: string): string => {
 const compileLiteral = (node: ValidatorIR, inExpr: string): NodeEmit | undefined => {
     const literal = node.literalValue?.trim();
 
-    if (literal === undefined || !PRIMITIVE_LITERAL_RE.test(literal)) {
+    if (literal === undefined || !LITERAL_VALUE_RE.test(literal)) {
         return undefined;
     }
 
@@ -117,16 +109,20 @@ const compileNode = (node: ValidatorIR, inExpr: string, context: EmitContext): N
         return undefined;
     }
 
-    // A `sourceText` field marks an expression the AST→IR step could NOT resolve
-    // to a concrete validator — most importantly a referenced validator
-    // identifier (`args: { name: sharedV }`), which `parseValidator` lowers to
-    // `{ kind: "any", sourceText: "sharedV" }`. The real runtime validator is
-    // unknown here, so the fast path must NOT treat it as `v.any()` (an
-    // unconditional pass-through) — that would bypass the actual validator and
-    // accept input the interpreted parser rejects. Decline so the function keeps
-    // the interpreted path. Genuine `v.any()` carries no `sourceText`, so it still
-    // compiles to a pass-through below.
-    if (node.sourceText !== undefined) {
+    // Decline two classes of node the compiler can't soundly model:
+    //
+    // - `hasRefinement` — a `.check(...)` predicate (a runtime closure the IR
+    //   can't represent); compiling it would silently skip the predicate.
+    // - `sourceText` — an expression the AST→IR step could NOT resolve to a
+    //   concrete validator, most importantly a referenced validator identifier
+    //   (`args: { name: sharedV }` → `{ kind: "any", sourceText: "sharedV" }`).
+    //   The real runtime validator is unknown, so treating it as `v.any()` (an
+    //   unconditional pass-through) would bypass the actual validator and accept
+    //   input the interpreted parser rejects.
+    //
+    // In both cases keep the function on the interpreted path. Genuine `v.any()`
+    // carries neither flag and still compiles to a pass-through below.
+    if (node.hasRefinement || node.sourceText !== undefined) {
         return undefined;
     }
 

@@ -6,36 +6,20 @@
  * input defers to the interpreted parser either way), so the numbers reflect the
  * steady-state dispatch cost a real query/mutation pays on every call.
  */
-import { parseValidatorMap, v } from "@lunora/values";
-import { Node, Project } from "ts-morph";
+import { parseValidatorMap } from "@lunora/values";
 import { bench, describe } from "vitest";
 
-import compileArgsValidator from "../src/compile-validator";
-import { parseObjectShape } from "../src/parse-validator";
+import { compiledFromSnippet, liveFromSnippet } from "./snippet-helpers";
 
-const DEFER = Symbol("bench.defer");
+/** Parse an args snippet into IR, evaluate the live validators, and compile the fast path (shared with the differential test). */
+const build = (snippet: string): { compiled: (source: Record<string, unknown>) => unknown; live: ReturnType<typeof liveFromSnippet> } => {
+    const compiled = compiledFromSnippet(snippet);
 
-/** Parse an args snippet into IR, evaluate the live validators, and compile the fast path. */
-const build = (snippet: string): { compiled: (source: Record<string, unknown>) => unknown; live: Record<string, ReturnType<typeof v.string>> } => {
-    const project = new Project({ useInMemoryFileSystem: true });
-    const initializer = project.createSourceFile("s.ts", `const a = ${snippet};`).getVariableDeclarationOrThrow("a").getInitializerOrThrow();
-
-    if (!Node.isObjectLiteralExpression(initializer)) {
-        throw new Error("snippet must be an object literal");
-    }
-
-    const source = compileArgsValidator(parseObjectShape(initializer));
-
-    if (source === undefined) {
+    if (compiled === undefined) {
         throw new Error(`snippet did not compile: ${snippet}`);
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval, sonarjs/code-eval -- bench-only: instantiating emitted source in Node; the Worker bundles it statically (no runtime eval)
-    const compiled = new Function("DEFER", `return (${source});`)(DEFER) as (source: Record<string, unknown>) => unknown;
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval, sonarjs/code-eval -- bench-only: evaluating a trusted literal snippet to obtain the runtime validators
-    const live = new Function("v", `return (${snippet});`)(v) as Record<string, ReturnType<typeof v.string>>;
-
-    return { compiled, live };
+    return { compiled, live: liveFromSnippet(snippet) };
 };
 
 const CASES: ReadonlyArray<{ input: Record<string, unknown>; name: string; snippet: string }> = [

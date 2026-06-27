@@ -56,8 +56,10 @@ describe("transparent .check()/.meta() modifiers in codegen", () => {
 
         expect(result).toHaveLength(1);
         // `.meta(...)` / `.check(...)` are transparent — the arg keeps its base kind.
+        // `.meta(...)` leaves the IR unchanged; `.check(...)` additionally records
+        // `hasRefinement` (its predicate can't be represented in the IR).
         expect(result[0]?.args.text).toEqual({ kind: "string" });
-        expect(result[0]?.args.name).toEqual({ kind: "string" });
+        expect(result[0]?.args.name).toEqual({ hasRefinement: true, kind: "string" });
         // Unwrapping composes through v.optional and v.array.
         expect(result[0]?.args.id).toEqual({ inner: { kind: "string" }, kind: "optional" });
         expect(result[0]?.args.to).toEqual({ inner: { kind: "string" }, kind: "array" });

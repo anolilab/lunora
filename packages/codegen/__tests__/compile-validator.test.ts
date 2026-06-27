@@ -10,45 +10,11 @@
  * returns a record the oracle must agree (no throw) and the records must be
  * deep-equal. A compiled "success" the oracle would reject is a hard failure.
  */
-import { parseValidatorMap, v } from "@lunora/values";
-import { Node, Project } from "ts-morph";
+import { parseValidatorMap } from "@lunora/values";
 import { describe, expect, it } from "vitest";
 
 import compileArgsValidator from "../src/compile-validator";
-import { parseObjectShape } from "../src/parse-validator";
-
-/** Local DEFER sentinel handed to the compiled closure (decoupled from the `@lunora/values` internals). */
-const DEFER = Symbol("test.defer");
-
-/** Parse a `{ ... }` args object-literal snippet into the codegen IR via the production AST path. */
-const irFromSnippet = (snippet: string): Record<string, unknown> => {
-    const project = new Project({ useInMemoryFileSystem: true });
-    const file = project.createSourceFile("snippet.ts", `const args = ${snippet};`);
-    const initializer = file.getVariableDeclarationOrThrow("args").getInitializerOrThrow();
-
-    if (!Node.isObjectLiteralExpression(initializer)) {
-        throw new Error("snippet must be an object literal");
-    }
-
-    return parseObjectShape(initializer);
-};
-
-/** Build a live `v.*` validators map by evaluating the same snippet with `v` in scope. */
-const liveFromSnippet = (snippet: string): Record<string, ReturnType<typeof v.string>> =>
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval, sonarjs/code-eval -- test-only: evaluating a trusted literal snippet in Node to mirror the AST path against the runtime validators
-    new Function("v", `return (${snippet});`)(v) as Record<string, ReturnType<typeof v.string>>;
-
-/** Compile an args IR into a live fast-path function closing over the test DEFER sentinel, or undefined when not compilable. */
-const compiledFromIr = (ir: Record<string, unknown>): ((source: Record<string, unknown>) => unknown) | undefined => {
-    const source = compileArgsValidator(ir as never);
-
-    if (source === undefined) {
-        return undefined;
-    }
-
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval, sonarjs/code-eval -- test-only: instantiating the emitted source in Node; the Worker bundles it statically (no runtime eval)
-    return new Function("DEFER", `return (${source});`)(DEFER) as (source: Record<string, unknown>) => unknown;
-};
+import { compiledFromIr, DEFER, irFromSnippet, liveFromSnippet } from "./snippet-helpers";
 
 /** A wide input corpus exercising valid, type-mismatched, missing, extra-key, and nested shapes. */
 const CORPUS: ReadonlyArray<Record<string, unknown>> = [
@@ -183,5 +149,15 @@ describe("compileArgsValidator — modelled behaviour", () => {
         expect(compileArgsValidator(irFromSnippet("{ name: sharedV }") as never)).toBeUndefined();
         // Genuine `v.any()` (no sourceText) still compiles to a pass-through.
         expect(compileArgsValidator(irFromSnippet("{ x: v.any() }") as never)).toBeDefined();
+    });
+
+    it("declines a `.check(...)` refinement (IR hasRefinement) so the predicate is never skipped", () => {
+        expect.assertions(2);
+
+        // `.check(...)` lowers to the base kind + `hasRefinement: true`; compiling it
+        // would silently drop the predicate, so the node must decline. `.meta(...)`
+        // has no parse effect and still compiles.
+        expect(compileArgsValidator(irFromSnippet("{ name: v.string().check((s) => s.length > 0) }") as never)).toBeUndefined();
+        expect(compileArgsValidator(irFromSnippet("{ name: v.string().meta({ schema: { maxLength: 4 } }) }") as never)).toBeDefined();
     });
 });
