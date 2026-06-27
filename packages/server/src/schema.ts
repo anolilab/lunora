@@ -461,13 +461,14 @@ type ExtendableSchema<T extends Record<string, TableDefinition>> = {
      * ⚠️ **Set this once, before your first deploy — changing or removing it
      * strands data.** A Durable Object name maps to a *different* ID in each
      * jurisdiction, so toggling this on an existing app makes every shard, scheduler
-     * job, and session resolve to a NEW, empty DO; the previous data stays in the
+     * job, and session DO resolve to a NEW, empty DO; the previous data stays in the
      * old jurisdiction's DOs and is no longer reachable. There is no in-place
      * migration — you would have to export from the old jurisdiction and import
      * into the new one.
      *
-     * Note: this pins **DO-backed** state only. `.global()` tables are D1-backed
-     * and governed by D1's own location settings, not this option.
+     * Note: this pins **DO-backed** state only. D1-backed state — `.global()`
+     * tables and `@lunora/auth` sessions alike — is governed by D1's own location
+     * settings, not this option.
      * @see https://developers.cloudflare.com/durable-objects/reference/data-location/
      */
     jurisdiction: (jurisdiction: DurableObjectJurisdiction) => ExtendableSchema<T>;

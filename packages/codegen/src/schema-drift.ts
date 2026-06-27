@@ -422,7 +422,7 @@ const diffSchemaSnapshots = (baseline: SchemaSnapshot | undefined, current: Sche
 
         changes.push({
             severity: "breaking",
-            summary: `Durable Object jurisdiction changed from ${from} to ${to} — this re-homes every DO and strands all existing shard/scheduler/session data in the old region (no in-place migration; export then import to move it). Revert the change, or override the gate to proceed intentionally.`,
+            summary: `Durable Object jurisdiction changed from ${from} to ${to} — this re-homes every DO and strands all existing shard, scheduler, and session-DO data in the old region (no in-place migration; export then import to move it). Revert the change, or override the gate to proceed intentionally.`,
             type: "changedJurisdiction",
         });
     }

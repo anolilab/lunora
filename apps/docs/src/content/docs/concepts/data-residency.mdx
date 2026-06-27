@@ -38,6 +38,12 @@ It does **not** pin, by design:
   the DO jurisdiction does not apply.
 - **Auth sessions** — `@lunora/auth` stores sessions in D1 (better-auth), so they
   follow D1's residency, not this option.
+- **`@lunora/mail` inbound / capture shards** — mail is a scaffolded add-on, not
+  codegen-wired, so its shard access is **not** auto-pinned. Both entry points
+  take an optional `jurisdiction` (`createMailerFromEnv({ jurisdiction })` for the
+  dev capture inbox, `dispatchToLunoraFunction({ jurisdiction })` for inbound
+  routing) — pass the **same value** you declared on the schema so the mail shard
+  co-resides with app data. Omit it and mail uses the un-pinned global namespace.
 
 <Callout type="info">
     **Fail-closed.** If the bound DO namespace can't honour the jurisdiction (an older `@cloudflare/workers-types` without `.jurisdiction()`), the worker throws
@@ -57,7 +63,7 @@ drift gate flags it as **breaking** and blocks the deploy:
 
 ```text
 Durable Object jurisdiction changed from (none) to us — this re-homes every DO
-and strands all existing shard/scheduler/session data in the old region
+and strands all existing shard, scheduler, and session-DO data in the old region
 (no in-place migration; export then import to move it). Revert the change, or
 override the gate to proceed intentionally.
 ```
