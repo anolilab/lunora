@@ -1,3 +1,26 @@
+## @lunora/codegen [1.0.0-alpha.9](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.8...@lunora/codegen@1.0.0-alpha.9) (2026-06-27)
+
+### Features
+
+* extending db  ([#32](https://github.com/anolilab/lunora/issues/32)) ([6b77a16](https://github.com/anolilab/lunora/commit/6b77a16996e6aa59c19c801c3ea18004deccd6dc))
+
+### Performance Improvements
+
+* **runtime:** skip route lookup when no custom routes ([#33](https://github.com/anolilab/lunora/issues/33)) ([e829b9b](https://github.com/anolilab/lunora/commit/e829b9b7d2a5c8a9f533f91706cdae8dd75b564d))
+
+### Miscellaneous Chores
+
+* update our og pacakge image ([63e6811](https://github.com/anolilab/lunora/commit/63e6811e2dfb94bc2cc38c05292b527e884660b5))
+
+
+### Dependencies
+
+* **@lunora/advisor:** upgraded to 1.0.0-alpha.4
+* **@lunora/values:** upgraded to 1.0.0-alpha.2
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.2
+* **@lunora/do:** upgraded to 1.0.0-alpha.5
+* **@lunora/server:** upgraded to 1.0.0-alpha.3
+
 ## @lunora/codegen [1.0.0-alpha.8](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.7...@lunora/codegen@1.0.0-alpha.8) (2026-06-26)
 
 ### Bug Fixes
