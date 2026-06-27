@@ -1,3 +1,18 @@
+## @lunora/cli [1.0.0-alpha.27](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.26...@lunora/cli@1.0.0-alpha.27) (2026-06-27)
+
+### Features
+
+* **queue:** add queues, pipelines, secrets bindings + studio queues page ([#30](https://github.com/anolilab/lunora/issues/30)) ([131460c](https://github.com/anolilab/lunora/commit/131460c5826f2ef600fa0ef81248ede91835dd0c)), closes [#29](https://github.com/anolilab/lunora/issues/29) [#31](https://github.com/anolilab/lunora/issues/31) [visulima#714](https://github.com/anolilab/visulima/issues/714)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.11
+* **@lunora/config:** upgraded to 1.0.0-alpha.17
+* **@lunora/container:** upgraded to 1.0.0-alpha.3
+* **@lunora/d1:** upgraded to 1.0.0-alpha.6
+* **@lunora/seed:** upgraded to 1.0.0-alpha.5
+
 ## @lunora/cli [1.0.0-alpha.26](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.25...@lunora/cli@1.0.0-alpha.26) (2026-06-27)
 
 
