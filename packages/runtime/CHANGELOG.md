@@ -1,3 +1,19 @@
+## @lunora/runtime [1.0.0-alpha.3](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.2...@lunora/runtime@1.0.0-alpha.3) (2026-06-27)
+
+### Performance Improvements
+
+* **runtime:** skip route lookup when no custom routes ([#33](https://github.com/anolilab/lunora/issues/33)) ([e829b9b](https://github.com/anolilab/lunora/commit/e829b9b7d2a5c8a9f533f91706cdae8dd75b564d))
+
+### Miscellaneous Chores
+
+* update our og pacakge image ([63e6811](https://github.com/anolilab/lunora/commit/63e6811e2dfb94bc2cc38c05292b527e884660b5))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.5
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.2
+
 ## @lunora/runtime [1.0.0-alpha.2](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.1...@lunora/runtime@1.0.0-alpha.2) (2026-06-25)
 
 ### Bug Fixes

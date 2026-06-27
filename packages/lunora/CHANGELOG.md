@@ -1,3 +1,18 @@
+## lunorash [1.0.0-alpha.25](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.24...lunorash@1.0.0-alpha.25) (2026-06-27)
+
+### Miscellaneous Chores
+
+* update our og pacakge image ([63e6811](https://github.com/anolilab/lunora/commit/63e6811e2dfb94bc2cc38c05292b527e884660b5))
+
+
+### Dependencies
+
+* **@lunora/cli:** upgraded to 1.0.0-alpha.25
+* **@lunora/do:** upgraded to 1.0.0-alpha.5
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.3
+* **@lunora/server:** upgraded to 1.0.0-alpha.3
+* **@lunora/values:** upgraded to 1.0.0-alpha.2
+
 ## lunorash [1.0.0-alpha.24](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.23...lunorash@1.0.0-alpha.24) (2026-06-26)
 
 

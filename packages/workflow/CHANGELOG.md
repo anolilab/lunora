@@ -1,3 +1,15 @@
+## @lunora/workflow [1.0.0-alpha.2](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.1...@lunora/workflow@1.0.0-alpha.2) (2026-06-27)
+
+### Miscellaneous Chores
+
+* **deps:** wire fallow into every package ([896a81d](https://github.com/anolilab/lunora/commit/896a81d39a064293234bba3b734cde1036e81a67))
+* update our og pacakge image ([63e6811](https://github.com/anolilab/lunora/commit/63e6811e2dfb94bc2cc38c05292b527e884660b5))
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.2
+
 ## @lunora/workflow 1.0.0-alpha.1 (2026-06-21)
 
 ### Features

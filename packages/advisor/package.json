@@ -1,6 +1,6 @@
 {
     "name": "@lunora/advisor",
-    "version": "1.0.0-alpha.3",
+    "version": "1.0.0-alpha.4",
     "description": "Schema & query lints (splinter-style advisors) for Lunora, feeding the Studio Advisors view",
     "keywords": [
         "advisor",
@@ -60,10 +60,10 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/server": "1.0.0-alpha.2"
+        "@lunora/server": "1.0.0-alpha.3"
     },
     "devDependencies": {
-        "@lunora/values": "1.0.0-alpha.1",
+        "@lunora/values": "1.0.0-alpha.2",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

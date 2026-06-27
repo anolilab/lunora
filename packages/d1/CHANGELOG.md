@@ -1,3 +1,23 @@
+## @lunora/d1 [1.0.0-alpha.5](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.4...@lunora/d1@1.0.0-alpha.5) (2026-06-27)
+
+### Features
+
+* extending db  ([#32](https://github.com/anolilab/lunora/issues/32)) ([6b77a16](https://github.com/anolilab/lunora/commit/6b77a16996e6aa59c19c801c3ea18004deccd6dc))
+
+### Miscellaneous Chores
+
+* update our og pacakge image ([63e6811](https://github.com/anolilab/lunora/commit/63e6811e2dfb94bc2cc38c05292b527e884660b5))
+
+### Tests
+
+* **do:** split write-throughput + relation-predicates benches for CodSpeed ([#28](https://github.com/anolilab/lunora/issues/28)) ([b14031e](https://github.com/anolilab/lunora/commit/b14031e34ca0b17193eeba7061cce34841fd514b))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.5
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.5
+
 ## @lunora/d1 [1.0.0-alpha.4](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.3...@lunora/d1@1.0.0-alpha.4) (2026-06-24)
 
 ### Features
