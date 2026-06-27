@@ -59,7 +59,7 @@ import {
 } from "./do-sql";
 import NotFoundError from "./not-found-error";
 import type { OrderKey, QueryArgs, QueryPage } from "./query-args";
-import { buildSeekBeforeWhere, buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args";
+import { applySelect, buildSeekBeforeWhere, buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args";
 import type {
     RankBeforeOptions,
     RankBeforeResult,
@@ -2280,7 +2280,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 }
 
                 // eslint-disable-next-line unicorn/no-null -- QueryPage.continueCursor is `null | string`: null is the documented "no further page" cursor on the wire
-                return { continueCursor: null, isDone: true, page: docs };
+                return { continueCursor: null, isDone: true, page: applySelect(docs, args.select, args.with) };
             }
 
             const hasMore = docs.length > limit;
@@ -2300,10 +2300,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             }
 
             return {
+                // The cursor is encoded from `last` (the full, unprojected row) above,
+                // so `applySelect` only trims the returned payload — paging is intact.
                 // eslint-disable-next-line unicorn/no-null -- QueryPage.continueCursor is `null | string`: null is the documented "no further page" cursor on the wire
                 continueCursor: hasMore && last ? encodeCursor(last, orderKeys) : null,
                 isDone: !hasMore,
-                page,
+                page: applySelect(page, args.select, args.with),
             };
         },
 

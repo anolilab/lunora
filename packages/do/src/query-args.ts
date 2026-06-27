@@ -57,6 +57,16 @@ interface QueryArgs {
      * reads (`findMany`/`findFirst`) — this flag specifically guards `count`.
      */
     restrictsCounts?: boolean;
+
+    /**
+     * Project each returned row down to these fields. The system fields `_id` and
+     * `_creationTime` are always retained (cursors + by-id reuse depend on them),
+     * and any relations attached via `with` (their relation keys and `_count`)
+     * survive the trim. Applied AFTER the rows are read and relations resolved, so
+     * read-dependency tracking and cursor encoding see the full row — only the
+     * payload returned to the caller is narrowed. Omit for the full document.
+     */
+    select?: ReadonlyArray<string>;
     where?: WhereInput;
     with?: WithInput;
 }
@@ -252,5 +262,40 @@ const buildSeekBeforeWhere = (keys: OrderKey[], cursorValues: unknown[]): WhereI
     return { OR: branches };
 };
 
-export { buildSeekBeforeWhere, buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys };
+/** System fields a `select` projection always retains so cursors + by-id reuse keep working. */
+const SELECT_SYSTEM_FIELDS = ["_id", "_creationTime"] as const;
+
+/**
+ * Project `page` rows down to `select` — plus the always-kept system fields and
+ * the relation/`_count` keys attached by a `with` load (passed as `withInput`,
+ * the same object handed to `findMany`). Returns the page unchanged when
+ * `select` is undefined. Pure; callers apply it AFTER relation resolution +
+ * cursor encoding so only the returned payload is trimmed (dependency tracking +
+ * the cursor still see the full row).
+ */
+const applySelect = (
+    page: Record<string, unknown>[],
+    select: ReadonlyArray<string> | undefined,
+    withInput?: Record<string, unknown>,
+): Record<string, unknown>[] => {
+    if (!select) {
+        return page;
+    }
+
+    const keep = new Set<string>([...select, ...SELECT_SYSTEM_FIELDS, ...(withInput ? Object.keys(withInput) : [])]);
+
+    return page.map((document) => {
+        const projected: Record<string, unknown> = {};
+
+        for (const key of keep) {
+            if (key in document) {
+                projected[key] = document[key];
+            }
+        }
+
+        return projected;
+    });
+};
+
+export { applySelect, buildSeekBeforeWhere, buildSeekWhere, decodeCursor, encodeCursor, normalizeOrderKeys };
 export type { OrderByInput, OrderKey, QueryArgs, QueryPage, SortDirection };

@@ -58,6 +58,14 @@ export interface QueryArgs<TDocument> {
     cursor?: null | string;
     limit?: number;
     orderBy?: OrderBy<TDocument>[];
+
+    /**
+     * Project each returned row down to these columns (plus the system fields
+     * `_id`/`_creationTime`, always retained). Trims wire payload for wide rows;
+     * relations requested via `with` are still attached. Reactivity is unaffected —
+     * the engine still reads the whole row to track dependencies.
+     */
+    select?: ReadonlyArray<keyof TDocument & string>;
     where?: Where<TDocument>;
 }
 
@@ -160,8 +168,25 @@ type LoadedRelations<DM, REL extends Record<keyof DM, object>, T extends keyof D
 /** The `_count` projection of `W`, if any. */
 type LoadedCount<W> = W extends { _count: infer C } ? { _count: { [K in keyof C]: number } } : {};
 
-/** `Doc&lt;T>` narrowed to exactly the relations requested in the with-arg `W`. */
-export type LoadWith<DM, REL extends Record<keyof DM, object>, T extends keyof DM, W> = DM[T] & LoadedCount<W> & LoadedRelations<DM, REL, T, W>;
+/** System columns a `select` projection always retains, so cursors and by-id reuse keep working. */
+type SelectAlwaysKeep<DM, T extends keyof DM> = ("_creationTime" | "_id") & keyof DM[T];
+
+/**
+ * `DM[T]` narrowed to the columns named by a `select` tuple `S` (plus the system
+ * fields). `undefined` (the default — no `select`) keeps the full document.
+ */
+type ProjectDoc<DM, T extends keyof DM, S> =
+    S extends ReadonlyArray<infer K> ? (K extends keyof DM[T] ? Pick<DM[T], (K & keyof DM[T]) | SelectAlwaysKeep<DM, T>> : DM[T]) : DM[T];
+
+/**
+ * `Doc&lt;T>` narrowed to exactly the relations requested in the with-arg `W` and,
+ * when a `select` tuple `S` is supplied, to its projected columns. `S` defaults
+ * to `undefined` so the 4-argument form (the codegen-emitted callers) keeps the
+ * full document.
+ */
+export type LoadWith<DM, REL extends Record<keyof DM, object>, T extends keyof DM, W, S = undefined> = LoadedCount<W> &
+    LoadedRelations<DM, REL, T, W> &
+    ProjectDoc<DM, T, S>;
 
 /** Reducer applied by an aggregate (`avg`/`count`/`max`/`min`/`sum`). */
 export type AggregateOp = "avg" | "count" | "max" | "min" | "sum";
@@ -291,9 +316,18 @@ export interface TableReaderFacade<
      * uses to inject `baseWhere` and `restrictsCounts`.
      */
     count: (where?: RestrictableQueryOptionsOf<DM, REL, T> | WhereOf<DM, REL, T>) => Promise<number>;
-    findFirst: <W extends WithArg<DM, REL, T> = {}>(args?: QueryArgsOf<DM, REL, T> & { with?: W }) => Promise<LoadWith<DM, REL, T, W> | null>;
-    findFirstOrThrow: <W extends WithArg<DM, REL, T> = {}>(args?: QueryArgsOf<DM, REL, T> & { with?: W }) => Promise<LoadWith<DM, REL, T, W>>;
-    findMany: <W extends WithArg<DM, REL, T> = {}>(args?: QueryArgsOf<DM, REL, T> & { with?: W }) => Promise<QueryPage<LoadWith<DM, REL, T, W>>>;
+
+    /** `true` when at least one row matches `where` (any row when omitted). RLS-filtered exactly like `findFirst`. */
+    exists: (where?: WhereOf<DM, REL, T>) => Promise<boolean>;
+    findFirst: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(
+        args?: QueryArgsOf<DM, REL, T> & { select?: S; with?: W },
+    ) => Promise<LoadWith<DM, REL, T, W, S> | null>;
+    findFirstOrThrow: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(
+        args?: QueryArgsOf<DM, REL, T> & { select?: S; with?: W },
+    ) => Promise<LoadWith<DM, REL, T, W, S>>;
+    findMany: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(
+        args?: QueryArgsOf<DM, REL, T> & { select?: S; with?: W },
+    ) => Promise<QueryPage<LoadWith<DM, REL, T, W, S>>>;
     get: (id: Id<string & T>) => Promise<DM[T] | null>;
 
     /**
@@ -339,14 +373,40 @@ export interface TableWriterFacade<
     delete: (id: Id<string & T>) => Promise<void>;
     /** Delete many rows in this table by id in one call; returns the *requested* id count (unknown ids are no-ops). Atomic within a mutation (a throw rolls the mutation back); an action has no transaction span. */
     deleteMany: (ids: ReadonlyArray<Id<string & T>>, options?: { limit?: number }) => Promise<{ deleted: number }>;
-    insert: (values: IM[T]) => Promise<Id<string & T>>;
+
+    /**
+     * Insert a document, returning its minted id. With `{ skipDuplicates: true }`
+     * a UNIQUE-constraint breach resolves to `null` (the row already exists)
+     * instead of throwing — the return type widens to `Id | null` on that overload.
+     */
+    insert: {
+        (values: IM[T], options: { skipDuplicates: true }): Promise<Id<string & T> | null>;
+        (values: IM[T], options?: { skipDuplicates?: boolean }): Promise<Id<string & T>>;
+    };
     /** Insert many documents into this table in one call, returning the minted ids in input order. Atomic within a mutation (a throw rolls the mutation back); an action has no transaction span. */
     insertMany: (values: ReadonlyArray<IM[T]>, options?: { limit?: number }) => Promise<Id<string & T>[]>;
     patch: (id: Id<string & T>, values: Partial<IM[T]>) => Promise<void>;
     /** Patch many rows in this table by id in one call. Atomic within a mutation (a throw rolls the mutation back); an action has no transaction span. */
     patchMany: (patches: ReadonlyArray<{ id: Id<string & T>; values: Partial<IM[T]> }>, options?: { limit?: number }) => Promise<void>;
     replace: (id: Id<string & T>, values: IM[T]) => Promise<void>;
+
+    /**
+     * Insert when no existing row matches `target`, otherwise patch the match with
+     * `update` (defaulting to `create`). `target` names a `.unique()` column (or a
+     * tuple) used to look it up. Returns the row id and whether it was `created`.
+     * Composes `findFirst` + `insert`/`patch`, so RLS gates each step.
+     */
+    upsert: (args: { create: IM[T]; target: UpsertTargetOf<DM, T>; update?: Partial<IM[T]> }) => Promise<{ created: boolean; id: Id<string & T> }>;
+
+    /** Sequential {@link TableWriterFacade.upsert} over many rows sharing one `target`; one result per input row, in order. */
+    upsertMany: (args: {
+        rows: ReadonlyArray<{ create: IM[T]; update?: Partial<IM[T]> }>;
+        target: UpsertTargetOf<DM, T>;
+    }) => Promise<{ created: boolean; id: Id<string & T> }[]>;
 }
+
+/** Conflict target for `upsert`/`upsertMany`: one column of table `T`, or a tuple of them. */
+export type UpsertTargetOf<DM, T extends keyof DM> = ReadonlyArray<keyof DM[T] & string> | (keyof DM[T] & string);
 
 /** Per-table read facade — `ctx.db.&lt;table>` on a `QueryCtx`. */
 export type DatabaseReaderFacade<DM, REL extends Record<keyof DM, object>, RANK extends Record<keyof DM, string>, SEARCH extends Record<keyof DM, string>> = {

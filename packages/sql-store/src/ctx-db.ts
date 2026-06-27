@@ -42,6 +42,7 @@ import {
     aggregateSqlFunction,
     aggregateTableName,
     applyOnDelete,
+    applySelect,
     assertFlatPredicate,
     assertValidClientId,
     buildFtsMatch,
@@ -2615,7 +2616,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 }
 
                 // eslint-disable-next-line unicorn/no-null -- findMany's public return uses `continueCursor: string | null`; an unpaged result has no cursor.
-                return { continueCursor: null, isDone: true, page: documents };
+                return { continueCursor: null, isDone: true, page: applySelect(documents, args.select, args.with) };
             }
 
             const hasMore = documents.length > limit;
@@ -2627,10 +2628,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             }
 
             return {
+                // The cursor is encoded from `last` (the full, unprojected row), so
+                // `applySelect` only trims the returned payload — paging is intact.
                 // eslint-disable-next-line unicorn/no-null -- public return shape: `continueCursor` is `string | null`; `null` marks the final page.
                 continueCursor: hasMore && last ? encodeCursor(last, orderKeys) : null,
                 isDone: !hasMore,
-                page,
+                page: applySelect(page, args.select, args.with),
             };
         },
 
