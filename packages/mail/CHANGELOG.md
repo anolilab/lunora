@@ -1,3 +1,18 @@
+## @lunora/mail [1.0.0-alpha.2](https://github.com/anolilab/lunora/compare/@lunora/mail@1.0.0-alpha.1...@lunora/mail@1.0.0-alpha.2) (2026-06-27)
+
+### Features
+
+* **server:** pin durable objects to a data-residency jurisdiction ([#29](https://github.com/anolilab/lunora/issues/29)) ([0fcdc94](https://github.com/anolilab/lunora/commit/0fcdc94a836ea1b54a0eba78b6926de52aa3a767))
+
+### Miscellaneous Chores
+
+* **deps:** wire fallow into every package ([896a81d](https://github.com/anolilab/lunora/commit/896a81d39a064293234bba3b734cde1036e81a67))
+* update our og pacakge image ([63e6811](https://github.com/anolilab/lunora/commit/63e6811e2dfb94bc2cc38c05292b527e884660b5))
+
+### Code Refactoring
+
+* remove dead code flagged by fallow ([be57eca](https://github.com/anolilab/lunora/commit/be57ecaf4d6f3bc95d7b1a5876305dfb2af80e45))
+
 ## @lunora/mail 1.0.0-alpha.1 (2026-06-21)
 
 ### Features
