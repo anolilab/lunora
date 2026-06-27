@@ -17,6 +17,8 @@ import type { MailboxSink } from "./capture-transport";
 import { createCaptureTransport } from "./capture-transport";
 import type { CloudflareSend } from "./cloudflare-transport";
 import createMailer from "./create-mailer";
+import type { DurableObjectJurisdiction, ShardNamespaceLike } from "./inbound/shard";
+import { applyJurisdiction } from "./inbound/shard";
 import type { Mailer, SendPayload } from "./types";
 
 /** A Worker `env` projected as a plain record (vars, secrets, and bindings are `unknown`-valued). */
@@ -30,21 +32,17 @@ const DEFAULT_ROOT_SHARD = "__root__";
 const DEV_ENVIRONMENT_PATTERN = /^(?:dev(?:elopment)?|local(?:host)?|test)$/iu;
 const ENVIRONMENT_VARS = ["CF_ENV", "ENVIRONMENT", "NODE_ENV", "WORKER_ENV"] as const;
 
-/** Structural projection of one shard stub — only `fetch` returning something with `.json()`. */
-interface ShardStubLike {
-    fetch: (input: string, init?: { body?: string; headers?: Record<string, string>; method?: string }) => Promise<{ json: () => Promise<unknown> }>;
-}
-
-/** Structural projection of the `SHARD` Durable Object namespace. */
-interface ShardNamespaceLike {
-    get: (id: unknown) => ShardStubLike;
-    idFromName: (name: string) => unknown;
-}
-
 /** Options for {@link createMailerFromEnv}. */
 interface FromEnvOptions {
     /** RFC 822 send callback bound to the Worker's `send_email` binding (Cloudflare default transport). */
     cloudflareSend?: CloudflareSend;
+
+    /**
+     * Pin the captured-mail inbox shard to a Cloudflare data-residency
+     * jurisdiction. Pass the same value as the worker's `jurisdiction` so the
+     * dev inbox co-resides with app data. Omit for the un-pinned global namespace.
+     */
+    jurisdiction?: DurableObjectJurisdiction;
     /** Shard the captured-mail inbox lives on; override if your worker sets a custom `defaultShardKey`. */
     rootShard?: string;
 }
@@ -87,16 +85,17 @@ const shouldCaptureMail = (env: MailEnv): boolean => {
  * the `SHARD` binding or `LUNORA_ADMIN_TOKEN` it returns a sentinel id so a send
  * never fails for lack of somewhere to record.
  */
-const createCaptureSink = (env: MailEnv, rootShard: string = DEFAULT_ROOT_SHARD): MailboxSink => {
+const createCaptureSink = (env: MailEnv, rootShard: string = DEFAULT_ROOT_SHARD, jurisdiction?: DurableObjectJurisdiction): MailboxSink => {
     return {
         record: async (mail: SendPayload): Promise<{ id: string }> => {
-            const namespace = env["SHARD"] as ShardNamespaceLike | undefined;
+            const binding = env["SHARD"] as ShardNamespaceLike | undefined;
             const adminToken = typeof env["LUNORA_ADMIN_TOKEN"] === "string" ? env["LUNORA_ADMIN_TOKEN"] : undefined;
 
-            if (namespace === undefined || adminToken === undefined) {
+            if (binding === undefined || adminToken === undefined) {
                 return { id: "uncaptured" };
             }
 
+            const namespace = applyJurisdiction(binding, jurisdiction);
             const stub = namespace.get(namespace.idFromName(rootShard));
             const response = await stub.fetch("https://shard.internal/rpc", {
                 body: JSON.stringify({ args: mail, functionPath: RECORD_MAIL_OP }),
@@ -124,7 +123,7 @@ const createMailerFromEnv = (env: MailEnv, options: FromEnvOptions = {}): Mailer
     const from = requireStringEnv(env, "MAIL_FROM");
 
     if (shouldCaptureMail(env)) {
-        return createMailer({ from, transport: createCaptureTransport(createCaptureSink(env, options.rootShard)) });
+        return createMailer({ from, transport: createCaptureTransport(createCaptureSink(env, options.rootShard, options.jurisdiction)) });
     }
 
     if (options.cloudflareSend) {

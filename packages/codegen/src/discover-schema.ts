@@ -931,6 +931,55 @@ const extendCallsOf = (defineSchemaCall: CallExpression): CallExpression[] => {
     return calls;
 };
 
+/** Recognised Cloudflare DO data-residency jurisdictions — the literals a `.jurisdiction("…")` call may carry. */
+const JURISDICTIONS = new Set<SchemaIR["jurisdiction"]>(["eu", "fedramp", "us"]);
+
+/**
+ * Walk the builder chain wrapping a `defineSchema(...)` call for a
+ * `.jurisdiction("…")` link and return its string-literal argument. Mirrors
+ * {@link extendCallsOf}'s parent-walk so the call is found regardless of where
+ * it sits in the chain (`defineSchema(...).rls(...).jurisdiction("us").extend(...)`).
+ * Returns `undefined` when absent; throws on an unrecognised literal so a typo
+ * fails loudly rather than emitting an invalid jurisdiction.
+ */
+const jurisdictionOf = (defineSchemaCall: CallExpression): SchemaIR["jurisdiction"] => {
+    let current: TsNode = defineSchemaCall;
+
+    for (;;) {
+        const parent = current.getParent();
+
+        if (!parent || !Node.isPropertyAccessExpression(parent)) {
+            break;
+        }
+
+        const callParent = parent.getParent();
+
+        if (!callParent || !Node.isCallExpression(callParent)) {
+            break;
+        }
+
+        if (parent.getName() === "jurisdiction") {
+            const argument = callParent.getArguments()[0];
+
+            if (!argument || !Node.isStringLiteral(argument)) {
+                throw diagnosticAt(callParent, '`.jurisdiction(...)` expects a string literal ("eu", "us", or "fedramp")');
+            }
+
+            const value = argument.getLiteralText() as SchemaIR["jurisdiction"];
+
+            if (!JURISDICTIONS.has(value)) {
+                throw diagnosticAt(argument, `unknown jurisdiction ${JSON.stringify(value)} — expected "eu", "us", or "fedramp"`);
+            }
+
+            return value;
+        }
+
+        current = callParent;
+    }
+
+    return undefined;
+};
+
 /** Parse the base `defineSchema({ table: defineTable(...) })` object literal into {@link TableIR}s. */
 const parseBaseTables = (object: ObjectLiteralExpression): TableIR[] => {
     const tables: TableIR[] = [];
@@ -1028,7 +1077,7 @@ const discoverSchema = (project: Project, schemaPath: string, projectRoot?: stri
     // plus extension-contributed standalone vector indexes.
     const vectorIndexes: VectorIndexIR[] = [...tables.flatMap((table) => table.vectorIndexes), ...standaloneVectorIndexes, ...extensionStandaloneVectorIndexes];
 
-    return { tables, vectorIndexes };
+    return { jurisdiction: jurisdictionOf(defineSchemaCall), tables, vectorIndexes };
 };
 
 export default discoverSchema;

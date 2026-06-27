@@ -93,8 +93,8 @@ export type {
     ShardTrafficFanOutResult,
 } from "./query-coordinator";
 export { createQueryCoordinator, createStaticShardRegistry, mergeStrategyForAggregate } from "./query-coordinator";
-export type { ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
-export { resolveShard } from "./resolve-shard";
+export type { DurableObjectJurisdiction, ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
+export { applyJurisdiction, resolveShard } from "./resolve-shard";
 export type { CorsOptions, CsrfOptions, ResolvedSecurity, SecurityHeadersOptions, SecurityOptions } from "./security-headers";
 export { decorateResponse, enforceOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
 

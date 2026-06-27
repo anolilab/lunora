@@ -1,7 +1,14 @@
+import applyJurisdiction from "./jurisdiction";
 import type { ArgsOf, EnqueueOptions, FunctionReference, Workpool, WorkpoolOptions } from "./types";
 
+const workpoolStub = (options: WorkpoolOptions) => {
+    const namespace = applyJurisdiction(options.namespace, options.jurisdiction);
+
+    return namespace.get(namespace.idFromName(options.instanceName ?? "default"));
+};
+
 const callDO = async <T>(options: WorkpoolOptions, path: string, body: unknown): Promise<T> => {
-    const stub = options.namespace.get(options.namespace.idFromName(options.instanceName ?? "default"));
+    const stub = workpoolStub(options);
     const response = await stub.fetch(`https://scheduler.internal${path}`, {
         body: JSON.stringify(body),
         headers: { "content-type": "application/json" },
@@ -18,7 +25,7 @@ const callDO = async <T>(options: WorkpoolOptions, path: string, body: unknown):
 };
 
 const getDO = async <T>(options: WorkpoolOptions, path: string): Promise<T> => {
-    const stub = options.namespace.get(options.namespace.idFromName(options.instanceName ?? "default"));
+    const stub = workpoolStub(options);
     const response = await stub.fetch(`https://scheduler.internal${path}`, { method: "GET" });
 
     if (!response.ok) {

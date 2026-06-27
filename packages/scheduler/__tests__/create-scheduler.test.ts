@@ -221,3 +221,43 @@ describe("createScheduler", () => {
         expect(() => createCronTrigger({ fn: fnRef, schedule: "0 0 * *" })).toThrow("invalid cron expression");
     });
 });
+
+describe("createScheduler jurisdiction", () => {
+    it("routes through a jurisdiction-pinned subnamespace when configured", async () => {
+        expect.assertions(2);
+
+        const { namespace: inner } = fakeNamespace();
+        const jurisdictionCalls: string[] = [];
+        const namespace: DurableObjectNamespaceLike = {
+            get: () => {
+                throw new Error("should resolve via the jurisdiction subnamespace, not the root namespace");
+            },
+            idFromName: () => {
+                throw new Error("should resolve via the jurisdiction subnamespace, not the root namespace");
+            },
+            jurisdiction: (j) => {
+                jurisdictionCalls.push(j);
+
+                return inner;
+            },
+        };
+
+        const scheduler = createScheduler({ jurisdiction: "us", namespace, originUrl: "https://app.example.com" });
+
+        await scheduler.runAfter(1000, fnRef, {});
+
+        expect(jurisdictionCalls).toStrictEqual(["us"]);
+        // The pinned subnamespace resolves the default instance — proving routing
+        // went through it (its `get`/`idFromName`, not the root namespace's, which throw).
+        expect(inner.idFromName as ReturnType<typeof vi.fn>).toHaveBeenCalledWith("default");
+    });
+
+    it("fails closed when the binding lacks jurisdiction support", async () => {
+        expect.assertions(1);
+
+        const { namespace } = fakeNamespace();
+        const scheduler = createScheduler({ jurisdiction: "eu", namespace, originUrl: "https://app.example.com" });
+
+        await expect(scheduler.runAfter(1000, fnRef, {})).rejects.toThrow(/does not support jurisdiction/);
+    });
+});

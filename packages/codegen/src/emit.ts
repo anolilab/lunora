@@ -7,6 +7,7 @@ import type {
     CronJobIR,
     FunctionIR,
     IndexIR,
+    JurisdictionIR,
     MaskMetadataIR,
     MigrationIR,
     RlsMetadataIR,
@@ -1930,10 +1931,15 @@ const r2sqlStub: R2SqlClient = {
  * `containers[].class_name` to be exported by the deployed worker. Returns ""
  * when the project declares no containers (the file is not written then).
  */
-const emitContainers = (containers: ReadonlyArray<ContainerIR>): string => {
+const emitContainers = (containers: ReadonlyArray<ContainerIR>, jurisdiction?: JurisdictionIR): string => {
     if (containers.length === 0) {
         return "";
     }
+
+    // Schema `.jurisdiction("…")` pins the container's best-effort lifecycle
+    // report to the same region as the root shard; emitted only when declared so
+    // existing generated output is unchanged.
+    const jurisdictionArgument = jurisdiction ? `, ${JSON.stringify(jurisdiction)}` : "";
 
     const classes = containers
         .map((container) => {
@@ -1943,7 +1949,7 @@ const emitContainers = (containers: ReadonlyArray<ContainerIR>): string => {
             return `/** Container DO for the \`${container.exportName}\` definition (binding \`${container.bindingName}\`). */
 export class ${container.className} extends LunoraContainer {
     public constructor(ctx: ConstructorParameters<typeof LunoraContainer>[0], env: Record<string, unknown>) {
-        super(ctx, env, ${container.exportName}, "${container.exportName}");
+        super(ctx, env, ${container.exportName}, "${container.exportName}"${jurisdictionArgument});
     }
 }
 `;
@@ -1975,7 +1981,10 @@ ${classes}`;
  * Durable Object bindings off `env` lazily (a missing binding only throws when
  * the handle is used).
  */
-const emitContainerFragments = (containers: ReadonlyArray<ContainerIR>): { build: string; contextField: string; importLines: string[]; specs: string } => {
+const emitContainerFragments = (
+    containers: ReadonlyArray<ContainerIR>,
+    jurisdiction?: JurisdictionIR,
+): { build: string; contextField: string; importLines: string[]; specs: string } => {
     if (containers.length === 0) {
         return { build: "", contextField: "", importLines: [], specs: "" };
     }
@@ -1994,8 +2003,11 @@ const emitContainerFragments = (containers: ReadonlyArray<ContainerIR>): { build
         .join("\n");
 
     return {
+        // Schema `.jurisdiction("…")` pins every container DO this shard reaches
+        // to the data-residency region; the arg is omitted when undeclared so
+        // existing generated output is unchanged.
         build: `
-            const containers = createContainerContext(env, LUNORA_CONTAINERS);
+            const containers = createContainerContext(env, LUNORA_CONTAINERS${jurisdiction ? `, ${JSON.stringify(jurisdiction)}` : ""});
 `,
         contextField: `\n                containers,`,
         importLines: [`import type { ContainerBindingSpec } from "@lunora/container";`, `import { createContainerContext } from "@lunora/container";`],
@@ -2299,7 +2311,7 @@ const emitShard = ({
         contextField: containersContextField,
         importLines: containerImportLines,
         specs: containerSpecs,
-    } = emitContainerFragments(containers);
+    } = emitContainerFragments(containers, schema.jurisdiction);
     const {
         build: workflowsBuild,
         contextField: workflowsContextField,

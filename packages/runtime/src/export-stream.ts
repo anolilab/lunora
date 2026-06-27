@@ -11,6 +11,7 @@
  */
 import type { AdminTableResolver, WorkerOptions } from "./create-worker";
 import type { QueryCoordinator } from "./query-coordinator";
+import type { ShardNamespaceLike } from "./resolve-shard";
 
 /** One exported row — a table name plus its document. */
 type ExportRow = { doc: Record<string, unknown>; table: string };
@@ -61,6 +62,7 @@ const exportShardLocalRows = async (
     tables: ReadonlyArray<string> | undefined,
     shardLocalTables: ReadonlyArray<string>,
     writeRow: (row: ExportRow) => void,
+    namespace: ShardNamespaceLike,
 ): Promise<void> => {
     // Skip only when the caller named tables and none are shard-local. When
     // tables is undefined the per-shard exporter visits every shard-local table.
@@ -75,7 +77,11 @@ const exportShardLocalRows = async (
     const probeFallback = tables === undefined ? collectKnownTables(options.resolveTableSharding) : [];
     const probeTables = exportTables.length > 0 ? exportTables : probeFallback;
 
-    const result = await coordinator.orchestrateExport(options.shardDO, {
+    // `namespace` is the worker's jurisdiction-pinned shard binding (create-worker
+    // pins it once). Fanning out through it keeps export reading the SAME DOs the
+    // app writes to — using the raw `options.shardDO` would resolve the un-pinned
+    // global DOs (a different ID per jurisdiction) and return wrong/empty rows.
+    const result = await coordinator.orchestrateExport(namespace, {
         args: { tables: exportTables },
         headers: forwardedHeaders,
         tables: probeTables,
@@ -106,10 +112,11 @@ const streamExportRows = async (
     forwardedHeaders: Record<string, string>,
     tables: ReadonlyArray<string> | undefined,
     writeRow: (row: ExportRow) => void,
+    namespace: ShardNamespaceLike,
 ): Promise<void> => {
     const { globalTables, shardLocalTables } = partitionExportTables(options, tables);
 
-    await exportShardLocalRows(options, coordinator, forwardedHeaders, tables, shardLocalTables, writeRow);
+    await exportShardLocalRows(options, coordinator, forwardedHeaders, tables, shardLocalTables, writeRow, namespace);
 
     // Globals: stream rows from the D1 helper when configured.
     const exportGlobalsFunction = options.exportGlobals;

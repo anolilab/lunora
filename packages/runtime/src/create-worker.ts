@@ -12,8 +12,8 @@ import type { ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext } 
 import { emitRpcEvent } from "./observability";
 import { buildOrchestrationAdminRoutes } from "./orchestration-admin-routes";
 import type { FanOutSpec, QueryCoordinator } from "./query-coordinator";
-import type { ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
-import { resolveShard } from "./resolve-shard";
+import type { DurableObjectJurisdiction, ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
+import { applyJurisdiction, resolveShard } from "./resolve-shard";
 import { buildScheduledAdminRoutes } from "./scheduled-admin-routes";
 import type { SecurityOptions } from "./security-headers";
 import { decorateResponse, enforceOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
@@ -661,6 +661,28 @@ interface WorkerOptions {
     importGlobals?: GlobalImportFunction;
 
     /**
+     * Restrict every Durable Object this worker reaches — shard DOs, the
+     * scheduler DO, the fan-out coordinator, subscriptions — to a Cloudflare
+     * data-residency jurisdiction (`"eu"`, `"us"`, `"fedramp"`). The runtime
+     * derives a jurisdiction-pinned subnamespace from {@link WorkerOptions.shardDO}
+     * and {@link WorkerOptions.schedulerDO} once, so all routing inherits it.
+     *
+     * Fail-closed: if the bound namespace does not expose `.jurisdiction()`
+     * (an older `@cloudflare/workers-types`), the worker throws rather than
+     * silently routing to the un-pinned global namespace. Omit it for the
+     * default, un-pinned behaviour.
+     *
+     * ⚠️ Set once, before the first deploy — changing it strands data. A DO name
+     * maps to a *different* ID per jurisdiction, so toggling this on an existing
+     * deployment makes every shard/scheduler call resolve to a new, empty DO; the
+     * prior data stays in the old jurisdiction and is unreachable (no in-place
+     * migration). Usually set via the schema's `.jurisdiction(...)`, which codegen
+     * threads here.
+     * @see https://developers.cloudflare.com/durable-objects/reference/data-location/
+     */
+    jurisdiction?: DurableObjectJurisdiction;
+
+    /**
      * Optional telemetry sink. When supplied, the worker emits one
      * `onRpc` event per dispatched RPC (single-shard forward or fan-out)
      * with duration / ok / error / shardKey or fanOut metadata. Sink
@@ -1293,6 +1315,15 @@ interface LunoraWorker {
 const createWorker = (options: WorkerOptions): LunoraWorker => {
     const defaultShard = options.defaultShardKey ?? "__root__";
 
+    // Pin every DO this worker reaches to the configured jurisdiction exactly
+    // once, here at the boundary. Downstream routing (`forwardToShard`,
+    // `coordinator.fanOut`, the scheduler stubs) reads these derived namespaces
+    // instead of `options.shardDO`/`options.schedulerDO`, so the residency
+    // constraint flows everywhere without threading it through each call.
+    // When `options.jurisdiction` is unset these are the bindings unchanged.
+    const shardDO = applyJurisdiction(options.shardDO, options.jurisdiction);
+    const schedulerDO = options.schedulerDO === undefined ? undefined : applyJurisdiction(options.schedulerDO, options.jurisdiction);
+
     // Effective admin bearer for the request-time `/_lunora/admin/*` gates: the
     // explicit `options.adminToken`, or — when unset (the `composeWorker` default,
     // since the generated worker entry doesn't thread it) — `env.LUNORA_ADMIN_TOKEN`.
@@ -1351,7 +1382,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         isAdmin: (request) => checkAdminAuth(request, effectiveAdminToken()),
         queryCoordinator: options.queryCoordinator,
         resolveForwardContext: (request, env) => resolveForwardContext(request, env, options.resolveIdentity),
-        shardDO: options.shardDO,
+        shardDO,
     });
 
     /**
@@ -1380,7 +1411,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             method: "POST",
         });
 
-        return forwardToShard(options.shardDO, shardKey, forwarded);
+        return forwardToShard(shardDO, shardKey, forwarded);
     };
 
     /**
@@ -1506,14 +1537,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const releasePoolSlot = async (candidate: { id?: unknown; instanceName?: unknown; pool?: unknown }): Promise<void> => {
         const pool = typeof candidate.pool === "string" && candidate.pool.length > 0 ? candidate.pool : undefined;
 
-        if (!pool || !options.schedulerDO || typeof candidate.id !== "string") {
+        if (!pool || !schedulerDO || typeof candidate.id !== "string") {
             return;
         }
 
         const instanceName = typeof candidate.instanceName === "string" && candidate.instanceName.length > 0 ? candidate.instanceName : "default";
 
         try {
-            await options.schedulerDO.get(options.schedulerDO.idFromName(instanceName)).fetch(
+            await schedulerDO.get(schedulerDO.idFromName(instanceName)).fetch(
                 new Request("https://scheduler.internal/complete", {
                     body: JSON.stringify({ id: candidate.id, pool }),
                     headers: { "content-type": "application/json" },
@@ -1608,9 +1639,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         knownTables: () => collectKnownTables(options.resolveTableSharding),
         queryCoordinator: options.queryCoordinator,
         resolveForwardContext: (request, env) => resolveForwardContext(request, env, options.resolveIdentity),
-        shardDO: options.shardDO,
-        streamExportRows: (coordinator, headers, tables, writeRow) => streamExportRows(options, coordinator, headers, tables, writeRow),
-        streamingImport: (request, headers) => streamingImport(request, options, headers),
+        shardDO,
+        streamExportRows: (coordinator, headers, tables, writeRow) => streamExportRows(options, coordinator, headers, tables, writeRow, shardDO),
+        streamingImport: (request, headers) => streamingImport(request, options, headers, shardDO),
         syncGlobals: options.syncGlobals,
     });
 
@@ -1670,11 +1701,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     const requireSchedulerNamespace = (): ShardNamespaceLike => {
-        if (options.schedulerDO === undefined) {
+        if (schedulerDO === undefined) {
             throw new LunoraError("scheduled endpoints require a `schedulerDO` namespace on the worker", { code: "SCHEDULER_NOT_CONFIGURED", status: 400 });
         }
 
-        return options.schedulerDO;
+        return schedulerDO;
     };
 
     const resolveSchedulerStub = (request: Request): ResolvedShard => {
@@ -1757,7 +1788,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 method: "POST",
             });
 
-            const response = await forwardToShard(options.shardDO, defaultShard, forwarded);
+            const response = await forwardToShard(shardDO, defaultShard, forwarded);
             const payload: { error?: { code?: string; message?: string }; result?: unknown } = await response.json();
 
             if (payload.error) {
@@ -1877,7 +1908,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             upgradeHeaders.set("x-lunora-identity-exp", forwardedExp);
         }
 
-        return forwardToShard(options.shardDO, shardKey, new Request(request, { headers: upgradeHeaders }));
+        return forwardToShard(shardDO, shardKey, new Request(request, { headers: upgradeHeaders }));
     };
 
     /**
@@ -1977,7 +2008,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         });
 
         try {
-            const response = await forwardToShard(options.shardDO, shardKey, forwarded);
+            const response = await forwardToShard(shardDO, shardKey, forwarded);
 
             // A non-2xx from the shard is reported as ok=false even though no
             // exception was thrown — the user-visible result is still an error
@@ -2086,7 +2117,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 }
 
                 try {
-                    const result = await coordinator.fanOut(options.shardDO, {
+                    const result = await coordinator.fanOut(shardDO, {
                         args: envelope.args ?? {},
                         fanOut: envelope.fanOut,
                         functionPath: envelope.functionPath,
@@ -2307,7 +2338,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 };
 
                 try {
-                    await streamExportRows(options, coordinator, forwardedHeaders, tables, writeRow);
+                    await streamExportRows(options, coordinator, forwardedHeaders, tables, writeRow, shardDO);
                     streamController.close();
                 } catch (error: unknown) {
                     // Capture the failure so it propagates past `put` — a stream
@@ -2425,7 +2456,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 method: "POST",
             });
 
-            await forwardToShard(options.shardDO, defaultShard, recordRequest);
+            await forwardToShard(shardDO, defaultShard, recordRequest);
         } catch {
             // Best-effort: a recording failure must be silent and must never
             // affect the auth response that already went out.

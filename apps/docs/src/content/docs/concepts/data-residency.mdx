@@ -1,0 +1,188 @@
+---
+title: Data residency
+description: Pin Durable Objects to a Cloudflare jurisdiction with .jurisdiction(), and the export→import runbook for moving regions.
+---
+
+Cloudflare [Durable Object jurisdictions](https://developers.cloudflare.com/durable-objects/reference/data-location/)
+restrict where a DO runs and stores data — for GDPR, FedRAMP, or US data
+residency. Declare one on your schema and Lunora pins every DO the app reaches
+to that region.
+
+```ts
+import { defineSchema, defineTable, v } from "lunorash/server";
+
+export const schema = defineSchema({
+    messages: defineTable({ channelId: v.id("channels"), text: v.string() }).shardBy("channelId"),
+}).jurisdiction("eu");
+```
+
+Supported values: `"eu"`, `"us"`, `"fedramp"` (Cloudflare adds more over time).
+It composes with `.rls(...)` and `.extend(...)` in any order.
+
+## What it pins
+
+Codegen reads `.jurisdiction(...)` off the schema and threads it through the
+generated worker, so a single declaration pins **every Durable Object the app
+reaches**:
+
+- **Shard DOs** — every shard-local table (`__root__` and `.shardBy(...)`), so all
+  reads, writes, and the live-query subscriptions over them stay in-region.
+- **Fan-out** — cross-shard query coordination.
+- **`ctx.scheduler`** — the `SchedulerDO` that owns `runAfter` / `runAt` / cron timers.
+- **`ctx.containers`** — container DOs and their lifecycle reporting.
+
+It does **not** pin, by design:
+
+- **`.global()` tables** — these are D1-backed, not Durable Objects. D1 has its
+  own [location settings](https://developers.cloudflare.com/d1/configuration/data-location/);
+  the DO jurisdiction does not apply.
+- **Auth sessions** — `@lunora/auth` stores sessions in D1 (better-auth), so they
+  follow D1's residency, not this option.
+- **`@lunora/mail` inbound / capture shards** — mail is a scaffolded add-on, not
+  codegen-wired, so its shard access is **not** auto-pinned. Both entry points
+  take an optional `jurisdiction` (`createMailerFromEnv({ jurisdiction })` for the
+  dev capture inbox, `dispatchToLunoraFunction({ jurisdiction })` for inbound
+  routing) — pass the **same value** you declared on the schema so the mail shard
+  co-resides with app data. Omit it and mail uses the un-pinned global namespace.
+
+<Callout type="info">
+    **Fail-closed.** If the bound DO namespace can't honour the jurisdiction (an older `@cloudflare/workers-types` without `.jurisdiction()`), the worker throws
+    rather than silently routing to the un-pinned global namespace — a dropped residency constraint is never allowed to leak data out of region.
+</Callout>
+
+## Set it once — changing it strands data
+
+A Durable Object name maps to a **different ID in each jurisdiction**. So
+toggling, changing, or removing `.jurisdiction(...)` on an app that has already
+deployed makes every shard, scheduler job, and container resolve to a **new,
+empty DO**. The previous data stays in the old region's DOs and is no longer
+reachable through the worker. There is no in-place migration.
+
+Because this is the most destructive change a schema can express, the pre-deploy
+drift gate flags it as **breaking** and blocks the deploy:
+
+```text
+Durable Object jurisdiction changed from (none) to us — this re-homes every DO
+and strands all existing shard, scheduler, and session-DO data in the old region
+(no in-place migration; export then import to move it). Revert the change, or
+override the gate to proceed intentionally.
+```
+
+Revert the change, or — if a region move is genuinely intended — follow the
+runbook below and override the gate explicitly.
+
+## Runbook: moving an app to a new jurisdiction
+
+The only way to move existing data across jurisdictions is to **export it while
+the worker can still read the old region, then import it after the worker is
+pinned to the new one.** Order matters: once you deploy the jurisdiction change,
+the old DOs become unreachable through the worker.
+
+Do this in a maintenance window — writes that land between the export and the
+import are not carried over.
+
+<Steps>
+
+<Step>
+
+### Export first, before changing anything
+
+While the deployed worker still resolves the **current** region's DOs, dump every
+table to NDJSON. This is your only window to read the old data.
+
+```bash
+LUNORA_ADMIN_TOKEN=… lunora export --prod --url https://app.example.com \
+  --out backup.ndjson \
+  --tables messages,channels,users   # scope to DO-backed tables
+```
+
+Scope `--tables` to your **shard-local** tables. `.global()` (D1) tables are not
+re-homed by the jurisdiction change, so leaving them out avoids re-inserting
+their rows in the import step.
+
+</Step>
+
+<Step>
+
+### Verify the dump
+
+Confirm row counts and file size look right before you touch the schema — this
+file is the only copy that bridges the two regions.
+
+```bash
+wc -l backup.ndjson
+```
+
+</Step>
+
+<Step>
+
+### Change the schema and regenerate
+
+Edit the `.jurisdiction(...)` declaration and run codegen so the generated worker
+picks up the new region.
+
+```ts
+export const schema = defineSchema({
+    // …
+}).jurisdiction("us"); // was "eu"
+```
+
+```bash
+lunora codegen
+```
+
+</Step>
+
+<Step>
+
+### Deploy, overriding the drift gate
+
+The gate will block on the `changedJurisdiction` drift. Since you have already
+exported, override it and re-bless the baseline so the new region becomes the
+recorded shape:
+
+```bash
+lunora deploy --allow-schema-drift --update-schema-baseline
+```
+
+The worker now resolves DOs in the new region — they start empty.
+
+</Step>
+
+<Step>
+
+### Import into the new region
+
+Replay the dump. The worker is now pinned to the new jurisdiction, so the rows
+land in the new region's DOs.
+
+```bash
+LUNORA_ADMIN_TOKEN=… lunora import backup.ndjson --prod --url https://app.example.com
+```
+
+</Step>
+
+<Step>
+
+### Verify and clean up
+
+Check parity (row counts, a few spot reads) against the dump. The old region's
+DOs are now orphaned — they hold no further traffic and bill nothing once idle;
+leave them to expire or delete them from the Cloudflare dashboard.
+
+</Step>
+
+</Steps>
+
+<Callout type="warn">
+    **Scheduled jobs and sessions don't ride along.** `lunora export` covers table rows, not `SchedulerDO` timer state — in-flight `runAfter` / `runAt` / cron
+    jobs in the old region are lost; re-enqueue anything that must survive the move. D1-backed auth sessions are unaffected by the jurisdiction change and stay
+    put.
+</Callout>
+
+## See also
+
+- [Sharding](/docs/concepts/sharding) — the `__root__` DO, `.shardBy()`, and `.global()`.
+- [Migrations](/docs/concepts/migrations) — `defineMigration` and the pre-deploy drift gate.
+- [CLI](/docs/packages/cli) — full `lunora export`, `lunora import`, and `lunora deploy` reference.

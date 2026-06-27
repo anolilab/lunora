@@ -142,7 +142,17 @@ export interface TableIR {
     vectorIndexes: ReadonlyArray<VectorIndexIR>;
 }
 
+/** The Cloudflare DO data-residency jurisdictions the schema may declare. Canonical literal set for the codegen package. */
+export type JurisdictionIR = "eu" | "fedramp" | "us";
+
 export interface SchemaIR {
+    /**
+     * Cloudflare data-residency jurisdiction declared via
+     * `defineSchema(...).jurisdiction("…")`. Emitted into the generated worker's
+     * `createWorker({ jurisdiction })` (and `ctx.scheduler` / `ctx.containers`).
+     * Absent ⇒ un-pinned.
+     */
+    jurisdiction?: JurisdictionIR;
     tables: ReadonlyArray<TableIR>;
     /** All vector indexes (inline Shape A hoisted + standalone Shape B), flattened. */
     vectorIndexes: ReadonlyArray<VectorIndexIR>;

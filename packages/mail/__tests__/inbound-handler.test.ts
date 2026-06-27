@@ -283,4 +283,52 @@ describe("dispatchToLunoraFunction", () => {
 
         consoleError.mockRestore();
     });
+
+    it("routes through a jurisdiction-pinned subnamespace when configured", async () => {
+        expect.assertions(2);
+
+        const inner = stubShard({
+            json: async () => {
+                return { result: "ok" };
+            },
+            ok: true,
+        });
+        const jurisdictionCalls: string[] = [];
+        const shard = {
+            get: () => {
+                throw new Error("should resolve via the jurisdiction subnamespace, not the root namespace");
+            },
+            idFromName: () => {
+                throw new Error("should resolve via the jurisdiction subnamespace, not the root namespace");
+            },
+            jurisdiction: (j: string) => {
+                jurisdictionCalls.push(j);
+
+                return inner.shard;
+            },
+        };
+
+        const dispatch = dispatchToLunoraFunction({ functionPath: "inbound:onEmail", jurisdiction: "us", shard });
+
+        await dispatch(fixture, { ctx: undefined, env: { LUNORA_ADMIN_TOKEN: "secret" }, message: fakeMessage() });
+
+        expect(jurisdictionCalls).toStrictEqual(["us"]);
+        expect(inner.idFromName).toHaveBeenCalledWith("__root__");
+    });
+
+    it("fails closed when the binding lacks jurisdiction support", async () => {
+        expect.assertions(1);
+
+        const { shard } = stubShard({
+            json: async () => {
+                return { result: "ok" };
+            },
+            ok: true,
+        });
+        const dispatch = dispatchToLunoraFunction({ functionPath: "inbound:onEmail", jurisdiction: "eu", shard });
+
+        await expect(dispatch(fixture, { ctx: undefined, env: { LUNORA_ADMIN_TOKEN: "secret" }, message: fakeMessage() })).rejects.toThrow(
+            /does not support jurisdiction/,
+        );
+    });
 });

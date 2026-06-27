@@ -250,4 +250,91 @@ describe("schema-drift", () => {
 
         expect(SCHEMA_SNAPSHOT_VERSION).toBe(1);
     });
+
+    describe("jurisdiction drift", () => {
+        const pinned = (jurisdiction: SchemaIR["jurisdiction"]): SchemaIR => {
+            return { jurisdiction, tables: [table("users", { name: stringField })], vectorIndexes: [] };
+        };
+
+        it("captures the schema jurisdiction into the snapshot", () => {
+            expect.assertions(1);
+
+            expect(buildSchemaSnapshot(pinned("us"), []).jurisdiction).toBe("us");
+        });
+
+        it("survives a serialize / parse round-trip", () => {
+            expect.assertions(1);
+
+            const parsed = parseSchemaSnapshot(serializeSchemaSnapshot(buildSchemaSnapshot(pinned("eu"), [])));
+
+            expect(parsed?.jurisdiction).toBe("eu");
+        });
+
+        it("parses a pre-jurisdiction baseline (field absent) as undefined", () => {
+            expect.assertions(1);
+
+            // A v1 baseline written before the field existed: no `jurisdiction` key.
+            const legacy = JSON.stringify({ migrationIds: [], tables: {}, version: SCHEMA_SNAPSHOT_VERSION });
+
+            expect(parseSchemaSnapshot(legacy)?.jurisdiction).toBeUndefined();
+        });
+
+        it("preserves an unknown jurisdiction string (forward-compat downgrade) instead of dropping it", () => {
+            expect.assertions(2);
+
+            // A baseline written by a newer Lunora that supports a jurisdiction this
+            // version doesn't know yet. Coercing it to `undefined` would fail open and
+            // hide a `changedJurisdiction` drift, so it must round-trip verbatim.
+            const future = JSON.stringify({ jurisdiction: "apac", migrationIds: [], tables: {}, version: SCHEMA_SNAPSHOT_VERSION });
+            const baseline = parseSchemaSnapshot(future);
+
+            expect(baseline?.jurisdiction).toBe("apac");
+
+            // Removing the (unknown) jurisdiction is still flagged as breaking drift.
+            const change = diffSchemaSnapshots(baseline, buildSchemaSnapshot(schema([table("users", { name: stringField })]), [])).changes.find(
+                (candidate) => candidate.type === "changedJurisdiction",
+            );
+
+            expect(change?.severity).toBe("breaking");
+        });
+
+        it("flags adding a jurisdiction as breaking drift", () => {
+            expect.assertions(3);
+
+            const baseline = buildSchemaSnapshot(schema([table("users", { name: stringField })]), []);
+            const current = buildSchemaSnapshot(pinned("us"), []);
+
+            const change = diffSchemaSnapshots(baseline, current).changes.find((candidate) => candidate.type === "changedJurisdiction");
+
+            expect(change).toBeDefined();
+            expect(change?.severity).toBe("breaking");
+            expect(change?.summary).toContain("strands all existing");
+        });
+
+        it("flags changing the jurisdiction as breaking drift", () => {
+            expect.assertions(1);
+
+            const change = diffSchemaSnapshots(buildSchemaSnapshot(pinned("eu"), []), buildSchemaSnapshot(pinned("us"), [])).changes.find(
+                (candidate) => candidate.type === "changedJurisdiction",
+            );
+
+            expect(change?.severity).toBe("breaking");
+        });
+
+        it("reports no jurisdiction drift when it is unchanged", () => {
+            expect.assertions(1);
+
+            const { changes } = diffSchemaSnapshots(buildSchemaSnapshot(pinned("us"), []), buildSchemaSnapshot(pinned("us"), []));
+
+            expect(changes.some((candidate) => candidate.type === "changedJurisdiction")).toBe(false);
+        });
+
+        it("does not flag jurisdiction on a first-ever capture (no baseline)", () => {
+            expect.assertions(1);
+
+            const { changes } = diffSchemaSnapshots(undefined, buildSchemaSnapshot(pinned("us"), []));
+
+            expect(changes.some((candidate) => candidate.type === "changedJurisdiction")).toBe(false);
+        });
+    });
 });

@@ -215,6 +215,18 @@ describe("emit (containers)", () => {
         expect(emitContainers([])).toBe("");
     });
 
+    it("emitContainers passes the schema jurisdiction to the base class when declared", () => {
+        expect.assertions(1);
+
+        expect(emitContainers(discover(), "us")).toContain('super(ctx, env, transcoder, "transcoder", "us");');
+    });
+
+    it("emitContainers omits the jurisdiction arg when undeclared (unchanged output)", () => {
+        expect.assertions(1);
+
+        expect(emitContainers(discover())).toContain('super(ctx, env, transcoder, "transcoder");');
+    });
+
     it("emitServer types ctx.containers on ActionCtx only when containers exist", () => {
         expect.assertions(4);
 
@@ -242,5 +254,13 @@ describe("emit (containers)", () => {
         expect.assertions(1);
 
         expect(emitShard({ schema: EMPTY_SCHEMA })).not.toContain("LUNORA_CONTAINERS");
+    });
+
+    it("emitShard pins ctx.containers to the schema jurisdiction when declared", () => {
+        expect.assertions(1);
+
+        const shard = emitShard({ schema: { ...EMPTY_SCHEMA, jurisdiction: "us" }, containers: discover() });
+
+        expect(shard).toContain('const containers = createContainerContext(env, LUNORA_CONTAINERS, "us");');
     });
 });
