@@ -22,7 +22,7 @@
         "directory": "packages/dispatch"
     },
     "files": [
-        "dist",
+        "./dist",
         "README.md",
         "LICENSE.md",
         "__assets__"

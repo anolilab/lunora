@@ -26,7 +26,7 @@
         "directory": "packages/bindings"
     },
     "files": [
-        "dist",
+        "./dist",
         "README.md",
         "LICENSE.md",
         "__assets__"

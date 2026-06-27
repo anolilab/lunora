@@ -28,7 +28,7 @@
         "lunora-mcp": "./dist/bin.mjs"
     },
     "files": [
-        "dist",
+        "./dist",
         "__assets__",
         "README.md",
         "LICENSE.md"

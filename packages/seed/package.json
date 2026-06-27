@@ -22,7 +22,7 @@
         "directory": "packages/seed"
     },
     "files": [
-        "dist",
+        "./dist",
         "README.md",
         "LICENSE.md",
         "__assets__"

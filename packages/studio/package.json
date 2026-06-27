@@ -25,7 +25,7 @@
         "directory": "packages/studio"
     },
     "files": [
-        "dist",
+        "./dist",
         "src/theme.css",
         "README.md",
         "LICENSE.md",

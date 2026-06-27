@@ -23,7 +23,7 @@
         "directory": "packages/queue"
     },
     "files": [
-        "dist",
+        "./dist",
         "README.md",
         "LICENSE.md",
         "__assets__"
