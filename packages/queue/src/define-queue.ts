@@ -45,6 +45,14 @@ const queueDefaultName = (exportName: string): string => exportName.replaceAll(/
  * ```
  *
  * Enqueue from a mutation or action: `await ctx.queues.emailQueue.send({ to })`.
+ *
+ * ⚠️ **Privileged dispatch.** A push handler's `ctx.run(...)` calls back into
+ * Lunora functions over the admin-authenticated dispatch endpoint (the same
+ * trusted path the scheduler and workflows use), so those calls run with the
+ * system identity — **end-user RLS is not applied**. Treat a queue handler as
+ * trusted server code: validate `message.body` (it may be attacker-influenced if
+ * anything user-facing can enqueue) before acting on it, and don't forward an
+ * unchecked body straight into a privileged mutation.
  */
 const defineQueue = <Body = unknown>(config: QueueConfig<Body>): QueueDefinition<Body> => {
     const mode = config.mode ?? "push";

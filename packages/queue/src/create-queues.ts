@@ -26,7 +26,9 @@ const producerFor = (binding: QueueBindingLike): QueueProducer => {
 const createQueues = (options: LunoraQueuesOptions): Queues => {
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the required type
     const bindings = options.bindings ?? {};
-    const producers: Record<string, QueueProducer> = {};
+    // Null-prototype map so a queue named `constructor` / `toString` / `hasOwnProperty`
+    // can't resolve to an inherited Object member instead of the directed error.
+    const producers: Record<string, QueueProducer> = Object.create(null) as Record<string, QueueProducer>;
 
     for (const [exportName, binding] of Object.entries(bindings)) {
         producers[exportName] = producerFor(binding);
@@ -49,7 +51,7 @@ const createQueues = (options: LunoraQueuesOptions): Queues => {
                 return undefined;
             }
 
-            return target[property] ?? missing(property);
+            return Object.hasOwn(target, property) ? target[property] : missing(property);
         },
     });
 };
