@@ -938,10 +938,10 @@ describe("createWorker — jurisdiction pins the export/import fan-out", () => {
             fakeContext,
         );
 
-        // `.jurisdiction()` is applied at the worker boundary AND in export-stream
-        // (it re-pins the raw `options.shardDO`), so it's requested with "us" each
-        // time — what matters is the pinned subnamespace reaches orchestrateExport.
-        expect(jurisdictionCalls).toContain("us");
+        // The namespace is pinned ONCE at the worker boundary and the pinned
+        // subnamespace is threaded into export-stream — so `.jurisdiction()` is
+        // requested exactly once, and that subnamespace reaches orchestrateExport.
+        expect(jurisdictionCalls).toStrictEqual(["us"]);
         expect(orchestrateExport.mock.calls[0]?.[0]).toBe(pinned);
     });
 
@@ -970,7 +970,7 @@ describe("createWorker — jurisdiction pins the export/import fan-out", () => {
             fakeContext,
         );
 
-        expect(jurisdictionCalls).toContain("eu");
+        expect(jurisdictionCalls).toStrictEqual(["eu"]);
         expect(orchestrateImport.mock.calls[0]?.[0]).toBe(pinned);
     });
 });

@@ -1640,8 +1640,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         queryCoordinator: options.queryCoordinator,
         resolveForwardContext: (request, env) => resolveForwardContext(request, env, options.resolveIdentity),
         shardDO,
-        streamExportRows: (coordinator, headers, tables, writeRow) => streamExportRows(options, coordinator, headers, tables, writeRow),
-        streamingImport: (request, headers) => streamingImport(request, options, headers),
+        streamExportRows: (coordinator, headers, tables, writeRow) => streamExportRows(options, coordinator, headers, tables, writeRow, shardDO),
+        streamingImport: (request, headers) => streamingImport(request, options, headers, shardDO),
         syncGlobals: options.syncGlobals,
     });
 
@@ -2338,7 +2338,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 };
 
                 try {
-                    await streamExportRows(options, coordinator, forwardedHeaders, tables, writeRow);
+                    await streamExportRows(options, coordinator, forwardedHeaders, tables, writeRow, shardDO);
                     streamController.close();
                 } catch (error: unknown) {
                     // Capture the failure so it propagates past `put` — a stream

@@ -11,7 +11,7 @@
 import { MAX_BODY_BYTES } from "./body-readers";
 import type { ShardingInfo, WorkerOptions } from "./create-worker";
 import { LunoraError } from "./errors";
-import { applyJurisdiction } from "./resolve-shard";
+import type { ShardNamespaceLike } from "./resolve-shard";
 
 interface AdminBatch {
     rows: { doc: Record<string, unknown>; table: string }[];
@@ -248,6 +248,7 @@ const streamingImport = async (
     request: Request,
     options: WorkerOptions,
     forwardedHeaders: Record<string, string>,
+    namespace: ShardNamespaceLike,
 ): Promise<{
     conflicts: number;
     errors: ImportRowError[];
@@ -268,11 +269,12 @@ const streamingImport = async (
             throw new LunoraError("Import endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
         }
 
-        // Pin the import fan-out to the configured jurisdiction — the same
-        // subnamespace the worker reads/writes through. Without this, imported
-        // rows land in the un-pinned global DOs (outside the residency boundary,
-        // a fail-open leak) which the live worker never reads back.
-        const result = await coordinator.orchestrateImport(applyJurisdiction(options.shardDO, options.jurisdiction), {
+        // `namespace` is the worker's jurisdiction-pinned shard binding (create-worker
+        // pins it once). Fanning out through it keeps import writing to the SAME DOs
+        // the app reads — using the raw `options.shardDO` would land rows in the
+        // un-pinned global DOs, outside the residency boundary and unreachable by
+        // the live worker (a fail-open leak).
+        const result = await coordinator.orchestrateImport(namespace, {
             batches: [...perShard.values()],
             headers: forwardedHeaders,
         });
