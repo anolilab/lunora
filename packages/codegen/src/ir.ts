@@ -307,6 +307,39 @@ export interface WorkflowIR {
 }
 
 /**
+ * A queue lifted from a `defineQueue()` export in `lunora/queues.ts`. Carries
+ * what the emitters and the config layer need to wire the typed `ctx.queues`
+ * producer, the generated worker `queue()` dispatch, and the wrangler
+ * `queues.producers[]` / `queues.consumers[]` entries. Like workflows, a queue
+ * is NOT a Durable Object — wrangler gets only `queues.*` entries. Names are
+ * derived via `@lunora/queue`'s shared helpers so codegen and the config layer
+ * can never disagree.
+ */
+export interface QueueIR {
+    /** The Cloudflare `Queue` producer binding name, e.g. `QUEUE_EMAIL`. */
+    bindingName: string;
+    /** The `lunora/queues.ts` export name, e.g. `emailQueue`. */
+    exportName: string;
+    /** How the queue is consumed: `"push"` (a worker `queue()` handler) or `"pull"` (external HTTP). */
+    mode: "pull" | "push";
+
+    /**
+     * The stable wrangler queue name (`queues.producers[].queue`). Defaults to
+     * the kebab-cased export name (`emailQueue` → `email-queue`); a static
+     * `name:` literal in the definition overrides it.
+     */
+    name: string;
+    /** Push-consumer batch/retry tuning, mirrored onto the wrangler `queues.consumers[]` entry. */
+    tuning: {
+        deadLetterQueue?: string;
+        maxBatchSize?: number;
+        maxBatchTimeout?: number;
+        maxRetries?: number;
+        retryDelay?: number;
+    };
+}
+
+/**
  * A `ctx.workflows.get("name")…` call discovered in a function body — the
  * use-site analog of {@link WorkflowIR} (which is the declaration side). Feeds
  * the `workflow_unused` lint (a declared workflow with zero call sites) and the

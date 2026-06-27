@@ -29,12 +29,11 @@
               "with":
                   "egress-policy": "audit"
 
+            # pull_request_target runs against the base ref; check out the base
+            # repo's scripts (never the PR's), which is the safe default.
+            # persist-credentials defaults to false in the composite.
             - "name": "Checkout"
-              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.0
-              "with":
-                  # pull_request_target runs against the base ref; check out the
-                  # base repo's scripts (never the PR's), which is the safe default.
-                  "persist-credentials": "false"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
             - "name": "Validate PR has CLA confirmation"
               "id": "check_cla"

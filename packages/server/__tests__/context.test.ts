@@ -93,6 +93,7 @@ describe("queryCtx.storage / MutationCtx.storage", () => {
             log: {} as QueryContext["log"],
             now: 0,
             runQuery: (async () => undefined) as unknown as QueryContext["runQuery"],
+            secrets: { get: async () => "secret" },
             storage,
             vectors: {} as QueryContext["vectors"],
         } satisfies QueryContext;

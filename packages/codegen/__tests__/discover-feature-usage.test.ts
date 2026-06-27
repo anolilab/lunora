@@ -27,7 +27,15 @@ const ALL_OFF: FeatureUsage = {
     workflows: false,
 };
 
-const NO_SIGNALS = { cronCount: 0, dependencies: new Set<string>(), storageColumnCount: 0, storageRuleCount: 0, vectorIndexCount: 0, workflowCount: 0 };
+const NO_SIGNALS = {
+    cronCount: 0,
+    dependencies: new Set<string>(),
+    queueCount: 0,
+    storageColumnCount: 0,
+    storageRuleCount: 0,
+    vectorIndexCount: 0,
+    workflowCount: 0,
+};
 
 describe("discover-feature-usage", () => {
     beforeEach(() => {
@@ -89,13 +97,14 @@ describe("discover-feature-usage", () => {
     it("detects the new Cloudflare-capability features via import or the `ctx.*` helper", () => {
         expect.assertions(12);
 
-        // Imports flip kv / analytics / hyperdrive / images / browser / pipelines.
-        writeSource("flag.ts", `import { createKv } from "@lunora/kv";\nexport const a = () => createKv();`);
-        writeSource("track.ts", `import { createAnalytics } from "@lunora/analytics";\nexport const b = () => createAnalytics();`);
+        // Imports flip kv / analytics / hyperdrive / images / browser. Pipelines
+        // ships from `@lunora/bindings/analytics`, so a plain import must NOT flip it — it is
+        // detected solely via the `ctx.pipelines` read (asserted below).
+        writeSource("flag.ts", `import { createKv } from "@lunora/bindings/kv";\nexport const a = () => createKv();`);
+        writeSource("track.ts", `import { createAnalytics } from "@lunora/bindings/analytics";\nexport const b = () => createAnalytics();`);
         writeSource("pg.ts", `import { createHyperdrive } from "@lunora/hyperdrive";\nexport const c = () => createHyperdrive();`);
-        writeSource("img.ts", `import { createImages } from "@lunora/images";\nexport const d = () => createImages();`);
+        writeSource("img.ts", `import { createImages } from "@lunora/bindings/images";\nexport const d = () => createImages();`);
         writeSource("shot.ts", `import { createBrowser } from "@lunora/browser";\nexport const e = () => createBrowser();`);
-        writeSource("ship.ts", `import { createPipeline } from "@lunora/pipelines";\nexport const f = () => createPipeline();`);
 
         const usage = discoverFeatureUsage(newProject(), workdir);
 
@@ -104,7 +113,7 @@ describe("discover-feature-usage", () => {
         expect(usage.hyperdrive).toBe(true);
         expect(usage.images).toBe(true);
         expect(usage.browser).toBe(true);
-        expect(usage.pipelines).toBe(true);
+        expect(usage.pipelines).toBe(false);
 
         // The `ctx.*` reads flip them too — note hyperdrive is reached via `ctx.sql`
         // and pipelines via `ctx.pipelines`.
@@ -178,6 +187,7 @@ describe("discover-feature-usage", () => {
             expect(buildStudioFeatures(ALL_OFF, NO_SIGNALS)).toStrictEqual({
                 mail: false,
                 payments: false,
+                queues: false,
                 scheduler: false,
                 storage: false,
                 vectors: false,
@@ -197,6 +207,7 @@ describe("discover-feature-usage", () => {
             const result = buildStudioFeatures(ALL_OFF, {
                 cronCount: 1,
                 dependencies: new Set<string>(),
+                queueCount: 0,
                 storageColumnCount: 2,
                 storageRuleCount: 0,
                 vectorIndexCount: 3,

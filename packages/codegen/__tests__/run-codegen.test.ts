@@ -205,11 +205,11 @@ export const cached = query({ args: { key: v.string() }, handler: async (ctx, { 
 
             const result = runCodegen({ lint: false, projectRoot: workdir });
 
-            expect(result.generated.shard).toContain('import { createKv } from "@lunora/kv"');
+            expect(result.generated.shard).toContain('import { createKv } from "@lunora/bindings/kv"');
             expect(result.generated.shard).toContain("\n                kv,");
             // KV rides every ctx, so it must NOT be gated behind the action-only block.
             expect(result.generated.shard).not.toContain("ctx.kv = kv;");
-            expect(result.generated.server).toContain('readonly kv: import("@lunora/kv").Kv;');
+            expect(result.generated.server).toContain('readonly kv: import("@lunora/bindings/kv").Kv;');
         });
 
         it("wires ctx.sql (Hyperdrive) end-to-end onto the ActionCtx ONLY (value-level) when an action reads ctx.sql", () => {
@@ -248,14 +248,14 @@ export const top = action({ args: { region: v.string() }, handler: async (ctx, {
 
             const result = runCodegen({ lint: false, projectRoot: workdir });
 
-            expect(result.generated.shard).toContain('import { createR2Sql } from "@lunora/r2sql";');
+            expect(result.generated.shard).toContain('import { createR2Sql } from "@lunora/bindings/r2sql";');
             // Attached only inside the `if (isAction)` block — never spliced into the shared ctx literal.
             expect(result.generated.shard).toContain("ctx.r2sql = r2sql;");
 
             const baseCtxBody = result.generated.shard.slice(0, result.generated.shard.indexOf("const isAction ="));
 
             expect(baseCtxBody).not.toContain("\n                r2sql,");
-            expect(result.generated.server).toContain('readonly r2sql: import("@lunora/r2sql").R2SqlClient;');
+            expect(result.generated.server).toContain('readonly r2sql: import("@lunora/bindings/r2sql").R2SqlClient;');
         });
 
         it("gates studioFeatures end-to-end: payments on (ctx read), crons drive scheduler, storage column drives storage, mail/vectors off", () => {
@@ -808,8 +808,8 @@ export default crons;
             expect(result.generated.shard).toContain("createShardCtxDb");
 
             // The fixture schema declares no vector indexes, so the shard must stay
-            // dependency-light and never reach for @lunora/vectors.
-            expect(result.generated.shard).not.toContain("@lunora/vectors");
+            // dependency-light and never reach for @lunora/bindings/vectors.
+            expect(result.generated.shard).not.toContain("@lunora/bindings/vectors");
             expect(result.generated.shard).not.toContain("createVectorSyncHook");
         });
 
@@ -1147,6 +1147,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 studioFeatures: {
                     mail: false,
                     payments: true,
+                    queues: false,
                     scheduler: false,
                     storage: true,
                     vectors: false,
@@ -1405,7 +1406,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
     });
 
     describe("emitShard", () => {
-        it("wires @lunora/vectors auto-sync when the schema declares vector indexes", () => {
+        it("wires @lunora/bindings/vectors auto-sync when the schema declares vector indexes", () => {
             expect.assertions(7);
 
             const schema: SchemaIR = {
@@ -1427,7 +1428,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             const output = emitShard({ schema });
 
             // Vectors variant: pull the adapters + the Vectorize binding type.
-            expect(output).toContain('import { createContextVectors, createVectors, createVectorSyncHook } from "@lunora/vectors"');
+            expect(output).toContain('import { createContextVectors, createVectors, createVectorSyncHook } from "@lunora/bindings/vectors"');
             expect(output).toContain("VectorizeIndexLike");
             expect(output).toContain("WriteHook");
 
@@ -1438,7 +1439,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("vectors,");
         });
 
-        it("omits @lunora/vectors entirely when the schema declares no vectors", () => {
+        it("omits @lunora/bindings/vectors entirely when the schema declares no vectors", () => {
             expect.assertions(4);
 
             const schema: SchemaIR = {
@@ -1459,7 +1460,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const output = emitShard({ schema });
 
-            expect(output).not.toContain("@lunora/vectors");
+            expect(output).not.toContain("@lunora/bindings/vectors");
             expect(output).not.toContain("createVectorSyncHook");
             expect(output).not.toContain("onWrite");
             expect(output).toContain("export const createShardDO");
@@ -1501,7 +1502,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const output = emitShard({ hasKv: true, schema });
 
-            expect(output).toContain('import { createKv } from "@lunora/kv"');
+            expect(output).toContain('import { createKv } from "@lunora/bindings/kv"');
             expect(output).toContain("kv?: (env: Record<string, unknown>) => KVNamespaceLike;");
             expect(output).toContain("const kvStub: Kv");
             expect(output).toContain("createKv({ namespace: kvBinding as KVNamespaceLike })");
@@ -1517,7 +1518,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const output = emitShard({ hasAnalytics: true, schema });
 
-            expect(output).toContain('import { createAnalytics } from "@lunora/analytics"');
+            expect(output).toContain('import { createAnalytics } from "@lunora/bindings/analytics"');
             expect(output).toContain("analytics?: (env: Record<string, unknown>) => AnalyticsEngineDatasetLike;");
             expect(output).toContain("const analyticsStub: AnalyticsClient");
             // Positional binding arg — NOT an options object.
@@ -1533,7 +1534,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const output = emitShard({ hasImages: true, schema });
 
-            expect(output).toContain('import { createImages } from "@lunora/images"');
+            expect(output).toContain('import { createImages } from "@lunora/bindings/images"');
             expect(output).toContain("images?: (env: Record<string, unknown>) => ImagesBindingLike;");
             expect(output).toContain("const imagesStub: Images");
             expect(output).toContain("createImages({ binding: imagesBinding as ImagesBindingLike })");
@@ -1582,9 +1583,9 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const output = emitShard({ schema });
 
-            expect(output).not.toContain("@lunora/kv");
-            expect(output).not.toContain("@lunora/analytics");
-            expect(output).not.toContain("@lunora/images");
+            expect(output).not.toContain("@lunora/bindings/kv");
+            expect(output).not.toContain("@lunora/bindings/analytics");
+            expect(output).not.toContain("@lunora/bindings/images");
             expect(output).not.toContain("@lunora/hyperdrive");
             expect(output).not.toContain("@lunora/browser");
             expect(output).not.toContain("isAction");
@@ -1703,10 +1704,10 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             const mutationCtx = ctxInterface(withKv, "MutationCtx");
             const actionCtx = ctxInterface(withKv, "ActionCtx");
 
-            expect(queryCtx).toContain('readonly kv: import("@lunora/kv").Kv;');
-            expect(mutationCtx).toContain('readonly kv: import("@lunora/kv").Kv;');
-            expect(actionCtx).toContain('readonly kv: import("@lunora/kv").Kv;');
-            expect(emitServer({})).not.toContain("@lunora/kv");
+            expect(queryCtx).toContain('readonly kv: import("@lunora/bindings/kv").Kv;');
+            expect(mutationCtx).toContain('readonly kv: import("@lunora/bindings/kv").Kv;');
+            expect(actionCtx).toContain('readonly kv: import("@lunora/bindings/kv").Kv;');
+            expect(emitServer({})).not.toContain("@lunora/bindings/kv");
         });
 
         it("wires ctx.analytics onto EVERY ctx (write-only fire-and-forget side effect)", () => {
@@ -1714,10 +1715,10 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const withAnalytics = emitServer({ hasAnalytics: true });
 
-            expect(ctxInterface(withAnalytics, "QueryCtx")).toContain('readonly analytics: import("@lunora/analytics").AnalyticsClient;');
-            expect(ctxInterface(withAnalytics, "MutationCtx")).toContain('readonly analytics: import("@lunora/analytics").AnalyticsClient;');
-            expect(ctxInterface(withAnalytics, "ActionCtx")).toContain('readonly analytics: import("@lunora/analytics").AnalyticsClient;');
-            expect(emitServer({})).not.toContain("@lunora/analytics");
+            expect(ctxInterface(withAnalytics, "QueryCtx")).toContain('readonly analytics: import("@lunora/bindings/analytics").AnalyticsClient;');
+            expect(ctxInterface(withAnalytics, "MutationCtx")).toContain('readonly analytics: import("@lunora/bindings/analytics").AnalyticsClient;');
+            expect(ctxInterface(withAnalytics, "ActionCtx")).toContain('readonly analytics: import("@lunora/bindings/analytics").AnalyticsClient;');
+            expect(emitServer({})).not.toContain("@lunora/bindings/analytics");
         });
 
         it("wires ctx.sql (Hyperdrive) onto ActionCtx ONLY — never query/mutation (determinism)", () => {
@@ -1747,10 +1748,10 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const withImages = emitServer({ hasImages: true });
 
-            expect(ctxInterface(withImages, "ActionCtx")).toContain('readonly images: import("@lunora/images").Images;');
+            expect(ctxInterface(withImages, "ActionCtx")).toContain('readonly images: import("@lunora/bindings/images").Images;');
             expect(ctxInterface(withImages, "QueryCtx")).not.toContain("readonly images:");
             expect(ctxInterface(withImages, "MutationCtx")).not.toContain("readonly images:");
-            expect(emitServer({})).not.toContain("@lunora/images");
+            expect(emitServer({})).not.toContain("@lunora/bindings/images");
         });
 
         it("wires ctx.pipelines onto ActionCtx ONLY — never query/mutation", () => {
@@ -1758,10 +1759,47 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const withPipelines = emitServer({ hasPipelines: true });
 
-            expect(ctxInterface(withPipelines, "ActionCtx")).toContain('readonly pipelines: import("@lunora/pipelines").PipelineClient;');
+            expect(ctxInterface(withPipelines, "ActionCtx")).toContain('readonly pipelines: import("@lunora/bindings/pipelines").PipelineClient;');
             expect(ctxInterface(withPipelines, "QueryCtx")).not.toContain("readonly pipelines:");
             expect(ctxInterface(withPipelines, "MutationCtx")).not.toContain("readonly pipelines:");
-            expect(emitServer({})).not.toContain("@lunora/pipelines");
+            expect(emitServer({})).not.toContain("PipelineClient");
+        });
+
+        it("wires ctx.queues producers onto Mutation + Action ctx — never query — and the runtime specs into the shard", () => {
+            expect.assertions(7);
+
+            const queues = [{ bindingName: "QUEUE_EMAIL", exportName: "emailQueue", mode: "push" as const, name: "email-queue", tuning: {} }];
+            const withQueues = emitServer({ queues });
+
+            // The typed producer lands on Mutation + Action (enqueue is a side effect), never the deterministic Query ctx.
+            expect(withQueues).toContain("export interface LunoraQueues");
+            expect(withQueues).toContain("readonly emailQueue: QueueProducer<QueueBodyOf<typeof lunoraQueueDefinitions.emailQueue>>;");
+            expect(ctxInterface(withQueues, "MutationCtx")).toContain("readonly queues: LunoraQueues;");
+            expect(ctxInterface(withQueues, "ActionCtx")).toContain("readonly queues: LunoraQueues;");
+            expect(ctxInterface(withQueues, "QueryCtx")).not.toContain("readonly queues:");
+
+            // The shard resolves producers from env via the codegen-emitted specs.
+            const shard = emitShard({ queues, schema: { tables: [], vectorIndexes: [] } });
+
+            expect(shard).toContain("createQueueContext(env, LUNORA_QUEUES)");
+            expect(shard).toContain('{ binding: "QUEUE_EMAIL", exportName: "emailQueue", name: "email-queue" }');
+        });
+
+        it("emits the queues studio metadata constant + override when queues are declared, and omits both otherwise", () => {
+            expect.assertions(5);
+
+            const queues = [
+                { bindingName: "QUEUE_EMAIL", exportName: "emailQueue", mode: "pull" as const, name: "email-queue", tuning: { deadLetterQueue: "email-dlq" } },
+            ];
+            const shard = emitShard({ queues, schema: { tables: [], vectorIndexes: [] } });
+
+            expect(shard).toContain("const LUNORA_QUEUES_INFO: QueuesResult = {");
+            expect(shard).toContain("protected override queuesMetadata(): QueuesResult {");
+            expect(shard).toContain('"mode": "pull"');
+            expect(shard).toContain('"deadLetterQueue": "email-dlq"');
+
+            // A queue-free app stays byte-identical: no metadata constant/override.
+            expect(emitShard({ schema: { tables: [], vectorIndexes: [] } })).not.toContain("LUNORA_QUEUES_INFO");
         });
 
         it("binds every table facade through the shard ctx-db (which routes `.global()` ops to D1)", () => {

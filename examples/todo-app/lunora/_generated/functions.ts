@@ -3,6 +3,7 @@
 
 import * as lunora_todos_0 from "../todos.js";
 
+import { DEFER_VALIDATION as DEFER, installCompiledValidatorMap } from "lunorash/values";
 import type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";
 import type { Id } from "./dataModel.js";
 
@@ -35,6 +36,28 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "todos:remove": lunora_todos_0.remove as unknown as RegisteredLunoraFunction,
     "todos:toggle": lunora_todos_0.toggle as unknown as RegisteredLunoraFunction,
 };
+
+/**
+ * AOT-compiled argument validators (Worker-safe, no `eval`). Each is installed
+ * onto its function's live `.args` object and consulted by the interpreted
+ * parser as a zero-allocation fast path; anything it can't model is deferred.
+ */
+installCompiledValidatorMap(lunora_todos_0.add.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["text"] !== "string") return DEFER;
+return { "text": source["text"] };
+});
+installCompiledValidatorMap(lunora_todos_0.remove.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["id"] !== "string") return DEFER;
+return { "id": source["id"] };
+});
+installCompiledValidatorMap(lunora_todos_0.toggle.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["id"] !== "string") return DEFER;
+if (typeof source["done"] !== "boolean") return DEFER;
+return { "id": source["id"], "done": source["done"] };
+});
 
 /**
  * Connection-lifecycle manifest: the function paths the generated ShardDO

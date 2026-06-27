@@ -25,7 +25,7 @@
         "directory": "packages/vite"
     },
     "files": [
-        "dist",
+        "./dist",
         "__assets__",
         "README.md",
         "LICENSE.md"

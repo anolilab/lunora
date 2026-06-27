@@ -1,0 +1,93 @@
+{
+    "name": "@lunora/bindings",
+    "version": "1.0.0-alpha.1",
+    "description": "Lightweight Cloudflare binding helpers for Lunora — ctx.kv, ctx.images, ctx.analytics, ctx.pipelines, ctx.vectors, ctx.r2sql — one install, per-binding subpaths",
+    "keywords": [
+        "analytics",
+        "cloudflare",
+        "images",
+        "kv",
+        "lunora",
+        "pipelines",
+        "r2-sql",
+        "vectorize",
+        "workers"
+    ],
+    "homepage": "https://lunora.sh",
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/anolilab/lunora.git",
+        "directory": "packages/bindings"
+    },
+    "files": [
+        "./dist",
+        "README.md",
+        "LICENSE.md",
+        "__assets__"
+    ],
+    "type": "module",
+    "sideEffects": false,
+    "exports": {
+        "./kv": {
+            "types": "./dist/kv/index.d.ts",
+            "import": "./dist/kv/index.mjs"
+        },
+        "./images": {
+            "types": "./dist/images/index.d.ts",
+            "import": "./dist/images/index.mjs"
+        },
+        "./analytics": {
+            "types": "./dist/analytics/index.d.ts",
+            "import": "./dist/analytics/index.mjs"
+        },
+        "./pipelines": {
+            "types": "./dist/pipelines/index.d.ts",
+            "import": "./dist/pipelines/index.mjs"
+        },
+        "./vectors": {
+            "types": "./dist/vectors/index.d.ts",
+            "import": "./dist/vectors/index.mjs"
+        },
+        "./r2sql": {
+            "types": "./dist/r2sql/index.d.ts",
+            "import": "./dist/r2sql/index.mjs"
+        },
+        "./package.json": "./package.json"
+    },
+    "publishConfig": {
+        "access": "public"
+    },
+    "scripts": {
+        "build": "pnpm exec packem build --development",
+        "build:prod": "pnpm exec packem build --production",
+        "lint:eslint": "eslint .",
+        "lint:eslint:fix": "eslint . --fix",
+        "lint:prettier": "prettier --check .",
+        "lint:prettier:fix": "prettier --write .",
+        "lint:types": "tsc --noEmit",
+        "test": "vitest run",
+        "test:coverage": "vitest run --coverage",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score"
+    },
+    "devDependencies": {
+        "@cloudflare/workers-types": "catalog:cloudflare",
+        "@types/node": "catalog:types",
+        "@visulima/packem": "catalog:build",
+        "@vitest/coverage-v8": "catalog:test",
+        "esbuild": "catalog:build",
+        "fallow": "catalog:lint",
+        "typescript": "catalog:tsc",
+        "vitest": "catalog:test"
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    }
+}

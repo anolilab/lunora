@@ -1,0 +1,14 @@
+# actionlint config.
+#
+# The `parallel:` step group (GitHub Actions parallel steps,
+# https://github.blog/changelog/2026-06-25-actions-steps-can-now-be-run-in-parallel/)
+# is a step that contains neither a `run:` nor a `uses:` key at its top level,
+# which actionlint does not yet model — it flags every such step as invalid.
+# Ignore that one error for the workflows that use `parallel:`.
+paths:
+    ".github/workflows/lint.yml":
+        ignore:
+            - 'step must run script with "run" section or run action with "uses" section' # yamllint disable-line rule:quoted-strings
+    ".github/workflows/test.yml":
+        ignore:
+            - 'step must run script with "run" section or run action with "uses" section' # yamllint disable-line rule:quoted-strings

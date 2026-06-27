@@ -23,7 +23,7 @@
         "directory": "packages/container"
     },
     "files": [
-        "dist",
+        "./dist",
         "README.md",
         "LICENSE.md",
         "__assets__"

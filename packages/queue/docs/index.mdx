@@ -1,0 +1,75 @@
+---
+title: "@lunora/queue"
+description: Cloudflare Queues for Lunora — defineQueue producers, a generated queue() push consumer (or HTTP pull), and the typed ctx.queues surface.
+---
+
+`@lunora/queue` brings Cloudflare Queues to Lunora. Declare a queue with `defineQueue` in `lunora/queues.ts`; codegen wires a typed `ctx.queues.<name>` producer onto mutations and actions and generates the worker `queue()` push consumer. The config layer reconciles the wrangler `queues.producers[]` / `queues.consumers[]` entries from the same definition.
+
+```sh
+pnpm add @lunora/queue
+```
+
+Scaffold a queue:
+
+```sh
+vis generate lunora-queue --name=emailQueue
+```
+
+## Declare a queue
+
+```ts
+// lunora/queues.ts
+import { defineQueue } from "@lunora/queue";
+
+import { api } from "./_generated/api";
+
+export const emailQueue = defineQueue<{ to: string }>({
+    handler: async (ctx, batch) => {
+        for (const message of batch.messages) {
+            try {
+                await ctx.run(api.email.send, { to: message.body.to });
+                message.ack();
+            } catch (error) {
+                ctx.log.error("send failed", message.id, error);
+                message.retry();
+            }
+        }
+    },
+    // Push-consumer tuning (optional):
+    // maxBatchSize: 10, maxBatchTimeout: 5, maxRetries: 3, deadLetterQueue: "dlq",
+});
+```
+
+The handler runs inside a Lunora context: call any query/mutation/action with `ctx.run(api.x.y, args)` (the dispatch goes through the same path the scheduler and workflows use). Each `message` is `ack`/`retry`-able for at-least-once processing.
+
+## Enqueue from a mutation or action
+
+`ctx.queues.<exportName>` is a typed producer on **Mutation** and **Action** contexts (enqueue is a side effect, so it's excluded from the deterministic query context):
+
+```ts
+import { mutation } from "./_generated/server";
+import { v } from "@lunora/values";
+
+export const invite = mutation({
+    args: { email: v.string() },
+    handler: async (ctx, { email }) => {
+        await ctx.queues.emailQueue.send({ to: email });
+        // or in one call:
+        // await ctx.queues.emailQueue.sendBatch([{ body: { to: a } }, { body: { to: b } }]);
+    },
+});
+```
+
+## Push vs pull consumers
+
+By default a queue is a **push** consumer: Cloudflare delivers batches to the worker's generated `queue()` handler. To expose the queue to an external HTTP **pull** consumer instead, omit the handler and set `mode: "pull"`:
+
+```ts
+export const reports = defineQueue({ mode: "pull", name: "reports" });
+```
+
+`lunora dev` / `lunora deploy` reconcile the wrangler config for you: every queue gets a `queues.producers[]` entry; push queues add a worker consumer, pull queues add a `type: "http_pull"` consumer (with any batch/retry/dead-letter tuning carried through).
+
+## Studio
+
+Declared queues show in the Studio **Queues** page — export name, deployed queue name, consumer mode, producer binding, and dead-letter queue — refreshed on every codegen run.

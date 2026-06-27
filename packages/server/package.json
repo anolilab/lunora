@@ -25,7 +25,7 @@
         "directory": "packages/server"
     },
     "files": [
-        "dist",
+        "./dist",
         "README.md",
         "LICENSE.md",
         "__assets__"

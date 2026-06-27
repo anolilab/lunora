@@ -15,6 +15,7 @@ const baseOptions = {
     hasImages: false,
     hasKv: false,
     hasPayments: false,
+    hasQueue: false,
     hasR2sql: false,
     hasScheduler: false,
     hasStorage: false,

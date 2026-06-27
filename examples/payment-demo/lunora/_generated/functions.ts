@@ -3,6 +3,7 @@
 
 import * as lunora_billing_0 from "../billing.js";
 
+import { DEFER_VALIDATION as DEFER, installCompiledValidatorMap } from "lunorash/values";
 import type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";
 
 /**
@@ -36,6 +37,23 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "billing:processWebhook": lunora_billing_0.processWebhook as unknown as RegisteredLunoraFunction,
     "billing:recordApiCall": lunora_billing_0.recordApiCall as unknown as RegisteredLunoraFunction,
 };
+
+/**
+ * AOT-compiled argument validators (Worker-safe, no `eval`). Each is installed
+ * onto its function's live `.args` object and consulted by the interpreted
+ * parser as a zero-allocation fast path; anything it can't model is deferred.
+ */
+installCompiledValidatorMap(lunora_billing_0.checkout.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["priceId"] !== "string") return DEFER;
+return { "priceId": source["priceId"] };
+});
+installCompiledValidatorMap(lunora_billing_0.processWebhook.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["body"] !== "string") return DEFER;
+if (typeof source["signature"] !== "string") return DEFER;
+return { "body": source["body"], "signature": source["signature"] };
+});
 
 /**
  * Connection-lifecycle manifest: the function paths the generated ShardDO

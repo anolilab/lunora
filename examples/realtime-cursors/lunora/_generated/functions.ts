@@ -3,6 +3,7 @@
 
 import * as lunora_cursors_0 from "../cursors.js";
 
+import { DEFER_VALIDATION as DEFER, installCompiledValidatorMap } from "lunorash/values";
 import type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";
 import type { Id } from "./dataModel.js";
 
@@ -34,6 +35,33 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "cursors:listCursors": lunora_cursors_0.listCursors as unknown as RegisteredLunoraFunction,
     "cursors:updateCursor": lunora_cursors_0.updateCursor as unknown as RegisteredLunoraFunction,
 };
+
+/**
+ * AOT-compiled argument validators (Worker-safe, no `eval`). Each is installed
+ * onto its function's live `.args` object and consulted by the interpreted
+ * parser as a zero-allocation fast path; anything it can't model is deferred.
+ */
+installCompiledValidatorMap(lunora_cursors_0.joinRoom.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["roomId"] !== "string") return DEFER;
+if (typeof source["sessionId"] !== "string") return DEFER;
+if (typeof source["name"] !== "string") return DEFER;
+if (typeof source["color"] !== "string") return DEFER;
+return { "roomId": source["roomId"], "sessionId": source["sessionId"], "name": source["name"], "color": source["color"] };
+});
+installCompiledValidatorMap(lunora_cursors_0.listCursors.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["roomId"] !== "string") return DEFER;
+return { "roomId": source["roomId"] };
+});
+installCompiledValidatorMap(lunora_cursors_0.updateCursor.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["roomId"] !== "string") return DEFER;
+if (typeof source["sessionId"] !== "string") return DEFER;
+if (typeof source["x"] !== "number" || !Number.isFinite(source["x"])) return DEFER;
+if (typeof source["y"] !== "number" || !Number.isFinite(source["y"])) return DEFER;
+return { "roomId": source["roomId"], "sessionId": source["sessionId"], "x": source["x"], "y": source["y"] };
+});
 
 /**
  * Connection-lifecycle manifest: the function paths the generated ShardDO

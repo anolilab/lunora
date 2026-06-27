@@ -6,7 +6,7 @@
  * default the studio backend fills those from each shard's durable in-DO
  * counters (`__lunora_metrics*`). This module is the **alternative feeder**:
  * given a read client over the Analytics Engine SQL API (the one
- * `@lunora/analytics` exposes as `createAnalyticsSqlClient`), it produces the
+ * `@lunora/bindings/analytics` exposes as `createAnalyticsSqlClient`), it produces the
  * same arrays from real, cross-shard scan-attribution data — so the advisors can
  * be backed by AE instead of (or alongside) the in-DO counters.
  *
@@ -21,7 +21,7 @@
  * The arrays are reconstructed from data points the runtime mirrors into AE via
  * `ctx.analytics.track(name, { dimensions })`. `track` reserves `blob1` for the
  * event name and lays dimensions out from `blob2` in key order (see
- * `@lunora/analytics`' `createAnalytics`). The event names + dimension columns
+ * `@lunora/bindings/analytics`' `createAnalytics`). The event names + dimension columns
  * this reader expects are the {@link AE_METRIC_EVENTS} constants below; the
  * un-sampled count is AE's `sum(_sample_interval)`.
  */
@@ -33,9 +33,9 @@ import type { LintContext } from "./types";
 const DATASET_NAME_PATTERN = /^[\w.-]+$/u;
 
 /**
- * Minimal structural view of the `@lunora/analytics` SQL client — just its
+ * Minimal structural view of the `@lunora/bindings/analytics` SQL client — just its
  * `query(sql)` method. Kept structural (not an `import type` from
- * `@lunora/analytics`) so the advisor needn't depend on the analytics package;
+ * `@lunora/bindings/analytics`) so the advisor needn't depend on the analytics package;
  * the real `AnalyticsSqlClient` satisfies it, as does a plain test double.
  */
 interface AnalyticsMetricsSource {

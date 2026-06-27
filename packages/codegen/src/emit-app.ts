@@ -6,7 +6,7 @@ import type { JurisdictionIR } from "./ir";
 interface EmitAppOptions {
     /** App uses `@lunora/ai` / `ctx.ai` → emit `.ai()` (override the Workers AI binding backing `ctx.ai`). */
     hasAi: boolean;
-    /** App uses `@lunora/analytics` / `ctx.analytics` → emit `.analytics()` (override the dataset backing `ctx.analytics`). */
+    /** App uses `@lunora/bindings/analytics` / `ctx.analytics` → emit `.analytics()` (override the dataset backing `ctx.analytics`). */
     hasAnalytics: boolean;
     /** App depends on `@lunora/auth` → emit `.auth()` + the lazy build/migrate dance. */
     hasAuth: boolean;
@@ -20,13 +20,15 @@ interface EmitAppOptions {
     hasHyperdrive: boolean;
     /** Schema declares **Hyperdrive-backed** `.global({ backend: "hyperdrive" })` tables → emit `.hyperdriveGlobal()` (reactive Postgres/MySQL ctx-db over Hyperdrive). */
     hasHyperdriveGlobal: boolean;
-    /** App uses `@lunora/images` / `ctx.images` → emit `.images()`. */
+    /** App uses `@lunora/bindings/images` / `ctx.images` → emit `.images()`. */
     hasImages: boolean;
-    /** App uses `@lunora/kv` / `ctx.kv` → emit `.kv()`. */
+    /** App uses `@lunora/bindings/kv` / `ctx.kv` → emit `.kv()`. */
     hasKv: boolean;
     /** App uses `@lunora/payment` / `ctx.payments` → emit `.payment()`. */
     hasPayments: boolean;
-    /** App uses `@lunora/r2sql` / `ctx.r2sql` → emit `.r2sql()`. */
+    /** App declares push queues (`defineQueue`) → wire `LUNORA_QUEUE_REGISTRY` into the worker's `queue()` consumer entry. */
+    hasQueue: boolean;
+    /** App uses `@lunora/bindings/r2sql` / `ctx.r2sql` → emit `.r2sql()`. */
     hasR2sql: boolean;
     /** App imports `@lunora/scheduler` / declares crons → emit `.scheduler()`. */
     hasScheduler: boolean;
@@ -82,7 +84,8 @@ const hasAnyLongTail = (options: EmitAppOptions): boolean => LONG_TAIL.some(([fl
 
 /** Import lines — only what the enabled capabilities need. Add-ons via `@lunora/*`; the runtime via the umbrella subpath when the app depends on `lunora`. */
 const buildImportLines = (options: EmitAppOptions): string[] => {
-    const { hasAuth, hasFramework, hasGlobal, hasHyperdriveGlobal, hasScheduler, hasStorage, hasWorkflow, useUmbrella, wantsOpenApi, wantsOpenRpc } = options;
+    const { hasAuth, hasFramework, hasGlobal, hasHyperdriveGlobal, hasQueue, hasScheduler, hasStorage, hasWorkflow, useUmbrella, wantsOpenApi, wantsOpenRpc } =
+        options;
     const runtimeModule = useUmbrella ? "lunorash/runtime" : "@lunora/runtime";
 
     const runtimeTypeImports = ["ExecutionContextLike", "LunoraWorker", "Route", "ScheduledControllerLike", "ShardNamespaceLike", "WorkerOptions"];
@@ -134,6 +137,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
         ...(hasGlobal || hasHyperdriveGlobal ? [`import schema from "../schema.js";`] : []),
         `import { LUNORA_CRONS } from "./crons.js";`,
         `import { LUNORA_FUNCTIONS } from "./functions.js";`,
+        ...(hasQueue ? [`import { dispatchQueueBatch } from "@lunora/queue";`, `import { LUNORA_QUEUE_REGISTRY } from "./queues.js";`] : []),
         ...(wantsOpenApi ? [`import { openApiSpec } from "./openapi.js";`] : []),
         ...(wantsOpenRpc ? [`import { openRpcSpec } from "./openrpc.js";`] : []),
         `import { createShardDO } from "./shard.js";`,
@@ -480,6 +484,16 @@ const buildBaseWorkerOptions = (options: EmitAppOptions): string[] => [
     ...(options.jurisdiction ? [`            jurisdiction: ${JSON.stringify(options.jurisdiction)},`] : []),
     ...(options.wantsOpenApi ? [`            openApiSpec,`] : []),
     ...(options.wantsOpenRpc ? [`            openRpcSpec,`] : []),
+    // The push-consumer handler backing the worker's `queue(batch, …)` entry:
+    // routes each delivered batch to its `defineQueue` handler. Built from
+    // `@lunora/queue` here (keeping the runtime decoupled) and wired only when the
+    // app declares push queues in `lunora/queues.ts`.
+    ...(options.hasQueue
+        ? [
+              `            queue: (batch: unknown, queueEnv: unknown, _context: ExecutionContextLike): Promise<void> =>`,
+              `                dispatchQueueBatch(batch as Parameters<typeof dispatchQueueBatch>[0], LUNORA_QUEUE_REGISTRY, { env: queueEnv as Record<string, unknown> }),`,
+          ]
+        : []),
     `            routes: this.routeMap,`,
     `            shardDO: this.shardSelector?.(env) ?? (undefined as unknown as ShardNamespaceLike),`,
 ];
@@ -734,7 +748,16 @@ ${buildWorkerLine}
                 worker ??= buildWorker(rawEnv as Env);
 
                 return worker.serverQuery(request, rawEnv, reference, args, options);
-            },
+            },${
+                options.hasQueue
+                    ? `
+            queue: async (batch: unknown, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {
+                worker ??= buildWorker(rawEnv as Env);
+
+                return worker.queue?.(batch, rawEnv, context);
+            },`
+                    : ""
+            }
         };
 
         if (this.emailHandler) {

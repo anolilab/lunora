@@ -694,6 +694,35 @@ interface Workflows {
     get: <Params = Record<string, unknown>>(name: string) => WorkflowHandle<Params>;
 }
 
+// --- Secrets Store (core built-in) -------------------------------------------
+
+/**
+ * Structural projection of workers-types' `SecretsStoreSecret` binding — the
+ * per-secret `secrets_store_secrets[]` binding whose `.get()` resolves the
+ * secret value (or throws if it does not exist). Mirrored structurally so the
+ * runtime resolves it without a workerd type dependency.
+ */
+interface SecretsStoreSecretLike {
+    get: () => Promise<string>;
+}
+
+/**
+ * `ctx.secrets` — read account-level secrets bound via Cloudflare Secrets Store.
+ * A core built-in (always present on every context, like `ctx.log`): a binding
+ * named in wrangler's `secrets_store_secrets[]` is read by its binding name.
+ *
+ * ```ts
+ * const apiKey = await ctx.secrets.get("STRIPE_KEY");
+ * ```
+ *
+ * The lookup is async (the platform fetches and decrypts on first read);
+ * reading an undeclared name throws a directed error naming the bound secrets.
+ */
+interface Secrets {
+    /** Resolve a Secrets Store secret by its wrangler binding name. */
+    get: (name: string) => Promise<string>;
+}
+
 // --- Lifecycle triggers ------------------------------------------------------
 
 /** Lifecycle phase relative to the SQL write. */
@@ -1011,7 +1040,7 @@ interface VectorRecord {
 
 /**
  * Read-only vector surface exposed on {@link QueryCtx}. Mirrors the read half
- * of `@lunora/vectors`' `LunoraVectors` so the live adapter is assignable.
+ * of `@lunora/bindings/vectors`' `LunoraVectors` so the live adapter is assignable.
  */
 interface VectorSearchReader {
     getByIds: (indexName: string, ids: ReadonlyArray<string>) => Promise<ReadonlyArray<VectorRecord>>;
@@ -1089,6 +1118,8 @@ interface QueryCtx {
      * Mirrors Convex's `ctx.runQuery`.
      */
     readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
+    /** Read account-level secrets from Cloudflare Secrets Store; see {@link Secrets}. */
+    readonly secrets: Secrets;
     readonly storage: ReadOnlyStorage;
     readonly vectors: VectorSearchReader;
 }
@@ -1136,6 +1167,8 @@ interface MutationCtx {
      */
     readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly scheduler: Scheduler;
+    /** Read account-level secrets from Cloudflare Secrets Store; see {@link Secrets}. */
+    readonly secrets: Secrets;
     readonly storage: ReadOnlyStorage;
     readonly vectors: VectorSearch;
 
@@ -1170,6 +1203,8 @@ interface ActionCtx {
     readonly runMutation: <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly scheduler: Scheduler;
+    /** Read account-level secrets from Cloudflare Secrets Store; see {@link Secrets}. */
+    readonly secrets: Secrets;
     readonly storage: Storage;
     readonly vectors: VectorSearch;
 
@@ -1264,6 +1299,8 @@ export type {
     Schema,
     SearchFilterBuilder,
     SearchIndexDefinition,
+    Secrets,
+    SecretsStoreSecretLike,
     ShardMode,
     Storage,
     StorageMetadata,

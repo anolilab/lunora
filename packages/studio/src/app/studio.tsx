@@ -63,6 +63,7 @@ import { SchedulePanel } from "../features/logs/schedule-panel";
 import SubscriptionsPanel from "../features/logs/subscriptions-panel";
 import { PaymentsPanel } from "../features/payments/payments-panel";
 import { PermissionsPanel } from "../features/permissions/permissions-panel";
+import QueuesPanel from "../features/queues/queues-panel";
 import DashboardsPanel from "../features/reports/dashboards-panel";
 import { HealthPanel } from "../features/reports/health-panel";
 import { MetricsPanel } from "../features/reports/metrics-panel";
@@ -106,6 +107,7 @@ type StudioTab =
     | "payments"
     | "permissions"
     | "pitr"
+    | "queues"
     | "realtime"
     | "rls"
     | "schedule"
@@ -275,6 +277,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     organizations: <path d="M3 21V8l6-4 6 4v13M9 21v-5h2v5M15 11h6v10M18 14v.01M18 17v.01M6 9v.01M6 12v.01M6 15v.01" />,
     permissions: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3Zm-3 8 2.2 2.2L15 9.5M8.5 16h7" />,
     pitr: <path d="M12 21a9 9 0 1 0-9-9M12 7.5V12l3 2M3 12l-2-2m2 2 2-2" />,
+    queues: <path d="M4 6h16M4 10h16M4 14h10M4 18h10m4-2 3 2-3 2v-4Z" />,
     realtime: <path d="M5 12a7 7 0 0 1 14 0M8 12a4 4 0 0 1 8 0M12 12v8m0-8a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" />,
     rls: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3ZM8.5 10h7M8.5 13h7" />,
     schedule: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0-13.5V12l4 2" />,
@@ -304,7 +307,7 @@ type NavGroup = { readonly key: NavGroupKey; readonly tabs: ReadonlyArray<Studio
 const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "overview", tabs: ["home", "dashboards"] },
     { key: "database", tabs: ["data", "sql", "schema", "migrations", "vectors", "pitr", "export"] },
-    { key: "functions", tabs: ["functions", "api", "workflows"] },
+    { key: "functions", tabs: ["functions", "api", "workflows", "queues"] },
     { key: "auth", tabs: ["users", "organizations", "authSessions", "authConfig"] },
     { key: "storage", tabs: ["files", "storageRules"] },
     { key: "observability", tabs: ["logs", "audit", "realtime", "metrics", "analytics", "health"] },
@@ -327,6 +330,7 @@ const TAB_FEATURE: Partial<Record<StudioTab, keyof StudioFeaturesResult>> = {
     files: "storage",
     mail: "mail",
     payments: "payments",
+    queues: "queues",
     schedule: "scheduler",
     storageRules: "storage",
     vectors: "vectors",
@@ -363,6 +367,7 @@ const TABS = [
     "functions",
     "api",
     "workflows",
+    "queues",
     "schema",
     "migrations",
     "vectors",
@@ -731,6 +736,7 @@ const StudioLayout = (): ReactElement => {
         mail: t("Mail"),
         payments: t("Payments"),
         permissions: t("Permissions"),
+        queues: t("Queues"),
         realtime: t("Realtime"),
         rls: t("RLS Policies"),
         schedule: t("Scheduled"),
@@ -780,6 +786,7 @@ const StudioLayout = (): ReactElement => {
         mail: t("Email your app sent, captured in dev."),
         payments: t("Synced customers, subscriptions, and webhook events."),
         permissions: t("Inspect access policies per table, and probe a function as any identity."),
+        queues: t("Inspect declared Cloudflare Queues — their producer bindings, consumer mode, and dead-letter queue."),
         realtime: t("Active WebSocket subscriptions on this shard."),
         rls: t("Inspect row-level-security policies and roles, per table."),
         schedule: t("Inspect and cancel scheduled jobs."),
@@ -1001,6 +1008,7 @@ const buildRouter = ({
         pitr: <PitrPanel initialShardKey={initialShardKey} />,
         mail: <MailPanel />,
         payments: <PaymentsPanel />,
+        queues: <QueuesPanel />,
         realtime: <SubscriptionsPanel initialShardKey={initialShardKey} />,
         rls: <RlsPanel />,
         schedule: <SchedulePanel loadCronJobs={scheduledCron} scheduledCancel={scheduledCancel} scheduledLoad={scheduledLoad} />,

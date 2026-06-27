@@ -5,6 +5,7 @@ import * as lunora_cleanup_0 from "../cleanup.js";
 import * as lunora_drafts_1 from "../drafts.js";
 import * as lunora_posts_2 from "../posts.js";
 
+import { DEFER_VALIDATION as DEFER, installCompiledValidatorMap } from "lunorash/values";
 import type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";
 import type { Id } from "./dataModel.js";
 
@@ -41,6 +42,60 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "posts:requestImageUpload": lunora_posts_2.requestImageUpload as unknown as RegisteredLunoraFunction,
     "posts:search": lunora_posts_2.search as unknown as RegisteredLunoraFunction,
 };
+
+/**
+ * AOT-compiled argument validators (Worker-safe, no `eval`). Each is installed
+ * onto its function's live `.args` object and consulted by the interpreted
+ * parser as a zero-allocation fast path; anything it can't model is deferred.
+ */
+installCompiledValidatorMap(lunora_drafts_1.save.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+let __has1 = false;
+let __val1;
+if (source["id"] !== undefined) {
+if (typeof source["id"] !== "string") return DEFER;
+__val1 = source["id"];
+__has1 = true;
+}
+if (typeof source["title"] !== "string") return DEFER;
+if (typeof source["body"] !== "string") return DEFER;
+return { ...(__has1 ? { "id": __val1 } : {}), "title": source["title"], "body": source["body"] };
+});
+installCompiledValidatorMap(lunora_posts_2.get.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["id"] !== "string") return DEFER;
+return { "id": source["id"] };
+});
+installCompiledValidatorMap(lunora_posts_2.publish.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["title"] !== "string") return DEFER;
+if (typeof source["body"] !== "string") return DEFER;
+let __has1 = false;
+let __val1;
+if (source["imageKey"] !== undefined) {
+if (typeof source["imageKey"] !== "string") return DEFER;
+__val1 = source["imageKey"];
+__has1 = true;
+}
+return { "title": source["title"], "body": source["body"], ...(__has1 ? { "imageKey": __val1 } : {}) };
+});
+installCompiledValidatorMap(lunora_posts_2.requestImageUpload.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["contentType"] !== "string") return DEFER;
+return { "contentType": source["contentType"] };
+});
+installCompiledValidatorMap(lunora_posts_2.search.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["text"] !== "string") return DEFER;
+let __has1 = false;
+let __val1;
+if (source["topK"] !== undefined) {
+if (typeof source["topK"] !== "number" || !Number.isFinite(source["topK"])) return DEFER;
+__val1 = source["topK"];
+__has1 = true;
+}
+return { "text": source["text"], ...(__has1 ? { "topK": __val1 } : {}) };
+});
 
 /**
  * Connection-lifecycle manifest: the function paths the generated ShardDO

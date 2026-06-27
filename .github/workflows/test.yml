@@ -25,9 +25,9 @@
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 5
         "outputs":
-            "packages": "${{ steps.changes.outputs.packages || steps.changes_retry.outputs.packages }}"
-            "e2e": "${{ steps.changes.outputs.e2e || steps.changes_retry.outputs.e2e }}"
-            "codecov": "${{ steps.changes.outputs.codecov || steps.changes_retry.outputs.codecov }}"
+            "packages": "${{ steps.changes.outputs.packages }}"
+            "e2e": "${{ steps.changes.outputs.e2e }}"
+            "codecov": "${{ steps.changes.outputs.codecov }}"
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
@@ -35,28 +35,13 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
-              "with":
-                  "persist-credentials": false
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
 
-            # dorny/paths-filter occasionally 401s on the rotating GITHUB_TOKEN;
-            # fall back to a retry whose outputs the job reads via `||`.
+            # checkout-with-retry rides out the transient GITHUB_TOKEN 401 that
+            # used to hit mid-checkout, so the paths-filter call no longer needs
+            # its own continue-on-error + sleep + retry dance.
             - "name": "Check for file changes"
               "id": "changes"
-              "continue-on-error": true
-              "uses": "dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d" # v4.0.1
-              "with":
-                  "token": "${{ github.token }}"
-                  "filters": ".github/file-filters.yml"
-
-            - "name": "Wait before retrying path filter"
-              "if": "steps.changes.outcome == 'failure'"
-              "shell": "bash"
-              "run": "sleep 30"
-
-            - "name": "Check for file changes (retry)"
-              "if": "steps.changes.outcome == 'failure'"
-              "id": "changes_retry"
               "uses": "dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d" # v4.0.1
               "with":
                   "token": "${{ github.token }}"
@@ -79,15 +64,10 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
+              # Full history so `vis affected` can resolve the PR base.
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
               "with":
-                  "persist-credentials": false
-                  # Full history so `vis affected` can resolve the PR base.
-                  "fetch-depth": 0
-              "env":
-                  "GIT_COMMITTER_NAME": "GitHub Actions Shell"
-                  "GIT_AUTHOR_NAME": "GitHub Actions Shell"
-                  "EMAIL": "github-actions[bot]@users.noreply.github.com"
+                  "fetch-depth": "0"
 
             - "name": "Setup resources and environment"
               "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
@@ -142,14 +122,9 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
               "with":
-                  "persist-credentials": false
-                  "fetch-depth": 0
-              "env":
-                  "GIT_COMMITTER_NAME": "GitHub Actions Shell"
-                  "GIT_AUTHOR_NAME": "GitHub Actions Shell"
-                  "EMAIL": "github-actions[bot]@users.noreply.github.com"
+                  "fetch-depth": "0"
 
             - "name": "Setup resources and environment"
               "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
@@ -165,11 +140,18 @@
             # The E2E global setup boots the playground's Vite dev server, which
             # imports lunorash / @lunora/* from their built dist and runs the
             # `lunora` CLI bin — so the packages must be built first.
-            - "name": "Build packages"
-              "run": "pnpm run build:packages"
+            #
+            # Building the packages (CPU/disk) and downloading the Playwright
+            # browsers (network) are independent and bottleneck on different
+            # resources, so they run concurrently via the `parallel:` step group
+            # (each runs in the background with an implicit wait-all at the group's
+            # end). Both complete before "Run E2E suite" starts.
+            - "parallel":
+                  - "name": "Build packages"
+                    "run": "pnpm run build:packages"
 
-            - "name": "Install Playwright browsers"
-              "run": "pnpm --filter @lunora/e2e exec playwright install chromium firefox"
+                  - "name": "Install Playwright browsers"
+                    "run": "pnpm --filter @lunora/e2e exec playwright install chromium firefox"
 
             - "name": "Run E2E suite"
               "env":

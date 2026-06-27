@@ -40,6 +40,7 @@ export const ADMIN_FUNCTIONS = {
     getAuthMetrics: "__lunora_admin__:getAuthMetrics",
     getCapturedMail: "__lunora_admin__:getCapturedMail",
     getFunctionStats: "__lunora_admin__:getFunctionStats",
+    listQueues: "__lunora_admin__:listQueues",
     listSubscriptions: "__lunora_admin__:listSubscriptions",
     listTableIndexes: "__lunora_admin__:listTableIndexes",
     listWorkflows: "__lunora_admin__:listWorkflows",
@@ -504,6 +505,7 @@ export interface StorageRulesResult {
 export interface StudioFeaturesResult {
     mail: boolean;
     payments: boolean;
+    queues: boolean;
     scheduler: boolean;
     storage: boolean;
     vectors: boolean;
@@ -528,6 +530,26 @@ export interface WorkflowMetadata {
 /** Payload of a `__lunora_admin__:listWorkflows` call, hand-mirroring `@lunora/do`'s `WorkflowsResult`. */
 export interface WorkflowsResult {
     workflows: WorkflowMetadata[];
+}
+
+/**
+ * One declared Cloudflare Queue, hand-mirroring `@lunora/do`'s `QueueMetadata`.
+ * `binding` is the generated `QUEUE_*` producer binding, `name` the deployed
+ * `queues.producers[].queue`, `exportName` the `lunora/queues.ts` export
+ * (`ctx.queues.&lt;exportName>`), `mode` whether the queue is consumed by a worker
+ * (`push`) or polled externally (`pull`), and `deadLetterQueue` the optional DLQ.
+ */
+export interface QueueMetadata {
+    binding: string;
+    deadLetterQueue?: string;
+    exportName: string;
+    mode: "pull" | "push";
+    name: string;
+}
+
+/** Payload of a `__lunora_admin__:listQueues` call, hand-mirroring `@lunora/do`'s `QueuesResult`. */
+export interface QueuesResult {
+    queues: QueueMetadata[];
 }
 
 /* eslint-disable no-secrets/no-secrets -- reserved admin RPC names are framework constants, not credentials */

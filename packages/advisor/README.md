@@ -86,7 +86,7 @@ import { fromServerSchema, loadAnalyticsRuntimeMetrics, runAdvisor } from "@luno
 
 import schema from "./lunora/schema";
 
-// `client` is an `@lunora/analytics` SQL client (anything with `query(sql)`).
+// `client` is an `@lunora/bindings/analytics` SQL client (anything with `query(sql)`).
 const metrics = await loadAnalyticsRuntimeMetrics(client, { dataset: "ANALYTICS" });
 const findings = runAdvisor({ schema: fromServerSchema(schema), ...metrics }, { source: "runtime" });
 ```

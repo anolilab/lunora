@@ -3,7 +3,7 @@ title: Vector search
 description: Typed Vectorize indexes on ctx.vectors — automatic write sync, similarity search, and RAG with embeddings.
 ---
 
-[`@lunora/vectors`](/docs/packages/vectors) is the Cloudflare
+[`@lunora/bindings/vectors`](/docs/packages/bindings) is the Cloudflare
 [Vectorize](https://developers.cloudflare.com/vectorize/) adapter. You declare a
 typed vector index alongside a regular table, the adapter keeps it in sync on
 every write, and you run similarity search from any function handler via
@@ -13,25 +13,25 @@ everything you need for retrieval-augmented generation (RAG).
 <Tabs items={["pnpm","npm","yarn","bun"]}>
 
 ```sh tab="pnpm"
-pnpm add @lunora/vectors
+pnpm add @lunora/bindings
 ```
 
 ```sh tab="npm"
-npm install @lunora/vectors
+npm install @lunora/bindings
 ```
 
 ```sh tab="yarn"
-yarn add @lunora/vectors
+yarn add @lunora/bindings
 ```
 
 ```sh tab="bun"
-bun add @lunora/vectors
+bun add @lunora/bindings
 ```
 
 </Tabs>
 
 When your schema declares at least one vector index, codegen imports
-`@lunora/vectors` into the generated server and wires a typed `ctx.vectors` onto
+`@lunora/bindings/vectors` into the generated server and wires a typed `ctx.vectors` onto
 your query, mutation, and action contexts.
 
 ## Declaring an index
@@ -65,7 +65,7 @@ export default defineSchema({
 
 When the embedded text is derived from multiple columns, use the standalone
 `defineVectorIndex(...)` form with a `source.select(row)` projection. See the
-[package reference](/docs/packages/vectors#standalone--definevectorindexoptions)
+[package reference](/docs/packages/bindings#standalone--definevectorindexoptions)
 for the full shape.
 
 ## Automatic write sync
@@ -201,6 +201,6 @@ error on first use.
 ## See also
 
 - [Queries & mutations](/docs/concepts/queries-mutations) — why search is on a query and embedding is on an action
-- [@lunora/vectors](/docs/packages/vectors) — full adapter reference (standalone indexes, sync internals, Studio panel)
+- [@lunora/bindings/vectors](/docs/packages/bindings) — full adapter reference (standalone indexes, sync internals, Studio panel)
 - [@lunora/ai](/docs/packages/ai) — embeddings and the AI SDK helpers used for RAG
 - [Deployment](/docs/deployment) — wiring the `vectorize` binding

@@ -25,7 +25,7 @@
         "directory": "packages/codegen"
     },
     "files": [
-        "dist",
+        "./dist",
         "__assets__",
         "README.md",
         "LICENSE.md"
@@ -63,6 +63,7 @@
     "dependencies": {
         "@lunora/advisor": "1.0.0-alpha.5",
         "@lunora/container": "1.0.0-alpha.2",
+        "@lunora/queue": "1.0.0-alpha.1",
         "@lunora/scheduler": "1.0.0-alpha.2",
         "@lunora/values": "1.0.0-alpha.2",
         "@lunora/workflow": "1.0.0-alpha.2",
