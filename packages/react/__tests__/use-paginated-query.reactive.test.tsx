@@ -1,10 +1,15 @@
 import type { FunctionReference, LunoraClient, Unsubscribe } from "@lunora/client";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, configure, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { LunoraProvider } from "../src/lunora-provider";
 import { usePaginatedQuery } from "../src/use-paginated-query";
+
+// The reactive pagination updates settle asynchronously; the 1s default
+// `waitFor` timeout flakes under parallel CI load (a later page not yet
+// applied). Give async assertions more headroom for this file.
+configure({ asyncUtilTimeout: 5000 });
 
 const makeRef = (ref: string): FunctionReference => {
     return { __lunoraRef: ref };

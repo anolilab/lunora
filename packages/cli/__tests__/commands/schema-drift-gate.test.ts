@@ -3,13 +3,19 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runDeployCommand } from "../../src/commands/deploy/handler";
 import { runPrepareCommand } from "../../src/commands/prepare/handler";
 import { runVerifyCommand } from "../../src/commands/verify/handler";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
+
+// Each `lunora deploy` here runs a full codegen pass, and several tests chain
+// three of them; under parallel CI load that exceeds the 30s default and times
+// out mid-deploy, whose late-resolving promise then leaks an assertion into the
+// next test (`expected 3, got 4`). Give the whole file generous headroom.
+vi.setConfig({ testTimeout: 120_000 });
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "..", "..", "..", "codegen", "__tests__", "fixtures", "simple");
