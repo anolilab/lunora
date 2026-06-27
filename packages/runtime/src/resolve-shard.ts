@@ -54,7 +54,7 @@ export const applyJurisdiction = (namespace: ShardNamespaceLike, jurisdiction?: 
 
     if (typeof namespace.jurisdiction !== "function") {
         throw new TypeError(
-            `Durable Object namespace does not support jurisdiction("${jurisdiction}") — update @cloudflare/workers-types or remove the jurisdiction option`,
+            `@lunora/runtime: Durable Object namespace does not support jurisdiction("${jurisdiction}") — update @cloudflare/workers-types or remove the jurisdiction option`,
         );
     }
 
