@@ -26,6 +26,7 @@
         "concepts/vector-search",
         "concepts/file-storage",
         "concepts/sharding",
+        "concepts/data-residency",
         "concepts/migrations",
         "---Auth & security---",
         "concepts/authentication",
