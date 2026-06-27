@@ -1,3 +1,15 @@
+## @lunora/ai [1.0.0-alpha.2](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.1...@lunora/ai@1.0.0-alpha.2) (2026-06-27)
+
+### Features
+
+* **queue:** add queues, pipelines, secrets bindings + studio queues page ([#30](https://github.com/anolilab/lunora/issues/30)) ([131460c](https://github.com/anolilab/lunora/commit/131460c5826f2ef600fa0ef81248ede91835dd0c)), closes [#29](https://github.com/anolilab/lunora/issues/29) [#31](https://github.com/anolilab/lunora/issues/31) [visulima#714](https://github.com/anolilab/visulima/issues/714)
+
+### Miscellaneous Chores
+
+* **deps:** wire fallow into every package ([896a81d](https://github.com/anolilab/lunora/commit/896a81d39a064293234bba3b734cde1036e81a67))
+* **release:** @lunora/ai@1.0.0-alpha.1 [skip ci]\n\n## @lunora/ai 1.0.0-alpha.1 (2026-06-25) ([012c2dc](https://github.com/anolilab/lunora/commit/012c2dc8271e64cf3db469fdfaf5dca5c44b055a))
+* update our og pacakge image ([63e6811](https://github.com/anolilab/lunora/commit/63e6811e2dfb94bc2cc38c05292b527e884660b5))
+
 ## @lunora/ai 1.0.0-alpha.1 (2026-06-25)
 
 ### Features
