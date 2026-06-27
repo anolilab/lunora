@@ -1,0 +1,124 @@
+---
+title: "@lunora/bindings"
+description: The lightweight Cloudflare binding helpers for Lunora in one install — ctx.kv, ctx.images, ctx.analytics, ctx.pipelines, ctx.vectors, ctx.r2sql — with per-binding subpaths and tree-shaking.
+---
+
+`@lunora/bindings` bundles the thin, zero-dependency Cloudflare binding helpers into a single install, exposed as **per-binding subpaths**. Each is a typed `ctx.*` facade over its Cloudflare binding; codegen wires the matching context helper when a `lunora/` source imports the subpath (or reads the `ctx.*` property).
+
+```sh
+pnpm add @lunora/bindings
+```
+
+| Subpath                      | Context helper  | Cloudflare binding      | Where                     |
+| ---------------------------- | --------------- | ----------------------- | ------------------------- |
+| `@lunora/bindings/kv`        | `ctx.kv`        | Workers KV              | Query / Mutation / Action |
+| `@lunora/bindings/images`    | `ctx.images`    | Cloudflare Images       | Action only               |
+| `@lunora/bindings/analytics` | `ctx.analytics` | Analytics Engine        | Query / Mutation / Action |
+| `@lunora/bindings/pipelines` | `ctx.pipelines` | Pipelines (R2-backed)   | Action only               |
+| `@lunora/bindings/vectors`   | `ctx.vectors`   | Vectorize               | Query / Mutation / Action |
+| `@lunora/bindings/r2sql`     | `ctx.r2sql`     | R2 SQL (Apache Iceberg) | Action only               |
+
+`sideEffects: false` subpath exports keep tree-shaking per-binding: an app that imports only `@lunora/bindings/kv` bundles nothing from the other helpers. Heavier add-ons with framework/driver peer deps (`@lunora/browser`, `@lunora/hyperdrive`, `@lunora/ai`, `@lunora/payment`) stay separate installs.
+
+## KV — `@lunora/bindings/kv`
+
+Typed Workers KV with scoped key helpers, available on **every** context. Add a `kv_namespaces` binding (`env.KV`) to your `wrangler.jsonc`:
+
+```jsonc
+{ "kv_namespaces": [{ "binding": "KV", "id": "<your-kv-namespace-id>" }] }
+```
+
+```ts
+import { mutation, query } from "@/lunora/_generated/server";
+import { v } from "@lunora/values";
+
+export const setFlag = mutation({
+    args: { name: v.string(), enabled: v.boolean() },
+    handler: async (ctx, { name, enabled }) => ctx.kv.put(`flag:${name}`, { enabled }),
+});
+
+export const getFlag = query({
+    args: { name: v.string() },
+    handler: async (ctx, { name }) => ctx.kv.get(`flag:${name}`),
+});
+```
+
+## Images — `@lunora/bindings/images`
+
+Cloudflare Images transforms (resize / format / optimize) plus signed and unsigned delivery URLs. Action-only (non-deterministic compute). Add an `images` binding (`env.IMAGES`):
+
+```ts
+import { action } from "@/lunora/_generated/server";
+
+export const thumbnail = action({
+    handler: async (ctx) => {
+        const out = await ctx.images.transform(sourceStream, { width: 128, format: "webp" });
+        return out;
+    },
+});
+```
+
+Build delivery URLs without a binding via the helpers:
+
+```ts
+import { buildImageDeliveryUrl, buildSignedImageUrl } from "@lunora/bindings/images";
+```
+
+## Analytics — `@lunora/bindings/analytics`
+
+Analytics Engine: typed `writeDataPoint` (and an ergonomic `track`) plus a SQL-API read client. Fire-and-forget writes ride **every** context. Add an `analytics_engine_datasets` binding (`env.ANALYTICS`):
+
+```ts
+import { mutation } from "@/lunora/_generated/server";
+
+export const recordSignup = mutation({
+    handler: async (ctx) => {
+        ctx.analytics.track("signup", { dimensions: { plan: "pro" }, metrics: { mrr: 20 } });
+    },
+});
+```
+
+The SQL-API read client is a separate import for dashboards/reports:
+
+```ts
+import { createAnalyticsSqlClient } from "@lunora/bindings/analytics";
+```
+
+## Pipelines — `@lunora/bindings/pipelines`
+
+Cloudflare Pipelines: durable, batched, R2-backed streaming ingestion. Action-only and fire-and-forget — never read a record back in-handler. Add a `pipelines` binding (`env.PIPELINES`) created with `wrangler pipelines create`:
+
+```ts
+import { action } from "@/lunora/_generated/server";
+
+export const ingest = action({
+    handler: async (ctx) => {
+        await ctx.pipelines.send({ userId: "u_1", event: "purchase", amount: 19.99 });
+    },
+});
+```
+
+## Vectors — `@lunora/bindings/vectors`
+
+Cloudflare Vectorize: typed vector indexes and similarity search, wired from `defineVectorIndex` / inline `.vectorize()` declarations and surfaced as `ctx.vectors`.
+
+```ts
+import { action } from "@/lunora/_generated/server";
+
+export const search = action({
+    args: { query: v.string() },
+    handler: async (ctx, { query }) => ctx.vectors.search("docs", query, { topK: 5 }),
+});
+```
+
+## R2 SQL — `@lunora/bindings/r2sql`
+
+A typed, chainable query builder over R2 SQL (serverless queries against Apache Iceberg tables): window functions, `DISTINCT`, set operations. Action-only — every query is an external HTTPS round-trip and is **not** tracked by Lunora live queries.
+
+```ts
+import { action } from "@/lunora/_generated/server";
+
+export const topEvents = action({
+    handler: async (ctx) => ctx.r2sql.from("events").select("type").count().groupBy("type").orderBy("count", "desc").limit(10),
+});
+```

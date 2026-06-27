@@ -1759,7 +1759,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const withPipelines = emitServer({ hasPipelines: true });
 
-            expect(ctxInterface(withPipelines, "ActionCtx")).toContain('readonly pipelines: import("@lunora/bindings/analytics").PipelineClient;');
+            expect(ctxInterface(withPipelines, "ActionCtx")).toContain('readonly pipelines: import("@lunora/bindings/pipelines").PipelineClient;');
             expect(ctxInterface(withPipelines, "QueryCtx")).not.toContain("readonly pipelines:");
             expect(ctxInterface(withPipelines, "MutationCtx")).not.toContain("readonly pipelines:");
             expect(emitServer({})).not.toContain("PipelineClient");

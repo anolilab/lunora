@@ -37,7 +37,7 @@ interface FeatureUsage {
     mail: boolean;
     /** A `lunora/` source imports `@lunora/payment` or reads `ctx.payments`. */
     payments: boolean;
-    /** A `lunora/` source imports `@lunora/pipelines` or reads `ctx.pipelines`. */
+    /** A `lunora/` source imports `@lunora/bindings/pipelines` or reads `ctx.pipelines`. */
     pipelines: boolean;
     /** A `lunora/` source imports `@lunora/bindings/r2sql` or reads `ctx.r2sql`. */
     r2sql: boolean;
@@ -68,11 +68,10 @@ const PROBES: Record<keyof FeatureUsage, FeatureProbe> = {
     kv: { contextProperty: "kv", moduleSpecifier: "@lunora/bindings/kv" },
     mail: { moduleSpecifier: "@lunora/mail" },
     payments: { contextProperty: "payments", moduleSpecifier: "@lunora/payment" },
-    // Pipelines ships from `@lunora/bindings/analytics`, but a plain analytics import must
-    // NOT flip `hasPipelines` (that would wire `ctx.pipelines` for analytics-only
-    // apps). So key it solely on the `ctx.pipelines` read via a sentinel specifier
-    // that no real import ever matches.
-    pipelines: { contextProperty: "pipelines", moduleSpecifier: "@lunora/bindings/analytics#pipelines" },
+    // Pipelines is its own `@lunora/bindings/pipelines` subpath (distinct from
+    // `/analytics`), so a real import is a clean signal that won't be flipped by a
+    // plain analytics import; `ctx.pipelines` reads flip it too.
+    pipelines: { contextProperty: "pipelines", moduleSpecifier: "@lunora/bindings/pipelines" },
     r2sql: { contextProperty: "r2sql", moduleSpecifier: "@lunora/bindings/r2sql" },
     scheduler: { contextProperty: "scheduler", moduleSpecifier: "@lunora/scheduler" },
     storage: { contextProperty: "storage", moduleSpecifier: "@lunora/storage" },

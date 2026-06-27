@@ -935,7 +935,7 @@ interface EmitServerOptions {
     /** A `lunora/` source uses `@lunora/bindings/kv` / `ctx.kv` — wires `ctx.kv` onto every ctx. */
     hasKv?: boolean;
     hasPayments?: boolean;
-    /** A `lunora/` source uses `@lunora/pipelines` / `ctx.pipelines` — wires `ctx.pipelines` onto ActionCtx only. */
+    /** A `lunora/` source uses `@lunora/bindings/pipelines` / `ctx.pipelines` — wires `ctx.pipelines` onto ActionCtx only. */
     hasPipelines?: boolean;
     /** A `lunora/` source uses `@lunora/bindings/r2sql` / `ctx.r2sql` — wires `ctx.r2sql` onto ActionCtx only. */
     hasR2sql?: boolean;
@@ -1078,7 +1078,7 @@ export type Env = CloudflareBindings;`;
     // `ctx.pipelines` — Pipelines (R2-backed) ingestion sink. ActionCtx ONLY
     // (write-only fire-and-forget, but external I/O — kept off query/mutation).
     const pipelinesActionField = hasPipelines
-        ? `\n    /** Pipelines ingestion sink (durable, R2-backed). Fire-and-forget and batched; do not read it back in-handler. */\n    readonly pipelines: import("@lunora/bindings/analytics").PipelineClient;`
+        ? `\n    /** Pipelines ingestion sink (durable, R2-backed). Fire-and-forget and batched; do not read it back in-handler. */\n    readonly pipelines: import("@lunora/bindings/pipelines").PipelineClient;`
         : "";
     // `ctx.r2sql` — R2 SQL (serverless query engine over Apache Iceberg tables).
     // ActionCtx ONLY: external REST I/O, non-deterministic, and non-reactive
@@ -1964,7 +1964,7 @@ const r2sqlStub: R2SqlClient = {
 /**
  * `ctx.pipelines` (Cloudflare Pipelines — R2-backed streaming ingestion)
  * fragments. ActionCtx ONLY: ingestion is external, fire-and-forget I/O (like
- * `ctx.images`). The client ships from `@lunora/bindings/analytics` (the other "emit data
+ * `ctx.images`). The client ships from `@lunora/bindings/pipelines` (the other "emit data
  * to a sink" surface). The binding resolves from a `config.pipelines` thunk
  * override, else the conventional `env.PIPELINES`; absent both, `send` throws via
  * `pipelinesStub`.
@@ -1986,8 +1986,8 @@ const emitPipelinesFragments = (hasPipelines: boolean): HelperFragments => {
         // in the \`isAction\` block, never the every-ctx object literal.
         contextField: "",
         importLines: [
-            `import type { PipelineBindingLike, PipelineClient } from "@lunora/bindings/analytics";`,
-            `import { createPipelines } from "@lunora/bindings/analytics";`,
+            `import type { PipelineBindingLike, PipelineClient } from "@lunora/bindings/pipelines";`,
+            `import { createPipelines } from "@lunora/bindings/pipelines";`,
         ],
         stub: `
 const pipelinesStub: PipelineClient = {

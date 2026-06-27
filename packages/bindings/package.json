@@ -45,6 +45,10 @@
             "types": "./dist/analytics/index.d.ts",
             "import": "./dist/analytics/index.mjs"
         },
+        "./pipelines": {
+            "types": "./dist/pipelines/index.d.ts",
+            "import": "./dist/pipelines/index.mjs"
+        },
         "./vectors": {
             "types": "./dist/vectors/index.d.ts",
             "import": "./dist/vectors/index.mjs"

@@ -364,7 +364,7 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
     // Each maps an `@lunora/*` import to a capability flag + signal. Hint
     // bindings (kv/hyperdrive) emit a `hint:` signal; self-describing bindings
     // (browser/images/analytics) emit a plain provisioning signal. Pipelines is
-    // NOT import-driven (it ships from @lunora/analytics, reached via
+    // NOT import-driven (it ships from @lunora/bindings/pipelines, reached via
     // ctx.pipelines) and is covered by its own test below.
     it.each([
         ["@lunora/bindings/kv", "usesKv", /hint: @lunora\/bindings\/kv/u],

@@ -98,7 +98,7 @@ const TYPE_ONLY_IMPORT_PATTERN = /^\s*import\s+type\b/;
 //   @lunora/browser    → browser                   → self-describing (binding name only)
 //   @lunora/bindings/images     → images                    → self-describing (binding name only)
 //   @lunora/bindings/analytics  → analytics_engine_datasets → self-describing (dataset == binding name)
-//   ctx.pipelines               → pipelines                 → hint (un-mintable remote pipeline name; ships from @lunora/bindings/analytics)
+//   ctx.pipelines               → pipelines                 → hint (un-mintable remote pipeline name; ships from @lunora/bindings/pipelines)
 const CAPABILITY_SOURCES = {
     usesAi: { pattern: /\bfrom\s+["']@lunora\/ai["']/, source: "@lunora/ai" },
     usesAnalytics: { pattern: /\bfrom\s+["']@lunora\/bindings\/analytics["']/, source: "@lunora/bindings/analytics" },
@@ -110,9 +110,10 @@ const CAPABILITY_SOURCES = {
     usesMail: { pattern: /\bfrom\s+["']@lunora\/mail["']/, source: "@lunora/mail" },
     usesPayment: { pattern: /\bfrom\s+["']@lunora\/payment["']/, source: "@lunora/payment" },
     // Keyed off the `ctx.pipelines` access (not an import) — see CTX_PIPELINES_PATTERN.
-    // The sentinel `source` never equals a real import specifier, so an
-    // `@lunora/analytics` import resolves to `usesAnalytics` alone, never this flag.
-    usesPipelines: { pattern: CTX_PIPELINES_PATTERN, source: "@lunora/analytics#pipelines" },
+    // Pipelines is codegen-wired onto ActionCtx, so apps reach it via `ctx.pipelines`
+    // rather than importing `@lunora/bindings/pipelines`; `source` names that subpath
+    // for the hint message.
+    usesPipelines: { pattern: CTX_PIPELINES_PATTERN, source: "@lunora/bindings/pipelines" },
     usesScheduler: { pattern: /\bfrom\s+["']@lunora\/scheduler["']/, source: "@lunora/scheduler" },
     usesStorage: { pattern: /\bfrom\s+["']@lunora\/storage["']/, source: "@lunora/storage" },
 } as const satisfies Record<string, { pattern: RegExp; source: string }>;

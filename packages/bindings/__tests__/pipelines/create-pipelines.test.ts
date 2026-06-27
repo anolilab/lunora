@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createPipelines } from "../../src/analytics/create-pipelines";
+import { createPipelines } from "../../src/pipelines/create-pipelines";
 
 describe("createPipelines", () => {
     it("wraps a single record in an array for the binding", async () => {

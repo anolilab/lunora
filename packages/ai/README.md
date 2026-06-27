@@ -34,7 +34,7 @@
 
 ---
 
-A small AI helper for Lunora, built on the [Vercel AI SDK](https://ai-sdk.dev) v6 core and Cloudflare's official [`workers-ai-provider`](https://github.com/cloudflare/ai). Call `generateText`/`streamText`/`generateObject`/`embed`/`tool` from any function handler. **Cloudflare Workers AI is the zero-config default**, but the helper is provider-agnostic: every call takes either a Workers AI model id (a string) or any AI SDK model object — `@ai-sdk/openai`, `@ai-sdk/anthropic`, OpenRouter, … — so apps are never locked to Workers AI. Pair `embed` with [`@lunora/vectors`](https://www.npmjs.com/package/@lunora/vectors) for RAG.
+A small AI helper for Lunora, built on the [Vercel AI SDK](https://ai-sdk.dev) v6 core and Cloudflare's official [`workers-ai-provider`](https://github.com/cloudflare/ai). Call `generateText`/`streamText`/`generateObject`/`embed`/`tool` from any function handler. **Cloudflare Workers AI is the zero-config default**, but the helper is provider-agnostic: every call takes either a Workers AI model id (a string) or any AI SDK model object — `@ai-sdk/openai`, `@ai-sdk/anthropic`, OpenRouter, … — so apps are never locked to Workers AI. Pair `embed` with [`@lunora/bindings/vectors`](https://www.npmjs.com/package/@lunora/bindings) for RAG.
 
 Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
@@ -82,7 +82,7 @@ const result = streamText({ model: openai("gpt-5"), messages });
 ```
 
 ```ts
-// RAG: embed via ctx.ai, store/search with @lunora/vectors (ctx.vectors)
+// RAG: embed via ctx.ai, store/search with @lunora/bindings/vectors (ctx.vectors)
 import { embed } from "@lunora/ai";
 
 const { embedding } = await embed({ model: ctx.ai.embeddingModel("@cf/baai/bge-base-en-v1.5"), value: text });
@@ -96,7 +96,7 @@ Outside an action — in the worker entry, a Durable Object, or a queue/schedule
 ## Related
 
 - [`@lunora/server`](https://www.npmjs.com/package/@lunora/server) — function primitives whose `ctx.ai` this package backs.
-- [`@lunora/vectors`](https://www.npmjs.com/package/@lunora/vectors) — pair `embed` with Vectorize for RAG.
+- [`@lunora/bindings/vectors`](https://www.npmjs.com/package/@lunora/bindings) — pair `embed` with Vectorize for RAG.
 - [`@lunora/vite`](https://www.npmjs.com/package/@lunora/vite) — infers and reconciles the `AI` binding into `wrangler.jsonc`.
 
 ## Supported Node.js Versions
