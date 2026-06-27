@@ -72,8 +72,14 @@ interface SchemaSnapshot {
      * or absent. Tracked because changing it strands all existing Durable Object
      * data (a DO name maps to a different ID per jurisdiction). Optional, so old
      * baselines written before this field parse cleanly (absent ⇒ undefined).
+     *
+     * Typed as a plain `string` (not the authoring union) on purpose: this is
+     * STORED data that a newer Lunora may have written with a jurisdiction this
+     * version doesn't yet know. Preserving the raw value keeps the breaking
+     * `changedJurisdiction` diff correct under a downgrade — coercing an unknown
+     * value to `undefined` would fail OPEN and hide the most destructive change.
      */
-    jurisdiction?: "eu" | "fedramp" | "us";
+    jurisdiction?: string;
     /** Sorted list of every declared `defineMigration` id at capture time. */
     migrationIds: ReadonlyArray<string>;
     /** Table name → {@link TableSnapshot}, keys sorted for stable serialization. */
@@ -236,9 +242,11 @@ const parseSchemaSnapshot = (content: string | undefined): SchemaSnapshot | unde
 
     // `jurisdiction` is optional and was added after v1, so a baseline written
     // before it simply omits the key (parsed as `undefined`) — no version bump,
-    // no forced re-bless. Only accept the known literals; anything else is treated
-    // as absent.
-    const jurisdiction = parsed.jurisdiction === "eu" || parsed.jurisdiction === "us" || parsed.jurisdiction === "fedramp" ? parsed.jurisdiction : undefined;
+    // no forced re-bless. Preserve ANY string verbatim (not just the literals this
+    // version knows): a newer baseline may carry a jurisdiction this code doesn't
+    // recognise yet, and coercing it to `undefined` would fail open and suppress
+    // the breaking `changedJurisdiction` diff on a downgrade.
+    const jurisdiction = typeof parsed.jurisdiction === "string" ? parsed.jurisdiction : undefined;
 
     return {
         jurisdiction,

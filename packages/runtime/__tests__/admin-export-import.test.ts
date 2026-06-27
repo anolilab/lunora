@@ -865,6 +865,116 @@ describe("admin sync (CDC streaming export)", () => {
     });
 });
 
+describe("createWorker — jurisdiction pins the export/import fan-out", () => {
+    /** A namespace whose `.jurisdiction()` returns a distinct sentinel subnamespace. */
+    const pinningNamespace = (): { jurisdictionCalls: string[]; namespace: ShardNamespaceLike; pinned: ShardNamespaceLike } => {
+        const jurisdictionCalls: string[] = [];
+        const pinned: ShardNamespaceLike = {
+            get: () => {
+                return { fetch: async () => new Response("pinned", { status: 200 }) };
+            },
+            idFromName: (name) => {
+                return { __pinned: name };
+            },
+        };
+
+        return {
+            jurisdictionCalls,
+            namespace: {
+                get: () => {
+                    throw new Error("export/import must resolve via the jurisdiction subnamespace, not the raw binding");
+                },
+                idFromName: () => {
+                    throw new Error("export/import must resolve via the jurisdiction subnamespace, not the raw binding");
+                },
+                jurisdiction: (j) => {
+                    jurisdictionCalls.push(j);
+
+                    return pinned;
+                },
+            },
+            pinned,
+        };
+    };
+
+    const coordinatorWith = (overrides: Record<string, unknown>): Record<string, unknown> => {
+        return {
+            fanOut: vi.fn<() => never>(),
+            orchestrateApplyCdc: vi.fn<() => never>(),
+            orchestrateCdcSync: vi.fn<() => never>(),
+            orchestrateExport: vi.fn<() => never>(),
+            orchestrateImport: vi.fn<() => never>(),
+            orchestrateMigration: vi.fn<() => never>(),
+            orchestrateRank: vi.fn<() => never>(),
+            orchestrateRankPage: vi.fn<() => never>(),
+            orchestrateShardTraffic: vi.fn<() => never>(),
+            registry: {},
+            ...overrides,
+        };
+    };
+
+    it("export passes the jurisdiction-pinned subnamespace to orchestrateExport", async () => {
+        expect.assertions(2);
+
+        const { jurisdictionCalls, namespace, pinned } = pinningNamespace();
+        const orchestrateExport = vi.fn<(ns: unknown) => Promise<unknown>>(async () => {
+            return { failed: 0, ok: 0, shards: [] };
+        });
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            jurisdiction: "us",
+            queryCoordinator: coordinatorWith({ orchestrateExport }) as never,
+            shardDO: namespace,
+        });
+
+        await worker.fetch(
+            new Request("https://app.example/_lunora/admin/export", {
+                body: JSON.stringify({ tables: ["users"] }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        // `.jurisdiction()` is applied at the worker boundary AND in export-stream
+        // (it re-pins the raw `options.shardDO`), so it's requested with "us" each
+        // time — what matters is the pinned subnamespace reaches orchestrateExport.
+        expect(jurisdictionCalls).toContain("us");
+        expect(orchestrateExport.mock.calls[0]?.[0]).toBe(pinned);
+    });
+
+    it("import passes the jurisdiction-pinned subnamespace to orchestrateImport", async () => {
+        expect.assertions(2);
+
+        const { jurisdictionCalls, namespace, pinned } = pinningNamespace();
+        const orchestrateImport = vi.fn<(ns: unknown) => Promise<unknown>>(async () => {
+            return { conflicts: 0, errors: [], failed: 0, inserted: {}, ok: 1, shards: [] };
+        });
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            jurisdiction: "eu",
+            queryCoordinator: coordinatorWith({ orchestrateImport }) as never,
+            shardDO: namespace,
+        });
+
+        await worker.fetch(
+            new Request("https://app.example/_lunora/admin/import", {
+                body: JSON.stringify({ doc: { _id: "u1" }, table: "users" }),
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/x-ndjson" },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(jurisdictionCalls).toContain("eu");
+        expect(orchestrateImport.mock.calls[0]?.[0]).toBe(pinned);
+    });
+});
+
 describe("admin apply (CDC replay)", () => {
     it("replays per-shard batches plus globals and sums the applied counts", async () => {
         expect.assertions(3);

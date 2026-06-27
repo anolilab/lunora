@@ -11,6 +11,7 @@
 import { MAX_BODY_BYTES } from "./body-readers";
 import type { ShardingInfo, WorkerOptions } from "./create-worker";
 import { LunoraError } from "./errors";
+import { applyJurisdiction } from "./resolve-shard";
 
 interface AdminBatch {
     rows: { doc: Record<string, unknown>; table: string }[];
@@ -267,7 +268,11 @@ const streamingImport = async (
             throw new LunoraError("Import endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
         }
 
-        const result = await coordinator.orchestrateImport(options.shardDO, {
+        // Pin the import fan-out to the configured jurisdiction — the same
+        // subnamespace the worker reads/writes through. Without this, imported
+        // rows land in the un-pinned global DOs (outside the residency boundary,
+        // a fail-open leak) which the live worker never reads back.
+        const result = await coordinator.orchestrateImport(applyJurisdiction(options.shardDO, options.jurisdiction), {
             batches: [...perShard.values()],
             headers: forwardedHeaders,
         });

@@ -6,6 +6,7 @@ import type {
     CronJobIR,
     FunctionIR,
     IndexIR,
+    JurisdictionIR,
     MaskMetadataIR,
     MigrationIR,
     RlsMetadataIR,
@@ -1895,7 +1896,7 @@ const r2sqlStub: R2SqlClient = {
  * `containers[].class_name` to be exported by the deployed worker. Returns ""
  * when the project declares no containers (the file is not written then).
  */
-const emitContainers = (containers: ReadonlyArray<ContainerIR>, jurisdiction?: "eu" | "fedramp" | "us"): string => {
+const emitContainers = (containers: ReadonlyArray<ContainerIR>, jurisdiction?: JurisdictionIR): string => {
     if (containers.length === 0) {
         return "";
     }
@@ -1947,7 +1948,7 @@ ${classes}`;
  */
 const emitContainerFragments = (
     containers: ReadonlyArray<ContainerIR>,
-    jurisdiction?: "eu" | "fedramp" | "us",
+    jurisdiction?: JurisdictionIR,
 ): { build: string; contextField: string; importLines: string[]; specs: string } => {
     if (containers.length === 0) {
         return { build: "", contextField: "", importLines: [], specs: "" };

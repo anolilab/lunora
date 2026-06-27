@@ -11,6 +11,7 @@
  */
 import type { AdminTableResolver, WorkerOptions } from "./create-worker";
 import type { QueryCoordinator } from "./query-coordinator";
+import { applyJurisdiction } from "./resolve-shard";
 
 /** One exported row — a table name plus its document. */
 type ExportRow = { doc: Record<string, unknown>; table: string };
@@ -75,7 +76,11 @@ const exportShardLocalRows = async (
     const probeFallback = tables === undefined ? collectKnownTables(options.resolveTableSharding) : [];
     const probeTables = exportTables.length > 0 ? exportTables : probeFallback;
 
-    const result = await coordinator.orchestrateExport(options.shardDO, {
+    // Pin the export fan-out to the configured jurisdiction — same subnamespace
+    // the worker reads/writes through. Without this, export resolves the
+    // un-pinned global DOs (a different ID per jurisdiction) and returns the
+    // wrong/empty rows for a residency-pinned app.
+    const result = await coordinator.orchestrateExport(applyJurisdiction(options.shardDO, options.jurisdiction), {
         args: { tables: exportTables },
         headers: forwardedHeaders,
         tables: probeTables,

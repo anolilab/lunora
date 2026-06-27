@@ -279,6 +279,25 @@ describe("schema-drift", () => {
             expect(parseSchemaSnapshot(legacy)?.jurisdiction).toBeUndefined();
         });
 
+        it("preserves an unknown jurisdiction string (forward-compat downgrade) instead of dropping it", () => {
+            expect.assertions(2);
+
+            // A baseline written by a newer Lunora that supports a jurisdiction this
+            // version doesn't know yet. Coercing it to `undefined` would fail open and
+            // hide a `changedJurisdiction` drift, so it must round-trip verbatim.
+            const future = JSON.stringify({ jurisdiction: "apac", migrationIds: [], tables: {}, version: SCHEMA_SNAPSHOT_VERSION });
+            const baseline = parseSchemaSnapshot(future);
+
+            expect(baseline?.jurisdiction).toBe("apac");
+
+            // Removing the (unknown) jurisdiction is still flagged as breaking drift.
+            const change = diffSchemaSnapshots(baseline, buildSchemaSnapshot(schema([table("users", { name: stringField })]), [])).changes.find(
+                (candidate) => candidate.type === "changedJurisdiction",
+            );
+
+            expect(change?.severity).toBe("breaking");
+        });
+
         it("flags adding a jurisdiction as breaking drift", () => {
             expect.assertions(3);
 

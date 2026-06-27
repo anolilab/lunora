@@ -1,5 +1,6 @@
 /* eslint-disable no-secrets/no-secrets -- emitted builder source: the string fragments are framework API type names (e.g. "SchedulerDeclaration<Env>"), not credentials. */
 import { GENERATED_HEADER } from "./emit";
+import type { JurisdictionIR } from "./ir";
 
 /** Which capability methods the generated `defineApp` builder exposes — one flag per package-backed feature the app actually uses. */
 interface EmitAppOptions {
@@ -35,8 +36,8 @@ interface EmitAppOptions {
     hasVectors: boolean;
     /** App declares Cloudflare Workflows (`defineWorkflow`) → wire `options.workflowsClient` so the studio's workflow-instance proxy can reach the CF REST API. */
     hasWorkflow: boolean;
-    /** Schema declares `.jurisdiction("…")` → pin every DO the worker reaches (shards, sessions, fan-out, scheduler) to the Cloudflare data-residency jurisdiction. */
-    jurisdiction?: "eu" | "fedramp" | "us";
+    /** Schema declares `.jurisdiction("…")` → pin every DO the worker reaches (shards, fan-out, scheduler, containers) to the Cloudflare data-residency jurisdiction. */
+    jurisdiction?: JurisdictionIR;
     /** Project depends on the unscoped `lunorash` umbrella → import the runtime via `lunorash/runtime` instead of `@lunora/runtime`. */
     useUmbrella: boolean;
     /** An OpenAPI spec is emitted (`openapi.ts`) → wire `openApiSpec` into the worker. */
