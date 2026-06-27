@@ -1,3 +1,9 @@
+## @lunora/runtime [1.0.0-alpha.4](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.3...@lunora/runtime@1.0.0-alpha.4) (2026-06-27)
+
+### Features
+
+* **server:** pin durable objects to a data-residency jurisdiction ([#29](https://github.com/anolilab/lunora/issues/29)) ([0fcdc94](https://github.com/anolilab/lunora/commit/0fcdc94a836ea1b54a0eba78b6926de52aa3a767))
+
 ## @lunora/runtime [1.0.0-alpha.3](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.2...@lunora/runtime@1.0.0-alpha.3) (2026-06-27)
 
 ### Performance Improvements
