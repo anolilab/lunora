@@ -14,11 +14,11 @@
     },
     "dependencies": {
         "@lunora/auth": "workspace:*",
+        "@lunora/bindings": "workspace:*",
         "@lunora/d1": "workspace:*",
         "@lunora/react": "workspace:*",
         "@lunora/scheduler": "workspace:*",
         "@lunora/storage": "workspace:*",
-        "@lunora/bindings": "workspace:*",
         "@lunora/vite": "workspace:*",
         "better-auth": "catalog:auth",
         "lunorash": "workspace:*",

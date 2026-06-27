@@ -3,12 +3,12 @@
     "version": "1.0.0-alpha.1",
     "description": "Cloudflare Queues for Lunora: defineQueue producers + consumers, the ctx.queues surface, and the generated queue() worker handler",
     "keywords": [
-        "cloudflare",
-        "queues",
-        "lunora",
         "background-jobs",
-        "workers",
-        "messaging"
+        "cloudflare",
+        "lunora",
+        "messaging",
+        "queues",
+        "workers"
     ],
     "homepage": "https://lunora.sh",
     "bugs": "https://github.com/anolilab/lunora/issues",

@@ -75,10 +75,11 @@ const TYPE_ONLY_EXPORT_PATTERNS: Record<DurableObjectClass, RegExp> = {
 
 const ENV_DB_PATTERN = /\benv\s*\.\s*DB\b/;
 const ENV_AI_PATTERN = /\benv\s*\.\s*AI\b/;
-// Pipelines ships from `@lunora/analytics` and is reached via `ctx.pipelines` —
-// there is no dedicated `@lunora/pipelines` import to key off (an analytics
-// import alone must NOT flip the pipelines binding hint). So detect the
-// `ctx.pipelines` access directly, mirroring the codegen feature probe.
+// Pipelines ships from `@lunora/bindings/pipelines` but is codegen-wired onto
+// ActionCtx, so apps reach it via `ctx.pipelines` rather than importing the
+// subpath — and a plain `@lunora/bindings/analytics` import must NOT flip the
+// pipelines binding hint. So detect the `ctx.pipelines` access directly,
+// mirroring the codegen feature probe.
 const CTX_PIPELINES_PATTERN = /\bctx\s*\.\s*pipelines\b/;
 const TYPE_ONLY_IMPORT_PATTERN = /^\s*import\s+type\b/;
 

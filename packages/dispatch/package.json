@@ -5,8 +5,8 @@
     "description": "Internal: shared dispatch runner bundled into @lunora/queue and @lunora/workflow (call a Lunora function from a server-initiated context via /_lunora/scheduler/dispatch). Not published — inlined at build.",
     "keywords": [
         "cloudflare",
-        "lunora",
         "dispatch",
+        "lunora",
         "workers"
     ],
     "homepage": "https://lunora.sh",

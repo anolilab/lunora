@@ -6,6 +6,7 @@
  * one `@lunora/workflow` uses), POSTing to `/_lunora/scheduler/dispatch` with the
  * admin bearer.
  */
+// eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { createDispatchLogger, createDispatchRunner } from "@lunora/dispatch";
 
 import type { QueueRunContext } from "./types";
