@@ -32,6 +32,8 @@ const NON_SECRET_BINDING_METHODS = [
     "send", // Queue producer
     "sendBatch", // Queue producer
     "writeDataPoint", // Analytics Engine dataset
+    "create", // Workflows binding (get(id) + create/createBatch)
+    "createBatch", // Workflows binding
 ] as const;
 
 /** True when a value structurally matches a Secrets Store binding (`{ get(): Promise&lt;string> }`) and not another `.get`-bearing binding. */
@@ -63,7 +65,7 @@ export const createSecrets = (env: Record<string, unknown>): Secrets => {
 
             if (!isSecretBinding(binding)) {
                 throw new Error(
-                    `ctx.secrets: no Secrets Store binding named "${name}". Add a \`secrets_store_secrets[]\` entry (binding "${name}") to wrangler.jsonc, or a local secret to .dev.vars.`,
+                    `ctx.secrets: no Secrets Store binding named "${name}". Add a \`secrets_store_secrets[]\` entry (binding "${name}", pointing at your store + secret) to wrangler.jsonc — \`ctx.secrets\` reads a Secrets Store binding, not a plain \`.dev.vars\` value.`,
                 );
             }
 
