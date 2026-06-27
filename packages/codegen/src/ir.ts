@@ -20,6 +20,16 @@ export interface ValidatorIR {
     bucket?: string;
     /** Column modifiers (`.unique()`, `.default()`, `.nullable()`, …) when present. */
     column?: ColumnMetaIR;
+
+    /**
+     * `true` when this validator carries a `.check(...)` refinement. The predicate
+     * is a runtime closure the AST→IR step can't represent, so the node keeps its
+     * base `kind` but records the refinement's presence here. The AOT args-validator
+     * compiler declines any node with this flag (compiling it would silently skip
+     * the predicate). `.meta(...)` is pure metadata with no parse effect and does
+     * NOT set this.
+     */
+    hasRefinement?: boolean;
     /** For `v.optional(inner)` / `v.array(inner)`. */
     inner?: ValidatorIR;
     /** For `v.record(key, value)`. */

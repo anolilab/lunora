@@ -264,6 +264,16 @@ describe("createWorker", () => {
         expect(shard.calls).toHaveLength(0);
     });
 
+    it("with no `routes` key, an unmatched path reaches default dispatch and 404s", async () => {
+        expect.assertions(1);
+
+        const worker = createWorker({ shardDO: shard.namespace });
+
+        const res = await worker.fetch(new Request("https://app.example/nope"), {}, fakeContext);
+
+        expect(res.status).toBe(404);
+    });
+
     it("prefers getByName when the namespace exposes it", async () => {
         expect.assertions(3);
 
@@ -825,6 +835,24 @@ describe("createWorker — HTTP actions", () => {
         expect(res.status).toBe(201);
         await expect(res.text()).resolves.toBe("pong");
         expect(shard.calls).toHaveLength(0);
+    });
+
+    it("an empty `routes: {}` does not shadow a matching httpRouter route", async () => {
+        expect.assertions(2);
+
+        // The generated composed/app workers pass a literal `routes: {}` (never
+        // undefined); the construction-time check must treat that as "no routes"
+        // so the empty map can't intercept an httpRouter match.
+        const worker = createWorker({
+            httpRouter: honoApp((app) => app.get("/ping", () => new Response("pong", { status: 201 }))),
+            routes: {},
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/ping"), {}, fakeContext);
+
+        expect(res.status).toBe(201);
+        await expect(res.text()).resolves.toBe("pong");
     });
 
     it("c.var.lunora.runMutation forwards an RPC envelope to the default shard and unwraps `{ result }`", async () => {

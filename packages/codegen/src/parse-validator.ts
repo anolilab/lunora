@@ -207,11 +207,15 @@ const parseValidatorCall = (call: CallExpression): ValidatorIR => {
     }
 
     // `.check(...)` / `.meta(...)` refine or annotate the base validator without
-    // altering its kind — unwrap to the receiver's IR unchanged.
+    // altering its kind — unwrap to the receiver's IR. `.check(...)` additionally
+    // records a `hasRefinement` flag (its predicate is a runtime closure the IR
+    // can't represent) so the AOT compiler declines the node; `.meta(...)` is pure
+    // metadata and leaves the IR unchanged.
     if (TRANSPARENT_MODIFIERS.has(member)) {
         const receiver = callee.getExpression();
+        const base = Node.isExpression(receiver) ? parseValidator(receiver) : { kind: "any" };
 
-        return Node.isExpression(receiver) ? parseValidator(receiver) : { kind: "any" };
+        return member === "check" ? { ...base, hasRefinement: true } : base;
     }
 
     return parseBuilderMember(member, args);

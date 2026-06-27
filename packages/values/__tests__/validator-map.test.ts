@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { ValidationError } from "../src/errors";
 import { v } from "../src/v";
-import { parseValidatorMap } from "../src/validator-map";
+import { DEFER_VALIDATION, installCompiledValidatorMap, parseValidatorMap } from "../src/validator-map";
 
 describe("parseValidatorMap", () => {
     it("parses each declared field through its validator", () => {
@@ -48,5 +48,58 @@ describe("parseValidatorMap", () => {
         expect.assertions(1);
 
         expect(parseValidatorMap({ name: v.string() }, { extra: "dropped", name: "ada" }, "args")).toStrictEqual({ name: "ada" });
+    });
+});
+
+describe("parseValidatorMap — compiled fast path", () => {
+    it("uses an installed compiled parser's result verbatim on a confident success", () => {
+        expect.assertions(2);
+
+        const validators = { name: v.string() };
+        let called = 0;
+
+        installCompiledValidatorMap(validators, (source) => {
+            called += 1;
+
+            // A deliberately distinguishable result proves the fast path was used
+            // (and not the interpreted loop, which would echo the input).
+            return { name: `compiled:${String(source["name"])}` };
+        });
+
+        expect(parseValidatorMap(validators, { name: "ada" }, "args")).toStrictEqual({ name: "compiled:ada" });
+        expect(called).toBe(1);
+    });
+
+    it("falls back to the interpreted parser when the compiled parser defers (valid input)", () => {
+        expect.assertions(1);
+
+        const validators = { amount: v.number() };
+
+        installCompiledValidatorMap(validators, () => DEFER_VALIDATION);
+
+        expect(parseValidatorMap(validators, { amount: 7 }, "args")).toStrictEqual({ amount: 7 });
+    });
+
+    it("lets the interpreted parser own the error when the compiled parser defers (invalid input)", () => {
+        expect.assertions(2);
+
+        const validators = { amount: v.number() };
+
+        installCompiledValidatorMap(validators, () => DEFER_VALIDATION);
+
+        const caught = ((): unknown => {
+            try {
+                parseValidatorMap(validators, { amount: "nope" }, "args");
+
+                return undefined;
+            } catch (error: unknown) {
+                return error;
+            }
+        })();
+
+        // Error parity: a deferring fast path produces the exact canonical error
+        // the interpreted path would have thrown without any compiled parser.
+        expect(caught).toBeInstanceOf(ValidationError);
+        expect(caught).toMatchObject({ message: expect.stringMatching(/^args\.amount:/u), path: ["amount"] });
     });
 });
