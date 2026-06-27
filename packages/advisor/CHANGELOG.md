@@ -1,3 +1,15 @@
+## @lunora/advisor [1.0.0-alpha.4](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.3...@lunora/advisor@1.0.0-alpha.4) (2026-06-27)
+
+### Miscellaneous Chores
+
+* update our og pacakge image ([63e6811](https://github.com/anolilab/lunora/commit/63e6811e2dfb94bc2cc38c05292b527e884660b5))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.3
+* **@lunora/values:** upgraded to 1.0.0-alpha.2
+
 ## @lunora/advisor [1.0.0-alpha.3](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.2...@lunora/advisor@1.0.0-alpha.3) (2026-06-25)
 
 
