@@ -130,6 +130,26 @@ describe("ctx-db soft delete", () => {
         expect(ids(await writer.findMany("todos", { includeDeleted: true }))).toStrictEqual(["t1", "t2", "t3"]);
     });
 
+    it("composes the soft-delete scope with an injected baseWhere (RLS) — neither bypasses the other", async () => {
+        expect.assertions(3);
+
+        const writer = setup();
+
+        await seedTodos(writer);
+        await writer.delete("t2", "todos");
+
+        // `baseWhere` is how RLS injects a read policy. Both filters AND together:
+        // only LIVE rows in project p1.
+        expect(ids(await writer.findMany("todos", { baseWhere: { projectId: "p1" } }))).toStrictEqual(["t1", "t3"]);
+
+        // `includeDeleted` relaxes the soft-delete scope but NOT the policy baseWhere.
+        expect(ids(await writer.findMany("todos", { baseWhere: { projectId: "p1" }, includeDeleted: true }))).toStrictEqual(["t1", "t2", "t3"]);
+
+        // A baseWhere the row fails wins even with includeDeleted — soft-delete
+        // can't be used to read around the policy.
+        expect(ids(await writer.findMany("todos", { baseWhere: { projectId: "other" }, includeDeleted: true }))).toStrictEqual([]);
+    });
+
     it("a second delete of an already-soft-deleted row is a no-op", async () => {
         expect.assertions(1);
 

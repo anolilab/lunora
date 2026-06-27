@@ -262,4 +262,30 @@ describe("bindTableFacade — upsert / upsertMany", () => {
         ]);
         expect(insert).toHaveBeenCalledTimes(1);
     });
+
+    it("propagates a write denial from the underlying writer (RLS gating on the insert path)", async () => {
+        expect.assertions(1);
+
+        const { entry, findFirst, insert } = makeComposingWriter();
+
+        // No existing row → insert path. When this facade is bound over the
+        // RLS-wrapped writer, an insert policy denial surfaces here as a throw;
+        // upsert must propagate it rather than swallow it.
+        findFirst.mockResolvedValue(null);
+        insert.mockRejectedValue(new Error('insert on "users" denied by policy'));
+
+        await expect(entry.upsert({ create: { email: "a@b.c" }, target: "email" })).rejects.toThrow(/denied by policy/u);
+    });
+
+    it("propagates a write denial on the update path (patch gated)", async () => {
+        expect.assertions(1);
+
+        const { entry, findFirst, patch } = makeComposingWriter();
+
+        // Existing row → patch path; an update-policy denial must propagate.
+        findFirst.mockResolvedValue({ _id: "u1", email: "a@b.c" });
+        patch.mockRejectedValue(new Error('update on "users" denied by policy'));
+
+        await expect(entry.upsert({ create: { email: "a@b.c", name: "x" }, target: "email" })).rejects.toThrow(/denied by policy/u);
+    });
 });

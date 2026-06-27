@@ -2192,9 +2192,15 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     dsql`UPDATE ${dsql.identifier(tableName)} SET ${dsql.identifier(DOC_COLUMN)} = ${JSON.stringify(merged)} WHERE id = ${id} AND ${dsql.identifier(DOC_COLUMN)} = ${existingJson}`,
                 );
 
+                // Search stays maintained (the marker filter hides it on read), but
+                // the rank companion and external stores (Vectorize) have NO read-time
+                // marker filter — the companion row carries no marker column and a
+                // Vectorize query can't be scoped — so a soft delete REMOVES the row
+                // from them (passing `undefined`/`op: "delete"`), exactly like a
+                // physical delete. `restore()` re-adds both via the patch path.
                 syncSearch(tableName, id, merged);
                 syncAggregates(tableName, existing, merged);
-                syncRanks(tableName, id, existing, merged);
+                syncRanks(tableName, id, existing, undefined);
 
                 cache?.invalidate(tableName, id);
 
@@ -2207,7 +2213,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     await fireTriggers("after", "delete", { id, op: "delete", previous: existing, table: tableName });
                 }
 
-                await onWrite({ doc: merged, id, op: "update", table: tableName });
+                // External stores treat a soft delete as a removal: fire `onWrite`
+                // with `op: "delete"` so the Vectorize sync hook drops the row's
+                // vector (`restore`'s patch re-upserts it).
+                await onWrite({ id, op: "delete", table: tableName });
 
                 return;
             }
@@ -3123,8 +3132,23 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 throw new Error(`ctx.db.restore: table "${located.tableName}" is not a .softDelete() table`);
             }
 
+            // Only an actually-soft-deleted row needs its rank entry rebuilt below
+            // (a no-op restore on a live row must not double-insert it).
+            const wasDeleted = located.row[field] !== null && located.row[field] !== undefined;
+
             // eslint-disable-next-line unicorn/no-null -- clearing the soft-delete marker writes SQL NULL into the column
             await writer.patch(id, { [field]: null }, expectedTable);
+
+            // The soft delete REMOVED this row's rank-companion entry; `patch`'s
+            // rank sync skips re-adding it (the sort fields are unchanged, so its
+            // fast path assumes the entry is already present). Force the re-insert
+            // here with `previous=undefined` — a pure INSERT, safe because the
+            // entry was definitively dropped on soft delete. Search/aggregates were
+            // kept (read-filtered), so they need nothing extra; the vector re-upsert
+            // rode `patch`'s `onWrite("update")`.
+            if (wasDeleted) {
+                syncRanks(located.tableName, id, undefined, located.row);
+            }
         },
 
         async replace(id, document, expectedTable) {

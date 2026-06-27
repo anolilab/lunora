@@ -2548,8 +2548,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
                 await runGuardedWrite(tableName, "UPDATE", assignments, snapshot);
 
+                // The rank companion has no marker column to filter on, so a soft
+                // delete REMOVES the rank entry (like a physical delete); search +
+                // aggregates stay maintained (search hides via the read filter).
+                // `restore()` re-adds the rank entry through the patch path.
                 await syncAggregates(tableName, existing, merged);
-                await syncRanks(tableName, id, existing, merged);
+                await syncRanks(tableName, id, existing, undefined);
                 await syncSearch(tableName, id, merged);
                 await recordCdc(tableName, id, "update", merged);
 
@@ -2955,14 +2959,33 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 throw new Error(`document not found: ${id}`);
             }
 
-            const field = schema.tables[tableName]?.softDeleteMode?.field;
+            const definition = schema.tables[tableName];
+            const field = definition?.softDeleteMode?.field;
 
-            if (!field) {
+            if (!definition || !field) {
                 throw new Error(`ctx.db.restore: table "${tableName}" is not a .softDelete() table`);
             }
 
+            // Snapshot the raw row before the patch so we know whether it was
+            // actually soft-deleted (drives the rank re-add) and have its sort
+            // fields to rebuild the rank-companion entry.
+            const snapshot = await rawRow(tableName, id);
+            const wasDeleted = snapshot?.[field] !== null && snapshot?.[field] !== undefined;
+
             // eslint-disable-next-line unicorn/no-null -- clearing the soft-delete marker writes SQL NULL into the column
             await writer.patch(id, { [field]: null }, expectedTable);
+
+            // Soft delete dropped this row's rank-companion entry; `patch`'s rank
+            // sync skips re-adding it (sort fields unchanged), so force a pure
+            // INSERT (`previous=undefined`) — only when restoring an actually
+            // soft-deleted row, to avoid a duplicate on a no-op restore.
+            if (wasDeleted) {
+                const row = decodeRow(definition, snapshot);
+
+                if (row !== null) {
+                    await syncRanks(tableName, id, undefined, row);
+                }
+            }
         },
 
         query(tableName) {
