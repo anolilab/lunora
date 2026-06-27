@@ -18,12 +18,11 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
+              # diff mode (below) compares against the base branch, which needs full
+              # history — a shallow clone (default depth 1) makes the diff fail.
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
               "with":
-                  # diff mode (below) compares against the base branch, which needs
-                  # full history — a shallow clone (default depth 1) makes the diff fail.
-                  "fetch-depth": 0
-                  "persist-credentials": false
+                  "fetch-depth": "0"
             # NOTE(security): SHA-pinned to the commit behind the react-doctor@0.5.6
             # tagged release (resolved via `gh api repos/millionco/react-doctor/git/refs/tags/...`).
             # Bump deliberately by re-resolving the tag's commit SHA.

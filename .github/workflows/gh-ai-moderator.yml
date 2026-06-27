@@ -20,9 +20,8 @@
             "models": "read"
             "contents": "read"
         "steps":
-            - "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
-              "with":
-                  "persist-credentials": false
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
             # https://github.com/github/ai-moderator
             - "uses": "github/ai-moderator@81159c370785e295c97461ade67d7c33576e9319" # v1.1.4
               "with":

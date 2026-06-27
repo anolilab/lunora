@@ -35,16 +35,11 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
+              # Pulls all commits + branches so `vis affected` can resolve the PR
+              # base ref (origin/<base>) for change detection.
+              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
               "with":
-                  "persist-credentials": false
-                  # Pulls all commits + branches so `vis affected` can resolve
-                  # the PR base ref (origin/<base>) for change detection.
-                  "fetch-depth": 0
-              "env":
-                  "GIT_COMMITTER_NAME": "GitHub Actions Shell"
-                  "GIT_AUTHOR_NAME": "GitHub Actions Shell"
-                  "EMAIL": "github-actions[bot]@users.noreply.github.com"
+                  "fetch-depth": "0"
 
             - "name": "Setup pnpm"
               "uses": "pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093" # v6.0.8
