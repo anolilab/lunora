@@ -1,3 +1,16 @@
+## @lunora/vite [1.0.0-alpha.17](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.16...@lunora/vite@1.0.0-alpha.17) (2026-06-27)
+
+### Features
+
+* **queue:** add queues, pipelines, secrets bindings + studio queues page ([#30](https://github.com/anolilab/lunora/issues/30)) ([131460c](https://github.com/anolilab/lunora/commit/131460c5826f2ef600fa0ef81248ede91835dd0c)), closes [#29](https://github.com/anolilab/lunora/issues/29) [#31](https://github.com/anolilab/lunora/issues/31) [visulima#714](https://github.com/anolilab/visulima/issues/714)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.11
+* **@lunora/config:** upgraded to 1.0.0-alpha.17
+* **@lunora/studio:** upgraded to 1.0.0-alpha.8
+
 ## @lunora/vite [1.0.0-alpha.16](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.15...@lunora/vite@1.0.0-alpha.16) (2026-06-27)
 
 
