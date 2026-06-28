@@ -93,6 +93,10 @@ The builder chain is `<builder>.input(validators).<kind>(handler)`, plus `.use(m
 
 > **Determinism:** `query` and `mutation` handlers must be deterministic — they may be re-run on OCC retry or subscription re-evaluation. Read the current time from **`ctx.now`** (epoch ms, captured once per execution — also on `ActionCtx`) instead of `Date.now()`; compute randomness and network results in an `action` (`crypto.randomUUID()`, `fetch`) and pass them into the mutation as arguments. The `nondeterministic_query_mutation` advisor flags `Date.now()`/`Math.random()`/`fetch` in query/mutation handlers.
 
+### Local-first sync engine
+
+`defineShape` declares a **partial replication shape** (a named table view with a server-resolved `where` predicate, AND-composed with RLS) and `defineMutator` declares a **custom mutator** (an authoritative `server` impl plus an optional optimistic `client` twin). Both are discovered by codegen and drive the [local-first sync engine](https://lunora.sh/docs/concepts/local-first) — clients subscribe to shapes over the poke diff protocol and push optimistic writes rebased over the server's authoritative result. The client-side runtime lives in [`@lunora/db`](https://www.npmjs.com/package/@lunora/db).
+
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/server)**.
 
 ## Related

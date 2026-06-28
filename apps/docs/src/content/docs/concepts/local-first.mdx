@@ -1,0 +1,151 @@
+---
+title: Local-first sync
+description: Shapes, the poke diff protocol, and custom mutators — the Zero-class sync engine.
+---
+
+The [offline-first](/docs/concepts/offline-first) layer gives you a durable
+outbox, read-cache hydration, and resume-from-cursor on the existing
+`query`/`mutation`/`subscribe` surface. The **local-first sync engine** is the
+next tier: declarative **partial replication** (shapes), a **poke diff
+protocol** so the Durable Object ships row-ops instead of re-running queries, and
+**custom mutators** — optimistic writes that run locally first and are rebased
+over the server's authoritative result.
+
+It is **opt-in and additive**. `client.subscribe`, `client.mutation`,
+`OfflineQueue`, and `defineCollections` keep working byte-for-byte; the engine
+adds new surfaces (`defineShape`, `defineMutator`, `subscribeShape`,
+`lunoraCollectionOptions`) on top.
+
+## Why the DO topology fits
+
+A per-shard Durable Object already _is_ a replication unit: it owns its SQLite,
+runs serialized, and every write lands in a monotonic op-log
+(`__cdc_log`). That serialization is the consistency cut for free — no WAL slot,
+no replica file, no logical-replication stream to tail. `shardBy(key)` is the
+bucket/parameter-query mechanism. The engine leans into this:
+
+- The **server** computes SQL row-deltas and ships an ordered op-log + checkpoint.
+- The **client** keeps the live views. Reads run through [TanStack DB](https://tanstack.com/db)'s
+  incremental dataflow (joins, filters, sorts, aggregates maintained on-device);
+  the DO never runs a dataflow pipeline.
+
+## Shapes — partial replication
+
+A **shape** names a table, a predicate, and an optional column projection. The
+client subscribes by shape _name_ + validated `args`; the DO resolves the
+predicate server-side and AND-composes it with the table's RLS read base-where,
+then streams only the matching rows.
+
+```ts title="lunora/shapes.ts"
+import { defineShape, v } from "lunorash/server";
+
+export const messagesByChannel = defineShape({
+    table: "messages",
+    args: { channelId: v.id("channels") },
+    // Runs on the DO with a trusted `ctx` (identity/auth the client can't forge).
+    where: (ctx, { channelId }) => ({ channelId }),
+    columns: ["text", "authorId", "channelId"], // optional projection
+});
+```
+
+A shape is a **read-as-permission**: the client picks _which partition_ to
+replicate, the server decides _which rows it may see_. Because `where` runs with
+an unforgeable `ctx`, a client can't widen its own visibility — and when RLS is
+`required` and no policy resolves, the subscription fails closed. See
+[Row-level security](/docs/concepts/rls).
+
+## The poke diff protocol
+
+Legacy `subscribe` re-runs a query and diffs the result. A shape subscription
+uses a leaner **poke** protocol over the same hibernatable WebSocket:
+
+1. **`shape_subscribe`** with the shape name + args (and an optional
+   `sinceCheckpoint`/`sinceEpoch` to resume).
+2. The DO acks, then seeds the current membership as one insert-poke stamped at
+   the current op-log cursor: `pokeStart` → `pokePart` → `pokeEnd`.
+3. On each write flush, the DO reads the op page once, computes per-shape
+   membership with a single `… IN (<changedIds>) AND <effectiveWhere>` query
+   (one source of truth — the same `where` compiler RLS uses), and pokes each
+   socket with the membership diff.
+
+All `pokePart`s for one flush sit inside a single `pokeStart`/`pokeEnd` and are
+applied **atomically at `pokeEnd`**. A socket that drops mid-poke re-seeds on
+reconnect (the checkpoint + epoch won't match). A subscriber that has fallen
+behind the op-log retention window (`sinceCheckpoint < minCdcSeq`) is forced to
+re-seed rather than silently miss rows.
+
+Deletes in the op-log carry no row image, so shape membership of a deleted row
+is unknowable from the op alone: the DO emits a `delete(key)` to every
+subscriber on that table and the client view no-ops unknown keys.
+
+## Custom mutators — optimistic, server-authoritative
+
+A **mutator** pairs a `client` implementation (optimistic, runs in the browser
+against the local collections) with a `server` implementation (authoritative,
+runs inside the shard DO):
+
+```ts title="lunora/mutators.ts"
+import { defineMutator, v } from "lunorash/server";
+
+export const sendMessage = defineMutator({
+    args: { channelId: v.id("channels"), text: v.string() },
+    // Authoritative — runs inside the shard DO; its writes append to the op-log.
+    server: (ctx, { channelId, text }) => ctx.db.insert("messages", { channelId, text, authorId: ctx.auth.userId }),
+});
+```
+
+The flow:
+
+- The client applies the optimistic `client` write immediately in a TanStack DB
+  transaction (the row renders with zero latency).
+- The DO runs the `server` impl as the **linearization point**; the resulting
+  op-log rows poke back to every subscriber.
+- On each poke the client **rebases** its pending optimistic writes over the new
+  synced base — this is free, TanStack DB re-derives pending overlays on every
+  sync tick. The overlay is dropped when the server echoes the matching
+  watermark, so the synced row replaces the optimistic one with no flicker.
+
+The DO is serialized (`blockConcurrencyWhile` + the storage transaction), so
+there is **no server-side OCC-retry loop**: a `ConflictError` is a deterministic
+self-conflict, not a race to retry.
+
+### The watermark protocol
+
+Each client carries a stable `clientId` and a monotonic per-client `clientSeq`.
+The DO tracks the last applied id per client (`__client_watermark`) and orders
+every push:
+
+- `seq <= watermark` → **already processed**: ack without re-running (idempotent
+  replay after a flaky network ack).
+- `seq == watermark + 1` → run the authoritative impl, advance the watermark in
+  the same transaction, echo `lastMutationId` on the poke.
+- `seq > watermark + 1` → **out-of-order**: reject with `409 OUT_OF_ORDER` and
+  the expected sequence; the client resends from `watermark + 1`.
+
+## The client store
+
+On the client these surfaces are wired through [`@lunora/db`](/docs/packages/db):
+`lunoraCollectionOptions({ shape })` syncs a shape into a TanStack DB collection,
+and `bindMutators` runs the optimistic transaction + the watermarked server push.
+Framework adapters add a thin `useMutator(handle)` hook over the bound handle —
+reads stay on the existing `useLiveQuery`, no new query hook needed.
+
+## Cross-shard joins — the one limit
+
+A shape whose `where()` joins two `shardBy` tables that live on _different_ DOs
+is **rejected at registration** — there is no single serialized cut to diff
+across. Two supported answers:
+
+1. **Denormalize** the joined columns into the shard, or
+2. move the joined table to [`.global()`](/docs/concepts/sharding) and read it
+   through the D1 tier. A `.global()`-backed shape reads from D1 and is
+   coordinator/poll-refreshed (latency-tiered), **not** poke-live — D1 has no
+   per-DO op-log.
+
+## See also
+
+- [@lunora/db](/docs/packages/db) — `lunoraCollectionOptions`, `bindMutators`.
+- [@lunora/client](/docs/packages/client) — `subscribeShape`.
+- [Offline-first](/docs/concepts/offline-first) — the lower tier these build on.
+- [Real-time](/docs/concepts/realtime) — the legacy subscribe/delta path.
+- [Row-level security](/docs/concepts/rls) — how shapes compose with RLS.

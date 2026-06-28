@@ -202,6 +202,92 @@ is validated for shape; uniqueness is still enforced by the primary key, so a
 client can't collide with, overwrite, or forge a peer row. Without `clientId`,
 Lunora mints the id as usual. See [`ctx.db.insert`](/docs/packages/server#client-supplied-ids).
 
+## Shapes — partial replication
+
+The `insert`/outbox path above syncs **whole tables** through each table's `list`
+query. For [partial replication](/docs/concepts/local-first#shapes--partial-replication)
+— replicating only the rows a client needs, scoped by a server-resolved predicate
+— point a collection at a [shape](/docs/packages/server#defineshapedefinition--partial-replication)
+instead of a `list`, via `lunoraCollectionOptions`:
+
+```ts
+import { lunoraCollectionOptions } from "@lunora/db/collections";
+import { createCollection } from "@tanstack/db";
+
+const { config, scope, checkpoints } = lunoraCollectionOptions({
+    client,
+    shape: { name: "messagesByChannel", args: { channelId } },
+    scopeBy: "channelId", // optional — makes the collection re-pointable
+});
+
+const messages = createCollection(config);
+scope({ channelId: "general" }); // re-point a scoped collection (or call with no args to detach)
+```
+
+`lunoraCollectionOptions` is the reusable core `defineCollections` is built on:
+it returns `{ config, scope, checkpoints }`. Pass exactly one of `list` (full
+table) or `shape` (partial replication). The `checkpoints` registry resolves
+optimistic-overlay drops against the server's confirmed watermarks — it's what
+`bindMutators` uses below.
+
+## Custom mutators
+
+For optimistic writes that run a local body first and a server-authoritative
+impl second (rather than the `insert`-binding outbox), use the
+[custom-mutator](/docs/concepts/local-first#custom-mutators--optimistic-server-authoritative)
+runtime on the `@lunora/db/mutators` subpath. Declare the optimistic body with
+`defineMutator` (its `serverRef` names the server `defineMutator` it pushes to),
+then bind the set to your client + collections:
+
+```ts
+import { bindMutators, defineMutator } from "@lunora/db/mutators";
+
+const mutators = {
+    sendMessage: defineMutator<{ channelId: string; text: string }>({
+        serverRef: "messages:sendMessage", // the server-side defineMutator
+        apply: ({ collections }, { channelId, text }) => {
+            collections.messages.insert({ _id: crypto.randomUUID(), channelId, text });
+        },
+    }),
+};
+
+const send = bindMutators(client, { collections, checkpoints }, mutators);
+
+// Calling a bound handle applies the optimistic overlay + pushes the server write.
+const tx = send.sendMessage({ channelId: "general", text: "hi" });
+await tx.isPersisted.promise; // resolves on confirm, rejects on rollback
+```
+
+Each call opens a TanStack DB optimistic transaction, runs `apply` against the
+local collections, and pushes the authoritative write under a monotonic
+per-client `clientSeq`. The rebase is free — TanStack re-derives pending overlays
+over the latest synced base on every sync tick. Pass the `checkpoints` registry
+from `lunoraCollectionOptions` so the overlay is held until the server echoes the
+matching watermark (no flicker); omit it to drop the overlay as soon as the write
+is accepted.
+
+### Framework hooks
+
+The framework adapters wrap a bound handle in a small `{ mutate, pending, error,
+isError, reset }` hook — reads stay on the existing `useLiveQuery`:
+
+| Framework | Import                               | Helper                  |
+| --------- | ------------------------------------ | ----------------------- |
+| React     | `useMutator` from `@lunora/react`    | `useMutator(handle)`    |
+| Vue       | `useMutator` from `@lunora/vue`      | `useMutator(handle)`    |
+| Solid     | `createMutator` from `@lunora/solid` | `createMutator(handle)` |
+| Svelte    | `mutator` from `@lunora/svelte`      | `mutator(handle)`       |
+
+```tsx
+import { useMutator } from "@lunora/react";
+
+const { mutate, pending, error } = useMutator(send.sendMessage);
+// <button disabled={pending} onClick={() => mutate({ channelId, text })}>Send</button>
+```
+
+`pending` is ref-counted across overlapping invocations of the same hook, so it
+clears only once every concurrent call settles.
+
 ## Manual binding
 
 `defineCollections(client, defs)` is the underlying API. Each entry is:
