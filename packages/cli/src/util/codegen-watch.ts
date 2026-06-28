@@ -9,7 +9,7 @@ import { existsSync, watch } from "node:fs";
 import { join } from "node:path";
 
 import type { CodegenOptions } from "@lunora/codegen";
-import { runCodegen } from "@lunora/codegen";
+import { findLunoraSolution, runCodegen } from "@lunora/codegen";
 
 import type { Logger } from "./logger";
 
@@ -18,6 +18,40 @@ const DEFAULT_DEBOUNCE_MS = 100;
 /** Splits a watch filename into path segments to detect `_generated` writes. */
 const PATH_SEGMENT_SEPARATOR = /[/\\]/u;
 
+/**
+ * Render a solution's Markdown body to plain terminal text: drop code-fence
+ * markers (keep the fenced code) and strip `**bold**` / `` `code` `` emphasis.
+ * The Vite error overlay renders the same Markdown in the browser; the CLI has
+ * no Markdown renderer, so it shows a lightly de-marked version.
+ */
+const toTerminalText = (markdown: string): string =>
+    markdown
+        .split("\n")
+        .filter((line) => !line.startsWith("```"))
+        .join("\n")
+        .replaceAll(/\*\*(.+?)\*\*/gu, "$1")
+        .replaceAll(/`([^`]+)`/gu, "$1");
+
+/**
+ * Print the Lunora fix hint for a recognized codegen error, mirroring the Vite
+ * overlay's solution panel on the non-Vite `lunora dev` path. No-op when the
+ * message isn't one Lunora recognizes — the bare `logger.error` already stands.
+ */
+const printSolutionHint = (logger: Logger, message: string): void => {
+    const solution = findLunoraSolution(message);
+
+    if (!solution) {
+        return;
+    }
+
+    logger.info("");
+    logger.info(`  → ${solution.header}`);
+
+    for (const line of toTerminalText(solution.body).split("\n")) {
+        logger.info(line === "" ? "" : `    ${line}`);
+    }
+};
+
 /** Run codegen once, logging success or surfacing a parse/emit error without throwing. */
 const runOnce = (projectRoot: string, lunoraDirectory: string, apiSpec: CodegenOptions["apiSpec"], logger: Logger, reason: string): void => {
     try {
@@ -25,7 +59,10 @@ const runOnce = (projectRoot: string, lunoraDirectory: string, apiSpec: CodegenO
 
         logger.success(`codegen: wrote ${lunoraDirectory}/_generated (${reason})`);
     } catch (error: unknown) {
-        logger.error(`codegen failed (${reason}): ${error instanceof Error ? error.message : String(error)}`);
+        const message = error instanceof Error ? error.message : String(error);
+
+        logger.error(`codegen failed (${reason}): ${message}`);
+        printSolutionHint(logger, message);
     }
 };
 

@@ -1,11 +1,14 @@
+import { findLunoraSolution } from "@lunora/codegen";
 import { describe, expect, it } from "vitest";
 
-import { LUNORA_SOLUTION_RULES, lunoraSolutionFinder, lunoraSolutionFinders } from "../src/solution-finders";
+import { lunoraSolutionFinder, lunoraSolutionFinders } from "../src/solution-finders";
 
 /**
  * Real messages Lunora throws, captured from the source. Codegen/schema
  * failures reach the overlay's finders with `name === "Error"` (pushed through
- * `server.hot.send`), so every rule must match on the message text alone.
+ * `server.hot.send`), so the finder must recognize them on the message text
+ * alone. The exact id each message maps to is asserted in `@lunora/codegen`'s
+ * `solutions` test — here we only check the overlay finder delegates correctly.
  */
 const CODEGEN_MESSAGES = {
     duplicate: 'defineSchema(...).extend(...): table "todos" already exists — another extension with the same key already contributed it.',
@@ -19,18 +22,6 @@ const CODEGEN_MESSAGES = {
     uniqueRuntime: 'unique constraint violation on "todos"',
 } as const;
 
-const expectedId: Record<keyof typeof CODEGEN_MESSAGES, string> = {
-    duplicate: "lunora-table-duplicate",
-    exportGap: "lunora-worker-entry-export-gap",
-    jurisdiction: "lunora-jurisdiction",
-    notObjectLiteral: "lunora-schema-not-object-literal",
-    occ: "lunora-runtime-occ",
-    reserved: "lunora-table-reserved",
-    schemaMissing: "lunora-schema-missing",
-    uniqueLiteral: "lunora-unique-literal",
-    uniqueRuntime: "lunora-runtime-unique",
-};
-
 describe("lunoraSolutionFinder", () => {
     it("exposes a single finder with a high priority and a stable name", () => {
         expect.assertions(3);
@@ -40,21 +31,16 @@ describe("lunoraSolutionFinder", () => {
         expect(lunoraSolutionFinder.priority).toBeGreaterThanOrEqual(100);
     });
 
-    it.each(Object.entries(CODEGEN_MESSAGES))("returns a solution for the %s error", async (key, message) => {
-        expect.assertions(4);
+    it.each(Object.entries(CODEGEN_MESSAGES))("returns the codegen solution for the %s error", async (_key, message) => {
+        expect.assertions(2);
 
-        // Each real message must match exactly one rule — this guards the loose
-        // `includes(...)` matchers against silently co-matching a second rule
-        // (where ordering, not the predicate, would decide the winner).
-        const allMatches = LUNORA_SOLUTION_RULES.filter((rule) => rule.test(message));
-
-        expect(allMatches).toHaveLength(1);
-        expect(allMatches[0]?.id).toBe(expectedId[key as keyof typeof CODEGEN_MESSAGES]);
-
+        // The finder is a thin wrapper over `@lunora/codegen`'s shared table: it
+        // must surface exactly that table's `{ header, body }` for the message.
+        const expected = findLunoraSolution(message);
         const solution = await lunoraSolutionFinder.handle({ message, name: "Error" }, { file: "", line: 0 });
 
-        expect(solution?.header).not.toBe("");
-        expect(typeof solution?.body).toBe("string");
+        expect(solution?.header).toBe(expected?.header);
+        expect(solution?.body).toBe(expected?.body);
     });
 
     it("defers (returns undefined) for unrelated errors", async () => {
@@ -68,13 +54,5 @@ describe("lunoraSolutionFinder", () => {
         const empty = await lunoraSolutionFinder.handle({ message: "", name: "Error" }, { file: "", line: 0 });
 
         expect(empty).toBeUndefined();
-    });
-
-    it("keeps every rule id unique", () => {
-        expect.assertions(1);
-
-        const ids = LUNORA_SOLUTION_RULES.map((rule) => rule.id);
-
-        expect(new Set(ids).size).toBe(ids.length);
     });
 });

@@ -85,6 +85,8 @@ export {
 } from "./schema-drift";
 export { schemaFromIr } from "./schema-from-ir";
 export { LUNORA_ERROR_CODES, validatorIrToJsonSchema } from "./schema-ir";
+export type { LunoraSolution, LunoraSolutionRule } from "./solutions";
+export { findLunoraSolution, LUNORA_SOLUTION_RULES } from "./solutions";
 export type { Finding } from "@lunora/advisor";
 
 export const VERSION = "0.0.0";

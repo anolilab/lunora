@@ -175,8 +175,11 @@ export { buildWorkerEntrySource, CLASS_A_WIRING, frameworkComposePlugin, isAutoC
 export { default as logStreamPlugin } from "./log-stream-plugin";
 export type { PlanViteRemoteOptions, ViteRemotePlan } from "./remote-bindings-plugin";
 export { planViteRemoteBindings, remoteBindingsCleanupPlugin, withRemoteBindings } from "./remote-bindings-plugin";
-export type { LunoraSolutionRule, Solution, SolutionFinder } from "./solution-finders";
-export { LUNORA_SOLUTION_RULES, lunoraSolutionFinder, lunoraSolutionFinders } from "./solution-finders";
+// The error→solution rule table itself lives in `@lunora/codegen` (shared with
+// the standalone `lunora dev` CLI); `@lunora/vite` only wraps it as an overlay
+// finder. Import `findLunoraSolution` / `LUNORA_SOLUTION_RULES` from `@lunora/codegen`.
+export type { Solution, SolutionFinder } from "./solution-finders";
+export { lunoraSolutionFinder, lunoraSolutionFinders } from "./solution-finders";
 export { buildStudioUrl, STUDIO_PATH, studioPlugin } from "./studio-plugin";
 export type { CloudflarePluginOptions, LunoraPluginOptions, LunoraPlugins, OverlayPluginOptions, ResolvedLunoraPluginOptions } from "./types";
 export { augmentWorkerStartupError, isWorkerEntryEvalError, withWorkerStartupHint, WORKER_STARTUP_HINT } from "./worker-startup-hint";
