@@ -1,6 +1,6 @@
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
@@ -87,7 +87,7 @@ const PaymentsPanel = ({ limit = 100 }: PaymentsPanelProps): ReactElement => {
     const [events, setEvents] = useState<Row[]>([]);
     const [error, setError] = useState<null | string>(null);
 
-    const refresh = async (): Promise<void> => {
+    const refresh = useCallback(async (): Promise<void> => {
         setError(null);
 
         try {
@@ -100,7 +100,7 @@ const PaymentsPanel = ({ limit = 100 }: PaymentsPanelProps): ReactElement => {
             setEvents([]);
             setError(errorMessage(error_));
         }
-    };
+    }, [client, limit]);
 
     useEffect(() => {
         fireAndForget(refresh());

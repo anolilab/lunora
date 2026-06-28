@@ -161,6 +161,42 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
     // override lets tests drive a skewed distribution without a worker.
     const fanShardTraffic = loadShardTraffic ?? ((table: string): Promise<ShardTrafficResult> => client.shardTraffic(table));
 
+    // Fan the cross-shard traffic feed out so the hot_shard lint can see
+    // cross-shard skew — the one input a single shard's snapshot can't supply.
+    // Off the metrics hot path and best-effort: a rejection (older worker / no
+    // admin token) leaves hot_shard dormant rather than blanking the panel.
+    // Driven by any one table's live shard set — a DO holds every table, so each
+    // shard's getMetrics request total is the same regardless of which table
+    // seeds the fan-out; we dedupe by shardKey to be safe.
+    const loadShardTrafficFeed = async (tableNames: ReadonlyArray<string>): Promise<void> => {
+        // The fan-out needs ANY live table to enumerate the shard set; with no
+        // tables there's nothing to seed it, so skip the call entirely rather
+        // than POST an empty `table` the worker rejects with a 400.
+        const seedTable = tableNames[0];
+
+        if (seedTable === undefined || seedTable === "") {
+            setShardTraffic(null);
+
+            return;
+        }
+
+        try {
+            const traffic = await fanShardTraffic(seedTable);
+            const byShard = new Map<string, AdvisorShardTraffic>();
+
+            for (const entry of traffic.shards) {
+                if (!byShard.has(entry.shardKey)) {
+                    byShard.set(entry.shardKey, { requests: entry.requests, shardKey: entry.shardKey });
+                }
+            }
+
+            setShardTraffic([...byShard.values()]);
+        } catch {
+            // shard-traffic endpoint unavailable — leave hot_shard dormant.
+            setShardTraffic(null);
+        }
+    };
+
     const refresh = async (shard: string): Promise<void> => {
         const [snapshot, stats, advisorySnapshot] = await Promise.allSettled([
             client.query(GET_METRICS, {}, callOptions(shard)) as Promise<MetricsSnapshot>,
@@ -221,29 +257,7 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
             setDeclaredIndexes(null);
         }
 
-        // Fan the cross-shard traffic feed out so the hot_shard lint can see
-        // cross-shard skew — the one input a single shard's snapshot can't
-        // supply. Off the metrics hot path and best-effort: a rejection (older
-        // worker / no admin token) leaves hot_shard dormant rather than
-        // blanking the panel. Driven by any one table's live shard set — a DO
-        // holds every table, so each shard's getMetrics request total is the
-        // same regardless of which table seeds the fan-out; we dedupe by
-        // shardKey to be safe.
-        try {
-            const traffic = await fanShardTraffic(tableNames[0] ?? "");
-            const byShard = new Map<string, AdvisorShardTraffic>();
-
-            for (const entry of traffic.shards) {
-                if (!byShard.has(entry.shardKey)) {
-                    byShard.set(entry.shardKey, { requests: entry.requests, shardKey: entry.shardKey });
-                }
-            }
-
-            setShardTraffic([...byShard.values()]);
-        } catch {
-            // shard-traffic endpoint unavailable — leave hot_shard dormant.
-            setShardTraffic(null);
-        }
+        await loadShardTrafficFeed(tableNames);
     };
 
     // Drive the initial load and re-load whenever `shardKey` changes (debounced),

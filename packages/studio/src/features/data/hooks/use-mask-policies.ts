@@ -1,5 +1,5 @@
 import { useLunora } from "@lunora/react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import type { MaskColumnMetadata, MaskPoliciesResult } from "../../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../lib/admin";
@@ -26,7 +26,7 @@ const useMaskPolicies = (): ReadonlyArray<MaskColumnMetadata> => {
     const client = useLunora();
     const [columns, setColumns] = useState<ReadonlyArray<MaskColumnMetadata>>(NO_COLUMNS);
 
-    const refresh = async (): Promise<void> => {
+    const refresh = useCallback(async (): Promise<void> => {
         try {
             const result = (await client.query(MASK_POLICIES, {}, callOptions(""))) as MaskPoliciesResult;
 
@@ -34,7 +34,7 @@ const useMaskPolicies = (): ReadonlyArray<MaskColumnMetadata> => {
         } catch {
             setColumns(NO_COLUMNS);
         }
-    };
+    }, [client]);
 
     useEffect(() => {
         fireAndForget(refresh());

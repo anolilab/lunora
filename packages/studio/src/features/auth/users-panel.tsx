@@ -1,7 +1,7 @@
 import type { AuthUser } from "@lunora/client";
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -47,7 +47,7 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
     const [createOpen, setCreateOpen] = useState<boolean>(false);
     const { capabilities } = useAuthCapabilities();
 
-    const fetchUsers = async (): Promise<void> => {
+    const fetchUsers = useCallback(async (): Promise<void> => {
         setUsersError(null);
 
         const trimmedSearch = debouncedSearch.trim();
@@ -66,7 +66,7 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
             setUsers(null);
             setUsersError(errorMessage(error_));
         }
-    };
+    }, [client, debouncedSearch, roleFilter, pageSize]);
 
     // Post-mutation refetch callback for the detail drawer / create dialog.
     const reloadUsers = (): void => {

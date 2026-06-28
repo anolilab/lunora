@@ -1,7 +1,7 @@
 import type { AnalyticsSqlResult } from "@lunora/bindings/analytics";
 import { createAnalyticsSqlClient } from "@lunora/bindings/analytics";
 import type { ReactElement } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Card } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
@@ -175,40 +175,43 @@ export const AnalyticsPanel = ({ config, dataset = DEFAULT_DATASET, runQuery }: 
         return (sql: string) => client.query(sql);
     }, [config, runQuery]);
 
-    const load = async (token: { cancelled: boolean }): Promise<void> => {
-        if (run === null) {
-            return;
-        }
-
-        for (const panel of PANEL_QUERIES) {
-            if (token.cancelled) {
+    const load = useCallback(
+        async (token: { cancelled: boolean }): Promise<void> => {
+            if (run === null) {
                 return;
             }
 
-            setStates((current) => {
-                return { ...current, [panel.key]: { error: null, loading: true, result: null } };
-            });
-
-            try {
-                // eslint-disable-next-line no-await-in-loop -- panels run sequentially to stay under the SQL API's per-token rate limit.
-                const result = await run(panel.sql(dataset));
-
-                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `cancelled` is flipped by the effect's cleanup during the await, so TS's narrowing from the loop-top guard is stale.
-                if (!token.cancelled) {
-                    setStates((current) => {
-                        return { ...current, [panel.key]: { error: null, loading: false, result } };
-                    });
+            for (const panel of PANEL_QUERIES) {
+                if (token.cancelled) {
+                    return;
                 }
-            } catch (error_) {
-                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `cancelled` is flipped by the effect's cleanup during the await, so TS's narrowing from the loop-top guard is stale.
-                if (!token.cancelled) {
-                    setStates((current) => {
-                        return { ...current, [panel.key]: { error: errorMessage(error_), loading: false, result: null } };
-                    });
+
+                setStates((current) => {
+                    return { ...current, [panel.key]: { error: null, loading: true, result: null } };
+                });
+
+                try {
+                    // eslint-disable-next-line no-await-in-loop -- panels run sequentially to stay under the SQL API's per-token rate limit.
+                    const result = await run(panel.sql(dataset));
+
+                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `cancelled` is flipped by the effect's cleanup during the await, so TS's narrowing from the loop-top guard is stale.
+                    if (!token.cancelled) {
+                        setStates((current) => {
+                            return { ...current, [panel.key]: { error: null, loading: false, result } };
+                        });
+                    }
+                } catch (error_) {
+                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `cancelled` is flipped by the effect's cleanup during the await, so TS's narrowing from the loop-top guard is stale.
+                    if (!token.cancelled) {
+                        setStates((current) => {
+                            return { ...current, [panel.key]: { error: errorMessage(error_), loading: false, result: null } };
+                        });
+                    }
                 }
             }
-        }
-    };
+        },
+        [run, dataset],
+    );
 
     useEffect(() => {
         const token = { cancelled: false };
