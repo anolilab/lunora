@@ -12,15 +12,19 @@ import {
     advanceClientWatermark,
     bumpCdcEpoch,
     CDC_LOG_TABLE,
+    deleteGlobalShapeSnapshot,
+    deleteGlobalShapeSnapshotsForConnection,
     minCdcSeq,
     readCdcChanges,
     readCdcCursor,
     readCdcEpoch,
     readClientWatermark,
+    readGlobalShapeSnapshot,
     readIdempotent,
     selectShapeMemberIds,
     selectShapeRows,
     trimIdempotent,
+    writeGlobalShapeSnapshot,
     writeIdempotent,
 } from "./ctx-db";
 import type { ShapeRow } from "./ctx-db-shapes";
@@ -1732,8 +1736,14 @@ abstract class ShardDO {
      * last poked to that socket. A `.global()` (D1) table has no op-log to diff,
      * so {@link ShardDO.refreshGlobalShape} re-reads the full membership on each
      * alarm tick and diffs it against this snapshot to compute the poke. Parallel
-     * to {@link ShardDO.shapeMemos} (the cursor baseline for poke-live shapes);
-     * in-memory only — a cold snapshot on a reconnected socket re-seeds full.
+     * to {@link ShardDO.shapeMemos} (the cursor baseline for poke-live shapes).
+     *
+     * This is a hot in-memory **cache** over the durable `__global_shape_snapshot`
+     * table (keyed by the socket's `connectionId` + subId): a hibernation eviction
+     * clears the WeakMap, so on the next alarm wake {@link ShardDO.readGlobalSnapshot}
+     * misses and re-loads the baseline from SQLite — without it, the diff would run
+     * against an empty baseline and a row deleted from D1 while the DO slept would
+     * never be poked as a `delete`, lingering on the client as a phantom row.
      */
     private readonly globalShapeSnapshots = new WeakMap<WebSocket, Map<string, Map<string, string>>>();
 
@@ -2343,6 +2353,17 @@ abstract class ShardDO {
         this.subMemos.delete(ws);
         this.shapeMemos.delete(ws);
         this.globalShapeSnapshots.delete(ws);
+
+        // Drop the durable global-shape baselines for this socket too — leaving
+        // them would orphan rows under a `connectionId` that can never reconnect
+        // (a fresh upgrade mints a new id), slowly leaking the snapshot table.
+        if (attachment.connectionId !== undefined) {
+            try {
+                deleteGlobalShapeSnapshotsForConnection(this.sql as SqlExec, attachment.connectionId);
+            } catch {
+                /* stub sql / missing table — nothing durable to clean up */
+            }
+        }
 
         // Clear the attachment so a future reconnection starts clean.
         (ws as HibernatableWebSocket).serializeAttachment?.(undefined);
@@ -3559,6 +3580,17 @@ abstract class ShardDO {
 
         this.shapeMemos.get(ws)?.delete(subId);
         this.globalShapeSnapshots.get(ws)?.delete(subId);
+
+        // Drop the durable baseline for this shape too (no-op for poke-live shapes
+        // / connection-id-less sockets), so an unsubscribe doesn't leave a stale
+        // snapshot a later resubscribe would diff against.
+        if (attachment.connectionId !== undefined) {
+            try {
+                deleteGlobalShapeSnapshot(this.sql as SqlExec, attachment.connectionId, subId);
+            } catch {
+                /* stub sql / missing table — nothing durable to clean up */
+            }
+        }
     }
 
     /**
@@ -5836,7 +5868,7 @@ abstract class ShardDO {
         // A `.global()`-table shape has no op-log to resume/diff: seed it from D1
         // and let the alarm poll loop drive updates (latency-tiered, not poke-live).
         if (resolved.global) {
-            await this.seedGlobalShape(ws, subId, resolved, identity);
+            await this.seedGlobalShape(ws, subId, resolved, identity, attachment.connectionId ?? "");
 
             return;
         }
@@ -6042,7 +6074,7 @@ abstract class ShardDO {
      * so the poke is stamped at this DO's current cursor (informational only) and
      * carries no resume base — a reconnect always re-seeds full.
      */
-    private async seedGlobalShape(ws: WebSocket, subId: string, resolved: ResolvedShape, identity: SubscriptionIdentity): Promise<void> {
+    private async seedGlobalShape(ws: WebSocket, subId: string, resolved: ResolvedShape, identity: SubscriptionIdentity, connectionId: string): Promise<void> {
         const rows = await this.readGlobalShapeRows(resolved, identity);
         const snapshot = new Map<string, string>();
         const rowsPatch: ShapeRowOp[] = [];
@@ -6055,6 +6087,7 @@ abstract class ShardDO {
         }
 
         this.recordGlobalSnapshot(ws, subId, snapshot);
+        this.saveGlobalSnapshot(connectionId, subId, snapshot);
 
         await awaitWsDrain(ws);
         this.sendPoke(ws, [{ rowsPatch, shapeId: subId }], this.currentCdcCursor() ?? 0, this.currentCdcEpoch(), undefined);
@@ -6068,9 +6101,15 @@ abstract class ShardDO {
      * membership even when the diff is empty, so the next tick compares from here.
      * No frame is sent when nothing changed (the common steady-state tick).
      */
-    private async refreshGlobalShape(ws: WebSocket, subId: string, resolved: ResolvedShape, identity: SubscriptionIdentity): Promise<void> {
+    private async refreshGlobalShape(
+        ws: WebSocket,
+        subId: string,
+        resolved: ResolvedShape,
+        identity: SubscriptionIdentity,
+        connectionId: string,
+    ): Promise<void> {
         const rows = await this.readGlobalShapeRows(resolved, identity);
-        const previous = this.globalShapeSnapshots.get(ws)?.get(subId) ?? new Map<string, string>();
+        const previous = this.readGlobalSnapshot(ws, subId, connectionId);
         const next = new Map<string, string>();
         const rowsPatch: ShapeRowOp[] = [];
 
@@ -6098,14 +6137,43 @@ abstract class ShardDO {
         this.recordGlobalSnapshot(ws, subId, next);
 
         if (rowsPatch.length === 0) {
+            // Unchanged tick: the durable baseline already matches `next`, so skip
+            // the SQLite write (the common steady-state path) — the in-memory cache
+            // is refreshed above regardless.
             return;
         }
+
+        // Membership changed: persist the new baseline so the diff survives a
+        // hibernation eviction before the next tick.
+        this.saveGlobalSnapshot(connectionId, subId, next);
 
         await awaitWsDrain(ws);
         this.sendPoke(ws, [{ rowsPatch, shapeId: subId }], this.currentCdcCursor() ?? 0, this.currentCdcEpoch(), undefined);
     }
 
-    /** Record a socket's latest global-shape membership snapshot (creating the per-socket map lazily). */
+    /**
+     * Read a socket's global-shape baseline, preferring the hot in-memory cache
+     * and falling back to the durable `__global_shape_snapshot` table on a miss (a
+     * cold socket after a hibernation eviction). The loaded baseline repopulates
+     * the cache so subsequent ticks in this wake hit memory. An empty
+     * `connectionId` (a socket that never went through the lifecycle-aware upgrade,
+     * e.g. a unit harness) skips the durable read and behaves as in-memory-only.
+     */
+    private readGlobalSnapshot(ws: WebSocket, subId: string, connectionId: string): Map<string, string> {
+        const cached = this.globalShapeSnapshots.get(ws)?.get(subId);
+
+        if (cached) {
+            return cached;
+        }
+
+        const stored = this.loadGlobalSnapshot(connectionId, subId);
+
+        this.recordGlobalSnapshot(ws, subId, stored);
+
+        return stored;
+    }
+
+    /** Record a socket's latest global-shape membership snapshot in the in-memory cache (creating the per-socket map lazily). */
     private recordGlobalSnapshot(ws: WebSocket, subId: string, snapshot: Map<string, string>): void {
         let snapshots = this.globalShapeSnapshots.get(ws);
 
@@ -6115,6 +6183,42 @@ abstract class ShardDO {
         }
 
         snapshots.set(subId, snapshot);
+    }
+
+    /**
+     * Load a durable global-shape baseline from SQLite, or an empty map when none
+     * is stored / the durable path is unavailable. A stub `sql` handle (unit
+     * harness) or a missing table degrades to in-memory-only behavior rather than
+     * failing the poll tick.
+     */
+    private loadGlobalSnapshot(connectionId: string, subId: string): Map<string, string> {
+        if (connectionId === "") {
+            return new Map<string, string>();
+        }
+
+        try {
+            return readGlobalShapeSnapshot(this.sql as SqlExec, connectionId, subId);
+        } catch {
+            return new Map<string, string>();
+        }
+    }
+
+    /**
+     * Persist a socket's global-shape baseline to SQLite so the poll-loop diff
+     * survives hibernation. A no-op for a connection-id-less socket or a stub
+     * `sql` handle (the in-memory cache then carries the baseline for the DO's
+     * lifetime, matching the pre-durable behavior).
+     */
+    private saveGlobalSnapshot(connectionId: string, subId: string, snapshot: Map<string, string>): void {
+        if (connectionId === "") {
+            return;
+        }
+
+        try {
+            writeGlobalShapeSnapshot(this.sql as SqlExec, connectionId, subId, snapshot);
+        } catch {
+            /* stub sql / missing table — degrade to in-memory cache only */
+        }
     }
 
     /**
@@ -6170,6 +6274,7 @@ abstract class ShardDO {
             }
 
             const identity: SubscriptionIdentity = { identity: attachment.identity, userId: attachment.userId };
+            const connectionId = attachment.connectionId ?? "";
 
             for (const [subId, shape] of Object.entries(shapes)) {
                 const resolved = this.resolveShape(shape.name, shape.args ?? {}, identity);
@@ -6181,7 +6286,7 @@ abstract class ShardDO {
                 remaining += 1;
 
                 // eslint-disable-next-line no-await-in-loop -- per-socket D1 reads are intentionally serialized to bound concurrent global reads per tick
-                await this.refreshGlobalShape(ws, subId, resolved, identity);
+                await this.refreshGlobalShape(ws, subId, resolved, identity, connectionId);
             }
         }
 
