@@ -40,6 +40,13 @@ export interface MutatorRunnerSinks {
  * re-throwing. Each adapter (`@lunora/react`, `/solid`, `/svelte`, `/vue`) binds
  * the two sinks to its own reactive setters, so this logic lives in exactly one
  * place. The optimistic overlay + server push are owned by the bound handle.
+ *
+ * `error` tracks the LATEST invocation, not the last to settle: overlapping
+ * calls can resolve out of order, so an earlier call that finishes later must
+ * not clobber a newer call's outcome. Each invocation takes a monotonic token
+ * and only writes `setError` while it is still the most recent one — otherwise
+ * `error`/`isError` could surface a stale success or failure (the documented
+ * "latest invocation's error" contract every adapter advertises).
  */
 export const createMutatorRunner = <TArgs>(
     handle: MutatorHandle<TArgs>,
@@ -47,18 +54,27 @@ export const createMutatorRunner = <TArgs>(
 ): { mutate: (args: TArgs) => Promise<void>; reset: () => void } => {
     // Ref-counted across overlapping calls of this one handle instance.
     let inFlight = 0;
+    // Monotonic per-invocation token; only the latest may write `error`.
+    let latestInvocation = 0;
 
     const mutate = async (args: TArgs): Promise<void> => {
+        latestInvocation += 1;
+        const invocation = latestInvocation;
         inFlight += 1;
         sinks.setPending(true);
 
         try {
             await handle(args).isPersisted.promise;
-            sinks.setError(undefined);
+
+            if (invocation === latestInvocation) {
+                sinks.setError(undefined);
+            }
         } catch (error) {
             const normalized = error instanceof Error ? error : new Error(String(error));
 
-            sinks.setError(normalized);
+            if (invocation === latestInvocation) {
+                sinks.setError(normalized);
+            }
 
             throw normalized;
         } finally {
