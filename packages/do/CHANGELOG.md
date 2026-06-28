@@ -1,3 +1,13 @@
+## @lunora/do [1.0.0-alpha.7](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.6...@lunora/do@1.0.0-alpha.7) (2026-06-28)
+
+### Features
+
+* **do:** durable subscription delivery + flush coalescing ([#35](https://github.com/anolilab/lunora/issues/35)) ([2fa5023](https://github.com/anolilab/lunora/commit/2fa5023ba70f6d51b499575d5747add0e88b6a5b))
+
+### Documentation
+
+* fix package doc bugs and dead cross-links ([205d74c](https://github.com/anolilab/lunora/commit/205d74c3b730e201e822141191b45015f303336b))
+
 ## @lunora/do [1.0.0-alpha.6](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.5...@lunora/do@1.0.0-alpha.6) (2026-06-27)
 
 ### Features
