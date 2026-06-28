@@ -1483,6 +1483,20 @@ abstract class ShardDO {
     protected static readonly GLOBAL_SHAPE_POLL_INTERVAL_MS = 2000;
 
     /**
+     * Upper bound on a `.global()`-shape's materialized membership. Each global
+     * shape keeps its ENTIRE current membership as a per-socket snapshot
+     * (`Map&lt;rowKey, hash&gt;`) so the poll loop can diff it; that snapshot — and the
+     * read buffer feeding it — scale with the membership size, multiplied by every
+     * subscribed socket. An unbounded membership (a global table with no narrowing
+     * shape predicate or RLS read scope) would grow them without limit and evict
+     * the DO. A shape whose membership exceeds this cap is failed closed (left
+     * empty, logged) rather than retained — the developer must narrow it. Sized
+     * well above any reasonable per-identity replicated set so legitimate shapes
+     * never trip it.
+     */
+    protected static readonly GLOBAL_SHAPE_MAX_ROWS = 50_000;
+
+    /**
      * Per-socket whisper-topic cap. Topic membership rides the same hibernation
      * attachment as `subs`, so bound it for the same reason — a runaway
      * `whisper_subscribe` loop must not wedge the attachment past the runtime's
@@ -6071,6 +6085,13 @@ abstract class ShardDO {
      */
     private async seedGlobalShape(ws: WebSocket, subId: string, resolved: ResolvedShape, identity: SubscriptionIdentity, connectionId: string): Promise<void> {
         const rows = await this.readGlobalShapeRows(resolved, identity);
+
+        // Refuse to materialize an unbounded membership into a per-socket snapshot
+        // (and never arm the poll loop for it) — fail this one shape closed.
+        if (!this.withinGlobalShapeBound(rows.length, `shape:seed:${subId}`, resolved.table)) {
+            return;
+        }
+
         // Seeding is a diff against an empty baseline — every surviving row an insert.
         const { next: snapshot, rowsPatch } = diffGlobalMembership(rows, new Map<string, string>(), { columns: resolved.columns, table: resolved.table });
 
@@ -6097,6 +6118,13 @@ abstract class ShardDO {
         connectionId: string,
     ): Promise<void> {
         const rows = await this.readGlobalShapeRows(resolved, identity);
+
+        // An over-cap membership: leave the prior snapshot untouched (so the diff
+        // recovers if it later shrinks) and skip this tick rather than retaining it.
+        if (!this.withinGlobalShapeBound(rows.length, `shape:poll:${subId}`, resolved.table)) {
+            return;
+        }
+
         const previous = this.readGlobalSnapshot(ws, subId, connectionId);
         const { next, rowsPatch } = diffGlobalMembership(rows, previous, { columns: resolved.columns, table: resolved.table });
 
@@ -6229,6 +6257,30 @@ abstract class ShardDO {
             message: error instanceof Error ? error.message : String(error),
             timestamp: Date.now(),
         });
+    }
+
+    /**
+     * Guard a global shape's materialized membership against {@link
+     * ShardDO.GLOBAL_SHAPE_MAX_ROWS}. Returns `true` when the row count is within
+     * the cap; otherwise records a diagnosable error and returns `false` so the
+     * caller fails the shape closed (no snapshot retained, no poke sent) rather
+     * than risking a DO eviction on an unbounded global table. The transient read
+     * buffer is bounded by the same gate — an over-cap membership is dropped, not
+     * snapshotted per socket.
+     */
+    private withinGlobalShapeBound(rowCount: number, context: string, table: string): boolean {
+        if (rowCount <= ShardDO.GLOBAL_SHAPE_MAX_ROWS) {
+            return true;
+        }
+
+        this.recordShapeError(
+            context,
+            new Error(
+                `global shape membership for "${table}" (${String(rowCount)} rows) exceeds the ${String(ShardDO.GLOBAL_SHAPE_MAX_ROWS)}-row cap; narrow it with a shape predicate or an RLS read policy`,
+            ),
+        );
+
+        return false;
     }
 
     /**
