@@ -4,6 +4,7 @@ import type { Plugin } from "vite";
 
 import agentRulesHintPlugin from "./agent-rules-hint-plugin";
 import codegenPlugin from "./codegen-plugin";
+import containerLogsPlugin from "./container-logs-plugin";
 import devVariablesPlugin from "./dev-variables-plugin";
 import { createCommandProbe, withDevWorkerEnv } from "./dev-worker-env";
 import { frameworkComposePlugin } from "./framework-compose-plugin";
@@ -95,6 +96,7 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
         devVariablesPlugin(resolved),
         codegenPlugin(resolved),
         logStreamPlugin(),
+        containerLogsPlugin(resolved),
         agentRulesHintPlugin(resolved),
     ];
 
@@ -136,6 +138,7 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
 const VERSION = "0.0.0";
 
 export { default as codegenPlugin } from "./codegen-plugin";
+export { default as containerLogsPlugin } from "./container-logs-plugin";
 export type { ReconcileResult } from "./cron-sync";
 export { reconcileWranglerCrons } from "./cron-sync";
 export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./detect-framework";

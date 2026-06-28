@@ -153,6 +153,7 @@ catalogs:
     typescript: 6.0.3
   types:
     "@standard-schema/spec": 1.1.0
+    "@types/dockerode": ^3.3.47
     "@types/node": 25.9.3
   cloudflare:
     "@cloudflare/containers": ^0.3.7
@@ -167,6 +168,7 @@ catalogs:
     "@playwright/test": ^1.61.0
     playwright: ^1.61.0
   tooling:
+    dockerode: ^4.0.12
     ts-morph: ^28.0.0
   vite:
     # Exact-pinned (no caret). 1.40.0 regressed the dev runner — `getWorkerEntryExportTypes`
@@ -392,11 +394,14 @@ peerDependencyRules:
 allowBuilds:
   '@parcel/watcher': true
   core-js: false
+  cpu-features: false
   esbuild: true
   msgpackr-extract: true
   msw: false
+  protobufjs: false
   rs-module-lexer: true
   sharp: true
+  ssh2: false
   unrs-resolver: true
   vue-demi: false
   workerd: true
