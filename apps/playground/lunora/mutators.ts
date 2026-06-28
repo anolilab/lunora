@@ -7,11 +7,23 @@ import { defineMutator, v } from "lunorash/server";
  * subscriber. The client rebase is free (TanStack re-derives pending overlays).
  */
 export const sendMessage = defineMutator({
-    args: { channelId: v.id("channels"), text: v.string(), userId: v.id("users") },
+    // `createdAt` is stamped by the caller (not `Date.now()` here) so the
+    // authoritative handler stays deterministic — same as `messages.send`.
+    args: { channelId: v.id("channels"), createdAt: v.number(), text: v.string(), userId: v.id("users") },
     client: () => {
         // Optimistic overlay is applied by the binding; nothing extra to do here.
     },
-    server: (_ctx, arguments_) => {
-        return { channelId: arguments_.channelId, text: arguments_.text };
+    server: async (ctx, arguments_) => {
+        // Persist the authoritative row so it appends to `__cdc_log` and pokes
+        // every `channelMessages` subscriber. Echoing the args alone would emit
+        // no CDC entry, so subscribers would never observe the send.
+        const id = await ctx.db.insert("messages", {
+            channelId: arguments_.channelId,
+            createdAt: arguments_.createdAt,
+            text: arguments_.text,
+            userId: arguments_.userId,
+        });
+
+        return { _id: id, channelId: arguments_.channelId, text: arguments_.text };
     },
 });
