@@ -17,7 +17,7 @@ import {
     refreshCodegenProject,
     runCodegen,
 } from "../src/index";
-import type { FunctionIR, SchemaIR } from "../src/ir";
+import type { FunctionIR, SchemaIR, ShapeIR } from "../src/ir";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "fixtures", "simple");
@@ -1354,6 +1354,36 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("config.hyperdriveGlobal?.(env, { identity, userId }) ?? globalDbStub");
             expect(output).toContain("hyperdriveGlobal?: (env: Record<string, unknown>");
             expect(output).not.toContain("config.d1?.(env");
+        });
+
+        const settingsShape: ShapeIR = { exportName: "allSettings", filePath: "shapes", table: "settings" };
+
+        it("emits the global-shape poll override when a project has shapes AND a `.global()` table", () => {
+            expect.assertions(3);
+
+            const output = emitShard({ schema: globalSchema("d1"), shapes: [settingsShape] });
+
+            // resolveShape flags a `.global()`-table shape so the base serves it via the poll path.
+            expect(output).toContain('const isGlobal = (schema as unknown as SchemaLike).tables[shape.table]?.shardMode?.kind === "global"');
+            // The DO reads the global membership by draining the global backend's findMany.
+            expect(output).toContain("protected override async readGlobalShapeRows");
+            expect(output).toContain("await globalDb.findMany(resolved.table, { cursor, where: resolved.effectiveWhere })");
+        });
+
+        it("does not emit readGlobalShapeRows when the project has shapes but no `.global()` table", () => {
+            expect.assertions(1);
+
+            const output = emitShard({
+                schema: {
+                    tables: [
+                        { indexes: [], name: "messages", rankIndexes: [], relations: [], searchIndexes: [], shape: {}, shardMode: "root", vectorIndexes: [] },
+                    ],
+                    vectorIndexes: [],
+                },
+                shapes: [{ exportName: "msgs", filePath: "shapes", table: "messages" }],
+            });
+
+            expect(output).not.toContain("protected override async readGlobalShapeRows");
         });
     });
 
