@@ -177,7 +177,7 @@ export const sendMessage = defineMutator({
             };
 
             it("registers shapes into LUNORA_SHAPES and overrides resolveShape on the DO", () => {
-                expect.assertions(5);
+                expect.assertions(7);
 
                 writeShapes();
 
@@ -190,6 +190,9 @@ export const sendMessage = defineMutator({
                 expect(result.generated.shard).toContain("LUNORA_SHAPES");
                 expect(result.generated.shard).toContain("protected override resolveShape");
                 expect(result.generated.shard).toContain("compileWhere");
+                // The cross-shard-join guard is imported + called against the compiled predicate.
+                expect(result.generated.shard).toContain("assertShapeShardable");
+                expect(result.generated.shard).toContain("assertShapeShardable(effectiveWhere, schema as unknown as SchemaLike, shape.table)");
             });
 
             it("registers mutators into the dispatch table + LUNORA_MUTATOR_PATHS and overrides isCustomMutator", () => {

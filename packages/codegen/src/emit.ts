@@ -2888,8 +2888,15 @@ const emitShard = ({
             // args then runs the shape's \`where(ctx, args)\` under that identity,
             // so which rows replicate is a server decision (reads-as-permissions).
             const ctx = this.buildCtx({ functionPath: \`__shape__:\${name}\`, identity });
+            const effectiveWhere = shape.compileWhere(ctx, args) as unknown as WhereInput;
 
-            return { columns: shape.columns, effectiveWhere: shape.compileWhere(ctx, args) as unknown as WhereInput, table: shape.table };
+            // A live shape pokes only from its OWN shard's op-log, so a \`where()\`
+            // that joins to a \`.shardBy()\` table (rows in another DO) is rejected
+            // here — the first point the compiled predicate + shard modes are both
+            // known. Remedy: denormalize, or move the joined table to \`.global()\`.
+            assertShapeShardable(effectiveWhere, schema as unknown as SchemaLike, shape.table);
+
+            return { columns: shape.columns, effectiveWhere, table: shape.table };
         }
 `
         : "";
@@ -2901,9 +2908,14 @@ const emitShard = ({
 `
         : "";
 
+    // The cross-shard-join guard (`assertShapeShardable`) is a value import,
+    // pulled in only when the project has shapes so a shape-free `shard.ts`
+    // stays byte-identical.
+    const shapeGuardImport = hasShapes ? "assertShapeShardable, " : "";
+
     const importLines = [
         `import type { ${doTypeImports.join(", ")} } from "${base.do}";`,
-        `import { applyCdcChanges, createShardCtxDb, runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
+        `import { applyCdcChanges, ${shapeGuardImport}createShardCtxDb, runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
         // `asBucketStorage` (the bucket-aware `ctx.storage` wrapper) and
         // `createSecrets` (the `ctx.secrets` core built-in) live in
         // `@lunora/server`, the single source — imported here rather than stamped
