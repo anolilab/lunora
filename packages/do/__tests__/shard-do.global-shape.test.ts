@@ -80,6 +80,35 @@ class GlobalShapeShard extends ShardDO {
     }
 }
 
+/**
+ * A {@link GlobalShapeShard} that can be made to fail on demand — `failResolve`
+ * makes `resolveShape` throw, and `failUserId` makes the global-backend read
+ * reject for one socket's identity. Used to prove the poll path contains a
+ * per-socket / per-shape failure instead of aborting the whole tick (and its
+ * re-arm).
+ */
+class FlakyGlobalShard extends GlobalShapeShard {
+    public failResolve = false;
+
+    public failUserId: string | undefined = undefined;
+
+    protected override readGlobalShapeRows(_resolved?: unknown, identity?: { userId?: string }): Promise<ShapeRow[]> {
+        if (this.failUserId !== undefined && identity?.userId === this.failUserId) {
+            return Promise.reject(new Error("global backend unavailable"));
+        }
+
+        return super.readGlobalShapeRows();
+    }
+
+    protected override resolveShape(name: string): { effectiveWhere?: Record<string, unknown>; global?: boolean; table: string } | undefined {
+        if (this.failResolve) {
+            throw new Error("policy lookup failed");
+        }
+
+        return super.resolveShape(name);
+    }
+}
+
 let harness: ReturnType<typeof createSqliteExec>;
 const alarmBox: { scheduled: null | number } = { scheduled: null };
 
@@ -283,5 +312,65 @@ describe("shardDO global-shape poll tier", () => {
         // No global subscribers remain ⇒ the alarm is not re-armed and the DO idles.
         expect(alarmBox.scheduled).toBeNull();
         expect(pokeOps(ws)).toStrictEqual([]);
+    });
+
+    it("contains one socket's poll failure: pokes the healthy socket and still re-arms", async () => {
+        expect.assertions(3);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new FlakyGlobalShard(makeState(sockets), {});
+        const ok = createFakeWebSocket();
+
+        ok.attachment = { subs: {}, userId: "ok" };
+
+        const boom = createFakeWebSocket();
+
+        boom.attachment = { subs: {}, userId: "boom" };
+        sockets.push(ok, boom);
+
+        shard.rows = [{ doc: { _id: "t1", label: "a" }, id: "t1" }];
+        await subscribeShape(shard, ok);
+        await subscribeShape(shard, boom);
+        ok.sent.length = 0;
+        boom.sent.length = 0;
+
+        // The global backend starts rejecting reads for `boom` only, and t1 changes.
+        shard.failUserId = "boom";
+        shard.rows = [{ doc: { _id: "t1", label: "a2" }, id: "t1" }];
+        alarmBox.scheduled = null;
+
+        await shard.alarm();
+
+        // The healthy socket still receives the update...
+        expect(pokeOps(ok)).toStrictEqual([{ key: "t1", op: "update", table: "things", value: expect.objectContaining({ label: "a2" }) }]);
+        // ...the failing socket's read is contained (no frames leak)...
+        expect(boom.sent).toStrictEqual([]);
+        // ...and the alarm re-arms despite the failure, so polling survives.
+        expect(alarmBox.scheduled).not.toBeNull();
+    });
+
+    it("contains a throwing resolveShape on an alarm tick and still re-arms", async () => {
+        expect.assertions(2);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new FlakyGlobalShard(makeState(sockets), {});
+        const ws = createFakeWebSocket();
+
+        sockets.push(ws);
+
+        shard.rows = [{ doc: { _id: "t1", label: "a" }, id: "t1" }];
+        await subscribeShape(shard, ws);
+        ws.sent.length = 0;
+
+        // resolveShape now throws (e.g. a revoked-policy lookup blowing up).
+        shard.failResolve = true;
+        alarmBox.scheduled = null;
+
+        await shard.alarm();
+
+        // No poke leaks from the throwing resolve...
+        expect(ws.sent).toStrictEqual([]);
+        // ...but the shape stays counted, so the alarm re-arms and retries next tick.
+        expect(alarmBox.scheduled).not.toBeNull();
     });
 });

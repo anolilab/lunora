@@ -2353,7 +2353,18 @@ abstract class ShardDO {
     public async alarm(): Promise<void> {
         this.globalPollScheduled = false;
 
-        const remaining = await this.pollGlobalShapes();
+        let remaining: number;
+
+        try {
+            remaining = await this.pollGlobalShapes();
+        } catch (error) {
+            // `pollGlobalShapes` already contains per-socket/per-shape failures;
+            // this guards a catastrophic failure (e.g. `getWebSockets` throwing)
+            // so the poll heartbeat re-arms and retries next tick instead of
+            // dying permanently and silently dropping every global subscriber.
+            this.recordShapeError("shape:poll", error);
+            remaining = 1;
+        }
 
         if (remaining > 0) {
             await this.scheduleGlobalPoll();
@@ -5826,7 +5837,19 @@ abstract class ShardDO {
     private async seedShapeSubscription(ws: WebSocket, subId: string, shape: ShapeSubscriptionQuery): Promise<void> {
         const attachment = this.readAttachment(ws);
         const identity: SubscriptionIdentity = { identity: attachment.identity, userId: attachment.userId };
-        const resolved = this.resolveShape(shape.name, shape.args ?? {}, identity);
+
+        let resolved: ResolvedShape | undefined;
+
+        try {
+            resolved = this.resolveShape(shape.name, shape.args ?? {}, identity);
+        } catch (error) {
+            // A throwing `resolveShape` must not reject the whole `shape_subscribe`
+            // (and with it the socket's message handling). Treat it as an
+            // unresolved (no-op) shape, surfaced for diagnosis.
+            this.recordShapeError(`shape:seed:${subId}`, error);
+
+            return;
+        }
 
         if (!resolved) {
             return;
@@ -5899,24 +5922,31 @@ abstract class ShardDO {
             const advanced: string[] = [];
 
             for (const [subId, shape] of Object.entries(shapes)) {
-                const resolved = this.resolveShape(shape.name, shape.args ?? {}, identity);
+                try {
+                    const resolved = this.resolveShape(shape.name, shape.args ?? {}, identity);
 
-                // Unresolvable now (revoked policy / dropped shape): leave the memo
-                // so a later flush retries rather than silently advancing past it.
-                // A `.global()` shape is driven by the alarm poll loop, not this
-                // op-log flush (its table can't appear in this DO's `changed` set
-                // anyway), so it is always skipped here.
-                if (!resolved || resolved.global || !changed.has(resolved.table)) {
-                    continue;
-                }
+                    // Unresolvable now (revoked policy / dropped shape): leave the
+                    // memo so a later flush retries rather than silently advancing
+                    // past it. A `.global()` shape is driven by the alarm poll loop,
+                    // not this op-log flush (its table can't appear in this DO's
+                    // `changed` set anyway), so it is always skipped here.
+                    if (!resolved || resolved.global || !changed.has(resolved.table)) {
+                        continue;
+                    }
 
-                const memoCursor = this.shapeMemos.get(ws)?.get(subId)?.cursor ?? 0;
-                const rowsPatch = this.buildShapeDiff(sql, resolved, memoCursor, checkpoint);
+                    const memoCursor = this.shapeMemos.get(ws)?.get(subId)?.cursor ?? 0;
+                    const rowsPatch = this.buildShapeDiff(sql, resolved, memoCursor, checkpoint);
 
-                advanced.push(subId);
+                    advanced.push(subId);
 
-                if (rowsPatch.length > 0) {
-                    parts.push({ rowsPatch, shapeId: subId });
+                    if (rowsPatch.length > 0) {
+                        parts.push({ rowsPatch, shapeId: subId });
+                    }
+                } catch (error) {
+                    // One shape's resolve/diff failure must not drop this socket's
+                    // other shapes — or abort the whole flush fan-out. Skip it with
+                    // its memo unadvanced so a later flush retries.
+                    this.recordShapeError(`shape:poke:${subId}`, error);
                 }
             }
 
@@ -6188,6 +6218,22 @@ abstract class ShardDO {
     }
 
     /**
+     * Record a contained shape-tier error (poll / poke / seed) into the DO's log
+     * ring without aborting the rest of the pass. The shape pipeline is a
+     * best-effort fan-out: one socket's read or one shape's resolve failing must
+     * never take down the others — so callers swallow the throw and surface it
+     * here for diagnosis. `context` is a synthetic `shape:phase:subId` path.
+     */
+    private recordShapeError(context: string, error: unknown): void {
+        this.logs.push({
+            functionPath: context,
+            level: "error",
+            message: error instanceof Error ? error.message : String(error),
+            timestamp: Date.now(),
+        });
+    }
+
+    /**
      * Refresh every `.global()`-table shape held across all live sockets, one
      * diff-poke per (socket, shape). Returns the number of global shapes still
      * subscribed so {@link ShardDO.alarm} knows whether to re-arm. Expired sockets
@@ -6212,23 +6258,56 @@ abstract class ShardDO {
             }
 
             const identity: SubscriptionIdentity = { identity: attachment.identity, userId: attachment.userId };
-            const connectionId = attachment.connectionId ?? "";
 
-            for (const [subId, shape] of Object.entries(shapes)) {
-                const resolved = this.resolveShape(shape.name, shape.args ?? {}, identity);
-
-                if (!resolved?.global) {
-                    continue;
-                }
-
-                remaining += 1;
-
-                // eslint-disable-next-line no-await-in-loop -- per-socket D1 reads are intentionally serialized to bound concurrent global reads per tick
-                await this.refreshGlobalShape(ws, subId, resolved, identity, connectionId);
-            }
+            // eslint-disable-next-line no-await-in-loop -- per-socket reads are intentionally serialized to bound concurrent global reads per tick
+            remaining += await this.pollSocketGlobalShapes(ws, shapes, identity, attachment.connectionId ?? "");
         }
 
         return remaining;
+    }
+
+    /**
+     * Refresh one socket's `.global()`-table shapes, containing per-shape
+     * failures so a single throw never aborts the poll tick (and with it the
+     * re-arm). Returns the count of global shapes still subscribed on this socket
+     * — a failed `resolveShape`/read keeps its shape counted so the alarm keeps
+     * polling and retries next tick.
+     */
+    private async pollSocketGlobalShapes(
+        ws: WebSocket,
+        shapes: Record<string, ShapeSubscriptionQuery>,
+        identity: SubscriptionIdentity,
+        connectionId: string,
+    ): Promise<number> {
+        let count = 0;
+
+        for (const [subId, shape] of Object.entries(shapes)) {
+            let resolved: ResolvedShape | undefined;
+
+            try {
+                resolved = this.resolveShape(shape.name, shape.args ?? {}, identity);
+            } catch (error) {
+                count += 1;
+                this.recordShapeError(`shape:poll:${subId}`, error);
+
+                continue;
+            }
+
+            if (!resolved?.global) {
+                continue;
+            }
+
+            count += 1;
+
+            try {
+                // eslint-disable-next-line no-await-in-loop -- per-shape D1 reads serialized within a socket to bound concurrency
+                await this.refreshGlobalShape(ws, subId, resolved, identity, connectionId);
+            } catch (error) {
+                this.recordShapeError(`shape:poll:${subId}`, error);
+            }
+        }
+
+        return count;
     }
 
     /** Send one poke (`pokeStart` → `pokePart` per shape → `pokeEnd`) to a socket. All parts apply atomically at `pokeEnd`. */
