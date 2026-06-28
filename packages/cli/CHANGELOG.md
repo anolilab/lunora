@@ -1,3 +1,15 @@
+## @lunora/cli [1.0.0-alpha.31](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.30...@lunora/cli@1.0.0-alpha.31) (2026-06-28)
+
+### Features
+
+* **vite:** error-overlay solution finders ([#42](https://github.com/anolilab/lunora/issues/42)) ([33097e2](https://github.com/anolilab/lunora/commit/33097e2d5638b3e924c506eb5e161e9a20ea6f6f))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.13
+* **@lunora/config:** upgraded to 1.0.0-alpha.20
+
 ## @lunora/cli [1.0.0-alpha.30](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.29...@lunora/cli@1.0.0-alpha.30) (2026-06-28)
 
 ### Features
