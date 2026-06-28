@@ -65,8 +65,9 @@ describe(bindMutators, () => {
 
         // The optimistic body wrote the predicted row.
         expect(inserted).toStrictEqual([{ _id: "tmp", text: "first" }]);
-        // The transaction carries the watermark metadata.
-        expect(configs[0]?.metadata).toStrictEqual({ clientSeq: 1, serverRef: "messages:send" });
+        // The transaction carries the mutator ref (the sequence is claimed inside
+        // the serialized push, not at dispatch).
+        expect(configs[0]?.metadata).toStrictEqual({ serverRef: "messages:send" });
 
         // Driving the mutationFn pushes the authoritative write with clientSeq 1.
         await configs[0]?.mutationFn();
@@ -75,8 +76,9 @@ describe(bindMutators, () => {
 
         // A second call increments the per-client sequence.
         bound.send({ text: "second" });
+        await configs[1]?.mutationFn();
 
-        expect(configs[1]?.metadata).toStrictEqual({ clientSeq: 2, serverRef: "messages:send" });
+        expect(callMutator).toHaveBeenLastCalledWith("messages:send", { text: "second" }, { clientSeq: 2, shardKey: "room-1" });
     });
 
     it("holds the overlay until the checkpoint registry echoes the watermark", async () => {
@@ -132,12 +134,9 @@ describe(bindMutators, () => {
         );
 
         bound.send({ text: "after reload" });
-
-        // The first post-reload push starts at watermark + 1, not 1.
-        expect(configs[0]?.metadata).toStrictEqual({ clientSeq: 6, serverRef: "messages:send" });
-
         await configs[0]?.mutationFn();
 
+        // The first post-reload push starts at watermark + 1, not 1.
         expect(callMutator).toHaveBeenCalledWith("messages:send", { text: "after reload" }, { clientSeq: 6, shardKey: "room-1" });
     });
 
@@ -204,5 +203,73 @@ describe(bindMutators, () => {
         bound.send({});
 
         await expect(configs[0]?.mutationFn()).rejects.toThrow(REISSUE_EXHAUSTED);
+    });
+
+    it("serializes concurrent pushes so each claims a contiguous sequence in watermark order", async () => {
+        configs.length = 0;
+        // The DO advances its watermark only once a push is acked. If two pushes
+        // raced the network, the second (clientSeq 2 against watermark 0) would be
+        // an OUT_OF_ORDER gap and the write would be lost — so the runtime must not
+        // issue the second until the first has acked.
+        let watermark = 0;
+        const calls: number[] = [];
+        const gates: (() => void)[] = [];
+        const callMutator = vi.fn<
+            (path: string, args: Record<string, unknown>, options: { clientSeq: number; shardKey?: string }) => Promise<{ applied: boolean; result: unknown }>
+        >(async (_path, _args, options) => {
+            calls.push(options.clientSeq);
+
+            // Block until the test releases this push, advancing the watermark to
+            // the acked sequence (mirroring the DO's commit-then-advance order).
+            await new Promise<void>((resolve) => {
+                gates.push(() => {
+                    watermark = options.clientSeq;
+                    resolve();
+                });
+            });
+
+            return { applied: true, result: "ok" };
+        });
+        const client = { callMutator, confirmedMutationWatermark: () => watermark } as never;
+        const { collection } = mockCollection();
+
+        const bound = bindMutators(
+            client,
+            { collections: { messages: collection }, shardKey: "room-1" },
+            { send: defineMutator<{ text: string }>({ apply: () => undefined, serverRef: "messages:send" }) },
+        );
+
+        bound.send({ text: "a" });
+        bound.send({ text: "b" });
+
+        // Drive both transactions "concurrently" — the second must queue behind
+        // the first rather than push immediately.
+        const first = configs[0]?.mutationFn();
+        const second = configs[1]?.mutationFn();
+
+        const flush = async (): Promise<void> => {
+            for (let index = 0; index < 8; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- draining the microtask queue deterministically
+                await Promise.resolve();
+            }
+        };
+
+        await flush();
+
+        // Only the first push is in flight; the second is held behind the chain.
+        expect(calls).toStrictEqual([1]);
+
+        // Release the first; its ack advances the watermark to 1, so the second
+        // now issues at the contiguous sequence 2 (never a gap).
+        gates[0]?.();
+        await first;
+        await flush();
+
+        expect(calls).toStrictEqual([1, 2]);
+
+        gates[1]?.();
+        await second;
+
+        expect(calls).toStrictEqual([1, 2]);
     });
 });
