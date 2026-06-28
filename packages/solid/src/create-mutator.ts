@@ -1,24 +1,7 @@
+import type { MutatorHandle } from "@lunora/client";
+import { createMutatorRunner } from "@lunora/client";
 import type { Accessor } from "solid-js";
 import { createSignal } from "solid-js";
-
-/**
- * The structural surface of a TanStack `Transaction` a bound mutator returns —
- * its `isPersisted.promise` resolves once the write is persisted and rejects on
- * failure. Typed structurally so `@lunora/solid` need not depend on
- * `@tanstack/db` or `@lunora/db` (the handle is created app-side by
- * `bindMutators`).
- */
-interface MutatorTransaction {
-    isPersisted: { promise: Promise<unknown> };
-}
-
-/**
- * A bound custom-mutator handle produced by `bindMutators(client, db, mutators)`
- * in `@lunora/db`. Calling it applies the optimistic overlay to the local
- * collections and pushes the authoritative server write; it returns the TanStack
- * transaction whose `isPersisted` promise tracks completion.
- */
-type MutatorHandle<TArgs> = (args: TArgs) => MutatorTransaction;
 
 /**
  * The reactive handle returned by {@link createMutator} — the Solid counterpart
@@ -56,34 +39,11 @@ export const createMutator = <TArgs = Record<string, unknown>>(handle: MutatorHa
     const [error, setError] = createSignal<Error | undefined>(undefined);
     const [pending, setPending] = createSignal(false);
 
-    let inFlight = 0;
-
-    const mutate = async (args: TArgs): Promise<void> => {
-        inFlight += 1;
-        setPending(true);
-
-        try {
-            await handle(args).isPersisted.promise;
-            setError(undefined);
-        } catch (error_) {
-            const normalized = error_ instanceof Error ? error_ : new Error(String(error_));
-
-            setError(normalized);
-
-            throw normalized;
-        } finally {
-            inFlight -= 1;
-            setPending(inFlight > 0);
-        }
-    };
+    const { mutate, reset } = createMutatorRunner(handle, { setError, setPending });
 
     const isError = (): boolean => error() !== undefined;
-
-    const reset = (): void => {
-        setError(undefined);
-    };
 
     return { error, isError, mutate, pending, reset };
 };
 
-export type { MutatorHandle, MutatorTransaction };
+export type { MutatorHandle, MutatorTransaction } from "@lunora/client";
