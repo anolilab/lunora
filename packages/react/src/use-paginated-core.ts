@@ -247,13 +247,15 @@ const usePaginatedCore = function <T>(
 
     const nextCursorRef = useRef<null | string | undefined>(undefined);
 
-    // Sync the next-page cursor via an effect rather than a render-phase ref
-    // write (which trips React Compiler). It's read only inside the
-    // user-triggered `loadMore` below, so the post-commit value is always current
-    // by the time it fires — and `loadMore` keeps a stable identity.
-    useEffect(() => {
-        nextCursorRef.current = status === "CanLoadMore" ? nextCursor : undefined;
-    });
+    // Sync the next-page cursor during render (same render-phase ref pattern as
+    // `resetKeyRef` above) rather than in a post-commit effect. It's read only
+    // inside the user-triggered `loadMore` below, which keeps a stable identity.
+    // A post-commit effect leaves a window — right after the first page paints
+    // but before the effect flushes — where `loadMore` reads a stale `undefined`
+    // cursor and silently no-ops (the next page never opens). Writing it during
+    // render closes that window: the cursor is always current the instant a
+    // committed render makes the page visible, so `loadMore` can never miss it.
+    nextCursorRef.current = status === "CanLoadMore" ? nextCursor : undefined;
 
     const loadMore = useCallback((numberItems: number) => {
         const cursor = nextCursorRef.current;
