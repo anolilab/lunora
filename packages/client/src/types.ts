@@ -131,6 +131,42 @@ export interface PersistenceAdapter {
 }
 
 /**
+ * One write handed to an {@link OutboxSink}. Mirrors {@link PersistedMutation}
+ * plus the custom-mutator identity (`clientId`/`mutationId`/`idempotencyKey`)
+ * the durable outbox needs to dedupe and watermark replays.
+ */
+export interface OutboxMutation {
+    args: Record<string, unknown>;
+    /** Stable per-client id; pairs with {@link OutboxMutation.mutationId} as `idempotencyKey`. */
+    clientId: string;
+    functionPath: string;
+    /** `${clientId}:${mutationId}` — sent as `x-lunora-mutation-id` so a replay is server-idempotent. */
+    idempotencyKey: string;
+    /** Issuing identity fingerprint (`null` = signed out); drives the sink's identity guard. */
+    identity: string | null;
+    /** Monotonic per-client mutation id, backing the server `__client_watermark`. */
+    mutationId: number;
+    shardKey?: string;
+}
+
+/**
+ * Pluggable durable outbox seam. When set on {@link LunoraClientOptions.outbox},
+ * the client delegates offline write durability + at-least-once replay to this
+ * sink instead of its built-in {@link PersistenceAdapter}-backed `OfflineQueue`.
+ * `@lunora/db` supplies the blessed implementation (`createExecutorOutboxSink`,
+ * backed by the TanStack `OfflineExecutor`); the interface itself is
+ * dependency-free so `@lunora/client` stays TanStack-free.
+ */
+export interface OutboxSink {
+    /**
+     * Persist and schedule a write for replay. Rejects with an
+     * `OFFLINE_QUEUE_OVERFLOW`-coded error when the sink's cap is exceeded, so
+     * the caller can surface back-pressure to the issuing mutation.
+     */
+    enqueue: (mutation: OutboxMutation) => Promise<void>;
+}
+
+/**
  * One persisted query result in the durable read cache (Pillar 2). Keyed in the
  * store by `shardKey + functionPath + argsKey`; the record carries everything
  * needed to render offline on reload and to resume the live subscription.
@@ -193,6 +229,17 @@ export interface LunoraClientOptions {
     bookmarkStorage?: BookmarkStorage;
 
     /**
+     * Stable per-client id backing the custom-mutator watermark. Sent on the
+     * `connect` envelope (so the server can scope this client's
+     * `__client_watermark`) and stamped onto every {@link OutboxMutation} the
+     * {@link LunoraClientOptions.outbox} sink persists, where it pairs with the
+     * monotonic mutation id to form the idempotency key. The `@lunora/db` path
+     * persists a stable id alongside the outbox and passes it here; omit for the
+     * standalone client, which generates an ephemeral per-session id.
+     */
+    clientId?: string;
+
+    /**
      * Default app context sent in the `connect` envelope right after each socket
      * opens, forwarded to the server's `onConnect`/`onDisconnect` lifecycle hooks
      * as `event.context`. A per-shard context registered via
@@ -222,6 +269,15 @@ export interface LunoraClientOptions {
      */
     heartbeatIntervalMs?: number;
     offlineQueue?: OfflineQueueOptions;
+
+    /**
+     * Durable outbox seam for offline writes. When supplied (the `@lunora/db`
+     * path wires `createExecutorOutboxSink`), offline mutations are delegated to
+     * the sink and the built-in {@link PersistenceAdapter}-backed `OfflineQueue`
+     * is bypassed, so a db app has exactly one durable write path. Omit for the
+     * standalone client, which keeps using {@link LunoraClientOptions.persistence}.
+     */
+    outbox?: OutboxSink;
     /** Durable store for the offline mutation queue; omit to keep it in memory. */
     persistence?: PersistenceAdapter;
 
@@ -253,7 +309,30 @@ export interface LunoraClientOptions {
 /** Wire envelope sent on `POST /_lunora/rpc`. */
 export interface RpcEnvelope {
     args?: Record<string, unknown>;
+
+    /**
+     * Stable per-client identifier (custom-mutator push path). Pairs with
+     * {@link RpcEnvelope.mutationId} to form `idempotencyKey` and scope the
+     * server `__client_watermark`. Absent on plain `client.mutation` calls.
+     */
+    clientId?: string;
     functionPath: string;
+
+    /**
+     * Idempotency key (`${clientId}:${mutationId}`) for the custom-mutator push
+     * path, mirrored into the `x-lunora-mutation-id` header. Absent on plain
+     * `client.mutation` calls.
+     */
+    idempotencyKey?: string;
+
+    /**
+     * Monotonic per-client mutation id (custom-mutator push path), backing the
+     * server-side per-client watermark: `id &lt;= watermark` is a replay (skipped),
+     * `id == watermark + 1` runs authoritatively, `id > watermark + 1` halts the
+     * batch so the client resends from `watermark + 1`. Absent on plain
+     * `client.mutation` calls.
+     */
+    mutationId?: number;
     shardKey?: string;
 }
 
@@ -288,9 +367,51 @@ export interface ClientUnsubscribeMessage {
  * `onDisconnect` when the socket drops.
  */
 export interface ClientConnectMessage {
+    /**
+     * Stable per-client id (persisted alongside the outbox). Lets the server
+     * scope this connection's `__client_watermark` so custom-mutator pokes can
+     * echo the right per-client `lastMutationId`. Omitted by clients that don't
+     * use custom mutators.
+     */
+    clientId?: string;
     context?: Record<string, unknown>;
     id: string;
     type: "connect";
+}
+
+/**
+ * Subscribe to a declarative **shape** — server-side partial replication scoped
+ * by `shardBy` + the shape's predicate + RLS. The client sends the shape *name*
+ * + validated `args`; the server resolves the trusted `where` (identity/RLS
+ * `baseWhere` the client can't forge) and streams the matching rowset, then live
+ * {@link ServerPokePartMessage} diffs. `id` namespaces the subscription and is
+ * echoed as `shapeId` on every poke part.
+ */
+export interface ClientShapeSubscribeMessage {
+    id: string;
+    shape: { args?: Record<string, unknown>; name: string };
+
+    /**
+     * Resume from this checkpoint (the `__cdc_log` cursor the client last
+     * applied for this shape). When absent or below the server's retained floor
+     * (`minCdcSeq`), the server re-seeds with a full insert-poke instead of a
+     * delta.
+     */
+    sinceCheckpoint?: number;
+
+    /**
+     * The CDC epoch {@link ClientShapeSubscribeMessage.sinceCheckpoint} belongs
+     * to. A mismatch (forked changelog timeline) forces a full re-seed even when
+     * the cursor is numerically in range.
+     */
+    sinceEpoch?: string;
+    type: "shape_subscribe";
+}
+
+/** Cancel a shape subscription started with the same `id`. */
+export interface ClientShapeUnsubscribeMessage {
+    id: string;
+    type: "shape_unsubscribe";
 }
 
 export interface ClientAckMessage {
@@ -336,6 +457,8 @@ export interface ClientWhisperMessage {
 export type ClientMessage =
     | ClientAckMessage
     | ClientConnectMessage
+    | ClientShapeSubscribeMessage
+    | ClientShapeUnsubscribeMessage
     | ClientStreamMessage
     | ClientSubscribeMessage
     | ClientUnsubscribeMessage
@@ -355,6 +478,14 @@ export interface ServerDataMessage {
     /** The CDC epoch this frame's cursor belongs to (see {@link CachedQuery.serverEpoch}). */
     epoch?: string;
     id: string;
+
+    /**
+     * The highest custom-mutator `mutationId` from this client the server has
+     * now applied (the per-client `__client_watermark`). Echoed so the client's
+     * outbox can drop confirmed pending mutations and let TanStack DB collapse
+     * the matching optimistic overlay. Absent on shards without custom mutators.
+     */
+    lastMutationId?: number;
     type: "data" | "delta";
 }
 
@@ -369,6 +500,8 @@ export interface ServerResumeMessage {
     /** The CDC epoch this resume's cursor belongs to (see {@link CachedQuery.serverEpoch}). */
     epoch?: string;
     id: string;
+    /** Per-client custom-mutator watermark (see {@link ServerDataMessage.lastMutationId}). */
+    lastMutationId?: number;
     type: "resume";
 }
 
@@ -409,8 +542,79 @@ export interface ServerWhisperMessage {
     type: "whisper";
 }
 
+/**
+ * One row-level change in a shape's replication stream — the wire form of the
+ * DO's `__cdc_log` `CdcChange`. `insert`/`update` carry the post-image in
+ * `value` (projected to the shape's `columns`); `delete` omits it, identifying
+ * the removed row by `key` alone. The client applies these to its local
+ * collection; an unknown `key` on a `delete` is a safe no-op (a row the client
+ * never had in this shape).
+ */
+export interface RowOp {
+    /** Row primary key (`_id`). */
+    key: string;
+    op: "delete" | "insert" | "update";
+    /** Logical table the row belongs to. */
+    table: string;
+    /** Post-image document for insert/update; absent on delete. */
+    value?: Record<string, unknown>;
+}
+
+/**
+ * Opens a **poke** — an atomically-applied batch of shape diffs (Zero's poke
+ * protocol). A `pokeStart` is followed by zero or more {@link ServerPokePartMessage}
+ * frames and closed by exactly one {@link ServerPokeEndMessage}; the client
+ * buffers every part and applies them in a single transaction at `pokeEnd`, so a
+ * socket that drops mid-poke simply re-seeds on reconnect (no torn view).
+ */
+export interface ServerPokeStartMessage {
+    /** The checkpoint the client's view is expected to be at before this poke applies (for ordering/gap detection). */
+    baseCheckpoint?: number;
+    /** CDC epoch this poke belongs to; a mismatch forces the client to re-seed rather than apply. */
+    epoch?: string;
+    /** Correlates this poke's `pokeStart`/`pokePart`/`pokeEnd` frames. */
+    pokeId: string;
+    type: "pokeStart";
+}
+
+/** One shape's slice of an in-flight poke: the row-ops to apply for `shapeId`. */
+export interface ServerPokePartMessage {
+    /** Per-client custom-mutator watermark carried with this slice (see {@link ServerDataMessage.lastMutationId}). */
+    lastMutationId?: number;
+    pokeId: string;
+    /** Ordered row-level changes for this shape, applied in sequence at `pokeEnd`. */
+    rowsPatch: RowOp[];
+    /** The {@link ClientShapeSubscribeMessage.id} these row-ops belong to. */
+    shapeId: string;
+    type: "pokePart";
+}
+
+/**
+ * Closes a poke: the client commits the buffered parts atomically and advances
+ * its checkpoint to {@link ServerPokeEndMessage.checkpoint} (the `__cdc_log`
+ * cursor high-watermark the view now reflects), replayed as `sinceCheckpoint` on
+ * the next reconnect.
+ */
+export interface ServerPokeEndMessage {
+    /** The `__cdc_log` cursor the view is at after applying this poke. */
+    checkpoint?: number;
+    /** CDC epoch the {@link ServerPokeEndMessage.checkpoint} belongs to. */
+    epoch?: string;
+    pokeId: string;
+    type: "pokeEnd";
+}
+
 export type ServerMessage =
-    ServerAckMessage | ServerChunkMessage | ServerCompleteMessage | ServerDataMessage | ServerErrorMessage | ServerResumeMessage | ServerWhisperMessage;
+    | ServerAckMessage
+    | ServerChunkMessage
+    | ServerCompleteMessage
+    | ServerDataMessage
+    | ServerErrorMessage
+    | ServerPokeEndMessage
+    | ServerPokePartMessage
+    | ServerPokeStartMessage
+    | ServerResumeMessage
+    | ServerWhisperMessage;
 
 /**
  * The authenticated user as exposed client-side, mirroring better-auth's

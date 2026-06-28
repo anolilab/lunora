@@ -30,17 +30,22 @@ import type {
     GlobalTableInfo,
     GlobalTablePage,
     LunoraClientOptions,
+    OutboxSink,
     PersistenceAdapter,
     PersistenceErrorContext,
     QueryCacheAdapter,
     ReconnectOptions,
     ReturnOf,
+    RowOp,
     RpcResponseBody,
     ScheduleRecord,
     SchedulerStatus,
     ServerDataMessage,
     ServerErrorMessage,
     ServerMessage,
+    ServerPokeEndMessage,
+    ServerPokePartMessage,
+    ServerPokeStartMessage,
     ServerResumeMessage,
     ServerWhisperMessage,
     ShardTrafficResult,
@@ -61,6 +66,28 @@ const WS_PATH = "/_lunora/ws";
 
 /** Build the `&amp;bucket=…` query fragment for a storage admin request, or `""` when no bucket is selected. */
 const bucketQuery = (bucket?: string): string => (bucket === undefined || bucket === "" ? "" : `&bucket=${encodeURIComponent(bucket)}`);
+
+/**
+ * Unwind a LIFO stack of optimistic-update rollbacks, most-recent first, so a
+ * stacked update on the same subscription restores the immediately-prior value
+ * rather than clobbering a newer still-pending optimistic value.
+ */
+const rollbackOptimistic = (optimisticRollbacks: (() => void)[]): void => {
+    for (let index = optimisticRollbacks.length - 1; index >= 0; index -= 1) {
+        optimisticRollbacks[index]?.();
+    }
+};
+
+/** Apply a shape's buffered row-ops to its keyed view in order: a delete removes the key, an upsert sets it (a value-less upsert is skipped — membership-only signal). */
+const applyRowOpsToView = (rows: Map<string, Record<string, unknown>>, ops: RowOp[]): void => {
+    for (const op of ops) {
+        if (op.op === "delete") {
+            rows.delete(op.key);
+        } else if (op.value !== undefined) {
+            rows.set(op.key, op.value);
+        }
+    }
+};
 
 /**
  * Keepalive frame sent on the heartbeat. MUST match the request payload the
@@ -393,6 +420,38 @@ const sendOn = (conn: ShardConnection, message: ClientMessage): boolean => {
     }
 };
 
+/** Callback a shape subscription invokes with its materialized rowset on every applied poke. */
+type ShapeCallback = (rows: Record<string, unknown>[]) => void;
+
+/**
+ * One live shape subscription's client state — the partial-replication parallel
+ * to {@link SubscriptionState}. The view is a keyed map of the rows currently in
+ * the shape (built up from seed + live poke diffs); `serverCursor`/`serverEpoch`
+ * carry the last applied checkpoint so a reconnect resumes via `sinceCheckpoint`
+ * instead of re-seeding.
+ */
+interface ShapeSubscriptionState {
+    args: Record<string, unknown> | undefined;
+    callbacks: Set<ShapeCallback>;
+    errorCallbacks: Set<SubscriptionErrorCallback>;
+    id: string;
+    /** Highest custom-mutator watermark the server has echoed for this client on this shape. */
+    lastMutationId?: number;
+    name: string;
+    /** The shape's current rowset, keyed by `_id`. */
+    rows: Map<string, Record<string, unknown>>;
+    serverCursor?: number;
+    serverEpoch?: string;
+    shardKey: string | undefined;
+}
+
+/** A poke being assembled between `pokeStart` and `pokeEnd` — parts buffered per shape, applied atomically at end. */
+interface PokeBuffer {
+    epoch: string | undefined;
+    lastMutationId: Map<string, number>;
+    parts: Map<string, RowOp[]>;
+}
+
 /**
  * Lunora browser/edge client. Talks RPC over HTTP and real-time deltas over
  * a single multiplexed WebSocket.
@@ -424,6 +483,19 @@ class LunoraClient {
     private readonly heartbeatIntervalMs: number;
 
     private readonly offlineQueue: OfflineQueue;
+
+    /**
+     * Durable outbox seam (the `@lunora/db` `createExecutorOutboxSink`). When
+     * set, offline writes are delegated here and the built-in {@link OfflineQueue}
+     * is bypassed, so a db app has exactly one durable write path.
+     */
+    private readonly outbox: OutboxSink | undefined;
+
+    /** Stable per-client id stamped onto every `OutboxMutation` (custom-mutator watermark). */
+    private readonly clientId: string;
+
+    /** Monotonic per-client mutation counter backing the server `__client_watermark`. */
+    private outboxMutationCounter = 0;
 
     private readonly onPersistenceError: ((context: PersistenceErrorContext) => void) | undefined;
 
@@ -526,6 +598,14 @@ class LunoraClient {
      */
     private readonly streams = new Map<string, { handle: StreamHandle; shardKey: string | undefined }>();
 
+    /** Live shape subscriptions (partial replication), keyed by their wire id. */
+    private readonly shapeSubscriptions = new Map<string, ShapeSubscriptionState>();
+
+    /** In-flight pokes being assembled between `pokeStart` and `pokeEnd`, keyed by `pokeId`. */
+    private readonly pokeBuffers = new Map<string, PokeBuffer>();
+
+    private nextShapeId = 0;
+
     public constructor(options: LunoraClientOptions) {
         this.url = options.url;
         this.wsUrl = options.wsUrl ?? joinUrl(deriveWsUrl(options.url), WS_PATH);
@@ -544,6 +624,11 @@ class LunoraClient {
         this.queryCache = options.queryCache === false ? undefined : options.queryCache;
         this.onPersistenceError = options.offlineQueue?.onPersistenceError;
         this.offlineQueue = new OfflineQueue(options.offlineQueue, options.persistence);
+        this.outbox = options.outbox;
+        // A db app persists a stable id alongside the outbox and passes it in; the
+        // standalone client gets an ephemeral per-session id, fine because it only
+        // matters when a durable outbox (which supplies its own) is wired.
+        this.clientId = options.clientId ?? `client-${nextId()}`;
 
         if (this.persistence) {
             // Deferred to a microtask so the constructor itself stays
@@ -600,6 +685,39 @@ class LunoraClient {
 
     public getAuthToken(): string | null {
         return this.authToken;
+    }
+
+    /**
+     * The current identity fingerprint (the same stamp queued offline writes
+     * carry). Exposed so a durable {@link OutboxSink}'s replay handler — which
+     * owns its own at-least-once replay outside the built-in `OfflineQueue` —
+     * can drop a persisted write whose captured `identity` no longer matches the
+     * signed-in user, the guard the queue path applies in `flushOfflineQueue`.
+     */
+    public currentIdentity(): string | null {
+        return this.identityFingerprint();
+    }
+
+    /** This client's stable identifier — the watermark key the server's custom-mutator protocol advances per `clientSeq`. */
+    public clientIdentifier(): string {
+        return this.clientId;
+    }
+
+    /**
+     * Push a custom mutator to its authoritative server impl over the watermark
+     * protocol (Phase 4): the request carries `x-lunora-client-id` + a monotonic
+     * `x-lunora-client-seq`, so the DO runs it exactly once and advances this
+     * client's `__client_watermark`. Returns the server result.
+     *
+     * This is the online transport for `@lunora/db`'s client-mutator runtime; the
+     * optimistic overlay + durable-outbox concerns live in that runtime, not here.
+     */
+    public async callMutator(functionPath: string, args: Record<string, unknown>, options?: { clientSeq?: number; shardKey?: string }): Promise<unknown> {
+        return this.rpc(functionPath, args, options?.shardKey, {
+            captureBookmark: true,
+            clientId: this.clientId,
+            clientSeq: options?.clientSeq ?? 0,
+        });
     }
 
     /**
@@ -967,62 +1085,14 @@ class LunoraClient {
         const midReconnect = wsState === "connecting" && connectedGate;
 
         if ((wsState !== "open" && !hasSocket && shouldQueueOffline) || midReconnect) {
-            // Bind the issuing identity at enqueue time so the write can only
-            // replay under the same identity (see flushOfflineQueue).
-            const issuingIdentity = this.identityFingerprint();
-
-            return new Promise<ReturnOf<F>>((resolve, reject) => {
-                const entry: QueuedMutation<ReturnOf<F>> = {
-                    args: argsRecord,
-                    functionPath: function_.__lunoraRef,
-                    // Reuse the call's idempotency key as the queue id so the
-                    // replay carries the same `x-lunora-mutation-id` the server
-                    // dedups on.
-                    id: mutationId,
-                    // Persist the stamp alongside the record so a hydrated write
-                    // can only replay under the identity that queued it.
-                    identity: issuingIdentity,
-                    reject: (error) => {
-                        // Drop this write's identity stamp on any rejection
-                        // (overflow eviction, identity change, close) so the
-                        // `queuedIdentities` map can't leak entries for writes
-                        // the queue has already discarded — `mutationId` is the
-                        // entry's stable id, reused as its queue id.
-                        this.queuedIdentities.delete(mutationId);
-
-                        // LIFO: roll back most-recent optimistic write first so a
-                        // stacked update on the same subscription restores the
-                        // immediately-prior value rather than clobbering a newer
-                        // still-pending optimistic value with a stale snapshot.
-                        for (let index = optimisticRollbacks.length - 1; index >= 0; index -= 1) {
-                            optimisticRollbacks[index]?.();
-                        }
-
-                        reject(error instanceof Error ? error : new Error(String(error)));
-                    },
-                    resolve,
-                    shardKey: options.shardKey,
-                };
-
-                this.offlineQueue.enqueue<ReturnOf<F>>(entry);
-
-                // `enqueue` assigns `entry.id` when absent; stamp the captured
-                // identity against it for the flush-time check.
-                if (entry.id !== undefined) {
-                    this.queuedIdentities.set(entry.id, issuingIdentity);
-                }
-            });
+            return this.enqueueOfflineMutation(function_, argsRecord, options.shardKey, mutationId, optimisticRollbacks);
         }
 
         try {
             return (await this.rpc(function_.__lunoraRef, argsRecord, options.shardKey, { captureBookmark: true, mutationId })) as ReturnOf<F>;
         } catch (error) {
-            // LIFO: see the offline-queue reject path above. Roll back the
-            // most-recent optimistic write first so stacked updates on the same
-            // subscription don't restore a stale captured snapshot.
-            for (let index = optimisticRollbacks.length - 1; index >= 0; index -= 1) {
-                optimisticRollbacks[index]?.();
-            }
+            // LIFO rollback: see the offline-queue reject path above.
+            rollbackOptimistic(optimisticRollbacks);
 
             throw error;
         }
@@ -1913,6 +1983,54 @@ class LunoraClient {
     }
 
     /**
+     * Subscribe to a declarative **shape** — server-side partial replication
+     * scoped by `shardBy` + the shape's predicate + RLS. The parallel to
+     * {@link subscribe} for the poke protocol: the client sends the shape *name* +
+     * validated `args` (never a `where` the client could forge), the server seeds
+     * the current membership as an insert-poke and streams live membership diffs.
+     * Each applied poke materializes the shape's rowset and invokes `callback`.
+     *
+     * Unlike {@link subscribe}, shape subscriptions are NOT deduped by
+     * (name, args): the server resolves them under the socket's verified identity,
+     * so every call gets its own id + view. The returned function unsubscribes.
+     */
+    public subscribeShape(
+        shape: { args?: Record<string, unknown>; name: string },
+        callback: ShapeCallback,
+        options: { onError?: SubscriptionErrorCallback; shardKey?: string } = {},
+    ): Unsubscribe {
+        if (this.closed) {
+            throw new Error("LunoraClient is closed");
+        }
+
+        this.nextShapeId += 1;
+        const id = `shape_${this.nextShapeId.toString()}`;
+        const state: ShapeSubscriptionState = {
+            args: shape.args,
+            callbacks: new Set([callback]),
+            errorCallbacks: options.onError ? new Set([options.onError]) : new Set(),
+            id,
+            name: shape.name,
+            rows: new Map(),
+            shardKey: options.shardKey,
+        };
+
+        this.shapeSubscriptions.set(id, state);
+        this.ensureSocket(options.shardKey);
+        this.sendShapeSubscribeIfOpen(state);
+
+        return () => {
+            this.shapeSubscriptions.delete(id);
+            const conn = this.getConnection(state.shardKey);
+            const ok = conn ? sendOn(conn, { id, type: "shape_unsubscribe" }) : false;
+
+            if (!ok && conn) {
+                conn.pendingUnsubscribes.push(id);
+            }
+        };
+    }
+
+    /**
      * Open a streaming query. The function reference must be a
      * `kind:"stream"` registration (built with `c.query.input(...).stream(...)`);
      * the type constraint catches accidental use of a query/mutation/action
@@ -2074,6 +2192,86 @@ class LunoraClient {
     }
 
     // --- Internals ----------------------------------------------------------
+
+    /**
+     * Persist a mutation that can't go out on the wire right now (offline, or
+     * mid-reconnect after a prior connect). The optimistic update has already
+     * been applied by `mutation`; this only chooses the durable write path and
+     * rolls the optimistic write back if persistence is rejected.
+     *
+     * Two paths: when an `outbox` sink is wired (the `@lunora/db` executor) it
+     * owns persistence + at-least-once replay, so we delegate and return
+     * optimistically (confirmation rides the synced view). Otherwise the
+     * built-in `OfflineQueue` resolves/rejects the returned promise on replay.
+     */
+    private async enqueueOfflineMutation<F extends FunctionReference>(
+        function_: F,
+        argsRecord: Record<string, unknown>,
+        shardKey: string | undefined,
+        mutationId: string,
+        optimisticRollbacks: (() => void)[],
+    ): Promise<ReturnOf<F>> {
+        // Bind the issuing identity at enqueue time so the write can only replay
+        // under the same identity (see flushOfflineQueue).
+        const issuingIdentity = this.identityFingerprint();
+
+        if (this.outbox) {
+            this.outboxMutationCounter += 1;
+            const outboxMutationId = this.outboxMutationCounter;
+
+            try {
+                await this.outbox.enqueue({
+                    args: argsRecord,
+                    clientId: this.clientId,
+                    functionPath: function_.__lunoraRef,
+                    idempotencyKey: `${this.clientId}:${String(outboxMutationId)}`,
+                    identity: issuingIdentity,
+                    mutationId: outboxMutationId,
+                    shardKey,
+                });
+            } catch (error) {
+                rollbackOptimistic(optimisticRollbacks);
+
+                throw error instanceof Error ? error : new Error(String(error));
+            }
+
+            return undefined as ReturnOf<F>;
+        }
+
+        return new Promise<ReturnOf<F>>((resolve, reject) => {
+            const entry: QueuedMutation<ReturnOf<F>> = {
+                args: argsRecord,
+                functionPath: function_.__lunoraRef,
+                // Reuse the call's idempotency key as the queue id so the replay
+                // carries the same `x-lunora-mutation-id` the server dedups on.
+                id: mutationId,
+                // Persist the stamp alongside the record so a hydrated write can
+                // only replay under the identity that queued it.
+                identity: issuingIdentity,
+                reject: (error) => {
+                    // Drop this write's identity stamp on any rejection (overflow
+                    // eviction, identity change, close) so the `queuedIdentities`
+                    // map can't leak entries for writes the queue has already
+                    // discarded — `mutationId` is the entry's stable id.
+                    this.queuedIdentities.delete(mutationId);
+
+                    rollbackOptimistic(optimisticRollbacks);
+
+                    reject(error instanceof Error ? error : new Error(String(error)));
+                },
+                resolve,
+                shardKey,
+            };
+
+            this.offlineQueue.enqueue<ReturnOf<F>>(entry);
+
+            // `enqueue` assigns `entry.id` when absent; stamp the captured
+            // identity against it for the flush-time check.
+            if (entry.id !== undefined) {
+                this.queuedIdentities.set(entry.id, issuingIdentity);
+            }
+        });
+    }
 
     /**
      * Restore offline mutations persisted in a prior session and open a socket
@@ -2345,7 +2543,7 @@ class LunoraClient {
      * so a mutation the server already committed returns its cached result
      * instead of running twice.
      */
-    private rpcRequestHeaders(flags: { attachBookmark?: boolean; mutationId?: string }): Record<string, string> {
+    private rpcRequestHeaders(flags: { attachBookmark?: boolean; clientId?: string; clientSeq?: number; mutationId?: string }): Record<string, string> {
         const headers: Record<string, string> = { "content-type": "application/json" };
 
         if (this.authToken) {
@@ -2354,6 +2552,17 @@ class LunoraClient {
 
         if (flags.mutationId) {
             headers["x-lunora-mutation-id"] = flags.mutationId;
+        }
+
+        // Custom-mutator push protocol (server reads these in `classifyClientMutation`):
+        // the per-client identity + the monotonic per-client sequence that drives
+        // the `__client_watermark` advance.
+        if (flags.clientId !== undefined) {
+            headers["x-lunora-client-id"] = flags.clientId;
+        }
+
+        if (flags.clientSeq !== undefined) {
+            headers["x-lunora-client-seq"] = flags.clientSeq.toString();
         }
 
         if (flags.attachBookmark) {
@@ -2371,7 +2580,7 @@ class LunoraClient {
         functionPath: string,
         args: Record<string, unknown>,
         shardKey: string | undefined,
-        flags: { attachBookmark?: boolean; captureBookmark?: boolean; mutationId?: string } = {},
+        flags: { attachBookmark?: boolean; captureBookmark?: boolean; clientId?: string; clientSeq?: number; mutationId?: string } = {},
     ): Promise<unknown> {
         if (!this.fetchImpl) {
             throw new Error("LunoraClient: no `fetch` implementation available");
@@ -2548,6 +2757,20 @@ class LunoraClient {
         });
     }
 
+    /**
+     * Re-send every shape subscription bound to `shardKey` over its (now open)
+     * socket. Each frame carries the shape's last applied checkpoint, so the
+     * server resumes from it — or re-seeds when the cursor fell below CDC
+     * retention or the epoch forked.
+     */
+    private resendShapeSubscriptions(shardKey: string | undefined): void {
+        for (const state of this.shapeSubscriptions.values()) {
+            if (connectionKey(state.shardKey) === connectionKey(shardKey)) {
+                this.sendShapeSubscribeIfOpen(state);
+            }
+        }
+    }
+
     private ensureSocket(shardKey: string | undefined): void {
         if (this.closed || this.WebSocketImpl === undefined) {
             return;
@@ -2623,6 +2846,11 @@ class LunoraClient {
                     this.sendSubscribeIfOpen(state);
                 }
             }
+
+            // Re-send shape subscriptions bound to this shard. Each carries its
+            // last applied checkpoint, so the server resumes (or re-seeds when the
+            // cursor fell below retention / the epoch forked).
+            this.resendShapeSubscriptions(shardKey);
 
             // Flush any unsubscribes that piled up while the socket was down.
             if (conn.pendingUnsubscribes.length > 0) {
@@ -2824,6 +3052,24 @@ class LunoraClient {
         });
     }
 
+    private sendShapeSubscribeIfOpen(state: ShapeSubscriptionState): void {
+        const conn = this.getConnection(state.shardKey);
+
+        if (conn?.wsState !== "open") {
+            return;
+        }
+
+        sendOn(conn, {
+            id: state.id,
+            shape: { name: state.name, ...(state.args === undefined ? {} : { args: state.args }) },
+            type: "shape_subscribe",
+            // Resume from the last applied checkpoint when we hold one; a cold
+            // subscribe omits it and the server seeds the full membership.
+            ...(state.serverCursor === undefined ? {} : { sinceCheckpoint: state.serverCursor }),
+            ...(state.serverEpoch === undefined ? {} : { sinceEpoch: state.serverEpoch }),
+        });
+    }
+
     private handleServerMessage(raw: unknown, shardKey?: string): void {
         const text = decodeServerFrame(raw);
 
@@ -2870,6 +3116,21 @@ class LunoraClient {
             }
             case "error": {
                 this.handleErrorMessage(message);
+
+                break;
+            }
+            case "pokeEnd": {
+                this.handlePokeEnd(message);
+
+                break;
+            }
+            case "pokePart": {
+                this.handlePokePart(message);
+
+                break;
+            }
+            case "pokeStart": {
+                this.handlePokeStart(message);
 
                 break;
             }
@@ -2929,6 +3190,90 @@ class LunoraClient {
                 } catch {
                     /* user callback threw — ignore */
                 }
+            }
+        }
+    }
+
+    private handlePokeStart(message: ServerPokeStartMessage): void {
+        // Open a buffer for this poke. Parts accumulate per shape and apply
+        // atomically at `pokeEnd`, so a socket dropping mid-poke leaves the view
+        // untouched and re-seeds on reconnect (no torn state).
+        this.pokeBuffers.set(message.pokeId, { epoch: message.epoch, lastMutationId: new Map(), parts: new Map() });
+    }
+
+    private handlePokePart(message: ServerPokePartMessage): void {
+        const buffer = this.pokeBuffers.get(message.pokeId);
+
+        if (!buffer) {
+            // No matching `pokeStart` (we connected mid-poke) — ignore; the
+            // server re-seeds the shape on the next subscribe.
+            return;
+        }
+
+        const existing = buffer.parts.get(message.shapeId) ?? [];
+
+        existing.push(...message.rowsPatch);
+        buffer.parts.set(message.shapeId, existing);
+
+        if (message.lastMutationId !== undefined) {
+            buffer.lastMutationId.set(message.shapeId, message.lastMutationId);
+        }
+    }
+
+    private handlePokeEnd(message: ServerPokeEndMessage): void {
+        const buffer = this.pokeBuffers.get(message.pokeId);
+
+        if (!buffer) {
+            return;
+        }
+
+        this.pokeBuffers.delete(message.pokeId);
+
+        for (const [shapeId, ops] of buffer.parts) {
+            const state = this.shapeSubscriptions.get(shapeId);
+
+            if (!state) {
+                continue;
+            }
+
+            // An epoch mismatch means the changelog timeline forked since we last
+            // applied (a reset/recycled DO): drop the local view so the next
+            // resume re-seeds from scratch rather than splicing onto a stale base.
+            if (buffer.epoch !== undefined && state.serverEpoch !== undefined && buffer.epoch !== state.serverEpoch) {
+                state.rows.clear();
+                state.serverCursor = undefined;
+            }
+
+            applyRowOpsToView(state.rows, ops);
+
+            if (message.checkpoint !== undefined) {
+                state.serverCursor = message.checkpoint;
+            }
+
+            if (message.epoch !== undefined) {
+                state.serverEpoch = message.epoch;
+            }
+
+            const watermark = buffer.lastMutationId.get(shapeId);
+
+            if (watermark !== undefined) {
+                state.lastMutationId = watermark;
+            }
+
+            this.emitShapeRows(state);
+        }
+    }
+
+    /** Materialize a shape's keyed view to an array and invoke its callbacks. */
+    // eslint-disable-next-line class-methods-use-this -- a pure state→callback fan-out kept beside the shape-subscription pipeline it serves.
+    private emitShapeRows(state: ShapeSubscriptionState): void {
+        const rows = [...state.rows.values()];
+
+        for (const shapeCallback of state.callbacks) {
+            try {
+                shapeCallback(rows);
+            } catch {
+                /* user callback threw — ignore */
             }
         }
     }
