@@ -101,13 +101,37 @@ describe(buildPokeFrames, () => {
                 { rowsPatch: [{ key: "t1", op: "insert", table: "things", value: { _id: "t1" } }], shapeId: "s1" },
                 { rowsPatch: [{ key: "u1", op: "delete", table: "others" }], shapeId: "s2" },
             ],
-            { baseCheckpoint: 3, checkpoint: 7, epoch: "e1", pokeId: "poke-1" },
+            { baseCheckpoint: 3, checkpoint: 7, epoch: "e1", lastMutationId: undefined, pokeId: "poke-1" },
         );
 
         expect(frames.map((frame) => JSON.parse(frame) as unknown)).toStrictEqual([
             { baseCheckpoint: 3, epoch: "e1", pokeId: "poke-1", type: "pokeStart" },
             { pokeId: "poke-1", rowsPatch: [{ key: "t1", op: "insert", table: "things", value: { _id: "t1" } }], shapeId: "s1", type: "pokePart" },
             { pokeId: "poke-1", rowsPatch: [{ key: "u1", op: "delete", table: "others" }], shapeId: "s2", type: "pokePart" },
+            { checkpoint: 7, epoch: "e1", pokeId: "poke-1", type: "pokeEnd" },
+        ]);
+    });
+
+    it("stamps the client watermark as lastMutationId on every pokePart when supplied", () => {
+        expect.assertions(1);
+
+        const frames = buildPokeFrames([{ rowsPatch: [{ key: "t1", op: "insert", table: "things", value: { _id: "t1" } }], shapeId: "s1" }], {
+            baseCheckpoint: undefined,
+            checkpoint: 7,
+            epoch: "e1",
+            lastMutationId: 42,
+            pokeId: "poke-1",
+        });
+
+        expect(frames.map((frame) => JSON.parse(frame) as unknown)).toStrictEqual([
+            { epoch: "e1", pokeId: "poke-1", type: "pokeStart" },
+            {
+                lastMutationId: 42,
+                pokeId: "poke-1",
+                rowsPatch: [{ key: "t1", op: "insert", table: "things", value: { _id: "t1" } }],
+                shapeId: "s1",
+                type: "pokePart",
+            },
             { checkpoint: 7, epoch: "e1", pokeId: "poke-1", type: "pokeEnd" },
         ]);
     });

@@ -225,7 +225,8 @@ interface ShardConnection {
     heartbeatTimer: ReturnType<typeof setInterval> | undefined;
     /** Stream-start frames buffered while the socket was (re)connecting. Flushed on `open`. */
     pendingStreams?: ClientMessage[];
-    pendingUnsubscribes: string[];
+    /** Unsubscribes that couldn't be sent while the socket was down, each tagged with its wire type so a shape sub is torn down as `shape_unsubscribe`, never the legacy `unsubscribe`. */
+    pendingUnsubscribes: { id: string; type: "shape_unsubscribe" | "unsubscribe" }[];
     reconnect: ReconnectCalculator;
     reconnectTimer: ReturnType<typeof setTimeout> | undefined;
     /** `undefined` for the default shard (connects without a `shard` param). */
@@ -377,6 +378,17 @@ const buildSubscriptionError = (message: ServerErrorMessage): SubscriptionError 
     const messageText = (typeof message.message === "string" ? message.message : undefined) ?? nestedMessage ?? "subscription error";
 
     return { message: messageText, ...(code === undefined ? {} : { code }) };
+};
+
+/** Fan an error out to every registered `onError` callback, swallowing throws so one bad listener can't starve the rest. */
+const fanSubscriptionError = (callbacks: Iterable<SubscriptionErrorCallback>, error: SubscriptionError): void => {
+    for (const errorCallback of callbacks) {
+        try {
+            errorCallback(error);
+        } catch {
+            /* user callback threw — ignore */
+        }
+    }
 };
 
 /**
@@ -2048,7 +2060,7 @@ class LunoraClient {
                 const ok = conn ? sendOn(conn, { id: subscriptionState.id, type: "unsubscribe" }) : false;
 
                 if (!ok && conn) {
-                    conn.pendingUnsubscribes.push(subscriptionState.id);
+                    conn.pendingUnsubscribes.push({ id: subscriptionState.id, type: "unsubscribe" });
                 }
 
                 this.subscriptions.remove(subscriptionState);
@@ -2100,7 +2112,7 @@ class LunoraClient {
             const ok = conn ? sendOn(conn, { id, type: "shape_unsubscribe" }) : false;
 
             if (!ok && conn) {
-                conn.pendingUnsubscribes.push(id);
+                conn.pendingUnsubscribes.push({ id, type: "shape_unsubscribe" });
             }
         };
     }
@@ -2264,6 +2276,13 @@ class LunoraClient {
         this.statusListeners.clear();
         this.tokenExpiredListeners.clear();
         this.whisperHandlers.clear();
+
+        // Shape subscriptions retain user row/error callbacks and replicated
+        // rows; poke buffers hold partially-assembled membership. Neither is
+        // touched by the registries above, so drop them too — otherwise the UI
+        // closures they close over outlive the terminal client.
+        this.shapeSubscriptions.clear();
+        this.pokeBuffers.clear();
     }
 
     // --- Internals ----------------------------------------------------------
@@ -2836,6 +2855,9 @@ class LunoraClient {
         const context = this.effectiveConnectionContext(connectionKey(conn.shardKey));
 
         sendOn(conn, {
+            // Lets the server scope this connection's `__client_watermark` so
+            // custom-mutator pokes can echo this client's `lastMutationId`.
+            clientId: this.clientId,
             id: "connect",
             type: "connect",
             ...(context === undefined ? {} : { context }),
@@ -2943,8 +2965,8 @@ class LunoraClient {
 
                 conn.pendingUnsubscribes = [];
 
-                for (const id of pending) {
-                    sendOn(conn, { id, type: "unsubscribe" });
+                for (const { id, type } of pending) {
+                    sendOn(conn, { id, type });
                 }
             }
 
@@ -3267,15 +3289,19 @@ class LunoraClient {
         const state = id === undefined ? undefined : this.subscriptions.getById(id);
 
         if (state) {
-            const error = buildSubscriptionError(message);
+            fanSubscriptionError(state.errorCallbacks, buildSubscriptionError(message));
 
-            for (const errorCallback of state.errorCallbacks) {
-                try {
-                    errorCallback(error);
-                } catch {
-                    /* user callback threw — ignore */
-                }
-            }
+            return;
+        }
+
+        // A shape subscription is keyed in its own map (`shape_*` ids), so the
+        // lookup above misses it. Without this a rejected `shape_subscribe`
+        // (unknown shape, RLS-denied, cross-shard-invalid) would never reach the
+        // subscriber's `onError` and the shape would silently hang with no data.
+        const shapeState = id === undefined ? undefined : this.shapeSubscriptions.get(id);
+
+        if (shapeState) {
+            fanSubscriptionError(shapeState.errorCallbacks, buildSubscriptionError(message));
         }
     }
 

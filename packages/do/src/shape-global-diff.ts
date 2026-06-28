@@ -31,6 +31,14 @@ interface PokeFrameMeta {
     baseCheckpoint: number | undefined;
     checkpoint: number;
     epoch: string | undefined;
+
+    /**
+     * The recipient client's `__client_watermark` (highest mutation id the DO
+     * has processed from it), stamped on each `pokePart` so a `@lunora/db`
+     * collection can drop the optimistic overlay for writes this poke synced.
+     * `undefined` for sockets with no recorded `clientId` (no custom mutators).
+     */
+    lastMutationId: number | undefined;
     pokeId: string;
 }
 
@@ -103,11 +111,19 @@ const diffGlobalMembership = (
  * owns only the send loop and its error containment.
  */
 const buildPokeFrames = (parts: ReadonlyArray<ShapePokePart>, meta: PokeFrameMeta): string[] => {
-    const { baseCheckpoint, checkpoint, epoch, pokeId } = meta;
+    const { baseCheckpoint, checkpoint, epoch, lastMutationId, pokeId } = meta;
     const frames: string[] = [JSON.stringify({ baseCheckpoint, epoch, pokeId, type: "pokeStart" })];
 
     for (const part of parts) {
-        frames.push(JSON.stringify({ pokeId, rowsPatch: part.rowsPatch, shapeId: part.shapeId, type: "pokePart" }));
+        frames.push(
+            JSON.stringify({
+                pokeId,
+                rowsPatch: part.rowsPatch,
+                shapeId: part.shapeId,
+                type: "pokePart",
+                ...(lastMutationId === undefined ? {} : { lastMutationId }),
+            }),
+        );
     }
 
     frames.push(JSON.stringify({ checkpoint, epoch, pokeId, type: "pokeEnd" }));
