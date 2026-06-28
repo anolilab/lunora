@@ -10,7 +10,7 @@ them from the generated `_generated/server`:
 
 ```ts
 // schema + validators from the package:
-import { defineSchema, defineTable, v } from "lunorash/server";
+import { defineSchema, defineTable, v } from "@lunora/server";
 // typed builders from codegen:
 import { action, mutation, query } from "@/lunora/_generated/server";
 ```
@@ -126,7 +126,7 @@ AND-composes it with the table's RLS read base-where. Declared in
 `lunora/shapes.ts`.
 
 ```ts title="lunora/shapes.ts"
-import { defineShape, v } from "lunorash/server";
+import { defineShape, v } from "@lunora/server";
 
 export const messagesByChannel = defineShape({
     table: "messages",
@@ -148,7 +148,7 @@ the shard DO) paired with an optional `client` twin (optimistic, runs in the
 browser). Declared in `lunora/mutators.ts`.
 
 ```ts title="lunora/mutators.ts"
-import { defineMutator, v } from "lunorash/server";
+import { defineMutator, v } from "@lunora/server";
 
 export const sendMessage = defineMutator({
     args: { channelId: v.id("channels"), text: v.string() },
