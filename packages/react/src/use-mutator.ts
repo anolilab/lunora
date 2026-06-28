@@ -1,25 +1,8 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
-
-/**
- * The structural surface of a TanStack `Transaction` a bound mutator returns —
- * its `isPersisted.promise` resolves once the write is persisted and rejects on
- * failure. Typed structurally so `@lunora/react` need not depend on
- * `@tanstack/db` or `@lunora/db` (the handle is created app-side by
- * `bindMutators`).
- */
-interface MutatorTransaction {
-    isPersisted: { promise: Promise<unknown> };
-}
-
-/**
- * A bound custom-mutator handle produced by `bindMutators(client, ctx, mutators)`
- * in `@lunora/db`. Calling it applies the optimistic overlay to the local
- * collections and pushes the authoritative server write; it returns the TanStack
- * transaction whose `isPersisted` promise tracks completion.
- */
-type MutatorHandle<TArgs> = (args: TArgs) => MutatorTransaction;
+import type { MutatorHandle } from "@lunora/client";
+import { createMutatorRunner } from "@lunora/client";
+import { useMemo, useState } from "react";
 
 interface MutatorHook<TArgs> {
     /** The latest invocation's error, or `undefined`. */
@@ -47,38 +30,17 @@ interface MutatorHook<TArgs> {
  * so it clears only once every concurrent call has settled.
  */
 const useMutator = function useMutator<TArgs = Record<string, unknown>>(handle: MutatorHandle<TArgs>): MutatorHook<TArgs> {
-    const pendingCountRef = useRef(0);
     const [pending, setPending] = useState(false);
     const [error, setError] = useState<Error | undefined>(undefined);
 
-    const mutate = useCallback(
-        async (args: TArgs): Promise<void> => {
-            pendingCountRef.current += 1;
-            setPending(true);
-
-            try {
-                await handle(args).isPersisted.promise;
-                setError(undefined);
-            } catch (error_) {
-                const normalized = error_ instanceof Error ? error_ : new Error(String(error_));
-
-                setError(normalized);
-
-                throw normalized;
-            } finally {
-                pendingCountRef.current -= 1;
-                setPending(pendingCountRef.current > 0);
-            }
-        },
-        [handle],
-    );
-
-    const reset = useCallback((): void => {
-        setError(undefined);
-    }, []);
+    // One runner per handle so its ref-counted in-flight tally is shared across
+    // overlapping calls and only re-created when the bound handle changes. The
+    // `useState` setters are referentially stable, so binding them once is safe.
+    const { mutate, reset } = useMemo(() => createMutatorRunner(handle, { setError, setPending }), [handle]);
 
     return { error, isError: error !== undefined, mutate, pending, reset };
 };
 
-export type { MutatorHandle, MutatorHook, MutatorTransaction };
+export type { MutatorHandle, MutatorTransaction } from "@lunora/client";
+export type { MutatorHook };
 export { useMutator };

@@ -1,24 +1,7 @@
+import type { MutatorHandle } from "@lunora/client";
+import { createMutatorRunner } from "@lunora/client";
 import type { Readable } from "svelte/store";
 import { derived, writable } from "svelte/store";
-
-/**
- * The structural surface of a TanStack `Transaction` a bound mutator returns —
- * its `isPersisted.promise` resolves once the write is persisted and rejects on
- * failure. Typed structurally so `@lunora/svelte` need not depend on
- * `@tanstack/db` or `@lunora/db` (the handle is created app-side by
- * `bindMutators`).
- */
-interface MutatorTransaction {
-    isPersisted: { promise: Promise<unknown> };
-}
-
-/**
- * A bound custom-mutator handle produced by `bindMutators(client, db, mutators)`
- * in `@lunora/db`. Calling it applies the optimistic overlay to the local
- * collections and pushes the authoritative server write; it returns the TanStack
- * transaction whose `isPersisted` promise tracks completion.
- */
-type MutatorHandle<TArgs> = (args: TArgs) => MutatorTransaction;
 
 /**
  * The reactive handle returned by {@link mutator} — the Svelte counterpart to
@@ -56,32 +39,16 @@ export const mutator = <TArgs = Record<string, unknown>>(handle: MutatorHandle<T
     const pending = writable(false);
     const isError = derived(error, ($error) => $error !== undefined);
 
-    let inFlight = 0;
-
-    const mutate = async (args: TArgs): Promise<void> => {
-        inFlight += 1;
-        pending.set(true);
-
-        try {
-            await handle(args).isPersisted.promise;
-            error.set(undefined);
-        } catch (error_) {
-            const normalized = error_ instanceof Error ? error_ : new Error(String(error_));
-
-            error.set(normalized);
-
-            throw normalized;
-        } finally {
-            inFlight -= 1;
-            pending.set(inFlight > 0);
-        }
-    };
-
-    const reset = (): void => {
-        error.set(undefined);
-    };
+    const { mutate, reset } = createMutatorRunner(handle, {
+        setError: (value) => {
+            error.set(value);
+        },
+        setPending: (value) => {
+            pending.set(value);
+        },
+    });
 
     return { error, isError, mutate, pending, reset };
 };
 
-export type { MutatorHandle, MutatorTransaction };
+export type { MutatorHandle, MutatorTransaction } from "@lunora/client";
