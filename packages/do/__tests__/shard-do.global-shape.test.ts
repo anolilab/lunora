@@ -165,7 +165,9 @@ describe("shardDO global-shape poll tier", () => {
 
         await subscribeShape(shard, ws);
 
-        expect(frameTypes(ws)).toStrictEqual(["ack", "pokeStart", "pokePart", "pokeEnd"]);
+        // The seed poke (start/part/end), then the ack last — the ack is sent only
+        // after the shape resolves and seeds.
+        expect(frameTypes(ws)).toStrictEqual(["pokeStart", "pokePart", "pokeEnd", "ack"]);
 
         const ops = pokeOps(ws);
 

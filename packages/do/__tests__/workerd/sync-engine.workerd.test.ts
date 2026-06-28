@@ -12,8 +12,8 @@
  *
  * The full pipeline under test, end to end:
  *
- * A `shape_subscribe` to a `channelId`-scoped shape acks then seed-pokes the
- * current membership. A custom-mutator push (`x-lunora-client-id` +
+ * A `shape_subscribe` to a `channelId`-scoped shape seed-pokes the current
+ * membership, then acks last (the ack follows a successful seed). A custom-mutator push (`x-lunora-client-id` +
  * `x-lunora-client-seq`) writes authoritatively, echoes the applied
  * `lastMutationId`, and the write flush pokes the live subscriber with the
  * membership diff. Watermark ordering: a replay acks without re-running and a
@@ -75,7 +75,7 @@ const openSocket = async (stub: DurableObjectStub<TestSyncDO>): Promise<OpenedSo
 const subscribeShape = async (socket: OpenedSocket, channelId: string): Promise<void> => {
     socket.client.send(JSON.stringify({ id: "s1", shape: { args: { channelId }, name: "messagesByChannel" }, type: "shape_subscribe" }));
 
-    // The seed always emits ack → pokeStart → pokePart → pokeEnd.
+    // The seed emits pokeStart → pokePart → pokeEnd → ack (ack last, after seed).
     await waitFor(() => socket.received.some((m) => m.includes('"type":"pokeEnd"')));
 };
 
@@ -128,7 +128,7 @@ describe("sync engine (workerd e2e)", () => {
 
         const types = socket.received.map((raw) => (JSON.parse(raw) as { type: string }).type);
 
-        expect(types).toStrictEqual(["ack", "pokeStart", "pokePart", "pokeEnd"]);
+        expect(types).toStrictEqual(["pokeStart", "pokePart", "pokeEnd", "ack"]);
 
         const ops = pokeOps(socket);
 

@@ -166,8 +166,9 @@ describe("shardDO shape poke protocol (dispatch path)", () => {
 
         await subscribeShape(shard, ws, "c1");
 
-        // ack, then a full seed poke (start/part/end) carrying only the c1 row.
-        expect(frameTypes(ws)).toStrictEqual(["ack", "pokeStart", "pokePart", "pokeEnd"]);
+        // The full seed poke (start/part/end) carrying only the c1 row, then the
+        // ack last — the ack is sent only after the shape resolves and seeds.
+        expect(frameTypes(ws)).toStrictEqual(["pokeStart", "pokePart", "pokeEnd", "ack"]);
 
         const ops = pokeOps(ws);
 

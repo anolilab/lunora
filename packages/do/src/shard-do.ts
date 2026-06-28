@@ -2200,35 +2200,7 @@ abstract class ShardDO {
         }
 
         if (envelope.type === "shape_subscribe" && envelope.shape) {
-            const status = this.shapeSubscribe(ws, envelope.id, {
-                args: envelope.shape.args,
-                name: envelope.shape.name,
-                sinceEpoch: envelope.sinceEpoch,
-                sinceSeq: envelope.sinceCheckpoint,
-            });
-
-            if (status !== "ok") {
-                const code = status === "too_many" ? "TOO_MANY_SUBSCRIPTIONS" : "SUBSCRIPTION_PERSIST_FAILED";
-                const errorMessage =
-                    status === "too_many"
-                        ? `subscription cap of ${String(ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET)} reached on this socket`
-                        : "failed to persist shape subscription attachment";
-
-                try {
-                    ws.send(JSON.stringify({ code, error: { code, message: errorMessage }, id: envelope.id, type: "error" }));
-                } catch {
-                    /* socket may already be closed; never throw out of webSocketMessage */
-                }
-
-                return;
-            }
-
-            ws.send(JSON.stringify({ id: envelope.id, type: "ack" }));
-
-            // Seed the fresh shape with its initial membership as one insert-poke
-            // (or a resume frame when the client is still current). A base class
-            // with no shape registry resolves nothing → no-op seed.
-            await this.seedShapeSubscription(ws, envelope.id, {
+            await this.handleShapeSubscribe(ws, envelope.id, {
                 args: envelope.shape.args,
                 name: envelope.shape.name,
                 sinceEpoch: envelope.sinceEpoch,
@@ -5875,6 +5847,61 @@ abstract class ShardDO {
     }
 
     /**
+     * Drive the full `shape_subscribe` flow as one failure-aware unit: persist the
+     * attachment, seed the shape, and ack ONLY once both succeed. A persist
+     * rejection (`too_many`/`serialize_failed`) or a seed that can't resolve the
+     * shape (unknown / RLS-denied / cross-shard-invalid) rolls the attachment back
+     * and sends an `error` frame instead of acking — so a client is never left
+     * acked but subscribed to a shape that will never deliver. Never throws (a
+     * thrown `webSocketMessage` is fatal to the hibernating socket).
+     */
+    private async handleShapeSubscribe(ws: WebSocket, subId: string, shape: ShapeSubscriptionQuery): Promise<void> {
+        const status = this.shapeSubscribe(ws, subId, shape);
+
+        if (status !== "ok") {
+            const code = status === "too_many" ? "TOO_MANY_SUBSCRIPTIONS" : "SUBSCRIPTION_PERSIST_FAILED";
+            const message =
+                status === "too_many"
+                    ? `subscription cap of ${String(ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET)} reached on this socket`
+                    : "failed to persist shape subscription attachment";
+
+            this.sendShapeSubscribeError(ws, subId, code, message);
+
+            return;
+        }
+
+        // Seed the fresh shape with its initial membership as one insert-poke (or a
+        // catch-up diff when the client is still current). On a resolve failure,
+        // roll back the just-persisted attachment and error instead of acking.
+        const seed = await this.seedShapeSubscription(ws, subId, shape);
+
+        if (seed !== "ok") {
+            this.shapeUnsubscribe(ws, subId);
+            this.sendShapeSubscribeError(ws, subId, seed.code, seed.message);
+
+            return;
+        }
+
+        // Both persistence and seeding succeeded — ack last (the client keys pokes
+        // by shape id, not the ack, so the seed poke arriving first is fine).
+        try {
+            ws.send(JSON.stringify({ id: subId, type: "ack" }));
+        } catch {
+            /* socket may already be closed; never throw out of webSocketMessage */
+        }
+    }
+
+    /** Send a structured `error` frame for a failed `shape_subscribe`, swallowing a send on an already-closed socket. */
+    // eslint-disable-next-line class-methods-use-this -- groups with the shape-subscribe flow; uses only its args + the socket
+    private sendShapeSubscribeError(ws: WebSocket, subId: string, code: string, message: string): void {
+        try {
+            ws.send(JSON.stringify({ code, error: { code, message }, id: subId, type: "error" }));
+        } catch {
+            /* socket may already be closed; never throw out of webSocketMessage */
+        }
+    }
+
+    /**
      * Seed a freshly-registered shape subscription. Resolves the shape under the
      * socket's verified identity, then ships either:
      *
@@ -5886,10 +5913,16 @@ abstract class ShardDO {
      * epoch.
      *
      * Either way the per-socket shape memo advances to the flush watermark so
-     * later `pokeShapeSubscribers` passes diff from the right point. A base class
-     * (or any unknown / RLS-denied shape) resolves nothing → silent no-op.
+     * later `pokeShapeSubscribers` passes diff from the right point.
+     *
+     * Returns `"ok"` once the shape resolved and its seed poke was attempted, or a
+     * `{ code, message }` failure when the shape can't be resolved — an unknown /
+     * RLS-denied shape (a base class with no registry resolves nothing), or a
+     * `resolveShape` that threw (e.g. a cross-shard-join guard). The caller rolls
+     * back the persisted attachment and errors instead of acking, so a client is
+     * never left subscribed to a shape that will never deliver.
      */
-    private async seedShapeSubscription(ws: WebSocket, subId: string, shape: ShapeSubscriptionQuery): Promise<void> {
+    private async seedShapeSubscription(ws: WebSocket, subId: string, shape: ShapeSubscriptionQuery): Promise<"ok" | { code: string; message: string }> {
         const attachment = this.readAttachment(ws);
         const identity: SubscriptionIdentity = { identity: attachment.identity, userId: attachment.userId };
 
@@ -5899,15 +5932,18 @@ abstract class ShardDO {
             resolved = this.resolveShape(shape.name, shape.args ?? {}, identity);
         } catch (error) {
             // A throwing `resolveShape` must not reject the whole `shape_subscribe`
-            // (and with it the socket's message handling). Treat it as an
-            // unresolved (no-op) shape, surfaced for diagnosis.
+            // (and with it the socket's message handling). Surface it for diagnosis
+            // and report a failure so the caller errors instead of acking. Preserve
+            // a structured error's `code` (e.g. the cross-shard-join guard).
             this.recordShapeError(`shape:seed:${subId}`, error);
 
-            return;
+            const code = typeof (error as { code?: unknown }).code === "string" ? (error as { code: string }).code : "SHAPE_RESOLVE_FAILED";
+
+            return { code, message: error instanceof Error ? error.message : "shape resolution failed" };
         }
 
         if (!resolved) {
-            return;
+            return { code: "SHAPE_NOT_FOUND", message: `shape "${shape.name}" not found or not permitted` };
         }
 
         // A `.global()`-table shape has no op-log to resume/diff: seed it from D1
@@ -5915,7 +5951,7 @@ abstract class ShardDO {
         if (resolved.global) {
             await this.seedGlobalShape(ws, subId, resolved, identity, attachment.connectionId ?? "");
 
-            return;
+            return "ok";
         }
 
         const sql = this.sql as SqlExec;
@@ -5924,23 +5960,33 @@ abstract class ShardDO {
 
         // Resume only when CDC is on, the client is on this epoch, its checkpoint
         // doesn't run ahead of ours, and the log still covers it (else a gap means
-        // we can't prove what it missed → full re-seed).
+        // we can't prove what it missed → full re-seed). A fully-compacted log
+        // (`floor === undefined`, no ops retained) only proves "nothing missed"
+        // when the client is already at `cursor`; if it lags, the changes between
+        // its checkpoint and now were compacted away, so it must re-seed.
         const floor = this.cdcEnabled() ? minCdcSeq(sql) : undefined;
         const canResume =
             this.cdcEnabled() &&
             shape.sinceSeq !== undefined &&
             shape.sinceEpoch === epoch &&
             shape.sinceSeq <= cursor &&
-            (floor === undefined || shape.sinceSeq >= floor - 1);
+            (shape.sinceSeq === cursor || (floor !== undefined && floor <= shape.sinceSeq + 1));
 
         const rowsPatch =
             canResume && shape.sinceSeq !== undefined ? this.buildShapeDiff(sql, resolved, shape.sinceSeq, cursor) : this.buildShapeSeed(sql, resolved);
 
         // Await drain before the (potentially large) seed poke so a slow consumer
-        // can't grow this socket's outbound buffer without bound.
+        // can't grow this socket's outbound buffer without bound. Advance the memo
+        // only once the seed is actually delivered — a failed send leaves the memo
+        // at its prior point so the next flush re-diffs from there rather than
+        // skipping the rows this seed carried.
         await awaitWsDrain(ws);
-        this.sendPoke(ws, [{ rowsPatch, shapeId: subId }], cursor, epoch, canResume ? shape.sinceSeq : undefined);
-        this.recordShapeMemo(ws, subId, cursor);
+
+        if (this.sendPoke(ws, [{ rowsPatch, shapeId: subId }], cursor, epoch, canResume ? shape.sinceSeq : undefined)) {
+            this.recordShapeMemo(ws, subId, cursor);
+        }
+
+        return "ok";
     }
 
     /**
@@ -5974,7 +6020,12 @@ abstract class ShardDO {
 
             const identity: SubscriptionIdentity = { identity: attachment.identity, userId: attachment.userId };
             const parts: ShapePokePart[] = [];
-            const advanced: string[] = [];
+            // Shapes whose diff was empty (table touched, no member changed) carry
+            // no part, so they advance unconditionally; shapes that contribute a
+            // part advance only once the poke is actually delivered, so a failed
+            // send doesn't strand their rows past an advanced memo.
+            const emptyAdvanced: string[] = [];
+            const partAdvanced: string[] = [];
 
             for (const [subId, shape] of Object.entries(shapes)) {
                 try {
@@ -5992,10 +6043,11 @@ abstract class ShardDO {
                     const memoCursor = this.shapeMemos.get(ws)?.get(subId)?.cursor ?? 0;
                     const rowsPatch = this.buildShapeDiff(sql, resolved, memoCursor, checkpoint);
 
-                    advanced.push(subId);
-
                     if (rowsPatch.length > 0) {
                         parts.push({ rowsPatch, shapeId: subId });
+                        partAdvanced.push(subId);
+                    } else {
+                        emptyAdvanced.push(subId);
                     }
                 } catch (error) {
                     // One shape's resolve/diff failure must not drop this socket's
@@ -6005,15 +6057,18 @@ abstract class ShardDO {
                 }
             }
 
-            // Advance every diffed shape to the watermark even when its patch was
-            // empty (a write touched the table but no member changed), so the next
-            // flush doesn't re-scan the same op range.
-            for (const subId of advanced) {
+            // Empty-diff shapes advance regardless (nothing to deliver for them),
+            // so the next flush doesn't re-scan the same op range.
+            for (const subId of emptyAdvanced) {
                 this.recordShapeMemo(ws, subId, checkpoint);
             }
 
-            if (parts.length > 0) {
-                this.sendPoke(ws, parts, checkpoint, frameEpoch, undefined);
+            // Part-bearing shapes advance only after the poke lands; a failed send
+            // leaves their memos so the next flush re-emits the rows.
+            if (parts.length > 0 && this.sendPoke(ws, parts, checkpoint, frameEpoch, undefined)) {
+                for (const subId of partAdvanced) {
+                    this.recordShapeMemo(ws, subId, checkpoint);
+                }
             }
         };
 
@@ -6138,11 +6193,16 @@ abstract class ShardDO {
         // Seeding is a diff against an empty baseline — every surviving row an insert.
         const { next: snapshot, rowsPatch } = diffGlobalMembership(rows, new Map<string, string>(), { columns: resolved.columns, table: resolved.table });
 
-        this.recordGlobalSnapshot(ws, subId, snapshot);
-        this.saveGlobalSnapshot(connectionId, subId, snapshot);
-
+        // Advance the baseline only after the seed poke lands; a failed send leaves
+        // the snapshot empty so the next poll re-diffs the full membership and
+        // re-seeds rather than skipping the rows this poke carried.
         await awaitWsDrain(ws);
-        this.sendPoke(ws, [{ rowsPatch, shapeId: subId }], this.currentCdcCursor() ?? 0, this.currentCdcEpoch(), undefined);
+
+        if (this.sendPoke(ws, [{ rowsPatch, shapeId: subId }], this.currentCdcCursor() ?? 0, this.currentCdcEpoch(), undefined)) {
+            this.recordGlobalSnapshot(ws, subId, snapshot);
+            this.saveGlobalSnapshot(connectionId, subId, snapshot);
+        }
+
         await this.scheduleGlobalPoll();
     }
 
@@ -6171,21 +6231,25 @@ abstract class ShardDO {
         const previous = this.readGlobalSnapshot(ws, subId, connectionId);
         const { next, rowsPatch } = diffGlobalMembership(rows, previous, { columns: resolved.columns, table: resolved.table });
 
-        this.recordGlobalSnapshot(ws, subId, next);
-
         if (rowsPatch.length === 0) {
-            // Unchanged tick: the durable baseline already matches `next`, so skip
-            // the SQLite write (the common steady-state path) — the in-memory cache
-            // is refreshed above regardless.
+            // Unchanged tick: membership equals `previous`, so refreshing the
+            // in-memory cache to `next` is a no-op-equivalent and never strands
+            // rows. Skip the SQLite write (the common steady-state path).
+            this.recordGlobalSnapshot(ws, subId, next);
+
             return;
         }
 
-        // Membership changed: persist the new baseline so the diff survives a
-        // hibernation eviction before the next tick.
-        this.saveGlobalSnapshot(connectionId, subId, next);
-
+        // Membership changed: poke the diff, and advance the baseline (in-memory +
+        // durable) only once the poke lands. A failed send leaves the prior
+        // snapshot so the next tick re-diffs and re-pokes the change rather than
+        // losing it.
         await awaitWsDrain(ws);
-        this.sendPoke(ws, [{ rowsPatch, shapeId: subId }], this.currentCdcCursor() ?? 0, this.currentCdcEpoch(), undefined);
+
+        if (this.sendPoke(ws, [{ rowsPatch, shapeId: subId }], this.currentCdcCursor() ?? 0, this.currentCdcEpoch(), undefined)) {
+            this.recordGlobalSnapshot(ws, subId, next);
+            this.saveGlobalSnapshot(connectionId, subId, next);
+        }
     }
 
     /**
@@ -6403,15 +6467,20 @@ abstract class ShardDO {
         return count;
     }
 
-    /** Send one poke (`pokeStart` → `pokePart` per shape → `pokeEnd`) to a socket. All parts apply atomically at `pokeEnd`. */
-
+    /**
+     * Send one poke (`pokeStart` → `pokePart` per shape → `pokeEnd`) to a socket.
+     * All parts apply atomically at `pokeEnd`. Returns `true` when every frame was
+     * handed to the socket, `false` when a send threw mid-poke (the socket closed)
+     * — callers must NOT advance their shape baselines on a `false` so the client
+     * re-receives the rows on its next flush/reconnect instead of losing them.
+     */
     private sendPoke(
         ws: WebSocket,
         parts: ReadonlyArray<ShapePokePart>,
         checkpoint: number,
         epoch: string | undefined,
         baseCheckpoint: number | undefined,
-    ): void {
+    ): boolean {
         this.pokeSequence += 1;
         const pokeId = `poke-${String(this.pokeSequence)}`;
         const frames = buildPokeFrames(parts, { baseCheckpoint, checkpoint, epoch, lastMutationId: this.socketClientWatermark(ws), pokeId });
@@ -6420,8 +6489,11 @@ abstract class ShardDO {
             for (const frame of frames) {
                 ws.send(frame);
             }
+
+            return true;
         } catch {
             /* socket may have closed mid-poke; the client re-seeds on reconnect */
+            return false;
         }
     }
 
