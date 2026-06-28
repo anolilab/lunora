@@ -1,7 +1,6 @@
-import type { AuthUser } from "@lunora/client";
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -9,11 +8,12 @@ import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Input } from "../../components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { useClientQuery } from "../../hooks/use-admin-query";
 import { useAuthCapabilities } from "../../hooks/use-auth-capabilities";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import useDebounced from "../../hooks/use-debounced";
 import { useT } from "../../i18n/i18n-context";
-import { errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
+import { formatTimestamp } from "../../lib/internal";
 import { UserCreateDialog } from "./user-create-dialog";
 import { UserDetailDrawer } from "./user-detail-drawer";
 
@@ -36,9 +36,6 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
     const client = useLunora();
     const t = useT();
 
-    const [users, setUsers] = useState<AuthUser[] | null>(null);
-    const [usersError, setUsersError] = useState<null | string>(null);
-
     const [search, setSearch] = useState<string>("");
     const [roleFilter, setRoleFilter] = useState<string>("");
     const debouncedSearch = useDebounced(search);
@@ -47,41 +44,34 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
     const [createOpen, setCreateOpen] = useState<boolean>(false);
     const { capabilities } = useAuthCapabilities();
 
-    const fetchUsers = useCallback(async (): Promise<void> => {
-        setUsersError(null);
+    const trimmedSearch = debouncedSearch.trim();
+    const trimmedRole = roleFilter.trim();
 
-        const trimmedSearch = debouncedSearch.trim();
-        const trimmedRole = roleFilter.trim();
-
-        try {
-            const page = await client.listAuthUsers({
+    // The auth store is HTTP-only (no admin-RPC path), so it's a `useClientQuery`
+    // over `client.listAuthUsers`, keyed on the search / role / page size.
+    const usersQuery = useClientQuery(
+        ["lunora-auth-users", trimmedSearch, trimmedRole, pageSize],
+        () =>
+            client.listAuthUsers({
                 filterField: trimmedRole === "" ? undefined : "role",
                 filterValue: trimmedRole === "" ? undefined : trimmedRole,
                 limit: pageSize,
                 search: trimmedSearch === "" ? undefined : trimmedSearch,
-            });
-
-            setUsers(page.rows);
-        } catch (error_) {
-            setUsers(null);
-            setUsersError(errorMessage(error_));
-        }
-    }, [client, debouncedSearch, roleFilter, pageSize]);
+            }),
+        { keepPreviousData: true },
+    );
+    const users = usersQuery.data?.rows ?? null;
+    const usersError = usersQuery.error;
 
     // Post-mutation refetch callback for the detail drawer / create dialog.
     const reloadUsers = (): void => {
-        fireAndForget(fetchUsers());
+        usersQuery.refetch();
     };
 
-    useEffect(() => {
-        fireAndForget(fetchUsers());
-    }, [fetchUsers]);
-
-    // The auth store is HTTP-only (no subscription channel), so polling is the
-    // honest "live" — always re-list to catch new sign-ups / bans without a
-    // reload button (paused while the tab is hidden).
+    // No subscription channel, so poll — honest "live" that catches new sign-ups /
+    // bans without a reload button (paused while the tab is hidden).
     useAutoRefresh(() => {
-        fireAndForget(fetchUsers());
+        usersQuery.refetch();
     }, true);
 
     // Derive the inspected user from the latest list so the drawer reflects

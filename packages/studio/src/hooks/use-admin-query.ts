@@ -154,6 +154,48 @@ function useAdminQuery<T>(path: string, args: Record<string, unknown>, options: 
     };
 }
 
+/** Options for {@link useClientQuery}. */
+interface UseClientQueryOptions {
+    /** Gate the read (rules-of-hooks safe). Defaults to `true`. */
+    readonly enabled?: boolean;
+    /** Keep the previously-resolved data visible while a new key is fetched. Defaults to `false`. */
+    readonly keepPreviousData?: boolean;
+    /** Freshness window; defaults to `0` (re-fetch on remount / refocus). */
+    readonly staleTime?: number;
+}
+
+/**
+ * Read through TanStack Query with a caller-supplied `queryFn` — the sibling of
+ * {@link useAdminQuery} for the studio's non-admin-RPC reads (the bespoke
+ * `client.listAuthUsers()` / `client.schedulerStatus()` / … methods that aren't
+ * routed as `__lunora_admin__:*` paths). The caller owns the `queryKey` (must be
+ * structurally stable) and the fetch; this hook adds the cache, dedup, and the
+ * uniform `{ data, error, isLoading, refetch }` surface. No live bridge — these
+ * backends are HTTP-only and the panels poll via `useAutoRefresh`.
+ */
+// eslint-disable-next-line func-style -- a generic arrow `<T>(…) =>` is misread as a JSX element by packem's Babel (`.ts` compiled with the React preset); a function declaration is the unambiguous form.
+function useClientQuery<T>(queryKey: QueryKey, queryFunction: () => Promise<T>, options: UseClientQueryOptions = {}): AdminQueryResult<T> {
+    const { enabled = true, keepPreviousData = false, staleTime = 0 } = options;
+
+    const query = useQuery<T>({
+        enabled,
+        queryFn: queryFunction,
+        placeholderData: keepPreviousData ? keepPreviousDataPlaceholder : undefined,
+        queryKey,
+        staleTime,
+    });
+
+    return {
+        data: query.data,
+        error: query.error ? errorMessage(query.error) : query.error,
+        isLoading: query.isLoading,
+        liveError: undefined,
+        refetch: (): void => {
+            fireAndForget(query.refetch());
+        },
+    };
+}
+
 /**
  * A stable callback that invalidates one or more admin reads so they re-fetch —
  * the post-write refresh primitive (replacing the old "await fetchPage again"
@@ -170,5 +212,5 @@ const useInvalidateAdmin = (): ((path: string, args?: Record<string, unknown>, s
     };
 };
 
-export { adminQueryKey, useAdminQuery, useInvalidateAdmin };
-export type { AdminQueryResult, UseAdminQueryOptions };
+export { adminQueryKey, useAdminQuery, useClientQuery, useInvalidateAdmin };
+export type { AdminQueryResult, UseAdminQueryOptions, UseClientQueryOptions };
