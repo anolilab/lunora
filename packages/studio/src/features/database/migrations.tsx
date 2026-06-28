@@ -1,6 +1,6 @@
 import { useLunora } from "@lunora/react";
 import type { ChangeEvent, ReactElement } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { ConfirmButton } from "../../components/confirm-button";
 import { LiveError } from "../../components/live-status";
@@ -12,20 +12,19 @@ import { EmptyState } from "../../components/ui/empty-state";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
-import useLiveAdmin from "../../hooks/use-live-admin";
+import { useAdminQuery } from "../../hooks/use-admin-query";
+import useDebounced from "../../hooks/use-debounced";
 import { useT } from "../../i18n/i18n-context";
 import type { MigrationDirection, MigrationRunResult, MigrationStatusRow } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
 import { recordShard } from "../../lib/shard-history";
-import useLiveShardSeed from "../data/hooks/use-live-shard-seed";
 
 interface MigrationsPanelProps {
     /** Shard key the panel targets. Defaults to the root shard. */
     readonly initialShardKey?: string;
 }
 
-const MIGRATION_STATUS = adminRef(ADMIN_FUNCTIONS.migrationStatus);
 const RUN_MIGRATION = adminRef(ADMIN_FUNCTIONS.runMigration);
 
 /**
@@ -43,11 +42,6 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
     const t = useT();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
-    const [rows, setRows] = useState<MigrationStatusRow[] | null>(null);
-    const [statusError, setStatusError] = useState<null | string>(null);
-    // Always-on live channel; this only holds a rejection message (e.g. missing
-    // admin token) so the panel can say why it stopped updating.
-    const [liveError, setLiveError] = useState<string | undefined>(undefined);
 
     const [migrationId, setMigrationId] = useState<string>("");
     const [direction, setDirection] = useState<MigrationDirection>("up");
@@ -56,42 +50,33 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
     const [runResult, setRunResult] = useState<MigrationRunResult | null>(null);
     const [runError, setRunError] = useState<null | string>(null);
 
-    const refresh = async (shard: string): Promise<void> => {
-        setStatusError(null);
+    // The shard the read targets, debounced so typing a key settles before
+    // refetching (and re-subscribing) rather than firing per keystroke.
+    const debouncedShard = useDebounced(shardKey.trim(), 400);
 
-        try {
-            const result = (await client.query(MIGRATION_STATUS, {}, callOptions(shard))) as { migrations: MigrationStatusRow[] };
-
-            recordShard(shard);
-            setRows(result.migrations);
-        } catch (error) {
-            setRows(null);
-            setStatusError(errorMessage(error));
-
-            // Rethrow so the shard-seed hook doesn't commit a shard that failed.
-            throw error;
-        }
-    };
-
-    // Debounced shard seed + commit-on-success; the live channel keys on the
-    // committed shard (replaces the old Refresh button).
-    const committedShard = useLiveShardSeed(shardKey, refresh);
-
-    // Live channel: always on once the seed commits a shard; each server push
-    // refreshes the run-state table so an in-progress migration's
-    // processed/changed counts update live.
-    useLiveAdmin(
+    // One-shot read + always-on live subscription for the committed shard. Each
+    // server push refreshes the run-state table so an in-progress migration's
+    // processed/changed counts update live; `liveError` holds a rejection message
+    // (e.g. missing admin token) so the panel can say why it stopped updating.
+    const statusQuery = useAdminQuery<{ migrations: MigrationStatusRow[] }>(
         ADMIN_FUNCTIONS.migrationStatus,
         {},
-        committedShard ?? "",
-        (result) => {
-            setStatusError(null);
-            setLiveError(undefined);
-            setRows((result as { migrations: MigrationStatusRow[] }).migrations);
+        {
+            live: true,
+            shardKey: debouncedShard,
         },
-        committedShard !== undefined,
-        setLiveError,
     );
+
+    const rows = statusQuery.data?.migrations ?? null;
+    const statusError = statusQuery.error;
+    const { liveError } = statusQuery;
+
+    // Record the browsed shard into recent-shards history once its status resolves.
+    useEffect(() => {
+        if (statusQuery.data !== undefined) {
+            recordShard(debouncedShard);
+        }
+    }, [statusQuery.data, debouncedShard]);
 
     const run = async (): Promise<void> => {
         const id = migrationId.trim();
@@ -110,9 +95,10 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
             const result = (await client.query(RUN_MIGRATION, { direction, dryRun, id }, callOptions(shardKey))) as MigrationRunResult;
 
             setRunResult(result);
-            // A post-run status reload failure shows via `statusError`; don't let it
-            // mask the (successful) run result by falling into the catch below.
-            await refresh(shardKey).catch(() => {});
+            // Reload the run-state table so the new processed/changed counts show; a
+            // reload failure surfaces via `statusError` (the query's own error) and
+            // can't mask the (successful) run result.
+            statusQuery.refetch();
         } catch (error) {
             setRunResult(null);
             setRunError(errorMessage(error));

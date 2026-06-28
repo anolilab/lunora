@@ -1,23 +1,21 @@
-import { useLunora } from "@lunora/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { ChangeEvent, CSSProperties, ReactElement } from "react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { LiveError } from "../../components/live-status";
 import { ShardInput } from "../../components/shard-input";
 import { Badge } from "../../components/ui/badge";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Input } from "../../components/ui/input";
-import useLiveAdmin from "../../hooks/use-live-admin";
+import { useAdminQuery } from "../../hooks/use-admin-query";
+import useDebounced from "../../hooks/use-debounced";
 import { useT } from "../../i18n/i18n-context";
 import type { LogEntry, LogLevel, RequestLogEntry, RequestLogQuery, RequestOutcome } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { CLOUDFLARE_OBSERVABILITY_URL } from "../../lib/cf-links";
-import { adminRef, callOptions, errorMessage } from "../../lib/internal";
 import { recordShard } from "../../lib/shard-history";
 import { cn } from "../../lib/utils";
 import flooredRectObserver from "../../lib/virtual-rect";
-import useLiveShardSeed from "../data/hooks/use-live-shard-seed";
 
 /** Fixed height of the scroll viewport; bounds how many rows can be live at once. */
 const SCROLL_HEIGHT = 400;
@@ -153,9 +151,6 @@ interface LogsPanelProps {
     /** Shard key the panel reports on. Defaults to the root shard. */
     readonly initialShardKey?: string;
 }
-
-const GET_LOGS = adminRef(ADMIN_FUNCTIONS.getLogs);
-const GET_REQUEST_LOG = adminRef(ADMIN_FUNCTIONS.getRequestLog);
 
 /**
  * Coerce a (possibly partial or malformed) admin result into its `entries`
@@ -373,14 +368,10 @@ const SummaryBucketRow = ({ bucket }: SummaryBucketRowProps): ReactElement => (
  * NOT re-stream), a deep-link to Cloudflare Workers Observability is provided.
  */
 export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => {
-    const client = useLunora();
     const t = useT();
 
     const [view, setView] = useState<LogsView>("requests");
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
-    const [entries, setEntries] = useState<LogEntry[]>([]);
-    const [requests, setRequests] = useState<RequestLogEntry[]>([]);
-    const [error, setError] = useState<null | string>(null);
     const [search, setSearch] = useState<string>("");
     // Errors-view client-side filters: a level allow-set (empty = all levels), a
     // function-path substring, and a relative time window. AND-composed.
@@ -395,72 +386,54 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
     const [userIdFilter, setUserIdFilter] = useState<string>("");
     const [tableFilter, setTableFilter] = useState<string>("");
     const [outcomeFilter, setOutcomeFilter] = useState<string>("all");
-    // Always-on live channel; this only holds a rejection message (e.g. missing
-    // admin token) so the panel can say why it stopped updating.
-    const [liveError, setLiveError] = useState<string | undefined>(undefined);
 
-    // Typed as a plain record too, so it satisfies the `query`/`useLiveAdmin`
-    // args surface (`Record<string, unknown>`) without a per-call-site cast.
+    // The shard the reads target, debounced so typing a key settles before
+    // refetching (and re-subscribing) rather than firing per keystroke.
+    const debouncedShard = useDebounced(shardKey.trim(), 400);
+
+    // Typed as a plain record too, so it satisfies the `useAdminQuery` args
+    // surface (`Record<string, unknown>`) without a per-call-site cast. Folding it
+    // into the query args means changing a correlation filter re-fetches the
+    // durable Requests log server-side (rather than filtering client-side).
     const requestQuery = buildRequestQuery({ functionPathPrefix: pathPrefix, outcome: outcomeFilter, tableTouched: tableFilter, userId: userIdFilter });
 
-    const refresh = async (shard: string): Promise<void> => {
-        setError(null);
+    // One-shot read + always-on live subscription per view, gated to the active
+    // one so only the shown feed is fetched/subscribed. Each server push replaces
+    // that view's buffer so new entries appear without a manual refresh; the
+    // Requests channel carries the same correlation filters as the one-shot read.
+    const requestsQuery = useAdminQuery<{ entries?: unknown }>(ADMIN_FUNCTIONS.getRequestLog, requestQuery, {
+        enabled: view === "requests",
+        live: true,
+        shardKey: debouncedShard,
+    });
 
-        try {
-            if (view === "requests") {
-                const result = await client.query(GET_REQUEST_LOG, requestQuery, callOptions(shard));
-
-                recordShard(shard);
-                setRequests(entriesOf<RequestLogEntry>(result));
-            } else {
-                const result = await client.query(GET_LOGS, {}, callOptions(shard));
-
-                recordShard(shard);
-                setEntries(entriesOf<LogEntry>(result));
-            }
-        } catch (error_) {
-            setEntries([]);
-            setRequests([]);
-            setError(errorMessage(error_));
-
-            // Rethrow so the shard-seed hook doesn't commit a shard that failed.
-            throw error_;
-        }
-    };
-
-    // Debounced shard seed + commit-on-success; also re-seeds when the view or the
-    // server-side request filters change (so the Requests view re-queries the
-    // durable log rather than filtering client-side). Replaces the old Refresh button.
-    const committedShard = useLiveShardSeed(shardKey, refresh, [view, requestQuery]);
-
-    // Live channel: always on for the active view; each server push replaces that
-    // view's buffer so new entries appear without a manual refresh. The Requests
-    // channel carries the same correlation filters as the one-shot read.
-    useLiveAdmin(
-        ADMIN_FUNCTIONS.getRequestLog,
-        requestQuery,
-        committedShard ?? "",
-        (result) => {
-            setError(null);
-            setLiveError(undefined);
-            setRequests(entriesOf<RequestLogEntry>(result));
-        },
-        view === "requests" && committedShard !== undefined,
-        setLiveError,
-    );
-
-    useLiveAdmin(
+    const errorsQuery = useAdminQuery<{ entries?: unknown }>(
         ADMIN_FUNCTIONS.getLogs,
         {},
-        committedShard ?? "",
-        (result) => {
-            setError(null);
-            setLiveError(undefined);
-            setEntries(entriesOf<LogEntry>(result));
+        {
+            enabled: view === "errors",
+            live: true,
+            shardKey: debouncedShard,
         },
-        view === "errors" && committedShard !== undefined,
-        setLiveError,
     );
+
+    const activeQuery = view === "requests" ? requestsQuery : errorsQuery;
+    const { error, liveError } = activeQuery;
+
+    // Coerce each view's resolved payload into its entries array (a one-shot read
+    // or live push without an `entries` array yields `[]`); an unloaded gated
+    // query's `undefined` data also yields `[]`.
+    const entries = entriesOf<LogEntry>(errorsQuery.data);
+    const requests = entriesOf<RequestLogEntry>(requestsQuery.data);
+
+    // Record the browsed shard into recent-shards history once the active view's
+    // read resolves.
+    useEffect(() => {
+        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- recording the browsed shard is derived from the resolved read (a value, not a discrete event); writing it when the data lands is the correct pattern.
+        if (activeQuery.data !== undefined) {
+            recordShard(debouncedShard);
+        }
+    }, [activeQuery.data, debouncedShard]);
 
     // AND-composed client-side filter for the Errors view (level allow-set,
     // function-path substring, message substring, relative time window), derived

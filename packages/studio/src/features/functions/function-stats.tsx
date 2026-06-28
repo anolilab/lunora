@@ -1,6 +1,5 @@
-import { useLunora } from "@lunora/react";
 import type { MouseEvent, ReactElement } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 
 import { LiveError } from "../../components/live-status";
 import { ShardInput } from "../../components/shard-input";
@@ -9,14 +8,14 @@ import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
-import useLiveAdmin from "../../hooks/use-live-admin";
+import { useAdminQuery } from "../../hooks/use-admin-query";
+import useDebounced from "../../hooks/use-debounced";
 import { useT } from "../../i18n/i18n-context";
 import type { FunctionCallStat, FunctionStatsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions, errorMessage, formatTimestamp } from "../../lib/internal";
+import { formatTimestamp } from "../../lib/internal";
 import type { FunctionDescriptor, FunctionKind } from "../../lib/types";
 import { cn } from "../../lib/utils";
-import useLiveShardSeed from "../data/hooks/use-live-shard-seed";
 
 interface FunctionStatsPanelProps {
     /** Descriptors from codegen, used to annotate each row with the function's `kind`. */
@@ -27,8 +26,6 @@ interface FunctionStatsPanelProps {
 
 /** How the table is ordered. Mirrors the three questions an operator asks of this screen. */
 type SortKey = "calls" | "recent" | "slowest";
-
-const GET_FUNCTION_STATS = adminRef(ADMIN_FUNCTIONS.getFunctionStats);
 
 /** Map a function `kind` to the same Badge variant the runner uses, so colours stay consistent across the Functions tab. */
 const KIND_VARIANT: Record<FunctionKind, "default" | "outline" | "secondary"> = {
@@ -89,84 +86,42 @@ const SORTERS: Record<SortKey, (a: FunctionCallStat, b: FunctionCallStat) => num
 /**
  * Per-function execution metrics for one shard: call count, error count/rate,
  * mean and slowest handler latency, last-run time, and the most recent error
- * message. Reads via the `__lunora_admin__:getFunctionStats` RPC over the
- * {@link useLunora} client; gated by the server's `LUNORA_ADMIN_TOKEN`.
+ * message. Reads via the `__lunora_admin__:getFunctionStats` RPC through
+ * `useAdminQuery`; gated by the server's `LUNORA_ADMIN_TOKEN`.
  *
  * Counters are per-DO-instance and reset on hibernation/restart — this is a
  * "since this instance woke" readout, mirroring the metrics panel. The panel is
- * always live: a subscription opens once the first seed commits a shard and
- * re-pushes on every server write-flush so the table updates as mutations land.
+ * always live: `useAdminQuery`'s `live` subscription re-pushes on every server
+ * write-flush so the table updates as mutations land.
  */
 export const FunctionStatsPanel = ({ functions, initialShardKey }: FunctionStatsPanelProps): ReactElement => {
-    const client = useLunora();
     const t = useT();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
-    const [stats, setStats] = useState<FunctionCallStat[] | null>(null);
-    const [error, setError] = useState<null | string>(null);
     const [sortKey, setSortKey] = useState<SortKey>("recent");
-    // Always-on live channel; this only holds a rejection message (e.g. missing
-    // admin token) so the table can say why it stopped updating.
-    const [liveError, setLiveError] = useState<string | undefined>(undefined);
 
-    const mountedRef = useRef(true);
+    // The shard the read targets, debounced so typing a key settles before
+    // refetching (and re-subscribing) rather than firing per keystroke.
+    const debouncedShard = useDebounced(shardKey.trim(), 400);
 
-    useEffect(() => {
-        mountedRef.current = true;
+    // One-shot read + always-on live subscription for the committed shard. Each
+    // server push updates the table as mutations land; `liveError` holds a
+    // rejection message (e.g. missing admin token) so the table can say why it
+    // stopped updating.
+    const { data, error, liveError } = useAdminQuery<FunctionStatsResult>(
+        ADMIN_FUNCTIONS.getFunctionStats,
+        {},
+        {
+            live: true,
+            shardKey: debouncedShard,
+        },
+    );
 
-        return () => {
-            mountedRef.current = false;
-        };
-    }, []);
+    const stats = data?.functions ?? null;
 
     // Compile-time `kind` is phantom on FunctionReference, so the server can't
     // report it — annotate each row from the codegen descriptors by path.
     const kindByPath = new Map((functions ?? []).map((descriptor) => [descriptor.path, descriptor.kind]));
-
-    const applyResult = (result: FunctionStatsResult): void => {
-        setError(null);
-        setLiveError(undefined);
-        setStats(result.functions);
-    };
-
-    const refresh = async (shard: string): Promise<void> => {
-        try {
-            const next = (await client.query(GET_FUNCTION_STATS, {}, callOptions(shard))) as FunctionStatsResult;
-
-            if (mountedRef.current) {
-                applyResult(next);
-            }
-        } catch (error_) {
-            if (mountedRef.current) {
-                setStats(null);
-                setError(errorMessage(error_));
-            }
-
-            // Rethrow so the shard-seed hook doesn't commit a shard that failed.
-            throw error_;
-        }
-    };
-
-    // Debounced shard seed + commit-on-success; the live channel keys on the
-    // committed shard (replaces the old Refresh button).
-    const committedShard = useLiveShardSeed(shardKey, refresh);
-
-    useLiveAdmin(
-        ADMIN_FUNCTIONS.getFunctionStats,
-        {},
-        committedShard ?? "",
-        (next) => {
-            if (mountedRef.current) {
-                applyResult(next as FunctionStatsResult);
-            }
-        },
-        committedShard !== undefined,
-        (message) => {
-            if (mountedRef.current) {
-                setLiveError(message);
-            }
-        },
-    );
 
     const selectSort = (event: MouseEvent<HTMLButtonElement>): void => {
         setSortKey(event.currentTarget.dataset.sort as SortKey);
