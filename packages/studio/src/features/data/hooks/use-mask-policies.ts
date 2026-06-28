@@ -1,11 +1,6 @@
-import { useLunora } from "@lunora/react";
-import { useCallback, useEffect, useState } from "react";
-
+import { useAdminQuery } from "../../../hooks/use-admin-query";
 import type { MaskColumnMetadata, MaskPoliciesResult } from "../../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../lib/admin";
-import { adminRef, callOptions, fireAndForget } from "../../../lib/internal";
-
-const MASK_POLICIES = adminRef(ADMIN_FUNCTIONS.maskPolicies);
 
 /** Hoisted empty list — a stable reference while the policies load (avoids a fresh `[]` each render). */
 const NO_COLUMNS: ReadonlyArray<MaskColumnMetadata> = [];
@@ -13,8 +8,8 @@ const NO_COLUMNS: ReadonlyArray<MaskColumnMetadata> = [];
 /**
  * Fetch the deployment's mask metadata — the `(table, column, strategy)` entries
  * `@lunora/codegen` discovers from every `.use(mask(...))` chain, served by
- * `__lunora_admin__:maskPolicies`. Deployment-wide (root shard), loaded once;
- * the data browser uses it to drive the "Mask sensitive columns" preview and the
+ * `__lunora_admin__:maskPolicies`. Deployment-wide (root shard); the data
+ * browser uses it to drive the "Mask sensitive columns" preview and the
  * per-column "masked" header chips.
  *
  * Fails soft: an older worker (or a stand-in) that doesn't serve the RPC, or one
@@ -23,24 +18,9 @@ const NO_COLUMNS: ReadonlyArray<MaskColumnMetadata> = [];
  * blocking banner: masking is a preview affordance, not core to browsing rows.
  */
 const useMaskPolicies = (): ReadonlyArray<MaskColumnMetadata> => {
-    const client = useLunora();
-    const [columns, setColumns] = useState<ReadonlyArray<MaskColumnMetadata>>(NO_COLUMNS);
+    const { data } = useAdminQuery<MaskPoliciesResult>(ADMIN_FUNCTIONS.maskPolicies, {});
 
-    const refresh = useCallback(async (): Promise<void> => {
-        try {
-            const result = (await client.query(MASK_POLICIES, {}, callOptions(""))) as MaskPoliciesResult;
-
-            setColumns(Array.isArray(result.columns) ? result.columns : NO_COLUMNS);
-        } catch {
-            setColumns(NO_COLUMNS);
-        }
-    }, [client]);
-
-    useEffect(() => {
-        fireAndForget(refresh());
-    }, [refresh]);
-
-    return columns;
+    return Array.isArray(data?.columns) ? data.columns : NO_COLUMNS;
 };
 
 export default useMaskPolicies;

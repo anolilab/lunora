@@ -1,22 +1,19 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useT } from "../../i18n/i18n-context";
 import type { SettingEntry, SettingsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { CLOUDFLARE_WORKERS_URL } from "../../lib/cf-links";
-import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
 
 interface SettingsPanelProps {
     /** Shard key the settings read targets on first load. Defaults to the root shard. */
     readonly initialShardKey?: string;
 }
-
-const GET_SETTINGS = adminRef(ADMIN_FUNCTIONS.getSettings);
 
 /** Badge tone per setting kind, so secrets read as the most guarded. */
 const KIND_VARIANT: Record<SettingEntry["kind"], "destructive" | "outline" | "secondary"> = {
@@ -28,8 +25,8 @@ const KIND_VARIANT: Record<SettingEntry["kind"], "destructive" | "outline" | "se
 /**
  * Read-only **Settings** view of the deployment's config: the Worker vars,
  * secrets, and bindings exposed via `env`, plus best-effort deploy metadata.
- * Reads the `__lunora_admin__:getSettings` RPC over the {@link useLunora} client
- * (gated by the server's `LUNORA_ADMIN_TOKEN`).
+ * Reads the `__lunora_admin__:getSettings` RPC via {@link useAdminQuery} (gated
+ * by the server's `LUNORA_ADMIN_TOKEN`).
  *
  * Strictly view-only: secret values are masked server-side and never returned
  * raw, and there is no editing here. The infrastructure plane lives in
@@ -38,32 +35,11 @@ const KIND_VARIANT: Record<SettingEntry["kind"], "destructive" | "outline" | "se
  * redeploy), so this loads once on mount — there is no live channel or poll.
  */
 export const SettingsPanel = ({ initialShardKey }: SettingsPanelProps): ReactElement => {
-    const client = useLunora();
     const t = useT();
 
-    const [result, setResult] = useState<SettingsResult | null>(null);
-    const [error, setError] = useState<null | string>(null);
-    const [loading, setLoading] = useState<boolean>(false);
-
-    const refresh = useCallback(async (): Promise<void> => {
-        setLoading(true);
-        setError(null);
-
-        try {
-            const settings = (await client.query(GET_SETTINGS, {}, callOptions(initialShardKey ?? ""))) as SettingsResult;
-
-            setResult(settings);
-        } catch (error_) {
-            setResult(null);
-            setError(errorMessage(error_));
-        } finally {
-            setLoading(false);
-        }
-    }, [client, initialShardKey]);
-
-    useEffect(() => {
-        fireAndForget(refresh());
-    }, [refresh]);
+    // Deployment config is static at runtime (it only changes on redeploy), so a
+    // plain one-shot read with no live channel.
+    const { data: result, error, isLoading: loading } = useAdminQuery<SettingsResult>(ADMIN_FUNCTIONS.getSettings, {}, { shardKey: initialShardKey ?? "" });
 
     const deployRows = useMemo<{ label: string; value: string }[]>(() => {
         const deploy = result?.deploy;

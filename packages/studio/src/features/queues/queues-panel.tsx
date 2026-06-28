@@ -1,16 +1,13 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useT } from "../../i18n/i18n-context";
 import type { QueuesResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
-
-const LIST_QUEUES = adminRef(ADMIN_FUNCTIONS.listQueues);
 
 /**
  * The Queues inspector — lists the deployment's declared Cloudflare Queues
@@ -22,29 +19,13 @@ const LIST_QUEUES = adminRef(ADMIN_FUNCTIONS.listQueues);
  * prod: on deploy).
  */
 const QueuesPanel = (): ReactElement => {
-    const client = useLunora();
     const t = useT();
 
-    const [data, setData] = useState<QueuesResult | null>(null);
-    const [error, setError] = useState<null | string>(null);
+    // Deployment-wide metadata (root shard), so no shard selector needed.
+    const { data, error } = useAdminQuery<QueuesResult>(ADMIN_FUNCTIONS.listQueues, {});
 
-    const refresh = useCallback(async (): Promise<void> => {
-        try {
-            // Deployment-wide metadata (root shard), so no shard selector needed.
-            const result = (await client.query(LIST_QUEUES, {}, callOptions(""))) as QueuesResult;
-
-            setData({ queues: Array.isArray(result.queues) ? result.queues : [] });
-            setError(null);
-        } catch (error_: unknown) {
-            setError(errorMessage(error_));
-        }
-    }, [client]);
-
-    useEffect(() => {
-        fireAndForget(refresh());
-    }, [refresh]);
-
-    const queues = useMemo(() => (data === null ? [] : [...data.queues].toSorted((a, b) => a.exportName.localeCompare(b.exportName))), [data]);
+    const loaded = data !== undefined;
+    const queues = useMemo(() => (Array.isArray(data?.queues) ? [...data.queues].toSorted((a, b) => a.exportName.localeCompare(b.exportName)) : []), [data]);
 
     return (
         <div className="flex flex-col gap-6" data-testid="lunora-queues-panel">
@@ -60,7 +41,7 @@ const QueuesPanel = (): ReactElement => {
                 )}
             </p>
 
-            {data !== null && queues.length === 0 ? (
+            {loaded && queues.length === 0 ? (
                 <EmptyState
                     description={t("No defineQueue is declared in lunora/queues.ts in this deployment. Add one to offload async work to a Cloudflare Queue.")}
                     testId="queues-empty"

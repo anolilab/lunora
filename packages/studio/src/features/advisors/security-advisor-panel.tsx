@@ -1,15 +1,11 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useCallback, useEffect, useState } from "react";
 
+import { useAdminQuery } from "../../hooks/use-admin-query";
 import type { TFunction } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
 import type { SecurityAuditResult, SecurityFinding } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
 import { AdvisorView } from "./advisor-view";
-
-const GET_SECURITY_AUDIT = adminRef(ADMIN_FUNCTIONS.getSecurityAudit);
 
 /** Localized headline per finding kind, shown in the Issue type column. */
 const findingTitle = (t: TFunction, finding: SecurityFinding): string =>
@@ -23,6 +19,9 @@ const findingTitle = (t: TFunction, finding: SecurityFinding): string =>
         "security-headers-disabled": t("Security headers are off"),
         "ws-gate-open": t("Live admin subscriptions are ungated"),
     })[finding.kind];
+
+/** Defensive: an older worker (or a stand-in) may not return a findings array — treat anything but an array as "no findings". */
+const toFindings = (result: SecurityAuditResult): SecurityFinding[] => (Array.isArray(result.findings) ? result.findings : []);
 
 /** The env binding each finding concerns, shown in the Entity column. */
 const findingEntity = (finding: SecurityFinding): string =>
@@ -78,28 +77,13 @@ const findingDetail = (t: TFunction, finding: SecurityFinding): string =>
  * reason about lunora's admin/WS gates or its log-redaction policy.
  */
 const SecurityAdvisorPanel = (): ReactElement => {
-    const client = useLunora();
     const t = useT();
 
-    const [findings, setFindings] = useState<SecurityFinding[] | null>(null);
-    const [error, setError] = useState<null | string>(null);
+    const { data, error } = useAdminQuery<SecurityAuditResult>(ADMIN_FUNCTIONS.getSecurityAudit, {});
 
-    const refresh = useCallback(async (): Promise<void> => {
-        try {
-            const result = (await client.query(GET_SECURITY_AUDIT, {}, callOptions(""))) as SecurityAuditResult;
-
-            // Defensive: an older worker (or a stand-in) may not return a findings
-            // array — treat anything but an array as "no findings" rather than throw.
-            setFindings(Array.isArray(result.findings) ? result.findings : []);
-            setError(null);
-        } catch (error_: unknown) {
-            setError(errorMessage(error_));
-        }
-    }, [client]);
-
-    useEffect(() => {
-        fireAndForget(refresh());
-    }, [refresh]);
+    // `undefined` while the first read is in flight (renders the loading state);
+    // once it resolves, `toFindings` normalises a non-array payload to empty.
+    const findings: SecurityFinding[] | null = data === undefined ? null : toFindings(data);
 
     const rows =
         findings === null

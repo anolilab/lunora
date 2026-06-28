@@ -1,6 +1,6 @@
 import { useLunora } from "@lunora/react";
 import type { ChangeEvent, MouseEvent, ReactElement } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -8,6 +8,7 @@ import { EmptyState } from "../../components/ui/empty-state";
 import { Input } from "../../components/ui/input";
 import { ScrollArea } from "../../components/ui/scroll-area";
 import { Separator } from "../../components/ui/separator";
+import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import { useT } from "../../i18n/i18n-context";
 import type { CapturedMail, CapturedMailResult, SendTestMailResult } from "../../lib/admin";
@@ -19,7 +20,6 @@ interface MailPanelProps {
     readonly limit?: number;
 }
 
-const GET_CAPTURED_MAIL = adminRef(ADMIN_FUNCTIONS.getCapturedMail);
 const CLEAR_CAPTURED_MAIL = adminRef(ADMIN_FUNCTIONS.clearCapturedMail);
 const SEND_TEST_MAIL = adminRef(ADMIN_FUNCTIONS.sendTestMail);
 
@@ -94,58 +94,46 @@ const MailPanel = ({ limit = 100 }: MailPanelProps): ReactElement => {
     const client = useLunora();
     const t = useT();
 
-    const [entries, setEntries] = useState<CapturedMail[]>([]);
-    const [error, setError] = useState<null | string>(null);
+    // The inbox is a single root-shard table with no write-flush to subscribe to,
+    // so it's a one-shot read kept fresh by the poll below.
+    const { data, error: readError, refetch } = useAdminQuery<CapturedMailResult>(ADMIN_FUNCTIONS.getCapturedMail, { limit });
+
+    // Errors from the clear/send-test actions, surfaced alongside the read error.
+    const [actionError, setActionError] = useState<null | string>(null);
     const [selectedId, setSelectedId] = useState<null | string>(null);
     const [tab, setTab] = useState<PreviewTab>("html");
     const [filter, setFilter] = useState<string>("");
 
-    const refresh = useCallback(async (): Promise<void> => {
-        setError(null);
-
-        try {
-            const next = (await client.query(GET_CAPTURED_MAIL, { limit }, callOptions(""))) as CapturedMailResult;
-
-            setEntries(next.entries);
-        } catch (error_) {
-            setEntries([]);
-            setError(errorMessage(error_));
-        }
-    }, [client, limit]);
+    const entries = useMemo<CapturedMail[]>(() => data?.entries ?? [], [data]);
+    const error = readError ?? actionError;
 
     const clearInbox = async (): Promise<void> => {
-        setError(null);
+        setActionError(null);
 
         try {
             await client.query(CLEAR_CAPTURED_MAIL, {}, callOptions(""));
             setSelectedId(null);
-            await refresh();
+            refetch();
         } catch (error_) {
-            setError(errorMessage(error_));
+            setActionError(errorMessage(error_));
         }
     };
 
     const sendTest = async (): Promise<void> => {
-        setError(null);
+        setActionError(null);
 
         try {
             (await client.query(SEND_TEST_MAIL, {}, callOptions(""))) as SendTestMailResult;
-            await refresh();
+            refetch();
         } catch (error_) {
-            setError(errorMessage(error_));
+            setActionError(errorMessage(error_));
         }
     };
 
-    useEffect(() => {
-        fireAndForget(refresh());
-    }, [refresh]);
-
-    const reload = (): void => {
-        fireAndForget(refresh());
-    };
-
     // Poll for newly-captured mail so the inbox stays live without a manual refresh.
-    useAutoRefresh(reload, true);
+    useAutoRefresh(() => {
+        refetch();
+    }, true);
 
     const onClear = (): void => {
         fireAndForget(clearInbox());
