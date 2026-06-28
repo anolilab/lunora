@@ -18,6 +18,7 @@ import discoverHttpRoutes from "./discover-http-routes";
 import discoverInserts from "./discover-inserts";
 import discoverMaskProcedures, { discoverMaskMetadata } from "./discover-mask-procedures";
 import discoverMigrations from "./discover-migrations";
+import { discoverMutators } from "./discover-mutators";
 import discoverNondeterministicCalls from "./discover-nondeterministic-calls";
 import discoverPackageDependencies from "./discover-package-dependencies";
 import discoverProcedureMiddleware from "./discover-procedure-middleware";
@@ -27,6 +28,7 @@ import discoverR2sqlCalls from "./discover-r2sql-calls";
 import discoverRlsProcedures, { discoverRlsMetadata } from "./discover-rls-procedures";
 import discoverSchema from "./discover-schema";
 import discoverSecrets from "./discover-secrets";
+import { discoverShapes } from "./discover-shapes";
 import discoverSqlInterpolation from "./discover-sql-interpolation";
 import discoverStorageRulesMetadata from "./discover-storage-rules";
 import discoverWorkflowCalls from "./discover-workflow-calls";
@@ -34,6 +36,7 @@ import { discoverWorkflows } from "./discover-workflows";
 import {
     buildStorageColumns,
     emitApi,
+    emitCollections,
     emitContainers,
     emitCrons,
     emitDataModel,
@@ -254,6 +257,15 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const httpRoutes = discoverHttpRoutes(project, lunoraDirectory);
     const migrations = discoverMigrations(project, lunoraDirectory);
 
+    // Local-first sync engine (Phase 7): replication shapes (`lunora/shapes.ts`)
+    // and custom mutators (`lunora/mutators.ts`). Shapes gate the generated DO's
+    // `resolveShape` override + the `_generated/collections.ts` factories;
+    // mutators register into `LUNORA_FUNCTIONS` (transaction-wrapped) and the
+    // `isCustomMutator` push-protocol override. Both return `[]` when their file
+    // is absent, so a project without them emits byte-identical generated code.
+    const shapes = discoverShapes(project, lunoraDirectory);
+    const mutators = discoverMutators(project, lunoraDirectory);
+
     // Workflows declared via `defineWorkflow` exports in `lunora/workflows.ts`.
     // Discovered before crons so a `cronJobs()` registration can target a
     // workflow by its export name (the cron then starts a durable instance per
@@ -305,6 +317,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   discoverSqlInterpolation(project, lunoraDirectory),
                   discoverAdminRoutes(project, lunoraDirectory),
                   discoverR2sqlCalls(project, lunoraDirectory),
+                  shapes,
               );
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,
@@ -402,7 +415,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         useUmbrella,
         workflows,
     });
-    const functionsContent = emitFunctions(functions, migrations, useUmbrella);
+    const functionsContent = emitFunctions(functions, migrations, useUmbrella, mutators, shapes);
     const shardContent = emitShard({
         advisories,
         containers,
@@ -418,14 +431,21 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasPipelines,
         hasR2sql,
         maskMetadata,
+        mutators,
         queues,
         rlsMetadata,
         schema,
+        shapes,
         storageRules: storageRulesMetadata,
         studioFeatures,
         useUmbrella,
         workflows,
     });
+    // `_generated/collections.ts` — one TanStack DB collection factory per shape.
+    // Emitted only when the project declares shapes AND installs the `@lunora/db`
+    // add-on (which ships `lunoraCollectionOptions`); `""` otherwise so
+    // `writeIfPresent` skips it.
+    const collectionsContent = emitCollections(shapes, dependencies.has("@lunora/db"), useUmbrella);
     const containersContent = emitContainers(containers, schema.jurisdiction);
     const workflowsContent = emitWorkflows(workflows);
     const queuesContent = emitQueues(queues);
@@ -534,6 +554,8 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         writeIfPresent(join(outputDirectory, "workflows.ts"), workflowsContent);
         writeIfPresent(join(outputDirectory, "queues.ts"), queuesContent);
         writeIfPresent(join(outputDirectory, "seed.ts"), seedContent);
+        //   - collections.ts → `@lunora/db`, when the project declares shapes
+        writeIfPresent(join(outputDirectory, "collections.ts"), collectionsContent);
 
         if (wantsOpenApi) {
             // The `.json` is the portable artifact for external tooling; the
@@ -576,6 +598,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         generated: {
             api: apiContent,
             app: appContent,
+            collections: collectionsContent,
             containers: containersContent,
             crons: cronsContent,
             dataModel: dataModelContent,
@@ -686,6 +709,8 @@ export interface CodegenResult {
         api: string;
         /** Fluent worker-composition builder (`_generated/app.ts`) — `defineApp()`. Always written. */
         app: string;
+        /** Partial-replication collection factories (`_generated/collections.ts`); `""` (and not written) unless the project declares shapes and installs `@lunora/db`. */
+        collections: string;
         /** Container DO classes (`_generated/containers.ts`); `""` (and not written) when no containers are declared. */
         containers: string;
         crons: string;
