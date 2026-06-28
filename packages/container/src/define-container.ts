@@ -211,6 +211,10 @@ const assertValidReadyOnChecks = (config: ContainerConfig): void => {
             throw new TypeError("defineContainer: `readyOn[].path` must be a non-empty HTTP path string");
         }
 
+        if (check.path !== check.path.trim()) {
+            throw new TypeError("defineContainer: `readyOn[].path` must not have leading or trailing whitespace");
+        }
+
         if (check.port !== undefined) {
             assertValidPort(check.port, "readyOn[].port");
         }
@@ -240,6 +244,21 @@ const assertValidHardTimeout = (hardTimeout: ContainerConfig["hardTimeout"]): vo
     }
 };
 
+/** Validate the egress-firewall fields — host allow/deny lists and `interceptHttps`. */
+const assertValidEgressFields = (config: ContainerConfig): void => {
+    for (const field of ["allowedHosts", "deniedHosts"] as const) {
+        const hosts = config[field];
+
+        if (hosts?.some((host) => typeof host !== "string" || host.trim().length === 0)) {
+            throw new TypeError(`defineContainer: \`${field}\` must be an array of non-empty hostname patterns`);
+        }
+    }
+
+    if (config.interceptHttps !== undefined && typeof config.interceptHttps !== "boolean") {
+        throw new TypeError("defineContainer: `interceptHttps` must be a boolean, or omitted");
+    }
+};
+
 /**
  * Validate the runtime fields the generated class applies onto the `Container`
  * base after `super()` — multi-port, the egress firewall, and observability
@@ -265,13 +284,7 @@ const assertValidContainerRuntimeFields = (config: ContainerConfig): void => {
         throw new TypeError("defineContainer: `entrypoint` must be a non-empty array of non-empty strings, or omitted");
     }
 
-    for (const field of ["allowedHosts", "deniedHosts"] as const) {
-        const hosts = config[field];
-
-        if (hosts?.some((host) => typeof host !== "string" || host.trim().length === 0)) {
-            throw new TypeError(`defineContainer: \`${field}\` must be an array of non-empty hostname patterns`);
-        }
-    }
+    assertValidEgressFields(config);
 
     if (config.pingEndpoint !== undefined && (typeof config.pingEndpoint !== "string" || config.pingEndpoint.trim().length === 0)) {
         throw new TypeError("defineContainer: `pingEndpoint` must be a non-empty path string");

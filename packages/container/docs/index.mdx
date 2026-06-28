@@ -210,8 +210,9 @@ custom outbound-handler types (`OutboundHandler`, `OutboundHandlers`,
 
 ## Readiness gating
 
-The platform health check waits for an **open port** (`defaultPort`, or
-`pingEndpoint` if set) — not necessarily a _ready_ app. `readyOn` adds
+The platform health check waits for an **open port** (`defaultPort`) — and, if
+`pingEndpoint` is set, for an HTTP probe on that path on the same container — not
+necessarily a _ready_ app. `readyOn` adds
 application-level probes that gate request proxying: a `ctx.containers.<name>`
 fetch holds until every probe responds with its expected status, so callers
 never hit a container still applying migrations or warming caches.
@@ -383,7 +384,7 @@ in the Studio **Advisors** table and at codegen time:
 | `hardTimeout`    | Hard cap on total lifetime from start, ignoring activity. Same grammar as `sleepAfter`.                         |
 | `readyOn`        | Application-level readiness probes that gate request proxying until the app reports ready.                      |
 | `pingEndpoint`   | HTTP path the platform polls to decide an instance is healthy. Defaults to upstream's `"ping"`.                 |
-| `env`            | Static environment variables baked into the container.                                                          |
+| `env`            | Static environment variables passed to the container on every start (runtime). For secrets use `secrets`.       |
 | `secrets`        | Names of Worker secrets forwarded into the container env at start.                                              |
 | `buildArgs`      | Build-time args for a built image (wrangler `image_vars`, like `--build-arg`); ignored for `{ registry }`.      |
 | `entrypoint`     | Override the image's `ENTRYPOINT`/`CMD` for every start.                                                        |

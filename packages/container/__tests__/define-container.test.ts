@@ -152,6 +152,12 @@ describe(defineContainer, () => {
         expect(() => defineContainer({ image: "./app", labels: { "  ": "x" } })).toThrow("`labels` must be a record of non-empty");
     });
 
+    it("rejects a non-boolean interceptHttps", () => {
+        expect.assertions(1);
+
+        expect(() => defineContainer({ image: "./app", interceptHttps: "yes" as unknown as boolean })).toThrow("`interceptHttps` must be a boolean");
+    });
+
     it("accepts hardTimeout and readyOn config", () => {
         expect.assertions(3);
 
@@ -176,9 +182,10 @@ describe(defineContainer, () => {
     });
 
     it("rejects an invalid readyOn check", () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         expect(() => defineContainer({ image: "./app", readyOn: [{ path: "   " }] })).toThrow("`readyOn[].path`");
+        expect(() => defineContainer({ image: "./app", readyOn: [{ path: " /ready " }] })).toThrow("leading or trailing whitespace");
         expect(() => defineContainer({ image: "./app", readyOn: [{ path: "/ready", port: 70_000 }] })).toThrow("readyOn[].port");
         expect(() => defineContainer({ image: "./app", readyOn: [{ path: "/ready", status: 700 }] })).toThrow("`readyOn[].status`");
     });
