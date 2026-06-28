@@ -28,6 +28,8 @@ export { getLunoraClient, setLunoraClient } from "./context";
 export { hydratePreloaded } from "./hydrate-preloaded";
 export type { MutationHandle } from "./mutation";
 export { mutation } from "./mutation";
+export type { MutatorHandle, MutatorHandleStore, MutatorTransaction } from "./mutator";
+export { mutator } from "./mutator";
 export type { InfiniteQueryHandle, InfiniteQueryOptions, PageItemOf, PaginatedArgs, PaginatedQueryHandle, PaginatedQueryOptions } from "./paginated-query";
 export { infiniteQuery, paginatedQuery } from "./paginated-query";
 export type { HeartbeatReference, ListPresentReference, PresenceHandle, PresenceOptions } from "./presence";

@@ -4,6 +4,8 @@ export { Authenticated, AuthLoading, createAuth, Unauthenticated } from "./creat
 export { default as createConnectionStatus } from "./create-connection-status";
 export type { MutationClient, MutationHandle } from "./create-mutation";
 export { createMutation, createMutationForClient } from "./create-mutation";
+export type { MutatorHandle, MutatorHook, MutatorTransaction } from "./create-mutator";
+export { createMutator } from "./create-mutator";
 export type {
     CreateInfiniteQueryOptions,
     CreateInfiniteQueryResult,

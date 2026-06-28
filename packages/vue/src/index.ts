@@ -40,6 +40,8 @@ export { useAuth } from "./use-auth";
 export { default as useConnectionStatus } from "./use-connection-status";
 export type { MutationHandle } from "./use-mutation";
 export { useMutation } from "./use-mutation";
+export type { MutatorHandle, MutatorHook, MutatorTransaction } from "./use-mutator";
+export { useMutator } from "./use-mutator";
 export type {
     PageItemOf,
     PaginatedArgs,
