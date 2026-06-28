@@ -89,6 +89,8 @@ import type { AppendRequestLogEntry, ContextLogLevel, LogEventInput, RequestLogR
 import { appendRequestLogEntry, emitLogEvent, emitRequestLogEvent, ensureRequestLogTable, readRequestLog, renderLogMessage } from "./request-log";
 import { buildSecurityAudit } from "./security-audit";
 import { buildSettings, isDevEnvironment } from "./settings";
+import type { ShapePokePart, ShapeRowOp } from "./shape-global-diff";
+import { buildPokeFrames, diffGlobalMembership, projectColumns } from "./shape-global-diff";
 import { runReadonlySql } from "./sql-console";
 import { findDanglingReferences } from "./storage-correlation";
 import { sendDeltaFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
@@ -279,41 +281,6 @@ interface ShapeMemo {
  * out-of-order arrival (`"gap"`).
  */
 type ClientMutationClass = { expected: number; kind: "already" | "gap" | "next" };
-
-/** Wire form of a single shape row change (the DO-side mirror of `@lunora/client`'s `RowOp`; kept local so `@lunora/do` takes no client dependency). */
-interface ShapeRowOp {
-    key: string;
-    op: "delete" | "insert" | "update";
-    table: string;
-    value?: Record<string, unknown>;
-}
-
-/** One shape's slice of a poke: the subscription id it belongs to plus its ordered row-ops. */
-interface ShapePokePart {
-    rowsPatch: ShapeRowOp[];
-    shapeId: string;
-}
-
-/**
- * Project a shape row's post-image to the shape's declared `columns` (its
- * column allow-list), always retaining `_id`/`_creationTime` so the client can
- * key and order. Absent `columns` ⇒ the full document is shipped verbatim.
- */
-const projectColumns = (document_: Record<string, unknown>, columns: ReadonlyArray<string> | undefined): Record<string, unknown> => {
-    if (!columns) {
-        return document_;
-    }
-
-    const projected: Record<string, unknown> = {};
-
-    for (const key of ["_id", "_creationTime", ...columns]) {
-        if (key in document_) {
-            projected[key] = document_[key];
-        }
-    }
-
-    return projected;
-};
 
 /**
  * Identity a subscription query is executed under, threaded EXPLICITLY into
@@ -6076,15 +6043,8 @@ abstract class ShardDO {
      */
     private async seedGlobalShape(ws: WebSocket, subId: string, resolved: ResolvedShape, identity: SubscriptionIdentity, connectionId: string): Promise<void> {
         const rows = await this.readGlobalShapeRows(resolved, identity);
-        const snapshot = new Map<string, string>();
-        const rowsPatch: ShapeRowOp[] = [];
-
-        for (const { doc, id } of rows) {
-            const value = projectColumns(doc, resolved.columns);
-
-            snapshot.set(id, JSON.stringify(value));
-            rowsPatch.push({ key: id, op: "insert", table: resolved.table, value });
-        }
+        // Seeding is a diff against an empty baseline — every surviving row an insert.
+        const { next: snapshot, rowsPatch } = diffGlobalMembership(rows, new Map<string, string>(), { columns: resolved.columns, table: resolved.table });
 
         this.recordGlobalSnapshot(ws, subId, snapshot);
         this.saveGlobalSnapshot(connectionId, subId, snapshot);
@@ -6110,29 +6070,7 @@ abstract class ShardDO {
     ): Promise<void> {
         const rows = await this.readGlobalShapeRows(resolved, identity);
         const previous = this.readGlobalSnapshot(ws, subId, connectionId);
-        const next = new Map<string, string>();
-        const rowsPatch: ShapeRowOp[] = [];
-
-        for (const { doc, id } of rows) {
-            const value = projectColumns(doc, resolved.columns);
-            const json = JSON.stringify(value);
-
-            next.set(id, json);
-
-            const before = previous.get(id);
-
-            if (before === undefined) {
-                rowsPatch.push({ key: id, op: "insert", table: resolved.table, value });
-            } else if (before !== json) {
-                rowsPatch.push({ key: id, op: "update", table: resolved.table, value });
-            }
-        }
-
-        for (const id of previous.keys()) {
-            if (!next.has(id)) {
-                rowsPatch.push({ key: id, op: "delete", table: resolved.table });
-            }
-        }
+        const { next, rowsPatch } = diffGlobalMembership(rows, previous, { columns: resolved.columns, table: resolved.table });
 
         this.recordGlobalSnapshot(ws, subId, next);
 
@@ -6304,15 +6242,12 @@ abstract class ShardDO {
     ): void {
         this.pokeSequence += 1;
         const pokeId = `poke-${String(this.pokeSequence)}`;
+        const frames = buildPokeFrames(parts, { baseCheckpoint, checkpoint, epoch, pokeId });
 
         try {
-            ws.send(JSON.stringify({ baseCheckpoint, epoch, pokeId, type: "pokeStart" }));
-
-            for (const part of parts) {
-                ws.send(JSON.stringify({ pokeId, rowsPatch: part.rowsPatch, shapeId: part.shapeId, type: "pokePart" }));
+            for (const frame of frames) {
+                ws.send(frame);
             }
-
-            ws.send(JSON.stringify({ checkpoint, epoch, pokeId, type: "pokeEnd" }));
         } catch {
             /* socket may have closed mid-poke; the client re-seeds on reconnect */
         }
