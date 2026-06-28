@@ -76,6 +76,11 @@ overrides:
   tmp@<0.2.6: ^0.2.6
   tmp@<=0.2.3: ^0.2.4
   undici@<6.27.0: ^6.27.0
+  # dockerode pulls uuid@10, flagged by GHSA-w5hq-g745-h8pq (missing buffer
+  # bounds check in v3/v5/v6 when `buf` is passed). dockerode only calls
+  # `uuid.v4()`, so it's not exploitable here, but bump the whole tree to the
+  # patched line to clear the advisory; v11 keeps the named `v4` export.
+  uuid@<11.1.0: ^11.1.0
 
 catalogs:
   ai:
