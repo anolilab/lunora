@@ -473,6 +473,8 @@ interface ShapeSubscriptionState {
 
 /** A poke being assembled between `pokeStart` and `pokeEnd` — parts buffered per shape, applied atomically at end. */
 interface PokeBuffer {
+    /** The checkpoint the client's view must be at for this poke's diff to splice on cleanly; a mismatch forces a re-seed. */
+    baseCheckpoint: number | undefined;
     epoch: string | undefined;
     lastMutationId: Map<string, number>;
     parts: Map<string, RowOp[]>;
@@ -782,6 +784,16 @@ class LunoraClient {
         // path and runs the mutation exactly once. The `@lunora/db` runtime always
         // supplies a monotonic seq (≥1); this guards direct callers of the raw API.
         const clientSeq = options?.clientSeq;
+
+        // A supplied seq must be a positive integer: 0 / negatives are `<=` the
+        // initial watermark and would be acked as replays (silent dropped write),
+        // and a fractional seq can never equal the integer watermark. Reject
+        // rather than send a poisoned header. `undefined` is the valid "no seq"
+        // signal (rides the idempotency path) and is left untouched.
+        if (clientSeq !== undefined && (!Number.isInteger(clientSeq) || clientSeq <= 0)) {
+            throw new Error(`callMutator: clientSeq must be a positive integer, got ${String(clientSeq)}`);
+        }
+
         const bucket = options?.shardKey ?? "";
         let ackWatermark: number | undefined;
 
@@ -3323,7 +3335,7 @@ class LunoraClient {
         // Open a buffer for this poke. Parts accumulate per shape and apply
         // atomically at `pokeEnd`, so a socket dropping mid-poke leaves the view
         // untouched and re-seeds on reconnect (no torn state).
-        this.pokeBuffers.set(message.pokeId, { epoch: message.epoch, lastMutationId: new Map(), parts: new Map() });
+        this.pokeBuffers.set(message.pokeId, { baseCheckpoint: message.baseCheckpoint, epoch: message.epoch, lastMutationId: new Map(), parts: new Map() });
     }
 
     private handlePokePart(message: ServerPokePartMessage): void {
@@ -3362,11 +3374,22 @@ class LunoraClient {
             }
 
             // An epoch mismatch means the changelog timeline forked since we last
-            // applied (a reset/recycled DO): drop the local view so the next
-            // resume re-seeds from scratch rather than splicing onto a stale base.
-            if (buffer.epoch !== undefined && state.serverEpoch !== undefined && buffer.epoch !== state.serverEpoch) {
+            // applied (a reset/recycled DO); a base mismatch means this diff was
+            // computed against a checkpoint we're not actually at (a dropped poke
+            // / gap). Either way, splicing the incremental ops onto our view would
+            // corrupt it — so drop the local view, clear the cursor, SKIP the ops,
+            // and re-subscribe so the server re-seeds the membership from scratch.
+            const epochForked = buffer.epoch !== undefined && state.serverEpoch !== undefined && buffer.epoch !== state.serverEpoch;
+            const baseDiverged = buffer.baseCheckpoint !== undefined && state.serverCursor !== undefined && state.serverCursor !== buffer.baseCheckpoint;
+
+            if (epochForked || baseDiverged) {
                 state.rows.clear();
                 state.serverCursor = undefined;
+                state.serverEpoch = undefined;
+                this.emitShapeRows(state);
+                this.sendShapeSubscribeIfOpen(state);
+
+                continue;
             }
 
             applyRowOpsToView(state.rows, ops);
