@@ -133,5 +133,14 @@ describe("index", () => {
             expect(defaulted === false ? undefined : defaulted.forwardedConsoleMethods).toStrictEqual(["error", "warn"]);
             expect(overridden === false ? undefined : overridden.forwardedConsoleMethods).toStrictEqual(["error"]);
         });
+
+        it("keeps the default when the user explicitly passes an undefined forwardedConsoleMethods", () => {
+            expect.assertions(1);
+
+            // An explicit `undefined` must not erase the default via the spread.
+            const resolved = resolveOverlayOption({ forwardedConsoleMethods: undefined });
+
+            expect(resolved === false ? undefined : resolved.forwardedConsoleMethods).toStrictEqual(["error", "warn"]);
+        });
     });
 });

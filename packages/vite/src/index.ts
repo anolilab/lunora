@@ -36,8 +36,10 @@ const resolveOverlayOption = (overlay: LunoraPluginOptions["overlay"]): false | 
     const userOverlay = overlay === true || overlay === undefined ? {} : overlay;
 
     return {
-        forwardedConsoleMethods: ["error", "warn"],
         ...userOverlay,
+        // After the spread + nullish-coalesce so an explicit `undefined` from the
+        // user doesn't erase Lunora's default (the spread would otherwise win).
+        forwardedConsoleMethods: userOverlay.forwardedConsoleMethods ?? ["error", "warn"],
         solutionFinders: [...lunoraSolutionFinders, ...(userOverlay.solutionFinders ?? [])],
     };
 };
