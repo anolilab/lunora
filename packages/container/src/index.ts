@@ -11,6 +11,7 @@
 export type {
     ContainerAccessor,
     ContainerBindingSpec,
+    ContainerEgressControls,
     ContainerHandle,
     ContainerInstanceHandle,
     ContainerInstanceState,
@@ -36,6 +37,7 @@ export type {
     ContainerDefinition,
     ContainerImageSource,
     ContainerInstanceType,
+    ContainerReadinessCheck,
     ContainerRollout,
     CustomContainerInstanceType,
     NamedContainerInstanceType,

@@ -70,6 +70,7 @@ import { buildSecurityAudit } from "./security-audit";
 import { buildSettings, isDevEnvironment } from "./settings";
 import { runReadonlySql } from "./sql-console";
 import { findDanglingReferences } from "./storage-correlation";
+import { sendDeltaFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
 import type { TransactionSqlLike } from "./transaction";
 import { ConflictError } from "./transaction";
 import type { LifecycleDispatchInfo, LifecycleEvent, MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "./types";
@@ -357,212 +358,16 @@ interface SubscriptionMemo {
     tables: Set<string>;
 }
 
-/** Identity field every Lunora document row carries. */
-const ROW_ID_FIELD = "_id";
-
 /**
- * Fallback table name stamped on a delta when the subscription's read-table
- * set is empty. The client only uses `table` for its structural guard
- * ({@link MutationDelta} recognition) — `key`/`row`/`op` drive the actual
- * merge — so any non-empty string is safe.
+ * Sentinel diff baseline meaning "no value has ever been delivered to this
+ * socket for this subscription". Stored as a memo's `lastJson` when the very
+ * first push to a socket fails to leave the outbound buffer. It can never equal
+ * `JSON.stringify(value)` (which always yields valid JSON) and is not itself
+ * valid JSON, so `subscriptionListDeltas` rejects it — the next write-flush
+ * always re-sends a full snapshot rather than a delta against a value the client
+ * never saw. See {@link ShardDO.pushSubscriptionData}.
  */
-const DELTA_FALLBACK_TABLE = "__lunora__";
-
-/**
- * Read a row's `_id` as a string; `undefined` when the row isn't a plain object with a string `_id`.
- * @returns the `_id` string, or `undefined` when the row is not a plain object with a string `_id`
- */
-const readRowId = (row: unknown): string | undefined => {
-    if (typeof row !== "object" || row === null || Array.isArray(row)) {
-        return undefined;
-    }
-
-    const id = (row as Record<string, unknown>)[ROW_ID_FIELD];
-
-    return typeof id === "string" ? id : undefined;
-};
-
-/**
- * Index an array of rows by `_id`, preserving insertion order. Returns
- * `undefined` the moment any element lacks a string `_id` (the diff can't key
- * such a list) — the caller then falls back to a full snapshot.
- *
- * Also bails on a duplicate `_id`: the delta protocol keys rows by `_id`, so a
- * list carrying the same `_id` twice (e.g. a relational join that fans a parent
- * out across children) cannot be expressed as deltas — the client would merge
- * the collisions down to a single row and silently lose the duplicates, leaving
- * its view shorter than the snapshot path. Returning `undefined` here forces the
- * full-snapshot fallback so both paths agree.
- * @returns the indexed map and insertion order, or `undefined` when any row lacks a string `_id` or ids are duplicated
- */
-const indexRowsById = (rows: unknown[]): undefined | { byId: Map<string, Record<string, unknown>>; order: string[] } => {
-    const byId = new Map<string, Record<string, unknown>>();
-    const order: string[] = [];
-
-    for (const row of rows) {
-        const id = readRowId(row);
-
-        if (id === undefined || byId.has(id)) {
-            return undefined;
-        }
-
-        byId.set(id, row as Record<string, unknown>);
-        order.push(id);
-    }
-
-    return { byId, order };
-};
-
-/**
- * True when the rows present in BOTH lists keep the same relative order. The
- * client merges updates in place and never reorders, so a survivor that moved
- * can't be expressed as deltas.
- */
-const survivorsKeepOrder = (
-    previous: { byId: Map<string, Record<string, unknown>>; order: string[] },
-    next: { byId: Map<string, Record<string, unknown>>; order: string[] },
-): boolean => {
-    const survivingPrevious = previous.order.filter((id) => next.byId.has(id));
-    const survivingNext = next.order.filter((id) => previous.byId.has(id));
-
-    if (survivingPrevious.length !== survivingNext.length) {
-        return false;
-    }
-
-    return survivingPrevious.every((id, index) => survivingNext[index] === id);
-};
-
-/** An `_id`-indexed row set: the lookup map plus the preserved insertion order. */
-type RowIndex = { byId: Map<string, Record<string, unknown>>; order: string[] };
-
-/** A diff delta paired with its pre-serialized `delta` frame body (`JSON.stringify(delta)`). */
-type FramedDelta = { delta: MutationDelta; frame: string };
-
-/**
- * Collect `delete` deltas for every prev row absent from `next`, in prev order.
- * Each delete's `frame` is byte-identical to `JSON.stringify({key, op, table})`.
- */
-const collectDeleteDeltas = (previous: RowIndex, next: RowIndex, deltaTable: string, tableJson: string): FramedDelta[] => {
-    const out: FramedDelta[] = [];
-
-    for (const id of previous.order) {
-        if (!next.byId.has(id)) {
-            out.push({
-                delta: { key: id, op: "delete", table: deltaTable },
-                frame: `{"key":${JSON.stringify(id)},"op":"delete","table":${tableJson}}`,
-            });
-        }
-    }
-
-    return out;
-};
-
-/**
- * Collect `insert`/`update` deltas for every next row that is new or whose body
- * changed, in next order. Each next row is fingerprinted with a SINGLE
- * `JSON.stringify` (finding #6) reused for both the `prev !== next` compare and
- * the `row` slot of the frame; each prev row is fingerprinted once too. Frames
- * are byte-identical to `JSON.stringify({key, op, row, table})`.
- */
-const collectUpsertDeltas = (previous: RowIndex, next: RowIndex, deltaTable: string, tableJson: string): FramedDelta[] => {
-    const out: FramedDelta[] = [];
-
-    for (const id of next.order) {
-        const nextRow = next.byId.get(id) as Record<string, unknown>;
-        const previousRow = previous.byId.get(id);
-        const nextFingerprint = JSON.stringify(nextRow);
-        const previousFingerprint = previousRow === undefined ? undefined : JSON.stringify(previousRow);
-
-        if (previousFingerprint === nextFingerprint) {
-            continue;
-        }
-
-        const op = previousFingerprint === undefined ? "insert" : "update";
-
-        out.push({
-            delta: { key: id, op, row: nextRow, table: deltaTable },
-            frame: `{"key":${JSON.stringify(id)},"op":"${op}","row":${nextFingerprint},"table":${tableJson}}`,
-        });
-    }
-
-    return out;
-};
-
-/**
- * Diff the previously-sent list snapshot (`previousJson`, the memo's
- * `lastJson`) against the new query result and produce per-row
- * {@link MutationDelta}s the client can merge in place via `applyDelta` —
- * Convex-parity live-pagination deltas (server half of gap #20).
- *
- * Returns `undefined` (caller falls back to a full `{type:"data"}` snapshot)
- * unless ALL of these hold:
- *
- * 1. `previousJson` parses to an array (there IS a previous list to diff against).
- * 2. `nextResult` is also an array.
- * 3. Every row in both arrays is a plain object carrying a string `_id`.
- * 4. Order preservation — rows present in BOTH arrays appear in the same relative order.
- * 5. Chattiness cap — the number of deltas does not exceed the new array length (a near-total change is cheaper as a snapshot).
- *
- * Diff is keyed by `_id`: rows only in prev → `delete`; rows only in next →
- * `insert`; rows in both whose JSON differs → `update`. Insert/update carry the
- * full new `row`; delete omits it (matching the wire contract `@lunora/client`
- * parses). Deltas are ordered deletes-then-inserts/updates so the client never
- * sees a transient over-length page.
- *
- * Per-row serialization is done exactly **once** per refresh (finding #6). Each
- * row is stringified a single time into a fingerprint reused for both the
- * `prev !== next` change-detection compare and — when the caller passes the
- * optional `frames` sink — the pre-serialized delta frame body. The returned
- * `MutationDelta[]` shape is unchanged; `frames`, when supplied, receives the
- * exact `JSON.stringify(delta)` string for each returned delta, in the same
- * order, so the caller can splice it straight into the `{type:"delta"}` frame
- * without serializing the delta (and the row inside it) a second time.
- * @returns the per-row deltas to send, or `undefined` when any precondition fails and a full snapshot should be sent instead
- */
-const subscriptionListDeltas = (previousJson: string, nextResult: unknown, table: string, frames?: string[]): MutationDelta[] | undefined => {
-    let parsed: unknown;
-
-    try {
-        parsed = JSON.parse(previousJson);
-    } catch {
-        return undefined;
-    }
-
-    // (1) + (2): both sides must be arrays. (3): both must be id-keyable.
-    if (!Array.isArray(parsed) || !Array.isArray(nextResult)) {
-        return undefined;
-    }
-
-    const previous = indexRowsById(parsed);
-    const next = indexRowsById(nextResult);
-
-    if (previous === undefined || next === undefined) {
-        return undefined;
-    }
-
-    // (4): survivors keep their relative order.
-    if (!survivorsKeepOrder(previous, next)) {
-        return undefined;
-    }
-
-    const deltaTable = table === "" ? DELTA_FALLBACK_TABLE : table;
-    const tableJson = JSON.stringify(deltaTable);
-    // Deletes precede upserts so the client never sees a transient over-length page.
-    const framed = [...collectDeleteDeltas(previous, next, deltaTable, tableJson), ...collectUpsertDeltas(previous, next, deltaTable, tableJson)];
-
-    // (5): a near-total change is better sent as a single snapshot.
-    if (framed.length > next.order.length) {
-        return undefined;
-    }
-
-    if (frames !== undefined) {
-        for (const { frame } of framed) {
-            frames.push(frame);
-        }
-    }
-
-    return framed.map(({ delta }) => delta);
-};
+const UNDELIVERED_BASELINE = "<undelivered>";
 
 /**
  * Threshold at which a `__root__` DO triggers the size warning. 1 GiB —
@@ -1720,6 +1525,20 @@ abstract class ShardDO {
      * the common read-only path allocates nothing.
      */
     private pendingChangedTables: Set<string> | undefined = undefined;
+
+    /**
+     * Coalesced set of tables awaiting a subscription-refresh pass, merged
+     * across every {@link ShardDO.flushChangedTables} call that lands while a
+     * pass is already draining. The single drain loop
+     * ({@link ShardDO.drainSubscriptionRefreshes}) owns this set; a burst of N
+     * writes to the same table therefore collapses into one (or two) refresh
+     * passes instead of N, so each affected subscription's handler re-runs once
+     * per burst rather than once per write. `undefined` when nothing is pending.
+     */
+    private pendingRefreshTables: Set<string> | undefined = undefined;
+
+    /** True while {@link ShardDO.drainSubscriptionRefreshes} is running; the single-waiter gate that coalesces concurrent flushes. */
+    private refreshInFlight = false;
 
     /**
      * Last pushed result per `(socket, subId)`, keyed by socket. Lets
@@ -3282,11 +3101,9 @@ abstract class ShardDO {
                     continue;
                 }
 
-                try {
-                    ws.send(`{"type":"delta","id":${JSON.stringify(subId)},"delta":${deltaJson}}`);
-                } catch {
-                    /* socket may have been closed mid-broadcast */
-                }
+                // Delivery is best-effort here (legacy broadcast path has no diff
+                // baseline to protect), so the boolean is intentionally ignored.
+                trySendFrame(ws, `{"type":"delta","id":${JSON.stringify(subId)},"delta":${deltaJson}}`);
             }
         }
     }
@@ -5080,21 +4897,76 @@ abstract class ShardDO {
             return;
         }
 
-        // `refreshSubscriptions` re-runs each subscription under the socket's OWN
+        // Merge this request's written tables into the coalesced refresh set.
+        if (this.pendingRefreshTables) {
+            for (const table of changed) {
+                this.pendingRefreshTables.add(table);
+            }
+        } else {
+            this.pendingRefreshTables = changed;
+        }
+
+        // Single-waiter coalescing: if a refresh pass is already draining, it
+        // will observe the tables we just merged before it finishes, so a burst
+        // of mutations collapses into one extra pass instead of one pass each.
+        // This mirrors the in-flight evaluation lock that keeps a hot shard from
+        // re-running every live query once per write.
+        if (this.refreshInFlight) {
+            return;
+        }
+
+        // The drain loop re-runs each subscription under the socket's OWN
         // verified identity (stamped on the attachment at upgrade), threaded as
         // an explicit `SubscriptionIdentity` by value — so the deferred re-run
-        // below neither reads nor mutates the shared per-request identity fields.
+        // neither reads nor mutates the shared per-request identity fields.
         // Crucial here because this refresh is dispatched via `waitUntil` (a
         // LATER macrotask), where a concurrent in-flight RPC owns
         // `currentRequestUserId`. See {@link SubscriptionIdentity}.
 
         if (typeof this.state.waitUntil === "function") {
-            this.state.waitUntil(this.refreshSubscriptions(changed));
+            this.state.waitUntil(this.drainSubscriptionRefreshes());
 
             return;
         }
 
-        await this.refreshSubscriptions(changed);
+        await this.drainSubscriptionRefreshes();
+    }
+
+    /**
+     * Drain {@link ShardDO.pendingRefreshTables} one coalesced batch at a time
+     * until it is empty, then release the {@link ShardDO.refreshInFlight} gate.
+     * Tables merged by a `flushChangedTables` that lands mid-pass are picked up
+     * by the next loop iteration, so every committed write is observed by a
+     * refresh that runs after it — bursts simply share a pass. The post-write
+     * high-watermark and live-socket set are re-read inside each
+     * `refreshSubscriptions` call, so a later batch always reflects the latest
+     * committed state.
+     */
+    private async drainSubscriptionRefreshes(): Promise<void> {
+        // Defensive re-entry guard: the real coalescing gate lives in the sole
+        // caller (`flushChangedTables` returns early when a drain is in flight),
+        // so this should never fire. It is belt-and-suspenders against a future
+        // direct caller — not the load-bearing coalescer.
+        if (this.refreshInFlight) {
+            return;
+        }
+
+        this.refreshInFlight = true;
+
+        try {
+            let batch = this.pendingRefreshTables;
+
+            while (batch && batch.size > 0) {
+                this.pendingRefreshTables = undefined;
+
+                // eslint-disable-next-line no-await-in-loop -- passes are intentionally sequential: each observes the prior pass's committed state and the tables merged while it ran
+                await this.refreshSubscriptions(batch);
+
+                batch = this.pendingRefreshTables;
+            }
+        } finally {
+            this.refreshInFlight = false;
+        }
     }
 
     /**
@@ -5374,27 +5246,22 @@ abstract class ShardDO {
                 ? undefined
                 : subscriptionListDeltas(existing.lastJson, outcome.result, outcome.tables.values().next().value ?? "", deltaFrames);
 
-        memos.set(subId, { lastJson: json, tables: outcome.tables });
+        // At-least-once delivery: advance the diff BASELINE (`lastJson`) only once
+        // the frame(s) for this value actually leave the socket. `ws.send` throws
+        // when the socket has closed or its outbound buffer is gone. Advancing the
+        // baseline unconditionally (the prior behavior) would diff the NEXT value
+        // against a value the client never received, so a single dropped frame
+        // silently lost that update until the client reconnected. By keeping the
+        // last *delivered* baseline on failure, the next write-flush that touches a
+        // read table re-sends — and the reconnect resume path (`evaluateResume`)
+        // still covers a fully-gone socket. `tables` always advances so dependency
+        // tracking stays accurate even when delivery failed.
+        const delivered =
+            deltas === undefined
+                ? trySendFrame(ws, `{"type":"data","id":${JSON.stringify(subId)},"data":${json}${cursorSuffix}}`)
+                : sendDeltaFrames(ws, subId, deltaFrames, cursorSuffix);
 
-        if (deltas !== undefined) {
-            const idJson = JSON.stringify(subId);
-
-            for (const deltaBody of deltaFrames) {
-                try {
-                    ws.send(`{"type":"delta","id":${idJson},"delta":${deltaBody}${cursorSuffix}}`);
-                } catch {
-                    /* socket may have been closed mid-flush */
-                }
-            }
-
-            return;
-        }
-
-        try {
-            ws.send(`{"type":"data","id":${JSON.stringify(subId)},"data":${json}${cursorSuffix}}`);
-        } catch {
-            /* socket may have been closed between checks */
-        }
+        memos.set(subId, { lastJson: delivered ? json : (existing?.lastJson ?? UNDELIVERED_BASELINE), tables: outcome.tables });
     }
 
     /**
@@ -5689,11 +5556,8 @@ abstract class ShardDO {
                 continue;
             }
 
-            try {
-                ws.send(frame);
-            } catch {
-                /* socket may have been closed mid-broadcast */
-            }
+            // Best-effort fan-out; a closed socket is simply skipped.
+            trySendFrame(ws, frame);
         }
     }
 
@@ -5709,7 +5573,10 @@ abstract class ShardDO {
     }
 }
 
-export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO, subscriptionListDeltas };
+export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO };
+// Re-exported so existing import sites (`./index`, tests) keep their path; the
+// canonical home is `./subscription-delivery`.
+export { subscriptionListDeltas } from "./subscription-delivery";
 export type {
     HibernatableWebSocket,
     LogSink,
