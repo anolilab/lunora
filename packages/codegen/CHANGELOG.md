@@ -1,3 +1,18 @@
+## @lunora/codegen [1.0.0-alpha.12](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.11...@lunora/codegen@1.0.0-alpha.12) (2026-06-28)
+
+### Features
+
+* **container:** close Cloudflare Container feature gaps ([#36](https://github.com/anolilab/lunora/issues/36)) ([0246176](https://github.com/anolilab/lunora/commit/02461764873b47d51fb55dbd12bc784bcf9dad42)), closes [28/#178](https://github.com/28/lunora/issues/178) [cloudflare/containers#30](https://github.com/cloudflare/containers/issues/30) [cloudflare/containers#147](https://github.com/cloudflare/containers/issues/147) [cloudflare/containers#147](https://github.com/cloudflare/containers/issues/147) [cloudflare/containers#135](https://github.com/cloudflare/containers/issues/135)
+
+### Documentation
+
+* fix package doc bugs and dead cross-links ([205d74c](https://github.com/anolilab/lunora/commit/205d74c3b730e201e822141191b45015f303336b))
+
+
+### Dependencies
+
+* **@lunora/container:** upgraded to 1.0.0-alpha.4
+
 ## @lunora/codegen [1.0.0-alpha.11](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.10...@lunora/codegen@1.0.0-alpha.11) (2026-06-27)
 
 ### Features
