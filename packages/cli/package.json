@@ -73,6 +73,7 @@
         "@lunora/d1": "1.0.0-alpha.7",
         "@lunora/seed": "1.0.0-alpha.5",
         "@visulima/cerebro": "3.0.0-alpha.32",
+        "@visulima/error": "6.0.0-alpha.34",
         "@visulima/fs": "5.0.0-alpha.32",
         "@visulima/pail": "4.0.0-alpha.22",
         "@visulima/path": "3.0.0-alpha.13",
