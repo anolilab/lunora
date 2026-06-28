@@ -10,9 +10,13 @@
  * consuming app pins their versions and supplies React bindings
  * (`@tanstack/react-db`) itself.
  */
+export type { CheckpointRegistry, LunoraCollectionConfig, LunoraCollectionOptions } from "./collection-options";
+export { createCheckpointRegistry, lunoraCollectionOptions } from "./collection-options";
 export type { CollectionDef, InsertBinding, LunoraDb } from "./define-collections";
 export { defineCollections } from "./define-collections";
-export type { Row, SyncWriter } from "./internals";
-export { createOptimisticOnlineDetector, makeDiffEmit, runOutboxMutation, toMap } from "./internals";
+export type { BindMutatorsContext, BoundMutators, ClientMutatorContext, ClientMutatorDef } from "./define-mutators";
+export { bindMutators, defineMutator } from "./define-mutators";
+export type { ExecutorOutboxSinkOptions, OutboxExecutor, OutboxMutationMetadata, Row, SyncWriter } from "./internals";
+export { createExecutorOutboxSink, createOptimisticOnlineDetector, makeDiffEmit, OUTBOX_MUTATION_FN_NAME, runOutboxMutation, toMap } from "./internals";
 
 export const VERSION = "0.0.0";

@@ -2,8 +2,113 @@
 import { NonRetriableError } from "@tanstack/offline-transactions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Row, SyncWriter } from "../src/internals";
-import { createOptimisticOnlineDetector, makeDiffEmit, runOutboxMutation, toMap } from "../src/internals";
+import type { OutboxExecutor, OutboxMutationMetadata, Row, SyncWriter } from "../src/internals";
+import { createExecutorOutboxSink, createOptimisticOnlineDetector, makeDiffEmit, OUTBOX_MUTATION_FN_NAME, runOutboxMutation, toMap } from "../src/internals";
+
+/**
+ * A fake `OfflineExecutor` slice: every `createOfflineTransaction(...).mutate()`
+ * appends a persisted entry; `peekOutbox` returns them oldest-first and
+ * `removeFromOutbox` evicts by id. Records the metadata each transaction carried
+ * so the sink's persisted payload can be asserted.
+ */
+const fakeExecutor = (): { committed: OutboxMutationMetadata[]; executor: OutboxExecutor; outbox: { id: string }[] } => {
+    const outbox: { id: string }[] = [];
+    const committed: OutboxMutationMetadata[] = [];
+    let counter = 0;
+
+    return {
+        committed,
+        executor: {
+            createOfflineTransaction: (options) => {
+                return {
+                    mutate: () => {
+                        counter += 1;
+                        outbox.push({ id: `tx-${counter.toString()}` });
+                        committed.push(options.metadata as OutboxMutationMetadata);
+                    },
+                };
+            },
+            getPendingCount: () => outbox.length,
+            peekOutbox: () => Promise.resolve([...outbox]),
+            removeFromOutbox: (id) => {
+                const index = outbox.findIndex((entry) => entry.id === id);
+
+                if (index !== -1) {
+                    outbox.splice(index, 1);
+                }
+
+                return Promise.resolve();
+            },
+        },
+        outbox,
+    };
+};
+
+const outboxMutation = (mutationId: number) => {
+    return {
+        args: { text: `m${mutationId.toString()}` },
+        clientId: "c1",
+        functionPath: "messages:send",
+        idempotencyKey: `c1:${mutationId.toString()}`,
+        identity: "ident-a",
+        mutationId,
+    };
+};
+
+describe(createExecutorOutboxSink, () => {
+    it("persists each write as an executor transaction carrying the replay metadata", async () => {
+        const { committed, executor, outbox } = fakeExecutor();
+        const sink = createExecutorOutboxSink(executor);
+
+        await sink.enqueue({ ...outboxMutation(1), shardKey: "room-7" });
+
+        expect(outbox).toHaveLength(1);
+        expect(committed[0]).toStrictEqual({
+            args: { text: "m1" },
+            clientId: "c1",
+            functionPath: "messages:send",
+            identity: "ident-a",
+            mutationId: 1,
+            shardKey: "room-7",
+        });
+    });
+
+    it("evicts the oldest persisted writes once the cap is exceeded, reporting each drop", async () => {
+        const { executor, outbox } = fakeExecutor();
+        const dropped: string[] = [];
+        const sink = createExecutorOutboxSink(executor, { maxItems: 2, onOverflow: (id) => dropped.push(id) });
+
+        await sink.enqueue(outboxMutation(1));
+        await sink.enqueue(outboxMutation(2));
+
+        // Still within the cap — nothing evicted yet.
+        expect(dropped).toStrictEqual([]);
+
+        await sink.enqueue(outboxMutation(3));
+
+        // The third write pushes over the cap → the oldest (tx-1) is evicted.
+        expect(dropped).toStrictEqual(["tx-1"]);
+        expect(outbox.map((entry) => entry.id)).toStrictEqual(["tx-2", "tx-3"]);
+    });
+
+    it("uses the configured reserved mutationFn name", async () => {
+        const seen: string[] = [];
+        const executor: OutboxExecutor = {
+            createOfflineTransaction: (options) => {
+                seen.push(options.mutationFnName);
+
+                return { mutate: () => undefined };
+            },
+            getPendingCount: () => 0,
+            peekOutbox: () => Promise.resolve([]),
+            removeFromOutbox: () => Promise.resolve(),
+        };
+
+        await createExecutorOutboxSink(executor).enqueue(outboxMutation(1));
+
+        expect(seen).toStrictEqual([OUTBOX_MUTATION_FN_NAME]);
+    });
+});
 
 /** A SyncWriter that records the writes it received, in order. */
 const recordingWriter = (): { ops: ({ key: string; type: "delete" } | { type: "insert" | "update"; value: Row })[]; writer: SyncWriter<Row> } => {

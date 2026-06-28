@@ -1,13 +1,13 @@
-/* eslint-disable no-underscore-dangle -- `_id` is the Lunora document-id field this binding keys rows by */
 /* eslint-disable import/exports-last -- a types-heavy module: public types are declared next to the helpers they build on */
 import type { FunctionReference, LunoraClient, SubscriptionError } from "@lunora/client";
 import type { Collection, Transaction } from "@tanstack/db";
-import { BTreeIndex, createCollection } from "@tanstack/db";
+import { createCollection } from "@tanstack/db";
 import type { OfflineConfig, OfflineExecutor } from "@tanstack/offline-transactions";
-import { startOfflineExecutor } from "@tanstack/offline-transactions";
+import { NonRetriableError, startOfflineExecutor } from "@tanstack/offline-transactions";
 
-import type { Row } from "./internals";
-import { createOptimisticOnlineDetector, makeDiffEmit, runOutboxMutation, toMap } from "./internals";
+import { lunoraCollectionOptions } from "./collection-options";
+import type { OutboxMutationMetadata, Row } from "./internals";
+import { createOptimisticOnlineDetector, OUTBOX_MUTATION_FN_NAME, runOutboxMutation } from "./internals";
 
 /** Element type of an array (the row type a `list` query returns). */
 type Element<T> = T extends ReadonlyArray<infer E> ? E : never;
@@ -97,86 +97,29 @@ export interface LunoraDb<D extends Record<string, AnyDef>> {
 export const defineCollections = <D extends Record<string, AnyDef>>(client: LunoraClient, defs: D): LunoraDb<D> => {
     const collections: Record<string, Collection<Row, string>> = {};
     const scope: Record<string, (args?: Record<string, unknown>) => void> = {};
-    const subscriptions: Record<string, (() => void) | undefined> = {};
-    const emitters: Record<string, ((rows: Map<string, Row>) => void) | undefined> = {};
-    const errorHandlers: Record<string, ((error: SubscriptionError) => void) | undefined> = {};
     const mutationFns: OfflineConfig["mutationFns"] = {};
 
     const entries = Object.entries(defs);
 
     for (const [name, definition] of entries) {
-        const getKey = definition.getKey ?? ((row: Row) => row._id);
         const insert = definition.insert as InsertBinding<Row, unknown> | undefined;
-        const synced = new Map<string, Row>();
 
-        collections[name] = createCollection<Row, string>({
-            // Auto-build ordered (B-tree) indexes for whatever the app's live
-            // queries join / filter / sort on, so they stay fast as data grows.
-            autoIndex: "eager",
-            defaultIndexType: BTreeIndex,
-            getKey,
+        // Build the live-sync read path from the shared collection-options core
+        // (same diff-into-channel + auto-index + scoped-resubscribe behavior).
+        const { config, scope: scopeFunction } = lunoraCollectionOptions<Row>({
+            client,
+            getKey: definition.getKey,
             id: name,
-            sync: {
-                sync: (writer) => {
-                    const emit = makeDiffEmit<Row>(synced, writer);
-                    emitters[name] = emit;
-
-                    // Surface a subscription error: forward it to the user's
-                    // `onError` and move the collection out of `loading` so a
-                    // failed subscription never leaves it stuck there forever.
-                    const onError = (error: SubscriptionError) => {
-                        writer.markReady();
-                        definition.onError?.(error);
-                    };
-
-                    errorHandlers[name] = onError;
-
-                    if (definition.scopeBy === undefined) {
-                        // Static collection: subscribe to the unscoped list now.
-                        subscriptions[name] = client.subscribe(
-                            definition.list,
-                            {},
-                            (rows) => {
-                                emit(toMap(rows as Row[], getKey));
-                                writer.markReady();
-                            },
-                            { onError },
-                        );
-                    } else {
-                        // Scoped collection: stays empty until `scope[name](args)`.
-                        writer.markReady();
-                    }
-
-                    return () => {
-                        emitters[name] = undefined;
-                        errorHandlers[name] = undefined;
-                        subscriptions[name]?.();
-                        subscriptions[name] = undefined;
-                    };
-                },
-            },
+            // `AnyDef` erases `list` to `any` (`TList = any`); it's a `FunctionReference` here.
+            list: definition.list as FunctionReference,
+            onError: definition.onError,
+            scopeBy: definition.scopeBy,
         });
 
+        collections[name] = createCollection<Row, string>(config);
+
         if (definition.scopeBy !== undefined) {
-            scope[name] = (args) => {
-                subscriptions[name]?.();
-                subscriptions[name] = undefined;
-                // Clear the previous scope's rows from the synced view.
-                emitters[name]?.(new Map());
-
-                if (args === undefined) {
-                    return;
-                }
-
-                subscriptions[name] = client.subscribe(
-                    definition.list,
-                    args,
-                    (rows) => {
-                        emitters[name]?.(toMap(rows as Row[], getKey));
-                    },
-                    { onError: (error) => errorHandlers[name]?.(error) },
-                );
-            };
+            scope[name] = scopeFunction;
         }
 
         if (insert) {
@@ -190,6 +133,27 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
             };
         }
     }
+
+    // Reserved replay handler for the unified outbox: a raw `client.mutation`
+    // offline write delegated through `createExecutorOutboxSink` rides this
+    // executor (one durable store) rather than the standalone `OfflineQueue`. It
+    // carries no collection mutation — the target lives in `transaction.metadata`
+    // — so we replay it by path and apply the same identity guard the queue path
+    // uses: a write whose captured identity no longer matches the signed-in user
+    // is dropped (NonRetriableError) instead of replaying as someone else.
+    mutationFns[OUTBOX_MUTATION_FN_NAME] = async ({ transaction }) => {
+        const meta = transaction.metadata as OutboxMutationMetadata | undefined;
+
+        if (!meta) {
+            return;
+        }
+
+        if (meta.identity !== client.currentIdentity()) {
+            throw new NonRetriableError("outbox write dropped: identity changed since it was queued");
+        }
+
+        await runOutboxMutation(() => client.mutation({ __lunoraRef: meta.functionPath }, meta.args, { shardKey: meta.shardKey }));
+    };
 
     const executor = startOfflineExecutor({
         collections,

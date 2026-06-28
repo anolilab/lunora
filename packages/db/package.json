@@ -40,6 +40,14 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./collections": {
+            "types": "./dist/collections/index.d.ts",
+            "import": "./dist/collections/index.mjs"
+        },
+        "./mutators": {
+            "types": "./dist/mutators/index.d.ts",
+            "import": "./dist/mutators/index.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {
