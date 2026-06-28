@@ -20,16 +20,16 @@ export default defineConfig({
 
 ## Options
 
-| Option             | Default               | Purpose                                                                        |
-| ------------------ | --------------------- | ------------------------------------------------------------------------------ |
-| `schemaDir`        | `"lunora"`            | Directory containing `schema.ts` + function files                              |
-| `generatedDir`     | `"lunora/_generated"` | Where to emit `api.ts`, `server.ts`, `dataModel.ts`                            |
-| `apiSpec`          | `"openapi"`           | API spec emitted into `_generated/`: `"openapi"`/`"openrpc"`/`"both"`/`"none"` |
-| `studio`           | `true`                | Serve the Lunora studio at `/__lunora` during dev, or `false` to skip          |
-| `cloudflare`       | `true`                | Pass options to `@cloudflare/vite-plugin`, or `false` to skip                  |
-| `overlay`          | `true`                | Inject `@visulima/vite-overlay` for runtime errors, or `false` to skip         |
-| `validateWrangler` | `true`                | Cross-check `wrangler.jsonc` bindings against the schema                       |
-| `projectRoot`      | `process.cwd()`       | Override for monorepo setups                                                   |
+| Option             | Default               | Purpose                                                                                              |
+| ------------------ | --------------------- | ---------------------------------------------------------------------------------------------------- |
+| `schemaDir`        | `"lunora"`            | Directory containing `schema.ts` + function files                                                    |
+| `generatedDir`     | `"lunora/_generated"` | Where to emit `api.ts`, `server.ts`, `dataModel.ts`                                                  |
+| `apiSpec`          | `"openapi"`           | API spec emitted into `_generated/`: `"openapi"`/`"openrpc"`/`"both"`/`"none"`                       |
+| `studio`           | `true`                | Serve the Lunora studio at `/__lunora` during dev, or `false` to skip                                |
+| `cloudflare`       | `true`                | Pass options to `@cloudflare/vite-plugin`, or `false` to skip                                        |
+| `overlay`          | `true`                | Inject `@visulima/vite-overlay` for runtime errors; `false` to skip, or an options object to forward |
+| `validateWrangler` | `true`                | Cross-check `wrangler.jsonc` bindings against the schema                                             |
+| `projectRoot`      | `process.cwd()`       | Override for monorepo setups                                                                         |
 
 ## Codegen lifecycle
 
@@ -49,6 +49,34 @@ bindings as Vite errors before they explode at deploy.
 During dev the plugin mounts the Lunora studio at `/__lunora` so you can browse
 your schema, data, logs, and advisors without leaving the dev server. Set
 `studio: false` to turn it off.
+
+## Error overlay
+
+The plugin injects [`@visulima/vite-overlay`](https://www.npmjs.com/package/@visulima/vite-overlay)
+so runtime and codegen failures show up in the browser instead of only the
+terminal. On top of it Lunora registers **solution finders** that recognise
+framework-specific failures and render an actionable fix hint in the overlay:
+
+- a missing or non-object-literal `defineSchema(...)`
+- a reserved or duplicate table name
+- an invalid `.jurisdiction(...)` value
+- a non-literal `unique` index flag
+- a container/workflow class that isn't re-exported by your worker entry
+- runtime unique-constraint and optimistic-concurrency (`ConflictError`) conflicts
+
+Pass an options object to forward overlay configuration — including your own
+`solutionFinders`, which run alongside Lunora's (each error resolves to the
+highest-`priority` finder that recognises it):
+
+```ts
+lunora({
+    overlay: {
+        solutionFinders: [myCustomFinder],
+    },
+});
+```
+
+Set `overlay: false` to disable it entirely.
 
 ## See also
 

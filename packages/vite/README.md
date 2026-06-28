@@ -80,6 +80,21 @@ lunora({
 
 `lunora()` returns a flat `Plugin[]`; Vite flattens nested plugin arrays, so `plugins: [lunora()]` works without spreading.
 
+### Error overlay
+
+The overlay surfaces dev-time failures in the browser. Lunora ships **solution finders** that turn the common ones — missing/invalid `defineSchema`, reserved or duplicate table names, a bad `.jurisdiction(...)`, a non-literal `unique`, a binding that isn't re-exported by your worker entry, and runtime unique-constraint / optimistic-concurrency conflicts — into an actionable fix hint right in the overlay.
+
+`overlay` also accepts an options object forwarded to [`@visulima/vite-overlay`](https://www.npmjs.com/package/@visulima/vite-overlay), so you can add your own finders alongside Lunora's:
+
+```ts
+lunora({
+    overlay: {
+        // your finders run alongside Lunora's; either side can win per error via `priority`
+        solutionFinders: [myCustomFinder],
+    },
+});
+```
+
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/vite)**.
 
 ## Related
