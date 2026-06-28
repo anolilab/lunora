@@ -193,6 +193,13 @@ type ConnectionStatus = "connected" | "connecting" | "idle" | "offline";
  * re-declaring it.
  */
 interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unknown> {
+    /**
+     * Override the auto-generated idempotency key (`x-lunora-mutation-id`). Lets a
+     * durable outbox replay a committed-but-unacked write under its *original* key
+     * so the server dedups it instead of applying it twice. Omit for normal calls —
+     * each then gets a fresh key.
+     */
+    mutationId?: string;
     optimistic?: (current: TCurrent | undefined) => TValue;
 
     /**
@@ -1155,7 +1162,9 @@ class LunoraClient {
         // One stable idempotency key per logical mutation, shared by the direct
         // send and any offline-queue replay of this write (the entry reuses it as
         // its `id`). Lets the server dedup a replayed-but-already-committed write.
-        const mutationId = nextId();
+        // A durable outbox replay passes the original key back via `mutationId` so
+        // its retry stays server-idempotent instead of minting a fresh key.
+        const mutationId = options.mutationId ?? nextId();
 
         // Apply optimistic updates to any subscriber listening on this fn. The
         // legacy per-call `optimistic` transform patches the matching (fn, args,
