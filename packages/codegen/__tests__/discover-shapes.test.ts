@@ -75,6 +75,30 @@ describe("discover-shapes", () => {
         expect(discoverShapes(newProject(), workdir)).toEqual([{ exportName: "channel", filePath: "shapes", table: "messages" }]);
     });
 
+    it("discovers a namespace-imported defineShape (server.defineShape)", () => {
+        expect.assertions(1);
+
+        writeShapes(`
+            import * as server from "@lunora/server";
+
+            export const channel = server.defineShape({ table: "messages", where: () => ({}) });
+        `);
+
+        expect(discoverShapes(newProject(), workdir)).toEqual([{ exportName: "channel", filePath: "shapes", table: "messages" }]);
+    });
+
+    it("ignores a namespace-imported defineShape from a foreign module", () => {
+        expect.assertions(1);
+
+        writeShapes(`
+            import * as other from "other-pkg";
+
+            export const channel = other.defineShape({ table: "messages", where: () => ({}) });
+        `);
+
+        expect(discoverShapes(newProject(), workdir)).toEqual([]);
+    });
+
     it("ignores a local defineShape not imported from @lunora/server", () => {
         expect.assertions(1);
 

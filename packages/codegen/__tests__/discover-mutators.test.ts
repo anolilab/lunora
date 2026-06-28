@@ -58,6 +58,43 @@ describe("discover-mutators", () => {
         expect(discoverMutators(newProject(), workdir)).toEqual([{ exportName: "sendMessage", filePath: "mutators" }]);
     });
 
+    it("discovers a namespace-imported defineMutator (server.defineMutator)", () => {
+        expect.assertions(1);
+
+        writeMutators(`
+            import * as server from "@lunora/server";
+
+            export const sendMessage = server.defineMutator({ server: async () => {} });
+        `);
+
+        expect(discoverMutators(newProject(), workdir)).toEqual([{ exportName: "sendMessage", filePath: "mutators" }]);
+    });
+
+    it("discovers a mutator exported via a separate export statement", () => {
+        expect.assertions(1);
+
+        writeMutators(`
+            import { defineMutator } from "@lunora/server";
+
+            const sendMessage = defineMutator({ server: async () => {} });
+            export { sendMessage };
+        `);
+
+        expect(discoverMutators(newProject(), workdir)).toEqual([{ exportName: "sendMessage", filePath: "mutators" }]);
+    });
+
+    it("ignores a namespace-imported defineMutator from a foreign module", () => {
+        expect.assertions(1);
+
+        writeMutators(`
+            import * as other from "other-pkg";
+
+            export const sendMessage = other.defineMutator({ server: async () => {} });
+        `);
+
+        expect(discoverMutators(newProject(), workdir)).toEqual([]);
+    });
+
     it("ignores a local defineMutator not imported from @lunora/server", () => {
         expect.assertions(1);
 

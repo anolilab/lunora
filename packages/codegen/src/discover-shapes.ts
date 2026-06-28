@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import type { CallExpression, Identifier, Project, SourceFile } from "ts-morph";
+import type { CallExpression, Identifier, Node as TsNode, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "./diagnostics";
@@ -37,6 +37,51 @@ const isDefineShape = (identifier: Identifier): boolean => {
         }
 
         return declaration.getNameNode().getText() === "defineShape";
+    }
+
+    return false;
+};
+
+/**
+ * Decide whether `identifier` is a namespace binding of an allowed shape module —
+ * the `server` in `import * as server from "@lunora/server"`. Used to recognize
+ * the member-access callee form `server.defineShape(...)`.
+ */
+const isShapeNamespaceImport = (identifier: Identifier): boolean => {
+    const symbol = identifier.getSymbol();
+
+    if (!symbol) {
+        return false;
+    }
+
+    for (const declaration of symbol.getDeclarations()) {
+        if (!Node.isNamespaceImport(declaration)) {
+            continue;
+        }
+
+        const importDeclaration = declaration.getFirstAncestorByKind(SyntaxKind.ImportDeclaration);
+
+        return importDeclaration !== undefined && SHAPE_MODULE_SPECIFIERS.has(importDeclaration.getModuleSpecifierValue());
+    }
+
+    return false;
+};
+
+/**
+ * Decide whether a call's callee is `defineShape` — either the bare imported
+ * identifier (`defineShape(...)`) or a namespace member access
+ * (`server.defineShape(...)`). Both are valid ES module syntax, so discovery
+ * must see shapes declared either way.
+ */
+const isDefineShapeCallee = (callee: TsNode): boolean => {
+    if (Node.isIdentifier(callee)) {
+        return isDefineShape(callee);
+    }
+
+    if (Node.isPropertyAccessExpression(callee)) {
+        const object = callee.getExpression();
+
+        return callee.getName() === "defineShape" && Node.isIdentifier(object) && isShapeNamespaceImport(object);
     }
 
     return false;
@@ -83,7 +128,7 @@ const shapesFromSource = (source: SourceFile): ShapeIR[] => {
         const callExpression = initializer as CallExpression;
         const callee = callExpression.getExpression();
 
-        if (!Node.isIdentifier(callee) || !isDefineShape(callee)) {
+        if (!isDefineShapeCallee(callee)) {
             continue;
         }
 

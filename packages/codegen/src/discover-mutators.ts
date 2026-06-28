@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import type { CallExpression, Identifier, Project, SourceFile } from "ts-morph";
+import type { CallExpression, Identifier, Node as TsNode, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "./diagnostics";
@@ -42,6 +42,51 @@ const isDefineMutator = (identifier: Identifier): boolean => {
     return false;
 };
 
+/**
+ * Decide whether `identifier` is a namespace binding of an allowed mutator
+ * module — the `server` in `import * as server from "@lunora/server"`. Used to
+ * recognize the member-access callee form `server.defineMutator(...)`.
+ */
+const isMutatorNamespaceImport = (identifier: Identifier): boolean => {
+    const symbol = identifier.getSymbol();
+
+    if (!symbol) {
+        return false;
+    }
+
+    for (const declaration of symbol.getDeclarations()) {
+        if (!Node.isNamespaceImport(declaration)) {
+            continue;
+        }
+
+        const importDeclaration = declaration.getFirstAncestorByKind(SyntaxKind.ImportDeclaration);
+
+        return importDeclaration !== undefined && MUTATOR_MODULE_SPECIFIERS.has(importDeclaration.getModuleSpecifierValue());
+    }
+
+    return false;
+};
+
+/**
+ * Decide whether a call's callee is `defineMutator` — either the bare imported
+ * identifier (`defineMutator(...)`) or a namespace member access
+ * (`server.defineMutator(...)`). Both are valid ES module syntax, so discovery
+ * must see mutators declared either way.
+ */
+const isDefineMutatorCallee = (callee: TsNode): boolean => {
+    if (Node.isIdentifier(callee)) {
+        return isDefineMutator(callee);
+    }
+
+    if (Node.isPropertyAccessExpression(callee)) {
+        const object = callee.getExpression();
+
+        return callee.getName() === "defineMutator" && Node.isIdentifier(object) && isMutatorNamespaceImport(object);
+    }
+
+    return false;
+};
+
 /** Collect exported `defineMutator` declarations from one source file. */
 const mutatorsFromSource = (source: SourceFile): MutatorIR[] => {
     const mutators: MutatorIR[] = [];
@@ -59,7 +104,7 @@ const mutatorsFromSource = (source: SourceFile): MutatorIR[] => {
 
         const callee = (initializer as CallExpression).getExpression();
 
-        if (!Node.isIdentifier(callee) || !isDefineMutator(callee)) {
+        if (!isDefineMutatorCallee(callee)) {
             continue;
         }
 
