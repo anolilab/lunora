@@ -168,18 +168,6 @@ interface ShardDOState {
      */
     setWebSocketAutoResponse?: (pair: WebSocketRequestResponsePair) => void;
     storage: {
-        /**
-         * Cancel any pending alarm. Optional: present on the real
-         * `DurableObjectState.storage`, absent in the unit harness.
-         */
-        deleteAlarm?: () => Promise<void>;
-
-        /**
-         * The currently-armed alarm time (ms epoch) or `null`. Used by the
-         * global-shape poll loop to avoid double-arming. Optional: present on
-         * the real runtime, absent in the unit harness.
-         */
-        getAlarm?: () => Promise<null | number>;
         /** Native PITR (≤30 days): bookmark for a past `time`. Absent in local dev. */
         getBookmarkForTime?: (time: Date | number) => Promise<string>;
         /** Native PITR: bookmark for the object's current state. Absent in local dev. */
@@ -1979,6 +1967,16 @@ abstract class ShardDO {
             // Custom-mutator watermark WRITE: advance the per-client high-water
             // mark to this sequence now that the authoritative writes committed.
             // No-op unless this dispatch was classified `"next"` above.
+            //
+            // NOT atomic with the handler: the handler's writes auto-commit per
+            // statement, then `persistIdempotentResult` and this advance run as
+            // two further separate writes. A crash after the handler commits but
+            // before this advance leaves the watermark behind — the client's
+            // unacked replay re-classifies as `"next"` (the read side treats a
+            // missing/lower row as already-processed) and re-runs idempotently,
+            // re-advancing. So the gap self-heals; it never drops or double-applies
+            // the write. The advance helper below documents the same
+            // replay-recovery contract for a failed watermark write.
             if (mutatorClass?.kind === "next") {
                 this.advanceClientMutationWatermark();
             }

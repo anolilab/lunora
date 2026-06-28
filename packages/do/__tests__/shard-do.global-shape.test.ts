@@ -121,14 +121,6 @@ const makeState = (sockets: FakeWebSocket[]): ShardDOState => {
             return sockets as unknown as WebSocket[];
         },
         storage: {
-            deleteAlarm() {
-                alarmBox.scheduled = null;
-
-                return Promise.resolve();
-            },
-            getAlarm() {
-                return Promise.resolve(alarmBox.scheduled);
-            },
             setAlarm(scheduledTime) {
                 alarmBox.scheduled = typeof scheduledTime === "number" ? scheduledTime : scheduledTime.getTime();
 

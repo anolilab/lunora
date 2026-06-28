@@ -6,7 +6,7 @@ export { applyDelta, isMutationDelta } from "./delta-merge";
 export { CONFLICT_ERROR_CODE, isConflictError } from "./errors";
 export type { OptimisticLocalStore, OptimisticUpdate } from "./local-store";
 export { createLocalStore } from "./local-store";
-export type { ConnectionStatus, MutationCallOptions } from "./lunora-client";
+export type { ConnectionStatus, MutationCallOptions, SyncWatermark } from "./lunora-client";
 export { LunoraClient } from "./lunora-client";
 export type { MutationRunnerSinks } from "./mutation-runner";
 export { createMutationRunner } from "./mutation-runner";

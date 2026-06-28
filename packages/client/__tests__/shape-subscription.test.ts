@@ -158,6 +158,36 @@ describe("lunoraClient subscribeShape", () => {
         expect(seen.at(-1)).toStrictEqual([{ _id: "m2", text: "b" }]);
     });
 
+    it("surfaces the advanced watermark to onCheckpoint after each applied poke", () => {
+        const client = makeClient();
+        const watermarks: { checkpoint?: number; mutationId?: number }[] = [];
+
+        client.subscribeShape({ args: { channelId: "c1" }, name: "messagesByChannel" }, () => undefined, {
+            onCheckpoint: (watermark) => watermarks.push(watermark),
+        });
+
+        const socket = latestSocket();
+
+        socket.open();
+        const shapeId = frames(socket).find((frame) => frame.type === "shape_subscribe")?.id as string;
+
+        // A poke whose part carries this client's echoed `lastMutationId`,
+        // committed at op-log checkpoint 5.
+        socket.receive({ epoch: "e1", pokeId: "p1", type: "pokeStart" });
+        socket.receive({
+            lastMutationId: 3,
+            pokeId: "p1",
+            rowsPatch: [{ key: "m1", op: "insert", table: "messages", value: { _id: "m1" } }],
+            shapeId,
+            type: "pokePart",
+        });
+        socket.receive({ checkpoint: 5, epoch: "e1", pokeId: "p1", type: "pokeEnd" });
+
+        // The collection learns both the op-log checkpoint and the mutation id it
+        // has now synced — so it can drop the overlay for client-seq ≤ 3.
+        expect(watermarks).toStrictEqual([{ checkpoint: 5, mutationId: 3 }]);
+    });
+
     it("does not apply a poke missing its pokeStart (connected mid-poke)", () => {
         const client = makeClient();
         const seen: Record<string, unknown>[][] = [];
