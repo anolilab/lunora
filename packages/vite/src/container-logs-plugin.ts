@@ -24,8 +24,20 @@ import type { ResolvedLunoraPluginOptions } from "./types";
 const containerLogsPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
     let handle: ContainerLogStreamHandle | undefined;
 
+    // Idempotent — safe to call from more than one lifecycle hook.
+    const closeHandle = (): void => {
+        handle?.close();
+        handle = undefined;
+    };
+
     return {
         apply: "serve",
+        // Fires on `server.close()` for both the normal and middleware-mode dev
+        // servers, so the Docker poll loop is torn down even when there is no
+        // `httpServer` to listen on (middleware mode).
+        buildEnd() {
+            closeHandle();
+        },
         configureServer(server) {
             if (handle || process.env.LUNORA_CONTAINER_LOGS === "0") {
                 return;
@@ -58,11 +70,10 @@ const containerLogsPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 },
             });
 
-            // Detach on shutdown so the Docker poll loop doesn't outlive the server.
-            server.httpServer?.once("close", () => {
-                handle?.close();
-                handle = undefined;
-            });
+            // Normal (non-middleware) dev server: detach the moment the HTTP
+            // server closes. In middleware mode `httpServer` is null, so the
+            // `buildEnd` hook above is the teardown path instead.
+            server.httpServer?.once("close", closeHandle);
         },
         name: "lunora:container-logs",
     };

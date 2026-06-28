@@ -96,7 +96,6 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
         devVariablesPlugin(resolved),
         codegenPlugin(resolved),
         logStreamPlugin(),
-        containerLogsPlugin(resolved),
         agentRulesHintPlugin(resolved),
     ];
 
@@ -113,6 +112,11 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
     }
 
     if (resolved.cloudflare !== false) {
+        // Only the Cloudflare plugin builds + runs the dev containers, so tail
+        // their logs only when it's active — the BYO (`cloudflare: false`) path
+        // never starts containers, so Docker polling would be pointless.
+        plugins.push(containerLogsPlugin(resolved));
+
         // Honor remote-binding dev (`LUNORA_REMOTE` / `lunora.json` `remote`) on
         // the `vite dev` path too, exactly like `lunora dev`: materialize a temp
         // wrangler config with `"remote": true` on each eligible binding and
