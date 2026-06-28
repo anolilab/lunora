@@ -47,6 +47,8 @@
 /* eslint-enable no-secrets/no-secrets */
 export { createPolicyDsl, definePermission, definePolicies, definePolicy, defineRole } from "./define";
 export { rls } from "./middleware";
+export type { RlsReadRegistry, ShapeReadWhereRequest } from "./shape-read-base";
+export { buildRlsReadRegistry, composeShapeReadWhere } from "./shape-read-base";
 export type {
     DefinePolicyInput,
     Permission,

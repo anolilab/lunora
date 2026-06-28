@@ -46,6 +46,7 @@ import type { Middleware } from "../builder/types";
 import { LunoraError } from "../error";
 import type { FacadeEntry } from "../facade";
 import { bindOrm, bindTableFacade } from "../facade";
+import { tagRlsMiddleware } from "./policy-tag";
 import type { Permission, Policy, PolicyContext, RlsOptions, Role, WhereInput } from "./types";
 
 /**
@@ -1387,7 +1388,7 @@ const rls = <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArra
     const perTable = indexByTable(policies);
     const rolePermissions = indexRolePermissions(options.roles);
 
-    return async ({ ctx, next }) => {
+    const middleware: Middleware<Context, Context> = async ({ ctx, next }) => {
         const auth = ctx.auth ?? {};
         // Resolve identity once per RLS-protected procedure so policies can
         // branch on claims (`ctx.auth.identity.email` etc.) without each
@@ -1446,6 +1447,14 @@ const rls = <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArra
 
         return next({ ctx: extension });
     };
+
+    // Surface the policies + roles on the middleware so the procedure builder
+    // can hoist them onto the registered function — the local-first shape path
+    // composes a `defineShape` predicate with the table's read base-where from
+    // these (see `shape-read-base.ts`). Cast to the erased `Policy<unknown>`
+    // the tag stores; the closures are evaluated against a structurally-built
+    // PolicyContext, exactly like this middleware does at request time.
+    return tagRlsMiddleware(middleware, { policies: policies as ReadonlyArray<Policy>, roles: options.roles ?? [] });
 };
 
 export { rls };

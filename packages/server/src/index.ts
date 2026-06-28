@@ -59,11 +59,13 @@ export type {
     PolicyDecisionOf,
     PolicyOperation,
     RlsOptions,
+    RlsReadRegistry,
     Role,
+    ShapeReadWhereRequest,
     TypedDefinePolicyInput,
     WhereInput,
 } from "./rls/index";
-export { createPolicyDsl, definePermission, definePolicies, definePolicy, defineRole, rls } from "./rls/index";
+export { buildRlsReadRegistry, composeShapeReadWhere, createPolicyDsl, definePermission, definePolicies, definePolicy, defineRole, rls } from "./rls/index";
 export type {
     AggregateIndexOptions,
     ExtendableSchema,

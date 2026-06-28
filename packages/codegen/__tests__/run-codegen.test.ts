@@ -177,7 +177,7 @@ export const sendMessage = defineMutator({
             };
 
             it("registers shapes into LUNORA_SHAPES and overrides resolveShape on the DO", () => {
-                expect.assertions(7);
+                expect.assertions(10);
 
                 writeShapes();
 
@@ -193,6 +193,14 @@ export const sendMessage = defineMutator({
                 // The cross-shard-join guard is imported + called against the compiled predicate.
                 expect(result.generated.shard).toContain("assertShapeShardable");
                 expect(result.generated.shard).toContain("assertShapeShardable(effectiveWhere, schema as unknown as SchemaLike, shape.table)");
+                // The shape predicate is AND-merged with the table's RLS read base-where:
+                // a module-scope registry is built from the function table, the helper is
+                // imported, and the resolver composes it before the shardability guard.
+                // eslint-disable-next-line no-secrets/no-secrets -- asserting on generated TS, not a credential
+                expect(result.generated.shard).toContain("const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCTIONS));");
+                expect(result.generated.shard).toContain("buildRlsReadRegistry, composeShapeReadWhere");
+                // eslint-disable-next-line no-secrets/no-secrets -- asserting on generated TS, not a credential
+                expect(result.generated.shard).toContain("composeShapeReadWhere(LUNORA_RLS_READ_REGISTRY,");
             });
 
             it("registers mutators into the dispatch table + LUNORA_MUTATOR_PATHS and overrides isCustomMutator", () => {

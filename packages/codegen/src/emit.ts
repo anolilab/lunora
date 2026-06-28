@@ -2872,6 +2872,7 @@ const emitShard = ({
     // (`resolveShape`) and the client-watermark mutator push (`isCustomMutator`)
     // through the generated registries. Both are empty for a shape/mutator-free
     // project, so its `shard.ts` is byte-identical.
+    /* eslint-disable no-secrets/no-secrets -- the emitted resolveShape body + registry builder are dense generated TS (`composeShapeReadWhere(LUNORA_RLS_READ_REGISTRY, …)`), not credentials */
     const shapeResolveOverride = hasShapes
         ? `
         protected override resolveShape(name: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; userId?: string }): { columns?: readonly string[]; effectiveWhere?: WhereInput; global?: boolean; table: string } | undefined {
@@ -2888,7 +2889,25 @@ const emitShard = ({
             // args then runs the shape's \`where(ctx, args)\` under that identity,
             // so which rows replicate is a server decision (reads-as-permissions).
             const ctx = this.buildCtx({ functionPath: \`__shape__:\${name}\`, identity });
-            const effectiveWhere = shape.compileWhere(ctx, args) as unknown as WhereInput;
+            const shapeWhere = shape.compileWhere(ctx, args) as unknown as WhereInput;
+
+            // AND-compose with the table's RLS read base-where. A shape runs no
+            // procedure, so the \`.use(rls(...))\` middleware never fires; without
+            // this merge its reads would bypass every read policy on the table
+            // (rows the caller can't see would replicate). \`composeShapeReadWhere\`
+            // evaluates the table's read policies under this same trusted ctx —
+            // exactly the request-time path — and fails closed under a
+            // \`.rls("required")\` schema for a non-\`.public()\`, policy-less table.
+            const effectiveWhere = composeShapeReadWhere(LUNORA_RLS_READ_REGISTRY, {
+                ctx,
+                identity: identity?.identity ?? null,
+                rlsRequired: (schema as unknown as { rlsMode?: string }).rlsMode === "required",
+                roles: (ctx as { auth?: { roles?: readonly string[] } }).auth?.roles ?? [],
+                shapeWhere,
+                table: shape.table,
+                tablePublic: (schema as unknown as { tables: Record<string, { isPublic?: boolean }> }).tables[shape.table]?.isPublic === true,
+                userId: identity?.userId ?? null,
+            });
 
             // A live shape pokes only from its OWN shard's op-log, so a \`where()\`
             // that joins to a \`.shardBy()\` table (rows in another DO) is rejected
@@ -2913,6 +2932,18 @@ const emitShard = ({
 `
         : "";
 
+    // Module-scope, built once: the per-table RLS read policies (hoisted from
+    // each function's `.use(rls(...))` chain onto `fn.rls`) the shape resolver
+    // AND-merges into every `defineShape` predicate, so partial replication
+    // honours the table's read policies. Only emitted when the project has shapes.
+    const shapeReadRegistryConst = hasShapes
+        ? `
+/** Per-table RLS read policies (hoisted from \`.use(rls(...))\` chains) the shape resolver AND-merges into each \`defineShape\` predicate so partial replication honours read policies. */
+const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCTIONS));
+`
+        : "";
+    /* eslint-enable no-secrets/no-secrets */
+
     // The cross-shard-join guard (`assertShapeShardable`) is a value import,
     // pulled in only when the project has shapes so a shape-free `shard.ts`
     // stays byte-identical.
@@ -2924,8 +2955,12 @@ const emitShard = ({
         // `asBucketStorage` (the bucket-aware `ctx.storage` wrapper) and
         // `createSecrets` (the `ctx.secrets` core built-in) live in
         // `@lunora/server`, the single source — imported here rather than stamped
-        // inline into every generated shard.
-        `import { asBucketStorage, createSecrets } from "${base.server}";`,
+        // inline into every generated shard. With shapes, also pull the RLS
+        // read-registry builder + `composeShapeReadWhere` so `resolveShape` can
+        // AND-merge a shape's predicate with the table's read base-where.
+        hasShapes
+            ? `import { asBucketStorage, buildRlsReadRegistry, composeShapeReadWhere, createSecrets } from "${base.server}";`
+            : `import { asBucketStorage, createSecrets } from "${base.server}";`,
     ];
 
     // The per-table facade binding lives in `@lunora/server` so codegen and the
@@ -3264,7 +3299,7 @@ const LUNORA_STORAGE_RULES: StorageRulesResult = ${JSON.stringify(storageRulesDa
 
 /** Which optional package-backed features this app wires up (discovered from imports / \`ctx.*\` reads / schema signals) served via \`__lunora_admin__:studioFeatures\` so the studio hides nav pages whose package isn't enabled. */
 const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = ${JSON.stringify(studioFeaturesData, undefined, 4)};
-${flagsOverrides.constant}${workflowsMetadataConst}${queuesMetadataConst}${containerSpecs}${workflowSpecs}${queueSpecs}
+${flagsOverrides.constant}${shapeReadRegistryConst}${workflowsMetadataConst}${queuesMetadataConst}${containerSpecs}${workflowSpecs}${queueSpecs}
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to \`__cdc_log\` on every write (backs streaming export + replay-PITR). */
     cdc?: boolean;
