@@ -1,6 +1,6 @@
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import type { TFunction } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
@@ -84,7 +84,7 @@ const SecurityAdvisorPanel = (): ReactElement => {
     const [findings, setFindings] = useState<SecurityFinding[] | null>(null);
     const [error, setError] = useState<null | string>(null);
 
-    const refresh = async (): Promise<void> => {
+    const refresh = useCallback(async (): Promise<void> => {
         try {
             const result = (await client.query(GET_SECURITY_AUDIT, {}, callOptions(""))) as SecurityAuditResult;
 
@@ -95,7 +95,7 @@ const SecurityAdvisorPanel = (): ReactElement => {
         } catch (error_: unknown) {
             setError(errorMessage(error_));
         }
-    };
+    }, [client]);
 
     useEffect(() => {
         fireAndForget(refresh());

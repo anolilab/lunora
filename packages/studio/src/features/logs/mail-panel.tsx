@@ -1,6 +1,6 @@
 import { useLunora } from "@lunora/react";
 import type { ChangeEvent, MouseEvent, ReactElement } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -100,7 +100,7 @@ const MailPanel = ({ limit = 100 }: MailPanelProps): ReactElement => {
     const [tab, setTab] = useState<PreviewTab>("html");
     const [filter, setFilter] = useState<string>("");
 
-    const refresh = async (): Promise<void> => {
+    const refresh = useCallback(async (): Promise<void> => {
         setError(null);
 
         try {
@@ -111,7 +111,7 @@ const MailPanel = ({ limit = 100 }: MailPanelProps): ReactElement => {
             setEntries([]);
             setError(errorMessage(error_));
         }
-    };
+    }, [client, limit]);
 
     const clearInbox = async (): Promise<void> => {
         setError(null);

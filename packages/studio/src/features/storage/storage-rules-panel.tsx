@@ -1,6 +1,6 @@
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
@@ -46,7 +46,7 @@ export const StorageRulesPanel = (): ReactElement => {
     const [data, setData] = useState<StorageRulesResult | null>(null);
     const [error, setError] = useState<null | string>(null);
 
-    const refresh = async (): Promise<void> => {
+    const refresh = useCallback(async (): Promise<void> => {
         try {
             const result = (await client.query(STORAGE_RULES, {}, callOptions(""))) as StorageRulesResult;
 
@@ -55,7 +55,7 @@ export const StorageRulesPanel = (): ReactElement => {
         } catch (error_: unknown) {
             setError(errorMessage(error_));
         }
-    };
+    }, [client]);
 
     useEffect(() => {
         fireAndForget(refresh());

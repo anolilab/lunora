@@ -1,6 +1,6 @@
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { LiveError } from "../../components/live-status";
 import { Badge } from "../../components/ui/badge";
@@ -141,7 +141,7 @@ export const PermissionsMatrix = ({ onProbe }: PermissionsMatrixProps = {}): Rea
     // One-shot load for the supporting metadata (masks + advisories). The policy
     // list is the live channel below; masks and advisories only change on codegen,
     // and a stale read here merely under-/over-flags a cell until the next mount.
-    const refresh = async (): Promise<void> => {
+    const refresh = useCallback(async (): Promise<void> => {
         const queryRls = client.query(RLS_POLICIES, {}, callOptions("")) as Promise<RlsPoliciesResult>;
         const queryMasks = client.query(MASK_POLICIES, {}, callOptions("")) as Promise<MaskPoliciesResult>;
         const queryAdvisories = client.query(GET_ADVISORIES, {}, callOptions("")) as Promise<AdvisoriesResult>;
@@ -164,7 +164,7 @@ export const PermissionsMatrix = ({ onProbe }: PermissionsMatrixProps = {}): Rea
         } catch (error_: unknown) {
             setError(errorMessage(error_));
         }
-    };
+    }, [client]);
 
     useEffect(() => {
         fireAndForget(refresh());

@@ -1,6 +1,6 @@
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
@@ -68,7 +68,7 @@ const RlsPanel = (): ReactElement => {
     const [data, setData] = useState<RlsPoliciesResult | null>(null);
     const [error, setError] = useState<null | string>(null);
 
-    const refresh = async (): Promise<void> => {
+    const refresh = useCallback(async (): Promise<void> => {
         try {
             // Deployment-wide metadata (root shard), so no shard selector is needed.
             const result = (await client.query(RLS_POLICIES, {}, callOptions(""))) as RlsPoliciesResult;
@@ -83,7 +83,7 @@ const RlsPanel = (): ReactElement => {
         } catch (error_: unknown) {
             setError(errorMessage(error_));
         }
-    };
+    }, [client]);
 
     useEffect(() => {
         fireAndForget(refresh());
