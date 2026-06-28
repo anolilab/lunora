@@ -42,6 +42,8 @@ export { useFlag, useFlags } from "./use-flag";
 export { default as useInfiniteQuery } from "./use-infinite-query";
 export type { MutationHook } from "./use-mutation";
 export { useMutation } from "./use-mutation";
+export type { MutatorHandle, MutatorHook, MutatorTransaction } from "./use-mutator";
+export { useMutator } from "./use-mutator";
 export type { PageItemOf, PaginatedArgs } from "./use-paginated-query";
 export { usePaginatedQuery } from "./use-paginated-query";
 export { hydratePreloaded, default as usePreloadedQuery } from "./use-preloaded-query";
