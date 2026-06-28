@@ -1023,6 +1023,12 @@ const resolveForwardContext = async (request: Request, env: unknown, resolveIden
     // the DO namespaces the dedup record by the server-minted identity, so a
     // forged id can only ever collide with the same caller's own mutations.
     const mutationId = request.headers.get("x-lunora-mutation-id");
+    // Custom-mutator push identity: a stable per-device client id + a monotonic
+    // per-client sequence. Forwarded verbatim — the DO classifies the sequence
+    // against its `__client_watermark` (already-applied / next / out-of-order),
+    // so a forged value can only reorder a caller's own mutator stream.
+    const clientId = request.headers.get("x-lunora-client-id");
+    const clientSeq = request.headers.get("x-lunora-client-seq");
 
     if (authorization) {
         headers["authorization"] = authorization;
@@ -1038,6 +1044,14 @@ const resolveForwardContext = async (request: Request, env: unknown, resolveIden
 
     if (mutationId) {
         headers["x-lunora-mutation-id"] = mutationId;
+    }
+
+    if (clientId) {
+        headers["x-lunora-client-id"] = clientId;
+    }
+
+    if (clientSeq) {
+        headers["x-lunora-client-seq"] = clientSeq;
     }
 
     // Forward the caller's IP server-side from Cloudflare's `CF-Connecting-IP`
