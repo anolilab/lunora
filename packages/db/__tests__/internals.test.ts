@@ -7,9 +7,8 @@ import { createExecutorOutboxSink, createOptimisticOnlineDetector, makeDiffEmit,
 
 /**
  * A fake `OfflineExecutor` slice: every `createOfflineTransaction(...).mutate()`
- * appends a persisted entry; `peekOutbox` returns them oldest-first and
- * `removeFromOutbox` evicts by id. Records the metadata each transaction carried
- * so the sink's persisted payload can be asserted.
+ * appends a persisted entry and `getPendingCount` reports the depth. Records the
+ * metadata each transaction carried so the sink's persisted payload can be asserted.
  */
 const fakeExecutor = (): { committed: OutboxMutationMetadata[]; executor: OutboxExecutor; outbox: { id: string }[] } => {
     const outbox: { id: string }[] = [];
@@ -29,16 +28,6 @@ const fakeExecutor = (): { committed: OutboxMutationMetadata[]; executor: Outbox
                 };
             },
             getPendingCount: () => outbox.length,
-            peekOutbox: () => Promise.resolve([...outbox]),
-            removeFromOutbox: (id) => {
-                const index = outbox.findIndex((entry) => entry.id === id);
-
-                if (index !== -1) {
-                    outbox.splice(index, 1);
-                }
-
-                return Promise.resolve();
-            },
         },
         outbox,
     };
@@ -67,28 +56,23 @@ describe(createExecutorOutboxSink, () => {
             args: { text: "m1" },
             clientId: "c1",
             functionPath: "messages:send",
+            idempotencyKey: "c1:1",
             identity: "ident-a",
             mutationId: 1,
             shardKey: "room-7",
         });
     });
 
-    it("evicts the oldest persisted writes once the cap is exceeded, reporting each drop", async () => {
+    it("rejects with OFFLINE_QUEUE_OVERFLOW at capacity instead of evicting", async () => {
         const { executor, outbox } = fakeExecutor();
-        const dropped: string[] = [];
-        const sink = createExecutorOutboxSink(executor, { maxItems: 2, onOverflow: (id) => dropped.push(id) });
+        const sink = createExecutorOutboxSink(executor, { maxItems: 2 });
 
         await sink.enqueue(outboxMutation(1));
         await sink.enqueue(outboxMutation(2));
 
-        // Still within the cap — nothing evicted yet.
-        expect(dropped).toStrictEqual([]);
-
-        await sink.enqueue(outboxMutation(3));
-
-        // The third write pushes over the cap → the oldest (tx-1) is evicted.
-        expect(dropped).toStrictEqual(["tx-1"]);
-        expect(outbox.map((entry) => entry.id)).toStrictEqual(["tx-2", "tx-3"]);
+        // At capacity — the next write is rejected, and no persisted write is dropped.
+        await expect(sink.enqueue(outboxMutation(3))).rejects.toMatchObject({ code: "OFFLINE_QUEUE_OVERFLOW" });
+        expect(outbox.map((entry) => entry.id)).toStrictEqual(["tx-1", "tx-2"]);
     });
 
     it("uses the configured reserved mutationFn name", async () => {
@@ -100,8 +84,6 @@ describe(createExecutorOutboxSink, () => {
                 return { mutate: () => undefined };
             },
             getPendingCount: () => 0,
-            peekOutbox: () => Promise.resolve([]),
-            removeFromOutbox: () => Promise.resolve(),
         };
 
         await createExecutorOutboxSink(executor).enqueue(outboxMutation(1));

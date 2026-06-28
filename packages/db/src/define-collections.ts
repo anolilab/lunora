@@ -152,7 +152,12 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
             throw new NonRetriableError("outbox write dropped: identity changed since it was queued");
         }
 
-        await runOutboxMutation(() => client.mutation({ __lunoraRef: meta.functionPath }, meta.args, { shardKey: meta.shardKey }));
+        // Replay under the *original* idempotency key (not a fresh one), so a
+        // committed-but-unacked write that the executor retries is deduped by the
+        // server instead of applied twice.
+        await runOutboxMutation(() =>
+            client.mutation({ __lunoraRef: meta.functionPath }, meta.args, { mutationId: meta.idempotencyKey, shardKey: meta.shardKey }),
+        );
     };
 
     const executor = startOfflineExecutor({
