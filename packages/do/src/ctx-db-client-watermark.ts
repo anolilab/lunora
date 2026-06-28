@@ -67,12 +67,15 @@ const readClientWatermark = (sql: SqlExec, identity: string, clientId: string): 
 };
 
 /**
- * Advance an `(identity, clientId)` pair's watermark to `mutationId`. Called
- * inside the same DO transaction as the mutator's writes, so the watermark is
- * durable iff the writes are — a crash between the write and the advance can only
- * replay* the mutation (caught next time by `id &lt;= watermark`), never skip it.
- * The `MAX(...)` upsert keeps the column monotonic even if an out-of-order
- * advance is ever attempted.
+ * Advance an `(identity, clientId)` pair's watermark to `mutationId`. This runs
+ * as its own write AFTER the mutator's writes auto-commit — NOT atomically with
+ * them (see the dispatch flow in `shard-do.ts`). That's safe because the gap
+ * self-heals: a crash between the handler commit and this advance leaves the
+ * watermark behind, so the client's unacked replay re-classifies as `"next"`,
+ * re-runs idempotently (the idempotency row dedups the actual write), and
+ * re-advances — only ever *replaying*, never skipping or double-applying. The
+ * `MAX(...)` upsert keeps the column monotonic even if an out-of-order advance is
+ * ever attempted.
  */
 const advanceClientWatermark = (sql: SqlExec, identity: string, clientId: string, mutationId: number): void => {
     runDrizzle(
