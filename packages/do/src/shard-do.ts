@@ -14,6 +14,7 @@ import {
     CDC_LOG_TABLE,
     deleteGlobalShapeSnapshot,
     deleteGlobalShapeSnapshotsForConnection,
+    migrateClientWatermark,
     minCdcSeq,
     readCdcChanges,
     readCdcCursor,
@@ -1964,9 +1965,7 @@ abstract class ShardDO {
             const cached = this.readIdempotentResult(this.currentRequestMutationId);
 
             if (cached !== undefined) {
-                this.recordFunctionCall(payload.functionPath, Date.now() - dispatchStartedAt, undefined, this.currentScannedTables, this.currentIndexHits);
-
-                return jsonResponse({ result: cached.value }, 200, this.currentResponseBookmark);
+                return this.respondFromIdempotencyCache(payload.functionPath, dispatchStartedAt, mutatorClass, cached.value);
             }
 
             const result = await this.handleRpc(payload.functionPath, payload.args ?? {});
@@ -3349,15 +3348,27 @@ abstract class ShardDO {
             return undefined;
         }
 
+        // Scope the watermark to the authenticated identity (as `__idempotency`
+        // does), so a reused/spoofed `clientId` under a different user can't
+        // suppress the real owner's sequence.
+        const identity = this.currentRequestUserId ?? "";
+
         let watermark: number;
 
         try {
-            watermark = readClientWatermark(this.sql as SqlExec, clientId);
+            watermark = readClientWatermark(this.sql as SqlExec, identity, clientId);
         } catch {
-            // Missing `__client_watermark` table (pre-migration shard / test
-            // stub) — treat as not-watermarked and let the call ride the legacy
-            // path rather than failing a write whose ordering we can't track.
-            return undefined;
+            // The `__client_watermark` table is missing. Rather than silently
+            // downgrade a mutator-enabled push to the legacy path (which never
+            // emits `lastMutationId`), try to create it and re-read so the shard
+            // self-heals. A genuine stub `sql` handle (unit harness) throws on
+            // the DDL too — only then do we fall back to the legacy path.
+            try {
+                migrateClientWatermark(this.sql as SqlExec);
+                watermark = readClientWatermark(this.sql as SqlExec, identity, clientId);
+            } catch {
+                return undefined;
+            }
         }
 
         const expected = watermark + 1;
@@ -3407,6 +3418,32 @@ abstract class ShardDO {
     }
 
     /**
+     * Respond to a dispatch that hit the `(identity, mutationId)` idempotency
+     * cache. Records the (zero-work) function call, then: for a `"next"` custom
+     * mutator whose handler already committed but whose watermark advance was
+     * lost to a crash in between, re-advance and echo `lastMutationId` exactly as
+     * the post-commit path does (otherwise the cached branch returns a bare
+     * result with a stale watermark and the client reports every later seq as a
+     * gap forever); for everything else, return the bare cached `{ result }`.
+     */
+    protected respondFromIdempotencyCache(
+        functionPath: string,
+        dispatchStartedAt: number,
+        mutatorClass: ClientMutationClass | undefined,
+        cachedValue: unknown,
+    ): Response {
+        this.recordFunctionCall(functionPath, Date.now() - dispatchStartedAt, undefined, this.currentScannedTables, this.currentIndexHits);
+
+        if (mutatorClass?.kind === "next") {
+            this.advanceClientMutationWatermark();
+
+            return this.buildDispatchResponse(mutatorClass, cachedValue);
+        }
+
+        return jsonResponse({ result: cachedValue }, 200, this.currentResponseBookmark);
+    }
+
+    /**
      * Build the success response for a dispatched RPC. A `"next"` custom-mutator
      * push echoes the applied `lastMutationId` so the client drops the pending
      * optimistic overlay as soon as the ack lands; ordinary calls return the bare
@@ -3438,7 +3475,7 @@ abstract class ShardDO {
         }
 
         try {
-            advanceClientWatermark(this.sql as SqlExec, clientId, seq);
+            advanceClientWatermark(this.sql as SqlExec, this.currentRequestUserId ?? "", clientId, seq);
         } catch {
             // Missing table / stub handle — see persistIdempotentResult. The
             // replay re-runs and re-advances (the read side treats a missing row
@@ -6395,13 +6432,22 @@ abstract class ShardDO {
      * for). Read off the attachment so it survives hibernation.
      */
     private socketClientWatermark(ws: WebSocket): number | undefined {
-        const { clientId } = this.readAttachment(ws);
+        const attachment = this.readAttachment(ws);
+        const { clientId } = attachment;
 
         if (clientId === undefined) {
             return undefined;
         }
 
-        return readClientWatermark(this.sql as SqlExec, clientId);
+        // Scope by the socket's verified identity, matching how the dispatch path
+        // advanced the watermark (`currentRequestUserId`); the upgrade resolves
+        // both from the same `x-lunora-userid`.
+        try {
+            return readClientWatermark(this.sql as SqlExec, attachment.userId ?? "", clientId);
+        } catch {
+            // Missing table / stub handle — no watermark to echo.
+            return undefined;
+        }
     }
 
     /** Record a shape's poke baseline cursor on a socket (creating the per-socket map lazily). */

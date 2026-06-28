@@ -84,11 +84,27 @@ describe(projectColumns, () => {
     it("retains _id / _creationTime alongside the allow-listed columns", () => {
         expect.assertions(1);
 
-        expect(projectColumns({ _creationTime: 9, _id: "t1", hidden: "x", label: "a" }, ["label"])).toStrictEqual({
+        // `toEqual` (not `toStrictEqual`): the projection target is a
+        // null-prototype object (hardening against a `__proto__` column), so a
+        // plain-object expectation differs by prototype under strict equality.
+        expect(projectColumns({ _creationTime: 9, _id: "t1", hidden: "x", label: "a" }, ["label"])).toEqual({
             _creationTime: 9,
             _id: "t1",
             label: "a",
         });
+    });
+
+    it("copies a `__proto__` column as a plain data field without polluting the prototype", () => {
+        expect.assertions(2);
+
+        // `JSON.parse` yields a real OWN `__proto__` property (a literal's
+        // `__proto__:` would set the prototype instead) — the adversarial input.
+        const payload = JSON.parse('{"__proto__":{"polluted":true},"_id":"t1"}') as Record<string, unknown>;
+        const projected = projectColumns(payload, ["__proto__"]);
+
+        // The dangerous key is an own data property, and nothing leaked onto Object.prototype.
+        expect(Object.hasOwn(projected, "__proto__")).toBe(true);
+        expect(({} as Record<string, unknown>).polluted).toBeUndefined();
     });
 });
 

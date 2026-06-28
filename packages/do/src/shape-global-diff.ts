@@ -52,10 +52,13 @@ const projectColumns = (document_: Record<string, unknown>, columns: ReadonlyArr
         return document_;
     }
 
-    const projected: Record<string, unknown> = {};
+    // Null-prototype target + own-property check: a column literally named
+    // `__proto__`/`constructor` must be copied as a plain data field, never walk
+    // the prototype chain or mutate the result's prototype.
+    const projected = Object.create(null) as Record<string, unknown>;
 
     for (const key of ["_id", "_creationTime", ...columns]) {
-        if (key in document_) {
+        if (Object.hasOwn(document_, key)) {
             projected[key] = document_[key];
         }
     }
