@@ -74,6 +74,8 @@ const unsubscribe = client.subscribe(api.messages.list, { room: "general" }, (ne
 client.close();
 ```
 
+`client.subscribeShape({ name, args }, cb)` is the [local-first sync engine](https://lunora.sh/docs/concepts/local-first)'s parallel to `subscribe`: it replicates a **partial view** of a table (a server-defined shape) over the poke diff protocol instead of re-running a query. Most apps consume it through [`@lunora/db`](https://www.npmjs.com/package/@lunora/db)'s `lunoraCollectionOptions({ shape })` rather than directly.
+
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/api/client)**.
 
 ## Related

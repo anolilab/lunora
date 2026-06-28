@@ -85,6 +85,18 @@ export const createCollections = (client: LunoraClient) =>
 
 > `vis generate lunora-collections` scaffolds this from your `schema.ts` + functions.
 
+### Local-first sync engine
+
+Beyond whole-table collections, the `@lunora/db/collections` and
+`@lunora/db/mutators` subpaths expose the local-first sync engine:
+`lunoraCollectionOptions({ shape })` syncs a **partial replication shape** (only
+the rows a client needs, scoped by a server-resolved predicate) over the poke
+diff protocol, and `defineMutator` + `bindMutators` run **optimistic custom
+mutators** (a local body first, a server-authoritative impl second, rebased on
+every sync tick). The framework adapters add a `useMutator` / `createMutator` /
+`mutator` hook over a bound handle. See the
+**[local-first guide](https://lunora.sh/docs/concepts/local-first)**.
+
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/db)**.
 
 ## Related
