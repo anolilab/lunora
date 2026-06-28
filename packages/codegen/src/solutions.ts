@@ -56,7 +56,7 @@ export const LUNORA_SOLUTION_RULES: ReadonlyArray<LunoraSolutionRule> = [
             "});",
             "```",
             "",
-            "Or scaffold a table with `vis generate lunora-table --name=messages`.",
+            "Or run `lunora init` to scaffold Lunora (a sample `lunora/schema.ts` included) into your app.",
         ].join("\n"),
         header: "No Lunora schema found",
         id: "lunora-schema-missing",

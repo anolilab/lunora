@@ -13,7 +13,7 @@ describe("renderCodegenFailure", () => {
         // The recognized error contributes its solution header + a body fragment
         // as the rendered hint (Markdown emphasis flattened for the terminal).
         expect(output).toContain("No Lunora schema found");
-        expect(output).toContain("vis generate lunora-table --name=messages");
+        expect(output).toContain("lunora init");
         // The internal codegen stack is suppressed — no frame leaks through.
         expect(output).not.toContain("codegen-error");
     });
