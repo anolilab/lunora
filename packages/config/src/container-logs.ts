@@ -17,6 +17,7 @@
  * `onUnavailable` notice rather than breaking dev.
  */
 import { Writable } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 
 /** Prefix of every image wrangler builds for a local dev container (`cloudflare-dev/&lt;class>:&lt;id>`). */
 const DEV_CONTAINER_IMAGE_PREFIX = "cloudflare-dev/";
@@ -103,6 +104,9 @@ const classFromImage = (image: string): string | undefined => {
  * line split across two Docker frames is never torn.
  */
 const lineBufferWritable = (emit: (text: string) => void): Writable => {
+    // Decode incrementally so a multi-byte UTF-8 character split across two
+    // Docker frames is reassembled rather than turned into replacement chars.
+    const decoder = new StringDecoder("utf8");
     let buffer = "";
 
     const flushLine = (line: string): void => {
@@ -111,6 +115,9 @@ const lineBufferWritable = (emit: (text: string) => void): Writable => {
 
     return new Writable({
         final(callback) {
+            // Flush any bytes the decoder is still holding, then the partial line.
+            buffer += decoder.end();
+
             if (buffer.length > 0) {
                 flushLine(buffer);
                 buffer = "";
@@ -119,7 +126,7 @@ const lineBufferWritable = (emit: (text: string) => void): Writable => {
             callback();
         },
         write(chunk: Buffer, _encoding, callback) {
-            buffer += chunk.toString("utf8");
+            buffer += decoder.write(chunk);
 
             const lines = buffer.split("\n");
 

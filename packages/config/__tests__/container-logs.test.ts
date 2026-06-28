@@ -26,6 +26,11 @@ class FakeStream {
         this.destroyed = true;
     }
 
+    /** Write raw bytes onto the demultiplexed stdout writable (one frame) — for splitting multi-byte chars. */
+    public feedStdoutBytes(bytes: Buffer): void {
+        this.stdout?.write(bytes);
+    }
+
     /** Write bytes onto the demultiplexed stdout writable (one frame). */
     public feedStdout(text: string): void {
         this.stdout?.write(Buffer.from(text, "utf8"));
@@ -153,6 +158,35 @@ describe("streamContainerLogs", () => {
         handle.close();
 
         expect(lines).toContainEqual({ level: "info", name: "transcoder", text: "hello world" });
+    });
+
+    it("reassembles a multi-byte character split across two frames", async () => {
+        expect.assertions(1);
+
+        const lines: ContainerLogLine[] = [];
+        const { docker, streamFor } = createFakeDocker([{ Id: "c1", Image: DEV_IMAGE }]);
+
+        const handle = streamContainerLogs({
+            containers: [{ className: "TranscoderContainer", exportName: "transcoder" }],
+            docker,
+            onLine: (line) => lines.push(line),
+            pollIntervalMs: 10,
+        });
+
+        await flush();
+
+        const stream = streamFor("c1");
+        // "café\n" — the "é" (U+00E9) is two UTF-8 bytes (0xC3 0xA9); split it
+        // across two frames so a naive per-chunk `toString` would corrupt it.
+        const encoded = Buffer.from("café\n", "utf8");
+
+        stream?.feedStdoutBytes(encoded.subarray(0, 4)); // "caf" + first byte of "é"
+        stream?.feedStdoutBytes(encoded.subarray(4)); // second byte of "é" + "\n"
+        await flush();
+
+        handle.close();
+
+        expect(lines).toContainEqual({ level: "info", name: "transcoder", text: "café" });
     });
 
     it("ignores containers whose image is not a declared dev container", async () => {
