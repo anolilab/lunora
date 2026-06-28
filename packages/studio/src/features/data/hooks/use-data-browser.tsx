@@ -2,8 +2,8 @@ import { useLunora } from "@lunora/react";
 import type { SortingState } from "@tanstack/react-table";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useAdminQuery } from "../../../hooks/use-admin-query";
 import useDebounced from "../../../hooks/use-debounced";
-import useLiveAdmin from "../../../hooks/use-live-admin";
 import type { BulkDeleteResult, FacetResult, FilterClause, TableInfo, TablePage, WriteRowResult } from "../../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../lib/admin";
 import { adminRef, callOptions, fireAndForget } from "../../../lib/internal";
@@ -78,12 +78,14 @@ const MAX_BULK_DELETE_BATCHES = 200;
  */
 const PREVIEW_CANDIDATES = 20;
 
-const LIST_TABLES = adminRef(ADMIN_FUNCTIONS.listTables);
 const READ_TABLE_PAGE = adminRef(ADMIN_FUNCTIONS.readTablePage);
 const FACET_COLUMN = adminRef(ADMIN_FUNCTIONS.facetColumn);
 const WRITE_ROW = adminRef(ADMIN_FUNCTIONS.writeRow);
 const DELETE_ROWS = adminRef(ADMIN_FUNCTIONS.deleteRows);
 const CLEAR_TABLE = adminRef(ADMIN_FUNCTIONS.clearTable);
+
+/** Stable empty args for the no-argument `listTables` read (avoids a fresh object each render). */
+const NO_ARGS: Record<string, unknown> = {};
 
 /**
  * Columns that are never inline-editable: the primary-key aliases, the creation
@@ -239,13 +241,8 @@ const useDataBrowser = ({
     // shared filters/search/sort the first time it opens the URL's table, then
     // forget them (subsequent selections start clean). Consumed once.
     const hydrationRef = useRef<DataView | null>({ filters: initialFilters, orderBy: initialOrderBy, search: initialSearch, table: tableParam });
-    const [tables, setTables] = useState<TableInfo[] | null>(null);
-    const [tablesError, setTablesError] = useState<null | string>(null);
-
     const [selectedTable, setSelectedTable] = useState<null | string>(null);
     const [offset, setOffset] = useState<number>(0);
-    const [page, setPage] = useState<TablePage | null>(null);
-    const [pageError, setPageError] = useState<null | string>(null);
     const [viewMode, setViewMode] = useState<"json" | "table">("table");
 
     // Page-local sort: operates ONLY on the rows of the currently loaded page.
@@ -258,14 +255,13 @@ const useDataBrowser = ({
     const [filter, setFilter] = useState<string>(initialSearch ?? "");
     const search = useDebounced(filter.trim(), 300);
 
-    // The shard key the table list is fetched for, debounced so typing a key
-    // auto-loads its tables once the input settles rather than firing per
-    // keystroke — replacing the old manual "Load tables" button.
+    // The shard key both reads target, debounced so typing a key settles before
+    // refetching the table list + page rather than firing per keystroke.
     const debouncedShard = useDebounced(shardKey.trim(), 400);
 
-    // Structured column filters. Held in a ref too so `fetchPage` reads the
-    // current value without threading them through its five call sites; an effect
-    // re-fetches from offset 0 when they change (mirroring the debounced search).
+    // Structured column filters. Held in a ref too so a write's bulk-delete reads
+    // the current value without threading it through; the page query reads the
+    // state directly via `pageArgs`.
     const [filters, setFilters] = useState<EditableFilter[]>(() => toEditableFilters(initialFilters ?? []));
     const filtersRef = useRef<EditableFilter[]>(filters);
 
@@ -278,13 +274,6 @@ const useDataBrowser = ({
     // shared `useFacets` hook owns the slot transitions and toggle/refetch; only the
     // per-view query (`FACET_COLUMN` over the current shard/filters/search) is ours.
     const { clearFacets, facets, refetchFacets, toggleFacet: toggleFacetColumn } = useFacets();
-
-    // Sorting is server-side: `fetchPage` reads the current sort off this ref (so
-    // it need not thread through every call site) and an effect re-fetches from
-    // offset 0 when it changes, mirroring the filters handling.
-    const sortingRef = useRef<SortingState>(sorting);
-
-    sortingRef.current = sorting;
 
     // Edit state: the row being edited (its id, or `""` for a new insert) and
     // the JSON-doc draft. `null` when no editor is open. `writeError` surfaces a
@@ -299,143 +288,44 @@ const useDataBrowser = ({
     const [editingCell, setEditingCell] = useState<null | { column: string; rowId: string }>(null);
     const [committing, setCommitting] = useState<boolean>(false);
 
-    // The data browser is always live (Convex-style): the readTablePage + listTables
-    // admin subscriptions stay open while a page is loaded, so writes stream in with
-    // no manual Refresh/Live toggle. `liveError` surfaces a rejected subscription
-    // (e.g. the client carries no admin `wsToken`); the initial one-shot fetch still
-    // populated the grid, so data stays visible — it just stops updating.
-    const [liveError, setLiveError] = useState<string | undefined>(undefined);
+    // ── Reads via TanStack Query: a one-shot fetch plus a live WS push into the
+    // cache (the same model as every other studio panel). The table list follows
+    // the debounced shard; the page read's args ARE the view, so selecting a table
+    // or paginating / searching / filtering / sorting transparently refetches.
+    const tablesQuery = useAdminQuery<TableInfo[]>(ADMIN_FUNCTIONS.listTables, NO_ARGS, { live: true, shardKey: debouncedShard });
+    const tables = tablesQuery.data ?? null;
+    const tablesError = tablesQuery.error;
 
-    // The page descriptor the live channel tracks. Set only when a page actually
-    // loads (in fetchPage), so the live subscription follows what's displayed —
-    // not the shard-key input as it's typed, nor a table selection whose offset
-    // reset hasn't landed yet. Keyed independently of `shardKey`/`offset` state.
-    const [loaded, setLoaded] = useState<null | {
-        filters: EditableFilter[];
-        offset: number;
-        pageSize: number;
-        search: string;
-        shard: string;
-        sort: SortingState;
-        table: string;
-    }>(null);
-
-    const fetchTables = useCallback(
-        async (shard: string): Promise<void> => {
-            setTablesError(null);
-
-            try {
-                const result = (await client.query(LIST_TABLES, {}, callOptions(shard))) as TableInfo[];
-
-                recordShard(shard);
-                setTables(result);
-            } catch (error) {
-                setTables(null);
-                setTablesError((error as Error).message);
-            }
-        },
-        [client],
-    );
-
-    // Monotonic request counter so an out-of-order page read can't overwrite a
-    // newer one. Rapid pagination / a debounced search landing while a manual
-    // fetch is in flight can resolve in any order; only the latest issued request
-    // is allowed to commit its result (mirrors `useRunSql`'s cancel token).
-    const fetchSeqRef = useRef(0);
-
-    const fetchPage = useCallback(
-        async (shard: string, table: string, nextOffset: number, searchQuery: string): Promise<void> => {
-            fetchSeqRef.current += 1;
-            const seq = fetchSeqRef.current;
-
-            setPageError(null);
-
-            const activeFilters = filtersRef.current;
-            const activeSort = sortingRef.current;
-
-            try {
-                const result = (await client.query(
-                    READ_TABLE_PAGE,
-                    {
-                        filters: toFilterClauses(activeFilters),
-                        limit: pageSize,
-                        offset: nextOffset,
-                        orderBy: toOrderBy(activeSort),
-                        search: searchQuery,
-                        table,
-                    },
-                    callOptions(shard),
-                )) as TablePage;
-
-                if (fetchSeqRef.current !== seq) {
-                    return;
-                }
-
-                setPage(result);
-                setOffset(nextOffset);
-                setLoaded({ filters: activeFilters, offset: nextOffset, pageSize, search: searchQuery, shard, sort: activeSort, table });
-            } catch (error) {
-                if (fetchSeqRef.current !== seq) {
-                    return;
-                }
-
-                setPage(null);
-                setPageError((error as Error).message);
-            }
-        },
-        [client, pageSize],
-    );
-
-    // Auto-load the table list for the (debounced) shard key. Fires once on mount
-    // for the initial shard and again whenever the typed shard key settles, so the
-    // tables appear without a manual trigger; the debounce keeps a half-typed key
-    // from firing a request per keystroke. A manual refresh icon (see `loadTables`)
-    // re-fetches on demand.
-    useEffect(() => {
-        fireAndForget(fetchTables(debouncedShard));
-    }, [fetchTables, debouncedShard]);
-
-    // Live channel: the server re-pushes the loaded window whenever its table is
-    // written (dependency-scoped to that table). Keyed on the `loaded` descriptor
-    // so it tracks exactly the displayed shard/table/page — never a half-typed shard
-    // key or a table switch whose offset reset is still pending — and runs as soon
-    // as a page has loaded (always-on; there is no Live toggle to gate it).
-    useLiveAdmin(
-        ADMIN_FUNCTIONS.readTablePage,
-        {
-            filters: toFilterClauses(loaded?.filters ?? []),
+    const pageArgs = useMemo<Record<string, unknown>>(() => {
+        return {
+            filters: toFilterClauses(filters),
             limit: pageSize,
-            offset: loaded?.offset ?? 0,
-            orderBy: toOrderBy(loaded?.sort ?? []),
-            search: loaded?.search ?? "",
-            table: loaded?.table ?? "",
-        },
-        loaded?.shard ?? "",
-        (result) => {
-            setPageError(null);
-            setLiveError(undefined);
-            setPage(result as TablePage);
-        },
-        loaded !== null,
-        setLiveError,
-    );
+            offset,
+            orderBy: toOrderBy(sorting),
+            search,
+            table: selectedTable ?? "",
+        };
+    }, [filters, pageSize, offset, sorting, search, selectedTable]);
 
-    // Live channel for the table list itself, so a migration that creates a
-    // table (or changes a row count) reflects without a manual "Load tables".
-    // `listTables` is shard-scoped; key it on the loaded shard so it follows the
-    // same shard as the page rather than the shard-input box as it's typed.
-    useLiveAdmin(
-        ADMIN_FUNCTIONS.listTables,
-        {},
-        loaded?.shard ?? "",
-        (result) => {
-            setTablesError(null);
-            setLiveError(undefined);
-            setTables(result as TableInfo[]);
-        },
-        loaded !== null,
-        setLiveError,
-    );
+    // `keepPreviousData` holds the last page visible until the next lands (so a
+    // paginate / search doesn't flash empty) — replacing the old monotonic
+    // out-of-order guard; `live` streams writes in. Disabled until a table is open.
+    const pageQuery = useAdminQuery<TablePage>(ADMIN_FUNCTIONS.readTablePage, pageArgs, {
+        enabled: selectedTable !== null,
+        keepPreviousData: true,
+        live: true,
+        shardKey: debouncedShard,
+    });
+    const page = pageQuery.data ?? null;
+    const pageError = pageQuery.error;
+    const { liveError } = pageQuery;
+
+    // Record the browsed shard into recent-shards history once its tables resolve.
+    useEffect(() => {
+        if (tablesQuery.data !== undefined) {
+            recordShard(debouncedShard);
+        }
+    }, [tablesQuery.data, debouncedShard]);
 
     // The table last applied to the selection, mirrored in a ref so the URL-reconcile
     // effect below can tell its own optimistic selections (which set this) apart from
@@ -461,17 +351,18 @@ const useDataBrowser = ({
             setFilter(nextSearch);
             setFilters(nextFilters);
             filtersRef.current = nextFilters;
-            sortingRef.current = nextSorting;
             clearFacets();
             stagedEdits.clear();
             setEditingCell(null);
+            setOffset(0);
             setSelectedTable(table);
             appliedTableRef.current = table;
-            fireAndForget(fetchPage(shardKey, table, 0, nextSearch));
+            // The page query refetches automatically once `selectedTable`/the view
+            // state changes — no imperative fetch needed.
             // Mirror the selection to the URL so it's shareable and back/forward works.
             onSelectTable?.(table);
         },
-        [clearFacets, fetchPage, onSelectTable, shardKey, stagedEdits],
+        [clearFacets, onSelectTable, stagedEdits],
     );
 
     // Follow a foreign-key cell: switch to the target table and search for the
@@ -482,12 +373,11 @@ const useDataBrowser = ({
         setFilters([]);
         filtersRef.current = [];
         clearFacets();
+        setOffset(0);
         setSelectedTable(targetTable);
         appliedTableRef.current = targetTable;
         setFilter(id);
-        // Seed the page immediately with the search applied; the debounced
-        // effect would otherwise fire a second time with the same value.
-        fireAndForget(fetchPage(shardKey, targetTable, 0, id));
+        // The page query refetches with the new table + (debounced) search applied.
         onSelectTable?.(targetTable);
     };
 
@@ -541,42 +431,42 @@ const useDataBrowser = ({
         const text = facetValueText(value);
 
         setFilters((current) => [...current.filter((clause) => clause.column !== column), { column, operator: "eq", value: text }]);
+        setOffset(0);
     };
 
-    // Refetch every toggled-on facet when the active view (filters/search/shard/
-    // table) changes, so the summaries always reflect the previewed rows. Keyed on
-    // the `loaded` descriptor (set by `fetchPage`) so it tracks the displayed view,
-    // not a half-typed shard key, and only after a page has loaded.
+    // Refetch every toggled-on facet when the active view (filters / search / shard
+    // / table) changes, so the summaries always reflect the previewed rows. The
+    // shard / search are already debounced, so this tracks the displayed view; it's
+    // gated on a selected table so it doesn't fire before one is open.
     useEffect(() => {
-        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- the facet summaries are derived from the loaded view (a value, not a discrete event); refetching them when it changes mirrors the page-refetch effects above.
-        if (loaded === null) {
+        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- the facet summaries are derived from the active view (a value, not a discrete event); refetching them when it changes is the correct pattern.
+        if (selectedTable === null) {
             return;
         }
 
         // `refetchFacets` re-runs only the already-open facets (read off the hook's
         // ref); toggling a single facet on is handled by `toggleFacet`'s own fetch.
-        refetchFacets(facetFetcher(loaded.shard, loaded.table, loaded.filters, loaded.search));
-    }, [loaded, facetFetcher, refetchFacets]);
+        refetchFacets(facetFetcher(debouncedShard, selectedTable, filters, search));
+    }, [debouncedShard, selectedTable, filters, search, facetFetcher, refetchFacets]);
 
-    // Mirror the loaded view (shard / search / filters / sort) to the host so it can
-    // write it into the URL — making every view a real, shareable link. Keyed on the
-    // `loaded` descriptor so it tracks exactly what's displayed (never a half-typed
-    // shard key) and only after a page has loaded; the table itself is mirrored
-    // separately by `onSelectTable`.
+    // Mirror the active view (shard / search / filters / sort) to the host so it can
+    // write it into the URL — making every view a real, shareable link. The shard /
+    // search are debounced, so it tracks the displayed view; the table itself is
+    // mirrored separately by `onSelectTable`.
     useEffect(() => {
-        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- the URL is a projection of the loaded view (a value, not a discrete event); mirroring it when the view changes is the correct pattern, like the facet-refetch effect above.
-        if (loaded === null || onViewChange === undefined) {
+        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- the URL is a projection of the active view (a value, not a discrete event); mirroring it when the view changes is the correct pattern.
+        if (selectedTable === null || onViewChange === undefined) {
             return;
         }
 
-        // eslint-disable-next-line react-you-might-not-need-an-effect/no-pass-live-state-to-parent, react-you-might-not-need-an-effect/no-pass-data-to-parent -- the host writes this into the URL (a side effect, not derivable render state); it must run only for the actually-displayed `loaded` view, so an effect keyed on it is the correct place — the same shape as `onSelectTable`.
+        // eslint-disable-next-line react-you-might-not-need-an-effect/no-pass-data-to-parent -- the host writes this into the URL (a side effect, not derivable render state); an effect keyed on the displayed view is the correct place — the same shape as `onSelectTable`.
         onViewChange({
-            filters: toFilterClauses(loaded.filters),
-            orderBy: toOrderBy(loaded.sort),
-            search: loaded.search,
-            shard: loaded.shard,
+            filters: toFilterClauses(filters),
+            orderBy: toOrderBy(sorting),
+            search,
+            shard: debouncedShard,
         });
-    }, [loaded, onViewChange]);
+    }, [selectedTable, filters, sorting, search, debouncedShard, onViewChange]);
 
     // Reconcile the URL's table into the selection. Fires on first load (deep link)
     // and on browser back/forward; an in-app selection already set `appliedTableRef`
@@ -608,7 +498,7 @@ const useDataBrowser = ({
             return;
         }
 
-        fireAndForget(fetchPage(shardKey, selectedTable, Math.max(0, nextOffset), search));
+        setOffset(Math.max(0, nextOffset));
     };
 
     // ── Inline cell editing → staged buffer → preview-diff → commit ──────────
@@ -641,7 +531,7 @@ const useDataBrowser = ({
 
             stagedEdits.clear();
             setEditingCell(null);
-            await fetchPage(shardKey, selectedTable, offset, search);
+            pageQuery.refetch();
         } catch (error) {
             setWriteError((error as Error).message);
         } finally {
@@ -677,55 +567,10 @@ const useDataBrowser = ({
         return changes;
     }, [page, stagedEdits.staged]);
 
-    // Re-run the server-side search (from offset 0) when the debounced query
-    // changes for the loaded table. Skipped until a table is selected, and when
-    // the debounced value already matches what's loaded (e.g. right after a
-    // table switch cleared it) so it doesn't double-fetch.
-    useEffect(() => {
-        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- `search` is a debounced value that updates asynchronously (not on a discrete event), so reacting to its change in an effect is the correct pattern.
-        if (selectedTable === null || loaded === null || loaded.search === search) {
-            return;
-        }
-
-        fireAndForget(fetchPage(shardKey, selectedTable, 0, search));
-    }, [search, selectedTable, shardKey, loaded, fetchPage]);
-
-    // Re-run from offset 0 when the structured filters change for the loaded
-    // table — same shape as the debounced-search effect above. `fetchPage` reads
-    // the live `filtersRef`, so the new clauses apply immediately.
-    useEffect(() => {
-        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- reacting to a changed filter set (a value, not a discrete event) is the correct pattern, mirroring the debounced-search effect above.
-        if (selectedTable === null || loaded === null || loaded.filters === filters) {
-            return;
-        }
-
-        fireAndForget(fetchPage(shardKey, selectedTable, 0, search));
-    }, [filters, selectedTable, shardKey, loaded, search, fetchPage]);
-
-    // Re-run from offset 0 when the sort changes for the loaded table — sorting is
-    // server-side, so a header click re-fetches the whole table in the new order
-    // rather than reordering only the loaded page. Same shape as the filters effect.
-    useEffect(() => {
-        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- reacting to a changed sort (a value, not a discrete event) is the correct pattern, mirroring the filters effect above.
-        if (selectedTable === null || loaded === null || loaded.sort === sorting) {
-            return;
-        }
-
-        fireAndForget(fetchPage(shardKey, selectedTable, 0, search));
-    }, [sorting, selectedTable, shardKey, loaded, search, fetchPage]);
-
-    // Re-run from offset 0 when the rows-per-page changes for the loaded table —
-    // the window size changed, so the current offset may no longer be valid. Same
-    // guarded shape as the sort/filter effects (`loaded.pageSize` tracks the size
-    // the page was fetched at, so a table switch doesn't double-fetch).
-    useEffect(() => {
-        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- reacting to a changed page size (a value, not a discrete event) is the correct pattern, mirroring the sort/filter effects above.
-        if (selectedTable === null || loaded === null || loaded.pageSize === pageSize) {
-            return;
-        }
-
-        fireAndForget(fetchPage(shardKey, selectedTable, 0, search));
-    }, [pageSize, selectedTable, shardKey, loaded, search, fetchPage]);
+    // Search / filters / sort / page-size changes flow straight into `pageArgs`, so
+    // the page query refetches on its own — the `setOffset(0)` effect above resets
+    // to the first page when the server-side view narrows. No manual refetch
+    // effects are needed (this is what the React Query migration removes).
 
     // Issue a writeRow op then reload the current page so the change shows. A
     // delete passes no doc; insert (id === "") / patch carry the JSON draft.
@@ -751,7 +596,7 @@ const useDataBrowser = ({
         try {
             (await client.query(WRITE_ROW, { doc: parsedDocument, id: id ?? undefined, op, table: selectedTable }, callOptions(shardKey))) as WriteRowResult;
             setEditing(null);
-            await fetchPage(shardKey, selectedTable, offset, search);
+            pageQuery.refetch();
         } catch (error) {
             setWriteError((error as Error).message);
         }
@@ -782,7 +627,8 @@ const useDataBrowser = ({
                 }
             }
 
-            await fetchPage(shardKey, selectedTable, 0, search);
+            setOffset(0);
+            pageQuery.refetch();
         } catch (error) {
             setWriteError((error as Error).message);
         }
@@ -812,7 +658,7 @@ const useDataBrowser = ({
     const rangeEnd = page === null ? 0 : offset + page.rows.length;
 
     const loadTables = (): void => {
-        fireAndForget(fetchTables(shardKey));
+        tablesQuery.refetch();
     };
 
     const showTable = (): void => {
@@ -833,6 +679,16 @@ const useDataBrowser = ({
 
     const onFilterChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
         setFilter(event.target.value);
+        // A new search narrows the result set — jump back to the first page so the
+        // current offset can't point past the (smaller) total.
+        setOffset(0);
+    };
+
+    // Apply a structured-filter change and reset to the first page (same reason as
+    // the search box). Exposed as `onFiltersChange`.
+    const changeFilters = (next: EditableFilter[]): void => {
+        setFilters(next);
+        setOffset(0);
     };
 
     const addRow = (): void => {
@@ -917,7 +773,7 @@ const useDataBrowser = ({
                 (await client.query(WRITE_ROW, { id, op: "delete", table: selectedTable }, callOptions(shardKey))) as WriteRowResult;
             }
 
-            await fetchPage(shardKey, selectedTable, offset, search);
+            pageQuery.refetch();
         } catch (error) {
             setWriteError((error as Error).message);
         }
@@ -960,7 +816,7 @@ const useDataBrowser = ({
         onBulkDeleteSelected,
         onCommitStaged,
         onFilterChange,
-        onFiltersChange: setFilters,
+        onFiltersChange: changeFilters,
         onRowDelete,
         onRowEdit,
         page,
