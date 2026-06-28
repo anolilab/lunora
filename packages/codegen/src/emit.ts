@@ -18,9 +18,11 @@ import type {
     JurisdictionIR,
     MaskMetadataIR,
     MigrationIR,
+    MutatorIR,
     QueueIR,
     RlsMetadataIR,
     SchemaIR,
+    ShapeIR,
     StorageRulesMetadataIR,
     TableIR,
     ValidatorIR,
@@ -702,6 +704,47 @@ export const createSeedClient = (options?: SeedClientOptions): SeedClient<Insert
 };
 
 /**
+ * Emit `_generated/collections.ts` — one TanStack DB collection factory per
+ * `defineShape` in `lunora/shapes.ts` (the local-first partial-replication
+ * surface). Each factory builds a live collection that syncs its shape's rowset
+ * through the client's poke protocol (`subscribeShape`), so an app feeds the
+ * result straight to `useLiveQuery`.
+ *
+ * Returns `""` (so `writeIfPresent` skips the file) unless the project both
+ * declares shapes AND installs `@lunora/db` — the add-on that ships
+ * `lunoraCollectionOptions`. `@lunora/db` stays a scoped install even under the
+ * `lunorash` umbrella (an opt-in add-on, like `@lunora/auth`), so its import is
+ * always `@lunora/db/collections`; only the in-umbrella `@lunora/client` import
+ * is remapped to `lunorash/client`.
+ */
+const emitCollections = (shapes: ReadonlyArray<ShapeIR>, hasDatabase: boolean, useUmbrella = false): string => {
+    if (shapes.length === 0 || !hasDatabase) {
+        return "";
+    }
+
+    const base = baseSpecifiers(useUmbrella);
+
+    const factories = shapes
+        .map((shape) => {
+            assertIdentifier(shape.exportName, "shape export name");
+
+            return `/** Live collection for the \`${shape.exportName}\` replication shape — pass the shape's validated \`args\` (its partition selector). */
+export const ${shape.exportName}Collection = (client: LunoraClient, args?: Record<string, unknown>): Collection<Row, string> =>
+    createCollection(lunoraCollectionOptions({ client, shape: { args, name: "${shape.exportName}" } }).config);`;
+        })
+        .join("\n\n");
+
+    return `${GENERATED_HEADER}import type { LunoraClient } from "${base.client}";
+import { lunoraCollectionOptions } from "@lunora/db/collections";
+import type { Row } from "@lunora/db";
+import type { Collection } from "@tanstack/db";
+import { createCollection } from "@tanstack/db";
+
+${factories}
+`;
+};
+
+/**
  * Convert a raw file path into a JS-identifier-safe alias used as the
  * imported namespace inside `_generated/server.ts`. Keeps the path
  * recognisable in the generated source while satisfying the lexer.
@@ -737,7 +780,9 @@ const CALL_REGISTERED_HELPER = `const callRegistered = async <R>(context: Caller
 const renderFunctionRegistry = (
     functions: ReadonlyArray<FunctionIR>,
     migrations: ReadonlyArray<MigrationIR>,
-): { dispatchBody: string; importBlock: string; installBlock: string; migrationBody: string } => {
+    mutators: ReadonlyArray<MutatorIR> = [],
+    shapes: ReadonlyArray<ShapeIR> = [],
+): { dispatchBody: string; importBlock: string; installBlock: string; migrationBody: string; mutatorPaths: ReadonlyArray<string>; shapeBody: string } => {
     const aliasByPath = new Map<string, string>();
 
     const registerPath = (filePath: string): void => {
@@ -752,6 +797,18 @@ const renderFunctionRegistry = (
 
     for (const migration of migrations) {
         registerPath(migration.filePath);
+    }
+
+    // Mutators + shapes live in fixed files (`mutators`/`shapes`) distinct from
+    // any function/migration file, so they pick up fresh aliases LAST — existing
+    // function/migration alias numbering is preserved untouched, keeping the
+    // golden output byte-identical for shape/mutator-free projects.
+    for (const mutator of mutators) {
+        registerPath(mutator.filePath);
+    }
+
+    for (const shape of shapes) {
+        registerPath(shape.filePath);
     }
 
     const importLines = [...aliasByPath.entries()]
@@ -779,6 +836,31 @@ const renderFunctionRegistry = (
                 `    ${JSON.stringify(migration.id)}: ${aliasByPath.get(migration.filePath) ?? ""}.${migration.exportName} as unknown as RegisteredDataMigration,`,
         )
         .join("\n");
+
+    // Custom mutators register into the SAME `LUNORA_FUNCTIONS` table as ordinary
+    // procedures (their `kind: "mutation"` makes `handleRpc` transaction-wrap the
+    // authoritative `server` impl). The entries are appended after the function
+    // entries so a project with no mutators emits a byte-identical dispatch body.
+    const mutatorEntries = mutators
+        .map(
+            (mutator) =>
+                `    "${sanitizeNamespace(mutator.filePath)}:${mutator.exportName}": ${aliasByPath.get(mutator.filePath) ?? ""}.${mutator.exportName} as unknown as RegisteredLunoraFunction,`,
+        )
+        .join("\n");
+
+    // Shape registry body: one `"exportName": shapesAlias.exportName` entry the
+    // generated DO's `resolveShape` override dispatches `shape_subscribe` against.
+    const shapeEntries = shapes
+        .map((shape) => `    "${shape.exportName}": ${aliasByPath.get(shape.filePath) ?? ""}.${shape.exportName} as unknown as RegisteredShape,`)
+        .join("\n");
+
+    // The `namespace:fn` paths the DO's `isCustomMutator` override routes through
+    // the client-watermark push protocol — exactly the `LUNORA_FUNCTIONS` keys above.
+    const mutatorPaths = mutators.map((mutator) => `${sanitizeNamespace(mutator.filePath)}:${mutator.exportName}`);
+
+    // Splice mutator entries onto the function dispatch body (both already sorted
+    // by `${filePath}:${exportName}`); `filter` keeps the joiner clean when either side is empty.
+    const combinedDispatch = [dispatchEntries, mutatorEntries].filter((entries) => entries.length > 0).join("\n");
 
     // AOT-compiled argument validators. For each function whose args are fully
     // structural (no `.check(...)` refinement, no unmodelled validator kind) we
@@ -809,10 +891,12 @@ const renderFunctionRegistry = (
         .join("\n");
 
     return {
-        dispatchBody: dispatchEntries.length > 0 ? `\n${dispatchEntries}\n` : "",
+        dispatchBody: combinedDispatch.length > 0 ? `\n${combinedDispatch}\n` : "",
         importBlock: importLines.length > 0 ? `${importLines}\n\n` : "",
         installBlock: installLines,
         migrationBody: migrationEntries.length > 0 ? `\n${migrationEntries}\n` : "",
+        mutatorPaths,
+        shapeBody: shapeEntries.length > 0 ? `\n${shapeEntries}\n` : "",
     };
 };
 
@@ -1311,11 +1395,31 @@ const renderLifecycleManifest = (functions: ReadonlyArray<FunctionIR>): { connec
     return manifest;
 };
 
-const emitFunctions = (functions: ReadonlyArray<FunctionIR>, migrations: ReadonlyArray<MigrationIR> = [], useUmbrella = false): string => {
+const emitFunctions = (
+    functions: ReadonlyArray<FunctionIR>,
+    migrations: ReadonlyArray<MigrationIR> = [],
+    useUmbrella = false,
+    mutators: ReadonlyArray<MutatorIR> = [],
+    shapes: ReadonlyArray<ShapeIR> = [],
+): string => {
     const hasFunctions = functions.length > 0;
     const base = baseSpecifiers(useUmbrella);
-    const { dispatchBody, importBlock, installBlock, migrationBody } = renderFunctionRegistry(functions, migrations);
+    const { dispatchBody, importBlock, installBlock, migrationBody, mutatorPaths, shapeBody } = renderFunctionRegistry(functions, migrations, mutators, shapes);
     const lifecycleHooks = renderLifecycleManifest(functions);
+
+    // Replication-shape + custom-mutator registries (local-first sync engine).
+    // Both are gated on non-empty so a project without shapes/mutators emits a
+    // byte-identical `functions.ts` (the `RegisteredShape` type import, the
+    // `LUNORA_SHAPES` map, and the `LUNORA_MUTATOR_PATHS` set all vanish).
+    const shapeTypeImport = shapes.length > 0 ? `import type { RegisteredShape } from "${base.server}";\n` : "";
+    const shapeRegistry =
+        shapes.length > 0
+            ? `\n/**\n * Replication-shape registry — one entry per \`defineShape\` in \`lunora/shapes.ts\`.\n * The generated ShardDO's \`resolveShape\` override looks a shape up by name and\n * evaluates its trusted \`compileWhere(ctx, args)\` to authorize + scope a\n * \`shape_subscribe\` (reads-as-permissions).\n */\nexport const LUNORA_SHAPES: Record<string, RegisteredShape> = {${shapeBody}};\n`
+            : "";
+    const mutatorPathsRegistry =
+        mutatorPaths.length > 0
+            ? `\n/**\n * Custom-mutator function paths — the \`LUNORA_FUNCTIONS\` keys the generated\n * ShardDO's \`isCustomMutator\` override routes through the client-watermark push\n * protocol (\`x-lunora-client-id\`/\`x-lunora-client-seq\` ordering).\n */\nexport const LUNORA_MUTATOR_PATHS: ReadonlySet<string> = new Set([${mutatorPaths.map((path) => JSON.stringify(path)).join(", ")}]);\n`
+            : "";
 
     // Pull in the compiled-args seam only when at least one function compiled —
     // an unused import would trip `noUnusedLocals`.
@@ -1341,7 +1445,7 @@ const emitFunctions = (functions: ReadonlyArray<FunctionIR>, migrations: Readonl
     const callerParameter = hasFunctions ? "context" : "_context";
     const callRegisteredHelper = hasFunctions ? `${CALL_REGISTERED_HELPER}\n\n` : "";
 
-    return `${GENERATED_HEADER}${importBlock}${compiledArgsImport}import type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";
+    return `${GENERATED_HEADER}${importBlock}${compiledArgsImport}${shapeTypeImport}import type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";
 ${dataModelImport}
 /**
  * Single registered function, narrowed to the shape \`handleRpc\` needs.
@@ -1367,7 +1471,7 @@ export interface RegisteredLunoraFunction {
  * emits (\`api[namespace][fn].__lunoraRef === "namespace:fn"\`).
  */
 export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {${dispatchBody}};
-${compiledArgsInstall}
+${compiledArgsInstall}${shapeRegistry}${mutatorPathsRegistry}
 /**
  * Connection-lifecycle manifest: the function paths the generated ShardDO
  * dispatches when a client's WebSocket connects (\`connect\`) or disconnects
@@ -2607,10 +2711,14 @@ interface EmitShardOptions {
     /** A `lunora/` source reads `ctx.r2sql` (R2 SQL) — wires `ctx.r2sql` onto the ActionCtx only. */
     hasR2sql?: boolean;
     maskMetadata?: MaskMetadataIR;
+    /** Custom mutators declared via `defineMutator` in `lunora/mutators.ts` — wires the `isCustomMutator` push-protocol override. */
+    mutators?: ReadonlyArray<MutatorIR>;
     /** Queues declared via `defineQueue` exports in `lunora/queues.ts` — wires the typed `ctx.queues` producers. */
     queues?: ReadonlyArray<QueueIR>;
     rlsMetadata?: RlsMetadataIR;
     schema: SchemaIR;
+    /** Replication shapes declared via `defineShape` in `lunora/shapes.ts` — wires the `resolveShape` subscription override. */
+    shapes?: ReadonlyArray<ShapeIR>;
     storageRules?: StorageRulesMetadataIR;
     studioFeatures?: StudioFeaturesResult;
     /** The project depends on the `lunora` umbrella — import base packages via its subpaths. */
@@ -2634,15 +2742,19 @@ const emitShard = ({
     hasPipelines = false,
     hasR2sql = false,
     maskMetadata,
+    mutators = [],
     queues = [],
     rlsMetadata,
     schema,
+    shapes = [],
     storageRules,
     studioFeatures,
     useUmbrella = false,
     workflows = [],
 }: EmitShardOptions): string => {
     const base = baseSpecifiers(useUmbrella);
+    const hasMutators = mutators.length > 0;
+    const hasShapes = shapes.length > 0;
     const { build: aiBuild, configField: aiConfigField, contextField: aiContextField, stub: aiStub } = emitAiFragments(hasAi);
     // New Cloudflare-capability helpers, mirroring `emitAiFragments`. `kv` /
     // `analytics` ride EVERY ctx (deterministic-read / fire-and-forget-write);
@@ -2746,9 +2858,48 @@ const emitShard = ({
     // (from `@lunora/server`) now owns the per-table accessor binding.
     const doTypeImports = buildDoTypeImports(hasVectors, workflows.length > 0, queues.length > 0, hasFlags);
 
+    // A shape's `resolveShape` override returns an `effectiveWhere: WhereInput`,
+    // so the DO's `WhereInput` type is pulled in only when the project has shapes.
+    if (hasShapes) {
+        doTypeImports.push("WhereInput");
+    }
+
     // Reverse cross-backend relation override + its `@lunora/do` import fragment
     // (both empty unless the project has `.global()` tables). See `emitRelationFanout`.
     const relationFanout = emitRelationFanout(hasGlobalTables);
+
+    // Local-first sync engine: the DO overrides that route `shape_subscribe`
+    // (`resolveShape`) and the client-watermark mutator push (`isCustomMutator`)
+    // through the generated registries. Both are empty for a shape/mutator-free
+    // project, so its `shard.ts` is byte-identical.
+    const shapeResolveOverride = hasShapes
+        ? `
+        protected override resolveShape(name: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; userId?: string }): { columns?: readonly string[]; effectiveWhere?: WhereInput; table: string } | undefined {
+            const shape = LUNORA_SHAPES[name];
+
+            if (!shape) {
+                return undefined;
+            }
+
+            this.ensureMigrated();
+
+            // Trusted ctx from the socket's OWN verified identity — the client
+            // supplies only the shape name + args; \`compileWhere\` validates the
+            // args then runs the shape's \`where(ctx, args)\` under that identity,
+            // so which rows replicate is a server decision (reads-as-permissions).
+            const ctx = this.buildCtx({ functionPath: \`__shape__:\${name}\`, identity });
+
+            return { columns: shape.columns, effectiveWhere: shape.compileWhere(ctx, args) as unknown as WhereInput, table: shape.table };
+        }
+`
+        : "";
+    const customMutatorOverride = hasMutators
+        ? `
+        protected override isCustomMutator(functionPath: string): boolean {
+            return LUNORA_MUTATOR_PATHS.has(functionPath);
+        }
+`
+        : "";
 
     const importLines = [
         `import type { ${doTypeImports.join(", ")} } from "${base.do}";`,
@@ -2793,7 +2944,9 @@ const emitShard = ({
         ...paymentsImports,
         ``,
         `import schema from "../schema.js";`,
-        `import { LUNORA_FUNCTIONS, LUNORA_LIFECYCLE_HOOKS, LUNORA_MIGRATIONS } from "./functions.js";`,
+        // Local-first sync registries are pulled in alongside the function table
+        // only when the project declares them, so the import list stays minimal.
+        `import { ${["LUNORA_FUNCTIONS", "LUNORA_LIFECYCLE_HOOKS", "LUNORA_MIGRATIONS", ...(hasMutators ? ["LUNORA_MUTATOR_PATHS"] : []), ...(hasShapes ? ["LUNORA_SHAPES"] : [])].join(", ")} } from "./functions.js";`,
     );
 
     const vectorsConfigField = hasVectors ? `\n    vectors?: (env: Record<string, unknown>) => Record<string, VectorizeIndexLike>;` : "";
@@ -3213,7 +3366,7 @@ ${relationFanout.override}
                 iterator: (signal) => (registered.handler as (context: unknown, args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>)(this.buildCtx({ functionPath }), args, signal),
             };
         }
-
+${customMutatorOverride}${shapeResolveOverride}
         protected override lifecycleHookPaths(event: "connect" | "disconnect"): readonly string[] {
             return LUNORA_LIFECYCLE_HOOKS[event];
         }
@@ -3928,6 +4081,7 @@ const emitWranglerCronTriggers = (crons: ReadonlyArray<CronJobIR>): string[] => 
 export {
     buildStorageColumns,
     emitApi,
+    emitCollections,
     emitContainers,
     emitCrons,
     emitDataModel,
