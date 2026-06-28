@@ -23,6 +23,17 @@ const LUNORA_WORKER_VIRTUAL_ID: string = "virtual:lunora/worker";
 const RESOLVED_VIRTUAL_PREFIX = "\0";
 const RESOLVED_LUNORA_WORKER_ID: string = `${RESOLVED_VIRTUAL_PREFIX}${LUNORA_WORKER_VIRTUAL_ID}`;
 
+/**
+ * Stub emitted for the worker virtual in the *client* (browser) environment. The
+ * composed entry pulls in worker-only runtime — `composeWorker`, `createShardDO`,
+ * the framework's server handler — none of which belongs in a browser chunk. The
+ * client never imports `virtual:lunora/worker` in practice, so this only hardens
+ * against an accidental import leaking worker code into the client bundle.
+ */
+const CLIENT_WORKER_STUB = `// @lunora/vite — the composed worker entry is worker-only and unavailable in the client environment.
+export default {};
+`;
+
 /** Strip a single trailing slash from a dir so the emitted import has exactly one separator. */
 const TRAILING_SLASH = /\/$/;
 
@@ -214,6 +225,15 @@ export const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, con
     return {
         load(id) {
             if (id === RESOLVED_LUNORA_WORKER_ID && isWorkerVirtualActive(context) && context.framework !== undefined) {
+                // `@cloudflare/vite-plugin` names the browser environment "client"
+                // and the worker environment after the worker; emit the stub there
+                // and the real entry everywhere else (worker/SSR). Vite 8 always
+                // runs hooks within an environment context, so `this.environment`
+                // is guaranteed present here.
+                if (this.environment.name === "client") {
+                    return CLIENT_WORKER_STUB;
+                }
+
                 // `_generated/containers.ts` exists only when the project declares
                 // containers; codegen has already run by load time, so this fs
                 // check decides whether the composed entry re-exports them.

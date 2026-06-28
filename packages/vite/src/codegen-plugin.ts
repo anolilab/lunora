@@ -271,39 +271,19 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             // wedge the loop), and on server close.
             let cachedProject: Project | undefined;
 
-            // Invalidate generated modules across every module graph so the dev
-            // server picks up new types/values. Vite 6's environment API (used by
-            // `@cloudflare/vite-plugin` for the worker/SSR environment) keeps
-            // per-environment graphs that the legacy `server.moduleGraph` doesn't
-            // cover, so walk those too when present.
-            type ModuleGraphLike = {
-                idToModuleMap: Map<string, { id: string | null }>;
-                invalidateModule: (module: { id: string | null }) => void;
-            };
-
+            // Invalidate generated modules across every environment's module graph
+            // so the dev server picks up new types/values. `@cloudflare/vite-plugin`
+            // runs the worker (and SSR) in their own Vite environments, each with
+            // its own graph the client graph doesn't cover — `server.environments`
+            // is always present on Vite 8 (the plugin's peer), so walk them all.
             const invalidateGenerated = (): void => {
-                // `environments` is absent on Vite < 6 / partial mocks; the cast
-                // through `unknown` keeps the runtime guard meaningful.
-                const environments = server.environments as unknown as Record<string, { moduleGraph?: ModuleGraphLike }> | undefined;
-                const graphs: ModuleGraphLike[] = [];
+                for (const environment of Object.values(server.environments)) {
+                    const graph = environment.moduleGraph;
 
-                if (environments !== undefined) {
-                    for (const environment of Object.values(environments)) {
-                        if (environment.moduleGraph !== undefined) {
-                            graphs.push(environment.moduleGraph);
-                        }
-                    }
-                }
-
-                if (graphs.length === 0) {
-                    graphs.push(server.moduleGraph as unknown as ModuleGraphLike);
-                }
-
-                for (const graph of graphs) {
                     for (const moduleEntry of graph.idToModuleMap.values()) {
                         if (moduleEntry.id && isInside(moduleEntry.id, absoluteGeneratedDirectory)) {
-                            // Invalidate via the owning graph so per-environment
-                            // graphs are handled correctly.
+                            // Invalidate via the owning environment graph so each
+                            // environment re-pulls the regenerated module.
                             graph.invalidateModule(moduleEntry);
                         }
                     }
