@@ -1,15 +1,14 @@
-import type { AuthSession } from "@lunora/client";
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { useClientQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import { useT } from "../../i18n/i18n-context";
-import { errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
+import { fireAndForget, formatTimestamp } from "../../lib/internal";
 
 /** How many sessions to pull for the global browser. */
 const SESSION_LIMIT = 200;
@@ -26,42 +25,24 @@ export const AuthSessionsPanel = (): ReactElement => {
     const client = useLunora();
     const t = useT();
 
-    const [sessions, setSessions] = useState<AuthSession[] | null>(null);
-    const [error, setError] = useState<null | string>(null);
-    const [version, setVersion] = useState<number>(0);
+    // The auth store is HTTP-only (no admin-RPC path), so it's a `useClientQuery`
+    // over `client.listAuthSessions`.
+    const sessionsQuery = useClientQuery(["lunora-auth-sessions", SESSION_LIMIT], () => client.listAuthSessions({ limit: SESSION_LIMIT }));
+    const { error } = sessionsQuery;
+    const sessions = sessionsQuery.data?.rows ?? null;
 
-    useEffect(() => {
-        fireAndForget(
-            (async (): Promise<void> => {
-                setError(null);
-
-                try {
-                    const page = await client.listAuthSessions({ limit: SESSION_LIMIT });
-
-                    setSessions(page.rows);
-                } catch (error_) {
-                    setSessions(null);
-                    setError(errorMessage(error_));
-                }
-            })(),
-        );
-        // `version` is included so a poll tick (or a revoke) re-lists sessions too.
-    }, [client, version]);
-
+    // No subscription channel, so poll to catch new sessions / revokes without a
+    // reload button (paused while the tab is hidden).
     useAutoRefresh(() => {
-        setVersion((value) => value + 1);
+        sessionsQuery.refetch();
     }, true);
 
-    /** Revoke a session, surface any error, and bump `version` so the list refetches. */
+    /** Revoke a session, then refetch so the list reflects the removal. */
     const onRevoke = (sessionId: string): void => {
         fireAndForget(
             (async (): Promise<void> => {
-                try {
-                    await client.revokeAuthSession({ sessionId });
-                    setVersion((value) => value + 1);
-                } catch (error_) {
-                    setError(errorMessage(error_));
-                }
+                await client.revokeAuthSession({ sessionId });
+                sessionsQuery.refetch();
             })(),
         );
     };
