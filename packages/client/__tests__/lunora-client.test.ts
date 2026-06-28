@@ -460,6 +460,7 @@ describe("lunoraClient", () => {
             expect.assertions(3);
 
             const client = new LunoraClient({
+                clientId: "client-A",
                 fetch: vi.fn<typeof fetch>(),
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -467,7 +468,8 @@ describe("lunoraClient", () => {
 
             // No connection context registered: the socket must still announce
             // itself so the server's `onConnect` hooks fire symmetrically with
-            // `onDisconnect`. The envelope simply carries no `context`.
+            // `onDisconnect`. The envelope carries the `clientId` (so pokes can
+            // echo this client's `lastMutationId`) but no `context`.
             client.subscribe(fnRef("messages:list"), {}, () => undefined);
 
             const socket = latestSocket();
@@ -476,7 +478,7 @@ describe("lunoraClient", () => {
 
             const connect = JSON.parse(socket.sent[0]!);
 
-            expect(connect).toEqual({ id: "connect", type: "connect" });
+            expect(connect).toEqual({ clientId: "client-A", id: "connect", type: "connect" });
             // The connect frame leads, then the subscribe — order matters so the
             // hook runs with any context in place before subscriptions replay.
             expect(JSON.parse(socket.sent[1]!).type).toBe("subscribe");
@@ -489,6 +491,7 @@ describe("lunoraClient", () => {
             expect.assertions(1);
 
             const client = new LunoraClient({
+                clientId: "client-A",
                 connectionContext: { roomId: "room-1" },
                 fetch: vi.fn<typeof fetch>(),
                 url: "https://app.example",
@@ -501,7 +504,7 @@ describe("lunoraClient", () => {
 
             socket.open();
 
-            expect(JSON.parse(socket.sent[0]!)).toEqual({ context: { roomId: "room-1" }, id: "connect", type: "connect" });
+            expect(JSON.parse(socket.sent[0]!)).toEqual({ clientId: "client-A", context: { roomId: "room-1" }, id: "connect", type: "connect" });
 
             client.close();
         });
