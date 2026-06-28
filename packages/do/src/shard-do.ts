@@ -2132,6 +2132,12 @@ abstract class ShardDO {
                 attachment.context = envelope.context;
             }
 
+            // Record the client's stable id so shape pokes to this socket can
+            // echo its `__client_watermark` as `lastMutationId` (overlay-drop).
+            if (envelope.clientId !== undefined) {
+                attachment.clientId = envelope.clientId;
+            }
+
             attachment.connected = true;
 
             try {
@@ -6371,7 +6377,7 @@ abstract class ShardDO {
     ): void {
         this.pokeSequence += 1;
         const pokeId = `poke-${String(this.pokeSequence)}`;
-        const frames = buildPokeFrames(parts, { baseCheckpoint, checkpoint, epoch, pokeId });
+        const frames = buildPokeFrames(parts, { baseCheckpoint, checkpoint, epoch, lastMutationId: this.socketClientWatermark(ws), pokeId });
 
         try {
             for (const frame of frames) {
@@ -6380,6 +6386,22 @@ abstract class ShardDO {
         } catch {
             /* socket may have closed mid-poke; the client re-seeds on reconnect */
         }
+    }
+
+    /**
+     * The recipient client's `__client_watermark` for stamping a poke's
+     * `lastMutationId`, or `undefined` when the socket announced no `clientId`
+     * (a client that doesn't use custom mutators — nothing to drop an overlay
+     * for). Read off the attachment so it survives hibernation.
+     */
+    private socketClientWatermark(ws: WebSocket): number | undefined {
+        const { clientId } = this.readAttachment(ws);
+
+        if (clientId === undefined) {
+            return undefined;
+        }
+
+        return readClientWatermark(this.sql as SqlExec, clientId);
     }
 
     /** Record a shape's poke baseline cursor on a socket (creating the per-socket map lazily). */

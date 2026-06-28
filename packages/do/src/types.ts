@@ -64,6 +64,14 @@ export interface ShapeSubscriptionQuery {
 
 export interface SubscriptionEnvelope {
     /**
+     * Stable per-client id carried by the `connect` envelope. Recorded on the
+     * socket attachment so a shape poke can echo this client's
+     * `__client_watermark` as its `lastMutationId`. Ignored on other envelope
+     * types; absent for clients that don't use custom mutators.
+     */
+    clientId?: string;
+
+    /**
      * App-supplied connection context carried by the `connect` envelope (e.g.
      * `{ roomId, sessionId }`). Merged into the socket attachment and forwarded
      * to every lifecycle hook as `event.context`. Ignored on other envelope types.
@@ -199,6 +207,16 @@ export interface SocketAttachment {
      * user-subscription sockets, which may never read admin data over the wire.
      */
     admin?: boolean;
+
+    /**
+     * Stable per-client id from the `connect` envelope (the same id the client
+     * stamps on its custom-mutator pushes). Lets a shape poke echo this client's
+     * `__client_watermark` as the poke's `lastMutationId`, so a `@lunora/db`
+     * collection can drop the optimistic overlay for writes this poke has
+     * synced. Absent for clients that don't use custom mutators. Persisted so it
+     * survives hibernation.
+     */
+    clientId?: string;
 
     /**
      * `true` once the socket's `connect` envelope has fired the `onConnect`
