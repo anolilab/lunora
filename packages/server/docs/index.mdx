@@ -117,6 +117,53 @@ commits, schedule it: `ctx.scheduler.runAfter(0, internalFn, args)` — the
 deterministic equivalent of an `afterCommit` hook (a registered function with
 serializable args, not an inline closure).
 
+## `defineShape(definition)` — partial replication
+
+Declare a **shape**: a named, partial replication of a table for the
+[local-first sync engine](/docs/concepts/local-first). A client subscribes by
+name + validated `args`; the DO resolves the predicate server-side and
+AND-composes it with the table's RLS read base-where. Declared in
+`lunora/shapes.ts`.
+
+```ts title="lunora/shapes.ts"
+import { defineShape, v } from "lunorash/server";
+
+export const messagesByChannel = defineShape({
+    table: "messages",
+    args: { channelId: v.id("channels") }, // optional — omit for a parameterless shape
+    where: (ctx, { channelId }) => ({ channelId }), // runs on the DO with a trusted ctx
+    columns: ["text", "authorId", "channelId"], // optional projection; _id/_creationTime always included
+});
+```
+
+`where` returns the same `WhereInput` the RLS DSL uses, so there is no second
+predicate implementation. Because it runs with an identity the client can't
+forge, a shape is a _read-as-permission_ — see
+[Local-first sync](/docs/concepts/local-first#shapes--partial-replication).
+
+## `defineMutator(definition)` — custom mutators
+
+Declare a **custom mutator**: a `server` implementation (authoritative, runs in
+the shard DO) paired with an optional `client` twin (optimistic, runs in the
+browser). Declared in `lunora/mutators.ts`.
+
+```ts title="lunora/mutators.ts"
+import { defineMutator, v } from "lunorash/server";
+
+export const sendMessage = defineMutator({
+    args: { channelId: v.id("channels"), text: v.string() },
+    server: (ctx, { channelId, text }) => ctx.db.insert("messages", { channelId, text, authorId: ctx.auth.userId }),
+});
+```
+
+The `server` impl is the linearization point; its writes append to the op-log
+and poke back to subscribers. The DO is serialized, so there is **no
+server-side OCC-retry loop**. The client-side optimistic twin and the watermark
+ordering are covered in
+[Local-first sync](/docs/concepts/local-first#custom-mutators--optimistic-server-authoritative);
+the browser-side `defineMutator` / `bindMutators` live in
+[`@lunora/db`](/docs/packages/db#custom-mutators).
+
 ## Subpaths
 
 - `@lunora/server/rls/testing` — `expectPolicy(policies)`, an in-process RLS
@@ -130,3 +177,4 @@ serializable args, not an inline closure).
 
 - [@lunora/client](/docs/packages/client)
 - [Concepts: schema](/docs/concepts/schema)
+- [Local-first sync](/docs/concepts/local-first) — `defineShape` / `defineMutator`
