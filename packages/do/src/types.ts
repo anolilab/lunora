@@ -40,6 +40,28 @@ export interface SubscriptionQuery {
     table?: string;
 }
 
+/**
+ * A live shape subscription registered on a socket — the partial-replication
+ * parallel to {@link SubscriptionQuery}. The client names a `defineShape` shape
+ * and supplies validated `args`; the DO resolves it to a table + RLS-composed
+ * `effectiveWhere` under the socket's verified identity (never the client's
+ * word) and pokes the membership diff. `sinceSeq`/`sinceEpoch` carry the
+ * client's last applied checkpoint for resume.
+ */
+export interface ShapeSubscriptionQuery {
+    /** Validated shape arguments (e.g. `{ channelId }`); forwarded to `resolveShape`. */
+    args?: Record<string, unknown>;
+
+    /** Registered shape name (the `defineShape` export the codegen subclass resolves). */
+    name: string;
+
+    /** Resume epoch the client persisted alongside {@link ShapeSubscriptionQuery.sinceSeq} (see {@link SubscriptionQuery.sinceEpoch}). */
+    sinceEpoch?: string;
+
+    /** Resume checkpoint: the `__cdc_log` cursor the client's view of this shape last reflected (see {@link SubscriptionQuery.sinceSeq}). */
+    sinceSeq?: number;
+}
+
 export interface SubscriptionEnvelope {
     /**
      * App-supplied connection context carried by the `connect` envelope (e.g.
@@ -55,6 +77,19 @@ export interface SubscriptionEnvelope {
     data?: unknown;
     id: string;
     query?: SubscriptionQuery;
+
+    /**
+     * Shape descriptor of a `shape_subscribe` envelope: the named shape + its
+     * validated args. Carries the client's resume checkpoint via
+     * {@link SubscriptionEnvelope.sinceCheckpoint}/{@link SubscriptionEnvelope.sinceEpoch}.
+     */
+    shape?: { args?: Record<string, unknown>; name: string };
+
+    /** Resume checkpoint on a `shape_subscribe` envelope (the `__cdc_log` cursor the client's shape view is at). */
+    sinceCheckpoint?: number;
+
+    /** CDC epoch the {@link SubscriptionEnvelope.sinceCheckpoint} belongs to. */
+    sinceEpoch?: string;
 
     /**
      * Topic of a `whisper`/`whisper_subscribe`/`whisper_unsubscribe` envelope —
@@ -75,7 +110,17 @@ export interface SubscriptionEnvelope {
      * this shard with NO SQLite/CDC write (AnyCable-style whispering — typing
      * indicators, live cursors). The sender never receives its own whisper.
      */
-    type: "ack" | "connect" | "stream" | "subscribe" | "unsubscribe" | "whisper" | "whisper_subscribe" | "whisper_unsubscribe";
+    type:
+        | "ack"
+        | "connect"
+        | "shape_subscribe"
+        | "shape_unsubscribe"
+        | "stream"
+        | "subscribe"
+        | "unsubscribe"
+        | "whisper"
+        | "whisper_subscribe"
+        | "whisper_unsubscribe";
 }
 
 /**
@@ -193,6 +238,15 @@ export interface SocketAttachment {
      * hooks so they run under the connecting user.
      */
     identity?: Record<string, unknown>;
+
+    /**
+     * Live shape subscriptions registered on this socket, keyed by the
+     * client-supplied subscription id. The partial-replication parallel to
+     * {@link SocketAttachment.subs}: the poke protocol fans membership diffs to
+     * these, while `subs` drives the legacy `data`/`delta` re-execution path.
+     * Absent until the socket sends its first `shape_subscribe`.
+     */
+    shapes?: Record<string, ShapeSubscriptionQuery>;
     subs: Record<string, SubscriptionQuery>;
 
     /**

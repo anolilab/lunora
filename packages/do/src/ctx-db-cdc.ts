@@ -9,6 +9,7 @@
  * these so existing import sites (shard-do, the index barrel, tests) are unchanged.
  */
 
+/* eslint-disable no-restricted-syntax -- every `dsql\`…\`` here is a drizzle tagged-template SQL builder binding a value, not a string conversion; the rule misfires on the inner TemplateLiteral (see where-sql.ts). */
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-cdc" mirrors its parent "ctx-db.ts" (the established public module name). */
 
 import { sql as dsql } from "drizzle-orm";
@@ -71,14 +72,32 @@ const appendCdcChange = (sql: SqlExec, ts: number, table: string, id: string, op
  * Read changelog entries newer than `sinceSeq` in commit order, up to `limit`
  * (clamped to [1, 10000]). Returns the rows plus the cursor to resume from (the
  * last `seq`, or `sinceSeq` when the page is empty).
+ *
+ * The optional `tables` set narrows the page to changes on those tables — the
+ * shape/poke path reads one filtered page per flush so it never scans op-log
+ * entries for tables no live shape is watching. Omit it (or pass an empty set)
+ * for the full, unfiltered page (the existing streaming-export/resume callers).
  */
-const readCdcChanges = (sql: SqlExec, options: { limit?: number; sinceSeq?: number } = {}): { changes: CdcChange[]; cursor: number } => {
+const readCdcChanges = (
+    sql: SqlExec,
+    options: { limit?: number; sinceSeq?: number; tables?: ReadonlySet<string> } = {},
+): { changes: CdcChange[]; cursor: number } => {
     const sinceSeq = options.sinceSeq ?? 0;
     const limit = Math.max(1, Math.min(options.limit ?? 1000, 10_000));
 
+    // Bind each table name as a parameter so the `IN (…)` list can never inject
+    // SQL; an empty/omitted set leaves the predicate off entirely (full page).
+    const tableFilter =
+        options.tables && options.tables.size > 0
+            ? dsql` AND ${dsql.identifier("table")} IN (${dsql.join(
+                  [...options.tables].map((table) => dsql`${table}`),
+                  dsql`, `,
+              )})`
+            : dsql``;
+
     const rows = runDrizzle<{ doc: null | string; id: string; op: string; seq: number; table: string; ts: number }>(
         sql,
-        dsql`SELECT seq, ts, ${dsql.identifier("table")}, id, op, doc FROM ${dsql.identifier(CDC_LOG_TABLE)} WHERE seq > ${sinceSeq} ORDER BY seq ASC LIMIT ${limit}`,
+        dsql`SELECT seq, ts, ${dsql.identifier("table")}, id, op, doc FROM ${dsql.identifier(CDC_LOG_TABLE)} WHERE seq > ${sinceSeq}${tableFilter} ORDER BY seq ASC LIMIT ${limit}`,
     ).toArray();
 
     const changes = rows.map((row): CdcChange => {
