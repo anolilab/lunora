@@ -1,12 +1,14 @@
 import type { ChildProcess } from "node:child_process";
 import { spawn as nodeSpawn } from "node:child_process";
 
+import type { ContainerLogStreamHandle } from "@lunora/config";
 import {
     AGENT_RULES_HINT,
     claimAgentRulesHint,
     detectAgentRules,
     DEV_VARS_EXAMPLE_FILE,
     DEV_VARS_FILE,
+    discoverContainerInfo,
     ensureDevVariables,
     ensureDevVarsExample,
     fillDevSecrets,
@@ -17,6 +19,7 @@ import {
     packageNamesFromBindings,
     readProjectRemotePreference,
     resolveRemoteEnabled,
+    streamContainerLogs,
 } from "@lunora/config";
 
 import type { ApiSpec } from "../../util/api-spec";
@@ -308,14 +311,57 @@ const printAgentRulesHint = (logger: Logger, cwd: string): void => {
 
 interface Teardown {
     codegen?: CodegenWatcherHandle;
+    /** Disposer for the dev container log stream (stops polling Docker + detaches). */
+    containerLogs?: ContainerLogStreamHandle;
     /** Disposer for the materialized remote wrangler temp config (idempotent, never throws). */
     remoteCleanup?: () => void;
     studio?: StudioServerHandle;
 }
 
-/** Best-effort shutdown of the studio server, codegen watcher, and remote temp config. */
+/**
+ * Follow the local Docker logs of every declared container and surface each
+ * output line on the dev logger, tagged `[container:&lt;name>]`. Returns a disposer
+ * (or `undefined` when there are no containers, so no Docker work ever starts).
+ *
+ * wrangler builds + runs each declared container locally but only forwards the
+ * worker's console; the container process's own stdout/stderr would otherwise be
+ * invisible. Set `LUNORA_CONTAINER_LOGS=0` to opt out.
+ */
+const startContainerLogStreaming = (cwd: string, logger: Logger): ContainerLogStreamHandle | undefined => {
+    if (process.env.LUNORA_CONTAINER_LOGS === "0") {
+        return undefined;
+    }
+
+    const discovery = discoverContainerInfo(cwd, "lunora");
+    const containers = discovery.containers.map((container) => {
+        return { className: container.className, exportName: container.exportName };
+    });
+
+    if (containers.length === 0) {
+        return undefined;
+    }
+
+    return streamContainerLogs({
+        containers,
+        onLine: (line) => {
+            const tagged = `[container:${line.name}] ${line.text}`;
+
+            if (line.level === "error") {
+                logger.warn(tagged);
+            } else {
+                logger.info(tagged);
+            }
+        },
+        onUnavailable: (message) => {
+            logger.warn(`[container] Docker engine unreachable — container logs unavailable (${message})`);
+        },
+    });
+};
+
+/** Best-effort shutdown of the studio server, codegen watcher, container logs, and remote temp config. */
 const teardown = async (handles: Teardown): Promise<void> => {
     handles.codegen?.close();
+    handles.containerLogs?.close();
     await handles.studio?.close().catch(() => undefined);
     // Unlink the generated remote wrangler config last; the disposer is itself
     // idempotent + swallows errors, but guard the call site too for safety.
@@ -438,6 +484,14 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         }
 
         const worker = (options.startWorker ?? defaultWorkerSpawner)(plan.wrangler, logger);
+
+        // Tail the local dev containers' own stdout/stderr (no-op when the project
+        // declares none). Best-effort — a Docker hiccup must not break dev.
+        try {
+            handles.containerLogs = startContainerLogStreaming(cwd, logger);
+        } catch {
+            /* never fatal */
+        }
 
         printBanner(logger, plan, studioUrl);
         printAgentRulesHint(logger, cwd);

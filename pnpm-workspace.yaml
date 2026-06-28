@@ -76,6 +76,11 @@ overrides:
   tmp@<0.2.6: ^0.2.6
   tmp@<=0.2.3: ^0.2.4
   undici@<6.27.0: ^6.27.0
+  # dockerode pulls uuid@10, flagged by GHSA-w5hq-g745-h8pq (missing buffer
+  # bounds check in v3/v5/v6 when `buf` is passed). dockerode only calls
+  # `uuid.v4()`, so it's not exploitable here, but bump the whole tree to the
+  # patched line to clear the advisory; v11 keeps the named `v4` export.
+  uuid@<11.1.0: ^11.1.0
 
 catalogs:
   ai:
@@ -153,6 +158,7 @@ catalogs:
     typescript: 6.0.3
   types:
     "@standard-schema/spec": 1.1.0
+    "@types/dockerode": ^3.3.47
     "@types/node": 25.9.3
   cloudflare:
     "@cloudflare/containers": ^0.3.7
@@ -167,6 +173,7 @@ catalogs:
     "@playwright/test": ^1.61.0
     playwright: ^1.61.0
   tooling:
+    dockerode: ^4.0.12
     ts-morph: ^28.0.0
   vite:
     # Exact-pinned (no caret). 1.40.0 regressed the dev runner — `getWorkerEntryExportTypes`
@@ -392,11 +399,14 @@ peerDependencyRules:
 allowBuilds:
   '@parcel/watcher': true
   core-js: false
+  cpu-features: false
   esbuild: true
   msgpackr-extract: true
   msw: false
+  protobufjs: false
   rs-module-lexer: true
   sharp: true
+  ssh2: false
   unrs-resolver: true
   vue-demi: false
   workerd: true

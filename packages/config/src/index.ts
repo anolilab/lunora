@@ -10,6 +10,15 @@ export {
 } from "./agent-rules";
 export type { ContainerIR, DiscoverContainerInfoResult } from "./container-info";
 export { discoverContainerInfo } from "./container-info";
+export type {
+    ContainerLogLevel,
+    ContainerLogLine,
+    ContainerLogSource,
+    ContainerLogStreamHandle,
+    ContainerLogStreamOptions,
+    DockerLike,
+} from "./container-logs";
+export { streamContainerLogs } from "./container-logs";
 export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./detect-framework";
 export { detectFramework } from "./detect-framework";
 export { DEV_VARS_EXAMPLE_FILE, DEV_VARS_FILE, DEV_VARS_KEY_PATTERN, parseDevVariableEntries } from "./dev-variables-format";

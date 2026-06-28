@@ -4,6 +4,7 @@ import type { Plugin } from "vite";
 
 import agentRulesHintPlugin from "./agent-rules-hint-plugin";
 import codegenPlugin from "./codegen-plugin";
+import containerLogsPlugin from "./container-logs-plugin";
 import devVariablesPlugin from "./dev-variables-plugin";
 import { createCommandProbe, withDevWorkerEnv } from "./dev-worker-env";
 import { frameworkComposePlugin } from "./framework-compose-plugin";
@@ -111,6 +112,11 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
     }
 
     if (resolved.cloudflare !== false) {
+        // Only the Cloudflare plugin builds + runs the dev containers, so tail
+        // their logs only when it's active — the BYO (`cloudflare: false`) path
+        // never starts containers, so Docker polling would be pointless.
+        plugins.push(containerLogsPlugin(resolved));
+
         // Honor remote-binding dev (`LUNORA_REMOTE` / `lunora.json` `remote`) on
         // the `vite dev` path too, exactly like `lunora dev`: materialize a temp
         // wrangler config with `"remote": true` on each eligible binding and
@@ -136,6 +142,7 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
 const VERSION = "0.0.0";
 
 export { default as codegenPlugin } from "./codegen-plugin";
+export { default as containerLogsPlugin } from "./container-logs-plugin";
 export type { ReconcileResult } from "./cron-sync";
 export { reconcileWranglerCrons } from "./cron-sync";
 export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./detect-framework";

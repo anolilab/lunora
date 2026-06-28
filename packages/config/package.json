@@ -68,11 +68,13 @@
         "@lunora/container": "1.0.0-alpha.4",
         "@lunora/seed": "1.0.0-alpha.5",
         "@visulima/colorize": "2.0.0-alpha.14",
+        "dockerode": "catalog:tooling",
         "es-module-lexer": "catalog:vite",
         "jsonc-parser": "catalog:vite",
         "ts-morph": "catalog:tooling"
     },
     "devDependencies": {
+        "@types/dockerode": "catalog:types",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
