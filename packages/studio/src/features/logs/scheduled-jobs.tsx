@@ -7,6 +7,7 @@ import { ConfirmButton } from "../../components/confirm-button";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { useClientQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
@@ -33,6 +34,9 @@ interface ScheduledJobsProps {
 /** A scheduled timestamp is always a finite epoch-ms; guard non-finite to an em dash. */
 const formatScheduledFor = (value: number): string => (Number.isFinite(value) ? formatTimestamp(value, "—") : "—");
 
+/** Soonest-due first so the next thing to fire is at the top. */
+const sortByDue = (records: ScheduleRecord[]): ScheduleRecord[] => records.toSorted((a, b) => a.scheduledFor - b.scheduledFor);
+
 /**
  * View — and cancel — the functions queued via `runAfter` / `runAt` on the
  * scheduler. Cron *triggers* are static wrangler config and don't appear here;
@@ -46,10 +50,41 @@ export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
     const client = useLunora();
     const t = useT();
 
-    const [jobs, setJobs] = useState<ScheduleRecord[] | null>(null);
-    const [error, setError] = useState<null | string>(null);
+    // Live updates, always on. When the panel sources jobs from the client (no
+    // custom `loadJobs`), it subscribes to the SchedulerDO's WebSocket — the
+    // server pushes the full list on every schedule/cancel/alarm-fire, so jobs
+    // appear and vanish the instant they change. With a custom `loadJobs` the host
+    // owns the transport, so we fall back to interval polling.
+    const livePush = loadJobs === undefined;
 
-    const load = loadJobs ?? (() => client.listScheduledJobs());
+    // The one-shot list read (HTTP, no admin-RPC path) seeds the table and drives
+    // the polling fallback for the custom-loader case.
+    const jobsQuery = useClientQuery(["lunora-scheduled-jobs", livePush], async () => {
+        const records = await (loadJobs ?? (() => client.listScheduledJobs()))();
+
+        return sortByDue(records);
+    });
+
+    // The live WebSocket push (left exactly as-is) writes here; it takes
+    // precedence over the one-shot read once the first push lands.
+    const [liveJobs, setLiveJobs] = useState<ScheduleRecord[] | undefined>(undefined);
+    const [liveError, setLiveError] = useState<string | undefined>(undefined);
+
+    useEffect(() => {
+        if (!livePush) {
+            return undefined;
+        }
+
+        return client.subscribeScheduledJobs((records) => {
+            setLiveError(undefined);
+            setLiveJobs(sortByDue(records));
+        });
+    }, [livePush, client]);
+
+    // Polling fallback for the custom-loader case (no WS to subscribe to).
+    useAutoRefresh(() => {
+        jobsQuery.refetch();
+    }, !livePush);
 
     // Cancelling is available when the host supplies a canceller, or when the
     // panel is sourcing jobs from the client (then the client can cancel too).
@@ -62,54 +97,16 @@ export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
         return loadJobs === undefined ? (id: string) => client.cancelScheduledJob(id) : undefined;
     }, [cancelJob, client, loadJobs]);
 
-    const refresh = async (): Promise<void> => {
-        setError(null);
-
-        try {
-            const records = await load();
-
-            // Soonest-due first so the next thing to fire is at the top.
-            setJobs(records.toSorted((a, b) => a.scheduledFor - b.scheduledFor));
-        } catch (error_) {
-            setJobs(null);
-            setError(errorMessage(error_));
-        }
-    };
-
-    useEffect(() => {
-        fireAndForget(refresh());
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
-    }, []);
-
-    // Live updates, always on. When the panel sources jobs from the client (no
-    // custom `loadJobs`), it subscribes to the SchedulerDO's WebSocket — the
-    // server pushes the full list on every schedule/cancel/alarm-fire, so jobs
-    // appear and vanish the instant they change. With a custom `loadJobs` the host
-    // owns the transport, so we fall back to interval polling.
-    const livePush = loadJobs === undefined;
-
-    useEffect(() => {
-        if (!livePush) {
-            return undefined;
-        }
-
-        return client.subscribeScheduledJobs((records) => {
-            setError(null);
-            setJobs(records.toSorted((a, b) => a.scheduledFor - b.scheduledFor));
-        });
-    }, [livePush, client]);
-
-    // Polling fallback for the custom-loader case (no WS to subscribe to).
-    useAutoRefresh(() => {
-        fireAndForget(refresh());
-    }, !livePush);
+    // The live push wins once it lands; otherwise the polled one-shot read.
+    const jobs = liveJobs ?? jobsQuery.data;
+    const error = liveError ?? jobsQuery.error;
 
     const cancel = async (id: string): Promise<void> => {
         if (cancelImpl === undefined) {
             return;
         }
 
-        setError(null);
+        setLiveError(undefined);
 
         try {
             await cancelImpl(id);
@@ -117,10 +114,10 @@ export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
             // When the live WS subscription is active, the server pushes the
             // updated list on cancel — so skip the redundant HTTP refetch.
             if (!livePush) {
-                await refresh();
+                jobsQuery.refetch();
             }
         } catch (error_) {
-            setError(errorMessage(error_));
+            setLiveError(errorMessage(error_));
         }
     };
 
@@ -132,7 +129,7 @@ export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
                 </p>
             )}
 
-            {jobs !== null && jobs.length === 0 && (
+            {jobs?.length === 0 && (
                 <EmptyState
                     description={t("Jobs queued with runAfter / runAt will appear here.")}
                     icon={
@@ -154,7 +151,7 @@ export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
                 />
             )}
 
-            {jobs !== null && jobs.length > 0 && (
+            {jobs !== undefined && jobs.length > 0 && (
                 <Card className="overflow-hidden py-0">
                     <CardContent className="px-0">
                         <Table data-testid="sj-table">

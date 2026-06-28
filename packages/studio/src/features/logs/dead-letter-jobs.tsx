@@ -1,13 +1,14 @@
 import type { ScheduleRecord } from "@lunora/client";
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { ConfirmButton } from "../../components/confirm-button";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { useClientQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
@@ -41,10 +42,22 @@ export const DeadLetterJobs = ({ loadJobs, removeJob, retryJob }: DeadLetterJobs
     const client = useLunora();
     const t = useT();
 
-    const [jobs, setJobs] = useState<ScheduleRecord[] | null>(null);
-    const [error, setError] = useState<null | string>(null);
+    // The dead-letter queue is HTTP-only (no admin-RPC path), so it's a
+    // `useClientQuery` over the supplied loader (or `client.listDeadJobs`).
+    // Most-attempted first — the jobs that fought hardest before dying are the
+    // ones worth triaging.
+    const jobsQuery = useClientQuery(["lunora-dead-jobs", loadJobs === undefined], async () => {
+        const records = await (loadJobs ?? (() => client.listDeadJobs()))();
 
-    const load = loadJobs ?? (() => client.listDeadJobs());
+        return records.toSorted((a, b) => (b.attempts ?? 0) - (a.attempts ?? 0));
+    });
+    const jobs = jobsQuery.data;
+
+    // An action (retry / drop) routes its own failure here; the read error comes
+    // from the query. Either surfaces in the one error banner below.
+    const [actionError, setActionError] = useState<string | undefined>(undefined);
+    const error = jobsQuery.error ?? actionError;
+
     // Actions are available when this view sources jobs from the client (then the
     // client can act too) or when the host supplies explicit handlers. A custom
     // `loadJobs` without handlers stays read-only.
@@ -52,37 +65,18 @@ export const DeadLetterJobs = ({ loadJobs, removeJob, retryJob }: DeadLetterJobs
     const retryImpl = retryJob ?? (clientOwned ? (id: string) => client.retryDeadJob(id) : undefined);
     const removeImpl = removeJob ?? (clientOwned ? (id: string) => client.removeDeadJob(id) : undefined);
 
-    const refresh = async (): Promise<void> => {
-        setError(null);
-
-        try {
-            const records = await load();
-
-            // Most-attempted first — the jobs that fought hardest before dying are the ones worth triaging.
-            setJobs(records.toSorted((a, b) => (b.attempts ?? 0) - (a.attempts ?? 0)));
-        } catch (error_) {
-            setJobs(null);
-            setError(errorMessage(error_));
-        }
-    };
-
-    useEffect(() => {
-        fireAndForget(refresh());
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
-    }, []);
-
     useAutoRefresh(() => {
-        fireAndForget(refresh());
+        jobsQuery.refetch();
     }, true);
 
     const act = async (operation: Promise<unknown>): Promise<void> => {
-        setError(null);
+        setActionError(undefined);
 
         try {
             await operation;
-            await refresh();
+            jobsQuery.refetch();
         } catch (error_) {
-            setError(errorMessage(error_));
+            setActionError(errorMessage(error_));
         }
     };
 
@@ -90,13 +84,13 @@ export const DeadLetterJobs = ({ loadJobs, removeJob, retryJob }: DeadLetterJobs
 
     return (
         <div className="flex flex-col gap-3" data-testid="lunora-dead-letter">
-            {error !== null && (
+            {error !== undefined && (
                 <p className="text-sm text-destructive" data-testid="dlq-error" role="alert">
                     {error}
                 </p>
             )}
 
-            {jobs !== null && jobs.length === 0 && (
+            {jobs?.length === 0 && (
                 <EmptyState
                     description={t("Jobs that exhaust their retry budget are parked here instead of being dropped.")}
                     icon={
@@ -117,7 +111,7 @@ export const DeadLetterJobs = ({ loadJobs, removeJob, retryJob }: DeadLetterJobs
                 />
             )}
 
-            {jobs !== null && jobs.length > 0 && (
+            {jobs !== undefined && jobs.length > 0 && (
                 <Card className="overflow-hidden py-0">
                     <CardContent className="px-0">
                         <Table data-testid="dlq-table">
