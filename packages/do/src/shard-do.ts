@@ -23,6 +23,7 @@ import {
     trimIdempotent,
     writeIdempotent,
 } from "./ctx-db";
+import type { ShapeRow } from "./ctx-db-shapes";
 import type { MigrationDirection, MigrationRunResult } from "./data-migration";
 import { DATA_MIGRATION_STATE_TABLE, readMigrationStatus } from "./data-migration";
 import type { DependencyTracker } from "./dependency-tracker";
@@ -159,12 +160,32 @@ interface ShardDOState {
      */
     setWebSocketAutoResponse?: (pair: WebSocketRequestResponsePair) => void;
     storage: {
+        /**
+         * Cancel any pending alarm. Optional: present on the real
+         * `DurableObjectState.storage`, absent in the unit harness.
+         */
+        deleteAlarm?: () => Promise<void>;
+
+        /**
+         * The currently-armed alarm time (ms epoch) or `null`. Used by the
+         * global-shape poll loop to avoid double-arming. Optional: present on
+         * the real runtime, absent in the unit harness.
+         */
+        getAlarm?: () => Promise<null | number>;
         /** Native PITR (≤30 days): bookmark for a past `time`. Absent in local dev. */
         getBookmarkForTime?: (time: Date | number) => Promise<string>;
         /** Native PITR: bookmark for the object's current state. Absent in local dev. */
         getCurrentBookmark?: () => Promise<string>;
         /** Native PITR: arm a restore to `bookmark` on next restart; returns the undo bookmark. */
         onNextSessionRestoreBookmark?: (bookmark: string) => Promise<string>;
+
+        /**
+         * Arm the DO's single alarm to fire at `scheduledTime` (ms epoch),
+         * waking {@link ShardDO.alarm}. Used by the global-shape poll loop.
+         * Optional: present on the real runtime, absent in the unit harness
+         * (where the poll loop degrades to seed-only).
+         */
+        setAlarm?: (scheduledTime: Date | number) => Promise<void>;
         sql: {
             [key: string]: unknown;
 
@@ -226,6 +247,17 @@ interface SubscriptionOutcome {
 interface ResolvedShape {
     columns?: ReadonlyArray<string>;
     effectiveWhere?: WhereInput;
+
+    /**
+     * `true` when the shape's table is `.global()` (lives in D1, not this DO's
+     * SQLite). A global shape has **no per-DO op-log** to diff, so it is served
+     * by the **latency-tiered poll path** ({@link ShardDO.seedGlobalShape} +
+     * {@link ShardDO.refreshGlobalShape}) instead of the CDC poke path — seeded
+     * from {@link ShardDO.readGlobalShapeRows} and refreshed on an alarm tick.
+     * The codegen subclass sets it from the schema's `shardMode`; absent ⇒ a
+     * shard-local (poke-live) shape.
+     */
+    global?: boolean;
     table: string;
 }
 
@@ -1480,6 +1512,16 @@ abstract class ShardDO {
     protected static readonly MAX_SUBSCRIPTIONS_PER_SOCKET = 32;
 
     /**
+     * Poll interval (ms) for `.global()`-table shapes. A global table lives in
+     * D1 with no per-DO op-log, so its shapes can't be poke-live; the DO re-reads
+     * each subscribed global shape's membership from D1 on an alarm every
+     * `GLOBAL_SHAPE_POLL_INTERVAL_MS` and pokes only the diff. This is the
+     * latency floor for a global-shape update — deliberately coarse (seconds, not
+     * the sub-millisecond poke-live path) since the D1 read fans out per tick.
+     */
+    protected static readonly GLOBAL_SHAPE_POLL_INTERVAL_MS = 2000;
+
+    /**
      * Per-socket whisper-topic cap. Topic membership rides the same hibernation
      * attachment as `subs`, so bound it for the same reason — a runaway
      * `whisper_subscribe` loop must not wedge the attachment past the runtime's
@@ -1681,6 +1723,24 @@ abstract class ShardDO {
      * `sinceCheckpoint`.
      */
     private readonly shapeMemos = new WeakMap<WebSocket, Map<string, ShapeMemo>>();
+
+    /**
+     * Per-socket, per-**global**-shape membership snapshot: maps each global
+     * shape's subscription id to a `key → projected-value JSON` map of the rows
+     * last poked to that socket. A `.global()` (D1) table has no op-log to diff,
+     * so {@link ShardDO.refreshGlobalShape} re-reads the full membership on each
+     * alarm tick and diffs it against this snapshot to compute the poke. Parallel
+     * to {@link ShardDO.shapeMemos} (the cursor baseline for poke-live shapes);
+     * in-memory only — a cold snapshot on a reconnected socket re-seeds full.
+     */
+    private readonly globalShapeSnapshots = new WeakMap<WebSocket, Map<string, Map<string, string>>>();
+
+    /**
+     * Whether a global-shape poll alarm is currently armed. Guards
+     * {@link ShardDO.scheduleGlobalPoll} from re-arming on every seed; reset in
+     * {@link ShardDO.alarm} before the poll so a still-subscribed shape re-arms.
+     */
+    private globalPollScheduled = false;
 
     /** Monotonic per-DO poke id source; correlates a poke's `pokeStart`/`pokePart`/`pokeEnd` frames. */
     private pokeSequence = 0;
@@ -2280,6 +2340,7 @@ abstract class ShardDO {
         // bounce. Cheap to recompute on the next subscribe.
         this.subMemos.delete(ws);
         this.shapeMemos.delete(ws);
+        this.globalShapeSnapshots.delete(ws);
 
         // Clear the attachment so a future reconnection starts clean.
         (ws as HibernatableWebSocket).serializeAttachment?.(undefined);
@@ -2289,6 +2350,24 @@ abstract class ShardDO {
     // eslint-disable-next-line class-methods-use-this -- Workers hibernation handler: the platform invokes it on the instance; the signature must stay an instance method
     public webSocketError(_ws: WebSocket, _error: unknown): void {
         // Subclasses can override with proper logging. Avoid throwing.
+    }
+
+    /**
+     * Durable Object alarm handler — the heartbeat for `.global()`-table shapes.
+     * The runtime wakes this when the poll alarm armed by `scheduleGlobalPoll`
+     * fires; it refreshes every subscribed global shape (diff-poke from the global
+     * backend) and re-arms while any remain. With no global subscribers left, the
+     * alarm is not re-armed and the DO goes idle. A base-only / global-free DO
+     * never arms it, so this stays dormant there.
+     */
+    public async alarm(): Promise<void> {
+        this.globalPollScheduled = false;
+
+        const remaining = await this.pollGlobalShapes();
+
+        if (remaining > 0) {
+            await this.scheduleGlobalPoll();
+        }
     }
 
     /** Subclasses implement function dispatch. */
@@ -3448,6 +3527,7 @@ abstract class ShardDO {
         }
 
         this.shapeMemos.get(ws)?.delete(subId);
+        this.globalShapeSnapshots.get(ws)?.delete(subId);
     }
 
     /**
@@ -3562,6 +3642,27 @@ abstract class ShardDO {
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to dispatch via the generated shape registry
     protected resolveShape(_name: string, _args: Record<string, unknown>, _identity?: SubscriptionIdentity): ResolvedShape | undefined {
         return undefined;
+    }
+
+    /**
+     * Read the FULL current membership of a `.global()`-table shape from its D1
+     * (or Hyperdrive) backend — the seed/poll source for the latency-tiered
+     * global shape path. A `.global()` table lives in another store with no
+     * per-DO op-log, so this is the only way to learn its rows from inside the
+     * shard DO; {@link ShardDO.seedGlobalShape} calls it once on subscribe and
+     * {@link ShardDO.refreshGlobalShape} on every alarm tick, diffing the result
+     * against the per-socket snapshot to compute the poke.
+     *
+     * The base class has no global backend, so it returns `[]` (a base-only DO,
+     * or a project with no global tables, never resolves a global shape). The
+     * codegen subclass overrides it to drain `globalDb.findMany(table, { where:
+     * effectiveWhere })` under the socket's verified `identity` — the same
+     * unforgeable value `resolveShape` composed the RLS predicate with, so the
+     * D1 read is identity-scoped exactly like the poke-live path.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this to read the global (D1) backend; the base has none
+    protected readGlobalShapeRows(_resolved: ResolvedShape, _identity?: SubscriptionIdentity): Promise<ShapeRow[]> {
+        return Promise.resolve([]);
     }
 
     /**
@@ -5640,9 +5741,18 @@ abstract class ShardDO {
      */
     private async seedShapeSubscription(ws: WebSocket, subId: string, shape: ShapeSubscriptionQuery): Promise<void> {
         const attachment = this.readAttachment(ws);
-        const resolved = this.resolveShape(shape.name, shape.args ?? {}, { identity: attachment.identity, userId: attachment.userId });
+        const identity: SubscriptionIdentity = { identity: attachment.identity, userId: attachment.userId };
+        const resolved = this.resolveShape(shape.name, shape.args ?? {}, identity);
 
         if (!resolved) {
+            return;
+        }
+
+        // A `.global()`-table shape has no op-log to resume/diff: seed it from D1
+        // and let the alarm poll loop drive updates (latency-tiered, not poke-live).
+        if (resolved.global) {
+            await this.seedGlobalShape(ws, subId, resolved, identity);
+
             return;
         }
 
@@ -5709,7 +5819,10 @@ abstract class ShardDO {
 
                 // Unresolvable now (revoked policy / dropped shape): leave the memo
                 // so a later flush retries rather than silently advancing past it.
-                if (!resolved || !changed.has(resolved.table)) {
+                // A `.global()` shape is driven by the alarm poll loop, not this
+                // op-log flush (its table can't appear in this DO's `changed` set
+                // anyway), so it is always skipped here.
+                if (!resolved || resolved.global || !changed.has(resolved.table)) {
                     continue;
                 }
 
@@ -5835,6 +5948,159 @@ abstract class ShardDO {
                 value: projectColumns(row.doc, resolved.columns),
             };
         });
+    }
+
+    /**
+     * Seed a `.global()`-table shape: read its full membership from D1, ship it
+     * as one insert-poke, record the membership snapshot the alarm poll loop will
+     * diff against, and arm the poll alarm. A global shape has no op-log cursor,
+     * so the poke is stamped at this DO's current cursor (informational only) and
+     * carries no resume base — a reconnect always re-seeds full.
+     */
+    private async seedGlobalShape(ws: WebSocket, subId: string, resolved: ResolvedShape, identity: SubscriptionIdentity): Promise<void> {
+        const rows = await this.readGlobalShapeRows(resolved, identity);
+        const snapshot = new Map<string, string>();
+        const rowsPatch: ShapeRowOp[] = [];
+
+        for (const { doc, id } of rows) {
+            const value = projectColumns(doc, resolved.columns);
+
+            snapshot.set(id, JSON.stringify(value));
+            rowsPatch.push({ key: id, op: "insert", table: resolved.table, value });
+        }
+
+        this.recordGlobalSnapshot(ws, subId, snapshot);
+
+        await awaitWsDrain(ws);
+        this.sendPoke(ws, [{ rowsPatch, shapeId: subId }], this.currentCdcCursor() ?? 0, this.currentCdcEpoch(), undefined);
+        await this.scheduleGlobalPoll();
+    }
+
+    /**
+     * Re-read a global shape's membership from D1 and poke only the diff against
+     * the socket's last snapshot: a new key → `insert`, a changed projected value
+     * → `update`, a vanished key → `delete`. The snapshot advances to the fresh
+     * membership even when the diff is empty, so the next tick compares from here.
+     * No frame is sent when nothing changed (the common steady-state tick).
+     */
+    private async refreshGlobalShape(ws: WebSocket, subId: string, resolved: ResolvedShape, identity: SubscriptionIdentity): Promise<void> {
+        const rows = await this.readGlobalShapeRows(resolved, identity);
+        const previous = this.globalShapeSnapshots.get(ws)?.get(subId) ?? new Map<string, string>();
+        const next = new Map<string, string>();
+        const rowsPatch: ShapeRowOp[] = [];
+
+        for (const { doc, id } of rows) {
+            const value = projectColumns(doc, resolved.columns);
+            const json = JSON.stringify(value);
+
+            next.set(id, json);
+
+            const before = previous.get(id);
+
+            if (before === undefined) {
+                rowsPatch.push({ key: id, op: "insert", table: resolved.table, value });
+            } else if (before !== json) {
+                rowsPatch.push({ key: id, op: "update", table: resolved.table, value });
+            }
+        }
+
+        for (const id of previous.keys()) {
+            if (!next.has(id)) {
+                rowsPatch.push({ key: id, op: "delete", table: resolved.table });
+            }
+        }
+
+        this.recordGlobalSnapshot(ws, subId, next);
+
+        if (rowsPatch.length === 0) {
+            return;
+        }
+
+        await awaitWsDrain(ws);
+        this.sendPoke(ws, [{ rowsPatch, shapeId: subId }], this.currentCdcCursor() ?? 0, this.currentCdcEpoch(), undefined);
+    }
+
+    /** Record a socket's latest global-shape membership snapshot (creating the per-socket map lazily). */
+    private recordGlobalSnapshot(ws: WebSocket, subId: string, snapshot: Map<string, string>): void {
+        let snapshots = this.globalShapeSnapshots.get(ws);
+
+        if (!snapshots) {
+            snapshots = new Map<string, Map<string, string>>();
+            this.globalShapeSnapshots.set(ws, snapshots);
+        }
+
+        snapshots.set(subId, snapshot);
+    }
+
+    /**
+     * Arm the poll alarm for `.global()` shapes if one isn't already pending.
+     * Idempotent — every global-shape seed calls it, but only the first arms the
+     * alarm. Degrades to a no-op when the runtime exposes no `setAlarm` (the unit
+     * harness): a global shape is then seed-only, which the poll-loop tests assert
+     * by driving {@link ShardDO.alarm} directly.
+     */
+    private async scheduleGlobalPoll(): Promise<void> {
+        if (this.globalPollScheduled) {
+            return;
+        }
+
+        const { setAlarm } = this.state.storage;
+
+        if (!setAlarm) {
+            return;
+        }
+
+        this.globalPollScheduled = true;
+
+        try {
+            await setAlarm.call(this.state.storage, Date.now() + ShardDO.GLOBAL_SHAPE_POLL_INTERVAL_MS);
+        } catch {
+            // A failed arm clears the flag so a later seed/tick retries.
+            this.globalPollScheduled = false;
+        }
+    }
+
+    /**
+     * Refresh every `.global()`-table shape held across all live sockets, one
+     * diff-poke per (socket, shape). Returns the number of global shapes still
+     * subscribed so {@link ShardDO.alarm} knows whether to re-arm. Expired sockets
+     * are dropped in passing (mirrors {@link ShardDO.pokeShapeSubscribers}).
+     */
+    private async pollGlobalShapes(): Promise<number> {
+        const sockets = [...this.state.getWebSockets()];
+        let remaining = 0;
+
+        for (const ws of sockets) {
+            if (this.isSocketExpired(ws)) {
+                this.dropExpiredSocket(ws);
+
+                continue;
+            }
+
+            const attachment = this.readAttachment(ws);
+            const { shapes } = attachment;
+
+            if (!shapes) {
+                continue;
+            }
+
+            const identity: SubscriptionIdentity = { identity: attachment.identity, userId: attachment.userId };
+
+            for (const [subId, shape] of Object.entries(shapes)) {
+                const resolved = this.resolveShape(shape.name, shape.args ?? {}, identity);
+
+                if (!resolved?.global) {
+                    continue;
+                }
+
+                remaining += 1;
+
+                // eslint-disable-next-line no-await-in-loop -- per-socket D1 reads are intentionally serialized to bound concurrent global reads per tick
+                await this.refreshGlobalShape(ws, subId, resolved, identity);
+            }
+        }
+
+        return remaining;
     }
 
     /** Send one poke (`pokeStart` → `pokePart` per shape → `pokeEnd`) to a socket. All parts apply atomically at `pokeEnd`. */
