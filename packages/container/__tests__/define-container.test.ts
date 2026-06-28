@@ -152,6 +152,37 @@ describe(defineContainer, () => {
         expect(() => defineContainer({ image: "./app", labels: { "  ": "x" } })).toThrow("`labels` must be a record of non-empty");
     });
 
+    it("accepts hardTimeout and readyOn config", () => {
+        expect.assertions(3);
+
+        const definition = defineContainer({
+            defaultPort: 8080,
+            hardTimeout: "1h",
+            image: "./app",
+            readyOn: [{ path: "/ready" }, { path: "migrations", port: 9090, status: 204 }],
+        });
+
+        expect(definition.hardTimeout).toBe("1h");
+        expect(definition.readyOn).toStrictEqual([{ path: "/ready" }, { path: "migrations", port: 9090, status: 204 }]);
+        expect(defineContainer({ hardTimeout: 600, image: "./app" }).hardTimeout).toBe(600);
+    });
+
+    it("rejects an invalid hardTimeout", () => {
+        expect.assertions(3);
+
+        expect(() => defineContainer({ hardTimeout: "5 minutes", image: "./app" })).toThrow("`hardTimeout`");
+        expect(() => defineContainer({ hardTimeout: 0, image: "./app" })).toThrow("`hardTimeout`");
+        expect(() => defineContainer({ hardTimeout: -5, image: "./app" })).toThrow("`hardTimeout`");
+    });
+
+    it("rejects an invalid readyOn check", () => {
+        expect.assertions(3);
+
+        expect(() => defineContainer({ image: "./app", readyOn: [{ path: "   " }] })).toThrow("`readyOn[].path`");
+        expect(() => defineContainer({ image: "./app", readyOn: [{ path: "/ready", port: 70_000 }] })).toThrow("readyOn[].port");
+        expect(() => defineContainer({ image: "./app", readyOn: [{ path: "/ready", status: 700 }] })).toThrow("`readyOn[].status`");
+    });
+
     it("rejects an empty or out-of-range requiredPorts", () => {
         expect.assertions(2);
 

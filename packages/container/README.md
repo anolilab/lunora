@@ -110,6 +110,17 @@ await ctx.containers.app.get(tenantId).fetch("/work"); // → 8080
 await ctx.containers.app.get(tenantId).port(9090).fetch("/admin"); // → 9090
 ```
 
+### Build-time args
+
+`env` and `secrets` are runtime values; for build-time `docker build --build-arg` values (wrangler `image_vars`, exposed to the Dockerfile as `ARG`) use `buildArgs`. They apply only to an image Lunora builds and are ignored for a pre-built `{ registry }` image.
+
+```ts
+export const worker = defineContainer({
+    image: "./containers/worker",
+    buildArgs: { NODE_VERSION: "22", BUILD_TARGET: "production" },
+});
+```
+
 ### Egress firewall
 
 Pair `enableInternet: false` with an `allowedHosts` allow-list (or layer a `deniedHosts` deny-list that overrides everything) to constrain a container's outbound traffic; `interceptHttps: true` extends the lists to TLS connections (the image must trust the Cloudflare CA). Codegen re-exports the `ContainerProxy` worker entrypoint the interception path needs automatically.
@@ -124,6 +135,34 @@ export const fetcher = defineContainer({
 
 // tighten or relax one running instance at runtime:
 await ctx.containers.fetcher.get(tenantId).egress.allow("hooks.slack.com");
+```
+
+For advanced egress rewriting in worker code, `@lunora/container/do` re-exports Cloudflare's custom outbound-handler types (`OutboundHandler`, `OutboundHandlers`, `outboundParams`) — wire them onto a hand-authored `LunoraContainer` subclass to inject auth, route, or mock a container's outbound calls.
+
+### Readiness gating
+
+The platform health check waits for an open port, not necessarily a _ready_ app. `readyOn` adds application-level probes that gate request proxying: a `ctx.containers.<name>` fetch holds until every probe responds with its expected status, so callers never hit a container still applying migrations or warming caches. Probes are declarative data (path + optional `port`/`status`), run in parallel at start, and probe the container's TCP port directly.
+
+```ts
+export const api = defineContainer({
+    image: "./containers/api",
+    defaultPort: 8080,
+    readyOn: [
+        { path: "/ready" }, // expect 200 on defaultPort
+        { path: "/live", port: 9090, status: 204 }, // own port + expected status
+    ],
+});
+```
+
+### Hard timeout
+
+`sleepAfter` caps _idle_ time; `hardTimeout` caps _total_ lifetime — a runaway-cost backstop measured from start, regardless of activity (same grammar as `sleepAfter`). When it elapses the generated class's `onHardTimeoutExpired` hook runs (default: `stop()`); the timer is run-generation-stamped so a stale timer from a slept/crashed run can't kill a fresh one.
+
+```ts
+export const job = defineContainer({
+    image: "./containers/job",
+    hardTimeout: "1h", // never run longer than an hour, busy or not
+});
 ```
 
 ### Calling Lunora from inside a container

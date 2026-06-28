@@ -148,6 +148,114 @@ named instances you own.
     call for stateless work until then; for batch work, drive instances from a [scheduler](/docs/packages/scheduler) cron or `runAfter`.
 </Callout>
 
+## Multi-port containers
+
+A container that listens on more than one port (an app port plus an admin port,
+say) declares every one with `requiredPorts` — start-up waits for all of them to
+be listening. `defaultPort` is the target when a request doesn't pick a port;
+route a single request elsewhere with `.port(n)`, which composes with `.get()`,
+`.any()`, and `.pool()`:
+
+```ts
+export const app = defineContainer({
+    image: "./containers/app",
+    defaultPort: 8080,
+    requiredPorts: [8080, 9090], // app + admin
+});
+```
+
+```ts
+// in an action:
+await ctx.containers.app.get(tenantId).fetch("/work"); // → 8080 (defaultPort)
+await ctx.containers.app.get(tenantId).port(9090).fetch("/admin"); // → 9090
+```
+
+## Egress firewall
+
+By default a container may open any outbound connection (`enableInternet: true`)
+— and egress is billed per GB. Constrain it by pairing `enableInternet: false`
+with an `allowedHosts` allow-list, or layer a `deniedHosts` deny-list that
+overrides everything, including `enableInternet: true` and `allowedHosts`. Glob
+patterns like `*.stripe.com` are supported.
+
+```ts
+export const fetcher = defineContainer({
+    image: "./containers/fetcher",
+    enableInternet: false,
+    allowedHosts: ["*.stripe.com", "api.github.com"],
+    deniedHosts: ["*.evil.com"],
+    interceptHttps: true, // extend the lists to TLS traffic (image must trust the Cloudflare CA)
+});
+```
+
+`interceptHttps` extends the allow/deny lists to **HTTPS** connections, not just
+plain HTTP; it requires the image to trust the Cloudflare CA at
+`/etc/cloudflare/certs/cloudflare-containers-ca.crt`. The interception path runs
+through the `ContainerProxy` worker entrypoint, which codegen re-exports from the
+generated container file automatically.
+
+Tighten or relax a single running instance at runtime through its named handle —
+`egress.allow` / `deny` add one host, `removeAllowed` / `removeDenied` drop one,
+and `setAllowed` / `setDenied` replace a whole list:
+
+```ts
+await ctx.containers.fetcher.get(tenantId).egress.allow("hooks.slack.com");
+await ctx.containers.fetcher.get(tenantId).egress.setDenied(["*.evil.com", "*.tracking.example"]);
+```
+
+For advanced egress _rewriting_ in worker code (inject auth, route, or mock a
+container's outbound calls), `@lunora/container/do` re-exports Cloudflare's
+custom outbound-handler types (`OutboundHandler`, `OutboundHandlers`,
+`outboundParams`) — wire them onto a hand-authored `LunoraContainer` subclass.
+
+## Readiness gating
+
+The platform health check waits for an **open port** (`defaultPort`, or
+`pingEndpoint` if set) — not necessarily a _ready_ app. `readyOn` adds
+application-level probes that gate request proxying: a `ctx.containers.<name>`
+fetch holds until every probe responds with its expected status, so callers
+never hit a container still applying migrations or warming caches.
+
+```ts
+export const api = defineContainer({
+    image: "./containers/api",
+    defaultPort: 8080,
+    readyOn: [
+        { path: "/ready" }, // expect 200 on defaultPort
+        { path: "/live", port: 9090, status: 204 }, // own port + expected status
+    ],
+});
+```
+
+Each probe declares a `path` (a leading slash is optional), an optional `port`
+(defaults to `defaultPort`), and an optional `status` (defaults to `200`).
+Probes are declarative **data** — no handler functions — so codegen and the
+config layer read them without evaluating code. At start they run in parallel,
+poll the container's TCP port directly, and fail the start if any probe doesn't
+go ready within the readiness budget.
+
+## Hard timeout
+
+`sleepAfter` caps _idle_ time; `hardTimeout` caps _total_ lifetime — a
+runaway-cost backstop that fires regardless of activity, measured from start. It
+uses the same grammar as `sleepAfter` (`"30s"`, `"5m"`, `"1h"`, or a plain
+number of seconds):
+
+```ts
+export const job = defineContainer({
+    image: "./containers/job",
+    sleepAfter: "5m", // sleep after 5 min idle
+    hardTimeout: "1h", // …but never run longer than an hour, busy or not
+});
+```
+
+When it elapses, the generated class's `onHardTimeoutExpired` hook runs — the
+default action is `stop()`. The timer is armed through the container's own
+scheduler and stamped with a run generation, so a stale timer left over from a
+previous (slept or crashed) run never kills a fresh one. Advanced apps that
+hand-author their container class can override `onHardTimeoutExpired` (the base
+class lives in `@lunora/container/do`) to drain or checkpoint before stopping.
+
 ## Calling Lunora from inside a container
 
 Container code calls back into your app's functions with the bridge client
@@ -264,16 +372,28 @@ in the Studio **Advisors** table and at codegen time:
 
 ## Configuration
 
-| Field            | Purpose                                                                                      |
-| ---------------- | -------------------------------------------------------------------------------------------- |
-| `image`          | Local Dockerfile path/directory, or `{ registry }` for a pre-built image. **Required.**      |
-| `defaultPort`    | Port the container listens on; `fetch` targets it. Must be `EXPOSE`d for local dev.          |
-| `instanceType`   | `lite` \| `basic` \| `standard-1..4`, or a custom `{ vcpu, memoryMib, diskMb }`.             |
-| `maxInstances`   | Cap on concurrently running instances (and the default `.any()` pool size).                  |
-| `sleepAfter`     | Idle timeout before an instance sleeps, e.g. `"5m"`, `"30s"`, or seconds. Default `"10m"`.   |
-| `env`            | Static environment variables baked into the container.                                       |
-| `secrets`        | Names of Worker secrets forwarded into the container env at start.                           |
-| `enableInternet` | Whether the container may open outbound connections. Default `true` — note egress is billed. |
+| Field            | Purpose                                                                                                         |
+| ---------------- | --------------------------------------------------------------------------------------------------------------- |
+| `image`          | Local Dockerfile path/directory, `{ registry }` for a pre-built image, or `{ build }` (Railpack). **Required.** |
+| `defaultPort`    | Port the container listens on; `fetch` targets it. Must be `EXPOSE`d for local dev.                             |
+| `requiredPorts`  | Every port start-up must wait for (multi-port); route a request to one with `.port(n)`.                         |
+| `instanceType`   | `lite` \| `basic` \| `standard-1..4`, or a custom `{ vcpu, memoryMib, diskMb }`.                                |
+| `maxInstances`   | Cap on concurrently running instances (and the default `.any()` pool size).                                     |
+| `sleepAfter`     | Idle timeout before an instance sleeps, e.g. `"5m"`, `"30s"`, or seconds. Default `"10m"`.                      |
+| `hardTimeout`    | Hard cap on total lifetime from start, ignoring activity. Same grammar as `sleepAfter`.                         |
+| `readyOn`        | Application-level readiness probes that gate request proxying until the app reports ready.                      |
+| `pingEndpoint`   | HTTP path the platform polls to decide an instance is healthy. Defaults to upstream's `"ping"`.                 |
+| `env`            | Static environment variables baked into the container.                                                          |
+| `secrets`        | Names of Worker secrets forwarded into the container env at start.                                              |
+| `buildArgs`      | Build-time args for a built image (wrangler `image_vars`, like `--build-arg`); ignored for `{ registry }`.      |
+| `entrypoint`     | Override the image's `ENTRYPOINT`/`CMD` for every start.                                                        |
+| `enableInternet` | Whether the container may open outbound connections. Default `true` — note egress is billed.                    |
+| `allowedHosts`   | Egress allow-list (globs) — hosts reachable even with `enableInternet: false`.                                  |
+| `deniedHosts`    | Egress deny-list (globs) — overrides everything, including `allowedHosts`.                                      |
+| `interceptHttps` | Extend the egress lists to HTTPS too (image must trust the Cloudflare CA). Default `false`.                     |
+| `labels`         | Key-value metadata attached to every instance for metrics/observability.                                        |
+| `name`           | Override the wrangler `containers[].name` identifier.                                                           |
+| `rollout`        | Rolling-deploy tuning: `{ stepPercentage, gracePeriodSeconds }`.                                                |
 
 ### Secrets and environment
 
@@ -288,6 +408,19 @@ export const worker = defineContainer({
     image: "./containers/worker",
     env: { LOG_LEVEL: "info" },
     secrets: ["STRIPE_API_KEY"], // resolved from env.STRIPE_API_KEY at start
+});
+```
+
+Both `env` and `secrets` are **runtime** values, available when the container
+starts. For **build-time** values — `docker build --build-arg`, exposed to the
+Dockerfile as `ARG` (wrangler's `image_vars`) — use `buildArgs`. They only apply
+to an image Lunora builds (a Dockerfile or Railpack `{ build }` source) and are
+ignored for a pre-built `{ registry }` image:
+
+```ts
+export const worker = defineContainer({
+    image: "./containers/worker",
+    buildArgs: { NODE_VERSION: "22", BUILD_TARGET: "production" }, // → docker --build-arg
 });
 ```
 

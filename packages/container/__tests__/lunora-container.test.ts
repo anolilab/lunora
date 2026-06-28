@@ -9,8 +9,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { LunoraContainer } from "../src/do/index";
 import { defineContainer } from "../src/index";
 
+/** Overrides for the pieces the readiness/hard-timeout paths read off the ctx. */
+interface FakeContextOverrides {
+    /** The `ctx.container` stub (running flag + optional `getTcpPort`). */
+    container?: unknown;
+    /** Value `ctx.storage.get` resolves to (the stored hard-timeout generation). */
+    storedGeneration?: number;
+}
+
 /** Minimal fake of the pieces `@cloudflare/containers` reads off the DO ctx. */
-const fakeDurableObjectContext = (): Record<string, unknown> => {
+const fakeDurableObjectContext = (overrides: FakeContextOverrides = {}): Record<string, unknown> => {
     return {
         // The base ctor schedules alarms inside an un-awaited
         // `blockConcurrencyWhile(...)` critical section that touches the full
@@ -19,10 +27,10 @@ const fakeDurableObjectContext = (): Record<string, unknown> => {
         // but don't run it — otherwise the alarm machinery becomes an unhandled
         // rejection that fails the run.
         blockConcurrencyWhile: async () => {},
-        container: { running: false },
+        container: overrides.container ?? { running: false },
         storage: {
             deleteAlarm: async () => {},
-            get: async () => undefined,
+            get: async () => overrides.storedGeneration,
             getAlarm: async () => null,
             kv: {
                 delete: () => {},
@@ -169,6 +177,130 @@ describe("lunoraContainer lifecycle logging", () => {
 
         expect(() => build().onError(new Error("crashed"))).toThrow("crashed");
         expect(JSON.parse((spy.mock.calls[0]![0] as string) ?? "{}")).toMatchObject({ event: "error", level: "error", message: "crashed" });
+    });
+
+    it("gates onStart on readyOn probes until each returns its expected status", async () => {
+        expect.assertions(3);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        const fetched: string[] = [];
+        const context = fakeDurableObjectContext({
+            container: {
+                getTcpPort: (port: number) => {
+                    return {
+                        fetch: (url: string) => {
+                            fetched.push(`${String(port)}:${url}`);
+
+                            return Promise.resolve({ status: url.endsWith("/live") ? 204 : 200 });
+                        },
+                    };
+                },
+                // `running: false` keeps the base ctor off its monitor path; the
+                // readiness probes only need `getTcpPort`, not a running flag.
+                running: false,
+            },
+        });
+
+        const definition = defineContainer({
+            defaultPort: 8080,
+            image: "./app",
+            readyOn: [{ path: "/ready" }, { path: "live", port: 9090, status: 204 }],
+        });
+        const instance = new LunoraContainer(context as never, {}, definition, "transcoder");
+
+        await expect(instance.onStart()).resolves.toBeUndefined();
+        // `/ready` resolves on the default port; `live` (no leading slash) is
+        // normalized and probed on its own port against status 204.
+        expect(fetched).toContain("8080:http://container/ready");
+        expect(fetched).toContain("9090:http://container/live");
+    });
+
+    it("fails onStart when a readyOn check has no port and no defaultPort", async () => {
+        expect.assertions(1);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        const context = fakeDurableObjectContext({
+            container: {
+                getTcpPort: () => {
+                    return { fetch: () => Promise.resolve({ status: 200 }) };
+                },
+                running: false,
+            },
+        });
+        const definition = defineContainer({ image: "./app", readyOn: [{ path: "/ready" }] });
+        const instance = new LunoraContainer(context as never, {}, definition, "transcoder");
+
+        await expect(instance.onStart()).rejects.toThrow("has no port");
+    });
+
+    it("arms a hard-timeout schedule on start, stamped with the bumped run generation", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        const definition = defineContainer({ hardTimeout: "30s", image: "./app" });
+        const instance = new LunoraContainer(fakeDurableObjectContext({ storedGeneration: 4 }) as never, {}, definition, "transcoder");
+        const scheduleSpy = vi.spyOn(instance, "schedule").mockResolvedValue(undefined as never);
+
+        await instance.onStart();
+
+        expect(scheduleSpy).toHaveBeenCalledTimes(1);
+        // 30s → 30 seconds; generation 4 → 5 (bumped so a stale schedule is detectable).
+        expect(scheduleSpy).toHaveBeenCalledWith(30, "onHardTimeoutExpired", { generation: 5 });
+    });
+
+    it("onHardTimeoutExpired stops a running instance whose generation matches", async () => {
+        expect.assertions(2);
+
+        const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+        const definition = defineContainer({ hardTimeout: "30s", image: "./app" });
+        // `monitor` is reached by the base ctor when `running` is true.
+        const instance = new LunoraContainer(
+            fakeDurableObjectContext({ container: { monitor: () => Promise.resolve(), running: true }, storedGeneration: 3 }) as never,
+            {},
+            definition,
+            "transcoder",
+        );
+        const stopSpy = vi.spyOn(instance, "stop").mockResolvedValue(undefined);
+
+        await instance.onHardTimeoutExpired({ generation: 3 });
+
+        expect(stopSpy).toHaveBeenCalledTimes(1);
+        expect(JSON.parse((spy.mock.calls.at(-1)![0] as string) ?? "{}")).toMatchObject({ event: "stop", message: "hard timeout reached" });
+    });
+
+    it("onHardTimeoutExpired ignores a stale generation or an already-stopped instance", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+
+        const definition = defineContainer({ hardTimeout: "30s", image: "./app" });
+
+        const stale = new LunoraContainer(
+            fakeDurableObjectContext({ container: { monitor: () => Promise.resolve(), running: true }, storedGeneration: 5 }) as never,
+            {},
+            definition,
+            "transcoder",
+        );
+        const staleStop = vi.spyOn(stale, "stop").mockResolvedValue(undefined);
+
+        await stale.onHardTimeoutExpired({ generation: 2 });
+
+        const stopped = new LunoraContainer(
+            fakeDurableObjectContext({ container: { running: false }, storedGeneration: 1 }) as never,
+            {},
+            definition,
+            "transcoder",
+        );
+        const stoppedStop = vi.spyOn(stopped, "stop").mockResolvedValue(undefined);
+
+        await stopped.onHardTimeoutExpired({ generation: 1 });
+
+        expect(staleStop).not.toHaveBeenCalled();
+        expect(stoppedStop).not.toHaveBeenCalled();
     });
 
     it("does not break onStart when the ShardDO push throws (best-effort)", async () => {

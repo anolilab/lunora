@@ -37,6 +37,7 @@ export type {
     ContainerDefinition,
     ContainerImageSource,
     ContainerInstanceType,
+    ContainerReadinessCheck,
     ContainerRollout,
     CustomContainerInstanceType,
     NamedContainerInstanceType,

@@ -60,6 +60,26 @@ interface BuildImageSource {
  */
 type ContainerImageSource = BuildImageSource | RegistryImageSource | string;
 
+/**
+ * An application-level readiness probe that gates request proxying. Layered on
+ * top of the platform's own port/`pingEndpoint` health wait, it lets you hold
+ * traffic back until the app inside the container is *functionally* ready —
+ * migrations applied, caches warmed — which an open-port check can't see.
+ *
+ * Declarative on purpose: a `defineContainer` value stays pure data (no handler
+ * functions), so codegen and the config layer can read it without evaluating
+ * code. (Upstream cloudflare/containers#188 expresses the same idea as handler
+ * functions; the Lunora config is data-only, so it's modelled as descriptors.)
+ */
+interface ContainerReadinessCheck {
+    /** HTTP path probed on the container, e.g. `"/ready"` (a leading slash is optional). */
+    path: string;
+    /** Port to probe. Defaults to {@link ContainerConfig.defaultPort}. */
+    port?: number;
+    /** HTTP status that means "ready". Defaults to `200`. */
+    status?: number;
+}
+
 interface ContainerConfig {
     /**
      * Hostnames the container may reach **even when {@link ContainerConfig.enableInternet}
@@ -119,6 +139,16 @@ interface ContainerConfig {
      */
     env?: Readonly<Record<string, string>>;
 
+    /**
+     * Hard cap on how long an instance may run, measured from start regardless
+     * of activity — a runaway-cost backstop on top of the idle
+     * {@link ContainerConfig.sleepAfter}. Same grammar as `sleepAfter`
+     * (`"30s"`, `"5m"`, `"1h"`, or a plain number of seconds). When it elapses,
+     * the `LunoraContainer.onHardTimeoutExpired` hook runs (default: `stop()`).
+     * (Upstream cloudflare/containers#85.)
+     */
+    hardTimeout?: number | string;
+
     /** Image source — a local Dockerfile path/directory or a registry reference. */
     image: ContainerImageSource;
 
@@ -164,6 +194,16 @@ interface ContainerConfig {
      * the container exposes its readiness check under a different route.
      */
     pingEndpoint?: string;
+
+    /**
+     * Application-level readiness probes that gate request proxying: a
+     * `ctx.containers.&lt;name>` fetch waits until every probe responds with its
+     * expected status before the request reaches the container — on top of the
+     * platform's port/`pingEndpoint` health wait. All probes run in parallel.
+     * Use these for readiness an open-port check can't see (migrations applied,
+     * caches warm). (Upstream cloudflare/containers#188.)
+     */
+    readyOn?: ReadonlyArray<ContainerReadinessCheck>;
 
     /**
      * Ports the container must be listening on before it's considered ready
@@ -232,6 +272,7 @@ export type {
     ContainerDefinition,
     ContainerImageSource,
     ContainerInstanceType,
+    ContainerReadinessCheck,
     ContainerRollout,
     CustomContainerInstanceType,
     NamedContainerInstanceType,
