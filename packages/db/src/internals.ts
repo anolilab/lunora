@@ -20,15 +20,12 @@ export interface OutboxMutationMetadata extends Record<string, unknown> {
     args: Record<string, unknown>;
     clientId: string;
     functionPath: string;
+    /** Stable `${clientId}:${mutationId}` replay key; passed back as the mutation id so a committed-but-unacked replay is server-idempotent. */
+    idempotencyKey: string;
     /** Issuing identity fingerprint; the replay handler drops the write when it no longer matches. */
     identity: string | null;
     mutationId: number;
     shardKey?: string;
-}
-
-/** One persisted, not-yet-confirmed entry in the executor outbox. */
-interface OutboxEntry {
-    id: string;
 }
 
 /** A committable outbox transaction handle (the `OfflineTransaction` the executor mints). */
@@ -49,18 +46,14 @@ export interface OutboxExecutor {
         mutationFnName: string;
     }) => OutboxTransaction;
     getPendingCount: () => number;
-    peekOutbox: () => Promise<OutboxEntry[]>;
-    removeFromOutbox: (id: string) => Promise<void>;
 }
 
-/** Tuning + back-pressure hooks for {@link createExecutorOutboxSink}. */
+/** Tuning for {@link createExecutorOutboxSink}. */
 export interface ExecutorOutboxSinkOptions {
-    /** Max persisted-but-unconfirmed writes before the oldest is evicted (default 1000, matching `OfflineQueue`). */
+    /** Max persisted-but-unconfirmed writes before `enqueue` rejects with `OFFLINE_QUEUE_OVERFLOW` (default 1000, matching `OfflineQueue`). */
     maxItems?: number;
     /** `mutationFns` key the replay handler is registered under (default {@link OUTBOX_MUTATION_FN_NAME}). */
     mutationFnName?: string;
-    /** Notified with each evicted transaction id when the cap is exceeded (the parallel to `OFFLINE_QUEUE_OVERFLOW`). */
-    onOverflow?: (droppedId: string) => void;
 }
 
 /**
@@ -69,7 +62,12 @@ export interface ExecutorOutboxSinkOptions {
  * executor transaction carrying the `client.mutation` target in `metadata`, then
  * ports the two semantics the executor lacks vs the built-in `OfflineQueue`.
  *
- * First: a `maxItems` cap that evicts the oldest persisted writes (the `OFFLINE_QUEUE_OVERFLOW` parallel), reporting each drop via `onOverflow`.
+ * First: a `maxItems` cap that **rejects** a new write at capacity with an
+ * `OFFLINE_QUEUE_OVERFLOW`-coded error — the {@link OutboxSink} contract, matching
+ * `OfflineQueue`. Rejecting (rather than evicting the oldest) preserves the
+ * at-least-once promise: an already-persisted write is never silently dropped, and
+ * the caller surfaces back-pressure to the issuing mutation (which rolls its
+ * optimistic write back).
  * Second: the identity guard lives in the replay handler (`defineCollections`), which drops a write whose captured `identity` no longer matches — see {@link OutboxMutationMetadata}.
  */
 export const createExecutorOutboxSink = (executor: OutboxExecutor, options: ExecutorOutboxSinkOptions = {}): OutboxSink => {
@@ -77,11 +75,25 @@ export const createExecutorOutboxSink = (executor: OutboxExecutor, options: Exec
     const mutationFunctionName = options.mutationFnName ?? OUTBOX_MUTATION_FN_NAME;
 
     return {
-        async enqueue(mutation: OutboxMutation): Promise<void> {
+        enqueue(mutation: OutboxMutation): Promise<void> {
+            // Cap: reject at capacity before persisting, so an already-queued
+            // durable write is never silently lost. Mirrors `OfflineQueue` and the
+            // `OutboxSink` contract (`OFFLINE_QUEUE_OVERFLOW`).
+            if (executor.getPendingCount() >= maxItems) {
+                const error = new Error("offline outbox is full") as Error & { code?: string };
+
+                error.code = "OFFLINE_QUEUE_OVERFLOW";
+
+                return Promise.reject(error);
+            }
+
             const metadata: OutboxMutationMetadata = {
                 args: mutation.args,
                 clientId: mutation.clientId,
                 functionPath: mutation.functionPath,
+                // Persist the stable replay key so a committed-but-unacked retry
+                // resends the same `x-lunora-mutation-id` and the server dedups it.
+                idempotencyKey: mutation.idempotencyKey,
                 identity: mutation.identity,
                 mutationId: mutation.mutationId,
                 shardKey: mutation.shardKey,
@@ -99,22 +111,7 @@ export const createExecutorOutboxSink = (executor: OutboxExecutor, options: Exec
 
             transaction.mutate(() => undefined);
 
-            // Cap: once persisted writes exceed the bound, evict the oldest (FIFO,
-            // as `peekOutbox` returns them) and report each drop so the caller can
-            // surface back-pressure — the `OFFLINE_QUEUE_OVERFLOW` eviction parallel.
-            if (executor.getPendingCount() > maxItems) {
-                const pending = await executor.peekOutbox();
-
-                for (let index = 0; index < pending.length - maxItems; index += 1) {
-                    const dropped = pending[index];
-
-                    if (dropped) {
-                        // eslint-disable-next-line no-await-in-loop -- sequential eviction keeps the outbox store consistent
-                        await executor.removeFromOutbox(dropped.id);
-                        options.onOverflow?.(dropped.id);
-                    }
-                }
-            }
+            return Promise.resolve();
         },
     };
 };

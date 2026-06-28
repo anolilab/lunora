@@ -167,6 +167,16 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
         const onRows = (data: unknown): void => {
             emit?.(toMap(data as TRow[], getKey));
             onReady?.();
+
+            // The shape path resolves the registry from the poke `checkpoint`
+            // (below). A `list` frame carries no per-frame watermark, so advance
+            // from the client's server-confirmed custom-mutator watermark (the
+            // push-ack stream) as synced rows land — a `bindMutators` optimistic
+            // overlay then drops exactly when the server rows arrive instead of
+            // `awaitMutationId` hanging forever after the write is accepted.
+            if (options.shape === undefined) {
+                checkpoints.resolve({ mutationId: options.client.confirmedMutationWatermark() });
+            }
         };
         const onError = (error: SubscriptionError): void => onErrorHandler?.(error);
 
