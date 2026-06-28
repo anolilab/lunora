@@ -2874,7 +2874,7 @@ const emitShard = ({
     // project, so its `shard.ts` is byte-identical.
     const shapeResolveOverride = hasShapes
         ? `
-        protected override resolveShape(name: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; userId?: string }): { columns?: readonly string[]; effectiveWhere?: WhereInput; table: string } | undefined {
+        protected override resolveShape(name: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; userId?: string }): { columns?: readonly string[]; effectiveWhere?: WhereInput; global?: boolean; table: string } | undefined {
             const shape = LUNORA_SHAPES[name];
 
             if (!shape) {
@@ -2896,7 +2896,12 @@ const emitShard = ({
             // known. Remedy: denormalize, or move the joined table to \`.global()\`.
             assertShapeShardable(effectiveWhere, schema as unknown as SchemaLike, shape.table);
 
-            return { columns: shape.columns, effectiveWhere, table: shape.table };
+            // A \`.global()\` table lives in D1 (no per-DO op-log): flag it so the
+            // base serves it through the latency-tiered poll path (\`readGlobalShapeRows\`)
+            // instead of the CDC poke path.
+            const isGlobal = (schema as unknown as SchemaLike).tables[shape.table]?.shardMode?.kind === "global";
+
+            return { columns: shape.columns, effectiveWhere, global: isGlobal, table: shape.table };
         }
 `
         : "";
@@ -3134,6 +3139,41 @@ const vectorsStub: VectorSearchLike = {
     const globalDatabaseLine = hasGlobalTables
         ? `            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, { identity, userId }) ?? globalDbStub;\n`
         : "";
+
+    // Local-first sync engine, global tier: when a project has shapes AND
+    // `.global()` tables, the DO serves a `.global()`-table shape's seed/poll
+    // rows by draining the global backend's `findMany` under the socket's
+    // verified identity — the same identity-scoped read the poke-live path uses,
+    // just against D1/Hyperdrive instead of this DO's op-log. Emitted only when
+    // both features are present so a shape-free or global-free `shard.ts` stays
+    // byte-identical.
+    const globalShapeReaderOverride =
+        hasShapes && hasGlobalTables
+            ? `
+        protected override async readGlobalShapeRows(resolved: { columns?: readonly string[]; effectiveWhere?: WhereInput; global?: boolean; table: string }, identity?: { identity?: Record<string, unknown>; userId?: string }): Promise<Array<{ doc: Record<string, unknown>; id: string }>> {
+            const env = this.env as Record<string, unknown>;
+            const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, identity) ?? globalDbStub;
+            const rows: Array<{ doc: Record<string, unknown>; id: string }> = [];
+
+            let cursor: null | string = null;
+
+            // Drain every page of the global membership so the seed/diff sees the
+            // full rowset (D1 \`findMany\` is paginated).
+            do {
+                // eslint-disable-next-line no-await-in-loop -- sequential page drain to assemble the full membership
+                const page = await globalDb.findMany(resolved.table, { cursor, where: resolved.effectiveWhere });
+
+                for (const doc of page.page) {
+                    rows.push({ doc, id: String((doc as { _id?: unknown })._id) });
+                }
+
+                cursor = page.isDone ? null : page.continueCursor;
+            } while (cursor !== null);
+
+            return rows;
+        }
+`
+            : "";
 
     const facadeBlock = hasTables
         ? `\n            const facade = db as unknown as Record<string, ReturnType<typeof bindTableFacade>>;
@@ -3378,7 +3418,7 @@ ${relationFanout.override}
                 iterator: (signal) => (registered.handler as (context: unknown, args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>)(this.buildCtx({ functionPath }), args, signal),
             };
         }
-${customMutatorOverride}${shapeResolveOverride}
+${customMutatorOverride}${shapeResolveOverride}${globalShapeReaderOverride}
         protected override lifecycleHookPaths(event: "connect" | "disconnect"): readonly string[] {
             return LUNORA_LIFECYCLE_HOOKS[event];
         }
