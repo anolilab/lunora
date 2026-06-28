@@ -1,3 +1,18 @@
+## @lunora/vite [1.0.0-alpha.19](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.18...@lunora/vite@1.0.0-alpha.19) (2026-06-28)
+
+### Features
+
+* **config:** stream dev container logs to terminal ([#38](https://github.com/anolilab/lunora/issues/38)) ([c34dbc6](https://github.com/anolilab/lunora/commit/c34dbc6f40f9e31ce291dbd31c6c4d9e596b4127))
+
+### Code Refactoring
+
+* **vite:** drop Vite<6 module-graph fallback ([#39](https://github.com/anolilab/lunora/issues/39)) ([de7ad15](https://github.com/anolilab/lunora/commit/de7ad15c6fcbfc03297cadf21d593bbbfbfa8d4f))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.19
+
 ## @lunora/vite [1.0.0-alpha.18](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.17...@lunora/vite@1.0.0-alpha.18) (2026-06-28)
 
 
