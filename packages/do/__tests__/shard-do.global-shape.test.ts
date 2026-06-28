@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { migrateGlobalShapeSnapshot } from "../src/ctx-db";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import type { SocketAttachment } from "../src/types";
@@ -220,6 +221,46 @@ describe("shardDO global-shape poll tier", () => {
 
         // Still one global subscriber ⇒ the alarm is re-armed for the next tick.
         expect(alarmBox.scheduled).not.toBeNull();
+    });
+
+    it("survives hibernation: a fresh instance pokes a delete from the durable baseline", async () => {
+        expect.assertions(2);
+
+        // Production shards run `runShardMigrations` (which creates this table) via
+        // the codegen subclass; the base test shard's `ensureMigrated` is a no-op,
+        // so create the durable snapshot table by hand to exercise the durable path.
+        migrateGlobalShapeSnapshot(harness.sql);
+
+        const sockets: FakeWebSocket[] = [];
+        const shard = new GlobalShapeShard(makeState(sockets), {});
+        const ws = createFakeWebSocket();
+        // A connection id (minted at upgrade in production) keys the durable
+        // baseline; without it the snapshot stays in-memory only.
+        ws.attachment = { connectionId: "conn-1", subs: {} };
+        sockets.push(ws);
+
+        shard.rows = [
+            { doc: { _id: "t1", label: "a" }, id: "t1" },
+            { doc: { _id: "t2", label: "b" }, id: "t2" },
+        ];
+        await subscribeShape(shard, ws);
+
+        // Simulate a hibernation eviction: the in-memory snapshot cache is gone,
+        // but the durable table + the socket's serialized attachment survive. A
+        // brand-new DO instance over the same state + sql is what the runtime wakes.
+        const wokenSockets: FakeWebSocket[] = [ws];
+        const woken = new GlobalShapeShard(makeState(wokenSockets), {});
+
+        // t2 was deleted from the global backend while the DO slept.
+        woken.rows = [{ doc: { _id: "t1", label: "a" }, id: "t1" }];
+        ws.sent.length = 0;
+
+        await woken.alarm();
+
+        // The durable baseline still carried t2, so the diff emits its delete —
+        // without persistence the empty cold cache would miss it (phantom row).
+        expect(frameTypes(ws)).toStrictEqual(["pokeStart", "pokePart", "pokeEnd"]);
+        expect(pokeOps(ws)).toStrictEqual([{ key: "t2", op: "delete", table: "things" }]);
     });
 
     it("does not re-arm the alarm once the global shape is unsubscribed", async () => {
