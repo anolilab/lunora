@@ -44,7 +44,7 @@ describe("ctx-db client watermark", () => {
 
         migrateClientWatermark(harness.sql);
 
-        expect(readClientWatermark(harness.sql, "client-a")).toBe(0);
+        expect(readClientWatermark(harness.sql, "user-1", "client-a")).toBe(0);
     });
 
     it("advances and reads back per client, isolated by client id", () => {
@@ -52,13 +52,26 @@ describe("ctx-db client watermark", () => {
 
         migrateClientWatermark(harness.sql);
 
-        advanceClientWatermark(harness.sql, "client-a", 1);
-        advanceClientWatermark(harness.sql, "client-a", 2);
-        advanceClientWatermark(harness.sql, "client-b", 5);
+        advanceClientWatermark(harness.sql, "user-1", "client-a", 1);
+        advanceClientWatermark(harness.sql, "user-1", "client-a", 2);
+        advanceClientWatermark(harness.sql, "user-1", "client-b", 5);
 
-        expect(readClientWatermark(harness.sql, "client-a")).toBe(2);
-        expect(readClientWatermark(harness.sql, "client-b")).toBe(5);
-        expect(readClientWatermark(harness.sql, "client-c")).toBe(0);
+        expect(readClientWatermark(harness.sql, "user-1", "client-a")).toBe(2);
+        expect(readClientWatermark(harness.sql, "user-1", "client-b")).toBe(5);
+        expect(readClientWatermark(harness.sql, "user-1", "client-c")).toBe(0);
+    });
+
+    it("isolates the watermark by identity so a reused client id can't cross users", () => {
+        expect.assertions(2);
+
+        migrateClientWatermark(harness.sql);
+
+        // Same client id, two different authenticated identities — each keeps its
+        // own counter, so one user can't suppress the other's sequence.
+        advanceClientWatermark(harness.sql, "user-1", "shared-client", 9);
+
+        expect(readClientWatermark(harness.sql, "user-2", "shared-client")).toBe(0);
+        expect(readClientWatermark(harness.sql, "user-1", "shared-client")).toBe(9);
     });
 
     it("never regresses the watermark (monotonic MAX upsert)", () => {
@@ -66,10 +79,10 @@ describe("ctx-db client watermark", () => {
 
         migrateClientWatermark(harness.sql);
 
-        advanceClientWatermark(harness.sql, "client-a", 7);
+        advanceClientWatermark(harness.sql, "user-1", "client-a", 7);
         // A stale/out-of-order advance must not lower the high-watermark.
-        advanceClientWatermark(harness.sql, "client-a", 3);
+        advanceClientWatermark(harness.sql, "user-1", "client-a", 3);
 
-        expect(readClientWatermark(harness.sql, "client-a")).toBe(7);
+        expect(readClientWatermark(harness.sql, "user-1", "client-a")).toBe(7);
     });
 });
