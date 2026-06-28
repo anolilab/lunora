@@ -121,6 +121,97 @@ describe(defineContainer, () => {
         expect(() => defineContainer({ image: { build: "" } })).toThrow("`image.build` must be a non-empty");
     });
 
+    it("accepts multi-port, egress-firewall, and labels config", () => {
+        expect.assertions(7);
+
+        const definition = defineContainer({
+            allowedHosts: ["*.stripe.com"],
+            deniedHosts: ["*.evil.com"],
+            entrypoint: ["node", "server.js"],
+            image: "./app",
+            interceptHttps: true,
+            labels: { env: "prod", tenant: "acme" },
+            pingEndpoint: "/healthz",
+            requiredPorts: [8080, 9090],
+        });
+
+        expect(definition.requiredPorts).toStrictEqual([8080, 9090]);
+        expect(definition.entrypoint).toStrictEqual(["node", "server.js"]);
+        expect(definition.interceptHttps).toBe(true);
+        expect(definition.allowedHosts).toStrictEqual(["*.stripe.com"]);
+        expect(definition.deniedHosts).toStrictEqual(["*.evil.com"]);
+        expect(definition.pingEndpoint).toBe("/healthz");
+        expect(definition.labels).toStrictEqual({ env: "prod", tenant: "acme" });
+    });
+
+    it("rejects a blank entrypoint part, hostname, or label key", () => {
+        expect.assertions(3);
+
+        expect(() => defineContainer({ entrypoint: ["node", "   "], image: "./app" })).toThrow("`entrypoint` must be a non-empty");
+        expect(() => defineContainer({ allowedHosts: ["  "], image: "./app" })).toThrow("`allowedHosts` must be an array of non-empty");
+        expect(() => defineContainer({ image: "./app", labels: { "  ": "x" } })).toThrow("`labels` must be a record of non-empty");
+    });
+
+    it("rejects a non-boolean interceptHttps", () => {
+        expect.assertions(1);
+
+        expect(() => defineContainer({ image: "./app", interceptHttps: "yes" as unknown as boolean })).toThrow("`interceptHttps` must be a boolean");
+    });
+
+    it("accepts hardTimeout and readyOn config", () => {
+        expect.assertions(3);
+
+        const definition = defineContainer({
+            defaultPort: 8080,
+            hardTimeout: "1h",
+            image: "./app",
+            readyOn: [{ path: "/ready" }, { path: "migrations", port: 9090, status: 204 }],
+        });
+
+        expect(definition.hardTimeout).toBe("1h");
+        expect(definition.readyOn).toStrictEqual([{ path: "/ready" }, { path: "migrations", port: 9090, status: 204 }]);
+        expect(defineContainer({ hardTimeout: 600, image: "./app" }).hardTimeout).toBe(600);
+    });
+
+    it("rejects an invalid hardTimeout", () => {
+        expect.assertions(3);
+
+        expect(() => defineContainer({ hardTimeout: "5 minutes", image: "./app" })).toThrow("`hardTimeout`");
+        expect(() => defineContainer({ hardTimeout: 0, image: "./app" })).toThrow("`hardTimeout`");
+        expect(() => defineContainer({ hardTimeout: -5, image: "./app" })).toThrow("`hardTimeout`");
+    });
+
+    it("rejects an invalid readyOn check", () => {
+        expect.assertions(4);
+
+        expect(() => defineContainer({ image: "./app", readyOn: [{ path: "   " }] })).toThrow("`readyOn[].path`");
+        expect(() => defineContainer({ image: "./app", readyOn: [{ path: " /ready " }] })).toThrow("leading or trailing whitespace");
+        expect(() => defineContainer({ image: "./app", readyOn: [{ path: "/ready", port: 70_000 }] })).toThrow("readyOn[].port");
+        expect(() => defineContainer({ image: "./app", readyOn: [{ path: "/ready", status: 700 }] })).toThrow("`readyOn[].status`");
+    });
+
+    it("rejects an empty or out-of-range requiredPorts", () => {
+        expect.assertions(2);
+
+        expect(() => defineContainer({ image: "./app", requiredPorts: [] })).toThrow("`requiredPorts` must be a non-empty");
+        expect(() => defineContainer({ image: "./app", requiredPorts: [70_000] })).toThrow("requiredPorts[]");
+    });
+
+    it("rejects an empty entrypoint and an empty-string entrypoint part", () => {
+        expect.assertions(2);
+
+        expect(() => defineContainer({ entrypoint: [], image: "./app" })).toThrow("`entrypoint` must be a non-empty");
+        expect(() => defineContainer({ entrypoint: ["node", ""], image: "./app" })).toThrow("`entrypoint` must be a non-empty");
+    });
+
+    it("rejects an empty hostname in an egress list and an empty pingEndpoint", () => {
+        expect.assertions(3);
+
+        expect(() => defineContainer({ allowedHosts: [""], image: "./app" })).toThrow("`allowedHosts` must be an array of non-empty");
+        expect(() => defineContainer({ deniedHosts: [""], image: "./app" })).toThrow("`deniedHosts` must be an array of non-empty");
+        expect(() => defineContainer({ image: "./app", pingEndpoint: "" })).toThrow("`pingEndpoint` must be a non-empty");
+    });
+
     it("does not brand arbitrary objects", () => {
         expect.assertions(2);
 

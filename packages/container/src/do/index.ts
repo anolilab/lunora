@@ -9,13 +9,27 @@
 import type { StopParams } from "@cloudflare/containers";
 import { Container } from "@cloudflare/containers";
 
-import { resolveContainerEnvVars as resolveContainerEnvVariables } from "../define-container";
+import { parseDurationSeconds, resolveContainerEnvVars as resolveContainerEnvVariables } from "../define-container";
 import { emitContainerLifecycle } from "../lifecycle-event";
-import type { ContainerDefinition } from "../types";
+import type { ContainerDefinition, ContainerReadinessCheck } from "../types";
 import type { DurableObjectJurisdiction } from "./report-lifecycle";
 import { reportContainerLifecycle } from "./report-lifecycle";
 
 type DurableObjectContext = ConstructorParameters<typeof Container>[0];
+
+/** Interval between `readyOn` probe attempts while waiting for the app to come up. */
+const READINESS_POLL_INTERVAL_MS = 500;
+
+/** Upper bound on how long the `readyOn` probes block container start before failing. */
+const READINESS_TIMEOUT_MS = 30_000;
+
+/**
+ * Durable-storage key holding a monotonically-increasing "run generation". Each
+ * start bumps it and stamps the `hardTimeout` schedule with the new value, so a
+ * stale schedule left over from a previous run (the container slept or crashed,
+ * then restarted) is recognised and ignored instead of killing the fresh run.
+ */
+const HARD_TIMEOUT_GENERATION_KEY = "__lunoraHardTimeoutGeneration";
 
 /**
  * Base class for the generated Container DO classes. Applies a
@@ -43,6 +57,12 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
     private readonly lunoraJurisdiction?: DurableObjectJurisdiction;
     /** The `lunora/containers.ts` export name, for lifecycle log correlation. */
     private readonly lunoraName: string;
+    /** Default port the readiness probes target when a check omits its own `port`. */
+    private readonly lunoraDefaultPort?: number;
+    /** Hard-cap lifetime in whole seconds (from the `hardTimeout` config), or `undefined`. */
+    private readonly lunoraHardTimeoutSeconds?: number;
+    /** Declarative readiness probes that gate request proxying (from the `readyOn` config). */
+    private readonly lunoraReadyOn: ReadonlyArray<ContainerReadinessCheck>;
 
     public constructor(
         context: DurableObjectContext,
@@ -53,6 +73,7 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
     ) {
         super(context, env, {
             defaultPort: definition.defaultPort,
+            entrypoint: definition.entrypoint ? [...definition.entrypoint] : undefined,
             envVars: resolveContainerEnvVariables(definition, env as Record<string, unknown>, exportName),
             sleepAfter: definition.sleepAfter,
         });
@@ -61,8 +82,50 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
             this.enableInternet = definition.enableInternet;
         }
 
+        // Multi-port + egress-firewall fields are `Container` instance
+        // properties (not constructor options), applied here from the
+        // definition. Each is guarded so an un-set field leaves the
+        // `@cloudflare/containers` default in place.
+        if (definition.requiredPorts !== undefined) {
+            this.requiredPorts = [...definition.requiredPorts];
+        }
+
+        if (definition.interceptHttps !== undefined) {
+            this.interceptHttps = definition.interceptHttps;
+        }
+
+        if (definition.allowedHosts !== undefined) {
+            this.allowedHosts = [...definition.allowedHosts];
+        }
+
+        if (definition.deniedHosts !== undefined) {
+            this.deniedHosts = [...definition.deniedHosts];
+        }
+
+        if (definition.pingEndpoint !== undefined) {
+            this.pingEndpoint = definition.pingEndpoint;
+        }
+
+        if (definition.labels !== undefined) {
+            this.labels = { ...definition.labels };
+        }
+
         this.lunoraName = exportName ?? "container";
         this.lunoraJurisdiction = jurisdiction;
+        this.lunoraDefaultPort = definition.defaultPort;
+        this.lunoraReadyOn = definition.readyOn ? [...definition.readyOn] : [];
+        this.lunoraHardTimeoutSeconds = definition.hardTimeout === undefined ? undefined : parseDurationSeconds(definition.hardTimeout);
+    }
+
+    public override async onActivityExpired(): Promise<void> {
+        // The container slept after its `sleepAfter` idle window. Surfacing it
+        // makes the WebSocket-keepalive gap (cloudflare/containers#147) visible
+        // in the dev log + Studio rather than a silent disappearance.
+        const envelope = emitContainerLifecycle(this.lunoraName, this.instanceId(), "sleep");
+
+        this.surfaceInStudioLogs(envelope);
+
+        await super.onActivityExpired();
     }
 
     public override onError(error: unknown): unknown {
@@ -79,6 +142,42 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         this.surfaceInStudioLogs(envelope);
 
         await super.onStart();
+
+        // The base calls `onStart()` after the ports are healthy and inside a
+        // `blockConcurrencyWhile`, and `containerFetch` routes through that same
+        // start path — so arming the hard timeout here makes it count from the
+        // real start, and awaiting readiness here gates request proxying until
+        // the app reports ready.
+        await this.armHardTimeout();
+        await this.awaitContainerReadiness();
+    }
+
+    /**
+     * Hook run when the container's `hardTimeout` elapses (dispatched by the base
+     * scheduler via the run-generation-stamped schedule armed in
+     * {@link onStart}). Default: stop the instance. Override to drain/checkpoint
+     * first. A stale schedule from a previous run, or an already-stopped
+     * instance, is ignored (upstream cloudflare/containers#85).
+     */
+    public async onHardTimeoutExpired(payload?: { generation?: number }): Promise<void> {
+        const current = await this.ctx.storage.get<number>(HARD_TIMEOUT_GENERATION_KEY);
+
+        // Ignore a schedule left over from a previous run (the container slept or
+        // crashed and restarted between arming and firing) — killing the fresh
+        // run early would be a surprising, hard-to-debug shutdown.
+        if (payload?.generation !== undefined && payload.generation !== current) {
+            return;
+        }
+
+        if (this.ctx.container?.running !== true) {
+            return;
+        }
+
+        const envelope = emitContainerLifecycle(this.lunoraName, this.instanceId(), "stop", "hard timeout reached");
+
+        this.surfaceInStudioLogs(envelope);
+
+        await this.stop();
     }
 
     public override async onStop(parameters: StopParams): Promise<void> {
@@ -87,6 +186,88 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         this.surfaceInStudioLogs(envelope);
 
         await super.onStop(parameters);
+    }
+
+    /**
+     * Arm the hard-timeout kill via the base scheduler (so it integrates with
+     * the container's own alarm machinery instead of fighting it). Bumps the run
+     * generation and stamps the schedule with it, so {@link onHardTimeoutExpired}
+     * can tell a fresh schedule from a stale one. No-op without a `hardTimeout`.
+     */
+    private async armHardTimeout(): Promise<void> {
+        if (this.lunoraHardTimeoutSeconds === undefined) {
+            return;
+        }
+
+        const generation = ((await this.ctx.storage.get<number>(HARD_TIMEOUT_GENERATION_KEY)) ?? 0) + 1;
+
+        await this.ctx.storage.put(HARD_TIMEOUT_GENERATION_KEY, generation);
+        await this.schedule(this.lunoraHardTimeoutSeconds, "onHardTimeoutExpired", { generation });
+    }
+
+    /**
+     * Block until every `readyOn` probe responds with its expected status, or
+     * throw once the readiness budget is spent. Probes run in parallel and hit
+     * the container's TCP port directly (NOT `containerFetch`, which would
+     * recurse back into the start path). No-op without `readyOn`.
+     */
+    private async awaitContainerReadiness(): Promise<void> {
+        if (this.lunoraReadyOn.length === 0) {
+            return;
+        }
+
+        const { container } = this.ctx;
+
+        if (container === undefined) {
+            return;
+        }
+
+        const deadline = Date.now() + READINESS_TIMEOUT_MS;
+
+        await Promise.all(this.lunoraReadyOn.map(async (check) => this.awaitReadinessCheck(container, check, deadline)));
+    }
+
+    /** Poll one readiness probe until it returns its expected status or the shared deadline passes. */
+    private async awaitReadinessCheck(
+        container: NonNullable<DurableObjectContext["container"]>,
+        check: ContainerReadinessCheck,
+        deadline: number,
+    ): Promise<void> {
+        const port = check.port ?? this.lunoraDefaultPort;
+
+        if (port === undefined) {
+            throw new Error(
+                `container "${this.lunoraName}": readyOn check "${check.path}" has no port — set the check's \`port\` or the container \`defaultPort\`.`,
+            );
+        }
+
+        const expectedStatus = check.status ?? 200;
+        const path = check.path.startsWith("/") ? check.path : `/${check.path}`;
+        const tcpPort = container.getTcpPort(port);
+
+        for (;;) {
+            try {
+                // eslint-disable-next-line no-await-in-loop -- sequential poll: each probe waits on the previous attempt before retrying.
+                const response = await tcpPort.fetch(`http://container${path}`);
+
+                if (response.status === expectedStatus) {
+                    return;
+                }
+            } catch {
+                // Connection refused / app not up yet — fall through and retry below.
+            }
+
+            if (Date.now() >= deadline) {
+                throw new Error(
+                    `container "${this.lunoraName}": readiness check "${check.path}" (port ${String(port)}) did not return ${String(expectedStatus)} within ${String(READINESS_TIMEOUT_MS)}ms`,
+                );
+            }
+
+            // eslint-disable-next-line no-await-in-loop -- back-off between poll attempts is intentionally sequential.
+            await new Promise((resolve) => {
+                setTimeout(resolve, READINESS_POLL_INTERVAL_MS);
+            });
+        }
     }
 
     /**
@@ -119,4 +300,19 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
     }
 }
 
-export default LunoraContainer;
+export { LunoraContainer };
+// Re-exported so the generated `_generated/containers.ts` can surface it from the
+// worker entry: the `Container` outbound-interception path (egress allow/deny
+// lists, `interceptHttps`, runtime egress controls) routes container traffic
+// through this WorkerEntrypoint, which the deployed worker must therefore export.
+// Funneling it through `@lunora/container/do` keeps the app depending only on
+// `@lunora/container`, never on `@cloudflare/containers` directly.
+export { ContainerProxy } from "@cloudflare/containers";
+// Custom outbound-interception handlers (cloudflare/containers#135). These let a
+// subclass of `LunoraContainer` rewrite/route a container's egress in worker
+// code (e.g. inject auth, mock an upstream, enforce a proxy). They're worker-side
+// functions, so they don't fit the data-only `defineContainer` config — surface
+// the upstream types/helper here so an advanced app can wire them on its own
+// generated subclass without depending on `@cloudflare/containers` directly.
+export type { OutboundHandler, OutboundHandlerContext, OutboundHandlerParams, OutboundHandlerParamsOf, OutboundHandlers } from "@cloudflare/containers";
+export { outboundParams } from "@cloudflare/containers";

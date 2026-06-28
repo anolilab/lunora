@@ -60,7 +60,39 @@ interface BuildImageSource {
  */
 type ContainerImageSource = BuildImageSource | RegistryImageSource | string;
 
+/**
+ * An application-level readiness probe that gates request proxying. Layered on
+ * top of the platform's own port/`pingEndpoint` health wait, it lets you hold
+ * traffic back until the app inside the container is *functionally* ready —
+ * migrations applied, caches warmed — which an open-port check can't see.
+ *
+ * Declarative on purpose: a `defineContainer` value stays pure data (no handler
+ * functions), so codegen and the config layer can read it without evaluating
+ * code. (Upstream cloudflare/containers#188 expresses the same idea as handler
+ * functions; the Lunora config is data-only, so it's modelled as descriptors.)
+ */
+interface ContainerReadinessCheck {
+    /** HTTP path probed on the container, e.g. `"/ready"` (a leading slash is optional). */
+    path: string;
+    /** Port to probe. Defaults to {@link ContainerConfig.defaultPort}. */
+    port?: number;
+    /** HTTP status that means "ready". Defaults to `200`. */
+    status?: number;
+}
+
 interface ContainerConfig {
+    /**
+     * Hostnames the container may reach **even when {@link ContainerConfig.enableInternet}
+     * is `false`** — an egress allow-list (Cloudflare's `allowedHosts`). Glob
+     * patterns like `*.stripe.com` are supported. Pair with `enableInternet:
+     * false` to deny all egress except these hosts (the firewall pattern
+     * upstream issue cloudflare/containers#30 asked for). The interception path
+     * needs the `ContainerProxy` worker entrypoint, which codegen re-exports
+     * from the generated container file automatically; the named-instance
+     * handle's `egress` controls adjust the lists at runtime.
+     */
+    allowedHosts?: ReadonlyArray<string>;
+
     /**
      * Build-time variables for a Dockerfile/Railpack image — wrangler's
      * `image_vars` (equivalent to `docker build --build-arg`). For *runtime*
@@ -71,16 +103,34 @@ interface ContainerConfig {
 
     /**
      * The port the container listens on. Worker → container requests target
-     * this port. Locally the Dockerfile must also `EXPOSE` it.
+     * this port. Locally the Dockerfile must also `EXPOSE` it. For a
+     * multi-port container also declare {@link ContainerConfig.requiredPorts}
+     * and route per request with the handle's `.port(n)`.
      */
     defaultPort?: number;
 
     /**
+     * Hostnames the container may **never** reach — an egress deny-list
+     * (Cloudflare's `deniedHosts`). Overrides everything else, including
+     * `enableInternet: true` and {@link ContainerConfig.allowedHosts}. Glob
+     * patterns like `*.evil.com` are supported.
+     */
+    deniedHosts?: ReadonlyArray<string>;
+
+    /**
      * Whether the container may open outbound internet connections. Defaults
      * to `true` — the platform default. Note that container egress is billed
-     * per GB by Cloudflare.
+     * per GB by Cloudflare. Combine with {@link ContainerConfig.allowedHosts} /
+     * {@link ContainerConfig.deniedHosts} for a precise egress firewall.
      */
     enableInternet?: boolean;
+
+    /**
+     * Default command to run inside the container, overriding the image's
+     * `ENTRYPOINT`/`CMD` (Cloudflare's `entrypoint`). A per-start override is
+     * still available via the named-instance handle's `start({ entrypoint })`.
+     */
+    entrypoint?: ReadonlyArray<string>;
 
     /**
      * Static environment variables passed to the container on every start.
@@ -88,6 +138,16 @@ interface ContainerConfig {
      * flow through Worker Secrets rather than source code.
      */
     env?: Readonly<Record<string, string>>;
+
+    /**
+     * Hard cap on how long an instance may run, measured from start regardless
+     * of activity — a runaway-cost backstop on top of the idle
+     * {@link ContainerConfig.sleepAfter}. Same grammar as `sleepAfter`
+     * (`"30s"`, `"5m"`, `"1h"`, or a plain number of seconds). When it elapses,
+     * the `LunoraContainer.onHardTimeoutExpired` hook runs (default: `stop()`).
+     * (Upstream cloudflare/containers#85.)
+     */
+    hardTimeout?: number | string;
 
     /** Image source — a local Dockerfile path/directory or a registry reference. */
     image: ContainerImageSource;
@@ -97,6 +157,23 @@ interface ContainerConfig {
      * custom `{ vcpu, memoryMib, diskMb }` object.
      */
     instanceType?: ContainerInstanceType;
+
+    /**
+     * Intercept the container's outbound **HTTPS** traffic so the egress
+     * allow/deny lists apply to TLS connections too (Cloudflare's
+     * `interceptHttps`). Requires the image to trust the Cloudflare CA at
+     * `/etc/cloudflare/certs/cloudflare-containers-ca.crt`. Defaults to `false`
+     * (HTTP egress is gated regardless).
+     */
+    interceptHttps?: boolean;
+
+    /**
+     * Key-value metadata attached to every instance for metrics/observability
+     * (Cloudflare's container `labels`), e.g. `{ tenant: "acme", env: "prod" }`.
+     * A per-start override is available via the named-instance handle's
+     * `start({ labels })`.
+     */
+    labels?: Readonly<Record<string, string>>;
 
     /**
      * Maximum number of concurrently *running* instances. Stopped (slept)
@@ -109,6 +186,33 @@ interface ContainerConfig {
      * wrangler's own default (worker name + class name + environment).
      */
     name?: string;
+
+    /**
+     * HTTP path Cloudflare polls to decide an instance is healthy
+     * (Cloudflare's `pingEndpoint`). Defaults to upstream's slash-less `"ping"`;
+     * either `"ping"` or `"/healthz"`-style paths are accepted. Set this when
+     * the container exposes its readiness check under a different route.
+     */
+    pingEndpoint?: string;
+
+    /**
+     * Application-level readiness probes that gate request proxying: a
+     * `ctx.containers.&lt;name>` fetch waits until every probe responds with its
+     * expected status before the request reaches the container — on top of the
+     * platform's port/`pingEndpoint` health wait. All probes run in parallel.
+     * Use these for readiness an open-port check can't see (migrations applied,
+     * caches warm). (Upstream cloudflare/containers#188.)
+     */
+    readyOn?: ReadonlyArray<ContainerReadinessCheck>;
+
+    /**
+     * Ports the container must be listening on before it's considered ready
+     * (Cloudflare's `requiredPorts`) — for multi-port containers. Start-up
+     * waits for every listed port, and the handle's `.port(n)` routes a request
+     * to any of them; {@link ContainerConfig.defaultPort} is the target when a
+     * request doesn't pick one.
+     */
+    requiredPorts?: ReadonlyArray<number>;
 
     /**
      * Rolling-deploy tuning. `stepPercentage` is the share of instances updated
@@ -168,6 +272,7 @@ export type {
     ContainerDefinition,
     ContainerImageSource,
     ContainerInstanceType,
+    ContainerReadinessCheck,
     ContainerRollout,
     CustomContainerInstanceType,
     NamedContainerInstanceType,

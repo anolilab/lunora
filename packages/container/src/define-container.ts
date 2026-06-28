@@ -19,6 +19,30 @@ const ENV_NAME_PATTERN = /^[A-Z_]\w*$/i;
  */
 const SLEEP_AFTER_PATTERN = /^\d+[smh]$/;
 
+/** Seconds-per-unit for the `sleepAfter`/`hardTimeout` duration grammar. */
+const DURATION_UNIT_SECONDS: Readonly<Record<string, number>> = { h: 3600, m: 60, s: 1 };
+
+/**
+ * Parse a `sleepAfter`/`hardTimeout` duration into whole seconds. A `number` is
+ * treated as seconds (floored); a string follows the `&lt;digits>&lt;s|m|h>` grammar
+ * {@link SLEEP_AFTER_PATTERN} enforces. Shared by the runtime DO so the wire
+ * value the container sees is derived from the exact same logic that validates
+ * it. Throws on an unparseable string (already rejected by `defineContainer`).
+ */
+const parseDurationSeconds = (duration: number | string): number => {
+    if (typeof duration === "number") {
+        return Math.floor(duration);
+    }
+
+    const match = SLEEP_AFTER_PATTERN.exec(duration);
+
+    if (match === null) {
+        throw new TypeError(`Invalid duration "${duration}" — expected a number of seconds or "<n>[smh]"`);
+    }
+
+    return Number(duration.slice(0, -1)) * (DURATION_UNIT_SECONDS[duration.slice(-1)] ?? 1);
+};
+
 /** Last path segment of a `/`-separated path (input is posix-style config). */
 const basename = (path: string): string => {
     const trimmed = path.endsWith("/") ? path.slice(0, -1) : path;
@@ -173,11 +197,113 @@ const assertValidEnvAndSecrets = (config: ContainerConfig): void => {
     }
 };
 
+/** Validate a port is an integer in the TCP range, with a directed error naming the field. */
+const assertValidPort = (port: number, field: string): void => {
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+        throw new TypeError(`defineContainer: \`${field}\` must be an integer in 1–65535 (got ${String(port)})`);
+    }
+};
+
+/** Validate the optional `readyOn` application-readiness probes (path, port, and status). */
+const assertValidReadyOnChecks = (config: ContainerConfig): void => {
+    for (const check of config.readyOn ?? []) {
+        if (typeof check.path !== "string" || check.path.trim().length === 0) {
+            throw new TypeError("defineContainer: `readyOn[].path` must be a non-empty HTTP path string");
+        }
+
+        if (check.path !== check.path.trim()) {
+            throw new TypeError("defineContainer: `readyOn[].path` must not have leading or trailing whitespace");
+        }
+
+        if (check.port !== undefined) {
+            assertValidPort(check.port, "readyOn[].port");
+        }
+
+        if (check.status !== undefined && (!Number.isInteger(check.status) || check.status < 100 || check.status > 599)) {
+            throw new TypeError(`defineContainer: \`readyOn[].status\` must be an HTTP status code in 100–599 (got ${String(check.status)})`);
+        }
+    }
+};
+
+/** Validate the optional `hardTimeout` hard-cap lifetime — same grammar as `sleepAfter`. */
+const assertValidHardTimeout = (hardTimeout: ContainerConfig["hardTimeout"]): void => {
+    if (hardTimeout === undefined) {
+        return;
+    }
+
+    if (typeof hardTimeout === "string") {
+        if (!SLEEP_AFTER_PATTERN.test(hardTimeout)) {
+            throw new TypeError(
+                `defineContainer: \`hardTimeout\` string "${hardTimeout}" must be a number of seconds followed by a unit, e.g. "30s", "5m", or "1h"`,
+            );
+        }
+    } else if (!Number.isInteger(hardTimeout) || hardTimeout < 1) {
+        throw new TypeError(
+            `defineContainer: \`hardTimeout\` must be a positive integer number of seconds or a duration string like "5m" (got ${String(hardTimeout)})`,
+        );
+    }
+};
+
+/** Validate the egress-firewall fields — host allow/deny lists and `interceptHttps`. */
+const assertValidEgressFields = (config: ContainerConfig): void => {
+    for (const field of ["allowedHosts", "deniedHosts"] as const) {
+        const hosts = config[field];
+
+        if (hosts?.some((host) => typeof host !== "string" || host.trim().length === 0)) {
+            throw new TypeError(`defineContainer: \`${field}\` must be an array of non-empty hostname patterns`);
+        }
+    }
+
+    if (config.interceptHttps !== undefined && typeof config.interceptHttps !== "boolean") {
+        throw new TypeError("defineContainer: `interceptHttps` must be a boolean, or omitted");
+    }
+};
+
+/**
+ * Validate the runtime fields the generated class applies onto the `Container`
+ * base after `super()` — multi-port, the egress firewall, and observability
+ * `labels`. Caught here at authoring time rather than failing inside the
+ * worker. Blank (whitespace-only) strings are rejected too, since they'd reach
+ * the platform as bogus hostnames/paths.
+ */
+const assertValidContainerRuntimeFields = (config: ContainerConfig): void => {
+    if (config.requiredPorts !== undefined) {
+        if (config.requiredPorts.length === 0) {
+            throw new TypeError("defineContainer: `requiredPorts` must be a non-empty array of ports, or omitted");
+        }
+
+        for (const port of config.requiredPorts) {
+            assertValidPort(port, "requiredPorts[]");
+        }
+    }
+
+    if (
+        config.entrypoint !== undefined &&
+        (config.entrypoint.length === 0 || config.entrypoint.some((part) => typeof part !== "string" || part.trim().length === 0))
+    ) {
+        throw new TypeError("defineContainer: `entrypoint` must be a non-empty array of non-empty strings, or omitted");
+    }
+
+    assertValidEgressFields(config);
+
+    if (config.pingEndpoint !== undefined && (typeof config.pingEndpoint !== "string" || config.pingEndpoint.trim().length === 0)) {
+        throw new TypeError("defineContainer: `pingEndpoint` must be a non-empty path string");
+    }
+
+    for (const [key, value] of Object.entries(config.labels ?? {})) {
+        if (key.trim().length === 0 || typeof value !== "string") {
+            throw new TypeError("defineContainer: `labels` must be a record of non-empty keys to string values");
+        }
+    }
+
+    assertValidReadyOnChecks(config);
+};
+
 const defineContainer = (config: ContainerConfig): ContainerDefinition => {
     assertValidImage(config.image);
 
-    if (config.defaultPort !== undefined && (!Number.isInteger(config.defaultPort) || config.defaultPort < 1 || config.defaultPort > 65_535)) {
-        throw new TypeError(`defineContainer: \`defaultPort\` must be an integer in 1–65535 (got ${String(config.defaultPort)})`);
+    if (config.defaultPort !== undefined) {
+        assertValidPort(config.defaultPort, "defaultPort");
     }
 
     const stepPercentage = config.rollout?.stepPercentage;
@@ -202,7 +328,9 @@ const defineContainer = (config: ContainerConfig): ContainerDefinition => {
         );
     }
 
+    assertValidHardTimeout(config.hardTimeout);
     assertValidEnvAndSecrets(config);
+    assertValidContainerRuntimeFields(config);
 
     return { ...config, isLunoraContainer: true };
 };
@@ -244,5 +372,6 @@ export {
     defineContainer,
     isContainerDefinition,
     normalizeContainerImage,
+    parseDurationSeconds,
     resolveContainerEnvVariables as resolveContainerEnvVars,
 };
