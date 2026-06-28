@@ -1,3 +1,14 @@
+## @lunora/cli [1.0.0-alpha.28](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.27...@lunora/cli@1.0.0-alpha.28) (2026-06-28)
+
+### Documentation
+
+* fix package doc bugs and dead cross-links ([205d74c](https://github.com/anolilab/lunora/commit/205d74c3b730e201e822141191b45015f303336b))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.7
+
 ## @lunora/cli [1.0.0-alpha.27](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.26...@lunora/cli@1.0.0-alpha.27) (2026-06-27)
 
 ### Features
