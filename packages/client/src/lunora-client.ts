@@ -494,6 +494,16 @@ class LunoraClient {
     /** Stable per-client id stamped onto every `OutboxMutation` (custom-mutator watermark). */
     private readonly clientId: string;
 
+    /**
+     * Highest custom-mutator watermark the server has echoed for this client,
+     * keyed by shard bucket (`shardKey ?? ""`) since the DO tracks one
+     * `__client_watermark` per shard. `callMutator` bumps it from every
+     * ack; the `@lunora/db` mutator runtime seeds its `clientSeq` generator from
+     * it so a reload (which resets the in-memory counter) never reissues a stale
+     * sequence the server would silently swallow as a replay.
+     */
+    private readonly clientWatermarks = new Map<string, number>();
+
     /** Monotonic per-client mutation counter backing the server `__client_watermark`. */
     private outboxMutationCounter = 0;
 
@@ -704,20 +714,60 @@ class LunoraClient {
     }
 
     /**
+     * The highest custom-mutator watermark the server has echoed for this client
+     * on the given shard (0 if none yet). The `@lunora/db` mutator runtime seeds
+     * its `clientSeq` generator from this so a reload never reissues a sequence
+     * the server has already applied (which it would swallow as a replay, silently
+     * dropping the write).
+     */
+    public confirmedMutationWatermark(shardKey?: string): number {
+        return this.clientWatermarks.get(shardKey ?? "") ?? 0;
+    }
+
+    /**
      * Push a custom mutator to its authoritative server impl over the watermark
      * protocol (Phase 4): the request carries `x-lunora-client-id` + a monotonic
      * `x-lunora-client-seq`, so the DO runs it exactly once and advances this
-     * client's `__client_watermark`. Returns the server result.
+     * client's `__client_watermark`.
+     *
+     * Returns the server `result` plus `applied`: `true` when the DO ran this push
+     * as the next-in-order mutation, `false` when it was a replay ack (`clientSeq`
+     * was at or below the stored watermark — e.g. a stale sequence after a reload).
+     * A `false` verdict tells the caller to reissue above the now-known watermark
+     * (echoed into {@link confirmedMutationWatermark}) rather than treat the benign
+     * ack as a confirmed write. Every ack — applied or not — bumps the watermark.
      *
      * This is the online transport for `@lunora/db`'s client-mutator runtime; the
      * optimistic overlay + durable-outbox concerns live in that runtime, not here.
      */
-    public async callMutator(functionPath: string, args: Record<string, unknown>, options?: { clientSeq?: number; shardKey?: string }): Promise<unknown> {
-        return this.rpc(functionPath, args, options?.shardKey, {
+    public async callMutator(
+        functionPath: string,
+        args: Record<string, unknown>,
+        options?: { clientSeq?: number; shardKey?: string },
+    ): Promise<{ applied: boolean; result: unknown }> {
+        const clientSeq = options?.clientSeq ?? 0;
+        const bucket = options?.shardKey ?? "";
+        let ackWatermark: number | undefined;
+
+        const result = await this.rpc(functionPath, args, options?.shardKey, {
             captureBookmark: true,
             clientId: this.clientId,
-            clientSeq: options?.clientSeq ?? 0,
+            clientSeq,
+            onMutationAck: (lastMutationId) => {
+                ackWatermark = lastMutationId;
+            },
         });
+
+        if (ackWatermark !== undefined && ackWatermark > (this.clientWatermarks.get(bucket) ?? 0)) {
+            this.clientWatermarks.set(bucket, ackWatermark);
+        }
+
+        // The DO echoes `lastMutationId === clientSeq` only when it ran this push
+        // as the next-in-order mutation; a replay ack echoes the (higher) stored
+        // watermark. An absent echo (non-watermarked call) is treated as applied.
+        const applied = ackWatermark === undefined || ackWatermark === clientSeq;
+
+        return { applied, result };
     }
 
     /**
@@ -2580,7 +2630,15 @@ class LunoraClient {
         functionPath: string,
         args: Record<string, unknown>,
         shardKey: string | undefined,
-        flags: { attachBookmark?: boolean; captureBookmark?: boolean; clientId?: string; clientSeq?: number; mutationId?: string } = {},
+        flags: {
+            attachBookmark?: boolean;
+            captureBookmark?: boolean;
+            clientId?: string;
+            clientSeq?: number;
+            mutationId?: string;
+            /** Invoked on a successful response with the server's echoed custom-mutator watermark (if any). */
+            onMutationAck?: (lastMutationId: number | undefined) => void;
+        } = {},
     ): Promise<unknown> {
         if (!this.fetchImpl) {
             throw new Error("LunoraClient: no `fetch` implementation available");
@@ -2627,6 +2685,8 @@ class LunoraClient {
 
             throw new Error(`LunoraClient: request failed (status ${response.status.toString()}${statusText})`);
         }
+
+        flags.onMutationAck?.(body.lastMutationId);
 
         return body.result;
     }

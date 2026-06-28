@@ -336,8 +336,13 @@ export interface RpcEnvelope {
     shardKey?: string;
 }
 
-/** Wire response from the shard's `/rpc` endpoint (forwarded by the runtime). */
-export type RpcResponseBody = { result: unknown } | { error: { code: string; message: string } };
+/**
+ * Wire response from the shard's `/rpc` endpoint (forwarded by the runtime). A
+ * watermarked custom-mutator push additionally carries `lastMutationId` — the
+ * highest per-client sequence the DO has applied — which the client uses to keep
+ * its `clientSeq` generator monotonic across reloads (see `LunoraClient.callMutator`).
+ */
+export type RpcResponseBody = { error: { code: string; message: string } } | { lastMutationId?: number; result: unknown };
 
 /** Subscription protocol — client → server. */
 export interface ClientSubscribeMessage {
