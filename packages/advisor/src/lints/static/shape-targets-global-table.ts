@@ -6,13 +6,14 @@ import type { Lint } from "../../types";
  *
  * Poke-live replication is a per-shard-DO property: the shard owns its SQLite
  * and a monotonic `__cdc_log`, so a write produces an ordered op the DO pokes to
- * every subscriber at the next flush. A `.global()` table lives in D1, which has
- * no per-DO op-log — so a shape over a global table cannot be poke-live. It is
+ * every subscriber at the next flush. A `.global()` table lives outside the
+ * shard DO's SQLite op-log (in a global backend — D1, or Hyperdrive-fronted
+ * Postgres/MySQL) — so a shape over a global table cannot be poke-live. It is
  * served through the cross-shard tier: **coordinator/poll-refreshed, latency-
  * tiered**, not live. That is a real and supported tier (it is the recommended
  * answer for cross-shard reads — denormalize, or move the joined table to
- * `.global()` and read through D1), but its freshness semantics differ from a
- * sharded shape's, so the boundary is surfaced rather than hidden.
+ * `.global()` and read through the global backend), but its freshness semantics
+ * differ from a sharded shape's, so the boundary is surfaced rather than hidden.
  *
  * `WARN`, not `ERROR`: a global-table shape is a legitimate design once you
  * accept the poll-refresh latency; the lint just makes the tier explicit so a
@@ -26,7 +27,7 @@ import type { Lint } from "../../types";
 const shapeTargetsGlobalTable: Lint = {
     categories: ["PERFORMANCE"],
     description:
-        "A `defineShape` replicates from a `.global()` table. Global tables live in D1, which has no per-shard op-log, so the shape is served through the cross-shard tier — coordinator/poll-refreshed and latency-tiered, not poke-live like a sharded shape.",
+        "A `defineShape` replicates from a `.global()` table. Global tables live outside the shard DO's SQLite op-log, so the shape is served through the cross-shard tier — coordinator/poll-refreshed and latency-tiered, not poke-live like a sharded shape.",
     facing: "EXTERNAL",
     level: "WARN",
     name: "shape_targets_global_table",
@@ -48,7 +49,7 @@ const shapeTargetsGlobalTable: Lint = {
             findings.push(
                 emit(shapeTargetsGlobalTable, {
                     cacheKey: `shape_targets_global_table:${shape.exportName}`,
-                    detail: `Shape \`${shape.exportName}\` (${shape.file}) replicates from the \`.global()\` table \`${shape.table}\`. It is served through the cross-shard D1 tier — poll-refreshed and latency-tiered, not poke-live.`,
+                    detail: `Shape \`${shape.exportName}\` (${shape.file}) replicates from the \`.global()\` table \`${shape.table}\`. It is served through the cross-shard global tier — poll-refreshed and latency-tiered, not poke-live.`,
                     metadata: { exportName: shape.exportName, file: shape.file, table: shape.table },
                 }),
             );
