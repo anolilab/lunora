@@ -170,6 +170,7 @@ export { serveRelationFanout } from "./relation-fanout";
 export type { ResolveRelationPredicatesOptions } from "./relation-predicates";
 export {
     assertFlatPredicate,
+    assertShapeShardable,
     containsRelationPredicate,
     DEFAULT_MAX_RELATION_KEYS,
     isRelationPredicate,
