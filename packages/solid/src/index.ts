@@ -6,6 +6,8 @@ export type { FlagContext, FlagValue } from "./create-flag";
 export { createFlag, createFlags } from "./create-flag";
 export type { MutationClient, MutationHandle } from "./create-mutation";
 export { createMutation, createMutationForClient } from "./create-mutation";
+export type { MutatorHandle, MutatorHook, MutatorTransaction } from "./create-mutator";
+export { createMutator } from "./create-mutator";
 export type {
     CreateInfiniteQueryOptions,
     CreateInfiniteQueryResult,
