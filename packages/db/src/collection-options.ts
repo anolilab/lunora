@@ -171,7 +171,15 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
         const onError = (error: SubscriptionError): void => onErrorHandler?.(error);
 
         if (options.shape !== undefined) {
-            return options.client.subscribeShape({ args, name: options.shape.name }, onRows, { onError, shardKey: options.shape.shardKey });
+            return options.client.subscribeShape({ args, name: options.shape.name }, onRows, {
+                // Advance the registry as the shape syncs, so a mutator runtime can
+                // drop optimistic overlays once the server's rows have landed.
+                onCheckpoint: (watermark) => {
+                    checkpoints.resolve(watermark);
+                },
+                onError,
+                shardKey: options.shape.shardKey,
+            });
         }
 
         return options.client.subscribe(options.list as FunctionReference, args, onRows, { onError });

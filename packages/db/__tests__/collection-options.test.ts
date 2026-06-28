@@ -8,6 +8,7 @@ const ref = (name: string) => ({ __lunoraRef: name }) as never;
 
 interface ShapeSubscribeCall {
     name: string;
+    onCheckpoint?: (watermark: { checkpoint?: number; mutationId?: number }) => void;
     onRows: (rows: Record<string, unknown>[]) => void;
     shapeArgs: Record<string, unknown> | undefined;
     shardKey?: string;
@@ -23,15 +24,28 @@ const makeClient = () => {
             (
                 shape: { args?: Record<string, unknown>; name: string },
                 onRows: (rows: Record<string, unknown>[]) => void,
-                options?: { shardKey?: string },
+                options?: { onCheckpoint?: (watermark: { checkpoint?: number; mutationId?: number }) => void; shardKey?: string },
             ) => () => void
-        >((shape: { args?: Record<string, unknown>; name: string }, onRows: (rows: Record<string, unknown>[]) => void, options?: { shardKey?: string }) => {
-            const unsubscribe = vi.fn<() => void>();
+        >(
+            (
+                shape: { args?: Record<string, unknown>; name: string },
+                onRows: (rows: Record<string, unknown>[]) => void,
+                options?: { onCheckpoint?: (watermark: { checkpoint?: number; mutationId?: number }) => void; shardKey?: string },
+            ) => {
+                const unsubscribe = vi.fn<() => void>();
 
-            shapeSubscribes.push({ name: shape.name, onRows, shapeArgs: shape.args, shardKey: options?.shardKey, unsubscribe });
+                shapeSubscribes.push({
+                    name: shape.name,
+                    onCheckpoint: options?.onCheckpoint,
+                    onRows,
+                    shapeArgs: shape.args,
+                    shardKey: options?.shardKey,
+                    unsubscribe,
+                });
 
-            return unsubscribe;
-        }),
+                return unsubscribe;
+            },
+        ),
     };
 
     return { client: client as never, shapeSubscribes };
@@ -180,5 +194,34 @@ describe("lunoraCollectionOptions (shape source)", () => {
 
         expect((client as unknown as { subscribe: ReturnType<typeof vi.fn> }).subscribe).not.toHaveBeenCalled();
         expect((client as unknown as { subscribeShape: ReturnType<typeof vi.fn> }).subscribeShape).toHaveBeenCalledTimes(1);
+    });
+
+    it("advances the returned checkpoints registry as the shape syncs watermarks", async () => {
+        const { client, shapeSubscribes } = makeClient();
+
+        const options = lunoraCollectionOptions({ client, shape: { name: "channelMessages" } });
+        const collection = createCollection(options.config);
+
+        collection.subscribeChanges(() => {});
+        await flush();
+
+        const call = shapeSubscribes.find((s) => s.name === "channelMessages");
+
+        expect(call?.onCheckpoint).toBeTypeOf("function");
+
+        // A waiter on mutation id 4 stays pending until the shape's poke confirms it.
+        const order: string[] = [];
+        const pending = options.checkpoints.awaitMutationId(4).then(() => order.push("dropped"));
+
+        call?.onCheckpoint?.({ checkpoint: 5, mutationId: 3 });
+        await Promise.resolve();
+
+        expect(order).toStrictEqual([]);
+
+        // The next poke syncs the write's watermark → the overlay drop unblocks.
+        call?.onCheckpoint?.({ checkpoint: 9, mutationId: 4 });
+        await pending;
+
+        expect(order).toStrictEqual(["dropped"]);
     });
 });

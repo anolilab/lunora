@@ -424,6 +424,18 @@ const sendOn = (conn: ShardConnection, message: ClientMessage): boolean => {
 type ShapeCallback = (rows: Record<string, unknown>[]) => void;
 
 /**
+ * The high-water marks a shape poke has now synced to the client: `checkpoint`
+ * is the op-log cursor and `mutationId` the highest custom-mutator id the server
+ * echoed for this client. A `@lunora/db` collection feeds these into its
+ * checkpoint registry to drop optimistic overlays once the server's authoritative
+ * rows have landed.
+ */
+interface SyncWatermark {
+    checkpoint?: number;
+    mutationId?: number;
+}
+
+/**
  * One live shape subscription's client state — the partial-replication parallel
  * to {@link SubscriptionState}. The view is a keyed map of the rows currently in
  * the shape (built up from seed + live poke diffs); `serverCursor`/`serverEpoch`
@@ -438,6 +450,8 @@ interface ShapeSubscriptionState {
     /** Highest custom-mutator watermark the server has echoed for this client on this shape. */
     lastMutationId?: number;
     name: string;
+    /** Invoked after each applied poke with the watermark this shape has now synced. */
+    onCheckpoint?: (watermark: SyncWatermark) => void;
     /** The shape's current rowset, keyed by `_id`. */
     rows: Map<string, Record<string, unknown>>;
     serverCursor?: number;
@@ -2047,7 +2061,7 @@ class LunoraClient {
     public subscribeShape(
         shape: { args?: Record<string, unknown>; name: string },
         callback: ShapeCallback,
-        options: { onError?: SubscriptionErrorCallback; shardKey?: string } = {},
+        options: { onCheckpoint?: (watermark: SyncWatermark) => void; onError?: SubscriptionErrorCallback; shardKey?: string } = {},
     ): Unsubscribe {
         if (this.closed) {
             throw new Error("LunoraClient is closed");
@@ -2061,6 +2075,7 @@ class LunoraClient {
             errorCallbacks: options.onError ? new Set([options.onError]) : new Set(),
             id,
             name: shape.name,
+            onCheckpoint: options.onCheckpoint,
             rows: new Map(),
             shardKey: options.shardKey,
         };
@@ -3321,6 +3336,10 @@ class LunoraClient {
             }
 
             this.emitShapeRows(state);
+
+            // Surface the advanced watermark so a `@lunora/db` collection can drop
+            // the optimistic overlay for any mutation this poke has now synced.
+            state.onCheckpoint?.({ checkpoint: state.serverCursor, mutationId: state.lastMutationId });
         }
     }
 
@@ -3660,4 +3679,4 @@ class LunoraClient {
 }
 
 export { LunoraClient };
-export type { ConnectionStatus, MutationCallOptions };
+export type { ConnectionStatus, MutationCallOptions, SyncWatermark };
