@@ -13,6 +13,7 @@ import type { AdvisorR2sqlCall } from "./r2sql-calls";
 import type { AdvisorRlsProcedure } from "./rls-procedures";
 import type { AdvisorSchema } from "./schema";
 import type { AdvisorSecretLiteral } from "./secrets";
+import type { AdvisorShape } from "./shapes";
 import type { AdvisorShardTraffic } from "./shard-traffic";
 import type { AdvisorSqlInterpolation } from "./sql-interpolation";
 import type { AdvisorTableSample } from "./table-samples";
@@ -205,6 +206,15 @@ export interface LintContext {
      * where the lint finds nothing.
      */
     secretLiterals?: ReadonlyArray<AdvisorSecretLiteral>;
+
+    /**
+     * Replication shapes declared via `defineShape` in `lunora/shapes.ts` — the
+     * `shape_unknown_table` and `shape_targets_global_table` lint input. Each
+     * carries the export name and its static `table` literal, cross-referenced
+     * against {@link LintContext.schema}. Supplied by the codegen feeder; absent
+     * for runtime callers, where the shape lints find nothing.
+     */
+    shapes?: ReadonlyArray<AdvisorShape>;
 
     /**
      * Per-shard observed traffic — the `hot_shard` lint input. Supplied by the
