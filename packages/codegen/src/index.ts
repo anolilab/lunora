@@ -8,16 +8,19 @@ export { default as discoverHttpRoutes } from "./discover-http-routes";
 export { default as discoverInserts } from "./discover-inserts";
 export { default as discoverMaskProcedures } from "./discover-mask-procedures";
 export { default as discoverMigrations } from "./discover-migrations";
+export { discoverMutators, MUTATORS_FILENAME } from "./discover-mutators";
 export { default as discoverNondeterministicCalls } from "./discover-nondeterministic-calls";
 export { default as discoverQueries } from "./discover-queries";
 export { discoverQueues, QUEUES_FILENAME } from "./discover-queues";
 export { default as discoverR2sqlCalls } from "./discover-r2sql-calls";
 export { discoverRlsMetadata, default as discoverRlsProcedures } from "./discover-rls-procedures";
 export { default as discoverSchema } from "./discover-schema";
+export { discoverShapes, SHAPES_FILENAME } from "./discover-shapes";
 export { default as discoverStorageRulesMetadata } from "./discover-storage-rules";
 export { discoverWorkflows, WORKFLOWS_FILENAME } from "./discover-workflows";
 export {
     emitApi,
+    emitCollections,
     emitContainers,
     emitCrons,
     emitDataModel,
@@ -42,6 +45,7 @@ export type {
     InsertWriteIR,
     MaskProcedureIR,
     MigrationIR,
+    MutatorIR,
     ProjectIR,
     QueryReadIR,
     QueueIR,
@@ -51,6 +55,7 @@ export type {
     RlsProcedureIR,
     RlsRoleIR,
     SchemaIR,
+    ShapeIR,
     StorageRuleIR,
     StorageRulesMetadataIR,
     TableIR,

@@ -145,4 +145,37 @@ describe("runCodegen lint integration", () => {
 
         expect(runCodegen({ lint: false, projectRoot: workdir }).generated.shard).toContain("const LUNORA_ADVISORIES: AdvisoryFinding[] = [];");
     });
+
+    it("flags replication shapes targeting an unknown table and a `.global()` table (full discover → lint path)", () => {
+        expect.assertions(4);
+
+        // A schema with a sharded `messages` (poke-live) and a global `users` (D1 tier).
+        writeFileSync(
+            join(workdir, "lunora", "schema.ts"),
+            `import { defineSchema, defineTable, v } from "@lunora/server";
+export const schema = defineSchema({
+    messages: defineTable({ text: v.string() }).shardBy("text"),
+    users: defineTable({ email: v.string() }).global(),
+});
+`,
+            "utf8",
+        );
+        // One shape over the global table (poll-tier WARN) and one over a typo'd table (unknown ERROR).
+        writeFileSync(
+            join(workdir, "lunora", "shapes.ts"),
+            `import { defineShape } from "@lunora/server";
+export const allUsers = defineShape({ table: "users", where: () => ({}) });
+export const ghost = defineShape({ table: "mesages", where: () => ({}) });
+`,
+            "utf8",
+        );
+
+        const findings = runCodegen({ projectRoot: workdir }).advisories;
+        const byName = (name: string) => findings.filter((finding) => finding.name === name);
+
+        expect(byName("shape_targets_global_table")).toHaveLength(1);
+        expect(byName("shape_targets_global_table")[0]?.metadata).toMatchObject({ exportName: "allUsers", table: "users" });
+        expect(byName("shape_unknown_table")).toHaveLength(1);
+        expect(byName("shape_unknown_table")[0]?.metadata).toMatchObject({ exportName: "ghost", table: "mesages" });
+    });
 });
