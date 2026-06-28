@@ -4,7 +4,8 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { lunora } from "../src/index";
+import { lunora, resolveOverlayOption } from "../src/index";
+import { lunoraSolutionFinder } from "../src/solution-finders";
 
 let workdir: string;
 
@@ -88,6 +89,58 @@ describe("index", () => {
             const minimal = lunora({ cloudflare: false, overlay: false, projectRoot: workdir, validateWrangler: false });
 
             expect(plugins.length).toBeGreaterThan(minimal.length);
+        });
+    });
+
+    describe("resolveOverlayOption", () => {
+        const userFinder = { handle: async () => undefined, name: "user", priority: 100 };
+
+        it("returns false when overlay is disabled", () => {
+            expect.assertions(1);
+
+            expect(resolveOverlayOption(false)).toBe(false);
+        });
+
+        it("injects Lunora's finders for the default (true/undefined) overlay", () => {
+            expect.assertions(2);
+
+            for (const overlay of [true, undefined] as const) {
+                const resolved = resolveOverlayOption(overlay);
+
+                expect(resolved === false ? [] : resolved.solutionFinders).toContain(lunoraSolutionFinder);
+            }
+        });
+
+        it("prepends Lunora's finders before a user's, keeping both", () => {
+            expect.assertions(3);
+
+            const resolved = resolveOverlayOption({ solutionFinders: [userFinder] });
+            const finders = resolved === false ? [] : (resolved.solutionFinders ?? []);
+
+            expect(finders).toHaveLength(2);
+            // Lunora is first, so at an equal priority it wins the overlay's stable
+            // sort — a user must use a strictly higher priority to outrank it.
+            expect(finders[0]).toBe(lunoraSolutionFinder);
+            expect(finders[1]).toBe(userFinder);
+        });
+
+        it("defaults forwardedConsoleMethods but lets a partial user object override it", () => {
+            expect.assertions(2);
+
+            const defaulted = resolveOverlayOption({ solutionFinders: [] });
+            const overridden = resolveOverlayOption({ forwardedConsoleMethods: ["error"] });
+
+            expect(defaulted === false ? undefined : defaulted.forwardedConsoleMethods).toStrictEqual(["error", "warn"]);
+            expect(overridden === false ? undefined : overridden.forwardedConsoleMethods).toStrictEqual(["error"]);
+        });
+
+        it("keeps the default when the user explicitly passes an undefined forwardedConsoleMethods", () => {
+            expect.assertions(1);
+
+            // An explicit `undefined` must not erase the default via the spread.
+            const resolved = resolveOverlayOption({ forwardedConsoleMethods: undefined });
+
+            expect(resolved === false ? undefined : resolved.forwardedConsoleMethods).toStrictEqual(["error", "warn"]);
         });
     });
 });

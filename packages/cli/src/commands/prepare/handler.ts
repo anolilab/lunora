@@ -10,6 +10,7 @@ import { inferLunoraBindings, reconcileWranglerBindings } from "@lunora/config";
 
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
+import { renderCodegenFailure } from "../../util/codegen-error";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
@@ -84,7 +85,10 @@ const runPrepareCommand = async (options: PrepareCommandOptions): Promise<Prepar
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 
-        options.logger.error(`codegen failed: ${message}`);
+        // Render the failure plus any matched Lunora fix (same hint the Vite
+        // overlay and `lunora dev` show); the returned `error` stays the plain
+        // machine-readable string for `--format json` and callers.
+        options.logger.error(renderCodegenFailure(error));
 
         return {
             code: 1,

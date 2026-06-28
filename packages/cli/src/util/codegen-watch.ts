@@ -11,6 +11,7 @@ import { join } from "node:path";
 import type { CodegenOptions } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
 
+import { renderCodegenFailure } from "./codegen-error";
 import type { Logger } from "./logger";
 
 const DEFAULT_DEBOUNCE_MS = 100;
@@ -25,7 +26,7 @@ const runOnce = (projectRoot: string, lunoraDirectory: string, apiSpec: CodegenO
 
         logger.success(`codegen: wrote ${lunoraDirectory}/_generated (${reason})`);
     } catch (error: unknown) {
-        logger.error(`codegen failed (${reason}): ${error instanceof Error ? error.message : String(error)}`);
+        logger.error(renderCodegenFailure(error, reason));
     }
 };
 

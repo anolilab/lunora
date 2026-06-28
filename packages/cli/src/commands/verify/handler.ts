@@ -5,6 +5,7 @@ import { runCodegen } from "@lunora/codegen";
 
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
+import { renderCodegenHint } from "../../util/codegen-error";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
@@ -75,6 +76,14 @@ const reportVerifyResult = (logger: Logger, errors: string[], warnings: string[]
 
         for (const error of errors) {
             logger.error(`  - ${error}`);
+
+            // Surface the actionable Lunora fix (the same hint the Vite overlay
+            // and `lunora dev` show) directly under a recognized codegen error.
+            const hint = renderCodegenHint(error);
+
+            if (hint !== undefined) {
+                logger.error(hint);
+            }
         }
 
         return { code: 1, errors, warnings, wranglerPath };

@@ -127,6 +127,23 @@ describe("lunora verify", () => {
             expect(result.errors.some((error) => error.includes("codegen failed"))).toBe(true);
         });
 
+        it("prints the matched Lunora fix under a recognized codegen error", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            // Valid TypeScript with no `defineSchema()` call → codegen throws the
+            // recognized "defineSchema() not found" error, which carries a fix hint.
+            writeFileSync(join(workdir, "lunora", "schema.ts"), "export const notASchema = 1;", "utf8");
+            const { logger, recorded } = recordingLogger();
+
+            const result = await runVerifyCommand({ cwd: workdir, logger });
+
+            expect(result.code).toBe(1);
+            expect(result.errors.some((error) => error.includes("codegen failed"))).toBe(true);
+            // The fix hint (solution header) is rendered alongside the error bullet.
+            expect(recorded.errors.join("\n")).toContain("No Lunora schema found");
+        });
+
         it("returns 1 when wrangler.jsonc is missing", async () => {
             expect.assertions(3);
 

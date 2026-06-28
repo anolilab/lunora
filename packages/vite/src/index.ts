@@ -11,10 +11,38 @@ import { frameworkComposePlugin } from "./framework-compose-plugin";
 import { createPluginContext, frameworkDetectPlugin } from "./framework-detect-plugin";
 import logStreamPlugin from "./log-stream-plugin";
 import { planViteRemoteBindings, remoteBindingsCleanupPlugin, withRemoteBindings } from "./remote-bindings-plugin";
+import { lunoraSolutionFinders } from "./solution-finders";
 import { studioPlugin } from "./studio-plugin";
 import type { CloudflarePluginOptions, LunoraPluginOptions, LunoraPlugins, OverlayPluginOptions, ResolvedLunoraPluginOptions } from "./types";
 import { withWorkerStartupHint } from "./worker-startup-hint";
 import { wranglerValidatorPlugin } from "./wrangler-validator-plugin";
+
+/**
+ * Resolve the `overlay` toggle into the overlay plugin's options — or `false` to
+ * skip it. Lunora's solution finders are **prepended** so they run before the
+ * overlay's built-ins; a user's own finders are appended and can still win per
+ * error via a strictly higher `priority` (equal priority keeps Lunora first,
+ * since the overlay sorts stably). Lunora also forwards both `error` AND `warn`
+ * console calls by default (the overlay's own default is `["error"]` only) so
+ * Lunora's branded `warn` advisories surface in the browser too — the user can
+ * override `forwardedConsoleMethods`.
+ */
+// eslint-disable-next-line sonarjs/function-return-type -- returns the overlay options object, or false to skip; the union mirrors the resolved overlay field.
+const resolveOverlayOption = (overlay: LunoraPluginOptions["overlay"]): false | OverlayPluginOptions => {
+    if (overlay === false) {
+        return false;
+    }
+
+    const userOverlay = overlay === true || overlay === undefined ? {} : overlay;
+
+    return {
+        ...userOverlay,
+        // After the spread + nullish-coalesce so an explicit `undefined` from the
+        // user doesn't erase Lunora's default (the spread would otherwise win).
+        forwardedConsoleMethods: userOverlay.forwardedConsoleMethods ?? ["error", "warn"],
+        solutionFinders: [...lunoraSolutionFinders, ...(userOverlay.solutionFinders ?? [])],
+    };
+};
 
 const resolveOptions = (options: LunoraPluginOptions | undefined): ResolvedLunoraPluginOptions => {
     const input = options ?? {};
@@ -32,26 +60,12 @@ const resolveOptions = (options: LunoraPluginOptions | undefined): ResolvedLunor
         cloudflareOption = input.cloudflare;
     }
 
-    // Forward both `error` AND `warn` console calls to the dev error overlay by
-    // default (the overlay plugin's own default is `["error"]` only) — surfacing
-    // Lunora's branded `warn` advisories in the browser too. User-overridable.
-    const overlayDefaults = { forwardedConsoleMethods: ["error", "warn"] } satisfies Partial<OverlayPluginOptions>;
-    let overlayOption: false | OverlayPluginOptions;
-
-    if (input.overlay === false) {
-        overlayOption = false;
-    } else if (input.overlay === true || input.overlay === undefined) {
-        overlayOption = { ...overlayDefaults };
-    } else {
-        overlayOption = { ...overlayDefaults, ...input.overlay };
-    }
-
     return {
         apiSpec: input.apiSpec ?? "openapi",
         cloudflare: cloudflareOption,
         studio: input.studio ?? true,
         generatedDir: input.generatedDir ?? `${schemaDirectory}/_generated`,
-        overlay: overlayOption,
+        overlay: resolveOverlayOption(input.overlay),
         projectRoot: input.projectRoot ?? process.cwd(),
         schemaDir: schemaDirectory,
         validateWrangler: input.validateWrangler ?? true,
@@ -163,8 +177,13 @@ export { buildWorkerEntrySource, CLASS_A_WIRING, frameworkComposePlugin, isAutoC
 export { default as logStreamPlugin } from "./log-stream-plugin";
 export type { PlanViteRemoteOptions, ViteRemotePlan } from "./remote-bindings-plugin";
 export { planViteRemoteBindings, remoteBindingsCleanupPlugin, withRemoteBindings } from "./remote-bindings-plugin";
+// The error→solution rule table itself lives in `@lunora/codegen` (shared with
+// the standalone `lunora dev` CLI); `@lunora/vite` only wraps it as an overlay
+// finder. Import `findLunoraSolution` / `LUNORA_SOLUTION_RULES` from `@lunora/codegen`.
+export type { Solution, SolutionFinder } from "./solution-finders";
+export { lunoraSolutionFinder, lunoraSolutionFinders } from "./solution-finders";
 export { buildStudioUrl, STUDIO_PATH, studioPlugin } from "./studio-plugin";
 export type { CloudflarePluginOptions, LunoraPluginOptions, LunoraPlugins, OverlayPluginOptions, ResolvedLunoraPluginOptions } from "./types";
 export { augmentWorkerStartupError, isWorkerEntryEvalError, withWorkerStartupHint, WORKER_STARTUP_HINT } from "./worker-startup-hint";
 export { wranglerValidatorPlugin } from "./wrangler-validator-plugin";
-export { lunora, VERSION };
+export { lunora, resolveOverlayOption, VERSION };
