@@ -138,6 +138,14 @@ interface ContainerConfig {
     interceptHttps?: boolean;
 
     /**
+     * Key-value metadata attached to every instance for metrics/observability
+     * (Cloudflare's container `labels`), e.g. `{ tenant: "acme", env: "prod" }`.
+     * A per-start override is available via the named-instance handle's
+     * `start({ labels })`.
+     */
+    labels?: Readonly<Record<string, string>>;
+
+    /**
      * Maximum number of concurrently *running* instances. Stopped (slept)
      * containers don't count. Also the default pool size for `.any()`.
      */
@@ -151,8 +159,9 @@ interface ContainerConfig {
 
     /**
      * HTTP path Cloudflare polls to decide an instance is healthy
-     * (Cloudflare's `pingEndpoint`). Defaults to `"ping"`. Set this when the
-     * container exposes its readiness check under a different route.
+     * (Cloudflare's `pingEndpoint`). Defaults to upstream's slash-less `"ping"`;
+     * either `"ping"` or `"/healthz"`-style paths are accepted. Set this when
+     * the container exposes its readiness check under a different route.
      */
     pingEndpoint?: string;
 

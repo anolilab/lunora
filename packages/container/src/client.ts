@@ -23,7 +23,12 @@ interface ContainerStartOptions {
 /** A container instance's runtime state, as returned by `getState()`. Structural — the platform adds fields over time. */
 interface ContainerInstanceState {
     [key: string]: unknown;
+    /** Process exit code, present once the instance has `stopped_with_code`. */
+    exitCode?: number;
+    /** Epoch-ms of the last state transition. */
     lastChange?: number;
+    /** Lifecycle status. Widening union — Cloudflare adds values over time. */
+    status?: "healthy" | "running" | "stopped" | "stopped_with_code" | "stopping";
 }
 
 /** What a handle needs from a Durable Object stub — `fetch` plus the optional lifecycle/egress RPCs the container DO exposes. */
@@ -115,7 +120,8 @@ interface ContainerInstanceHandle extends ContainerHandle {
      * Adjust this instance's egress allow/deny lists at runtime — the dynamic
      * counterpart to the static `allowedHosts`/`deniedHosts` config. Useful for
      * per-tenant egress policy. Requires the worker to export `ContainerProxy`
-     * (codegen does this automatically when any container declares egress).
+     * (codegen re-exports it from the generated container file whenever any
+     * container is defined, so the runtime controls always work).
      */
     egress: ContainerEgressControls;
     /** Read the instance's current runtime state. */
@@ -270,6 +276,22 @@ const lifecycleCall = async <Result>(stub: ContainerStubLike, method: ContainerS
     return (rpc as (argument?: unknown) => Promise<Result>)(argument);
 };
 
+/**
+ * The runtime egress controls for a named instance, each mapping a `handle.egress.*`
+ * method to its `@cloudflare/containers` `Container` RPC. Re-derives the stub per
+ * call (DO stubs are cheap and shouldn't be cached across the await boundary).
+ */
+const egressControlsFor = (stub: () => ContainerStubLike, binding: string): ContainerEgressControls => {
+    return {
+        allow: async (hostname) => lifecycleCall(stub(), "allowHost", binding, hostname),
+        deny: async (hostname) => lifecycleCall(stub(), "denyHost", binding, hostname),
+        removeAllowed: async (hostname) => lifecycleCall(stub(), "removeAllowedHost", binding, hostname),
+        removeDenied: async (hostname) => lifecycleCall(stub(), "removeDeniedHost", binding, hostname),
+        setAllowed: async (hosts) => lifecycleCall(stub(), "setAllowedHosts", binding, [...hosts]),
+        setDenied: async (hosts) => lifecycleCall(stub(), "setDeniedHosts", binding, [...hosts]),
+    };
+};
+
 /** A named-instance handle: `fetch`/`.port()` plus the container DO's lifecycle + egress RPCs. */
 const instanceHandleFor = (namespace: ContainerNamespaceLike, spec: ContainerBindingSpec, instanceName: string): ContainerInstanceHandle => {
     const stub = (): ContainerStubLike => namespace.get(namespace.idFromName(instanceName));
@@ -277,14 +299,7 @@ const instanceHandleFor = (namespace: ContainerNamespaceLike, spec: ContainerBin
     return {
         ...sendingHandle(async (request) => stub().fetch(request)),
         destroy: async () => lifecycleCall(stub(), "destroy", spec.binding),
-        egress: {
-            allow: async (hostname) => lifecycleCall(stub(), "allowHost", spec.binding, hostname),
-            deny: async (hostname) => lifecycleCall(stub(), "denyHost", spec.binding, hostname),
-            removeAllowed: async (hostname) => lifecycleCall(stub(), "removeAllowedHost", spec.binding, hostname),
-            removeDenied: async (hostname) => lifecycleCall(stub(), "removeDeniedHost", spec.binding, hostname),
-            setAllowed: async (hosts) => lifecycleCall(stub(), "setAllowedHosts", spec.binding, [...hosts]),
-            setDenied: async (hosts) => lifecycleCall(stub(), "setDeniedHosts", spec.binding, [...hosts]),
-        },
+        egress: egressControlsFor(stub, spec.binding),
         getState: async () => lifecycleCall(stub(), "getState", spec.binding),
         renewActivityTimeout: async () => lifecycleCall(stub(), "renewActivityTimeout", spec.binding),
         start: async (options) => lifecycleCall(stub(), "start", spec.binding, options),
@@ -405,6 +420,35 @@ const createContainerContext = (
 type ContainerTestHandler = (request: Request, instance: { name: string }) => Promise<Response> | Response;
 
 /**
+ * A fake DO namespace backing the test double: every instance's `fetch` plays
+ * the user's handler, and the lifecycle/egress RPCs are inert (resolve void / a
+ * stub state). Built so the double reuses the *real* `instanceHandleFor` /
+ * `handleFor` wiring — it can't drift from the production handle shape — while
+ * staying Docker-free. `idFromName` is identity so the handler sees the
+ * instance name unchanged.
+ */
+const testNamespaceFor = (handler: ContainerTestHandler): ContainerNamespaceLike => {
+    const stubFor = (name: string): ContainerStubLike => {
+        return {
+            allowHost: () => Promise.resolve(),
+            denyHost: () => Promise.resolve(),
+            destroy: () => Promise.resolve(),
+            fetch: (request) => Promise.resolve(handler(request, { name })),
+            getState: () => Promise.resolve({ lastChange: 0 }),
+            removeAllowedHost: () => Promise.resolve(),
+            removeDeniedHost: () => Promise.resolve(),
+            renewActivityTimeout: () => Promise.resolve(),
+            setAllowedHosts: () => Promise.resolve(),
+            setDeniedHosts: () => Promise.resolve(),
+            start: () => Promise.resolve(),
+            stop: () => Promise.resolve(),
+        };
+    };
+
+    return { get: (id) => stubFor(String(id)), idFromName: (name) => name };
+};
+
+/**
  * Docker-free test double for `ctx.containers`: each export name maps to a
  * fetch handler that plays the container. Mirrors the real shape exactly, so
  * action handlers under test can't tell the difference.
@@ -419,42 +463,16 @@ const createContainerTestContext = (handlers: Record<string, ContainerTestHandle
     const containers: Record<string, ContainerAccessor> = {};
 
     for (const [exportName, handler] of Object.entries(handlers)) {
-        const testHandleFor = (instanceName: string, port?: number): ContainerHandle => {
-            return {
-                fetch: async (input, init) => handler(toRequest(input, init, port), { name: instanceName }),
-                port: (targetPort) => testHandleFor(instanceName, targetPort),
-            };
-        };
-
-        // Lifecycle/egress calls in the double are inert (resolve void / a stub
-        // state) so action tests that stop/destroy/inspect/re-route an instance
-        // don't blow up; the double exercises action logic, not real container
-        // behavior.
-        const testInstanceHandleFor = (instanceName: string): ContainerInstanceHandle => {
-            return {
-                ...testHandleFor(instanceName),
-                destroy: () => Promise.resolve(),
-                egress: {
-                    allow: () => Promise.resolve(),
-                    deny: () => Promise.resolve(),
-                    removeAllowed: () => Promise.resolve(),
-                    removeDenied: () => Promise.resolve(),
-                    setAllowed: () => Promise.resolve(),
-                    setDenied: () => Promise.resolve(),
-                },
-                getState: () => Promise.resolve({ lastChange: 0 }),
-                renewActivityTimeout: () => Promise.resolve(),
-                start: () => Promise.resolve(),
-                stop: () => Promise.resolve(),
-            };
-        };
+        const namespace = testNamespaceFor(handler);
+        const spec: ContainerBindingSpec = { binding: `CONTAINER_${exportName.toUpperCase()}`, exportName };
 
         containers[exportName] = {
-            any: () => testHandleFor("pool-0"),
-            get: (name) => testInstanceHandleFor(name),
-            // The double doesn't simulate failure/retry — pool() just routes to
-            // the handler like any other call, so tests stay deterministic.
-            pool: () => testHandleFor("pool-0"),
+            // `.any()`/`.pool()` route to a fixed `pool-0` so the handler's
+            // `instance.name` is deterministic under test; the double doesn't
+            // simulate the random-pick or retry/backoff the real pool does.
+            any: () => handleFor(namespace, "pool-0"),
+            get: (name) => instanceHandleFor(namespace, spec, name),
+            pool: () => handleFor(namespace, "pool-0"),
         };
     }
 

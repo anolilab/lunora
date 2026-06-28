@@ -121,8 +121,8 @@ describe(defineContainer, () => {
         expect(() => defineContainer({ image: { build: "" } })).toThrow("`image.build` must be a non-empty");
     });
 
-    it("accepts multi-port and egress-firewall config", () => {
-        expect.assertions(6);
+    it("accepts multi-port, egress-firewall, and labels config", () => {
+        expect.assertions(7);
 
         const definition = defineContainer({
             allowedHosts: ["*.stripe.com"],
@@ -130,6 +130,7 @@ describe(defineContainer, () => {
             entrypoint: ["node", "server.js"],
             image: "./app",
             interceptHttps: true,
+            labels: { env: "prod", tenant: "acme" },
             pingEndpoint: "/healthz",
             requiredPorts: [8080, 9090],
         });
@@ -140,6 +141,15 @@ describe(defineContainer, () => {
         expect(definition.allowedHosts).toStrictEqual(["*.stripe.com"]);
         expect(definition.deniedHosts).toStrictEqual(["*.evil.com"]);
         expect(definition.pingEndpoint).toBe("/healthz");
+        expect(definition.labels).toStrictEqual({ env: "prod", tenant: "acme" });
+    });
+
+    it("rejects a blank entrypoint part, hostname, or label key", () => {
+        expect.assertions(3);
+
+        expect(() => defineContainer({ entrypoint: ["node", "   "], image: "./app" })).toThrow("`entrypoint` must be a non-empty");
+        expect(() => defineContainer({ allowedHosts: ["  "], image: "./app" })).toThrow("`allowedHosts` must be an array of non-empty");
+        expect(() => defineContainer({ image: "./app", labels: { "  ": "x" } })).toThrow("`labels` must be a record of non-empty");
     });
 
     it("rejects an empty or out-of-range requiredPorts", () => {

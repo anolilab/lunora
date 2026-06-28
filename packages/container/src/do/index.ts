@@ -86,8 +86,23 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
             this.pingEndpoint = definition.pingEndpoint;
         }
 
+        if (definition.labels !== undefined) {
+            this.labels = { ...definition.labels };
+        }
+
         this.lunoraName = exportName ?? "container";
         this.lunoraJurisdiction = jurisdiction;
+    }
+
+    public override async onActivityExpired(): Promise<void> {
+        // The container slept after its `sleepAfter` idle window. Surfacing it
+        // makes the WebSocket-keepalive gap (cloudflare/containers#147) visible
+        // in the dev log + Studio rather than a silent disappearance.
+        const envelope = emitContainerLifecycle(this.lunoraName, this.instanceId(), "sleep");
+
+        this.surfaceInStudioLogs(envelope);
+
+        await super.onActivityExpired();
     }
 
     public override onError(error: unknown): unknown {

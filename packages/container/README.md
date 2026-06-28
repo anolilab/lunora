@@ -66,6 +66,7 @@ export const transcoder = defineContainer({
     maxInstances: 5,
     sleepAfter: "5m",
     secrets: ["TRANSCODER_API_KEY"], // forwarded from Worker secrets / .dev.vars
+    labels: { team: "media" }, // metadata attached to every instance for metrics/observability
 });
 ```
 

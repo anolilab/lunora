@@ -66,8 +66,8 @@ describe(LunoraContainer, () => {
         expect(instance.envVars).toStrictEqual({ API_KEY: "s3cret", LOG_LEVEL: "info" });
     });
 
-    it("applies the multi-port and egress-firewall fields onto the Container base", () => {
-        expect.assertions(6);
+    it("applies the multi-port, egress-firewall, and labels fields onto the Container base", () => {
+        expect.assertions(7);
 
         const definition = defineContainer({
             allowedHosts: ["*.stripe.com"],
@@ -75,6 +75,7 @@ describe(LunoraContainer, () => {
             entrypoint: ["node", "server.js"],
             image: "./app",
             interceptHttps: true,
+            labels: { env: "prod", tenant: "acme" },
             pingEndpoint: "/healthz",
             requiredPorts: [8080, 9090],
         });
@@ -84,6 +85,7 @@ describe(LunoraContainer, () => {
             deniedHosts: string[];
             entrypoint: string[];
             interceptHttps: boolean;
+            labels: Record<string, string>;
             pingEndpoint: string;
             requiredPorts: number[];
         };
@@ -94,6 +96,7 @@ describe(LunoraContainer, () => {
         expect(instance.allowedHosts).toStrictEqual(["*.stripe.com"]);
         expect(instance.deniedHosts).toStrictEqual(["*.evil.com"]);
         expect(instance.pingEndpoint).toBe("/healthz");
+        expect(instance.labels).toStrictEqual({ env: "prod", tenant: "acme" });
     });
 
     it("fails fast when a declared secret is missing from the worker env", () => {
@@ -139,6 +142,24 @@ describe("lunoraContainer lifecycle logging", () => {
         await build().onStop({ exitCode: 137, reason: "runtime_signal" });
 
         expect(JSON.parse((spy.mock.calls.at(-1)![0] as string) ?? "{}")).toMatchObject({ event: "stop", message: "runtime_signal (exit 137)" });
+    });
+
+    it("emits a sleep event when activity expires", async () => {
+        expect.assertions(1);
+
+        const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+        await build().onActivityExpired();
+
+        // Our envelope is logged before `super.onActivityExpired()`'s own plain
+        // line, so it's the first call.
+        expect(JSON.parse((spy.mock.calls[0]![0] as string) ?? "{}")).toMatchObject({
+            container: "transcoder",
+            event: "sleep",
+            level: "info",
+            source: "lunora",
+            type: "container",
+        });
     });
 
     it("emits an error event and re-throws (the base onError contract)", () => {

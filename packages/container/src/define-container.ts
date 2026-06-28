@@ -181,11 +181,13 @@ const assertValidPort = (port: number, field: string): void => {
 };
 
 /**
- * Validate the multi-port and egress-firewall fields. All are runtime
- * properties the generated class applies onto the `Container` base, so they're
- * caught here at authoring time rather than failing inside the worker.
+ * Validate the runtime fields the generated class applies onto the `Container`
+ * base after `super()` — multi-port, the egress firewall, and observability
+ * `labels`. Caught here at authoring time rather than failing inside the
+ * worker. Blank (whitespace-only) strings are rejected too, since they'd reach
+ * the platform as bogus hostnames/paths.
  */
-const assertValidPortsAndEgress = (config: ContainerConfig): void => {
+const assertValidContainerRuntimeFields = (config: ContainerConfig): void => {
     if (config.requiredPorts !== undefined) {
         if (config.requiredPorts.length === 0) {
             throw new TypeError("defineContainer: `requiredPorts` must be a non-empty array of ports, or omitted");
@@ -198,7 +200,7 @@ const assertValidPortsAndEgress = (config: ContainerConfig): void => {
 
     if (
         config.entrypoint !== undefined &&
-        (config.entrypoint.length === 0 || config.entrypoint.some((part) => typeof part !== "string" || part.length === 0))
+        (config.entrypoint.length === 0 || config.entrypoint.some((part) => typeof part !== "string" || part.trim().length === 0))
     ) {
         throw new TypeError("defineContainer: `entrypoint` must be a non-empty array of non-empty strings, or omitted");
     }
@@ -206,13 +208,19 @@ const assertValidPortsAndEgress = (config: ContainerConfig): void => {
     for (const field of ["allowedHosts", "deniedHosts"] as const) {
         const hosts = config[field];
 
-        if (hosts?.some((host) => typeof host !== "string" || host.length === 0)) {
+        if (hosts?.some((host) => typeof host !== "string" || host.trim().length === 0)) {
             throw new TypeError(`defineContainer: \`${field}\` must be an array of non-empty hostname patterns`);
         }
     }
 
-    if (config.pingEndpoint !== undefined && (typeof config.pingEndpoint !== "string" || config.pingEndpoint.length === 0)) {
+    if (config.pingEndpoint !== undefined && (typeof config.pingEndpoint !== "string" || config.pingEndpoint.trim().length === 0)) {
         throw new TypeError("defineContainer: `pingEndpoint` must be a non-empty path string");
+    }
+
+    for (const [key, value] of Object.entries(config.labels ?? {})) {
+        if (key.trim().length === 0 || typeof value !== "string") {
+            throw new TypeError("defineContainer: `labels` must be a record of non-empty keys to string values");
+        }
     }
 };
 
@@ -246,7 +254,7 @@ const defineContainer = (config: ContainerConfig): ContainerDefinition => {
     }
 
     assertValidEnvAndSecrets(config);
-    assertValidPortsAndEgress(config);
+    assertValidContainerRuntimeFields(config);
 
     return { ...config, isLunoraContainer: true };
 };
