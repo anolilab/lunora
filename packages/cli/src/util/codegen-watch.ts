@@ -8,58 +8,16 @@ import type { FSWatcher } from "node:fs";
 import { existsSync, watch } from "node:fs";
 import { join } from "node:path";
 
-import type { CodegenOptions, LunoraSolution } from "@lunora/codegen";
-import { findLunoraSolution, runCodegen } from "@lunora/codegen";
-import { renderError, VisulimaError } from "@visulima/error";
+import type { CodegenOptions } from "@lunora/codegen";
+import { runCodegen } from "@lunora/codegen";
 
+import { renderCodegenFailure } from "./codegen-error";
 import type { Logger } from "./logger";
 
 const DEFAULT_DEBOUNCE_MS = 100;
 
 /** Splits a watch filename into path segments to detect `_generated` writes. */
 const PATH_SEGMENT_SEPARATOR = /[/\\]/u;
-
-/**
- * Adapt a Lunora solution's Markdown body into an `@visulima/error` hint — a
- * list of plain-text blocks with code-fence markers and inline `**bold**` /
- * `` `code` `` emphasis stripped. The Markdown is authored for the Vite
- * overlay's browser renderer; `renderError` (below) lays the hint out and
- * colors it for the terminal, so here we only flatten content it can't render.
- */
-const solutionToHint = (solution: LunoraSolution): string[] => {
-    const body = solution.body
-        .split("\n")
-        .filter((line) => !line.startsWith("```"))
-        .join("\n")
-        .replaceAll(/\*\*(.+?)\*\*/gu, "$1")
-        .replaceAll(/`([^`]+)`/gu, "$1");
-
-    return [solution.header, "", body];
-};
-
-/**
- * Render a failed codegen run for the terminal through `@visulima/error` — the
- * same renderer cerebro uses for thrown CLI errors — attaching the matched
- * Lunora fix as the error's `hint` (the overlay shows the same fix as a solution
- * panel). The internal stack is suppressed: in a watch loop the codegen call
- * site is noise; the message plus an actionable hint is what helps.
- */
-const renderCodegenFailure = (error: unknown, reason: string): string => {
-    const message = error instanceof Error ? error.message : String(error);
-    const solution = findLunoraSolution(message);
-
-    const rendered = new VisulimaError({
-        hint: solution ? solutionToHint(solution) : undefined,
-        message: `codegen failed (${reason}): ${message}`,
-        name: "CodegenError",
-    });
-
-    // No useful frames for a dev watch loop — drop the stack so the output is
-    // just the failure line and the fix hint.
-    rendered.stack = "";
-
-    return renderError(rendered, { filterStacktrace: () => false, hideErrorCodeView: true });
-};
 
 /** Run codegen once, logging success or surfacing a parse/emit error without throwing. */
 const runOnce = (projectRoot: string, lunoraDirectory: string, apiSpec: CodegenOptions["apiSpec"], logger: Logger, reason: string): void => {
@@ -170,5 +128,3 @@ export interface CodegenWatcherHandle {
      */
     watchAvailable: boolean;
 }
-
-export { renderCodegenFailure };
