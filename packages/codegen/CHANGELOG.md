@@ -1,3 +1,9 @@
+## @lunora/codegen [1.0.0-alpha.13](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.12...@lunora/codegen@1.0.0-alpha.13) (2026-06-28)
+
+### Features
+
+* **vite:** error-overlay solution finders ([#42](https://github.com/anolilab/lunora/issues/42)) ([33097e2](https://github.com/anolilab/lunora/commit/33097e2d5638b3e924c506eb5e161e9a20ea6f6f))
+
 ## @lunora/codegen [1.0.0-alpha.12](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.11...@lunora/codegen@1.0.0-alpha.12) (2026-06-28)
 
 ### Features
