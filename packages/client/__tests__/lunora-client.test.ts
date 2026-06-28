@@ -325,6 +325,72 @@ describe("lunoraClient", () => {
         });
     });
 
+    // --- Custom-mutator watermark ----------------------------------------------
+
+    describe("lunoraClient — callMutator watermark", () => {
+        it("sends the client id + seq and reports applied when the DO runs the push as next", async () => {
+            expect.assertions(4);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ lastMutationId: 1, result: "ok" }));
+
+            const client = new LunoraClient({
+                clientId: "client-A",
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const ack = await client.callMutator("messages:send", { text: "hi" }, { clientSeq: 1, shardKey: "room-1" });
+
+            expect(ack).toStrictEqual({ applied: true, result: "ok" });
+            expect(client.confirmedMutationWatermark("room-1")).toBe(1);
+
+            const headers = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].headers as Record<string, string>;
+
+            expect(headers["x-lunora-client-id"]).toBe("client-A");
+            expect(headers["x-lunora-client-seq"]).toBe("1");
+        });
+
+        it("reports applied=false and surfaces the echoed watermark when the DO swallows a stale push as a replay", async () => {
+            expect.assertions(2);
+
+            // The server's replay ack echoes its (higher) stored watermark with a
+            // null result — clientSeq 1 was already applied in a prior session.
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ lastMutationId: 5, result: null }));
+
+            const client = new LunoraClient({
+                clientId: "client-A",
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const ack = await client.callMutator("messages:send", { text: "hi" }, { clientSeq: 1, shardKey: "room-1" });
+
+            expect(ack).toStrictEqual({ applied: false, result: null });
+            // The client now knows the real watermark, so the next seq can clear it.
+            expect(client.confirmedMutationWatermark("room-1")).toBe(5);
+        });
+
+        it("tracks the watermark per shard bucket", async () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ lastMutationId: 3, result: null }));
+
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await client.callMutator("messages:send", {}, { clientSeq: 3, shardKey: "room-1" });
+
+            expect(client.confirmedMutationWatermark("room-1")).toBe(3);
+            // A different shard keeps its own watermark (untouched).
+            expect(client.confirmedMutationWatermark("room-2")).toBe(0);
+        });
+    });
+
     // --- Subscriptions ----------------------------------------------------------
 
     describe("lunoraClient — subscriptions", () => {

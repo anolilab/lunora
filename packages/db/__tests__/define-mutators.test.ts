@@ -29,6 +29,9 @@ vi.mock(
 // eslint-disable-next-line import/first -- must follow the vi.mock above
 import { bindMutators, defineMutator } from "../src/define-mutators";
 
+/** The reissue-exhaustion error message the runtime throws after `maxReissues`. */
+const REISSUE_EXHAUSTED = /could not claim a fresh client sequence/;
+
 /** A mock collection that records the optimistic ops an `apply` body issues. */
 const mockCollection = () => {
     const inserted: unknown[] = [];
@@ -39,10 +42,12 @@ const mockCollection = () => {
 describe(bindMutators, () => {
     it("runs the optimistic body and pushes the server write under a monotonic clientSeq", async () => {
         configs.length = 0;
-        const callMutator = vi.fn<(path: string, args: Record<string, unknown>, options: { clientSeq: number; shardKey?: string }) => Promise<unknown>>(
-            async () => "ok",
-        );
-        const client = { callMutator } as never;
+        const callMutator = vi.fn<
+            (path: string, args: Record<string, unknown>, options: { clientSeq: number; shardKey?: string }) => Promise<{ applied: boolean; result: unknown }>
+        >(async () => {
+            return { applied: true, result: "ok" };
+        });
+        const client = { callMutator, confirmedMutationWatermark: () => 0 } as never;
         const { collection, inserted } = mockCollection();
 
         const mutators = {
@@ -76,7 +81,12 @@ describe(bindMutators, () => {
 
     it("holds the overlay until the checkpoint registry echoes the watermark", async () => {
         configs.length = 0;
-        const client = { callMutator: async () => "ok" } as never;
+        const client = {
+            callMutator: async () => {
+                return { applied: true, result: "ok" };
+            },
+            confirmedMutationWatermark: () => 0,
+        } as never;
         const { collection } = mockCollection();
 
         let resolved = false;
@@ -101,5 +111,98 @@ describe(bindMutators, () => {
 
         expect(checkpoints.awaitMutationId).toHaveBeenCalledWith(1);
         expect(resolved).toBe(true);
+    });
+
+    it("seeds clientSeq from the server's confirmed watermark so a reload doesn't reissue a stale sequence", async () => {
+        configs.length = 0;
+        // A reload reset the in-memory counter, but the server already advanced
+        // this client's durable watermark to 5 (echoed back via the client).
+        const callMutator = vi.fn<
+            (path: string, args: Record<string, unknown>, options: { clientSeq: number; shardKey?: string }) => Promise<{ applied: boolean; result: unknown }>
+        >(async () => {
+            return { applied: true, result: "ok" };
+        });
+        const client = { callMutator, confirmedMutationWatermark: () => 5 } as never;
+        const { collection } = mockCollection();
+
+        const bound = bindMutators(
+            client,
+            { collections: { messages: collection }, shardKey: "room-1" },
+            { send: defineMutator<{ text: string }>({ apply: () => undefined, serverRef: "messages:send" }) },
+        );
+
+        bound.send({ text: "after reload" });
+
+        // The first post-reload push starts at watermark + 1, not 1.
+        expect(configs[0]?.metadata).toStrictEqual({ clientSeq: 6, serverRef: "messages:send" });
+
+        await configs[0]?.mutationFn();
+
+        expect(callMutator).toHaveBeenCalledWith("messages:send", { text: "after reload" }, { clientSeq: 6, shardKey: "room-1" });
+    });
+
+    it("reissues above the echoed watermark when the server swallows a stale push as a replay", async () => {
+        configs.length = 0;
+        // Cold start: the client doesn't yet know the watermark (0), so its first
+        // push uses clientSeq 1 — which the DO has already applied. The replay ack
+        // (`applied: false`) teaches the client the real watermark (3); the runtime
+        // then reissues above it instead of treating the benign ack as a write.
+        let watermark = 0;
+        const calls: number[] = [];
+        const callMutator = vi.fn<
+            (path: string, args: Record<string, unknown>, options: { clientSeq: number; shardKey?: string }) => Promise<{ applied: boolean; result: unknown }>
+        >(async (_path, _args, options) => {
+            calls.push(options.clientSeq);
+
+            if (options.clientSeq <= 3) {
+                watermark = 3;
+
+                return { applied: false, result: null };
+            }
+
+            watermark = options.clientSeq;
+
+            return { applied: true, result: "ok" };
+        });
+        const client = { callMutator, confirmedMutationWatermark: () => watermark } as never;
+        const { collection } = mockCollection();
+
+        const bound = bindMutators(
+            client,
+            { collections: { messages: collection }, shardKey: "room-1" },
+            { send: defineMutator<{ text: string }>({ apply: () => undefined, serverRef: "messages:send" }) },
+        );
+
+        bound.send({ text: "fresh" });
+        await configs[0]?.mutationFn();
+
+        // First push at 1 (stale → replay ack), reissued at 4 (watermark 3 + 1).
+        expect(calls).toStrictEqual([1, 4]);
+    });
+
+    it("throws rather than reissuing forever when a push is never accepted", async () => {
+        configs.length = 0;
+        // Pathological server: every push is rejected as a replay and the watermark
+        // keeps racing ahead, so the runtime can never claim a fresh sequence.
+        let watermark = 0;
+        const callMutator = vi.fn<
+            (path: string, args: Record<string, unknown>, options: { clientSeq: number; shardKey?: string }) => Promise<{ applied: boolean; result: unknown }>
+        >(async (_path, _args, options) => {
+            watermark = options.clientSeq + 10;
+
+            return { applied: false, result: null };
+        });
+        const client = { callMutator, confirmedMutationWatermark: () => watermark } as never;
+        const { collection } = mockCollection();
+
+        const bound = bindMutators(
+            client,
+            { collections: { messages: collection }, shardKey: "room-1" },
+            { send: defineMutator({ apply: () => undefined, serverRef: "messages:send" }) },
+        );
+
+        bound.send({});
+
+        await expect(configs[0]?.mutationFn()).rejects.toThrow(REISSUE_EXHAUSTED);
     });
 });

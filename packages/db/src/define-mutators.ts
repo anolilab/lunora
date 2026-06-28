@@ -82,23 +82,66 @@ export type BoundMutators<M extends AnyMutatorMap> = {
  * over the latest synced base on each sync tick. The overlay is dropped when the
  * server confirms the write (and, if `checkpoints` is supplied, once it echoes the
  * matching watermark so the synced row has landed).
+ *
+ * The `clientSeq` generator is seeded from the server's echoed watermark
+ * ({@link LunoraClient.confirmedMutationWatermark}) on every issue, so a reload —
+ * which resets this in-memory counter while the server keeps a durable per-client
+ * watermark — never reissues a sequence the DO has already applied. As a backstop
+ * for the very first push of a fresh session (before any ack has taught the client
+ * the watermark), a push the DO swallows as a replay (`applied === false`) is
+ * reissued above the now-known watermark instead of being mistaken for a confirmed
+ * write — closing the silent-drop window without risking a double-apply (a fresh
+ * session's first stale push provably cannot be an honest replay).
  */
 export const bindMutators = <M extends AnyMutatorMap>(client: LunoraClient, context: BindMutatorsContext, mutators: M): BoundMutators<M> => {
+    // Backstop bound on the reissue loop: the watermark is finite and each retry
+    // strictly raises the sequence toward it, so this only trips on a pathological
+    // server (or a same-clientId tab racing the watermark forever) — surfaced as a
+    // hard error rather than an infinite loop.
+    const maxReissues = 32;
     let counter = 0;
+
+    // Seed `counter` from the highest watermark the server has confirmed for this
+    // shard, then claim the next sequence — keeping issuance monotonic across reloads.
+    const nextClientSeq = (): number => {
+        counter = Math.max(counter, client.confirmedMutationWatermark(context.shardKey)) + 1;
+
+        return counter;
+    };
+
     const bound: Record<string, (args: unknown) => Transaction> = {};
 
     for (const [name, mutator] of Object.entries(mutators)) {
         bound[name] = (args) => {
-            counter += 1;
-            const clientSeq = counter;
+            let clientSeq = nextClientSeq();
 
             const transaction = createTransaction({
                 autoCommit: true,
                 metadata: { clientSeq, serverRef: mutator.serverRef },
                 mutationFn: async () => {
-                    await runOutboxMutation(() =>
-                        client.callMutator(mutator.serverRef, args as Record<string, unknown>, { clientSeq, shardKey: context.shardKey }),
-                    );
+                    await runOutboxMutation(async () => {
+                        for (let attempt = 0; ; attempt += 1) {
+                            // eslint-disable-next-line no-await-in-loop -- sequential by design: each reissue must observe the prior ack's watermark before claiming a fresh sequence
+                            const { applied } = await client.callMutator(mutator.serverRef, args as Record<string, unknown>, {
+                                clientSeq,
+                                shardKey: context.shardKey,
+                            });
+
+                            if (applied) {
+                                return;
+                            }
+
+                            if (attempt >= maxReissues) {
+                                throw new Error(
+                                    `lunora: custom mutator "${mutator.serverRef}" could not claim a fresh client sequence after ${String(maxReissues)} attempts`,
+                                );
+                            }
+
+                            // The DO swallowed this push as a replay (a stale `clientSeq`
+                            // after a reload). Reissue above the watermark it just echoed.
+                            clientSeq = nextClientSeq();
+                        }
+                    });
 
                     // Hold the overlay until the synced row lands (the poke echoes
                     // this client's `lastMutationId`). Skipped when no watermark
