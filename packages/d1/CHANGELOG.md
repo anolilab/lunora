@@ -1,3 +1,15 @@
+## @lunora/d1 [1.0.0-alpha.7](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.6...@lunora/d1@1.0.0-alpha.7) (2026-06-28)
+
+### Documentation
+
+* fix package doc bugs and dead cross-links ([205d74c](https://github.com/anolilab/lunora/commit/205d74c3b730e201e822141191b45015f303336b))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.7
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.7
+
 ## @lunora/d1 [1.0.0-alpha.6](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.5...@lunora/d1@1.0.0-alpha.6) (2026-06-27)
 
 ### Features

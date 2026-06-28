@@ -67,8 +67,12 @@ const createFakeWebSocket = (): FakeWebSocket => {
 // Fake DO state — omits `waitUntil` so `flushChangedTables` runs synchronously
 // inside the same microtask, making post-mutation assertions deterministic.
 // ---------------------------------------------------------------------------
-const createFakeState = (): ShardDOState & { sockets: FakeWebSocket[] } => {
+// Pass `waitUntilSink` to opt INTO a `waitUntil` that records scheduled work
+// (the coalescing test needs `flushChangedTables` to defer instead of awaiting
+// inline). Omit it for the default synchronous-flush behavior most cases rely on.
+const createFakeState = (options: { waitUntilSink?: Promise<unknown>[] } = {}): ShardDOState & { sockets: FakeWebSocket[] } => {
     const sockets: FakeWebSocket[] = [];
+    const { waitUntilSink } = options;
 
     return {
         acceptWebSocket(ws) {
@@ -85,6 +89,13 @@ const createFakeState = (): ShardDOState & { sockets: FakeWebSocket[] } => {
                 },
             },
         },
+        ...(waitUntilSink === undefined
+            ? {}
+            : {
+                  waitUntil(promise: Promise<unknown>) {
+                      waitUntilSink.push(promise);
+                  },
+              }),
     };
 };
 
@@ -611,5 +622,143 @@ describe("shardDO: mutation → subscription-refresh pipeline", () => {
         // No new data/delta frame after the seed — the expired socket was dropped.
         expect(subFrames(ws, "sub-A")).toHaveLength(1);
         expect(ws.closed).toBe(true);
+    });
+
+    // -------------------------------------------------------------------------
+    // Case 8 — DELIVERY DURABILITY (at-least-once on the next relevant flush)
+    //
+    // `pushSubscriptionData` advances a subscription's diff BASELINE only after
+    // the frame actually leaves the socket. If a push throws (the socket's
+    // outbound buffer is gone but the socket is still in `getWebSockets()`), the
+    // baseline must stay at the last DELIVERED value so the next write-flush
+    // re-sends. The pre-fix code advanced the baseline before/regardless of the
+    // send, so a single dropped frame combined with the no-op suppression guard
+    // (`existing.lastJson === json`) stranded the client on a stale value until
+    // it reconnected.
+    //
+    // We use an object result so every push is a full `{type:"data"}` snapshot
+    // (no list-delta path), making the delivered-value sequence unambiguous.
+    // -------------------------------------------------------------------------
+    it("delivery durability: a dropped frame keeps the diff baseline so the next refresh re-delivers", async () => {
+        expect.assertions(3);
+
+        const shard = new SubscriptionRefreshShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("counter:get", { result: { value: 1 }, tables: new Set(["counter"]) });
+        await subscribeSocket(shard, ws, "sub-A", "counter:get");
+
+        // The seed value was delivered.
+        expect(dataFrames(ws, "sub-A")).toStrictEqual([{ value: 1 }]);
+
+        // Make the NEXT push fail, as if the socket's outbound buffer were gone
+        // while the socket is still enumerated by `getWebSockets()`.
+        const realSend = ws.send.bind(ws);
+        let failNext = true;
+
+        ws.send = (data: string) => {
+            if (failNext) {
+                throw new Error("send failed: socket buffer gone");
+            }
+
+            realSend(data);
+        };
+
+        // Mutate → value 2. The push throws and is swallowed; the client never
+        // sees it AND (with the fix) the baseline stays at the delivered value 1.
+        shard.outcomes.set("counter:get", { result: { value: 2 }, tables: new Set(["counter"]) });
+        shard.changedTableOnRpc = "counter";
+        await shard.writeRpc();
+
+        expect(dataFrames(ws, "sub-A")).toStrictEqual([{ value: 1 }]); // still only the seed reached the client
+
+        // Socket recovers; a later refresh recomputes the SAME value 2.
+        failNext = false;
+        await shard.writeRpc();
+
+        // The baseline never advanced past the delivered value 1, so value 2 is
+        // (re)delivered now. Pre-fix the baseline was corrupted to the never-sent
+        // value 2 and the no-op guard suppressed this push, stranding the client.
+        expect(dataFrames(ws, "sub-A")).toStrictEqual([{ value: 1 }, { value: 2 }]);
+    });
+
+    // -------------------------------------------------------------------------
+    // Case 9 — FLUSH COALESCING (single-waiter)
+    //
+    // A burst of mutations that all land while a refresh pass is already in
+    // flight must collapse into ONE additional pass, not one pass per write.
+    // `flushChangedTables` merges each write's tables into a shared pending set
+    // and only starts a drain when none is running; the drain loop picks up the
+    // merged tables in a single catch-up pass. Pre-coalescing, each write
+    // scheduled its own `refreshSubscriptions`, so N writes re-ran every live
+    // query N times.
+    //
+    // The fake state here PROVIDES `waitUntil`, so `flushChangedTables` schedules
+    // the drain and returns immediately — letting writes 2+ land while pass 1 is
+    // blocked on a gate.
+    // -------------------------------------------------------------------------
+    it("flush coalescing: writes during an in-flight refresh share a single extra pass", async () => {
+        expect.assertions(2);
+
+        const pending: Promise<unknown>[] = [];
+        const wuState = createFakeState({ waitUntilSink: pending });
+
+        let releaseGate: () => void = () => {};
+        const gate = new Promise<void>((resolve) => {
+            releaseGate = resolve;
+        });
+
+        class GatedRefreshShard extends SubscriptionRefreshShard {
+            public gateRefreshes = false;
+
+            public refreshExecs = 0;
+
+            protected override async executeSubscription(functionPath: string, args: Record<string, unknown>): Promise<SubscriptionOutcome | null> {
+                if (this.gateRefreshes) {
+                    this.refreshExecs += 1;
+
+                    if (this.refreshExecs === 1) {
+                        // Block the FIRST refresh pass so a burst of writes piles
+                        // up behind the in-flight gate.
+                        await gate;
+                    }
+                }
+
+                return super.executeSubscription(functionPath, args);
+            }
+        }
+
+        const shard = new GatedRefreshShard(wuState, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("messages:list", { result: [{ _id: "m1" }], tables: new Set(["messages"]) });
+        await subscribeSocket(shard, ws, "sub-A", "messages:list");
+
+        // Gate refreshes from here on; the seed already ran ungated. Give the
+        // refreshes something new to deliver so a frame is actually produced.
+        shard.gateRefreshes = true;
+        shard.changedTableOnRpc = "messages";
+        shard.outcomes.set("messages:list", { result: [{ _id: "m1" }, { _id: "m2" }], tables: new Set(["messages"]) });
+
+        // Burst of three writes. Write 1 starts pass 1, which synchronously sets
+        // the in-flight gate before blocking; writes 2 and 3 see it in-flight and
+        // only MERGE their table, scheduling no new pass.
+        await shard.writeRpc();
+        await shard.writeRpc();
+        await shard.writeRpc();
+
+        // Release pass 1; the drain loop then runs exactly ONE more pass for the
+        // tables coalesced from writes 2 and 3.
+        releaseGate();
+        await Promise.all(pending);
+
+        // Coalesced: 3 writes ⇒ 2 refresh passes (blocked first + one merged
+        // catch-up), not 3. Pre-coalescing this would have been one pass per write.
+        expect(shard.refreshExecs).toBe(2);
+
+        // The socket still converged on the latest value (a frame was delivered).
+        expect(subFrames(ws, "sub-A").length).toBeGreaterThan(1);
     });
 });
