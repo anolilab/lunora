@@ -53,12 +53,17 @@ const callResolveId = (plugin: Plugin, id: string): unknown => {
     return run?.call({} as never, id, undefined, {} as never);
 };
 
-/** Call a plugin's `load` hook regardless of whether it is a fn or `{ handler }`. */
-const callLoad = (plugin: Plugin, id: string): unknown => {
+/**
+ * Call a plugin's `load` hook regardless of whether it is a fn or `{ handler }`.
+ * Vite 8 always runs hooks within an environment context; the worker virtual is
+ * emitted in every non-"client" environment, so the harness defaults to `"ssr"`
+ * (the real-entry path) and callers pass an explicit name when they care.
+ */
+const callLoad = (plugin: Plugin, id: string, environment = "ssr"): unknown => {
     const hook = plugin.load;
     const run = typeof hook === "function" ? hook : hook?.handler;
 
-    return run?.call({} as never, id, undefined as never);
+    return run?.call({ environment: { name: environment } } as never, id, undefined as never);
 };
 
 describe("framework-compose-plugin", () => {
@@ -117,6 +122,23 @@ describe("framework-compose-plugin", () => {
             expect(code).toContain('"/workspace/app/lunora/_generated/functions"');
             expect(code).toContain("createShardDO()");
             expect(code).toContain("shardDO: env.SHARD");
+        });
+
+        it("emits a worker-free stub in the client environment but the real entry in the worker environment", () => {
+            expect.hasAssertions();
+
+            const plugin = frameworkComposePlugin(baseOptions(), context("react-router", "A"));
+
+            // Browser environment: a stub with none of the worker-only runtime, so
+            // an accidental client import can't pull worker code into the bundle.
+            const clientSource = callLoad(plugin, RESOLVED_LUNORA_WORKER_ID, "client") as string;
+
+            expect(clientSource).not.toContain("composeWorker(");
+            expect(clientSource).not.toContain("createShardDO");
+
+            // Worker environment (named after the worker, not "client"): the real
+            // composed entry.
+            expect(callLoad(plugin, RESOLVED_LUNORA_WORKER_ID, "my-worker")).toContain("composeWorker(");
         });
 
         it("honours a custom generatedDir in the emitted imports", () => {

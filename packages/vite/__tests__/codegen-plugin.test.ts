@@ -195,10 +195,14 @@ describe("codegen-plugin", () => {
             send,
             server: {
                 config: { logger: { error: vi.fn<() => void>(), info: vi.fn<() => void>(), warn: vi.fn<() => void>() } },
-                environments: undefined,
+                // Vite 8 always exposes per-environment module graphs; codegen
+                // invalidates the generated dir across all of them.
+                environments: {
+                    client: { moduleGraph: { idToModuleMap: new Map(), invalidateModule: vi.fn<() => void>() } },
+                    worker: { moduleGraph: { idToModuleMap: new Map(), invalidateModule: vi.fn<() => void>() } },
+                },
                 hot: { send },
                 httpServer: undefined,
-                moduleGraph: { idToModuleMap: new Map(), invalidateModule: vi.fn<() => void>() },
                 watcher: { add: vi.fn<() => void>(), off: vi.fn<() => void>(), on: vi.fn<() => void>() },
                 ws: { send: vi.fn<() => void>() },
             } as unknown as import("vite").ViteDevServer,
