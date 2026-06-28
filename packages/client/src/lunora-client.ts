@@ -474,6 +474,9 @@ interface PokeBuffer {
  * see the package README for the wire protocol.
  */
 class LunoraClient {
+    /** Hard cap on concurrently-buffered pokes — a backstop that reclaims buffers abandoned by a mid-poke disconnect (no `pokeEnd`). Far above any real concurrent-in-flight count. */
+    private static readonly MAX_POKE_BUFFERS = 256;
+
     public readonly url: string;
 
     public readonly wsUrl: string;
@@ -759,7 +762,14 @@ class LunoraClient {
         args: Record<string, unknown>,
         options?: { clientSeq?: number; shardKey?: string },
     ): Promise<{ applied: boolean; result: unknown }> {
-        const clientSeq = options?.clientSeq ?? 0;
+        // An omitted `clientSeq` must stay `undefined` — NOT default to 0. A seq of
+        // 0 is `<=` the initial watermark, so the DO classifies the push as an
+        // already-applied replay and acks it WITHOUT running the handler — a silent
+        // dropped write that still reports `applied: true`. Passing `undefined`
+        // sends no `x-lunora-client-seq` header, so the server rides the idempotency
+        // path and runs the mutation exactly once. The `@lunora/db` runtime always
+        // supplies a monotonic seq (≥1); this guards direct callers of the raw API.
+        const clientSeq = options?.clientSeq;
         const bucket = options?.shardKey ?? "";
         let ackWatermark: number | undefined;
 
@@ -3270,6 +3280,20 @@ class LunoraClient {
     }
 
     private handlePokeStart(message: ServerPokeStartMessage): void {
+        // A buffer is dropped at its `pokeEnd`; one whose socket drops mid-poke
+        // (no `pokeEnd`) is abandoned and the server re-seeds on resume, so it
+        // would otherwise linger forever. Bound the map by evicting the oldest
+        // entry (insertion order) once it exceeds the cap — abandoned buffers are
+        // always the oldest, and live pokes resolve within a few frames, so this
+        // only ever reclaims dead buffers in practice.
+        if (this.pokeBuffers.size >= LunoraClient.MAX_POKE_BUFFERS) {
+            const oldest = this.pokeBuffers.keys().next().value;
+
+            if (oldest !== undefined) {
+                this.pokeBuffers.delete(oldest);
+            }
+        }
+
         // Open a buffer for this poke. Parts accumulate per shape and apply
         // atomically at `pokeEnd`, so a socket dropping mid-poke leaves the view
         // untouched and re-seeds on reconnect (no torn state).

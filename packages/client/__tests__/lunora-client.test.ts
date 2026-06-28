@@ -372,6 +372,31 @@ describe("lunoraClient", () => {
             expect(client.confirmedMutationWatermark("room-1")).toBe(5);
         });
 
+        it("omits the seq header when no clientSeq is given so the push rides the idempotency path", async () => {
+            expect.assertions(3);
+
+            // No `lastMutationId` echo — a non-watermarked call the DO ran once.
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: "ok" }));
+
+            const client = new LunoraClient({
+                clientId: "client-A",
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            // No `clientSeq` — must NOT default to 0 (a seq of 0 is `<=` the initial
+            // watermark, which the DO would swallow as a replay without running it).
+            const ack = await client.callMutator("messages:send", { text: "hi" });
+
+            expect(ack).toStrictEqual({ applied: true, result: "ok" });
+
+            const headers = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].headers as Record<string, string>;
+
+            expect(headers["x-lunora-client-id"]).toBe("client-A");
+            expect(headers["x-lunora-client-seq"]).toBeUndefined();
+        });
+
         it("tracks the watermark per shard bucket", async () => {
             expect.assertions(2);
 
