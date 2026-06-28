@@ -42,6 +42,8 @@ export type { MaskColumns, MaskContext, MaskFn, MaskOptions, MaskPolicies, MaskS
 export { mask } from "./mask/index";
 export type { MigrationDefinition, MigrationDocument, MigrationTransform, RegisteredMigration } from "./migration";
 export { defineMigration } from "./migration";
+export type { MutatorDefinition, RegisteredMutator } from "./mutators";
+export { defineMutator } from "./mutators";
 export type { Component, ComponentFunctions, DefineComponentOptions, DefinePluginOptions, Plugin, PrefixedTables, SchemaExtension } from "./plugin";
 export { composePluginMiddleware, defineComponent, definePlugin, defineSchemaExtension, installPlugins, mergeSchemaExtension } from "./plugin";
 export type { DefinePresenceOptions, PresenceComponent, PresenceFunctions, PresenceMember } from "./presence";
@@ -76,6 +78,8 @@ export type {
     VectorizeOptions,
 } from "./schema";
 export { defineAggregateIndex, defineRankIndex, defineSchema, defineTable, defineVectorIndex } from "./schema";
+export type { RegisteredShape, ShapeDefinition } from "./shapes";
+export { defineShape } from "./shapes";
 export type { DefineStorageRuleInput, StorageOperation, StorageRule, StorageRuleContext, StorageRuleDecision, StorageRulesOptions } from "./storage/index";
 export { defineStorageRule, defineStorageRules, storageRules } from "./storage/index";
 export type {
