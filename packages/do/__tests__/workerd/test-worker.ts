@@ -14,15 +14,19 @@
  */
 import { DurableObject } from "cloudflare:workers";
 
+import type { DatabaseWriterLike } from "../../src/ctx-db";
+import { createShardCtxDb, runShardMigrations } from "../../src/ctx-db";
 import { SessionDO } from "../../src/session-do";
 import type { ShardDOState } from "../../src/shard-do";
 import { ShardDO } from "../../src/shard-do";
 import type { MutationDelta } from "../../src/types";
+import messagesSchema from "../_helpers/messages-schema";
 
 interface Env {
     LUNORA_ALLOWED_ORIGINS?: string;
     SESSION: DurableObjectNamespace<TestSessionDO>;
     SHARD: DurableObjectNamespace<TestShardDO>;
+    SYNC: DurableObjectNamespace<TestSyncDO>;
 }
 
 class ConcreteShard extends ShardDO {
@@ -74,6 +78,113 @@ class TestShardDO extends DurableObject<Env> {
     }
 }
 
+/**
+ * A real, sync-engine-capable `ShardDO` for the local-first poke protocol e2e.
+ *
+ * Unlike {@link ConcreteShard} (an RPC echo), this subclass runs migrations and
+ * writes through a real `createShardCtxDb` writer inside the live Durable
+ * Object, so the full pipeline executes against workerd's SQLite + the
+ * Hibernation WebSocket API.
+ *
+ * The `messagesByChannel(channelId)` shape seeds the current membership on
+ * `shape_subscribe` and each write pokes the membership diff. The
+ * `messages:sendMutator` custom mutator orders a watermarked push (`clientId` +
+ * numeric `clientSeq`) against `__client_watermark`, writes authoritatively, and
+ * echoes the applied `lastMutationId` on the response.
+ */
+class ConcreteSyncShard extends ShardDO {
+    private migrated = false;
+
+    private writer: DatabaseWriterLike | undefined;
+
+    public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+        const writer = this.getWriter();
+
+        switch (functionPath) {
+            case "messages:remove": {
+                await writer.delete(args["_id"] as string);
+
+                break;
+            }
+            case "messages:send":
+            case "messages:sendMutator": {
+                await writer.insert(
+                    "messages",
+                    { _id: args["_id"], authorId: "u1", channelId: args["channelId"], text: args["text"] ?? "x" },
+                    { allowExplicitId: true },
+                );
+
+                break;
+            }
+            default: {
+                break;
+            }
+        }
+
+        this.recordChangedTable("messages");
+
+        return { id: args["_id"], ok: true };
+    }
+
+    // eslint-disable-next-line class-methods-use-this -- override classifies by `functionPath` alone, no instance state.
+    protected override isCustomMutator(functionPath: string): boolean {
+        return functionPath === "messages:sendMutator";
+    }
+
+    protected override resolveShape(name: string, args: Record<string, unknown>): { effectiveWhere?: Record<string, unknown>; table: string } | undefined {
+        this.ensureMigrated();
+
+        if (name !== "messagesByChannel") {
+            return undefined;
+        }
+
+        return { effectiveWhere: { channelId: args["channelId"] }, table: "messages" };
+    }
+
+    protected override ensureMigrated(): void {
+        if (this.migrated) {
+            return;
+        }
+
+        runShardMigrations(this.sql as Parameters<typeof runShardMigrations>[0], messagesSchema, { cdc: true });
+        this.migrated = true;
+    }
+
+    private getWriter(): DatabaseWriterLike {
+        this.ensureMigrated();
+        this.writer ??= createShardCtxDb({
+            broadcast: () => undefined,
+            cdc: true,
+            clock: () => 1_700_000_000_000,
+            schema: messagesSchema,
+            sql: this.sql as Parameters<typeof createShardCtxDb>[0]["sql"],
+        });
+
+        return this.writer;
+    }
+}
+
+class TestSyncDO extends DurableObject<Env> {
+    private readonly shard: ConcreteSyncShard;
+
+    public constructor(context: DurableObjectState, env: Env) {
+        super(context, env);
+        this.shard = new ConcreteSyncShard(context as unknown as ShardDOState, env);
+    }
+
+    public override fetch(request: Request): Promise<Response> {
+        return this.shard.fetch(request);
+    }
+
+    public override webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+        return this.shard.webSocketMessage(ws, message);
+    }
+
+    public override webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
+        return this.shard.webSocketClose(ws, code, reason, wasClean);
+    }
+}
+
 class TestSessionDO extends DurableObject<Env> {
     private readonly session: SessionDO;
 
@@ -94,5 +205,5 @@ const handler = {
 };
 
 export default handler;
-export { TestSessionDO, TestShardDO };
+export { TestSessionDO, TestShardDO, TestSyncDO };
 export type { Env };
