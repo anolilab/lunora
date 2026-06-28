@@ -62,6 +62,18 @@ type ContainerImageSource = BuildImageSource | RegistryImageSource | string;
 
 interface ContainerConfig {
     /**
+     * Hostnames the container may reach **even when {@link ContainerConfig.enableInternet}
+     * is `false`** — an egress allow-list (Cloudflare's `allowedHosts`). Glob
+     * patterns like `*.stripe.com` are supported. Pair with `enableInternet:
+     * false` to deny all egress except these hosts (the firewall pattern
+     * upstream issue cloudflare/containers#30 asked for). The interception path
+     * needs the `ContainerProxy` worker entrypoint, which codegen re-exports
+     * from the generated container file automatically; the named-instance
+     * handle's `egress` controls adjust the lists at runtime.
+     */
+    allowedHosts?: ReadonlyArray<string>;
+
+    /**
      * Build-time variables for a Dockerfile/Railpack image — wrangler's
      * `image_vars` (equivalent to `docker build --build-arg`). For *runtime*
      * values use {@link ContainerConfig.env} / {@link ContainerConfig.secrets}.
@@ -71,16 +83,34 @@ interface ContainerConfig {
 
     /**
      * The port the container listens on. Worker → container requests target
-     * this port. Locally the Dockerfile must also `EXPOSE` it.
+     * this port. Locally the Dockerfile must also `EXPOSE` it. For a
+     * multi-port container also declare {@link ContainerConfig.requiredPorts}
+     * and route per request with the handle's `.port(n)`.
      */
     defaultPort?: number;
 
     /**
+     * Hostnames the container may **never** reach — an egress deny-list
+     * (Cloudflare's `deniedHosts`). Overrides everything else, including
+     * `enableInternet: true` and {@link ContainerConfig.allowedHosts}. Glob
+     * patterns like `*.evil.com` are supported.
+     */
+    deniedHosts?: ReadonlyArray<string>;
+
+    /**
      * Whether the container may open outbound internet connections. Defaults
      * to `true` — the platform default. Note that container egress is billed
-     * per GB by Cloudflare.
+     * per GB by Cloudflare. Combine with {@link ContainerConfig.allowedHosts} /
+     * {@link ContainerConfig.deniedHosts} for a precise egress firewall.
      */
     enableInternet?: boolean;
+
+    /**
+     * Default command to run inside the container, overriding the image's
+     * `ENTRYPOINT`/`CMD` (Cloudflare's `entrypoint`). A per-start override is
+     * still available via the named-instance handle's `start({ entrypoint })`.
+     */
+    entrypoint?: ReadonlyArray<string>;
 
     /**
      * Static environment variables passed to the container on every start.
@@ -99,6 +129,15 @@ interface ContainerConfig {
     instanceType?: ContainerInstanceType;
 
     /**
+     * Intercept the container's outbound **HTTPS** traffic so the egress
+     * allow/deny lists apply to TLS connections too (Cloudflare's
+     * `interceptHttps`). Requires the image to trust the Cloudflare CA at
+     * `/etc/cloudflare/certs/cloudflare-containers-ca.crt`. Defaults to `false`
+     * (HTTP egress is gated regardless).
+     */
+    interceptHttps?: boolean;
+
+    /**
      * Maximum number of concurrently *running* instances. Stopped (slept)
      * containers don't count. Also the default pool size for `.any()`.
      */
@@ -109,6 +148,22 @@ interface ContainerConfig {
      * wrangler's own default (worker name + class name + environment).
      */
     name?: string;
+
+    /**
+     * HTTP path Cloudflare polls to decide an instance is healthy
+     * (Cloudflare's `pingEndpoint`). Defaults to `"ping"`. Set this when the
+     * container exposes its readiness check under a different route.
+     */
+    pingEndpoint?: string;
+
+    /**
+     * Ports the container must be listening on before it's considered ready
+     * (Cloudflare's `requiredPorts`) — for multi-port containers. Start-up
+     * waits for every listed port, and the handle's `.port(n)` routes a request
+     * to any of them; {@link ContainerConfig.defaultPort} is the target when a
+     * request doesn't pick one.
+     */
+    requiredPorts?: ReadonlyArray<number>;
 
     /**
      * Rolling-deploy tuning. `stepPercentage` is the share of instances updated

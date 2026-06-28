@@ -26,11 +26,18 @@ interface ContainerInstanceState {
     lastChange?: number;
 }
 
-/** What a handle needs from a Durable Object stub — `fetch` plus the optional lifecycle RPCs the container DO exposes. */
+/** What a handle needs from a Durable Object stub — `fetch` plus the optional lifecycle/egress RPCs the container DO exposes. */
 interface ContainerStubLike {
+    allowHost?: (hostname: string) => Promise<void>;
+    denyHost?: (hostname: string) => Promise<void>;
     destroy?: () => Promise<void>;
     fetch: (input: Request) => Promise<Response>;
     getState?: () => Promise<ContainerInstanceState>;
+    removeAllowedHost?: (hostname: string) => Promise<void>;
+    removeDeniedHost?: (hostname: string) => Promise<void>;
+    renewActivityTimeout?: () => Promise<void>;
+    setAllowedHosts?: (hosts: string[]) => Promise<void>;
+    setDeniedHosts?: (hosts: string[]) => Promise<void>;
     start?: (options?: ContainerStartOptions) => Promise<void>;
     stop?: (signal?: number | string) => Promise<void>;
 }
@@ -81,6 +88,16 @@ interface ContainerHandle {
      * `Request`/URL passes through unchanged.
      */
     fetch: (input: Request | string, init?: RequestInit) => Promise<Response>;
+
+    /**
+     * Return a handle that routes every request to `targetPort` on the
+     * container instead of the definition's `defaultPort` — for multi-port
+     * containers (declare the ports in `requiredPorts`). Sets the
+     * `cf-container-target-port` header the way `@cloudflare/containers`'
+     * `switchPort` does, so it composes with `.get()`, `.any()`, and `.pool()`:
+     * `ctx.containers.app.get("u1").port(9090).fetch("/admin")`.
+     */
+    port: (targetPort: number) => ContainerHandle;
 }
 
 /**
@@ -93,12 +110,49 @@ interface ContainerHandle {
 interface ContainerInstanceHandle extends ContainerHandle {
     /** Stop and discard the instance (its ephemeral disk is lost). */
     destroy: () => Promise<void>;
+
+    /**
+     * Adjust this instance's egress allow/deny lists at runtime — the dynamic
+     * counterpart to the static `allowedHosts`/`deniedHosts` config. Useful for
+     * per-tenant egress policy. Requires the worker to export `ContainerProxy`
+     * (codegen does this automatically when any container declares egress).
+     */
+    egress: ContainerEgressControls;
     /** Read the instance's current runtime state. */
     getState: () => Promise<ContainerInstanceState>;
+
+    /**
+     * Reset the instance's `sleepAfter` idle timer. The platform renews it on
+     * each request automatically, but WebSocket message activity does not yet
+     * renew it (cloudflare/containers#147) — call this on inbound WS traffic to
+     * keep a busy socket's container awake.
+     */
+    renewActivityTimeout: () => Promise<void>;
     /** Explicitly start the instance, optionally with per-instance env/entrypoint. */
     start: (options?: ContainerStartOptions) => Promise<void>;
     /** Stop the instance (optionally with a signal); it can start again on the next request. */
     stop: (signal?: number | string) => Promise<void>;
+}
+
+/**
+ * Runtime egress-firewall controls for a named instance (`handle.egress.*`).
+ * Each maps to the corresponding `@cloudflare/containers` `Container` RPC, so
+ * an app can tighten or relax a single instance's allowed/denied hosts after
+ * start without redeploying.
+ */
+interface ContainerEgressControls {
+    /** Add one hostname (or glob) to the allow-list. */
+    allow: (hostname: string) => Promise<void>;
+    /** Add one hostname (or glob) to the deny-list. */
+    deny: (hostname: string) => Promise<void>;
+    /** Remove one hostname from the allow-list. */
+    removeAllowed: (hostname: string) => Promise<void>;
+    /** Remove one hostname from the deny-list. */
+    removeDenied: (hostname: string) => Promise<void>;
+    /** Replace the entire allow-list. */
+    setAllowed: (hosts: ReadonlyArray<string>) => Promise<void>;
+    /** Replace the entire deny-list. */
+    setDenied: (hosts: ReadonlyArray<string>) => Promise<void>;
 }
 
 /** The per-definition accessor exposed as `ctx.containers.&lt;exportName>`. */
@@ -174,27 +228,39 @@ const DEFAULT_POOL_SIZE = 3;
  */
 const DEFAULT_MAX_BACKOFF_MS = 30_000;
 
-const toRequest = (input: Request | string, init?: RequestInit): Request => {
-    if (typeof input === "string" && input.startsWith("/")) {
-        return new Request(`http://container${input}`, init);
+/** The header `@cloudflare/containers`' `switchPort` sets to target a non-default container port. */
+const TARGET_PORT_HEADER = "cf-container-target-port";
+
+const toRequest = (input: Request | string, init?: RequestInit, port?: number): Request => {
+    const request = typeof input === "string" && input.startsWith("/") ? new Request(`http://container${input}`, init) : new Request(input, init);
+
+    if (port !== undefined) {
+        request.headers.set(TARGET_PORT_HEADER, String(port));
     }
 
-    return new Request(input, init);
+    return request;
 };
 
-const handleFor = (namespace: ContainerNamespaceLike, instanceName: string): ContainerHandle => {
+/**
+ * A fetch-only handle over a `send` function, carrying an optional target port.
+ * `.port(n)` re-binds the same `send` to a different port, so multi-port
+ * routing composes uniformly across `.get()`, `.any()`, and `.pool()`.
+ */
+const sendingHandle = (send: (request: Request) => Promise<Response>, port?: number): ContainerHandle => {
     return {
-        fetch: async (input, init) => namespace.get(namespace.idFromName(instanceName)).fetch(toRequest(input, init)),
+        fetch: async (input, init) => send(toRequest(input, init, port)),
+        port: (targetPort) => sendingHandle(send, targetPort),
     };
 };
 
-/** Invoke an optional lifecycle RPC on a stub, with a directed error if the runtime doesn't expose it. */
-const lifecycleCall = async <Result>(
-    stub: ContainerStubLike,
-    method: "destroy" | "getState" | "start" | "stop",
-    binding: string,
-    argument?: unknown,
-): Promise<Result> => {
+const handleFor = (namespace: ContainerNamespaceLike, instanceName: string): ContainerHandle =>
+    sendingHandle(async (request) => namespace.get(namespace.idFromName(instanceName)).fetch(request));
+
+/** Lifecycle/egress RPCs `instanceHandleFor` forwards to the container DO stub. */
+type ContainerStubMethod = keyof Omit<ContainerStubLike, "fetch">;
+
+/** Invoke an optional lifecycle/egress RPC on a stub, with a directed error if the runtime doesn't expose it. */
+const lifecycleCall = async <Result>(stub: ContainerStubLike, method: ContainerStubMethod, binding: string, argument?: unknown): Promise<Result> => {
     const rpc = stub[method];
 
     if (typeof rpc !== "function") {
@@ -204,14 +270,23 @@ const lifecycleCall = async <Result>(
     return (rpc as (argument?: unknown) => Promise<Result>)(argument);
 };
 
-/** A named-instance handle: `fetch` plus the container DO's lifecycle RPCs. */
+/** A named-instance handle: `fetch`/`.port()` plus the container DO's lifecycle + egress RPCs. */
 const instanceHandleFor = (namespace: ContainerNamespaceLike, spec: ContainerBindingSpec, instanceName: string): ContainerInstanceHandle => {
     const stub = (): ContainerStubLike => namespace.get(namespace.idFromName(instanceName));
 
     return {
+        ...sendingHandle(async (request) => stub().fetch(request)),
         destroy: async () => lifecycleCall(stub(), "destroy", spec.binding),
-        fetch: async (input, init) => stub().fetch(toRequest(input, init)),
+        egress: {
+            allow: async (hostname) => lifecycleCall(stub(), "allowHost", spec.binding, hostname),
+            deny: async (hostname) => lifecycleCall(stub(), "denyHost", spec.binding, hostname),
+            removeAllowed: async (hostname) => lifecycleCall(stub(), "removeAllowedHost", spec.binding, hostname),
+            removeDenied: async (hostname) => lifecycleCall(stub(), "removeDeniedHost", spec.binding, hostname),
+            setAllowed: async (hosts) => lifecycleCall(stub(), "setAllowedHosts", spec.binding, [...hosts]),
+            setDenied: async (hosts) => lifecycleCall(stub(), "setDeniedHosts", spec.binding, [...hosts]),
+        },
         getState: async () => lifecycleCall(stub(), "getState", spec.binding),
+        renewActivityTimeout: async () => lifecycleCall(stub(), "renewActivityTimeout", spec.binding),
         start: async (options) => lifecycleCall(stub(), "start", spec.binding, options),
         stop: async (signal) => lifecycleCall(stub(), "stop", spec.binding, signal),
     };
@@ -241,7 +316,7 @@ const retryOnServerError = (response: Response): boolean => response.status >= 5
  * backoff. Pure over the namespace, so it's testable with a fake. The final
  * attempt's outcome (response or thrown error) is returned/propagated as-is.
  */
-const poolHandleFor = (namespace: ContainerNamespaceLike, spec: ContainerBindingSpec, options: PoolOptions = {}): ContainerHandle => {
+const poolHandleFor = (namespace: ContainerNamespaceLike, spec: ContainerBindingSpec, options: PoolOptions = {}, port?: number): ContainerHandle => {
     const size = options.size ?? spec.maxInstances ?? DEFAULT_POOL_SIZE;
     const attempts = Math.max(1, options.attempts ?? 3);
     const baseBackoff = options.backoffMs ?? 100;
@@ -260,7 +335,7 @@ const poolHandleFor = (namespace: ContainerNamespaceLike, spec: ContainerBinding
                     await sleep(Math.min(baseBackoff * 2 ** (attempt - 1), maxBackoff));
                 }
 
-                const request = toRequest(input, init);
+                const request = toRequest(input, init, port);
 
                 try {
                     // eslint-disable-next-line no-await-in-loop -- attempts are inherently sequential
@@ -277,6 +352,7 @@ const poolHandleFor = (namespace: ContainerNamespaceLike, spec: ContainerBinding
             // Exhausted attempts after a thrown error on the last try.
             throw lastError instanceof Error ? lastError : new Error(`ctx.containers.${spec.exportName}.pool(): all ${String(attempts)} attempts failed`);
         },
+        port: (targetPort) => poolHandleFor(namespace, spec, options, targetPort),
     };
 };
 
@@ -343,20 +419,31 @@ const createContainerTestContext = (handlers: Record<string, ContainerTestHandle
     const containers: Record<string, ContainerAccessor> = {};
 
     for (const [exportName, handler] of Object.entries(handlers)) {
-        const testHandleFor = (instanceName: string): ContainerHandle => {
+        const testHandleFor = (instanceName: string, port?: number): ContainerHandle => {
             return {
-                fetch: async (input, init) => handler(toRequest(input, init), { name: instanceName }),
+                fetch: async (input, init) => handler(toRequest(input, init, port), { name: instanceName }),
+                port: (targetPort) => testHandleFor(instanceName, targetPort),
             };
         };
 
-        // Lifecycle calls in the double are inert (resolve void / a stub state)
-        // so action tests that stop/destroy/inspect an instance don't blow up;
-        // the double exercises action logic, not real container behavior.
+        // Lifecycle/egress calls in the double are inert (resolve void / a stub
+        // state) so action tests that stop/destroy/inspect/re-route an instance
+        // don't blow up; the double exercises action logic, not real container
+        // behavior.
         const testInstanceHandleFor = (instanceName: string): ContainerInstanceHandle => {
             return {
                 ...testHandleFor(instanceName),
                 destroy: () => Promise.resolve(),
+                egress: {
+                    allow: () => Promise.resolve(),
+                    deny: () => Promise.resolve(),
+                    removeAllowed: () => Promise.resolve(),
+                    removeDenied: () => Promise.resolve(),
+                    setAllowed: () => Promise.resolve(),
+                    setDenied: () => Promise.resolve(),
+                },
                 getState: () => Promise.resolve({ lastChange: 0 }),
+                renewActivityTimeout: () => Promise.resolve(),
                 start: () => Promise.resolve(),
                 stop: () => Promise.resolve(),
             };
@@ -377,6 +464,7 @@ const createContainerTestContext = (handlers: Record<string, ContainerTestHandle
 export type {
     ContainerAccessor,
     ContainerBindingSpec,
+    ContainerEgressControls,
     ContainerHandle,
     ContainerInstanceHandle,
     ContainerInstanceState,

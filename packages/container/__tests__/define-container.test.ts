@@ -121,6 +121,49 @@ describe(defineContainer, () => {
         expect(() => defineContainer({ image: { build: "" } })).toThrow("`image.build` must be a non-empty");
     });
 
+    it("accepts multi-port and egress-firewall config", () => {
+        expect.assertions(6);
+
+        const definition = defineContainer({
+            allowedHosts: ["*.stripe.com"],
+            deniedHosts: ["*.evil.com"],
+            entrypoint: ["node", "server.js"],
+            image: "./app",
+            interceptHttps: true,
+            pingEndpoint: "/healthz",
+            requiredPorts: [8080, 9090],
+        });
+
+        expect(definition.requiredPorts).toStrictEqual([8080, 9090]);
+        expect(definition.entrypoint).toStrictEqual(["node", "server.js"]);
+        expect(definition.interceptHttps).toBe(true);
+        expect(definition.allowedHosts).toStrictEqual(["*.stripe.com"]);
+        expect(definition.deniedHosts).toStrictEqual(["*.evil.com"]);
+        expect(definition.pingEndpoint).toBe("/healthz");
+    });
+
+    it("rejects an empty or out-of-range requiredPorts", () => {
+        expect.assertions(2);
+
+        expect(() => defineContainer({ image: "./app", requiredPorts: [] })).toThrow("`requiredPorts` must be a non-empty");
+        expect(() => defineContainer({ image: "./app", requiredPorts: [70_000] })).toThrow("requiredPorts[]");
+    });
+
+    it("rejects an empty entrypoint and an empty-string entrypoint part", () => {
+        expect.assertions(2);
+
+        expect(() => defineContainer({ entrypoint: [], image: "./app" })).toThrow("`entrypoint` must be a non-empty");
+        expect(() => defineContainer({ entrypoint: ["node", ""], image: "./app" })).toThrow("`entrypoint` must be a non-empty");
+    });
+
+    it("rejects an empty hostname in an egress list and an empty pingEndpoint", () => {
+        expect.assertions(3);
+
+        expect(() => defineContainer({ allowedHosts: [""], image: "./app" })).toThrow("`allowedHosts` must be an array of non-empty");
+        expect(() => defineContainer({ deniedHosts: [""], image: "./app" })).toThrow("`deniedHosts` must be an array of non-empty");
+        expect(() => defineContainer({ image: "./app", pingEndpoint: "" })).toThrow("`pingEndpoint` must be a non-empty");
+    });
+
     it("does not brand arbitrary objects", () => {
         expect.assertions(2);
 

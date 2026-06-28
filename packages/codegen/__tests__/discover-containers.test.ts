@@ -198,12 +198,13 @@ describe("emit (containers)", () => {
     };
 
     it("emitContainers renders one thin DO class per definition", () => {
-        expect.assertions(5);
+        expect.assertions(6);
 
         const content = emitContainers(discover());
 
-        expect(content).toContain('import LunoraContainer from "@lunora/container/do";');
+        expect(content).toContain('import { LunoraContainer } from "@lunora/container/do";');
         expect(content).toContain('import { transcoder } from "../containers.js";');
+        expect(content).toContain('export { ContainerProxy } from "@lunora/container/do";');
         expect(content).toContain("export class TranscoderContainer extends LunoraContainer {");
         expect(content).toContain('super(ctx, env, transcoder, "transcoder");');
         expect(content).toContain("Re-export them from your worker entry");

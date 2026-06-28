@@ -6,7 +6,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import LunoraContainer from "../src/do/index";
+import { LunoraContainer } from "../src/do/index";
 import { defineContainer } from "../src/index";
 
 /** Minimal fake of the pieces `@cloudflare/containers` reads off the DO ctx. */
@@ -64,6 +64,36 @@ describe(LunoraContainer, () => {
         expect(instance.sleepAfter).toBe("5m");
         expect(instance.enableInternet).toBe(false);
         expect(instance.envVars).toStrictEqual({ API_KEY: "s3cret", LOG_LEVEL: "info" });
+    });
+
+    it("applies the multi-port and egress-firewall fields onto the Container base", () => {
+        expect.assertions(6);
+
+        const definition = defineContainer({
+            allowedHosts: ["*.stripe.com"],
+            deniedHosts: ["*.evil.com"],
+            entrypoint: ["node", "server.js"],
+            image: "./app",
+            interceptHttps: true,
+            pingEndpoint: "/healthz",
+            requiredPorts: [8080, 9090],
+        });
+
+        const instance = new LunoraContainer(fakeDurableObjectContext() as never, {}, definition, "transcoder") as unknown as {
+            allowedHosts: string[];
+            deniedHosts: string[];
+            entrypoint: string[];
+            interceptHttps: boolean;
+            pingEndpoint: string;
+            requiredPorts: number[];
+        };
+
+        expect(instance.requiredPorts).toStrictEqual([8080, 9090]);
+        expect(instance.entrypoint).toStrictEqual(["node", "server.js"]);
+        expect(instance.interceptHttps).toBe(true);
+        expect(instance.allowedHosts).toStrictEqual(["*.stripe.com"]);
+        expect(instance.deniedHosts).toStrictEqual(["*.evil.com"]);
+        expect(instance.pingEndpoint).toBe("/healthz");
     });
 
     it("fails fast when a declared secret is missing from the worker env", () => {

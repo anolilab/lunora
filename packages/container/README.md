@@ -89,9 +89,41 @@ export const transcode = action.input({ videoId: v.id("videos") }).action(async 
 });
 ```
 
-`ctx.containers` is action-only (container calls are external I/O, like `ctx.fetch`); `.get(name)` handles also expose `start`/`stop`/`destroy`/`getState` lifecycle control.
+`ctx.containers` is action-only (container calls are external I/O, like `ctx.fetch`); `.get(name)` handles also expose `start`/`stop`/`destroy`/`getState` lifecycle control plus `renewActivityTimeout()` (keep a busy WebSocket's container awake) and `egress.*` (adjust the allow/deny lists at runtime).
 
 The config layer (`lunora dev` / `lunora deploy`) reconciles the wrangler `containers[]` entry, the `CONTAINER_*` Durable Object binding, and the SQLite-class migration automatically; `wrangler deploy` builds the Dockerfile with local Docker and pushes it to the Cloudflare Registry.
+
+### Multi-port containers
+
+Declare every port the container must be listening on with `requiredPorts` (start-up waits for all of them); `defaultPort` is the target when a request doesn't pick one. Route a single request to another port with `.port(n)` — it composes with `.get()`, `.any()`, and `.pool()`:
+
+```ts
+export const app = defineContainer({
+    image: "./containers/app",
+    defaultPort: 8080,
+    requiredPorts: [8080, 9090], // app + admin
+});
+
+// in an action:
+await ctx.containers.app.get(tenantId).fetch("/work"); // → 8080
+await ctx.containers.app.get(tenantId).port(9090).fetch("/admin"); // → 9090
+```
+
+### Egress firewall
+
+Pair `enableInternet: false` with an `allowedHosts` allow-list (or layer a `deniedHosts` deny-list that overrides everything) to constrain a container's outbound traffic; `interceptHttps: true` extends the lists to TLS connections (the image must trust the Cloudflare CA). Codegen re-exports the `ContainerProxy` worker entrypoint the interception path needs automatically.
+
+```ts
+export const fetcher = defineContainer({
+    image: "./containers/fetcher",
+    enableInternet: false,
+    allowedHosts: ["*.stripe.com", "api.github.com"],
+    deniedHosts: ["*.evil.com"],
+});
+
+// tighten or relax one running instance at runtime:
+await ctx.containers.fetcher.get(tenantId).egress.allow("hooks.slack.com");
+```
 
 ### Calling Lunora from inside a container
 

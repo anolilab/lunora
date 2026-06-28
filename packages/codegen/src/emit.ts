@@ -2040,10 +2040,17 @@ export class ${container.className} extends LunoraContainer {
  * requires each \`containers[].class_name\` to be exported by the worker:
  *
  * \`export * from "./lunora/_generated/containers.js";\`
+ *
+ * \`ContainerProxy\` is re-exported alongside them: the egress-interception path
+ * (\`allowedHosts\`/\`deniedHosts\`/\`interceptHttps\` and the runtime
+ * \`handle.egress\` controls) routes container outbound traffic through this
+ * WorkerEntrypoint, so it too must be exported by the deployed worker.
  */
-import LunoraContainer from "@lunora/container/do";
+import { LunoraContainer } from "@lunora/container/do";
 
 import { ${imports} } from "../containers.js";
+
+export { ContainerProxy } from "@lunora/container/do";
 
 ${classes}`;
 };

@@ -53,12 +53,37 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
     ) {
         super(context, env, {
             defaultPort: definition.defaultPort,
+            entrypoint: definition.entrypoint ? [...definition.entrypoint] : undefined,
             envVars: resolveContainerEnvVariables(definition, env as Record<string, unknown>, exportName),
             sleepAfter: definition.sleepAfter,
         });
 
         if (definition.enableInternet !== undefined) {
             this.enableInternet = definition.enableInternet;
+        }
+
+        // Multi-port + egress-firewall fields are `Container` instance
+        // properties (not constructor options), applied here from the
+        // definition. Each is guarded so an un-set field leaves the
+        // `@cloudflare/containers` default in place.
+        if (definition.requiredPorts !== undefined) {
+            this.requiredPorts = [...definition.requiredPorts];
+        }
+
+        if (definition.interceptHttps !== undefined) {
+            this.interceptHttps = definition.interceptHttps;
+        }
+
+        if (definition.allowedHosts !== undefined) {
+            this.allowedHosts = [...definition.allowedHosts];
+        }
+
+        if (definition.deniedHosts !== undefined) {
+            this.deniedHosts = [...definition.deniedHosts];
+        }
+
+        if (definition.pingEndpoint !== undefined) {
+            this.pingEndpoint = definition.pingEndpoint;
         }
 
         this.lunoraName = exportName ?? "container";
@@ -119,4 +144,11 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
     }
 }
 
-export default LunoraContainer;
+export { LunoraContainer };
+// Re-exported so the generated `_generated/containers.ts` can surface it from the
+// worker entry: the `Container` outbound-interception path (egress allow/deny
+// lists, `interceptHttps`, runtime egress controls) routes container traffic
+// through this WorkerEntrypoint, which the deployed worker must therefore export.
+// Funneling it through `@lunora/container/do` keeps the app depending only on
+// `@lunora/container`, never on `@cloudflare/containers` directly.
+export { ContainerProxy } from "@cloudflare/containers";

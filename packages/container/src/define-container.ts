@@ -173,11 +173,54 @@ const assertValidEnvAndSecrets = (config: ContainerConfig): void => {
     }
 };
 
+/** Validate a port is an integer in the TCP range, with a directed error naming the field. */
+const assertValidPort = (port: number, field: string): void => {
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+        throw new TypeError(`defineContainer: \`${field}\` must be an integer in 1–65535 (got ${String(port)})`);
+    }
+};
+
+/**
+ * Validate the multi-port and egress-firewall fields. All are runtime
+ * properties the generated class applies onto the `Container` base, so they're
+ * caught here at authoring time rather than failing inside the worker.
+ */
+const assertValidPortsAndEgress = (config: ContainerConfig): void => {
+    if (config.requiredPorts !== undefined) {
+        if (config.requiredPorts.length === 0) {
+            throw new TypeError("defineContainer: `requiredPorts` must be a non-empty array of ports, or omitted");
+        }
+
+        for (const port of config.requiredPorts) {
+            assertValidPort(port, "requiredPorts[]");
+        }
+    }
+
+    if (
+        config.entrypoint !== undefined &&
+        (config.entrypoint.length === 0 || config.entrypoint.some((part) => typeof part !== "string" || part.length === 0))
+    ) {
+        throw new TypeError("defineContainer: `entrypoint` must be a non-empty array of non-empty strings, or omitted");
+    }
+
+    for (const field of ["allowedHosts", "deniedHosts"] as const) {
+        const hosts = config[field];
+
+        if (hosts?.some((host) => typeof host !== "string" || host.length === 0)) {
+            throw new TypeError(`defineContainer: \`${field}\` must be an array of non-empty hostname patterns`);
+        }
+    }
+
+    if (config.pingEndpoint !== undefined && (typeof config.pingEndpoint !== "string" || config.pingEndpoint.length === 0)) {
+        throw new TypeError("defineContainer: `pingEndpoint` must be a non-empty path string");
+    }
+};
+
 const defineContainer = (config: ContainerConfig): ContainerDefinition => {
     assertValidImage(config.image);
 
-    if (config.defaultPort !== undefined && (!Number.isInteger(config.defaultPort) || config.defaultPort < 1 || config.defaultPort > 65_535)) {
-        throw new TypeError(`defineContainer: \`defaultPort\` must be an integer in 1–65535 (got ${String(config.defaultPort)})`);
+    if (config.defaultPort !== undefined) {
+        assertValidPort(config.defaultPort, "defaultPort");
     }
 
     const stepPercentage = config.rollout?.stepPercentage;
@@ -203,6 +246,7 @@ const defineContainer = (config: ContainerConfig): ContainerDefinition => {
     }
 
     assertValidEnvAndSecrets(config);
+    assertValidPortsAndEgress(config);
 
     return { ...config, isLunoraContainer: true };
 };

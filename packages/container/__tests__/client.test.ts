@@ -216,6 +216,75 @@ describe("ctx.containers.<name>.get() lifecycle controls", () => {
 
         await expect(handle.stop()).rejects.toThrow("does not expose stop()");
     });
+
+    it("forwards renewActivityTimeout and the egress controls to the DO with the right args", async () => {
+        expect.assertions(2);
+
+        const calls: { arg: unknown; method: string }[] = [];
+        const recordVoid =
+            (method: string) =>
+            async (arg?: unknown): Promise<void> => {
+                calls.push({ arg, method });
+            };
+        const egressNamespace: ContainerNamespaceLike = {
+            get: () => {
+                return {
+                    allowHost: recordVoid("allowHost"),
+                    denyHost: recordVoid("denyHost"),
+                    fetch: async () => new Response("ok"),
+                    removeAllowedHost: recordVoid("removeAllowedHost"),
+                    removeDeniedHost: recordVoid("removeDeniedHost"),
+                    renewActivityTimeout: recordVoid("renewActivityTimeout"),
+                    setAllowedHosts: recordVoid("setAllowedHosts"),
+                    setDeniedHosts: recordVoid("setDeniedHosts"),
+                };
+            },
+            idFromName: (name) => name,
+        };
+
+        const handle = createContainerContext({ CONTAINER_TRANSCODER: egressNamespace }, [
+            { binding: "CONTAINER_TRANSCODER", exportName: "transcoder" },
+        ]).transcoder!.get("video-1");
+
+        await handle.renewActivityTimeout();
+        await handle.egress.allow("api.stripe.com");
+        await handle.egress.deny("evil.com");
+        await handle.egress.setAllowed(["a.com", "b.com"]);
+        await handle.egress.setDenied(["c.com"]);
+        await handle.egress.removeAllowed("a.com");
+        await handle.egress.removeDenied("c.com");
+
+        expect(calls.map((call) => call.method)).toStrictEqual([
+            "renewActivityTimeout",
+            "allowHost",
+            "denyHost",
+            "setAllowedHosts",
+            "setDeniedHosts",
+            "removeAllowedHost",
+            "removeDeniedHost",
+        ]);
+        // ReadonlyArray args are copied to a fresh mutable array before the RPC.
+        expect(calls.find((call) => call.method === "setAllowedHosts")!.arg).toStrictEqual(["a.com", "b.com"]);
+    });
+
+    it("routes .port(n) requests with the cf-container-target-port header across get/any/pool", async () => {
+        expect.assertions(4);
+
+        const { namespace, requests } = fakeNamespace();
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: namespace }, [
+            { binding: "CONTAINER_TRANSCODER", exportName: "transcoder", maxInstances: 3 },
+        ]);
+
+        await containers.transcoder!.get("video-1").port(9090).fetch("/admin");
+        await containers.transcoder!.any().port(7000).fetch("/admin");
+        await containers.transcoder!.pool().port(6000).fetch("/admin");
+        await containers.transcoder!.get("video-1").fetch("/no-port");
+
+        expect(requests[0]!.headers.get("cf-container-target-port")).toBe("9090");
+        expect(requests[1]!.headers.get("cf-container-target-port")).toBe("7000");
+        expect(requests[2]!.headers.get("cf-container-target-port")).toBe("6000");
+        expect(requests[3]!.headers.get("cf-container-target-port")).toBeNull();
+    });
 });
 
 /** A namespace whose every `fetch` runs the next scripted step (response or throw). */
