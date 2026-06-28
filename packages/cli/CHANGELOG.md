@@ -1,3 +1,14 @@
+## @lunora/cli [1.0.0-alpha.30](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.29...@lunora/cli@1.0.0-alpha.30) (2026-06-28)
+
+### Features
+
+* **config:** stream dev container logs to terminal ([#38](https://github.com/anolilab/lunora/issues/38)) ([c34dbc6](https://github.com/anolilab/lunora/commit/c34dbc6f40f9e31ce291dbd31c6c4d9e596b4127))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.19
+
 ## @lunora/cli [1.0.0-alpha.29](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.28...@lunora/cli@1.0.0-alpha.29) (2026-06-28)
 
 
