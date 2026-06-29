@@ -85,7 +85,7 @@
         "fallow": "catalog:lint",
         "jsdom": "catalog:frontend",
         "react": "catalog:frontend",
-        "react-doctor": "0.5.6",
+        "react-doctor": "0.5.8",
         "react-dom": "catalog:frontend",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"

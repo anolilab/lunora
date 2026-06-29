@@ -70,14 +70,14 @@
     },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",
-        "@electric-sql/pglite": "0.3.16",
+        "@electric-sql/pglite": "0.5.3",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
         "mysql-memory-server": "1.14.1",
-        "mysql2": "^3.11.0",
+        "mysql2": "^3.22.5",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
     },
