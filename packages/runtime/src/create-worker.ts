@@ -2807,10 +2807,89 @@ const withFrameworkWorker = (host: FrameworkHostHandler, optionsInput: Framework
     };
 };
 
+/**
+ * Options for {@link createLunoraHandler}. Either an `(env) => options` factory
+ * (full control — for bindings that only exist at request time), or a partial
+ * {@link FrameworkWorkerOptions} object whose `shardDO` defaults to the
+ * conventional `env.SHARD` binding. Pass nothing for the common case.
+ */
+type LunoraHandlerOptions = ((env: unknown) => FrameworkWorkerOptions) | Partial<FrameworkWorkerOptions>;
+
+/**
+ * No-op `ExecutionContext` used when the host runtime didn't supply one (a
+ * non-Cloudflare preview, or a unit test), so the worker's `fetch` always
+ * receives a valid third argument.
+ */
+const NOOP_EXECUTION_CONTEXT: ExecutionContextLike = {
+    passThroughOnException: () => {},
+    waitUntil: () => {},
+};
+
+/**
+ * Resolve per-request Lunora worker options. A factory is called with the
+ * request `env`; a partial object has its `shardDO` defaulted to `env.SHARD` so
+ * the common case needs no configuration. Throws a clear error when no shard
+ * namespace can be found — a wiring mistake, not a runtime condition to swallow.
+ */
+const resolveLunoraOptions = (options: LunoraHandlerOptions, env: unknown): FrameworkWorkerOptions => {
+    if (typeof options === "function") {
+        return options(env);
+    }
+
+    const shardDO = options.shardDO ?? (env as { SHARD?: ShardNamespaceLike } | undefined)?.SHARD;
+
+    if (!shardDO) {
+        throw new Error(
+            "@lunora/runtime: no shard Durable Object namespace found. Bind `SHARD` in wrangler.jsonc, or pass `createLunoraHandler({ shardDO: env.MY_SHARD })`.",
+        );
+    }
+
+    return { ...options, shardDO };
+};
+
+/**
+ * Build a framework-neutral request handler for Lunora's realtime plane
+ * (`/_lunora/rpc`, `/_lunora/ws`, `/_lunora/admin/*`). This is the **one shared
+ * seam** every web-standard framework integration mounts — Hono, Nitro/h3,
+ * Elysia, or any WinterCG host running on Cloudflare Workers — so each is a
+ * 1–2 line bridge (`(request, env, ctx) => Response`) rather than a bespoke
+ * adapter package.
+ *
+ * Mount it under `/_lunora/*` (or whatever path you reserve) inside your app's
+ * router; everything else stays your framework's. The host supplies, per
+ * request: a Web `Request`, the Cloudflare `env` (carrying the `SHARD` Durable
+ * Object namespace), and — when available — the `ExecutionContext`. The
+ * `101 Switching Protocols` WebSocket-upgrade `Response` (with its `webSocket`)
+ * is returned verbatim, so the framework streams the socket through unchanged.
+ *
+ * ```ts
+ * // Hono
+ * const lunora = createLunoraHandler();
+ * app.use("/_lunora/*", (c) => lunora(c.req.raw, c.env, c.executionCtx));
+ *
+ * // Nitro / h3
+ * const lunora = createLunoraHandler();
+ * export default defineEventHandler((event) => {
+ *   const { ctx, env } = event.context.cloudflare;
+ *   return lunora(toWebRequest(event), env, ctx);
+ * });
+ * ```
+ *
+ * `shardDO` defaults to `env.SHARD`; pass `options` (or an `(env) => options`
+ * factory) to add `auth`, `crons`, a `security` posture, or a custom namespace.
+ * A new worker is composed per request because the options (and the `SHARD`
+ * binding they default from) are only known once `env` arrives.
+ * @param options Partial worker options (default `shardDO: env.SHARD`), or an `(env) => options` factory.
+ */
+const createLunoraHandler =
+    (options: LunoraHandlerOptions = {}): ((request: Request, env: unknown, context?: ExecutionContextLike) => Promise<Response>) =>
+    (request, env, context) =>
+        createWorker(resolveLunoraOptions(options, env)).fetch(request, env, context ?? NOOP_EXECUTION_CONTEXT);
+
 /** Re-exported helper so callers can roundtrip envelopes in tests. */
 const defineRpcEnvelope = (envelope: RpcEnvelope): RpcEnvelope => envelope;
 
-export { composeWorker, createWorker, defineRpcEnvelope, withFrameworkWorker };
+export { composeWorker, createLunoraHandler, createWorker, defineRpcEnvelope, NOOP_EXECUTION_CONTEXT, resolveLunoraOptions, withFrameworkWorker };
 export type {
     AdminTableResolver,
     BackupManifest,
@@ -2835,6 +2914,7 @@ export type {
     HttpActionContext,
     HttpActionLike,
     HttpRouterLike,
+    LunoraHandlerOptions,
     LunoraWorker,
     QueueConsumerHandler,
     ResolvedIdentity,

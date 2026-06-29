@@ -55,6 +55,92 @@ the worker-to-Durable-Object hop (dispatch lives inside the DO, so a worker-side
 keeping byte-identical identity and RLS semantics.
 </Callout>
 
+## Mount Lunora inside your framework
+
+The section above is the **Lunora-owns-the-entry** direction (`httpRouter` /
+`withLunora`). The inverse — **your framework owns the entry** and you mount
+Lunora's realtime plane as a middleware — is the common case for web-standard
+HTTP frameworks like [Hono](https://hono.dev), [Nitro / h3](https://nitro.build),
+and [Elysia](https://elysiajs.com). For these you do **not** need a per-framework
+adapter package: the entire seam is one shared helper, `createLunoraHandler`.
+
+```ts
+import { createLunoraHandler } from "lunorash/runtime";
+```
+
+`createLunoraHandler(options?)` returns a framework-neutral
+`(request, env, ctx?) => Response` that owns the reserved `/_lunora/*` namespace
+(`/_lunora/rpc`, `/_lunora/ws`, `/_lunora/admin/*`). Mount it under `/_lunora/*`
+in your router; everything else stays your framework's. `shardDO` defaults to the
+conventional `env.SHARD` binding, so the common case needs no options.
+
+```ts
+// Hono — c.req.raw is a Web Request; c.env carries the bindings.
+import { Hono } from "hono";
+import { createLunoraHandler } from "lunorash/runtime";
+
+const lunora = createLunoraHandler();
+const app = new Hono<{ Bindings: Env }>();
+
+app.use("/_lunora/*", (c) => lunora(c.req.raw, c.env, c.executionCtx));
+app.get("/", (c) => c.text("hi")); // your routes, 100% plain Hono
+
+export default app;
+```
+
+```ts
+// Nitro / h3 — env + ExecutionContext live on the Cloudflare runtime accessor.
+import { createLunoraHandler } from "lunorash/runtime";
+
+const lunora = createLunoraHandler();
+
+// server/routes/_lunora/[...].ts
+export default defineEventHandler((event) => {
+    const { ctx, env } = event.context.cloudflare;
+
+    return lunora(toWebRequest(event), env, ctx);
+});
+```
+
+```ts
+// Elysia — ctx.request is a Web Request.
+import { createLunoraHandler } from "lunorash/runtime";
+
+const lunora = createLunoraHandler();
+
+app.all("/_lunora/*", ({ request }) => lunora(request, env));
+```
+
+Every host satisfies the same four-part contract, which is all the helper needs:
+
+1. a Web **`Request`**,
+2. the Cloudflare **`env`** (carrying the `SHARD` Durable Object namespace),
+3. an **`ExecutionContext`** when the runtime supplies one (omit it and a no-op
+   is used), and
+4. **WebSocket pass-through** — the `101 Switching Protocols` upgrade `Response`
+   (with its `webSocket`) is returned verbatim, so the framework streams the
+   socket through unchanged.
+
+For bindings that only exist at request time, pass an `(env) => options` factory
+instead of a fixed object:
+
+```ts
+const lunora = createLunoraHandler((env) => ({ shardDO: env.MY_SHARD, auth }));
+```
+
+<Callout type="warn">
+    **Your framework must run *on* Cloudflare Workers.** Durable Object bindings (`env.SHARD`) exist only inside the Workers runtime, so this seam works for
+    web-standard frameworks deployed to Workers (Hono natively, Nitro's `cloudflare-module` preset, Elysia on Workers, …). Node-only servers (Express, Fastify,
+    Koa) cannot host the realtime plane in-process — point their client at a separately-deployed Lunora worker instead.
+</Callout>
+
+<Callout type="info">
+    **Why no `@lunora/hono` / `@lunora/nitro` / `@lunora/elysia` packages?** Because there is nothing framework-specific left to package — each integration is
+    the one-/two-line bridge above over the shared `createLunoraHandler`. A dedicated package is only warranted when a framework needs real build/module wiring
+    beyond a fetch bridge (e.g. **Nuxt**, which registers a server handler, a `#lunora/app` virtual, and re-exports `ShardDO` via `exports.cloudflare.ts` —
+    hence `@lunora/nuxt` exists).
+</Callout>
+
 ## The per-framework matrix
 
 How a framework composes with Lunora depends on who owns the worker entry. This

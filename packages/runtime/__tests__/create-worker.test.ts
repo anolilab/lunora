@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ExecutionContextLike, HttpActionContext, HttpRouterLike, Route } from "../src/create-worker";
-import { composeWorker, createWorker } from "../src/create-worker";
+import { composeWorker, createLunoraHandler, createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 interface ShardSpy {
@@ -1047,6 +1047,82 @@ describe("composeWorker — meta-framework composition (PLAN4 §2.2)", () => {
         expect(shard.calls).toHaveLength(1);
 
         errorSpy.mockRestore();
+    });
+});
+
+describe("createLunoraHandler — framework-neutral mount seam", () => {
+    let shard: ShardSpy;
+
+    beforeEach(() => {
+        shard = createShardSpy();
+    });
+
+    it("defaults shardDO to env.SHARD and forwards /_lunora/rpc", async () => {
+        expect.assertions(2);
+
+        const handler = createLunoraHandler();
+
+        const res = await handler(
+            new Request("https://app.example/_lunora/rpc", { body: JSON.stringify({ args: {}, functionPath: "x:y" }), method: "POST" }),
+            { SHARD: shard.namespace },
+            fakeContext,
+        );
+
+        expect(res.status).toBe(200);
+        expect(shard.calls).toHaveLength(1);
+    });
+
+    it("honours an explicit shardDO over env.SHARD", async () => {
+        expect.assertions(2);
+
+        const ignored = createShardSpy();
+        const handler = createLunoraHandler({ shardDO: shard.namespace });
+
+        const res = await handler(
+            new Request("https://app.example/_lunora/rpc", { body: JSON.stringify({ args: {}, functionPath: "x:y" }), method: "POST" }),
+            { SHARD: ignored.namespace },
+            fakeContext,
+        );
+
+        expect(res.status).toBe(200);
+        expect(ignored.calls).toHaveLength(0);
+    });
+
+    it("supports an (env) => options factory", async () => {
+        expect.assertions(1);
+
+        const handler = createLunoraHandler((env) => {
+            return { shardDO: (env as { CUSTOM: ShardNamespaceLike }).CUSTOM };
+        });
+
+        const res = await handler(
+            new Request("https://app.example/_lunora/rpc", { body: JSON.stringify({ args: {}, functionPath: "x:y" }), method: "POST" }),
+            { CUSTOM: shard.namespace },
+            fakeContext,
+        );
+
+        expect(res.status).toBe(200);
+    });
+
+    it("defaults the ExecutionContext when the host omits one", async () => {
+        expect.assertions(1);
+
+        const handler = createLunoraHandler({ shardDO: shard.namespace });
+
+        const res = await handler(
+            new Request("https://app.example/_lunora/rpc", { body: JSON.stringify({ args: {}, functionPath: "x:y" }), method: "POST" }),
+            {},
+        );
+
+        expect(res.status).toBe(200);
+    });
+
+    it("throws a clear error when no shard namespace resolves", () => {
+        expect.assertions(1);
+
+        const handler = createLunoraHandler();
+
+        expect(() => handler(new Request("https://app.example/_lunora/rpc", { method: "POST" }), {})).toThrow(/no shard Durable Object namespace/);
     });
 });
 

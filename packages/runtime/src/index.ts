@@ -30,6 +30,7 @@ export type {
     HttpActionLike,
     HttpRouterLike,
     ListAuthUsersOptions,
+    LunoraHandlerOptions,
     LunoraWorker,
     Route,
     RpcContext,
@@ -43,7 +44,15 @@ export type {
     VectorQueryMatch,
     WorkerOptions,
 } from "./create-worker";
-export { composeWorker, createWorker, defineRpcEnvelope, withFrameworkWorker } from "./create-worker";
+export {
+    composeWorker,
+    createLunoraHandler,
+    createWorker,
+    defineRpcEnvelope,
+    NOOP_EXECUTION_CONTEXT,
+    resolveLunoraOptions,
+    withFrameworkWorker,
+} from "./create-worker";
 export type { CrossShardCounter, CrossShardReader, CrossShardRelationCapabilities, CrossShardRelationOptions } from "./cross-shard-relations";
 export { createCrossShardRelationCapabilities } from "./cross-shard-relations";
 export type { DynamicShardRegistry, DynamicShardRegistryOptions } from "./dynamic-shard-registry";

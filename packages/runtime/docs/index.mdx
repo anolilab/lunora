@@ -84,6 +84,31 @@ object, and `options` may be a plain object or an `(env) => options` factory
 supplies that). When Lunora configures no cron surface, the host's own
 `scheduled` is preserved rather than dropped.
 
+## `createLunoraHandler(options?)`
+
+The framework-neutral mount seam for **web-standard frameworks that own the
+worker entry** (Hono, Nitro/h3, Elysia, any WinterCG host on Workers). Returns a
+`(request, env, ctx?) => Response` that serves Lunora's realtime plane
+(`/_lunora/rpc`, `/_lunora/ws`, `/_lunora/admin/*`); mount it under `/_lunora/*`
+in your router and everything else stays your framework's. `shardDO` defaults to
+`env.SHARD`, so the common case needs no options; pass a partial options object
+or an `(env) => options` factory for `auth`, `crons`, or a custom namespace.
+
+```ts
+import { Hono } from "hono";
+import { createLunoraHandler } from "lunorash/runtime";
+
+const lunora = createLunoraHandler();
+const app = new Hono<{ Bindings: Env }>();
+
+app.use("/_lunora/*", (c) => lunora(c.req.raw, c.env, c.executionCtx));
+```
+
+This is the **one shared helper** that replaces per-framework adapter packages —
+see [Bring your framework](/docs/frameworks/bring-your-framework#mount-lunora-inside-your-framework)
+for Nitro/Elysia examples and the host contract. `resolveLunoraOptions` and
+`NOOP_EXECUTION_CONTEXT` are exported too, for adapters that need finer control.
+
 ## `defineRpcEnvelope`
 
 Helper for building a custom transport (e.g. a CLI driver). Wraps a
