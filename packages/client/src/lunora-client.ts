@@ -74,6 +74,9 @@ const WS_KEEPALIVE_PING = "lunora-ping";
 /** Default heartbeat cadence (ms) — see {@link LunoraClientOptions.heartbeatIntervalMs}. */
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 
+/** Default WS connect timeout (ms) — see {@link LunoraClientOptions.connectTimeoutMs}. */
+const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
+
 /**
  * Debounce window (ms) for durable read-cache writes (Pillar 2). A burst of
  * deltas on one subscription coalesces into a single `put` per key after the
@@ -183,6 +186,14 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
  * are all per-connection so one shard dropping doesn't disturb the others.
  */
 interface ShardConnection {
+    /**
+     * Fail-fast timer armed while the socket is `connecting`; cleared on `open`.
+     * If the handshake doesn't complete within `connectTimeoutMs` (a hung proxy /
+     * cold worker that never upgrades) it force-closes the socket and routes
+     * through the normal disconnect/reconnect path, instead of leaving the live
+     * channel silently stuck on the browser's much longer default WS timeout.
+     */
+    connectTimer: ReturnType<typeof setTimeout> | undefined;
     /** Active keepalive interval while the socket is open; cleared on disconnect/close. */
     heartbeatTimer: ReturnType<typeof setInterval> | undefined;
     /** Stream-start frames buffered while the socket was (re)connecting. Flushed on `open`. */
@@ -407,6 +418,8 @@ class LunoraClient {
 
     private readonly reconnectOptions: ReconnectOptions | undefined;
 
+    /** WS connect timeout (ms); `0` disables it. See {@link LunoraClientOptions.connectTimeoutMs}. */
+    private readonly connectTimeoutMs: number;
     /** Keepalive cadence (ms); `0` disables the heartbeat. See {@link LunoraClientOptions.heartbeatIntervalMs}. */
     private readonly heartbeatIntervalMs: number;
 
@@ -525,6 +538,7 @@ class LunoraClient {
         this.bookmark = options.bookmarkStorage ?? createInMemoryBookmarkStorage();
         this.reconnectOptions = options.reconnect;
         this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+        this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
         this.defaultConnectionContext = options.connectionContext;
         this.persistence = options.persistence;
         this.queryCache = options.queryCache === false ? undefined : options.queryCache;
@@ -2012,6 +2026,11 @@ class LunoraClient {
                 conn.reconnectTimer = undefined;
             }
 
+            if (conn.connectTimer !== undefined) {
+                clearTimeout(conn.connectTimer);
+                conn.connectTimer = undefined;
+            }
+
             this.stopHeartbeat(conn);
 
             if (conn.socket) {
@@ -2278,6 +2297,7 @@ class LunoraClient {
 
         if (!conn) {
             conn = {
+                connectTimer: undefined,
                 heartbeatTimer: undefined,
                 pendingUnsubscribes: [],
                 reconnect: createReconnect(this.reconnectOptions),
@@ -2542,7 +2562,36 @@ class LunoraClient {
 
         conn.socket = socket;
 
+        // Fail-fast connect timeout: if the handshake doesn't reach `open` within
+        // `connectTimeoutMs` (a hung proxy / cold worker that never upgrades),
+        // force-close the socket so `close` → `handleDisconnect` arms the normal
+        // reconnect/backoff and surfaces `offline` — instead of the live channel
+        // hanging on the browser's much longer default. Cleared on `open`/disconnect.
+        if (this.connectTimeoutMs > 0) {
+            conn.connectTimer = setTimeout(() => {
+                conn.connectTimer = undefined;
+
+                // Only act if still connecting (open/close already cleared this).
+                if (conn.wsState !== "connecting") {
+                    return;
+                }
+
+                try {
+                    socket.close();
+                } catch {
+                    /* a stuck socket may throw on close — the disconnect below still arms reconnect */
+                }
+
+                this.handleDisconnect(conn);
+            }, this.connectTimeoutMs);
+        }
+
         socket.addEventListener("open", (): void => {
+            if (conn.connectTimer !== undefined) {
+                clearTimeout(conn.connectTimer);
+                conn.connectTimer = undefined;
+            }
+
             conn.wsState = "open";
             conn.wasEverConnected = true;
             conn.reconnect.reset();
@@ -2645,6 +2694,14 @@ class LunoraClient {
         // the open/close/error handlers all observe the same state machine.
         /* eslint-disable no-param-reassign -- mutate the shared ShardConnection state machine in place */
         this.stopHeartbeat(conn);
+
+        // Cancel the fail-fast connect timer: a `close`/`error` reached us before
+        // (or because of) the timeout, so the reconnect path below owns recovery.
+        if (conn.connectTimer !== undefined) {
+            clearTimeout(conn.connectTimer);
+            conn.connectTimer = undefined;
+        }
+
         conn.socket = undefined;
         conn.wsState = "idle";
         this.emitConnectionStatus();

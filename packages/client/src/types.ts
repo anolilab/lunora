@@ -200,6 +200,17 @@ export interface LunoraClientOptions {
      * hook needs connection context.
      */
     connectionContext?: Record<string, unknown>;
+
+    /**
+     * Fail-fast timeout (ms) for opening a subscription WebSocket. If the
+     * handshake doesn't complete within this window — a hung dev proxy or a cold
+     * worker that never upgrades — the client force-closes the socket and routes
+     * through its normal reconnect/backoff (surfacing `offline` status) instead
+     * of leaving the live channel silently stuck on the browser's much longer
+     * default. Does not affect HTTP queries/mutations (those never ride the WS).
+     * Defaults to 10000 (10s); set to `0` (or negative) to disable.
+     */
+    connectTimeoutMs?: number;
     fetch?: typeof fetch;
 
     /**
