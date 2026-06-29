@@ -81,6 +81,26 @@ export const listInvoices = query
 
 Omit `map` to use each group name as a role verbatim. A group with no mapping contributes no role (fail-closed). Roles are unioned with any already on `ctx.auth.roles`, then deduped. Pass `readGroups` when your IdP nests groups somewhere other than the `groups` claim.
 
+## Gating the Studio behind Access
+
+`@lunora/cloudflare-access/admin` ships `accessAdminGate()`, which builds a value for the runtime's `WorkerOptions.adminGate` — an async authorization gate for the `/_lunora/admin/*` plane (the Studio's HTTP + WebSocket endpoints), OR-ed with the static `adminToken` bearer. It verifies the request's Access JWT and applies your `isAdmin(claims)` predicate, so a verified Access identity in the right group can reach the Studio without a shared token. It is fail-closed: no token, a token that fails verification, or an `isAdmin` returning `false` all deny (the bearer stays the only other path). It runs only on admin routes, never on the RPC/WebSocket data path.
+
+Wire it on the generated app builder via `.extend((env) => …)`:
+
+```ts
+import { accessAdminGate } from "@lunora/cloudflare-access/admin";
+
+export default defineApp()
+    .extend((env) => ({
+        adminGate: accessAdminGate({
+            teamDomain: env.CF_ACCESS_TEAM_DOMAIN,
+            aud: env.CF_ACCESS_ADMIN_AUD, // a dedicated Access app over /_lunora/admin
+            isAdmin: (claims) => claims.groups?.includes("lunora-admins") ?? false,
+        }),
+    }))
+    .build();
+```
+
 ## API
 
 - `createAccessResolver(options)` — a `resolveIdentity` adapter (header + cookie, verify, map).
@@ -88,3 +108,4 @@ Omit `map` to use each group name as a role verbatim. A group with no mapping co
 - `verifyAccessJwt(token, options)` — low-level: verify a token, return its claims (throws on failure).
 - `accessIssuer(teamDomain)` — normalize a team domain to its canonical issuer URL.
 - `accessRoles(options)` _(`@lunora/cloudflare-access/roles`)_ — middleware mapping the verified `groups` claim into `ctx.auth.roles` for RLS.
+- `accessAdminGate(options)` _(`@lunora/cloudflare-access/admin`)_ — a `WorkerOptions.adminGate` that authorizes the `/_lunora/admin/*` plane from a verified Access identity.

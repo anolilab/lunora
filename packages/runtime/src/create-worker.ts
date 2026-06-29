@@ -453,6 +453,23 @@ interface BackupManifest {
 
 interface WorkerOptions {
     /**
+     * An additional, async authorization gate for the `/_lunora/admin/*` plane
+     * (the Studio's HTTP + WS endpoints), OR-ed with the static {@link WorkerOptions.adminToken}
+     * bearer. When it resolves `true` for a request, that request is treated as
+     * admin-authorized even without the bearer; when it resolves `false` (or is
+     * unset) the bearer remains the only path. Evaluated once per admin request
+     * and never on the RPC/WebSocket data hot path.
+     *
+     * The intended producer is `@lunora/cloudflare-access`'s `accessAdminGate(...)`,
+     * which verifies the request's `Cf-Access-Jwt-Assertion` JWT and applies an
+     * `isAdmin(claims)` predicate — so the Studio can sit behind Cloudflare Access
+     * instead of (or alongside) a shared admin token. It takes only the request
+     * (verification needs static team-domain/aud config + the remote JWKS, no env
+     * binding), so it composes without threading async through every admin route.
+     */
+    adminGate?: (request: Request) => boolean | Promise<boolean>;
+
+    /**
      * Admin bearer token expected by the export/import endpoints. When unset,
      * the endpoints respond with `ADMIN_FORBIDDEN` — the same posture the
      * per-shard admin gate uses.
@@ -895,6 +912,13 @@ const WS_PATH = "/_lunora/ws";
 const SCHEDULER_DISPATCH_PATH = "/_lunora/scheduler/dispatch";
 /** Admin-gated POST that manually fires one code-defined cron job by name (studio "Run now"). */
 const CRON_JOBS_RUN_PATH = "/_lunora/admin/cron-jobs/run";
+/** Prefix shared by every Studio admin route (`/_lunora/admin/*`). */
+const ADMIN_PATH_PREFIX = "/_lunora/admin/";
+/** The lone cross-shard admin route that sits outside {@link ADMIN_PATH_PREFIX}. */
+const MIGRATE_PATH = "/_lunora/migrate";
+
+/** True for the admin routes the async `adminGate` may authorize — everything under `/_lunora/admin/` plus `/_lunora/migrate`. */
+const isAdminPath = (pathname: string): boolean => pathname.startsWith(ADMIN_PATH_PREFIX) || pathname === MIGRATE_PATH;
 // The cross-shard orchestration (`migrate` / `rank` / `rankpage` / `shard-traffic`)
 // + `pitr`, data-movement (`export` / `import` / `sync` / `connector/sync` /
 // `apply`), static-introspection (`functions` / `cron-jobs` / `openapi` /
@@ -1396,6 +1420,19 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
     };
 
+    // Per-request admin grants from `options.adminGate` (e.g. a verified Cloudflare
+    // Access identity). `handle` evaluates the async gate once for `/_lunora/admin/*`
+    // requests and records the granted request here; the per-route gates consult it
+    // through `requestIsAdmin`, so an Access-authorized request passes the same SYNC
+    // gates the static bearer does — without threading async verification through
+    // every extracted admin-route builder. A `WeakSet` keyed by the request lets the
+    // entry be collected with the request, and concurrent requests never alias.
+    const accessAdminGrants = new WeakSet<Request>();
+
+    // The unified admin predicate every `/_lunora/admin/*` gate routes through: the
+    // static bearer, OR a grant `handle` recorded from `options.adminGate`.
+    const requestIsAdmin = (request: Request): boolean => checkAdminAuth(request, effectiveAdminToken()) || accessAdminGrants.has(request);
+
     // Fan-out and non-default shard routing are authorization-open when neither
     // `authorizeShard` nor `authorizeFanOut` is configured — any caller can name
     // any shard or fan a function across every shard for a table. That's the
@@ -1430,7 +1467,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const orchestrationAdminRoutes = buildOrchestrationAdminRoutes({
         defaultShard,
         forwardToShard,
-        isAdmin: (request) => checkAdminAuth(request, effectiveAdminToken()),
+        isAdmin: requestIsAdmin,
         queryCoordinator: options.queryCoordinator,
         resolveForwardContext: (request, env) => resolveForwardContext(request, env, options.resolveIdentity),
         shardDO,
@@ -1547,7 +1584,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * `/_lunora/admin/*` mutations.
      */
     const handleRunCronJob = async (request: Request, env: unknown): Promise<Response> => {
-        if (!checkAdminAuth(request, effectiveAdminToken())) {
+        if (!requestIsAdmin(request)) {
             throw new LunoraError("admin endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
         }
 
@@ -1686,7 +1723,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // the scheduled R2 backup (mirroring the other extracted clusters).
     const dataMovementAdminRoutes = buildDataMovementAdminRoutes({
         applyGlobals: options.applyGlobals,
-        isAdmin: (request) => checkAdminAuth(request, effectiveAdminToken()),
+        isAdmin: requestIsAdmin,
         knownTables: () => collectKnownTables(options.resolveTableSharding),
         queryCoordinator: options.queryCoordinator,
         resolveForwardContext: (request, env) => resolveForwardContext(request, env, options.resolveIdentity),
@@ -1709,7 +1746,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
     /** Throw 403 unless the request carries a valid admin bearer. */
     const assertAdminAuthorized = (request: Request): void => {
-        if (!checkAdminAuth(request, effectiveAdminToken())) {
+        if (!requestIsAdmin(request)) {
             throw new LunoraError("admin endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
         }
     };
@@ -1769,7 +1806,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // the admin gate, scheduler-namespace requirement, and resolved stub through
     // injected deps (mirroring the other extracted clusters below).
     const scheduledAdminRoutes = buildScheduledAdminRoutes({
-        checkWsAdmin: (request) => checkAdminAuth(request, effectiveAdminToken()) || checkAdminWsToken(request, effectiveAdminToken()),
+        checkWsAdmin: (request) => requestIsAdmin(request) || checkAdminWsToken(request, effectiveAdminToken()),
         requireSchedulerNamespace,
         resolveSchedulerStub,
         schedulerInstanceName: options.schedulerInstanceName ?? "default",
@@ -2656,6 +2693,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const internalRoute = internalRoutes[url.pathname];
 
         if (internalRoute) {
+            // Cloudflare Access (or any) admin gate: when configured, verify it ONCE
+            // for an admin path and record a grant the per-route sync gates consult
+            // via `requestIsAdmin`. Restricted to `isAdminPath` so the verification
+            // never runs on the `/_lunora/rpc` + `/_lunora/ws` data hot path.
+            if (options.adminGate !== undefined && isAdminPath(url.pathname) && (await options.adminGate(request))) {
+                accessAdminGrants.add(request);
+            }
+
             return internalRoute(request, env, url, context);
         }
 

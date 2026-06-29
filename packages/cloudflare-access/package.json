@@ -36,6 +36,10 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./admin": {
+            "types": "./dist/admin.d.ts",
+            "import": "./dist/admin.mjs"
+        },
         "./roles": {
             "types": "./dist/roles.d.ts",
             "import": "./dist/roles.mjs"
