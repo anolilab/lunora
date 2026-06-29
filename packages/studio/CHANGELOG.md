@@ -1,3 +1,9 @@
+## @lunora/studio [1.0.0-alpha.9](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.8...@lunora/studio@1.0.0-alpha.9) (2026-06-28)
+
+### Bug Fixes
+
+* **studio:** stop infinite render loops in admin panels ([#43](https://github.com/anolilab/lunora/issues/43)) ([f87b3b9](https://github.com/anolilab/lunora/commit/f87b3b9e34efc654870acde49b0ba460c2a5514d))
+
 ## @lunora/studio [1.0.0-alpha.8](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.7...@lunora/studio@1.0.0-alpha.8) (2026-06-27)
 
 ### Features
