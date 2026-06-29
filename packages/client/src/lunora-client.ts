@@ -1163,8 +1163,12 @@ class LunoraClient {
      * List a workflow's instances via the admin Workflows proxy
      * (`/_lunora/admin/workflows/instances`) — the Cloudflare control-plane data
      * the `Workflow` binding can't expose. Requires the worker to be built with a
-     * `workflowsClient` (Cloudflare account id + API token); otherwise the proxy
-     * responds 501 and this rejects. `name` is the deployed workflow name.
+     * `workflowsClient` (Cloudflare account id + API token). When one isn't
+     * configured this does NOT reject: the proxy returns a `200 { configured:
+     * false }` sentinel, so the result resolves with `configured === false` and an
+     * empty `instances` list — callers should branch on that flag rather than
+     * try/catch. (The instance-detail / status endpoints still reject with 501.)
+     * `name` is the deployed workflow name.
      */
     public async listWorkflowInstances(options: {
         name: string;
@@ -2571,8 +2575,10 @@ class LunoraClient {
             conn.connectTimer = setTimeout(() => {
                 conn.connectTimer = undefined;
 
-                // Only act if still connecting (open/close already cleared this).
-                if (conn.wsState !== "connecting") {
+                // Only act if THIS socket is still the connection's current,
+                // still-connecting socket. A newer reconnect socket (or an
+                // already-resolved open/close) must be left untouched.
+                if (conn.socket !== socket || conn.wsState !== "connecting") {
                     return;
                 }
 
@@ -2587,6 +2593,13 @@ class LunoraClient {
         }
 
         socket.addEventListener("open", (): void => {
+            // Ignore a late event from a socket that's no longer the connection's
+            // current one — a timed-out/closed socket must never resurrect itself
+            // or stomp the state of the newer socket that replaced it.
+            if (conn.socket !== socket) {
+                return;
+            }
+
             if (conn.connectTimer !== undefined) {
                 clearTimeout(conn.connectTimer);
                 conn.connectTimer = undefined;
@@ -2656,6 +2669,13 @@ class LunoraClient {
         });
 
         socket.addEventListener("close", (event?: { code?: number }): void => {
+            // Ignore a late close from a socket the connection already moved past
+            // (e.g. the fail-fast timeout force-closed it and a reconnect already
+            // built a newer socket). Acting on it would tear down the live socket.
+            if (conn.socket !== socket) {
+                return;
+            }
+
             // Close code 4001 is the server's `token_expired` signal: notify
             // listeners so the app can refresh its credential before the
             // (always-armed) reconnect re-resolves identity. The event is
@@ -2668,6 +2688,12 @@ class LunoraClient {
         });
 
         socket.addEventListener("error", (): void => {
+            // Ignore a late error from a superseded socket (see `close` above):
+            // only the connection's current socket may drive a disconnect.
+            if (conn.socket !== socket) {
+                return;
+            }
+
             // Some WebSocket implementations (notably misbehaving proxies and
             // certain test doubles) fire `error` without a follow-up `close`.
             // Treat error in `connecting`/`open` as a disconnect ourselves to
