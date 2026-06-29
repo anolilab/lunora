@@ -246,6 +246,25 @@ export interface MutatorIR {
 }
 
 /**
+ * A whole-row `ctx.db.replace(id, document)` write discovered inside a custom
+ * mutator's inline `server` impl (`lunora/mutators.ts`) — the input the
+ * `mutator_full_row_replace` advisor lint consumes. A `replace` overwrites the
+ * entire row, so a concurrent edit to a different column on a synced table is
+ * clobbered; `ctx.db.patch(id, { field })` merges at the column level instead.
+ * Structurally identical to `AdvisorMutatorWrite` so it passes straight through
+ * to the advisor without conversion, exactly as `InsertWriteIR` does for
+ * `AdvisorInsertWrite`.
+ */
+export interface MutatorWriteIR {
+    /** The mutator export whose `server` impl performs the replace, e.g. `renameChannel`. */
+    exportName: string;
+    /** Openable source path the replace appears in — always `lunora/mutators.ts`. */
+    file: string;
+    /** 1-based line of the `replace(...)` call. */
+    line: number;
+}
+
+/**
  * A single cron job lifted from a `cronJobs()` builder in `lunora/crons.ts`.
  * Mirrors `@lunora/scheduler`'s `CronJob`: {@link CronJobIR.cron} is the compiled
  * standard cron expression, {@link CronJobIR.functionPath} is the target

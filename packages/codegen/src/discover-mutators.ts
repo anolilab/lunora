@@ -142,4 +142,4 @@ const discoverMutators = (project: Project, lunoraDirectory: string): MutatorIR[
     return mutators;
 };
 
-export { discoverMutators, MUTATORS_FILENAME };
+export { discoverMutators, isDefineMutatorCallee, MUTATORS_FILENAME };

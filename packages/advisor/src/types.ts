@@ -6,6 +6,7 @@ import type { AdvisorHyperdriveCall } from "./hyperdrive-calls";
 import type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
 import type { AdvisorInsertWrite } from "./inserts";
 import type { AdvisorMaskProcedure } from "./mask-procedures";
+import type { AdvisorMutatorWrite } from "./mutator-writes";
 import type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
 import type { AdvisorProcedureProtection } from "./procedure-protections";
 import type { AdvisorQueryRead } from "./queries";
@@ -151,6 +152,15 @@ export interface LintContext {
      * nothing.
      */
     maskProcedures?: ReadonlyArray<AdvisorMaskProcedure>;
+
+    /**
+     * Whole-row `ctx.db.replace(id, document)` writes lifted from custom
+     * mutators' authoritative `server` impls (the `mutator_full_row_replace`
+     * input). Each `replace` overwrites the entire row, clobbering a concurrent
+     * edit to a different column on a synced table. Supplied by the codegen
+     * feeder; absent for runtime callers, where the lint finds nothing.
+     */
+    mutatorWrites?: ReadonlyArray<AdvisorMutatorWrite>;
 
     /**
      * Non-deterministic API calls (`Date.now`, `Math.random`,

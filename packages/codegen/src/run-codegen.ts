@@ -18,6 +18,7 @@ import discoverHttpRoutes from "./discover-http-routes";
 import discoverInserts from "./discover-inserts";
 import discoverMaskProcedures, { discoverMaskMetadata } from "./discover-mask-procedures";
 import discoverMigrations from "./discover-migrations";
+import discoverMutatorWrites from "./discover-mutator-writes";
 import { discoverMutators } from "./discover-mutators";
 import discoverNondeterministicCalls from "./discover-nondeterministic-calls";
 import discoverPackageDependencies from "./discover-package-dependencies";
@@ -318,6 +319,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   discoverAdminRoutes(project, lunoraDirectory),
                   discoverR2sqlCalls(project, lunoraDirectory),
                   shapes,
+                  discoverMutatorWrites(project, lunoraDirectory),
               );
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,
