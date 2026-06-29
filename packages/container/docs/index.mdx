@@ -450,7 +450,8 @@ export const worker = defineContainer({
 A name that collides with `env`/`secrets`, or a binding missing from the Worker
 env, is rejected (the collision at authoring time, the missing binding at start)
 — the same fail-closed stance as `secrets`. A per-instance `start({ envVars })`
-still replaces the env set wholesale.
+replaces the env set wholesale and skips Secrets Store resolution entirely, so
+the injected values apply only to implicit starts or a bare `start()`.
 
 Both `env` and `secrets` are **runtime** values, available when the container
 starts. For **build-time** values — `docker build --build-arg`, exposed to the

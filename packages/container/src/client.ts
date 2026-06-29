@@ -317,16 +317,59 @@ const COLD_START_ERROR_PATTERN = /no container instance|not listening|try again 
 const COLD_START_NO_INSTANCE_BODY = "no Container instance available";
 const COLD_START_START_FAILURE_BODY = "Failed to start container:";
 
+/**
+ * Bytes of a 500/503 body we scan for a cold-start sentinel. The platform's
+ * provisioning errors are short, fixed strings that lead the body, so a small
+ * prefix is enough — and capping the read keeps a large or streaming *app* error
+ * (which we never match and pass straight through) from stalling the retry path
+ * or buffering megabytes just to decide not to retry.
+ */
+const COLD_START_SENTINEL_SCAN_BYTES = 1024;
+
+/**
+ * Read at most {@link COLD_START_SENTINEL_SCAN_BYTES} of a response body, then
+ * cancel the reader so the rest is never pulled. Reads off the clone's stream so
+ * the caller's `response` stays untouched.
+ */
+const readBodyPrefix = async (response: Response): Promise<string> => {
+    const stream = response.clone().body;
+
+    if (stream === null) {
+        return "";
+    }
+
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+
+    try {
+        while (text.length < COLD_START_SENTINEL_SCAN_BYTES) {
+            // eslint-disable-next-line no-await-in-loop -- sequentially accumulate a bounded prefix, then stop.
+            const { done, value } = await reader.read();
+
+            if (done) {
+                break;
+            }
+
+            text += decoder.decode(value, { stream: true });
+        }
+    } finally {
+        await reader.cancel();
+    }
+
+    return text;
+};
+
 /** True when a thrown error is one of the platform's cold-start/provisioning transients. */
 const isColdStartError = (error: unknown): boolean => error instanceof Error && COLD_START_ERROR_PATTERN.test(error.message);
 
 /**
  * True when a *returned* response is a cold-start transient the base class
  * surfaced instead of throwing: a `429` (rate-limited start) or a `503`/`500`
- * whose body carries the no-instance / start-failure sentinel. The body is read
- * off a clone so the caller still gets an untouched response when we don't
- * retry. A plain app `5xx` (no sentinel) is left alone — this is not a blanket
- * 5xx retry.
+ * whose body carries the no-instance / start-failure sentinel. Only a bounded
+ * prefix is read off a clone, so the caller still gets an untouched response and
+ * a large/streaming app error never has to be drained. A plain app `5xx` (no
+ * sentinel) is left alone — this is not a blanket 5xx retry.
  */
 const isColdStartTransient = async (response: Response): Promise<boolean> => {
     if (response.status === 429) {
@@ -338,7 +381,7 @@ const isColdStartTransient = async (response: Response): Promise<boolean> => {
     }
 
     try {
-        const body = await response.clone().text();
+        const body = await readBodyPrefix(response);
 
         return body.includes(COLD_START_NO_INSTANCE_BODY) || body.startsWith(COLD_START_START_FAILURE_BODY);
     } catch {

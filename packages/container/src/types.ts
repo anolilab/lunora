@@ -238,8 +238,8 @@ interface ContainerConfig {
      * `{ STRIPE_KEY: "STRIPE_SECRET" }` runs `env.STRIPE_SECRET.get()` and sets
      * `STRIPE_KEY` inside the container. Unlike {@link ContainerConfig.secrets}
      * (plain Worker text secrets), this pulls from a `secrets_store_secrets`
-     * binding. A name already used by `env`/`secrets`, or a missing binding, is
-     * rejected at authoring time; an unreadable value fails the start. Applies
+     * binding. A name already used by `env`/`secrets` is rejected at authoring
+     * time; a missing binding or unreadable value fails the start. Applies
      * to the default start (the `ctx.containers` proxy path and a bare
      * `start()`); a per-instance `start({ envVars })` replaces the env set
      * wholesale, as it does for `env`/`secrets`. (Upstream

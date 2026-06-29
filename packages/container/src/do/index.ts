@@ -139,10 +139,17 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
      * `secretsStore` bindings into `envVars` first, mirroring
      * {@link containerFetch}. A per-instance `start({ envVars })` replaces the
      * env set wholesale (base behavior), so the injected values only apply to a
-     * bare `start()` — same as the static `env`/`secrets`.
+     * bare `start()` — same as the static `env`/`secrets`. When the caller
+     * supplies its own `envVars` we skip resolution entirely: those values would
+     * be discarded anyway, so a missing/unreadable binding shouldn't fail a start
+     * that never uses them.
      */
     public override async start(...args: Parameters<Container<Env>["start"]>): Promise<void> {
-        await this.resolveSecretsStoreEnv();
+        const [options] = args;
+
+        if (options?.envVars === undefined) {
+            await this.resolveSecretsStoreEnv();
+        }
 
         return super.start(...args);
     }
