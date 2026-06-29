@@ -96,7 +96,7 @@ const MailPanel = ({ limit = 100 }: MailPanelProps): ReactElement => {
 
     // The inbox is a single root-shard table with no write-flush to subscribe to,
     // so it's a one-shot read kept fresh by the poll below.
-    const { data, error: readError, refetch } = useAdminQuery<CapturedMailResult>(ADMIN_FUNCTIONS.getCapturedMail, { limit });
+    const { data, error: readError, isLoading, refetch } = useAdminQuery<CapturedMailResult>(ADMIN_FUNCTIONS.getCapturedMail, { limit });
 
     // Errors from the clear/send-test actions, surfaced alongside the read error.
     const [actionError, setActionError] = useState<null | string>(null);
@@ -233,7 +233,7 @@ const MailPanel = ({ limit = 100 }: MailPanelProps): ReactElement => {
                 </p>
             )}
 
-            {error === null && entries.length === 0 && (
+            {error === null && !isLoading && entries.length === 0 && (
                 <EmptyState
                     description={t("Email your app sends in dev is captured here — nothing is delivered.")}
                     icon={

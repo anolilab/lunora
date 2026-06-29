@@ -54,6 +54,12 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
     // refetching (and re-subscribing) rather than firing per keystroke.
     const debouncedShard = useDebounced(shardKey.trim(), 400);
 
+    // The status query (and its post-run `refetch`) is keyed by `debouncedShard`,
+    // while a run targets the live `shardKey`. Until the debounce catches up the two
+    // can disagree, so running would hit one shard while the table refreshes another.
+    // Gate the run on the displayed shard being settled.
+    const shardSettled = shardKey.trim() === debouncedShard;
+
     // One-shot read + always-on live subscription for the committed shard. Each
     // server push refreshes the run-state table so an in-progress migration's
     // processed/changed counts update live; `liveError` holds a rejection message
@@ -225,12 +231,17 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
                         {t("Dry run")}
                     </Label>
                     {dryRun ? (
-                        <Button data-testid="mg-run" disabled={running} onClick={runMigration} size="sm" type="button">
+                        <Button data-testid="mg-run" disabled={running || !shardSettled} onClick={runMigration} size="sm" type="button">
                             {running ? t("Running…") : t("Run")}
                         </Button>
                     ) : (
                         // A real (non-dry-run) migration mutates rows — guard it.
-                        <ConfirmButton confirmLabel={running ? t("Running…") : t("Run migration?")} disabled={running} onConfirm={runMigration} testId="mg-run">
+                        <ConfirmButton
+                            confirmLabel={running ? t("Running…") : t("Run migration?")}
+                            disabled={running || !shardSettled}
+                            onConfirm={runMigration}
+                            testId="mg-run"
+                        >
                             {t("Run")}
                         </ConfirmButton>
                     )}

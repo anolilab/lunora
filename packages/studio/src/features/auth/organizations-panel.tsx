@@ -145,8 +145,15 @@ export const OrganizationsPanel = (): ReactElement => {
     // is hidden).
     useAutoRefresh(() => {
         orgsQuery.refetch();
-        membersQuery.refetch();
-        invitationsQuery.refetch();
+
+        // The member/invitation queries are gated on a selection; `refetch()` runs
+        // even for a disabled query, so without this guard the poll would hit the
+        // endpoints with `organizationId: ""` and surface a spurious error before
+        // any org is selected.
+        if (selected !== null) {
+            membersQuery.refetch();
+            invitationsQuery.refetch();
+        }
     }, capabilities.organization);
 
     // Select an org; the keyed member/invitation queries re-fetch for the new id,

@@ -48,6 +48,14 @@ const formatDuration = (ms: number): string => {
     return `${seconds.toString()}s`;
 };
 
+/**
+ * The tab actually shown. The query-insights tab only exists while the active
+ * shard/snapshot carries `queryStats`; if it vanishes while selected, fall back to
+ * overview so the body never blanks pointing at a tab that no longer renders.
+ */
+const resolveTab = (hasQueryStats: boolean, activeTab: "overview" | "query-insights"): "overview" | "query-insights" =>
+    hasQueryStats ? activeTab : "overview";
+
 /** Cache hit-rate as a percentage string, or `—` when there's been no traffic. */
 const hitRate = (hits: number, misses: number): string => {
     const total = hits + misses;
@@ -253,6 +261,10 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
         return enrichQueryStats(snapQs);
     }, [metrics]);
 
+    // The shown tab, falling back to overview when the active shard/snapshot has no
+    // query insights (see {@link resolveTab}) so a vanished tab never blanks the body.
+    const effectiveTab = resolveTab(queryStats !== undefined, activeTab);
+
     const runAggregate = (): void => {
         fireAndForget(aggregateAll());
     };
@@ -303,7 +315,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
             {queryStats !== undefined && (
                 <div className="flex gap-2 border-b" data-testid="mt-tabs">
                     <button
-                        className={`pb-2 text-sm font-medium transition-colors ${activeTab === "overview" ? "border-b-2 border-primary text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                        className={`pb-2 text-sm font-medium transition-colors ${effectiveTab === "overview" ? "border-b-2 border-primary text-foreground" : "text-muted-foreground hover:text-foreground"}`}
                         data-testid="mt-tab-overview"
                         onClick={switchToOverview}
                         type="button"
@@ -311,7 +323,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
                         {t("Overview")}
                     </button>
                     <button
-                        className={`pb-2 text-sm font-medium transition-colors ${activeTab === "query-insights" ? "border-b-2 border-primary text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                        className={`pb-2 text-sm font-medium transition-colors ${effectiveTab === "query-insights" ? "border-b-2 border-primary text-foreground" : "text-muted-foreground hover:text-foreground"}`}
                         data-testid="mt-tab-query-insights"
                         onClick={switchToQueryInsights}
                         type="button"
@@ -325,9 +337,9 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
             )}
 
             {/* Query Insights tab — rendered only when present and selected. */}
-            {activeTab === "query-insights" && queryStats !== undefined && <QueryInsights queryStats={queryStats} />}
+            {effectiveTab === "query-insights" && queryStats !== undefined && <QueryInsights queryStats={queryStats} />}
 
-            {activeTab === "overview" && metrics !== null && (
+            {effectiveTab === "overview" && metrics !== null && (
                 <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" data-testid="mt-stats">
                     <StatCard
                         chart={
@@ -389,9 +401,9 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
                 </dl>
             )}
 
-            {activeTab === "overview" && metrics === null && null}
+            {effectiveTab === "overview" && metrics === null && null}
 
-            {activeTab === "overview" && aggregate !== null && shardResults !== null && (
+            {effectiveTab === "overview" && aggregate !== null && shardResults !== null && (
                 <div className="flex flex-col gap-4" data-testid="mt-aggregate-view">
                     <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="mt-aggregate-stats">
                         <StatCard

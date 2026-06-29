@@ -1,7 +1,7 @@
 import { useLunora } from "@lunora/react";
 import type { QueryKey } from "@tanstack/react-query";
 import { keepPreviousData as keepPreviousDataPlaceholder, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { adminRef, callOptions, errorMessage, fireAndForget } from "../lib/internal";
 
@@ -13,7 +13,7 @@ import { adminRef, callOptions, errorMessage, fireAndForget } from "../lib/inter
  * panels (e.g. `listTables` / `maskPolicies` / `advisories` mounted in several
  * places resolve to one in-flight request + one cache entry).
  */
-const adminQueryKey = (path: string, args: Record<string, unknown>, shardKey: string): QueryKey => ["lunora-admin", path, args, shardKey];
+const adminQueryKey = (path: string, args: Record<string, unknown>, shardKey: string): QueryKey => ["lunora-admin", path, args, shardKey.trim()];
 
 /** Options for {@link useAdminQuery}. */
 interface UseAdminQueryOptions {
@@ -186,7 +186,11 @@ function useAdminQuery<T>(path: string, args: Record<string, unknown>, options: 
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [keySignature, enabled, live]);
 
-    return { ...base, liveError };
+    // When the read is gated off or live mode is disabled the subscription effect
+    // returns early without re-running, so a `liveError` captured from a previous
+    // `live` window would otherwise linger. Suppress it whenever the live bridge
+    // isn't actually active.
+    return { ...base, liveError: enabled && live ? liveError : undefined };
 }
 
 /**
@@ -198,11 +202,14 @@ function useAdminQuery<T>(path: string, args: Record<string, unknown>, options: 
 const useInvalidateAdmin = (): ((path: string, args?: Record<string, unknown>, shardKey?: string) => void) => {
     const queryClient = useQueryClient();
 
-    return (path: string, args?: Record<string, unknown>, shardKey?: string): void => {
-        const queryKey = args === undefined ? ["lunora-admin", path] : adminQueryKey(path, args, shardKey ?? "");
+    return useCallback(
+        (path: string, args?: Record<string, unknown>, shardKey?: string): void => {
+            const queryKey = args === undefined ? ["lunora-admin", path] : adminQueryKey(path, args, shardKey ?? "");
 
-        fireAndForget(queryClient.invalidateQueries({ queryKey }));
-    };
+            fireAndForget(queryClient.invalidateQueries({ queryKey }));
+        },
+        [queryClient],
+    );
 };
 
 export { adminQueryKey, useAdminQuery, useClientQuery, useInvalidateAdmin };

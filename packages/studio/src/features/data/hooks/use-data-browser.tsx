@@ -255,8 +255,12 @@ const useDataBrowser = ({
     const [filter, setFilter] = useState<string>(initialSearch ?? "");
     const search = useDebounced(filter.trim(), 300);
 
-    // The shard key both reads target, debounced so typing a key settles before
-    // refetching the table list + page rather than firing per keystroke.
+    // The shard the reads target, debounced so typing a key settles before
+    // refetching the table list + page rather than firing per keystroke. Page-bound
+    // actions (preview, facet fetch, row write/delete, bulk delete) target this same
+    // settled shard so a write can never hit a different shard than the one whose
+    // rows are on screen during the debounce window. The live `shardKey` is only the
+    // input value + the share-link descriptor.
     const debouncedShard = useDebounced(shardKey.trim(), 400);
 
     // Structured column filters. Held in a ref too so a write's bulk-delete reads
@@ -307,12 +311,13 @@ const useDataBrowser = ({
         };
     }, [filters, pageSize, offset, sorting, search, selectedTable]);
 
-    // `keepPreviousData` holds the last page visible until the next lands (so a
-    // paginate / search doesn't flash empty) — replacing the old monotonic
-    // out-of-order guard; `live` streams writes in. Disabled until a table is open.
+    // `keepPreviousData` is off: the placeholder isn't identity-aware, so holding
+    // the last page across a `selectedTable` / `debouncedShard` change would render
+    // the prior table's/shard's rows while edits and deletes already target the new
+    // one. `live` streams writes in. Disabled until a table is open.
     const pageQuery = useAdminQuery<TablePage>(ADMIN_FUNCTIONS.readTablePage, pageArgs, {
         enabled: selectedTable !== null,
-        keepPreviousData: true,
+        keepPreviousData: false,
         live: true,
         shardKey: debouncedShard,
     });
@@ -392,7 +397,7 @@ const useDataBrowser = ({
             const result = (await client.query(
                 READ_TABLE_PAGE,
                 { filters: [], limit: PREVIEW_CANDIDATES, offset: 0, search: id, table: targetTable },
-                callOptions(shardKey),
+                callOptions(debouncedShard),
             )) as TablePage;
 
             return result.rows.find((row) => rowId(row) === id) ?? null;
@@ -420,7 +425,7 @@ const useDataBrowser = ({
     // drops it entirely. With no table selected the hook seeds the slot without
     // fetching (a null fetcher).
     const toggleFacet = (column: string): void => {
-        toggleFacetColumn(column, selectedTable === null ? null : facetFetcher(shardKey, selectedTable, filtersRef.current, search));
+        toggleFacetColumn(column, selectedTable === null ? null : facetFetcher(debouncedShard, selectedTable, filtersRef.current, search));
     };
 
     // Clicking a facet value adds an `eq` filter for that column/value, narrowing
@@ -526,7 +531,7 @@ const useDataBrowser = ({
         try {
             for (const [id, columns] of Object.entries(stagedEdits.staged)) {
                 // eslint-disable-next-line no-await-in-loop -- one patch per edited row; sequential so a failure pins the offending row
-                (await client.query(WRITE_ROW, { doc: columns, id, op: "patch", table: selectedTable }, callOptions(shardKey))) as WriteRowResult;
+                (await client.query(WRITE_ROW, { doc: columns, id, op: "patch", table: selectedTable }, callOptions(debouncedShard))) as WriteRowResult;
             }
 
             stagedEdits.clear();
@@ -596,7 +601,11 @@ const useDataBrowser = ({
         }
 
         try {
-            (await client.query(WRITE_ROW, { doc: parsedDocument, id: id ?? undefined, op, table: selectedTable }, callOptions(shardKey))) as WriteRowResult;
+            (await client.query(
+                WRITE_ROW,
+                { doc: parsedDocument, id: id ?? undefined, op, table: selectedTable },
+                callOptions(debouncedShard),
+            )) as WriteRowResult;
             setEditing(null);
             pageQuery.refetch();
         } catch (error) {
@@ -622,7 +631,7 @@ const useDataBrowser = ({
         try {
             for (let batch = 0; batch < MAX_BULK_DELETE_BATCHES; batch += 1) {
                 // eslint-disable-next-line no-await-in-loop -- batches are inherently sequential (each call reflects the prior batch's deletes)
-                const result = (await client.query(ref, args, callOptions(shardKey))) as BulkDeleteResult;
+                const result = (await client.query(ref, args, callOptions(debouncedShard))) as BulkDeleteResult;
 
                 if (!result.hasMore) {
                     break;
@@ -781,7 +790,7 @@ const useDataBrowser = ({
         try {
             for (const id of ids) {
                 // eslint-disable-next-line no-await-in-loop -- one delete per selected row; sequential so a failure pins the offending row
-                (await client.query(WRITE_ROW, { id, op: "delete", table: selectedTable }, callOptions(shardKey))) as WriteRowResult;
+                (await client.query(WRITE_ROW, { id, op: "delete", table: selectedTable }, callOptions(debouncedShard))) as WriteRowResult;
             }
 
             pageQuery.refetch();

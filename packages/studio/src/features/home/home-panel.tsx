@@ -365,8 +365,11 @@ export const HomePanel = ({ initialShardKey }: HomePanelProps): ReactElement => 
     const activity = Array.isArray(auditLogQuery.data?.entries) ? auditLogQuery.data.entries : [];
 
     // `null` for an unresolved or failed read (renders a muted placeholder rather
-    // than a misleading zero); a number once the read resolves.
-    const performanceCount = statsQuery.data === undefined ? null : deriveInsights(metrics, functions).length;
+    // than a misleading zero); a number once the read resolves. `deriveInsights`
+    // draws on BOTH the metrics snapshot and the function stats, so wait for both —
+    // resolving on `statsQuery` alone could show `0` / "No issues found" while the
+    // metrics-derived insights are still loading.
+    const performanceCount = metricsQuery.data === undefined || statsQuery.data === undefined ? null : deriveInsights(metrics, functions).length;
     const securityCount = Array.isArray(auditQuery.data?.findings) ? auditQuery.data.findings.length : null;
 
     const viewSecurity = (): void => {

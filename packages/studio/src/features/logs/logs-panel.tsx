@@ -418,7 +418,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
     );
 
     const activeQuery = view === "requests" ? requestsQuery : errorsQuery;
-    const { error, liveError } = activeQuery;
+    const { error, isLoading: activeLoading, liveError } = activeQuery;
 
     // Coerce each view's resolved payload into its entries array (a one-shot read
     // or live push without an `entries` array yields `[]`); an unloaded gated
@@ -459,11 +459,19 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
         }
 
         if (activeCount === 0) {
+            // A count of 0 while the active view's first read is still in flight
+            // means the buffer hasn't loaded yet — not that the server returned an
+            // empty page. Don't flash the empty state; fall through to the (empty)
+            // list/summary container until data lands.
+            if (activeLoading) {
+                return summaryVisible ? "summary" : "list";
+            }
+
             return "empty";
         }
 
         return summaryVisible ? "summary" : "list";
-    }, [activeCount, error, summaryVisible]);
+    }, [activeCount, activeLoading, error, summaryVisible]);
 
     // Row virtualization over the active list: only the rows intersecting the
     // 400px viewport (+ overscan) are mounted, so a full buffer never renders

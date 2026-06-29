@@ -55,8 +55,10 @@ export const CronTriggersPanel = ({ loadCronJobs, runCronJob }: CronTriggersPane
     const [runStates, setRunStates] = useState<Record<string, RunState>>({});
 
     // The cron-jobs map is HTTP-only (no admin-RPC path), so it's a
-    // `useClientQuery` over the supplied loader (or `client.getCronJobs`).
-    const jobsQuery = useClientQuery(["lunora-cron-jobs"], () => (loadCronJobs ?? (() => client.getCronJobs()))());
+    // `useClientQuery` over the supplied loader (or `client.getCronJobs`). The key
+    // carries the loader source so a custom `loadCronJobs` override never shares the
+    // default `client.getCronJobs()` cache entry under one `QueryClient`.
+    const jobsQuery = useClientQuery(["lunora-cron-jobs", loadCronJobs ? "custom" : "default"], () => (loadCronJobs ?? (() => client.getCronJobs()))());
     const { data: jobs, error } = jobsQuery;
 
     // Running is available when the host supplies a runner, or when the panel is

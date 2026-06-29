@@ -82,7 +82,7 @@ const AuditPanel = ({ initialShardKey }: AuditPanelProps): ReactElement => {
     // streams each server write-flush into the cache so new entries appear without
     // a manual refresh; `liveError` holds a rejection message (e.g. missing admin
     // token) so the panel can say why it stopped updating.
-    const { data, error, liveError } = useAdminQuery<AuditLogResult>(ADMIN_FUNCTIONS.getAuditLog, {}, { live: true, shardKey: debouncedShard });
+    const { data, error, isLoading, liveError } = useAdminQuery<AuditLogResult>(ADMIN_FUNCTIONS.getAuditLog, {}, { live: true, shardKey: debouncedShard });
 
     const entries = useMemo<AuditEntry[]>(() => data?.entries ?? [], [data]);
 
@@ -151,7 +151,7 @@ const AuditPanel = ({ initialShardKey }: AuditPanelProps): ReactElement => {
                 </p>
             )}
 
-            {error === null && filtered.length === 0 && (
+            {error === null && !isLoading && filtered.length === 0 && (
                 <EmptyState
                     description={t("State-changing admin operations are recorded here.")}
                     icon={

@@ -124,13 +124,14 @@ export const GlobalDataBrowser = ({
     const tables = tablesQuery.data ?? null;
     const tablesError = tablesQuery.error;
 
-    // `keepPreviousData` holds the last page visible until the next lands (so a
-    // paginate / drill-down doesn't flash empty) and TanStack's latest-wins keying
-    // replaces the old monotonic out-of-order guard. Disabled until a table is open.
+    // `keepPreviousData` is off: the placeholder isn't table-aware, so holding the
+    // last page across a `selectedTable` change would render table A's rows while
+    // the sidebar/URL already point at table B (and facet clicks would then act on
+    // the new table using the stale visible rows). Disabled until a table is open.
     const pageQuery = useClientQuery<GlobalTablePage>(
         ["lunora-global-page", selectedTable ?? "", offset, pageSize, JSON.stringify(filters)],
         () => client.readGlobalTablePage({ filters, limit: pageSize, offset, table: selectedTable ?? "" }),
-        { enabled: selectedTable !== null, keepPreviousData: true },
+        { enabled: selectedTable !== null, keepPreviousData: false },
     );
     const page = pageQuery.data ?? null;
     const pageError = pageQuery.error;

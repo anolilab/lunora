@@ -127,7 +127,7 @@ const PaymentsPanel = ({ limit = 100 }: PaymentsPanelProps): ReactElement => {
 
             {error === null ? undefined : <p className="text-sm text-destructive">{error}</p>}
 
-            {subscriptions.length === 0 ? (
+            {subscriptions.length === 0 && !subscriptionsQuery.isLoading ? (
                 <EmptyState testId="payments-empty" title={t("No subscriptions yet")} />
             ) : (
                 <Card className="overflow-hidden py-0">

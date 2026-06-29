@@ -2,7 +2,7 @@ import type { AdvisorShardTraffic } from "@lunora/advisor";
 import { useLunora } from "@lunora/react";
 import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ShardInput } from "../../components/shard-input";
 import { Button } from "../../components/ui/button";
@@ -155,6 +155,13 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
     // shard-seed protocol the audit/metrics panels share.
     const debouncedShard = useDebounced(shardKey.trim(), 400);
 
+    // The most recently requested enumeration shard. `enumerateShard` runs
+    // fire-and-forget from both the shard-change effect and the visibility handler,
+    // so a slower request for a previous shard can resolve last; every state write
+    // is gated on this ref still naming the shard it was issued for, so a stale
+    // completion can't overwrite the current shard's `declaredIndexes`/`shardTraffic`.
+    const latestEnumeratedShard = useRef<string>("");
+
     // The three simple shard-scoped reads, each live so a write-flush re-pushes
     // without a manual refresh. `metrics`/`functions`/`advisories` are best-effort:
     // a partial snapshot still yields useful insights, so a single failure doesn't
@@ -186,20 +193,29 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
     // Driven by any one table's live shard set — a DO holds every table, so each
     // shard's getMetrics request total is the same regardless of which table
     // seeds the fan-out; we dedupe by shardKey to be safe.
-    const loadShardTrafficFeed = async (tableNames: ReadonlyArray<string>): Promise<void> => {
+    const loadShardTrafficFeed = async (tableNames: ReadonlyArray<string>, shard: string): Promise<void> => {
         // The fan-out needs ANY live table to enumerate the shard set; with no
         // tables there's nothing to seed it, so skip the call entirely rather
         // than POST an empty `table` the worker rejects with a 400.
         const seedTable = tableNames[0];
 
         if (seedTable === undefined || seedTable === "") {
-            setShardTraffic(null);
+            if (latestEnumeratedShard.current === shard) {
+                setShardTraffic(null);
+            }
 
             return;
         }
 
         try {
             const traffic = await fanShardTraffic(seedTable);
+
+            // A newer shard enumeration superseded this one mid-flight — drop the
+            // result rather than overwrite the current shard's traffic.
+            if (latestEnumeratedShard.current !== shard) {
+                return;
+            }
+
             const byShard = new Map<string, AdvisorShardTraffic>();
 
             for (const entry of traffic.shards) {
@@ -211,7 +227,9 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
             setShardTraffic([...byShard.values()]);
         } catch {
             // shard-traffic endpoint unavailable — leave hot_shard dormant.
-            setShardTraffic(null);
+            if (latestEnumeratedShard.current === shard) {
+                setShardTraffic(null);
+            }
         }
     };
 
@@ -226,10 +244,18 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
     // `recordShard` runs only on a successful read, mirroring the old refresh.
     const enumerateShard = useCallback(
         async (shard: string): Promise<void> => {
+            // Claim this as the latest enumeration; any earlier in-flight call now
+            // sees a ref mismatch after its awaits and drops its (stale) writes.
+            latestEnumeratedShard.current = shard;
+
             let tableNames: string[] = [];
 
             try {
                 const tables = (await client.query(LIST_TABLES, {}, callOptions(shard))) as TableInfo[];
+
+                if (latestEnumeratedShard.current !== shard) {
+                    return;
+                }
 
                 recordShard(shard);
                 tableNames = tables.map((table) => table.name);
@@ -240,6 +266,10 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
                             [table.name, (await client.query(LIST_TABLE_INDEXES, { table: table.name }, callOptions(shard))) as TableIndexesResult] as const,
                     ),
                 );
+
+                if (latestEnumeratedShard.current !== shard) {
+                    return;
+                }
 
                 const declared: DeclaredIndex[] = [];
 
@@ -255,10 +285,12 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
             } catch {
                 // listTables unavailable (older worker / no admin token) — no
                 // declared-index enumeration, so the dead-index check is dormant.
-                setDeclaredIndexes(null);
+                if (latestEnumeratedShard.current === shard) {
+                    setDeclaredIndexes(null);
+                }
             }
 
-            await loadShardTrafficFeed(tableNames);
+            await loadShardTrafficFeed(tableNames, shard);
         },
         // `fanShardTraffic`/`loadShardTrafficFeed` are render-fresh closures; the
         // enumeration only needs to re-run on a shard change (or a manual visibility
