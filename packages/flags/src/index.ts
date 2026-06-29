@@ -7,6 +7,8 @@
  *
  * - `@lunora/flags` — `defineFlags`, the `createFlags` ctx facade, and types.
  * - `@lunora/flags/providers/flagship` — the first-class Cloudflare Flagship provider.
+ * - `@lunora/flags/providers/memory` — a static, in-memory provider (tests/local/simple apps, zero extra deps).
+ * - `@lunora/flags/providers/env` — reads flags from the Worker `env` vars/secrets (zero deps).
  * - `@lunora/flags/web` — optional browser OpenFeature provider (escape hatch).
  * @packageDocumentation
  */

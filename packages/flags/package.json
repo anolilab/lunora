@@ -42,6 +42,14 @@
             "types": "./dist/providers/flagship.d.ts",
             "import": "./dist/providers/flagship.mjs"
         },
+        "./providers/memory": {
+            "types": "./dist/providers/memory.d.ts",
+            "import": "./dist/providers/memory.mjs"
+        },
+        "./providers/env": {
+            "types": "./dist/providers/env.d.ts",
+            "import": "./dist/providers/env.mjs"
+        },
         "./web": {
             "types": "./dist/web.d.ts",
             "import": "./dist/web.mjs"
@@ -68,18 +76,6 @@
     "dependencies": {
         "@openfeature/server-sdk": "catalog:flags"
     },
-    "peerDependencies": {
-        "@cloudflare/flagship": "catalog:flags",
-        "@openfeature/web-sdk": "catalog:flags"
-    },
-    "peerDependenciesMeta": {
-        "@cloudflare/flagship": {
-            "optional": true
-        },
-        "@openfeature/web-sdk": {
-            "optional": true
-        }
-    },
     "devDependencies": {
         "@cloudflare/flagship": "catalog:flags",
         "@cloudflare/workers-types": "catalog:cloudflare",
@@ -91,6 +87,18 @@
         "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
+    },
+    "peerDependencies": {
+        "@cloudflare/flagship": "catalog:flags",
+        "@openfeature/web-sdk": "catalog:flags"
+    },
+    "peerDependenciesMeta": {
+        "@cloudflare/flagship": {
+            "optional": true
+        },
+        "@openfeature/web-sdk": {
+            "optional": true
+        }
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"

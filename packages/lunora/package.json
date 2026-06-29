@@ -98,9 +98,17 @@
             "types": "./dist/flags.d.ts",
             "import": "./dist/flags.mjs"
         },
+        "./flags/env": {
+            "types": "./dist/flags/env.d.ts",
+            "import": "./dist/flags/env.mjs"
+        },
         "./flags/flagship": {
             "types": "./dist/flags/flagship.d.ts",
             "import": "./dist/flags/flagship.mjs"
+        },
+        "./flags/memory": {
+            "types": "./dist/flags/memory.d.ts",
+            "import": "./dist/flags/memory.mjs"
         },
         "./flags/web": {
             "types": "./dist/flags/web.d.ts",
