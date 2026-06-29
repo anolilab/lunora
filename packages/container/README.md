@@ -90,7 +90,9 @@ export const transcode = action.input({ videoId: v.id("videos") }).action(async 
 });
 ```
 
-`ctx.containers` is action-only (container calls are external I/O, like `ctx.fetch`); `.get(name)` handles also expose `start`/`stop`/`destroy`/`getState` lifecycle control plus `renewActivityTimeout()` (keep a busy WebSocket's container awake) and `egress.*` (adjust the allow/deny lists at runtime).
+`.get()` and `.any()` retry the **same** instance through a cold start — when a request lands while Cloudflare is still provisioning (a `503` "no instance", `500` "Failed to start", `429`, or "not listening"), they back off and retry (default 3 attempts) so the provisioning race never reaches your handler. Genuine app `5xx`s pass straight through. Tune or disable per call with `.get(id, { attempts, backoffMs })` (a pre-built `Request` is sent once and not retried, since its body may not be replayable).
+
+`ctx.containers` is action-only (container calls are external I/O, like `ctx.fetch`); `.get(name)` handles also expose `start`/`stop`/`destroy`/`getState` lifecycle control plus `renewActivityTimeout()` and `egress.*` (adjust the allow/deny lists at runtime). HTTP requests and WebSocket frames already keep a busy container awake automatically; `renewActivityTimeout()` is the escape hatch for non-HTTP/non-WS activity.
 
 The config layer (`lunora dev` / `lunora deploy`) reconciles the wrangler `containers[]` entry, the `CONTAINER_*` Durable Object binding, and the SQLite-class migration automatically; `wrangler deploy` builds the Dockerfile with local Docker and pushes it to the Cloudflare Registry.
 
@@ -118,6 +120,18 @@ await ctx.containers.app.get(tenantId).port(9090).fetch("/admin"); // → 9090
 export const worker = defineContainer({
     image: "./containers/worker",
     buildArgs: { NODE_VERSION: "22", BUILD_TARGET: "production" },
+});
+```
+
+### Secrets and Secrets Store
+
+`secrets` forwards plain Worker secrets into the container env; `secretsStore` maps a _container env-var name → Cloudflare [Secrets Store](https://developers.cloudflare.com/secrets-store/) binding name_ and resolves each with its async `.get()` at first start (memoised). A collision with `env`/`secrets` is rejected at authoring time; a missing binding fails the start — the same fail-closed stance as `secrets`.
+
+```ts
+export const worker = defineContainer({
+    image: "./containers/worker",
+    secrets: ["TRANSCODER_API_KEY"], // plain Worker secret → same-named env var
+    secretsStore: { STRIPE_KEY: "STRIPE_SECRET" }, // env.STRIPE_SECRET.get() → STRIPE_KEY
 });
 ```
 
@@ -189,6 +203,16 @@ Secure the bridge in `resolveIdentity`: read `request.headers.get("authorization
 - `@lunora/container/bridge` — runtime-agnostic: `createContainerBridge` for calling Lunora functions from inside a container.
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/containers)**.
+
+### Known platform limitations
+
+Some constraints live in Cloudflare Containers itself (open issues on [`cloudflare/containers`](https://github.com/cloudflare/containers/issues)). Lunora papers over what it can — cold-start retry and WebSocket keep-alive — and surfaces the rest:
+
+- **No autoscaling / location-aware routing** — pools are fixed-size and pick uniformly at random ([#226](https://github.com/cloudflare/containers/issues/226)).
+- **Ephemeral disk; no FUSE / tmpfs / some `node:net` modes** — persist to [`@lunora/storage`](https://www.npmjs.com/package/@lunora/storage) (R2) ([#112](https://github.com/cloudflare/containers/issues/112), [#160](https://github.com/cloudflare/containers/issues/160), [#67](https://github.com/cloudflare/containers/issues/67)).
+- **Egress interception is HTTP-first** — HTTPS needs `interceptHttps`; raw gRPC isn't interceptable yet ([#195](https://github.com/cloudflare/containers/issues/195)).
+- **Long jobs can be terminated on rollout** — use `hardTimeout` and make work resumable ([#138](https://github.com/cloudflare/containers/issues/138)).
+- **Local dev can't pull from the Cloudflare Registry** — build from a local Dockerfile ([#155](https://github.com/cloudflare/containers/issues/155)).
 
 ## Related
 
