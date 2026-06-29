@@ -231,6 +231,23 @@ interface ContainerConfig {
     secrets?: ReadonlyArray<string>;
 
     /**
+     * Cloudflare **Secrets Store** secrets forwarded into the container's
+     * environment, as a map of *container env-var name → Worker Secrets Store
+     * binding name*. Each binding is resolved with its async `.get()` the first
+     * time the instance starts, then injected as that env var — e.g.
+     * `{ STRIPE_KEY: "STRIPE_SECRET" }` runs `env.STRIPE_SECRET.get()` and sets
+     * `STRIPE_KEY` inside the container. Unlike {@link ContainerConfig.secrets}
+     * (plain Worker text secrets), this pulls from a `secrets_store_secrets`
+     * binding. A name already used by `env`/`secrets`, or a missing binding, is
+     * rejected at authoring time; an unreadable value fails the start. Applies
+     * to the default start (the `ctx.containers` proxy path and a bare
+     * `start()`); a per-instance `start({ envVars })` replaces the env set
+     * wholesale, as it does for `env`/`secrets`. (Upstream
+     * cloudflare/containers#96.)
+     */
+    secretsStore?: Readonly<Record<string, string>>;
+
+    /**
      * Idle timeout after which the instance is put to sleep, e.g. `"5m"`,
      * `"30s"`, or a number of seconds. Cloudflare's default is `"10m"`.
      */

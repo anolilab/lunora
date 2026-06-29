@@ -164,10 +164,31 @@ const assertValidImage = (image: ContainerConfig["image"]): void => {
 };
 
 /**
- * Validate `env`/`buildArgs`/`secrets` naming and reject a name declared in both
- * `env` and `secrets` (where the secret would silently overwrite the static env
- * value at start). All three name sets must be valid env-var names; the
- * collision is rejected at authoring time so the runtime resolver never has to.
+ * Validate the `secretsStore` env → binding map: each env name must be a valid
+ * env-var name, each binding a non-empty string, and no env name may collide
+ * with an `env`/`secrets` source (which one would silently win at start).
+ */
+const assertValidSecretsStore = (config: ContainerConfig, envNames: ReadonlySet<string>, secretNames: ReadonlySet<string>): void => {
+    for (const [envName, binding] of Object.entries(config.secretsStore ?? {})) {
+        if (!ENV_NAME_PATTERN.test(envName)) {
+            throw new TypeError(`defineContainer: secretsStore env name "${envName}" is not a valid environment variable name`);
+        }
+
+        if (typeof binding !== "string" || binding.trim().length === 0) {
+            throw new TypeError(`defineContainer: \`secretsStore["${envName}"]\` must be a non-empty Secrets Store binding name`);
+        }
+
+        if (envNames.has(envName) || secretNames.has(envName)) {
+            throw new TypeError(`defineContainer: "${envName}" is declared in both \`secretsStore\` and \`env\`/\`secrets\` — pick one source for the value`);
+        }
+    }
+};
+
+/**
+ * Validate `env`/`buildArgs`/`secrets`/`secretsStore` naming and reject a name
+ * declared by more than one source (where one would silently overwrite the
+ * other at start). All name sets must be valid env-var names; the collisions
+ * are rejected at authoring time so the runtime resolver never has to.
  */
 const assertValidEnvAndSecrets = (config: ContainerConfig): void => {
     for (const name of Object.keys(config.env ?? {})) {
@@ -183,6 +204,7 @@ const assertValidEnvAndSecrets = (config: ContainerConfig): void => {
     }
 
     const envNames = new Set(Object.keys(config.env ?? {}));
+    const secretNames = new Set(config.secrets);
 
     for (const secret of config.secrets ?? []) {
         if (!ENV_NAME_PATTERN.test(secret)) {
@@ -195,6 +217,8 @@ const assertValidEnvAndSecrets = (config: ContainerConfig): void => {
             );
         }
     }
+
+    assertValidSecretsStore(config, envNames, secretNames);
 };
 
 /** Validate a port is an integer in the TCP range, with a directed error naming the field. */
