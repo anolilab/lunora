@@ -116,6 +116,103 @@ describe(LunoraContainer, () => {
     });
 });
 
+/** Cast onto the private Secrets Store resolver + `envVars` the start path reads. */
+type SecretsStoreProbe = { envVars: Record<string, string>; resolveSecretsStoreEnv: () => Promise<void> };
+
+describe("lunoraContainer secretsStore resolution", () => {
+    it("resolves Secrets Store bindings and merges them into envVars before start", async () => {
+        expect.assertions(1);
+
+        const definition = defineContainer({
+            env: { LOG_LEVEL: "info" },
+            image: "./app",
+            secretsStore: { STRIPE_KEY: "STRIPE_SECRET" },
+        });
+        const env = { STRIPE_SECRET: { get: async () => "sk_live_123" } };
+
+        const instance = new LunoraContainer(fakeDurableObjectContext() as never, env, definition, "transcoder") as unknown as SecretsStoreProbe;
+
+        await instance.resolveSecretsStoreEnv();
+
+        expect(instance.envVars).toStrictEqual({ LOG_LEVEL: "info", STRIPE_KEY: "sk_live_123" });
+    });
+
+    it("resolves each binding only once across repeated starts", async () => {
+        expect.assertions(2);
+
+        const get = vi.fn<() => Promise<string>>(async () => "sk_live_123");
+        const definition = defineContainer({ image: "./app", secretsStore: { STRIPE_KEY: "STRIPE_SECRET" } });
+
+        const instance = new LunoraContainer(
+            fakeDurableObjectContext() as never,
+            { STRIPE_SECRET: { get } },
+            definition,
+            "transcoder",
+        ) as unknown as SecretsStoreProbe;
+
+        await instance.resolveSecretsStoreEnv();
+        await instance.resolveSecretsStoreEnv();
+
+        expect(get).toHaveBeenCalledTimes(1);
+        expect(instance.envVars).toStrictEqual({ STRIPE_KEY: "sk_live_123" });
+    });
+
+    it("fails the start when the Secrets Store binding is missing from the worker env", async () => {
+        expect.assertions(1);
+
+        const definition = defineContainer({ image: "./app", secretsStore: { STRIPE_KEY: "STRIPE_SECRET" } });
+        const instance = new LunoraContainer(fakeDurableObjectContext() as never, {}, definition, "transcoder") as unknown as SecretsStoreProbe;
+
+        await expect(instance.resolveSecretsStoreEnv()).rejects.toThrow('binding "STRIPE_SECRET", which is not a Secrets Store binding');
+    });
+
+    it("fails the start when a Secrets Store value does not resolve to a string", async () => {
+        expect.assertions(1);
+
+        const definition = defineContainer({ image: "./app", secretsStore: { STRIPE_KEY: "STRIPE_SECRET" } });
+        const env = { STRIPE_SECRET: { get: async () => undefined } };
+        const instance = new LunoraContainer(fakeDurableObjectContext() as never, env, definition, "transcoder") as unknown as SecretsStoreProbe;
+
+        await expect(instance.resolveSecretsStoreEnv()).rejects.toThrow("did not resolve to a string value");
+    });
+
+    it("is a no-op when no secretsStore is configured", async () => {
+        expect.assertions(1);
+
+        const definition = defineContainer({ env: { LOG_LEVEL: "info" }, image: "./app" });
+        const instance = new LunoraContainer(fakeDurableObjectContext() as never, {}, definition, "transcoder") as unknown as SecretsStoreProbe;
+
+        await instance.resolveSecretsStoreEnv();
+
+        expect(instance.envVars).toStrictEqual({ LOG_LEVEL: "info" });
+    });
+
+    it("skips Secrets Store resolution when start() supplies its own envVars", async () => {
+        expect.assertions(2);
+
+        // The binding is missing from the worker env, so resolution *would* throw
+        // — proving it's skipped when the caller overrides `envVars` (which
+        // replace the env set wholesale, discarding any resolved secret anyway).
+        const definition = defineContainer({ image: "./app", secretsStore: { STRIPE_KEY: "STRIPE_SECRET" } });
+        const instance = new LunoraContainer(fakeDurableObjectContext() as never, {}, definition, "transcoder");
+
+        const probe = instance as unknown as SecretsStoreProbe & { start: (options?: { envVars?: Record<string, string> }) => Promise<void> };
+        const resolveSpy = vi.spyOn(probe, "resolveSecretsStoreEnv");
+        // Stub the upstream `Container.start` (two prototypes up) — it would try
+        // to boot a real container otherwise.
+        const baseStart = vi
+            .spyOn(Object.getPrototypeOf(Object.getPrototypeOf(instance)) as { start: () => Promise<void> }, "start")
+            .mockResolvedValue(undefined);
+
+        await probe.start({ envVars: { STRIPE_KEY: "override" } });
+
+        expect(resolveSpy).not.toHaveBeenCalled();
+        expect(baseStart).toHaveBeenCalledTimes(1);
+
+        baseStart.mockRestore();
+    });
+});
+
 describe("lunoraContainer lifecycle logging", () => {
     afterEach(() => {
         vi.restoreAllMocks();

@@ -19,6 +19,7 @@ export type {
     ContainerStartOptions,
     ContainerTestHandler,
     DurableObjectJurisdiction,
+    InstanceRetryOptions,
     PoolOptions,
 } from "./client";
 export { createContainerContext, createContainerTestContext } from "./client";

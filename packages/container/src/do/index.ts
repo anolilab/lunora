@@ -63,6 +63,10 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
     private readonly lunoraHardTimeoutSeconds?: number;
     /** Declarative readiness probes that gate request proxying (from the `readyOn` config). */
     private readonly lunoraReadyOn: ReadonlyArray<ContainerReadinessCheck>;
+    /** Map of container env-var name → Worker Secrets Store binding name (from the `secretsStore` config). */
+    private readonly lunoraSecretsStore?: Readonly<Record<string, string>>;
+    /** Memoised Secrets Store resolution: run once, then merged into `envVars` before the first start. */
+    private lunoraSecretsStoreResolved?: Promise<void>;
 
     public constructor(
         context: DurableObjectContext,
@@ -115,12 +119,45 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         this.lunoraDefaultPort = definition.defaultPort;
         this.lunoraReadyOn = definition.readyOn ? [...definition.readyOn] : [];
         this.lunoraHardTimeoutSeconds = definition.hardTimeout === undefined ? undefined : parseDurationSeconds(definition.hardTimeout);
+        this.lunoraSecretsStore = definition.secretsStore;
+    }
+
+    /**
+     * Proxy entry for every `ctx.containers.&lt;name>` fetch. Resolves the
+     * `secretsStore` bindings into `envVars` before delegating, so the values
+     * are present when the base implicitly starts the container for this
+     * request — a no-op when `secretsStore` is unset.
+     */
+    public override async containerFetch(...args: Parameters<Container<Env>["containerFetch"]>): Promise<Response> {
+        await this.resolveSecretsStoreEnv();
+
+        return super.containerFetch(...args);
+    }
+
+    /**
+     * Explicit start (`ctx.containers.&lt;name>.get(id).start()`). Resolves the
+     * `secretsStore` bindings into `envVars` first, mirroring
+     * {@link containerFetch}. A per-instance `start({ envVars })` replaces the
+     * env set wholesale (base behavior), so the injected values only apply to a
+     * bare `start()` — same as the static `env`/`secrets`. When the caller
+     * supplies its own `envVars` we skip resolution entirely: those values would
+     * be discarded anyway, so a missing/unreadable binding shouldn't fail a start
+     * that never uses them.
+     */
+    public override async start(...args: Parameters<Container<Env>["start"]>): Promise<void> {
+        const [options] = args;
+
+        if (options?.envVars === undefined) {
+            await this.resolveSecretsStoreEnv();
+        }
+
+        return super.start(...args);
     }
 
     public override async onActivityExpired(): Promise<void> {
-        // The container slept after its `sleepAfter` idle window. Surfacing it
-        // makes the WebSocket-keepalive gap (cloudflare/containers#147) visible
-        // in the dev log + Studio rather than a silent disappearance.
+        // The container slept after its `sleepAfter` idle window elapsed with no
+        // proxied request or WebSocket frame. Surfacing it in the dev log +
+        // Studio turns a silent disappearance into an observable event.
         const envelope = emitContainerLifecycle(this.lunoraName, this.instanceId(), "sleep");
 
         this.surfaceInStudioLogs(envelope);
@@ -203,6 +240,53 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
 
         await this.ctx.storage.put(HARD_TIMEOUT_GENERATION_KEY, generation);
         await this.schedule(this.lunoraHardTimeoutSeconds, "onHardTimeoutExpired", { generation });
+    }
+
+    /**
+     * Resolve the `secretsStore` bindings (async `.get()`) once and merge the
+     * values into `envVars`, so they're present when the base starts the
+     * container. Memoised on the first call — every later start reuses the
+     * resolved promise. A missing binding or a non-string value fails fast (the
+     * start surfaces the error), the same fail-closed stance the static
+     * `secrets` resolution takes for a missing Worker secret. No-op without
+     * `secretsStore`.
+     */
+    private async resolveSecretsStoreEnv(): Promise<void> {
+        const secretsStore = this.lunoraSecretsStore;
+
+        if (secretsStore === undefined) {
+            return;
+        }
+
+        this.lunoraSecretsStoreResolved ??= (async () => {
+            const workerEnv = this.env as Record<string, unknown>;
+            const resolved: Record<string, string> = {};
+
+            for (const [envName, binding] of Object.entries(secretsStore)) {
+                const store = workerEnv[binding] as { get?: () => Promise<unknown> } | undefined;
+
+                if (store === undefined || typeof store.get !== "function") {
+                    throw new Error(
+                        `container "${this.lunoraName}": secretsStore env "${envName}" points at binding "${binding}", which is not a Secrets Store binding on the Worker env. Add a \`secrets_store_secrets\` entry binding "${binding}".`,
+                    );
+                }
+
+                // eslint-disable-next-line no-await-in-loop -- a handful of secrets resolved once at first start; sequencing keeps the failing name obvious.
+                const value = await store.get();
+
+                if (typeof value !== "string") {
+                    throw new TypeError(
+                        `container "${this.lunoraName}": Secrets Store binding "${binding}" (env "${envName}") did not resolve to a string value.`,
+                    );
+                }
+
+                resolved[envName] = value;
+            }
+
+            this.envVars = { ...this.envVars, ...resolved };
+        })();
+
+        await this.lunoraSecretsStoreResolved;
     }
 
     /**
