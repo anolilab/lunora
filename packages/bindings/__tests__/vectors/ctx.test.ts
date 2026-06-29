@@ -10,11 +10,10 @@ const fakeIndex = (overrides: Partial<VectorizeIndexLike> = {}): VectorizeIndexL
         deleteByIds: vi.fn<VectorizeIndexLike["deleteByIds"]>(async (ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation> => {
             return { count: ids.length, mutationId: `delete-${String(ids.length)}` };
         }),
-        getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(
-            async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> =>
-                ids.map((id) => {
-                    return { id, metadata: { k: id }, values: [1, 2] };
-                }),
+        getByIds: vi.fn<VectorizeIndexLike["getByIds"]>(async (ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>> =>
+            ids.map((id) => {
+                return { id, metadata: { k: id }, values: [1, 2] };
+            }),
         ),
         insert: vi.fn<VectorizeIndexLike["insert"]>(async (vectors): Promise<VectorizeUpsertMutation> => {
             return { mutationId: `insert-${String(vectors.length)}` };

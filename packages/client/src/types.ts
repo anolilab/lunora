@@ -399,13 +399,7 @@ export interface ServerWhisperMessage {
 }
 
 export type ServerMessage =
-    | ServerAckMessage
-    | ServerChunkMessage
-    | ServerCompleteMessage
-    | ServerDataMessage
-    | ServerErrorMessage
-    | ServerResumeMessage
-    | ServerWhisperMessage;
+    ServerAckMessage | ServerChunkMessage | ServerCompleteMessage | ServerDataMessage | ServerErrorMessage | ServerResumeMessage | ServerWhisperMessage;
 
 /**
  * The authenticated user as exposed client-side, mirroring better-auth's

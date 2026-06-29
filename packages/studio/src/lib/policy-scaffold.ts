@@ -54,9 +54,7 @@ const FAILURE_MESSAGES: Readonly<Record<string, string>> = {
 
 /** Outcome of a scaffold/wire apply, normalising every host response. */
 type PolicyScaffoldResult =
-    | { diagnostics: ReadonlyArray<string>; kind: "ok"; label: string }
-    | { kind: "error"; message: string }
-    | { kind: "needs-manual-edit"; message: string };
+    { diagnostics: ReadonlyArray<string>; kind: "ok"; label: string } | { kind: "error"; message: string } | { kind: "needs-manual-edit"; message: string };
 
 /** Apply a scaffolder request through the dev host, normalising every outcome. */
 const applyPolicyScaffold = async (request: PolicyScaffoldRequest): Promise<PolicyScaffoldResult> => {

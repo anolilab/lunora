@@ -113,7 +113,7 @@ function Chat({ channelId }: { channelId: Id<"channels"> }) {
 
     const send = (text: string) => db.actions.messages({ channelId, text, userId: me });
 
-    return /* … */;
+    return; /* … */
 }
 ```
 
