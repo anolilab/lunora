@@ -1433,6 +1433,31 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // static bearer, OR a grant `handle` recorded from `options.adminGate`.
     const requestIsAdmin = (request: Request): boolean => checkAdminAuth(request, effectiveAdminToken()) || accessAdminGrants.has(request);
 
+    // Forward-context for the cross-shard admin orchestrators (migrate / rank /
+    // pitr / export / import / …). They authorize fanned-out per-shard RPCs by
+    // forwarding the inbound `Authorization` bearer, which an Access-authorized
+    // admin request never carries — it presented a `Cf-Access-Jwt-Assertion`,
+    // consumed by the edge `adminGate`. So an Access-only admin would clear the
+    // edge gate yet have every downstream shard admin gate reject the fan-out.
+    // When the request holds a recorded Access grant and brings no bearer of its
+    // own, mint the worker's own configured admin token into the forwarded
+    // headers, so the per-shard gates (which trust only the static bearer) accept
+    // the orchestrated calls. No static token configured → nothing to mint, and
+    // the operation fails closed downstream exactly as before.
+    const resolveAdminForwardContext = async (request: Request, env: unknown): Promise<ForwardContext> => {
+        const context = await resolveForwardContext(request, env, options.resolveIdentity);
+
+        if (accessAdminGrants.has(request) && context.headers["authorization"] === undefined) {
+            const token = effectiveAdminToken();
+
+            if (token !== undefined) {
+                context.headers["authorization"] = `Bearer ${token}`;
+            }
+        }
+
+        return context;
+    };
+
     // Fan-out and non-default shard routing are authorization-open when neither
     // `authorizeShard` nor `authorizeFanOut` is configured — any caller can name
     // any shard or fan a function across every shard for a table. That's the
@@ -1469,7 +1494,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         forwardToShard,
         isAdmin: requestIsAdmin,
         queryCoordinator: options.queryCoordinator,
-        resolveForwardContext: (request, env) => resolveForwardContext(request, env, options.resolveIdentity),
+        resolveForwardContext: resolveAdminForwardContext,
         shardDO,
     });
 
@@ -1726,7 +1751,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         isAdmin: requestIsAdmin,
         knownTables: () => collectKnownTables(options.resolveTableSharding),
         queryCoordinator: options.queryCoordinator,
-        resolveForwardContext: (request, env) => resolveForwardContext(request, env, options.resolveIdentity),
+        resolveForwardContext: resolveAdminForwardContext,
         shardDO,
         streamExportRows: (coordinator, headers, tables, writeRow) => streamExportRows(options, coordinator, headers, tables, writeRow, shardDO),
         streamingImport: (request, headers) => streamingImport(request, options, headers, shardDO),

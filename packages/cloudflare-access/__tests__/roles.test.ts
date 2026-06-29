@@ -117,4 +117,23 @@ describe("accessRoles", () => {
 
         expect(roles).toStrictEqual(["ok", "fine"]);
     });
+
+    it("falls back to the nested access.groups claim when groups is not promoted", async () => {
+        expect.assertions(1);
+
+        // A custom `mapClaims` that stops promoting `groups` to the envelope top
+        // still leaves the verified claim set under `access` (the resolver shape);
+        // the default reader must read groups from there, not strip every role.
+        const { roles } = await run({ access: { groups: ["admins", "billing"] } });
+
+        expect(roles).toStrictEqual(["admins", "billing"]);
+    });
+
+    it("prefers the promoted top-level groups over the nested access.groups", async () => {
+        expect.assertions(1);
+
+        const { roles } = await run({ access: { groups: ["nested"] }, groups: ["promoted"] });
+
+        expect(roles).toStrictEqual(["promoted"]);
+    });
 });

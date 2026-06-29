@@ -70,14 +70,6 @@
     "dependencies": {
         "jose": "catalog:auth"
     },
-    "peerDependencies": {
-        "@lunora/server": "1.0.0-alpha.6"
-    },
-    "peerDependenciesMeta": {
-        "@lunora/server": {
-            "optional": true
-        }
-    },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@lunora/server": "1.0.0-alpha.6",
@@ -88,6 +80,14 @@
         "fallow": "catalog:lint",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
+    },
+    "peerDependencies": {
+        "@lunora/server": "1.0.0-alpha.6"
+    },
+    "peerDependenciesMeta": {
+        "@lunora/server": {
+            "optional": true
+        }
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"

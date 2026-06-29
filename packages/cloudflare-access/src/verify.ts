@@ -35,7 +35,13 @@ const accessIssuer = (teamDomain: string): string => {
         throw new Error('@lunora/cloudflare-access: `teamDomain` is required (e.g. "acme" or "acme.cloudflareaccess.com")');
     }
 
-    const host = trimmed.includes(".") ? trimmed : `${trimmed}.cloudflareaccess.com`;
+    // A bare name (no dot) is the team subdomain; expand to the full host. Parse
+    // through `URL` so a full-URL input keeps only its origin (a stray path like
+    // `…/foo` is dropped, not folded into the issuer) and the host is lowercased
+    // — hostnames are case-insensitive, so a differently-cased env value must
+    // still produce the canonical issuer the `iss` claim is matched against.
+    const candidate = trimmed.includes(".") ? `https://${trimmed}` : `https://${trimmed}.cloudflareaccess.com`;
+    const host = new URL(candidate).host.toLowerCase();
 
     return `https://${host}`;
 };
@@ -131,7 +137,15 @@ const verifyRequest = async (request: Request, options: RequestVerifyOptions): P
     try {
         return await verifyAccessJwt(token, options);
     } catch (error) {
-        options.onError?.(error, request);
+        // The observer must not be able to turn a verification failure into a
+        // thrown request error — that would break the fail-closed "anonymous on
+        // invalid token" contract callers rely on. Swallow anything the hook
+        // itself throws; verification still resolves to `undefined` below.
+        try {
+            options.onError?.(error, request);
+        } catch {
+            /* ignore observer errors — fail closed regardless */
+        }
 
         return undefined;
     }

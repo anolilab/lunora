@@ -34,9 +34,17 @@ interface AccessRolesOptions {
     readGroups?: (identity: Record<string, unknown>) => ReadonlyArray<string> | undefined;
 }
 
-/** Default group reader: the `groups` claim, keeping only the string entries. */
+/**
+ * Default group reader: the promoted top-level `groups` claim, falling back to
+ * the verified nested `access.groups`. This mirrors the `ctx.access` facade in
+ * `context.ts` (`identity.groups ?? identity.access.groups`), so a custom
+ * `mapClaims` that stops promoting `groups` still feeds `accessRoles` instead of
+ * silently stripping every RLS role. Keeps only the string entries.
+ */
 const defaultReadGroups = (identity: Record<string, unknown>): ReadonlyArray<string> | undefined => {
-    const { groups } = identity;
+    const { access } = identity;
+    const nested = typeof access === "object" && access !== null ? (access as { groups?: unknown }).groups : undefined;
+    const groups = identity["groups"] ?? nested;
 
     return Array.isArray(groups) ? groups.filter((group): group is string => typeof group === "string") : undefined;
 };

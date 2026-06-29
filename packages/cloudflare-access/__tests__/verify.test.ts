@@ -2,7 +2,7 @@ import type { CryptoKey } from "jose";
 import { generateKeyPair, SignJWT } from "jose";
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { accessIssuer, verifyAccessJwt } from "../src/verify";
+import { accessIssuer, verifyAccessJwt, verifyRequest } from "../src/verify";
 
 const TEAM = "acme";
 const ISSUER = "https://acme.cloudflareaccess.com";
@@ -44,6 +44,16 @@ describe("accessIssuer", () => {
 
     it("rejects an empty team domain", () => {
         expect(() => accessIssuer("   ")).toThrow(/teamDomain/);
+    });
+
+    it("lowercases the host so a differently-cased domain still matches the iss claim", () => {
+        expect(accessIssuer("ACME.cloudflareAccess.com")).toBe("https://acme.cloudflareaccess.com");
+        expect(accessIssuer("https://ACME.cloudflareaccess.com")).toBe("https://acme.cloudflareaccess.com");
+    });
+
+    it("drops a stray path/query from a full-URL input, keeping only the origin", () => {
+        expect(accessIssuer("https://acme.cloudflareaccess.com/cdn-cgi/access")).toBe("https://acme.cloudflareaccess.com");
+        expect(accessIssuer("https://acme.cloudflareaccess.com/?x=1")).toBe("https://acme.cloudflareaccess.com");
     });
 });
 
@@ -115,5 +125,37 @@ describe("verifyAccessJwt", () => {
         const token = await sign({ sub: "user-1" }, { key: attacker.privateKey });
 
         await expect(verifyAccessJwt(token, { aud: AUD, keySet: publicKey, teamDomain: TEAM })).rejects.toThrow();
+    });
+});
+
+describe("verifyRequest", () => {
+    const requestWith = (token: string): Request => new Request("https://app.example.com/", { headers: { "cf-access-jwt-assertion": token } });
+
+    it("returns undefined (anonymous) when no token is present", async () => {
+        await expect(verifyRequest(new Request("https://app.example.com/"), { aud: AUD, keySet: publicKey, teamDomain: TEAM })).resolves.toBeUndefined();
+    });
+
+    it("returns the claims for a valid token", async () => {
+        const token = await sign({ sub: "user-1" });
+
+        await expect(verifyRequest(requestWith(token), { aud: AUD, keySet: publicKey, teamDomain: TEAM })).resolves.toMatchObject({ sub: "user-1" });
+    });
+
+    it("fails closed (undefined) even when the onError observer itself throws", async () => {
+        // A bad-audience token fails verification → onError fires. If the hook
+        // throws, the throw must NOT propagate: verification still resolves to
+        // undefined so callers keep their fail-closed anonymous contract.
+        const token = await sign({ sub: "user-1" }, { aud: "wrong-aud" });
+
+        await expect(
+            verifyRequest(requestWith(token), {
+                aud: AUD,
+                keySet: publicKey,
+                onError: () => {
+                    throw new Error("observer blew up");
+                },
+                teamDomain: TEAM,
+            }),
+        ).resolves.toBeUndefined();
     });
 });
