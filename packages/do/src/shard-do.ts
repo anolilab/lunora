@@ -3718,9 +3718,14 @@ abstract class ShardDO {
             return jsonResponse({ error: { code: lunoraError.code ?? "INTERNAL", message: lunoraError.message ?? "internal error" } }, status);
         }
 
-        const message = error instanceof Error ? error.message : "unknown error";
+        // Do NOT echo arbitrary error.message values to clients — an unhandled
+        // throw may carry SQL fragments, file paths, or internal identifiers. Log
+        // the raw error server-side and return a generic message (mirrors
+        // `@lunora/runtime`'s `toErrorResponse`).
+        // eslint-disable-next-line no-console -- server-side diagnostic for an unhandled handler error
+        console.error("[@lunora/do] unhandled RPC error:", error);
 
-        return jsonResponse({ error: { code: "RPC_FAILED", message } }, 500);
+        return jsonResponse({ error: { code: "RPC_FAILED", message: "internal error" } }, 500);
     }
 
     /**
