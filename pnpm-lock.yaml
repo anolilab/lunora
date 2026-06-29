@@ -1835,6 +1835,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 4.20260628.1
+      '@lunora/server':
+        specifier: workspace:*
+        version: link:../server
       '@types/node':
         specifier: catalog:types
         version: 26.0.1

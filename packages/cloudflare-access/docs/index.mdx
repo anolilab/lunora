@@ -65,9 +65,26 @@ definePolicy({
 });
 ```
 
+## Groups → RLS roles
+
+`@lunora/cloudflare-access/roles` ships `accessRoles()`, a procedure middleware that lifts the verified `groups` claim into `ctx.auth.roles` — the per-request role list `rls()` unions permissions over. Place it **before** `rls(...)` in the chain; with no token (anonymous) it forwards the context unchanged, so RLS still fails closed.
+
+```ts
+import { accessRoles } from "@lunora/cloudflare-access/roles";
+
+export const listInvoices = query
+    // groups used verbatim, or remap with a table / function
+    .use(accessRoles({ map: { "idp-admins": "admin", "idp-billing": ["billing", "viewer"] } }))
+    .use(rls(policies, { roles }))
+    .query(async ({ ctx }) => ctx.db.from("invoices").all());
+```
+
+Omit `map` to use each group name as a role verbatim. A group with no mapping contributes no role (fail-closed). Roles are unioned with any already on `ctx.auth.roles`, then deduped. Pass `readGroups` when your IdP nests groups somewhere other than the `groups` claim.
+
 ## API
 
 - `createAccessResolver(options)` — a `resolveIdentity` adapter (header + cookie, verify, map).
 - `composeResolvers(...resolvers)` — first non-null identity wins.
 - `verifyAccessJwt(token, options)` — low-level: verify a token, return its claims (throws on failure).
 - `accessIssuer(teamDomain)` — normalize a team domain to its canonical issuer URL.
+- `accessRoles(options)` _(`@lunora/cloudflare-access/roles`)_ — middleware mapping the verified `groups` claim into `ctx.auth.roles` for RLS.
