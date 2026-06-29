@@ -1,25 +1,22 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { ShardInput } from "../../components/shard-input";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import useDebounced from "../../hooks/use-debounced";
 import { useT } from "../../i18n/i18n-context";
 import type { SubscriptionConnection, SubscriptionInfo, SubscriptionsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
 
 interface SubscriptionsPanelProps {
     /** Shard key the panel reports on. Defaults to the root shard. */
     readonly initialShardKey?: string;
 }
-
-const LIST_SUBSCRIPTIONS = adminRef(ADMIN_FUNCTIONS.listSubscriptions);
 
 /** Longest `args` JSON rendered inline before it's truncated; the full value stays in the cell `title`. */
 const ARGS_MAX = 80;
@@ -75,8 +72,8 @@ const DASH = <span className="text-muted-foreground">—</span>;
  * connected WebSocket on the shard's Durable Object and the live subscriptions
  * it tracks — the `functionPath`/`table`/args each watches, whether the socket
  * is an admin socket, and the aggregate connection / subscription counts. Reads
- * via the `__lunora_admin__:listSubscriptions` RPC over the {@link useLunora}
- * client; gated by the server's `LUNORA_ADMIN_TOKEN`.
+ * the `__lunora_admin__:listSubscriptions` RPC via {@link useAdminQuery} (gated
+ * by the server's `LUNORA_ADMIN_TOKEN`).
  *
  * This is a point-in-time read (sockets and their subscriptions are derived live
  * from the DO, nothing durable). A connect/disconnect isn't a write-flush, so
@@ -86,47 +83,35 @@ const DASH = <span className="text-muted-foreground">—</span>;
  * label, not a stable identifier across reads.
  */
 const SubscriptionsPanel = ({ initialShardKey }: SubscriptionsPanelProps): ReactElement => {
-    const client = useLunora();
     const t = useT();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
-    const [result, setResult] = useState<null | SubscriptionsResult>(null);
-    const [error, setError] = useState<null | string>(null);
-
-    const refresh = async (shard: string): Promise<void> => {
-        setError(null);
-
-        try {
-            const next = (await client.query(LIST_SUBSCRIPTIONS, {}, callOptions(shard))) as SubscriptionsResult;
-
-            setResult(next);
-        } catch (error_) {
-            setResult(null);
-            setError(errorMessage(error_));
-        }
-    };
 
     // Re-read on the debounced shard key so typing a shard applies once it settles
     // (no Refresh button) without querying a half-typed value.
     const debouncedShard = useDebounced(shardKey.trim(), 400);
 
-    useEffect(() => {
-        fireAndForget(refresh(debouncedShard));
-    }, [refresh, debouncedShard]);
+    // A point-in-time DO read (no write-flush fires on socket connect/disconnect),
+    // so a one-shot read keyed by the debounced shard; the poll below keeps it
+    // current. `keepPreviousData` holds the last snapshot visible while a new
+    // shard's read is in flight.
+    const {
+        data: result,
+        error,
+        refetch,
+    } = useAdminQuery<SubscriptionsResult>(ADMIN_FUNCTIONS.listSubscriptions, {}, { keepPreviousData: true, shardKey: debouncedShard });
 
     // No write-flush fires on socket connect/disconnect, so poll the committed
     // shard to keep the snapshot current without a manual refresh.
-    useAutoRefresh(() => {
-        fireAndForget(refresh(debouncedShard));
-    }, true);
+    useAutoRefresh(refetch, true);
 
-    const rows = result === null ? [] : toRows(result.connections);
+    const rows = result === undefined ? [] : toRows(result.connections);
 
     return (
         <div className="flex flex-col gap-4" data-testid="subs-panel">
             <div className="flex flex-wrap items-center gap-2">
                 <ShardInput onChange={setShardKey} testId="subs-shard-input" value={shardKey} />
-                {result !== null && (
+                {result !== undefined && (
                     <div className="ml-auto flex items-center gap-2 text-sm text-muted-foreground" data-testid="subs-count">
                         <Badge variant="secondary">{t("{count} connections", { count: result.totalConnections })}</Badge>
                         <Badge variant="secondary">{t("{count} subscriptions", { count: result.totalSubscriptions })}</Badge>
@@ -140,7 +125,7 @@ const SubscriptionsPanel = ({ initialShardKey }: SubscriptionsPanelProps): React
                 </p>
             )}
 
-            {error === null && result !== null && rows.length === 0 && (
+            {error === null && result !== undefined && rows.length === 0 && (
                 <EmptyState
                     description={t("Active WebSocket subscriptions on this shard.")}
                     icon={
@@ -161,7 +146,7 @@ const SubscriptionsPanel = ({ initialShardKey }: SubscriptionsPanelProps): React
                 />
             )}
 
-            {rows.length > 0 && (
+            {error === null && rows.length > 0 && (
                 <Card className="overflow-hidden py-0">
                     <CardContent className="px-0">
                         <Table data-testid="subs-table">

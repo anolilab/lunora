@@ -7,6 +7,7 @@ import { ShardInput } from "../../components/shard-input";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import { Textarea } from "../../components/ui/textarea";
+import { useInvalidateAdmin } from "../../hooks/use-admin-query";
 import { useT } from "../../i18n/i18n-context";
 import type { ExportRow, ImportShardResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
@@ -73,6 +74,7 @@ const parseNdjson = (text: string): ExportRow[] => {
  */
 export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): ReactElement => {
     const client = useLunora();
+    const invalidateAdmin = useInvalidateAdmin();
     const t = useT();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
@@ -122,6 +124,11 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
 
             recordShard(shardKey);
             setImportResult(result);
+            // The import wrote rows to this shard, so the data browser's cached reads
+            // are now stale across every page/filter variant — drop them (path-only,
+            // all args) so they re-fetch on next view.
+            invalidateAdmin(ADMIN_FUNCTIONS.readTablePage);
+            invalidateAdmin(ADMIN_FUNCTIONS.listTables);
         } catch (error_) {
             setError(errorMessage(error_));
         } finally {

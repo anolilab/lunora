@@ -1,13 +1,12 @@
 import type { AuthCapabilities } from "@lunora/client";
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
 
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
+import { useClientQuery } from "../../hooks/use-admin-query";
 import type { MessageId } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
-import { errorMessage, fireAndForget } from "../../lib/internal";
 
 /**
  * The capability flags surfaced as rows, paired with a human label key. Order is
@@ -35,38 +34,10 @@ export const AuthConfigPanel = (): ReactElement => {
     const client = useLunora();
     const t = useT();
 
-    const [capabilities, setCapabilities] = useState<AuthCapabilities | null>(null);
-    const [error, setError] = useState<null | string>(null);
-    const [loading, setLoading] = useState<boolean>(true);
-
-    useEffect(() => {
-        const token = { cancelled: false };
-
-        fireAndForget(
-            (async (): Promise<void> => {
-                try {
-                    const result = await client.getAuthCapabilities();
-
-                    if (!token.cancelled) {
-                        setCapabilities(result);
-                        setError(null);
-                    }
-                } catch (error_) {
-                    if (!token.cancelled) {
-                        setError(errorMessage(error_));
-                    }
-                } finally {
-                    if (!token.cancelled) {
-                        setLoading(false);
-                    }
-                }
-            })(),
-        );
-
-        return () => {
-            token.cancelled = true;
-        };
-    }, [client]);
+    // The capability set is HTTP-only (no admin-RPC path), so it's a one-shot
+    // `useClientQuery` over `client.getAuthCapabilities`. `data === undefined`
+    // distinguishes the initial load from a resolved result.
+    const { data: capabilities, error } = useClientQuery<AuthCapabilities>(["lunora-auth-capabilities"], () => client.getAuthCapabilities());
 
     return (
         <div className="flex flex-col gap-4" data-testid="auth-config">
@@ -81,13 +52,13 @@ export const AuthConfigPanel = (): ReactElement => {
                     </p>
                 )}
 
-                {error === null && loading && (
+                {error === null && capabilities === undefined && (
                     <p className="px-4 py-8 text-center text-sm text-muted-foreground" data-testid="auth-config-loading">
                         {t("Loading auth configuration…")}
                     </p>
                 )}
 
-                {error === null && !loading && capabilities !== null && (
+                {error === null && capabilities !== undefined && (
                     <CardContent className="p-3">
                         <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                             {CAPABILITY_ROWS.map((row) => {

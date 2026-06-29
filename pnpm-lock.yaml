@@ -2790,6 +2790,9 @@ importers:
       '@lunora/react':
         specifier: workspace:*
         version: link:../react
+      '@tanstack/react-query':
+        specifier: catalog:frontend
+        version: 5.101.0(react@19.2.7)
       '@tanstack/react-router':
         specifier: catalog:frontend
         version: 1.170.16(react-dom@19.2.7(react@19.2.7))(react@19.2.7)

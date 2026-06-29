@@ -5,10 +5,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { useClientQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import { useT } from "../../i18n/i18n-context";
 import { CLOUDFLARE_D1_URL } from "../../lib/cf-links";
-import { errorMessage, fireAndForget } from "../../lib/internal";
 import DataFacets from "./data-facets";
 import { CellValue, GridContainer } from "./data-grid";
 import GridPagination from "./grid-pagination";
@@ -93,18 +93,13 @@ export const GlobalDataBrowser = ({
     const client = useLunora();
     const t = useT();
 
-    const [tables, setTables] = useState<GlobalTableInfo[] | null>(null);
-    const [tablesError, setTablesError] = useState<null | string>(null);
-
     // Seed from `initialTable` (a cross-tier ref jump from the Table editor) so the
     // initial selection comes from an initializer, never a synchronous setState in
-    // an effect; the page itself is fetched in the mount effect below.
+    // an effect; the page query refetches itself once a table is selected.
     const [selectedTable, setSelectedTable] = useState<null | string>(initialTable ?? null);
     const [offset, setOffset] = useState<number>(0);
     // Rows-per-page is user-adjustable via the footer's selector; the prop seeds it.
     const [pageSize, setPageSize] = useState<number>(initialPageSize);
-    const [page, setPage] = useState<GlobalTablePage | null>(null);
-    const [pageError, setPageError] = useState<null | string>(null);
 
     // Active drill-down: the `column = value` eq constraints a facet-value click
     // adds. Unlike the shard browser there's no free-form filter bar — these come
@@ -121,49 +116,25 @@ export const GlobalDataBrowser = ({
     // poll tick can refetch the open ones; only the per-view fetch call is ours.
     const { clearFacets, facets, refetchFacets: refetchFacetsViaHook, toggleFacet } = useFacets();
 
-    const fetchTables = useCallback(async (): Promise<void> => {
-        setTablesError(null);
+    // ── Reads via TanStack Query (`useClientQuery`): the D1 browser is HTTP-only
+    // (no live channel), so these are one-shot reads polled by `useAutoRefresh`
+    // below. The page query's key IS the view (table / offset / size / filters), so
+    // selecting a table or paginating / drilling down transparently refetches.
+    const tablesQuery = useClientQuery<GlobalTableInfo[]>(["lunora-global-tables"], () => client.listGlobalTables());
+    const tables = tablesQuery.data ?? null;
+    const tablesError = tablesQuery.error;
 
-        try {
-            setTables(await client.listGlobalTables());
-        } catch (error) {
-            setTables(null);
-            setTablesError(errorMessage(error));
-        }
-    }, [client]);
-
-    // Monotonic request counter so an out-of-order page read can't overwrite a
-    // newer one — rapid pagination / drill-down clicks can resolve in any order,
-    // so only the latest issued request commits its result (mirrors `useRunSql`).
-    const fetchSeqRef = useRef(0);
-
-    const fetchPage = useCallback(
-        async (table: string, nextOffset: number, limit: number = pageSize, activeFilters: GlobalFilterClause[] = filtersRef.current): Promise<void> => {
-            fetchSeqRef.current += 1;
-            const seq = fetchSeqRef.current;
-
-            setPageError(null);
-
-            try {
-                const result = await client.readGlobalTablePage({ filters: activeFilters, limit, offset: nextOffset, table });
-
-                if (fetchSeqRef.current !== seq) {
-                    return;
-                }
-
-                setPage(result);
-                setOffset(nextOffset);
-            } catch (error) {
-                if (fetchSeqRef.current !== seq) {
-                    return;
-                }
-
-                setPage(null);
-                setPageError(errorMessage(error));
-            }
-        },
-        [client, pageSize],
+    // `keepPreviousData` is off: the placeholder isn't table-aware, so holding the
+    // last page across a `selectedTable` change would render table A's rows while
+    // the sidebar/URL already point at table B (and facet clicks would then act on
+    // the new table using the stale visible rows). Disabled until a table is open.
+    const pageQuery = useClientQuery<GlobalTablePage>(
+        ["lunora-global-page", selectedTable ?? "", offset, pageSize, JSON.stringify(filters)],
+        () => client.readGlobalTablePage({ filters, limit: pageSize, offset, table: selectedTable ?? "" }),
+        { enabled: selectedTable !== null, keepPreviousData: false },
     );
+    const page = pageQuery.data ?? null;
+    const pageError = pageQuery.error;
 
     // A column's facet summary is fetched over the active view via `facetGlobalColumn`.
     // `GlobalFacetResult` is structurally the studio's `FacetResult`, so it drops
@@ -179,19 +150,16 @@ export const GlobalDataBrowser = ({
         refetchFacetsViaHook(facetFetcher(table, activeFilters));
     };
 
-    useEffect(() => {
-        fireAndForget(fetchTables());
-    }, [fetchTables]);
-
     // D1 is HTTP-only (no subscription channel), so poll to keep the table list
     // and the current page current without a manual reload — `useAutoRefresh`
     // pauses while the tab is hidden. The tick closure is held in a ref, so it
-    // always sees the latest selection/offset.
+    // always sees the latest selection/filters; it re-runs the two TanStack reads
+    // and the open facets.
     useAutoRefresh(() => {
-        fireAndForget(fetchTables());
+        tablesQuery.refetch();
 
         if (selectedTable !== null) {
-            fireAndForget(fetchPage(selectedTable, offset));
+            pageQuery.refetch();
             refetchFacets(selectedTable, filtersRef.current);
         }
     }, true);
@@ -210,11 +178,13 @@ export const GlobalDataBrowser = ({
             setFilters([]);
             filtersRef.current = [];
             clearFacets();
-            fireAndForget(fetchPage(table, 0, pageSize, []));
+            // Reset to the first page in the handler (not an effect); the page query
+            // refetches itself once `selectedTable`/`offset`/`filters` change.
+            setOffset(0);
             // Mirror the selection to the URL so it's shareable and back/forward works.
             onSelectTable?.(table);
         },
-        [clearFacets, fetchPage, onSelectTable, pageSize],
+        [clearFacets, onSelectTable],
     );
 
     // Toggle a column into / out of the facet sidebar. Turning it on seeds a loading
@@ -224,14 +194,16 @@ export const GlobalDataBrowser = ({
         toggleFacet(column, selectedTable === null ? null : facetFetcher(selectedTable, filtersRef.current));
     };
 
-    // Apply a new filter set: re-read the first page and refetch the open facets so
-    // both reflect the drill-down. `next` is passed explicitly (state is async).
+    // Apply a new filter set: jump back to the first page (in the handler, not an
+    // effect — the page query refetches on the `filters`/`offset` change) and refetch
+    // the open facets so both reflect the drill-down. `next` is passed explicitly to
+    // the facet refetch (state is async).
     const applyFilters = (next: GlobalFilterClause[]): void => {
         setFilters(next);
         filtersRef.current = next;
+        setOffset(0);
 
         if (selectedTable !== null) {
-            fireAndForget(fetchPage(selectedTable, 0, pageSize, next));
             refetchFacets(selectedTable, next);
         }
     };
@@ -251,10 +223,11 @@ export const GlobalDataBrowser = ({
 
     // Reconcile the `initialTable` the Table editor hands us via the URL into the
     // selection: a cross-tier `v.id` ref jump, a deep link, or browser back/forward.
-    // It defers to `selectTable`, which sets BOTH `selectedTable` (so the sidebar
-    // highlight and pagination track the displayed table) and fetches its page — a
-    // bare `fetchPage` here would desync the two on back/forward while the browser
-    // stays mounted. Applied once per distinct value (ref claimed up front), so a
+    // It defers to `selectTable`, which sets `selectedTable` (so the sidebar
+    // highlight and pagination track the displayed table) and resets the view — the
+    // page query then refetches off that state change. Setting `selectedTable`
+    // directly here would skip the filter/facet/offset reset. Applied once per
+    // distinct value (ref claimed up front), so a
     // page-size change or a value this component itself just selected doesn't re-run.
     //
     // NB: structurally identical to the shard hook's URL-reconcile effect
@@ -282,7 +255,8 @@ export const GlobalDataBrowser = ({
             return;
         }
 
-        fireAndForget(fetchPage(selectedTable, Math.max(0, nextOffset)));
+        // The page query is keyed on `offset`, so setting it refetches that page.
+        setOffset(Math.max(0, nextOffset));
     };
 
     const total = page?.total ?? 0;
@@ -292,7 +266,7 @@ export const GlobalDataBrowser = ({
     const rangeEnd = page === null ? 0 : offset + page.rows.length;
 
     const reloadTables = (): void => {
-        fireAndForget(fetchTables());
+        tablesQuery.refetch();
     };
 
     const goPrevious = (): void => {
@@ -307,14 +281,12 @@ export const GlobalDataBrowser = ({
         goToPage(Math.max(0, (targetPage - 1) * pageSize));
     };
 
-    // Change rows-per-page and re-read the first page at the new size (passed
-    // explicitly so it doesn't wait for the state-updated closure).
+    // Change rows-per-page and jump back to the first page (in the handler, not an
+    // effect); the page query is keyed on `pageSize`/`offset`, so it refetches the
+    // first page at the new size.
     const changePageSize = (size: number): void => {
         setPageSize(size);
-
-        if (selectedTable !== null) {
-            fireAndForget(fetchPage(selectedTable, 0, size));
-        }
+        setOffset(0);
     };
 
     return (

@@ -7,14 +7,14 @@ import { ShardInput } from "../../components/shard-input";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
-import useLiveAdmin from "../../hooks/use-live-admin";
+import { useAdminQuery } from "../../hooks/use-admin-query";
+import useDebounced from "../../hooks/use-debounced";
 import { useT } from "../../i18n/i18n-context";
 import type { MetricsSnapshot, ShardMetrics } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { CLOUDFLARE_DURABLE_OBJECTS_URL } from "../../lib/cf-links";
 import { adminRef, callOptions, errorMessage, fireAndForget, formatBytes } from "../../lib/internal";
 import { loadRecentShards, recordShard } from "../../lib/shard-history";
-import useLiveShardSeed from "../data/hooks/use-live-shard-seed";
 import type { ShardMetricsResult } from "./metrics-aggregate";
 import { aggregateMetrics, computeLatencyPercentiles, enrichQueryStats, shardsToAggregate } from "./metrics-aggregate";
 import { QueryInsights } from "./query-insights";
@@ -47,6 +47,14 @@ const formatDuration = (ms: number): string => {
 
     return `${seconds.toString()}s`;
 };
+
+/**
+ * The tab actually shown. The query-insights tab only exists while the active
+ * shard/snapshot carries `queryStats`; if it vanishes while selected, fall back to
+ * overview so the body never blanks pointing at a tab that no longer renders.
+ */
+const resolveTab = (hasQueryStats: boolean, activeTab: "overview" | "query-insights"): "overview" | "query-insights" =>
+    hasQueryStats ? activeTab : "overview";
 
 /** Cache hit-rate as a percentage string, or `—` when there's been no traffic. */
 const hitRate = (hits: number, misses: number): string => {
@@ -108,23 +116,18 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
     const t = useT();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
-    const [metrics, setMetrics] = useState<ShardMetrics | null>(null);
-    const [error, setError] = useState<null | string>(null);
     /** Active panel tab: "overview" (default) or "query-insights" (shown when queryStats present). */
     const [activeTab, setActiveTab] = useState<"overview" | "query-insights">("overview");
-    // The live channel is always on once a shard is committed; this only holds a
-    // rejection message (e.g. missing admin token) so the panel can say why it
-    // stopped updating. The one-shot seed remains the source of truth.
-    const [liveError, setLiveError] = useState<string | undefined>(undefined);
     const [history, setHistory] = useState<ReadonlyArray<number>>([]);
 
-    // Avoid setState after unmount.
-    const mountedRef = useRef(true);
     // Latest cumulative `requests` count, used to derive the per-sample delta,
     // plus the shard it belongs to so a shard switch resets the series instead
     // of diffing against the previous shard's counters.
     const lastRequestsRef = useRef<null | number>(null);
     const lastShardRef = useRef<null | string>(null);
+
+    // Avoid setState after unmount from the manual all-shards aggregate.
+    const mountedRef = useRef(true);
 
     useEffect(() => {
         mountedRef.current = true;
@@ -134,77 +137,51 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
         };
     }, []);
 
-    // Fold a fresh metrics snapshot (one-shot or live push) into panel state,
-    // extending the requests-per-sample sparkline series. A fresh sample means
-    // the channel is healthy, so clear any stale live-unavailable notice.
-    const applySample = (next: ShardMetrics): void => {
-        setError(null);
-        setLiveError(undefined);
-        setMetrics(next);
+    // The shard the read targets, debounced so typing a key settles before
+    // refetching (and re-subscribing) rather than firing per keystroke.
+    const debouncedShard = useDebounced(shardKey.trim(), 400);
 
+    // One-shot read + always-on live subscription for the committed shard. Each
+    // server push folds in like a refresh; `liveError` holds a rejection message
+    // (e.g. missing admin token) so the panel can say why it stopped updating. The
+    // one-shot read remains the source of truth.
+    const { data, error, liveError } = useAdminQuery<ShardMetrics>(ADMIN_FUNCTIONS.getMetrics, {}, { live: true, shardKey: debouncedShard });
+
+    const metrics = data ?? null;
+
+    // Fold each fresh metrics snapshot (one-shot or live push) into the
+    // requests-per-sample sparkline series as it arrives — an inherently
+    // stream-accumulating side effect: each new `data` value is diffed against the
+    // prior sample (held in refs) to derive one more series point, which can only
+    // be computed when a new snapshot lands. A new shard's counters are unrelated
+    // to the previous shard's, so reset the series rather than emit a spurious
+    // cross-shard delta; the first sample and any counter reset (DO hibernation)
+    // are skipped (no prior point / a bogus delta). Also records the browsed shard.
+    useEffect(() => {
+        if (data === undefined) {
+            return;
+        }
+
+        recordShard(debouncedShard);
+
+        const next = data;
         const previous = lastRequestsRef.current;
-        // A new shard's counters are unrelated to the previous shard's, so
-        // reset the series rather than emit a spurious cross-shard delta.
         const shardChanged = lastShardRef.current !== null && lastShardRef.current !== next.shard;
 
         lastShardRef.current = next.shard;
         lastRequestsRef.current = next.requests;
 
         if (shardChanged) {
+            // eslint-disable-next-line react-x/set-state-in-effect -- resetting the per-shard series is part of folding a new snapshot into derived stream state, not an unconditional mount-time reset.
             setHistory([]);
 
             return;
         }
 
-        // Skip the first sample (no prior point to diff against) and any counter
-        // reset (DO hibernation), which would yield a bogus delta.
         if (previous !== null && next.requests >= previous) {
             setHistory((prior) => [...prior, next.requests - previous].slice(-MAX_HISTORY));
         }
-    };
-
-    const refresh = async (shard: string): Promise<void> => {
-        try {
-            const next = (await client.query(GET_METRICS, {}, callOptions(shard))) as ShardMetrics;
-
-            recordShard(shard);
-
-            if (mountedRef.current) {
-                applySample(next);
-            }
-        } catch (error_) {
-            if (mountedRef.current) {
-                setMetrics(null);
-                setError(errorMessage(error_));
-            }
-
-            // Rethrow so the shard-seed hook doesn't commit a shard that failed.
-            throw error_;
-        }
-    };
-
-    // Debounced shard seed + commit-on-success; the live channel keys on the
-    // committed shard (replaces the old Refresh button).
-    const committedShard = useLiveShardSeed(shardKey, refresh);
-
-    // Live channel: always on once the seed commits a shard; each server push
-    // folds in like a refresh.
-    useLiveAdmin(
-        ADMIN_FUNCTIONS.getMetrics,
-        {},
-        committedShard ?? "",
-        (next) => {
-            if (mountedRef.current) {
-                applySample(next as ShardMetrics);
-            }
-        },
-        committedShard !== undefined,
-        (message) => {
-            if (mountedRef.current) {
-                setLiveError(message);
-            }
-        },
-    );
+    }, [data, debouncedShard]);
 
     // Cross-shard aggregate: per-shard results for the shards we know about
     // (root + current + recently-visited). `null` = aggregate view not loaded.
@@ -284,6 +261,10 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
         return enrichQueryStats(snapQs);
     }, [metrics]);
 
+    // The shown tab, falling back to overview when the active shard/snapshot has no
+    // query insights (see {@link resolveTab}) so a vanished tab never blanks the body.
+    const effectiveTab = resolveTab(queryStats !== undefined, activeTab);
+
     const runAggregate = (): void => {
         fireAndForget(aggregateAll());
     };
@@ -334,7 +315,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
             {queryStats !== undefined && (
                 <div className="flex gap-2 border-b" data-testid="mt-tabs">
                     <button
-                        className={`pb-2 text-sm font-medium transition-colors ${activeTab === "overview" ? "border-b-2 border-primary text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                        className={`pb-2 text-sm font-medium transition-colors ${effectiveTab === "overview" ? "border-b-2 border-primary text-foreground" : "text-muted-foreground hover:text-foreground"}`}
                         data-testid="mt-tab-overview"
                         onClick={switchToOverview}
                         type="button"
@@ -342,7 +323,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
                         {t("Overview")}
                     </button>
                     <button
-                        className={`pb-2 text-sm font-medium transition-colors ${activeTab === "query-insights" ? "border-b-2 border-primary text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                        className={`pb-2 text-sm font-medium transition-colors ${effectiveTab === "query-insights" ? "border-b-2 border-primary text-foreground" : "text-muted-foreground hover:text-foreground"}`}
                         data-testid="mt-tab-query-insights"
                         onClick={switchToQueryInsights}
                         type="button"
@@ -356,9 +337,9 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
             )}
 
             {/* Query Insights tab — rendered only when present and selected. */}
-            {activeTab === "query-insights" && queryStats !== undefined && <QueryInsights queryStats={queryStats} />}
+            {effectiveTab === "query-insights" && queryStats !== undefined && <QueryInsights queryStats={queryStats} />}
 
-            {activeTab === "overview" && metrics !== null && (
+            {effectiveTab === "overview" && metrics !== null && (
                 <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" data-testid="mt-stats">
                     <StatCard
                         chart={
@@ -420,9 +401,9 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
                 </dl>
             )}
 
-            {activeTab === "overview" && metrics === null && null}
+            {effectiveTab === "overview" && metrics === null && null}
 
-            {activeTab === "overview" && aggregate !== null && shardResults !== null && (
+            {effectiveTab === "overview" && aggregate !== null && shardResults !== null && (
                 <div className="flex flex-col gap-4" data-testid="mt-aggregate-view">
                     <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="mt-aggregate-stats">
                         <StatCard

@@ -7,7 +7,7 @@ import ConnectionBadge from "../../components/connection-badge";
 import { LiveError } from "../../components/live-status";
 import { Badge } from "../../components/ui/badge";
 import { Card } from "../../components/ui/card";
-import useLiveAdmin from "../../hooks/use-live-admin";
+import { useAdminQuery } from "../../hooks/use-admin-query";
 import type { TFunction } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
 import type { AuthMetrics, FunctionCallStat, LogEntry, LogsResult, MetricsSnapshot, MigrationStatusRow } from "../../lib/admin";
@@ -290,9 +290,6 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
     const [auth, setAuth] = useState<AuthMetrics | null>(null);
     const [scheduler, setScheduler] = useState<SchedulerStatus | null>(null);
     const [migrations, setMigrations] = useState<MigrationStatusRow[]>([]);
-    // Always-on live channel; this only holds a rejection message (e.g. missing
-    // admin token) so the overview can say why it stopped updating.
-    const [liveError, setLiveError] = useState<string | undefined>(undefined);
 
     // Recently-visited shard keys the studio remembers — read once on mount.
     const [recentShards] = useState<string[]>(loadRecentShards);
@@ -382,20 +379,26 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
         [],
     );
 
-    // Live channel: always on. A root-shard `getMetrics` push (every write-flush)
-    // drives a cross-shard re-pull, rate-limited by `scheduleFanOut` and the
-    // `inFlightRef` concurrency guard.
-    useLiveAdmin(
-        ADMIN_FUNCTIONS.getMetrics,
-        {},
-        rootShard,
-        () => {
-            setLiveError(undefined);
-            scheduleFanOut();
-        },
-        true,
-        setLiveError,
-    );
+    // Live channel: always on. A root-shard `getMetrics` subscription (re-pushed on
+    // every write-flush) drives a cross-shard re-pull, rate-limited by
+    // `scheduleFanOut` and the `inFlightRef` concurrency guard. `liveError` holds a
+    // rejection message (e.g. missing admin token) so the overview can say why it
+    // stopped updating; the one-shot seed `data` is otherwise unused here — its
+    // only role is to tick `scheduleFanOut` when a fresh push lands.
+    const { data: liveMetrics, liveError } = useAdminQuery<MetricsSnapshot>(ADMIN_FUNCTIONS.getMetrics, {}, { live: true, shardKey: rootShard });
+
+    // Each fresh `getMetrics` push (one-shot seed or a live write-flush) schedules a
+    // coalesced cross-shard fan-out. Folding a stream of pushes into the fan-out
+    // cadence can only happen as each value lands, so this stays an effect.
+    useEffect(() => {
+        if (liveMetrics === undefined) {
+            return;
+        }
+
+        scheduleFanOut();
+        // `scheduleFanOut` reads only refs + the stable `refresh`; re-run per push.
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed on the live push, not the (stable) scheduler closure.
+    }, [liveMetrics]);
 
     // Entries arrive newest-first from the buffer.
     const recentErrors = entries.filter((entry) => entry.level === "error");

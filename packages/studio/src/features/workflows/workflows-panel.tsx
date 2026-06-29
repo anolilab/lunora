@@ -1,6 +1,6 @@
 import { useLunora } from "@lunora/react";
 import type { ChangeEvent, MouseEvent, ReactElement } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
@@ -8,13 +8,13 @@ import { EmptyState } from "../../components/ui/empty-state";
 import { Input } from "../../components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { Textarea } from "../../components/ui/textarea";
+import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useT } from "../../i18n/i18n-context";
 import type { CreateWorkflowInstanceResult, WorkflowInstanceStatusResult, WorkflowMetadata, WorkflowsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
 import { WorkflowInstanceHistory } from "./workflow-instances";
 
-const LIST_WORKFLOWS = adminRef(ADMIN_FUNCTIONS.listWorkflows);
 const CREATE_WORKFLOW_INSTANCE = adminRef(ADMIN_FUNCTIONS.createWorkflowInstance);
 const GET_WORKFLOW_INSTANCE_STATUS = adminRef(ADMIN_FUNCTIONS.getWorkflowInstanceStatus);
 
@@ -63,8 +63,8 @@ const WorkflowsPanel = (): ReactElement => {
     const client = useLunora();
     const t = useT();
 
-    const [data, setData] = useState<WorkflowsResult | null>(null);
-    const [error, setError] = useState<null | string>(null);
+    // Deployment-wide metadata (root shard), so no shard selector is needed.
+    const { data, error } = useAdminQuery<WorkflowsResult>(ADMIN_FUNCTIONS.listWorkflows, {});
 
     const [selectedExport, setSelectedExport] = useState("");
     const [instanceIdInput, setInstanceIdInput] = useState("");
@@ -75,26 +75,9 @@ const WorkflowsPanel = (): ReactElement => {
     const [instances, setInstances] = useState<ObservedInstance[]>([]);
     const [refreshingId, setRefreshingId] = useState<null | string>(null);
 
-    const refresh = useCallback(async (): Promise<void> => {
-        try {
-            // Deployment-wide metadata (root shard), so no shard selector is needed.
-            const result = (await client.query(LIST_WORKFLOWS, {}, callOptions(""))) as WorkflowsResult;
-
-            // Defensive: an older worker (or a stand-in) may omit the array —
-            // treat anything but an array as empty rather than throw.
-            setData({ workflows: Array.isArray(result.workflows) ? result.workflows : [] });
-            setError(null);
-        } catch (error_: unknown) {
-            setError(errorMessage(error_));
-        }
-    }, [client]);
-
-    useEffect(() => {
-        fireAndForget(refresh());
-    }, [refresh]);
-
+    const loaded = data !== undefined;
     const workflows = useMemo<WorkflowMetadata[]>(
-        () => (data === null ? [] : [...data.workflows].toSorted((a, b) => a.exportName.localeCompare(b.exportName))),
+        () => (Array.isArray(data?.workflows) ? [...data.workflows].toSorted((a, b) => a.exportName.localeCompare(b.exportName)) : []),
         [data],
     );
 
@@ -215,7 +198,7 @@ const WorkflowsPanel = (): ReactElement => {
                 )}
             </p>
 
-            {data !== null && workflows.length === 0 ? (
+            {loaded && workflows.length === 0 ? (
                 <EmptyState
                     description={t("No defineWorkflow is declared in lunora/workflows.ts in this deployment. Add one to run a durable, multi-step workflow.")}
                     testId="workflows-empty"

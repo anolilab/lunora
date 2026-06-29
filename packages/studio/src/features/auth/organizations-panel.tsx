@@ -1,15 +1,16 @@
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { useClientQuery } from "../../hooks/use-admin-query";
 import { useAuthCapabilities } from "../../hooks/use-auth-capabilities";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import { useT } from "../../i18n/i18n-context";
-import { errorMessage, fireAndForget, formatCell, formatTimestamp } from "../../lib/internal";
+import { fireAndForget, formatCell, formatTimestamp } from "../../lib/internal";
 
 type Row = Record<string, unknown>;
 
@@ -109,97 +110,66 @@ export const OrganizationsPanel = (): ReactElement => {
     const t = useT();
     const { capabilities, ready } = useAuthCapabilities();
 
-    const [orgs, setOrgs] = useState<Row[] | null>(null);
-    const [error, setError] = useState<null | string>(null);
-
     const [selected, setSelected] = useState<null | string>(null);
-    const [members, setMembers] = useState<Row[] | null>(null);
-    const [invitations, setInvitations] = useState<Row[] | null>(null);
-    const [version, setVersion] = useState<number>(0);
 
-    useEffect(() => {
-        if (!capabilities.organization) {
-            return;
-        }
+    // The org/auth store is HTTP-only (no admin-RPC path), so these are
+    // `useClientQuery` reads over the bespoke `client.listAuthOrg*` methods.
+    const orgsQuery = useClientQuery(["lunora-auth-orgs"], () => client.listAuthOrganizations({ limit: 100 }), {
+        enabled: capabilities.organization,
+    });
+    const orgs = orgsQuery.data?.rows ?? null;
 
-        fireAndForget(
-            (async (): Promise<void> => {
-                try {
-                    const page = await client.listAuthOrganizations({ limit: 100 });
+    // Members + invitations are keyed on the selected org id and gated on a
+    // selection. `keepPreviousData` is intentionally off so switching orgs flashes
+    // back to `undefined` (→ `null`) rather than briefly showing the prior org's
+    // rows — the same guard the old staleness check provided.
+    const membersQuery = useClientQuery(
+        ["lunora-auth-org-members", selected],
+        () => client.listAuthOrgMembers({ limit: 200, organizationId: selected ?? "" }),
+        { enabled: selected !== null },
+    );
+    const invitationsQuery = useClientQuery(
+        ["lunora-auth-org-invitations", selected],
+        () => client.listAuthOrgInvitations({ limit: 200, organizationId: selected ?? "" }),
+        { enabled: selected !== null },
+    );
+    const members = selected === null ? null : (membersQuery.data?.rows ?? null);
+    const invitations = selected === null ? null : (invitationsQuery.data?.rows ?? null);
 
-                    setOrgs(page.rows);
-                } catch (error_) {
-                    setError(errorMessage(error_));
-                }
-            })(),
-        );
-        // `version` is included so a poll tick (or a mutation) re-lists orgs too.
-    }, [capabilities.organization, client, version]);
-
-    useEffect(() => {
-        if (selected === null) {
-            return undefined;
-        }
-
-        // Staleness guard: capture the org id this fetch is for and discard the
-        // response if `selected` has changed (i.e. the operator switched orgs) before
-        // both fetches resolve — otherwise the slower response for org A would
-        // overwrite org B's data while B is displayed.
-        let cancelled = false;
-
-        fireAndForget(
-            (async (): Promise<void> => {
-                try {
-                    const [memberPage, invitePage] = await Promise.all([
-                        client.listAuthOrgMembers({ limit: 200, organizationId: selected }),
-                        client.listAuthOrgInvitations({ limit: 200, organizationId: selected }),
-                    ]);
-
-                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `cancelled` is flipped by the effect's cleanup during the await, so TS's narrowing from the declaration is stale.
-                    if (!cancelled) {
-                        setMembers(memberPage.rows);
-                        setInvitations(invitePage.rows);
-                    }
-                } catch (error_) {
-                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `cancelled` is flipped by the effect's cleanup during the await, so TS's narrowing from the declaration is stale.
-                    if (!cancelled) {
-                        setError(errorMessage(error_));
-                    }
-                }
-            })(),
-        );
-
-        return () => {
-            cancelled = true;
-        };
-    }, [client, selected, version]);
+    // Surface the first read error across the three queries.
+    const error = orgsQuery.error ?? membersQuery.error ?? invitationsQuery.error;
 
     // The org/auth store is HTTP-only (no subscription channel), so poll while the
-    // plugin is enabled — bumping `version` re-lists orgs and the selected org's
-    // members/invitations — to stay current without a reload button (paused while
-    // the tab is hidden).
+    // plugin is enabled — re-listing orgs and the selected org's members /
+    // invitations — to stay current without a reload button (paused while the tab
+    // is hidden).
     useAutoRefresh(() => {
-        setVersion((value) => value + 1);
+        orgsQuery.refetch();
+
+        // The member/invitation queries are gated on a selection; `refetch()` runs
+        // even for a disabled query, so without this guard the poll would hit the
+        // endpoints with `organizationId: ""` and surface a spurious error before
+        // any org is selected.
+        if (selected !== null) {
+            membersQuery.refetch();
+            invitationsQuery.refetch();
+        }
     }, capabilities.organization);
 
-    // Select an org and clear the previous one's rows up front (in the handler, not
-    // an effect) so a switch never briefly shows the prior org's members.
+    // Select an org; the keyed member/invitation queries re-fetch for the new id,
+    // and (with `keepPreviousData` off) render `null` until they land so a switch
+    // never briefly shows the prior org's rows.
     const onSelectOrg = (id: string): void => {
         setSelected(id);
-        setMembers(null);
-        setInvitations(null);
     };
 
-    /** Run an org mutation, surface any error, and bump `version` so the member/invitation lists refetch. */
+    /** Run an org mutation, then refetch the member/invitation lists. */
     const runOrgAction = (action: () => Promise<void>): void => {
         fireAndForget(
             (async (): Promise<void> => {
-                try {
-                    await action();
-                    setVersion((value) => value + 1);
-                } catch (error_) {
-                    setError(errorMessage(error_));
-                }
+                await action();
+                membersQuery.refetch();
+                invitationsQuery.refetch();
             })(),
         );
     };

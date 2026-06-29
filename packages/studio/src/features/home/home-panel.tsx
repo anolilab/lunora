@@ -1,17 +1,16 @@
-import { useLunora } from "@lunora/react";
 import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement, ReactNode } from "react";
-import { useEffect, useState } from "react";
 
 import { Bar, EvilBarChart } from "../../components/evilcharts/charts/bar-chart";
 import type { ChartConfig } from "../../components/evilcharts/ui/chart";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
+import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useT } from "../../i18n/i18n-context";
 import type { AuditEntry, FunctionCallStat, MetricsSnapshot, SecurityAuditResult, SubscriptionsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions, fireAndForget, formatBytes } from "../../lib/internal";
+import { fireAndForget, formatBytes } from "../../lib/internal";
 import { cn } from "../../lib/utils";
 import { deriveInsights } from "../advisors/derive-insights";
 
@@ -19,12 +18,6 @@ interface HomePanelProps {
     /** Shard key the health digest targets on first load. Defaults to the root shard. */
     readonly initialShardKey?: string;
 }
-
-const GET_METRICS = adminRef(ADMIN_FUNCTIONS.getMetrics);
-const GET_FUNCTION_STATS = adminRef(ADMIN_FUNCTIONS.getFunctionStats);
-const GET_SECURITY_AUDIT = adminRef(ADMIN_FUNCTIONS.getSecurityAudit);
-const GET_AUDIT_LOG = adminRef(ADMIN_FUNCTIONS.getAuditLog);
-const LIST_SUBSCRIPTIONS = adminRef(ADMIN_FUNCTIONS.listSubscriptions);
 
 /** Format a millisecond duration compactly (`24ms`, `1.2s`). */
 const formatMs = (ms: number): string => {
@@ -352,42 +345,32 @@ const averageLatencyMs = (functions: ReadonlyArray<FunctionCallStat>): null | nu
  * placeholder rather than blanking the page.
  */
 export const HomePanel = ({ initialShardKey }: HomePanelProps): ReactElement => {
-    const client = useLunora();
     const t = useT();
     const navigate = useNavigate();
 
-    const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
-    const [functions, setFunctions] = useState<FunctionCallStat[]>([]);
-    const [performanceCount, setPerformanceCount] = useState<null | number>(null);
-    const [securityCount, setSecurityCount] = useState<null | number>(null);
-    const [subscriptions, setSubscriptions] = useState<SubscriptionsResult | null>(null);
-    const [activity, setActivity] = useState<AuditEntry[]>([]);
+    const shard = initialShardKey ?? "";
 
-    useEffect(() => {
-        const shard = initialShardKey ?? "";
+    // Each digest source is its own one-shot admin read, so a slow or failing card
+    // (a missing admin token, a cold instance) degrades on its own rather than
+    // blanking the page. The security audit is deployment-wide → root shard ("").
+    const metricsQuery = useAdminQuery<MetricsSnapshot>(ADMIN_FUNCTIONS.getMetrics, {}, { shardKey: shard });
+    const statsQuery = useAdminQuery<{ functions: FunctionCallStat[] }>(ADMIN_FUNCTIONS.getFunctionStats, {}, { shardKey: shard });
+    const auditQuery = useAdminQuery<SecurityAuditResult>(ADMIN_FUNCTIONS.getSecurityAudit, {}, { shardKey: "" });
+    const subscriptionsQuery = useAdminQuery<SubscriptionsResult>(ADMIN_FUNCTIONS.listSubscriptions, {}, { shardKey: shard });
+    const auditLogQuery = useAdminQuery<{ entries: AuditEntry[] }>(ADMIN_FUNCTIONS.getAuditLog, {}, { shardKey: shard });
 
-        const load = async (): Promise<void> => {
-            const [snapshot, stats, audit, subs, recent] = await Promise.allSettled([
-                client.query(GET_METRICS, {}, callOptions(shard)) as Promise<MetricsSnapshot>,
-                client.query(GET_FUNCTION_STATS, {}, callOptions(shard)) as Promise<{ functions: FunctionCallStat[] }>,
-                client.query(GET_SECURITY_AUDIT, {}, callOptions("")) as Promise<SecurityAuditResult>,
-                client.query(LIST_SUBSCRIPTIONS, {}, callOptions(shard)) as Promise<SubscriptionsResult>,
-                client.query(GET_AUDIT_LOG, {}, callOptions(shard)) as Promise<{ entries: AuditEntry[] }>,
-            ]);
+    const metrics = metricsQuery.data ?? null;
+    const functions = Array.isArray(statsQuery.data?.functions) ? statsQuery.data.functions : [];
+    const subscriptions = subscriptionsQuery.data ?? null;
+    const activity = Array.isArray(auditLogQuery.data?.entries) ? auditLogQuery.data.entries : [];
 
-            const snapshotValue = snapshot.status === "fulfilled" ? snapshot.value : null;
-            const statFns = stats.status === "fulfilled" && Array.isArray(stats.value.functions) ? stats.value.functions : [];
-
-            setMetrics(snapshotValue);
-            setFunctions(statFns);
-            setPerformanceCount(stats.status === "fulfilled" ? deriveInsights(snapshotValue, statFns).length : null);
-            setSecurityCount(audit.status === "fulfilled" && Array.isArray(audit.value.findings) ? audit.value.findings.length : null);
-            setSubscriptions(subs.status === "fulfilled" ? subs.value : null);
-            setActivity(recent.status === "fulfilled" && Array.isArray(recent.value.entries) ? recent.value.entries : []);
-        };
-
-        fireAndForget(load());
-    }, [client, initialShardKey]);
+    // `null` for an unresolved or failed read (renders a muted placeholder rather
+    // than a misleading zero); a number once the read resolves. `deriveInsights`
+    // draws on BOTH the metrics snapshot and the function stats, so wait for both —
+    // resolving on `statsQuery` alone could show `0` / "No issues found" while the
+    // metrics-derived insights are still loading.
+    const performanceCount = metricsQuery.data === undefined || statsQuery.data === undefined ? null : deriveInsights(metrics, functions).length;
+    const securityCount = Array.isArray(auditQuery.data?.findings) ? auditQuery.data.findings.length : null;
 
     const viewSecurity = (): void => {
         fireAndForget(navigate({ to: "/security" }));

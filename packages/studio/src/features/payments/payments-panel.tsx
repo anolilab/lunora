@@ -1,16 +1,15 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useCallback, useEffect, useState } from "react";
 
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import { useT } from "../../i18n/i18n-context";
 import type { TablePage } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
+import { formatTimestamp } from "../../lib/internal";
 
 interface PaymentsPanelProps {
     /** Newest-N rows to load per table (default 100). */
@@ -18,8 +17,6 @@ interface PaymentsPanelProps {
 }
 
 type Row = Record<string, unknown>;
-
-const READ_TABLE_PAGE = adminRef(ADMIN_FUNCTIONS.readTablePage);
 
 // Subscription states that count as "active" for the summary + badge tone.
 const ACTIVE_STATES = new Set(["active", "trialing"]);
@@ -67,12 +64,6 @@ const badgeVariant = (state: string): "default" | "destructive" | "outline" => {
     return ALERT_STATES.has(state) ? "destructive" : "outline";
 };
 
-const readRows = async (client: ReturnType<typeof useLunora>, table: string, limit: number): Promise<Row[]> => {
-    const page = (await client.query(READ_TABLE_PAGE, { filters: [], limit, offset: 0, orderBy: [], search: "", table }, callOptions(""))) as TablePage;
-
-    return page.rows;
-};
-
 /**
  * Read-only operational view of the `@lunora/payment` sync store: webhook-synced
  * subscriptions (with state) and the recent webhook `events` log. Backed by the
@@ -80,37 +71,38 @@ const readRows = async (client: ReturnType<typeof useLunora>, table: string, lim
  * no payment-specific server endpoint is needed.
  */
 const PaymentsPanel = ({ limit = 100 }: PaymentsPanelProps): ReactElement => {
-    const client = useLunora();
     const t = useT();
 
-    const [subscriptions, setSubscriptions] = useState<Row[]>([]);
-    const [events, setEvents] = useState<Row[]>([]);
-    const [error, setError] = useState<null | string>(null);
+    // Payment tables are ordinary app tables, read through the generic
+    // `readTablePage` RPC (no payment-specific endpoint). The structural query
+    // key dedupes the inline args, so a fresh object each render is harmless.
+    const subscriptionsQuery = useAdminQuery<TablePage>(ADMIN_FUNCTIONS.readTablePage, {
+        filters: [],
+        limit,
+        offset: 0,
+        orderBy: [],
+        search: "",
+        table: "subscriptions",
+    });
+    const eventsQuery = useAdminQuery<TablePage>(ADMIN_FUNCTIONS.readTablePage, {
+        filters: [],
+        limit: 25,
+        offset: 0,
+        orderBy: [],
+        search: "",
+        table: "events",
+    });
 
-    const refresh = useCallback(async (): Promise<void> => {
-        setError(null);
+    // The payment sync store has no client-observable write event to push on, so
+    // poll (skipped while the tab is hidden by `useAutoRefresh`).
+    useAutoRefresh(() => {
+        subscriptionsQuery.refetch();
+        eventsQuery.refetch();
+    }, true);
 
-        try {
-            const [subscriptionRows, eventRows] = await Promise.all([readRows(client, "subscriptions", limit), readRows(client, "events", 25)]);
-
-            setSubscriptions(subscriptionRows);
-            setEvents(eventRows);
-        } catch (error_) {
-            setSubscriptions([]);
-            setEvents([]);
-            setError(errorMessage(error_));
-        }
-    }, [client, limit]);
-
-    useEffect(() => {
-        fireAndForget(refresh());
-    }, [refresh]);
-
-    const reload = (): void => {
-        fireAndForget(refresh());
-    };
-
-    useAutoRefresh(reload, true);
+    const subscriptions = subscriptionsQuery.data?.rows ?? [];
+    const events = eventsQuery.data?.rows ?? [];
+    const error = subscriptionsQuery.error ?? eventsQuery.error;
 
     const activeCount = subscriptions.filter((row) => ACTIVE_STATES.has(text(readField(row, "state")))).length;
 
@@ -135,7 +127,7 @@ const PaymentsPanel = ({ limit = 100 }: PaymentsPanelProps): ReactElement => {
 
             {error === null ? undefined : <p className="text-sm text-destructive">{error}</p>}
 
-            {subscriptions.length === 0 ? (
+            {subscriptions.length === 0 && !subscriptionsQuery.isLoading ? (
                 <EmptyState testId="payments-empty" title={t("No subscriptions yet")} />
             ) : (
                 <Card className="overflow-hidden py-0">
