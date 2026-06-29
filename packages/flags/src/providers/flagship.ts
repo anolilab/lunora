@@ -1,0 +1,93 @@
+import { FlagshipServerProvider } from "@cloudflare/flagship/server";
+
+import type { FlagsProviderFactory } from "../types";
+
+/**
+ * Flagship provider in **binding mode** (recommended for Workers): evaluations
+ * go through the wrangler binding — no HTTP, no auth token.
+ */
+interface FlagshipBindingOptions {
+    /**
+     * The name of the Flagship binding on the Worker `env` (e.g. `"FLAGS"`). The
+     * factory resolves `env[binding]` at request time. Configure a matching
+     * `flagship` binding in `wrangler.jsonc` with this binding name and your app id.
+     */
+    binding: string;
+    /** Max cached entries when `cacheTtl` is set (default 1000). */
+    cacheMaxSize?: number;
+    /** Opt-in per-context TTL cache, in ms. Enables caching when greater than 0. */
+    cacheTtl?: number;
+    /** Surface Flagship SDK logs (default false). */
+    logging?: boolean;
+}
+
+/**
+ * Flagship provider in **HTTP mode** (non-binding Workers or other server
+ * runtimes): evaluations go to the Flagship API over HTTP.
+ */
+interface FlagshipHttpOptions {
+    /** Account id for multi-tenant routing (required with `appId`). */
+    accountId?: string;
+    /** Flagship app id; the SDK builds the evaluation URL (mutually exclusive with `endpoint`). */
+    appId?: string;
+    /** Bearer token added as an `Authorization: Bearer` header to every request. */
+    authToken?: string;
+    /** Base URL override (only used with `appId`). */
+    baseUrl?: string;
+    cacheMaxSize?: number;
+    cacheTtl?: number;
+    /** Full evaluation URL (mutually exclusive with `appId`). */
+    endpoint?: string;
+    logging?: boolean;
+    /** Retry attempts on transient errors (default 1, max 10). */
+    retries?: number;
+    /** Delay between retries in ms (default 1000, max 30000). */
+    retryDelay?: number;
+    /** Request timeout in ms (default 5000). */
+    timeout?: number;
+}
+
+/** Options for `flagshipProvider` — binding mode or HTTP mode. */
+type FlagshipProviderOptions = FlagshipBindingOptions | FlagshipHttpOptions;
+
+const isBindingOptions = (options: FlagshipProviderOptions): options is FlagshipBindingOptions => "binding" in options && typeof options.binding === "string";
+
+/**
+ * Builds a Cloudflare Flagship OpenFeature provider for `defineFlags({ provider })`.
+ * Flagship is Lunora's first-class default; the same `defineFlags` accepts any
+ * OpenFeature provider, so apps can swap it out without touching call sites.
+ *
+ * ```ts
+ * // Binding mode (recommended) — reads env.FLAGS at request time:
+ * flagshipProvider({ binding: "FLAGS" })
+ *
+ * // HTTP mode:
+ * flagshipProvider({ appId: "app-abc", accountId: "acct", authToken: "tok" })
+ * ```
+ */
+const flagshipProvider = (options: FlagshipProviderOptions): FlagsProviderFactory => {
+    if (isBindingOptions(options)) {
+        const { binding: bindingName, ...rest } = options;
+
+        return (env: Record<string, unknown>): FlagshipServerProvider => {
+            const binding = env[bindingName];
+
+            if (binding === undefined || binding === null) {
+                throw new Error(
+                    `flagshipProvider: no binding "${bindingName}" found on env. Add a \`flagship\` binding to wrangler.jsonc, ` +
+                        `e.g. { "flagship": [{ "binding": "${bindingName}", "app_id": "your-app-id" }] }.`,
+                );
+            }
+
+            return new FlagshipServerProvider({ binding: binding as never, ...rest });
+        };
+    }
+
+    // HTTP mode carries no env-resolved binding — the provider is constructed
+    // from static config, but we still defer construction to the factory so the
+    // isolate-level memo owns its lifetime.
+    return (): FlagshipServerProvider => new FlagshipServerProvider(options);
+};
+
+export { flagshipProvider };
+export type { FlagshipBindingOptions, FlagshipHttpOptions, FlagshipProviderOptions };

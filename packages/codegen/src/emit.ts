@@ -928,6 +928,8 @@ interface EmitServerOptions {
     hasAnalytics?: boolean;
     /** A `lunora/` source uses `@lunora/browser` / `ctx.browser` — wires `ctx.browser` onto ActionCtx only. */
     hasBrowser?: boolean;
+    /** The project declares `lunora/flags.ts` — wires `ctx.flags` (OpenFeature) onto every ctx. */
+    hasFlags?: boolean;
     /** A `lunora/` source uses `@lunora/hyperdrive` / `ctx.sql` — wires `ctx.sql` onto ActionCtx only. */
     hasHyperdrive?: boolean;
     /** A `lunora/` source uses `@lunora/bindings/images` / `ctx.images` — wires `ctx.images` onto ActionCtx only. */
@@ -954,6 +956,7 @@ const emitServer = ({
     hasAi = false,
     hasAnalytics = false,
     hasBrowser = false,
+    hasFlags = false,
     hasHyperdrive = false,
     hasImages = false,
     hasKv = false,
@@ -1057,6 +1060,12 @@ export type Env = CloudflareBindings;`;
     // `ctx.kv` — Workers KV. Typed on EVERY ctx (a KV read is allowed in a
     // deterministic read path the way `ctx.db` is; the binding is user-named).
     const kvContextField = hasKv ? `\n    readonly kv: import("@lunora/bindings/kv").Kv;` : "";
+    // `ctx.flags` — OpenFeature feature flags. Typed on EVERY ctx: a flag read is
+    // an external lookup like `ctx.kv`, sanctioned in deterministic read paths and
+    // memoized per request. Gated on the project declaring `lunora/flags.ts`.
+    const flagsContextField = hasFlags
+        ? `\n    /** Feature-flag evaluation (OpenFeature). Reads are memoized per request; evaluations never throw — a provider error resolves to the supplied default. */\n    readonly flags: import("@lunora/flags").LunoraFlags;`
+        : "";
     // `ctx.sql` — Hyperdrive (external Postgres/MySQL). ActionCtx ONLY: external,
     // non-deterministic I/O whose writes are invisible to Lunora live queries.
     const hyperdriveActionField = hasHyperdrive
@@ -1192,19 +1201,19 @@ type TypedTableGet = <T extends TableName>(id: IdOfTable<T>) => Promise<Doc<T> |
 export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"> {
     readonly db: Omit<DatabaseReader, "query" | "get"> & DatabaseReaderFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmReader;
-    readonly storage: ReadOnlyStorage<StorageBucketName>;${kvContextField}${analyticsContextField}
+    readonly storage: ReadOnlyStorage<StorageBucketName>;${kvContextField}${flagsContextField}${analyticsContextField}
 }
 
 export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${workflowsOmit}> {
     readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: ReadOnlyStorage<StorageBucketName>;${kvContextField}${analyticsContextField}${workflowsContextField}${queuesContextField}
+    readonly storage: ReadOnlyStorage<StorageBucketName>;${kvContextField}${flagsContextField}${analyticsContextField}${workflowsContextField}${queuesContextField}
 }
 
 export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${workflowsOmit}> {
     readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: StorageBase<StorageBucketName>;${aiActionField}${paymentsActionField}${containersActionField}${kvContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${workflowsContextField}${queuesContextField}
+    readonly storage: StorageBase<StorageBucketName>;${aiActionField}${paymentsActionField}${containersActionField}${kvContextField}${flagsContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${workflowsContextField}${queuesContextField}
 }
 
 /**
@@ -1739,6 +1748,131 @@ const kvStub: Kv = {
 };
 `,
     };
+};
+
+/**
+ * `ctx.flags` (OpenFeature feature flags) fragments. A flag read is an external
+ * lookup like `ctx.kv` — sanctioned in deterministic read paths and memoized per
+ * request — so this rides EVERY ctx. Unlike the `env`-binding helpers, the
+ * provider comes from the project's own `lunora/flags.ts` (`defineFlags(...)`),
+ * imported as `flagsConfig`; a `config.flags` thunk override (tests) wins over
+ * it. The default `targetingKey` is derived from `flagsConfig.identify(auth)`
+ * over the request's verified identity. `createFlags` never throws, so there is
+ * no stub fallback — provider/init errors resolve as the supplied default value.
+ */
+const emitFlagsFragments = (hasFlags: boolean): HelperFragments => {
+    if (!hasFlags) {
+        return EMPTY_HELPER_FRAGMENTS;
+    }
+
+    return {
+        build: `
+            const flags: import("@lunora/flags").LunoraFlags = createFlags({
+                hooks: flagsConfig.hooks,
+                logger: flagsConfig.logger,
+                provider: () => config.flags?.(env) ?? flagsConfig.provider(env),
+                targetingKey: () => flagsConfig.identify?.({ identity: identity ?? null, userId: userId ?? null }),
+            });
+`,
+        configField: `\n    flags?: (env: Record<string, unknown>) => import("@lunora/flags").Provider;`,
+        contextField: `\n                flags,`,
+        importLines: [`import { createFlags } from "@lunora/flags";`, `import flagsConfig from "../flags.js";`],
+        stub: "",
+    };
+};
+
+/**
+ * The studio + reactive feature-flag fragments woven into the generated ShardDO,
+ * or empty strings when the project wires no flags:
+ * - `constant`: `LUNORA_FLAG_KEYS`, the statically-discovered `ctx.flags.&lt;type>` reads (key + value type) the overrides iterate.
+ * - `evaluateOverride`: the `evaluateFlags()` override backing `__lunora_admin__:listFlags` — evaluates every discovered key under the studio's editable targeting context and returns full `EvaluationDetails`.
+ * - `subscriptionOverride`: the reactive override backing the React client's `useFlag`/`useFlags` over the reserved `__lunora_flags__:` channel — evaluates one flag under the socket's own verified identity.
+ *
+ * Both build the flags client exactly like `emitFlagsFragments.build` (provider
+ * resolved via the `config.flags` test thunk, else the project's `flagsConfig`).
+ * A per-type `if`/`else` chain (not a union index) keeps the typed `details.*`
+ * calls sound. Flag values are JSON, so the `context` cast at the trust boundary
+ * is safe.
+ */
+const emitFlagsOverrides = (
+    flagKeys: ReadonlyArray<{ key: string; type: "boolean" | "number" | "object" | "string" }>,
+    hasFlags: boolean,
+): { constant: string; evaluateOverride: string; subscriptionOverride: string } => {
+    if (!hasFlags) {
+        return { constant: "", evaluateOverride: "", subscriptionOverride: "" };
+    }
+
+    const clientBuild = (targetingKey: string): string => `
+            const env = (this.env ?? {}) as Record<string, unknown>;
+            const flags: import("@lunora/flags").LunoraFlags = createFlags({
+                hooks: flagsConfig.hooks,
+                logger: flagsConfig.logger,
+                provider: () => config.flags?.(env) ?? flagsConfig.provider(env),
+                targetingKey: ${targetingKey},
+            });`;
+
+    const constant = `
+/** Statically-discovered feature flags (\`ctx.flags.<type>("key")\` reads) served via \`__lunora_admin__:listFlags\` + the reactive \`__lunora_flags__:\` channel. */
+const LUNORA_FLAG_KEYS: ReadonlyArray<{ key: string; type: "boolean" | "number" | "object" | "string" }> = ${JSON.stringify(flagKeys, undefined, 4)};
+`;
+
+    const evaluateOverride = `
+        protected override async evaluateFlags(context?: Record<string, unknown>): Promise<FlagsResult> {${clientBuild("undefined")}
+            const evalContext = context as import("@lunora/flags").EvaluationContext | undefined;
+            const evaluations: FlagsResult["flags"] = [];
+
+            for (const entry of LUNORA_FLAG_KEYS) {
+                // eslint-disable-next-line no-await-in-loop -- flags evaluate sequentially; each shares the single memoized provider client
+                const details =
+                    entry.type === "boolean"
+                        ? await flags.details.boolean(entry.key, false, evalContext)
+                        : entry.type === "number"
+                          ? await flags.details.number(entry.key, 0, evalContext)
+                          : entry.type === "string"
+                            ? await flags.details.string(entry.key, "", evalContext)
+                            : await flags.details.object(entry.key, {}, evalContext);
+
+                evaluations.push({ errorCode: details.errorCode, key: entry.key, reason: details.reason, type: entry.type, value: details.value, variant: details.variant });
+            }
+
+            return { configured: true, flags: evaluations };
+        }
+`;
+
+    // eslint-disable-next-line no-secrets/no-secrets -- the emitted ShardDO override method name, not a secret
+    const subscriptionOverride = `
+        protected override runFlagSubscriptionRead(_functionPath: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; userId?: string }): Promise<unknown> {${clientBuild("() => flagsConfig.identify?.({ identity: identity?.identity ?? null, userId: identity?.userId ?? null })")}
+            const key = typeof args.key === "string" ? args.key : "";
+            const rawContext = typeof args.context === "object" && args.context !== null ? (args.context as Record<string, unknown>) : undefined;
+            // The reactive channel is public (any socket, no auth required): never
+            // let a subscriber-supplied targetingKey override the verified identity
+            // resolved above, or a client could read another user's flags. Other
+            // (non-identity) targeting attributes pass through unchanged.
+            const { targetingKey: _clientTargetingKey, ...safeContext } = rawContext ?? {};
+            const context = (rawContext === undefined ? undefined : safeContext) as import("@lunora/flags").EvaluationContext | undefined;
+
+            // eslint-disable-next-line unicorn/no-null -- the base hook's "nothing to deliver" sentinel
+            if (key.length === 0) {
+                return Promise.resolve(null);
+            }
+
+            if (args.type === "number") {
+                return flags.number(key, typeof args.default === "number" ? args.default : 0, context);
+            }
+
+            if (args.type === "string") {
+                return flags.string(key, typeof args.default === "string" ? args.default : "", context);
+            }
+
+            if (args.type === "object") {
+                return flags.object(key, (args.default ?? {}) as import("@lunora/flags").JsonValue, context);
+            }
+
+            return flags.boolean(key, typeof args.default === "boolean" ? args.default : false, context);
+        }
+`;
+
+    return { constant, evaluateOverride, subscriptionOverride };
 };
 
 /**
@@ -2421,10 +2555,11 @@ const paymentStub: LunoraPayment = {
  * `WriteHook` only when it has vector indexes (the auto-sync write hook), so a
  * workflow-/queue-/vector-free app's import line stays minimal.
  */
-const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueues: boolean): string[] => [
+const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueues: boolean, hasFlags: boolean): string[] => [
     "AdvisoryFinding",
     "DatabaseWriterLike",
     "DataMigrationLike",
+    ...(hasFlags ? ["FlagsResult"] : []),
     "LogSink",
     "MaskPoliciesResult",
     "MigrationRunResult",
@@ -2451,11 +2586,15 @@ const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueue
 interface EmitShardOptions {
     advisories?: ReadonlyArray<Finding>;
     containers?: ReadonlyArray<ContainerIR>;
+    /** Statically-discovered `ctx.flags.&lt;type>("key")` reads — the studio Flags page + reactive evaluation iterate these. */
+    flagKeys?: ReadonlyArray<{ key: string; type: "boolean" | "number" | "object" | "string" }>;
     hasAi?: boolean;
     /** A `lunora/` source reads `ctx.analytics` — wires the Analytics Engine write helper onto every ctx. */
     hasAnalytics?: boolean;
     /** A `lunora/` source reads `ctx.browser` — wires `ctx.browser` onto the ActionCtx only. */
     hasBrowser?: boolean;
+    /** The project declares `lunora/flags.ts` — wires `ctx.flags` (OpenFeature) onto every ctx. */
+    hasFlags?: boolean;
     /** A `lunora/` source reads `ctx.sql` (Hyperdrive) — wires `ctx.sql` onto the ActionCtx only. */
     hasHyperdrive?: boolean;
     /** A `lunora/` source reads `ctx.images` — wires `ctx.images` onto the ActionCtx only. */
@@ -2483,9 +2622,11 @@ interface EmitShardOptions {
 const emitShard = ({
     advisories = [],
     containers = [],
+    flagKeys = [],
     hasAi = false,
     hasAnalytics = false,
     hasBrowser = false,
+    hasFlags = false,
     hasHyperdrive = false,
     hasImages = false,
     hasKv = false,
@@ -2508,6 +2649,8 @@ const emitShard = ({
     // `images` / `sql` / `browser` are ActionCtx-only (external, non-deterministic
     // I/O) and are woven onto the action ctx object only — see the `isAction` gate.
     const kvFragments = emitKvFragments(hasKv);
+    const flagsFragments = emitFlagsFragments(hasFlags);
+    const flagsOverrides = emitFlagsOverrides(flagKeys, hasFlags);
     const analyticsFragments = emitAnalyticsFragments(hasAnalytics);
     const imagesFragments = emitImagesFragments(hasImages);
     const hyperdriveFragments = emitHyperdriveFragments(hasHyperdrive);
@@ -2561,6 +2704,7 @@ const emitShard = ({
     // to the generated `studioFeatures()` override. The default (all-false) hides
     // every optional page — matching the un-generated base-class behaviour.
     const studioFeaturesData: StudioFeaturesResult = studioFeatures ?? {
+        flags: false,
         mail: false,
         payments: false,
         queues: false,
@@ -2600,7 +2744,7 @@ const emitShard = ({
     // The facade option types (AggregateOptions/QueryArgs/RestrictableQueryOptions/
     // SearchFilterBuilderLike/…) are no longer imported here — `bindTableFacade`
     // (from `@lunora/server`) now owns the per-table accessor binding.
-    const doTypeImports = buildDoTypeImports(hasVectors, workflows.length > 0, queues.length > 0);
+    const doTypeImports = buildDoTypeImports(hasVectors, workflows.length > 0, queues.length > 0, hasFlags);
 
     // Reverse cross-backend relation override + its `@lunora/do` import fragment
     // (both empty unless the project has `.global()` tables). See `emitRelationFanout`.
@@ -2636,6 +2780,7 @@ const emitShard = ({
 
     importLines.push(
         ...kvFragments.importLines,
+        ...flagsFragments.importLines,
         ...analyticsFragments.importLines,
         ...imagesFragments.importLines,
         ...hyperdriveFragments.importLines,
@@ -2848,8 +2993,8 @@ ${schema.tables
     const secretsBuild = `
             const secrets = createSecrets(env);
 `;
-    const everyContextBuild = `${kvFragments.build}${analyticsFragments.build}${secretsBuild}`;
-    const everyContextField = `${kvFragments.contextField}${analyticsFragments.contextField}\n                secrets,`;
+    const everyContextBuild = `${kvFragments.build}${flagsFragments.build}${analyticsFragments.build}${secretsBuild}`;
+    const everyContextField = `${kvFragments.contextField}${flagsFragments.contextField}${analyticsFragments.contextField}\n                secrets,`;
 
     // `ctx.images` / `ctx.sql` (Hyperdrive) / `ctx.browser` are ActionCtx-ONLY:
     // external, non-deterministic I/O the typed `ActionCtx` exposes but
@@ -2914,14 +3059,14 @@ const LUNORA_STORAGE_RULES: StorageRulesResult = ${JSON.stringify(storageRulesDa
 
 /** Which optional package-backed features this app wires up (discovered from imports / \`ctx.*\` reads / schema signals) served via \`__lunora_admin__:studioFeatures\` so the studio hides nav pages whose package isn't enabled. */
 const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = ${JSON.stringify(studioFeaturesData, undefined, 4)};
-${workflowsMetadataConst}${queuesMetadataConst}${containerSpecs}${workflowSpecs}${queueSpecs}
+${flagsOverrides.constant}${workflowsMetadataConst}${queuesMetadataConst}${containerSpecs}${workflowSpecs}${queueSpecs}
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to \`__cdc_log\` on every write (backs streaming export + replay-PITR). */
     cdc?: boolean;
     /** Optional telemetry sink. When supplied, each \`ctx.log.*\` call is forwarded to \`sink.onLog\`. Pass the SAME sink you give \`createWorker({ observability })\` (which drives \`onRpc\`) to route both RPC and log events. */
     observability?: (env: Record<string, unknown>) => LogSink | undefined;
     scheduler?: (env: Record<string, unknown>) => unknown;
-    storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}${aiConfigField}${kvFragments.configField}${analyticsFragments.configField}${imagesFragments.configField}${hyperdriveFragments.configField}${browserFragments.configField}${r2sqlFragments.configField}${pipelinesFragments.configField}${paymentsConfigField}${d1ConfigField}${hyperdriveGlobalConfigField}
+    storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}${aiConfigField}${kvFragments.configField}${flagsFragments.configField}${analyticsFragments.configField}${imagesFragments.configField}${hyperdriveFragments.configField}${browserFragments.configField}${r2sqlFragments.configField}${pipelinesFragments.configField}${paymentsConfigField}${d1ConfigField}${hyperdriveGlobalConfigField}
 }
 
 const schedulerStub = {
@@ -2959,7 +3104,7 @@ const storageStub = {
         throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
     },
 };
-${globalDatabaseStub}${vectorsStub}${aiStub}${kvFragments.stub}${analyticsFragments.stub}${imagesFragments.stub}${hyperdriveFragments.stub}${browserFragments.stub}${r2sqlFragments.stub}${pipelinesFragments.stub}${paymentStub}${bindTableHelper}
+${globalDatabaseStub}${vectorsStub}${aiStub}${kvFragments.stub}${flagsFragments.stub}${analyticsFragments.stub}${imagesFragments.stub}${hyperdriveFragments.stub}${browserFragments.stub}${r2sqlFragments.stub}${pipelinesFragments.stub}${paymentStub}${bindTableHelper}
 // Bound in-process \`ctx.run*\` composition depth so a self- or cyclically-
 // referencing call fails loudly with a clear error instead of overflowing the
 // stack. Tracked across the awaited handler chain (one DO invocation is
@@ -3104,7 +3249,7 @@ ${relationFanout.override}
         protected override studioFeatures(): StudioFeaturesResult {
             return LUNORA_STUDIO_FEATURES;
         }
-${workflowsMetadataOverride}${queuesMetadataOverride}
+${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workflowsMetadataOverride}${queuesMetadataOverride}
         protected override advisories(): AdvisoryFinding[] {
             return LUNORA_ADVISORIES;
         }

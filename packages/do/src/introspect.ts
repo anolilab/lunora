@@ -26,6 +26,20 @@ const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
 const RELATION_FUNCTION_PREFIX = "__lunora_relation__:";
 
 /**
+ * Reserved `functionPath` prefix for live feature-flag reads. The React client's
+ * `useFlag`/`useFlags` subscribe to `__lunora_flags__:eval` over the same WS
+ * channel as a user query; `ShardDO` intercepts it before user dispatch and
+ * serves it from the codegen-overridden flag-subscription read hook, which
+ * evaluates the flag through the app's OpenFeature provider under the socket's
+ * verified identity. Like the other reserved prefixes it is NOT admin-gated (a
+ * flag read is public, scoped to the subscriber's own targeting context), and
+ * the `__lunora_` namespace is reserved so a real `&lt;file>:&lt;function>` can't
+ * collide. Re-evaluated on every write-flush so values stay live within a
+ * session (provider-side flips with no intervening write surface on reconnect).
+ */
+const FLAGS_FUNCTION_PREFIX = "__lunora_flags__:";
+
+/**
  * Fully-qualified reserved paths the data browser invokes. The
  * `__lunora_admin__:` prefix is spelled out inline rather than interpolated so
  * the values stay emittable under `--isolatedDeclarations`.
@@ -57,6 +71,7 @@ const ADMIN_FUNCTIONS = {
     // eslint-disable-next-line no-secrets/no-secrets -- reserved admin RPC path constant, not a credential
     getWorkflowInstanceStatus: "__lunora_admin__:getWorkflowInstanceStatus",
     importShard: "__lunora_admin__:importShard",
+    listFlags: "__lunora_admin__:listFlags",
     listQueues: "__lunora_admin__:listQueues",
     listTables: "__lunora_admin__:listTables",
     listWorkflows: "__lunora_admin__:listWorkflows",
@@ -386,6 +401,8 @@ interface StorageRulesResult {
  * package's tests and the studio's fails the build if the two key sets diverge.
  */
 interface StudioFeaturesResult {
+    /** `@lunora/flags` / `ctx.flags` is used, or it is a declared dependency. */
+    flags: boolean;
     /** `@lunora/mail` is imported by a `lunora/` source or a declared dependency. */
     mail: boolean;
     /** `@lunora/payment` is used (import or `ctx.payments`) or a declared dependency. */
@@ -400,6 +417,42 @@ interface StudioFeaturesResult {
     vectors: boolean;
     /** `@lunora/workflow` / `ctx.workflows` is used, the app declares workflows, or it is a declared dependency. */
     workflows: boolean;
+}
+
+/**
+ * One feature flag evaluated under a supplied targeting context, surfaced by
+ * `__lunora_admin__:listFlags` for the studio's read-only Flags page. The `key`
+ * and `type` are statically discovered by `@lunora/codegen` from the app's
+ * `ctx.flags.&lt;type>("key", …)` reads; `value`/`reason`/`variant`/`errorCode`
+ * come from the live OpenFeature evaluation (the codegen subclass overrides the
+ * base `evaluateFlags` hook). `value` is the resolved flag value as JSON.
+ */
+interface FlagEvaluation {
+    /** OpenFeature `errorCode` when the evaluation failed (the value falls back to the default). */
+    errorCode?: string;
+    /** The discovered flag key (the first argument of a `ctx.flags.&lt;type>(...)` read). */
+    key: string;
+    /** OpenFeature `reason` for the resolution (`TARGETING_MATCH`, `DEFAULT`, `ERROR`, …). */
+    reason?: string;
+    /** The flag's value type, derived from which `ctx.flags.&lt;type>` method read it. */
+    type: "boolean" | "number" | "object" | "string";
+    /** The resolved value (JSON), or the type default when unconfigured / on error. */
+    value: unknown;
+    /** OpenFeature `variant` identifier when the provider reports one. */
+    variant?: string;
+}
+
+/**
+ * Payload of a `__lunora_admin__:listFlags` call: every statically-discovered
+ * flag evaluated under the supplied targeting context. `configured` is `false`
+ * when the app wires no `@lunora/flags` provider (the base hook), so the studio
+ * can distinguish "no flags configured" from "configured but zero flags read".
+ */
+interface FlagsResult {
+    /** `true` when an `@lunora/flags` provider is wired (the codegen override ran). */
+    configured: boolean;
+    /** Each discovered flag evaluated under the request's targeting context. */
+    flags: FlagEvaluation[];
 }
 
 /**
@@ -1244,6 +1297,7 @@ export {
     ADMIN_FUNCTIONS,
     facetColumn,
     findStorageReferences,
+    FLAGS_FUNCTION_PREFIX,
     listTables,
     MAX_PAGE_SIZE,
     readTablePage,
@@ -1263,6 +1317,8 @@ export type {
     FacetValue,
     FilterClause,
     FilterOperator,
+    FlagEvaluation,
+    FlagsResult,
     FunctionCallStat,
     FunctionScanAttribution,
     FunctionStatsResult,

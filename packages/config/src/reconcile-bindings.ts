@@ -77,6 +77,8 @@ interface WranglerShape {
     containers?: ReadonlyArray<ContainerEntry>;
     d1_databases?: ReadonlyArray<{ binding?: string }>;
     durable_objects?: { bindings?: ReadonlyArray<DurableObjectBinding> };
+    // Hint-only: the `app_id` is a remote Flagship app Lunora can't mint — warned, never written.
+    flagship?: ReadonlyArray<{ app_id?: string; binding?: string }>;
     // Hint-only: the `id` is a remote Hyperdrive resource Lunora can't mint — warned, never written.
     hyperdrive?: ReadonlyArray<{ binding?: string; id?: string }>;
     // Self-describing: a parameterless { binding } — auto-writeable like `ai` (see reconcileImages).
@@ -172,6 +174,12 @@ interface ReconcileStep {
  * bindings (browser/images/analytics) are auto-written instead; see reconcile.
  */
 const collectHintBindingWarnings = (inferred: InferredBindings, parsed?: WranglerShape): string[] => {
+    // A Flagship binding-mode provider needs a matching `flagship[]` entry; the
+    // warning keys on the *binding name* (an app can wire several Flagship apps),
+    // not array length, and carries the specific name + app_id remediation.
+    const flagshipBindingMissing =
+        inferred.flagshipBinding !== undefined && !(parsed?.flagship ?? []).some((entry) => entry.binding === inferred.flagshipBinding);
+
     const rules: ReadonlyArray<[boolean, string]> = [
         [
             inferred.usesKv && (parsed?.kv_namespaces?.length ?? 0) === 0,
@@ -184,6 +192,10 @@ const collectHintBindingWarnings = (inferred: InferredBindings, parsed?: Wrangle
         [
             inferred.usesPipelines && (parsed?.pipelines?.length ?? 0) === 0,
             "ctx.pipelines is used but no pipelines binding exists; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding, pipeline }) — the pipeline resource can't be auto-provisioned.",
+        ],
+        [
+            flagshipBindingMissing,
+            `lunora/flags.ts uses Flagship in binding mode but no flagship binding "${inferred.flagshipBinding ?? ""}" exists; add a flagship entry ({ binding: "${inferred.flagshipBinding ?? ""}", app_id }) — the app_id can't be auto-provisioned.`,
         ],
     ];
 

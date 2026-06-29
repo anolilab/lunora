@@ -12,6 +12,7 @@ import discoverAuthApiCalls from "./discover-authapi-calls";
 import { discoverContainers } from "./discover-containers";
 import discoverCrons from "./discover-crons";
 import { buildStudioFeatures, discoverFeatureUsage } from "./discover-feature-usage";
+import { discoverFlagKeys } from "./discover-flags";
 import { discoverFunctions, listLunoraSourceFiles } from "./discover-functions";
 import discoverHttpRoutes from "./discover-http-routes";
 import discoverInserts from "./discover-inserts";
@@ -335,6 +336,16 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // These flip the emitted ctx type seam in `server.ts` (type-only dynamic
     // imports); the runtime ShardDO wiring lands with each capability's package.
     const hasKv = featureUsage.kv;
+    // `ctx.flags` is gated on the project actually declaring a `lunora/flags.ts`
+    // (`defineFlags(...)`) — the generated ShardDO imports that module's default
+    // export for its OpenFeature provider, so wiring `ctx.flags` without it would
+    // emit a broken import. (A handler reading `ctx.flags` without the module is a
+    // compile error — the field is only typed when the module exists.)
+    const hasFlags = existsSync(join(lunoraDirectory, "flags.ts"));
+    // Statically-discovered `ctx.flags.<type>("key")` reads — the generated
+    // ShardDO's `evaluateFlags` (studio Flags page) + the reactive read override
+    // (`useFlag`) iterate these. Only meaningful when a provider is wired.
+    const flagKeys = hasFlags ? discoverFlagKeys(project, lunoraDirectory) : [];
     const hasHyperdrive = featureUsage.hyperdrive;
     const hasBrowser = featureUsage.browser;
     const hasImages = featureUsage.images;
@@ -378,6 +389,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasAi,
         hasAnalytics,
         hasBrowser,
+        hasFlags,
         hasHyperdrive,
         hasImages,
         hasKv,
@@ -394,9 +406,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const shardContent = emitShard({
         advisories,
         containers,
+        flagKeys,
         hasAi,
         hasAnalytics,
         hasBrowser,
+        hasFlags,
         hasHyperdrive,
         hasImages,
         hasKv,

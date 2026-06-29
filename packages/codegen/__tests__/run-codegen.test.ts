@@ -212,6 +212,36 @@ export const cached = query({ args: { key: v.string() }, handler: async (ctx, { 
             expect(result.generated.server).toContain('readonly kv: import("@lunora/bindings/kv").Kv;');
         });
 
+        it("does not wire @lunora/flags for a project without a lunora/flags.ts", () => {
+            expect.assertions(2);
+
+            const result = runCodegen({ lint: false, projectRoot: workdir });
+
+            expect(result.generated.shard).not.toContain("@lunora/flags");
+            expect(result.generated.server).not.toContain("@lunora/flags");
+        });
+
+        it("wires ctx.flags end-to-end (every ctx) when the project declares lunora/flags.ts", () => {
+            expect.assertions(5);
+
+            writeFileSync(
+                join(workdir, "lunora", "flags.ts"),
+                `import { defineFlags } from "@lunora/flags";
+export default defineFlags({ provider: (env) => env.PROVIDER, identify: (auth) => auth.userId ?? undefined });
+`,
+                "utf8",
+            );
+
+            const result = runCodegen({ lint: false, projectRoot: workdir });
+
+            expect(result.generated.shard).toContain('import { createFlags } from "@lunora/flags"');
+            expect(result.generated.shard).toContain('import flagsConfig from "../flags.js"');
+            expect(result.generated.shard).toContain("\n                flags,");
+            // Flags ride every ctx, so they must NOT be gated behind the action-only block.
+            expect(result.generated.shard).not.toContain("ctx.flags = flags;");
+            expect(result.generated.server).toContain('readonly flags: import("@lunora/flags").LunoraFlags;');
+        });
+
         it("wires ctx.sql (Hyperdrive) end-to-end onto the ActionCtx ONLY (value-level) when an action reads ctx.sql", () => {
             expect.assertions(4);
 
@@ -1145,6 +1175,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             const output = emitShard({
                 schema: { tables: [], vectorIndexes: [] },
                 studioFeatures: {
+                    flags: false,
                     mail: false,
                     payments: true,
                     queues: false,
@@ -1167,6 +1198,45 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             expect(output).toContain("const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {");
             expect(output).not.toContain('"payments": true');
+        });
+    });
+
+    describe("emitShard — feature flags", () => {
+        it("emits no flag overrides when the app wires no flags", () => {
+            expect.assertions(3);
+
+            const output = emitShard({ schema: { tables: [], vectorIndexes: [] } });
+
+            expect(output).not.toContain("LUNORA_FLAG_KEYS");
+            expect(output).not.toContain("evaluateFlags");
+            // eslint-disable-next-line no-secrets/no-secrets -- the generated override's method name asserted absent, not a secret
+            expect(output).not.toContain("runFlagSubscriptionRead");
+        });
+
+        it("emits LUNORA_FLAG_KEYS plus the evaluateFlags + reactive read overrides when flags are wired", () => {
+            expect.assertions(8);
+
+            const output = emitShard({
+                flagKeys: [
+                    { key: "dark-mode", type: "boolean" },
+                    { key: "page-size", type: "number" },
+                ],
+                hasFlags: true,
+                schema: { tables: [], vectorIndexes: [] },
+            });
+
+            expect(output).toContain("const LUNORA_FLAG_KEYS: ReadonlyArray<{ key: string; type: ");
+            expect(output).toContain('"key": "dark-mode"');
+            expect(output).toContain("protected override async evaluateFlags(context?: Record<string, unknown>): Promise<FlagsResult> {");
+            expect(output).toContain("protected override runFlagSubscriptionRead(");
+            expect(output).toContain("FlagsResult");
+            // The per-type chain keeps the typed details.* calls sound.
+            expect(output).toContain("await flags.details.boolean(entry.key, false, evalContext)");
+            // Security: the public reactive channel must strip a client-supplied
+            // targetingKey so a subscriber can't read another user's flags.
+            expect(output).toContain("const { targetingKey: _clientTargetingKey, ...safeContext } = rawContext ?? {};");
+            // Robustness: identify is wrapped in a thunk so a throwing identify fails open.
+            expect(output).toContain("targetingKey: () => flagsConfig.identify?.(");
         });
     });
 

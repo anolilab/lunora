@@ -16,6 +16,7 @@ const STUDIO_FEATURES = adminRef(ADMIN_FUNCTIONS.studioFeatures);
  * one fetch is enough.
  */
 const DEFAULT_STUDIO_FEATURES: StudioFeaturesResult = {
+    flags: true,
     mail: true,
     payments: true,
     queues: true,
@@ -35,6 +36,7 @@ const coerceFeatures = (raw: unknown): StudioFeaturesResult => {
     const flag = (key: keyof StudioFeaturesResult): boolean => (typeof record[key] === "boolean" ? record[key] : true);
 
     return {
+        flags: flag("flags"),
         mail: flag("mail"),
         payments: flag("payments"),
         queues: flag("queues"),

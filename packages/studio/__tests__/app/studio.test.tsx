@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { Studio } from "../../src/app/studio";
-import type { QueueMetadata, StudioFeaturesResult } from "../../src/lib/admin";
+import type { FlagEvaluation, FlagsResult, QueueMetadata, StudioFeaturesResult } from "../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../src/lib/admin";
 import type { MockClientHooks } from "../mock-client";
 import { createMockClient } from "../mock-client";
@@ -30,7 +30,7 @@ const createClient = (features?: Partial<StudioFeaturesResult>): MockClientHooks
             // Optional-feature flags drive which nav pages render. Default every
             // flag on (the studio's back-compat default) unless a test overrides one.
             if (reference === ADMIN_FUNCTIONS.studioFeatures) {
-                return { mail: true, payments: true, queues: true, scheduler: true, storage: true, vectors: true, workflows: true, ...features };
+                return { flags: true, mail: true, payments: true, queues: true, scheduler: true, storage: true, vectors: true, workflows: true, ...features };
             }
 
             // The logs panel mounts when its domain is opened; hand it the real
@@ -64,7 +64,7 @@ const renderAndFind = async (testId: string): Promise<HTMLElement> => {
  * studio copy of the type drifts from this tuple — keeping both packages' copies
  * of the wire contract in lockstep.
  */
-const STUDIO_FEATURE_KEYS = ["mail", "payments", "queues", "scheduler", "storage", "vectors", "workflows"] as const;
+const STUDIO_FEATURE_KEYS = ["flags", "mail", "payments", "queues", "scheduler", "storage", "vectors", "workflows"] as const;
 
 /** `true` only when `Keys` and `Canonical` are mutually assignable (the exact same key set). */
 type KeysMatch<Keys extends string, Canonical extends string> = [Keys] extends [Canonical] ? ([Canonical] extends [Keys] ? true : never) : never;
@@ -82,6 +82,23 @@ const STUDIO_FEATURES_KEY_GUARD: KeysMatch<keyof StudioFeaturesResult, (typeof S
 const QUEUE_METADATA_KEYS = ["binding", "deadLetterQueue", "exportName", "mode", "name"] as const;
 
 const QUEUE_METADATA_KEY_GUARD: KeysMatch<keyof QueueMetadata, (typeof QUEUE_METADATA_KEYS)[number]> = true;
+
+/**
+ * Canonical key sets of `FlagEvaluation` / `FlagsResult` — hand-mirrored from
+ * `@lunora/do` the same way as the types above, with the matching guards living
+ * in `@lunora/do`'s `shard-do.admin.test.ts`. The studio Flags page reads these
+ * fields off the wire, so a field dropped from the mirror (e.g. `variant`) would
+ * surface as a silent `undefined` cell rather than a type error; these guards
+ * fail the build on drift. `errorCode`/`reason`/`variant` are optional (present
+ * only when the provider reports them), so they're in the set.
+ */
+const FLAG_EVALUATION_KEYS = ["errorCode", "key", "reason", "type", "value", "variant"] as const;
+
+const FLAG_EVALUATION_KEY_GUARD: KeysMatch<keyof FlagEvaluation, (typeof FLAG_EVALUATION_KEYS)[number]> = true;
+
+const FLAGS_RESULT_KEYS = ["configured", "flags"] as const;
+
+const FLAGS_RESULT_KEY_GUARD: KeysMatch<keyof FlagsResult, (typeof FLAGS_RESULT_KEYS)[number]> = true;
 
 describe("studio", () => {
     it("renders every domain's sub-pages at once in the grouped sidebar", async () => {
@@ -194,7 +211,7 @@ describe("studio", () => {
         // The compile-time guard (STUDIO_FEATURES_KEY_GUARD) fails the build on drift;
         // this asserts the canonical tuple at runtime so the guard can't be silently deleted.
         expect(STUDIO_FEATURES_KEY_GUARD).toBe(true);
-        expect([...STUDIO_FEATURE_KEYS]).toStrictEqual(["mail", "payments", "queues", "scheduler", "storage", "vectors", "workflows"]);
+        expect([...STUDIO_FEATURE_KEYS]).toStrictEqual(["flags", "mail", "payments", "queues", "scheduler", "storage", "vectors", "workflows"]);
     });
 
     it("keeps the studio's QueueMetadata mirror in lockstep with @lunora/do's contract", () => {
@@ -202,5 +219,14 @@ describe("studio", () => {
 
         expect(QUEUE_METADATA_KEY_GUARD).toBe(true);
         expect([...QUEUE_METADATA_KEYS]).toStrictEqual(["binding", "deadLetterQueue", "exportName", "mode", "name"]);
+    });
+
+    it("keeps the studio's FlagEvaluation/FlagsResult mirror in lockstep with @lunora/do's contract", () => {
+        expect.assertions(4);
+
+        expect(FLAG_EVALUATION_KEY_GUARD).toBe(true);
+        expect([...FLAG_EVALUATION_KEYS]).toStrictEqual(["errorCode", "key", "reason", "type", "value", "variant"]);
+        expect(FLAGS_RESULT_KEY_GUARD).toBe(true);
+        expect([...FLAGS_RESULT_KEYS]).toStrictEqual(["configured", "flags"]);
     });
 });

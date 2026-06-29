@@ -94,6 +94,18 @@
             "types": "./dist/client/ssr.d.ts",
             "import": "./dist/client/ssr.mjs"
         },
+        "./flags": {
+            "types": "./dist/flags.d.ts",
+            "import": "./dist/flags.mjs"
+        },
+        "./flags/flagship": {
+            "types": "./dist/flags/flagship.d.ts",
+            "import": "./dist/flags/flagship.mjs"
+        },
+        "./flags/web": {
+            "types": "./dist/flags/web.d.ts",
+            "import": "./dist/flags/web.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {
@@ -117,6 +129,7 @@
         "@lunora/cli": "1.0.0-alpha.34",
         "@lunora/client": "1.0.0-alpha.4",
         "@lunora/do": "1.0.0-alpha.7",
+        "@lunora/flags": "1.0.0-alpha.1",
         "@lunora/runtime": "1.0.0-alpha.7",
         "@lunora/server": "1.0.0-alpha.6",
         "@lunora/values": "1.0.0-alpha.3"

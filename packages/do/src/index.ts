@@ -115,6 +115,8 @@ export type {
     FacetColumnOptions,
     FacetColumnResult,
     FacetValue,
+    FlagEvaluation,
+    FlagsResult,
     FunctionCallStat,
     FunctionStatsResult,
     MaskColumnMetadata,
@@ -141,7 +143,16 @@ export type {
     WorkflowMetadata,
     WorkflowsResult,
 } from "./introspect";
-export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, facetColumn, listTables, readTablePage, RELATION_FUNCTION_PREFIX, selectMatchingIds } from "./introspect";
+export {
+    ADMIN_FUNCTION_PREFIX,
+    ADMIN_FUNCTIONS,
+    facetColumn,
+    FLAGS_FUNCTION_PREFIX,
+    listTables,
+    readTablePage,
+    RELATION_FUNCTION_PREFIX,
+    selectMatchingIds,
+} from "./introspect";
 export type { LogEntry, LogLevel } from "./log-buffer";
 export { LogBuffer } from "./log-buffer";
 export type { CapturedMailRow, RecordMailInput } from "./mail-catcher";

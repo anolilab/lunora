@@ -100,6 +100,10 @@ interface WranglerConfig {
     // `validateDispatchNamespaces`.
     dispatch_namespaces?: ReadonlyArray<{ binding?: string; namespace?: string; outbound?: unknown } | null | undefined>;
     durable_objects?: { bindings?: ReadonlyArray<WranglerDurableObjectBinding> };
+    // Cloudflare Flagship feature-flag bindings (`@lunora/flags` binding mode).
+    // The `app_id` is a remote Flagship app Lunora can't mint — warn, don't fail.
+    // See `HINT_BINDING_RULES`.
+    flagship?: ReadonlyArray<{ app_id?: string; binding?: string } | null | undefined>;
     // Hyperdrive (bring-your-own Postgres/MySQL). The `id` is a remote resource
     // (`wrangler hyperdrive create`) Lunora can't mint — warn, don't fail. See
     // `validateHyperdriveBindings`.
@@ -514,6 +518,14 @@ const HINT_BINDING_RULES = [
         hintMessage: (label: string, binding: string) =>
             `${label} ("${binding}") has no "id" — run \`wrangler kv namespace create\` and set the namespace id, or the binding can't resolve`,
         key: "kv_namespaces",
+    },
+    {
+        arrayMessage: "flagship must be an array of { binding, app_id } entries",
+        bindingMessage: (label: string) => `${label} must have a non-empty "binding" naming the Flagship binding`,
+        hintField: "app_id",
+        hintMessage: (label: string, binding: string) =>
+            `${label} ("${binding}") has no "app_id" — create a Flagship app and set its id, or the binding can't resolve`,
+        key: "flagship",
     },
     {
         arrayMessage: "hyperdrive must be an array of { binding, id } entries",

@@ -1,0 +1,98 @@
+{
+    "name": "@lunora/flags",
+    "version": "1.0.0-alpha.1",
+    "description": "OpenFeature-based feature flags for Lunora — ctx.flags, useFlag, and a first-class Cloudflare Flagship provider with any OpenFeature provider pluggable",
+    "keywords": [
+        "cloudflare",
+        "feature-flags",
+        "flagship",
+        "lunora",
+        "openfeature",
+        "workers"
+    ],
+    "homepage": "https://lunora.sh",
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/anolilab/lunora.git",
+        "directory": "packages/flags"
+    },
+    "files": [
+        "./dist",
+        "README.md",
+        "LICENSE.md",
+        "__assets__"
+    ],
+    "type": "module",
+    "sideEffects": false,
+    "main": "./dist/index.mjs",
+    "module": "./dist/index.mjs",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.mjs"
+        },
+        "./providers/flagship": {
+            "types": "./dist/providers/flagship.d.ts",
+            "import": "./dist/providers/flagship.mjs"
+        },
+        "./web": {
+            "types": "./dist/web.d.ts",
+            "import": "./dist/web.mjs"
+        },
+        "./package.json": "./package.json"
+    },
+    "publishConfig": {
+        "access": "public"
+    },
+    "scripts": {
+        "build": "pnpm exec packem build --development",
+        "build:prod": "pnpm exec packem build --production",
+        "lint:eslint": "eslint .",
+        "lint:eslint:fix": "eslint . --fix",
+        "lint:prettier": "prettier --check .",
+        "lint:prettier:fix": "prettier --write .",
+        "lint:types": "tsc --noEmit",
+        "test": "vitest run",
+        "test:coverage": "vitest run --coverage",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score"
+    },
+    "dependencies": {
+        "@openfeature/server-sdk": "catalog:flags"
+    },
+    "peerDependencies": {
+        "@cloudflare/flagship": "catalog:flags",
+        "@openfeature/web-sdk": "catalog:flags"
+    },
+    "peerDependenciesMeta": {
+        "@cloudflare/flagship": {
+            "optional": true
+        },
+        "@openfeature/web-sdk": {
+            "optional": true
+        }
+    },
+    "devDependencies": {
+        "@cloudflare/flagship": "catalog:flags",
+        "@cloudflare/workers-types": "catalog:cloudflare",
+        "@openfeature/web-sdk": "catalog:flags",
+        "@types/node": "catalog:types",
+        "@visulima/packem": "catalog:build",
+        "@vitest/coverage-v8": "catalog:test",
+        "esbuild": "catalog:build",
+        "fallow": "catalog:lint",
+        "typescript": "catalog:tsc",
+        "vitest": "catalog:test"
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    }
+}

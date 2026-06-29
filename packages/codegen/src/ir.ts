@@ -340,6 +340,32 @@ export interface QueueIR {
 }
 
 /**
+ * The feature-flag provider declared by the default export of `lunora/flags.ts`
+ * (`defineFlags({ provider, … })`). Discovery is **metadata-only** — codegen
+ * imports the real module at runtime for the provider value; this IR exists so
+ * the config layer can reconcile/validate the wrangler `flagship` binding when
+ * the app uses Flagship in binding mode. A `custom` provider (any other
+ * OpenFeature factory) carries no binding to reconcile.
+ */
+export interface FlagsIR {
+    /**
+     * The wrangler `flagship[].binding` name — set **only** for a flagship
+     * `provider` in binding mode (`flagshipProvider({ binding: "FLAGS" })`). The
+     * config layer hints/validates a matching `flagship` binding from this.
+     */
+    bindingName?: string;
+
+    /**
+     * Flagship operating mode — `"binding"` (wrangler binding, needs a
+     * `flagship` entry) or `"http"` (no binding); `undefined` for a `custom`
+     * provider or when the mode can't be read statically.
+     */
+    mode?: "binding" | "http";
+    /** `"flagship"` when the provider is `flagshipProvider(...)`, else `"custom"` (any other OpenFeature provider factory). */
+    provider: "custom" | "flagship";
+}
+
+/**
  * A `ctx.workflows.get("name")…` call discovered in a function body — the
  * use-site analog of {@link WorkflowIR} (which is the declaration side). Feeds
  * the `workflow_unused` lint (a declared workflow with zero call sites) and the
