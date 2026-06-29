@@ -4,6 +4,8 @@ import type { JurisdictionIR } from "./ir";
 
 /** Which capability methods the generated `defineApp` builder exposes — one flag per package-backed feature the app actually uses. */
 interface EmitAppOptions {
+    /** App depends on `@lunora/cloudflare-access` → emit `.access()` (wire the Cloudflare Access `resolveIdentity`, composed ahead of `@lunora/auth` when both are present). */
+    hasAccess: boolean;
     /** App uses `@lunora/ai` / `ctx.ai` → emit `.ai()` (override the Workers AI binding backing `ctx.ai`). */
     hasAi: boolean;
     /** App uses `@lunora/bindings/analytics` / `ctx.analytics` → emit `.analytics()` (override the dataset backing `ctx.analytics`). */
@@ -82,10 +84,31 @@ const LONG_TAIL: ReadonlyArray<readonly [keyof EmitAppOptions, string, string, s
 /** Whether any long-tail (`shardExtras`-backed) capability method is emitted. */
 const hasAnyLongTail = (options: EmitAppOptions): boolean => LONG_TAIL.some(([flag]) => options[flag]);
 
+/** `@lunora/cloudflare-access` imports — `composeResolvers` only when `@lunora/auth` also wires a resolver to fall back to. */
+const buildAccessImports = (hasAccess: boolean, hasAuth: boolean): string[] =>
+    hasAccess
+        ? [
+              `import type { CreateAccessResolverOptions } from "@lunora/cloudflare-access";`,
+              `import { createAccessResolver${hasAuth ? ", composeResolvers" : ""} } from "@lunora/cloudflare-access";`,
+          ]
+        : [];
+
 /** Import lines — only what the enabled capabilities need. Add-ons via `@lunora/*`; the runtime via the umbrella subpath when the app depends on `lunora`. */
 const buildImportLines = (options: EmitAppOptions): string[] => {
-    const { hasAuth, hasFramework, hasGlobal, hasHyperdriveGlobal, hasQueue, hasScheduler, hasStorage, hasWorkflow, useUmbrella, wantsOpenApi, wantsOpenRpc } =
-        options;
+    const {
+        hasAccess,
+        hasAuth,
+        hasFramework,
+        hasGlobal,
+        hasHyperdriveGlobal,
+        hasQueue,
+        hasScheduler,
+        hasStorage,
+        hasWorkflow,
+        useUmbrella,
+        wantsOpenApi,
+        wantsOpenRpc,
+    } = options;
     const runtimeModule = useUmbrella ? "lunorash/runtime" : "@lunora/runtime";
 
     const runtimeTypeImports = ["ExecutionContextLike", "LunoraWorker", "Route", "ScheduledControllerLike", "ShardNamespaceLike", "WorkerOptions"];
@@ -111,6 +134,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
                   `import { createAuth, createAuthAdmin, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";`,
               ]
             : []),
+        ...buildAccessImports(hasAccess, hasAuth),
         ...(hasGlobal
             ? [
                   `import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";`,
@@ -211,6 +235,7 @@ interface AuthDeclaration<Env> {
 
 /** Builder instance fields (private state recorded by the fluent methods). */
 const buildFieldLines = (options: EmitAppOptions): string[] => [
+    ...(options.hasAccess ? [`    private accessSelector?: Selector<Env, CreateAccessResolverOptions>;`] : []),
     `    private adminToken?: Selector<Env, string>;`,
     ...(options.hasAuth ? [`    private authDeclaration?: AuthDeclaration<Env>;`] : []),
     `    private readonly extendFns: ((env: Env, derived: Readonly<WorkerOptions>) => Partial<WorkerOptions>)[] = [];`,
@@ -236,6 +261,16 @@ const buildLongTailMethods = (options: EmitAppOptions): string[] =>
 
 /** Fluent capability methods (always-on ones plus the feature-gated ones). */
 const buildMethodBlocks = (options: EmitAppOptions): string[] => [
+    ...(options.hasAccess
+        ? [
+              `    /** Wire Cloudflare Access (Zero Trust) — verifies the \`Cf-Access-Jwt-Assertion\` JWT and feeds the identity into \`ctx.auth\` / RLS via \`resolveIdentity\`. When \`.auth(...)\` is also configured, Access is composed ahead of it (Access wins when its JWT is present; everyone else falls through to the app session). */
+    public access(selector: Selector<Env, CreateAccessResolverOptions>): this {
+        this.accessSelector = selector;
+
+        return this;
+    }`,
+          ]
+        : []),
     `    /** Bearer token gating the \`/_lunora/admin/*\` endpoints the studio calls. */
     public admin(selector: Selector<Env, string>): this {
         this.adminToken = selector;
@@ -469,6 +504,25 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
             const authInstance = getAuth();
 
             options.authAdmin = authInstance ? createAuthAdmin(authInstance) : undefined;
+        }`,
+          ]
+        : []),
+    // Cloudflare Access — runs AFTER the auth block so it can compose ahead of
+    // the better-auth resolver rather than clobber it. With `.auth()` present,
+    // a request carrying a verified Access JWT is authenticated by Access and
+    // everyone else falls through to the app session; without it, Access is the
+    // sole resolver.
+    ...(options.hasAccess
+        ? [
+              options.hasAuth
+                  ? `        if (this.accessSelector) {
+            const accessResolver = createAccessResolver(this.accessSelector(env));
+            const fallback = options.resolveIdentity;
+
+            options.resolveIdentity = fallback ? composeResolvers(accessResolver, fallback) : accessResolver;
+        }`
+                  : `        if (this.accessSelector) {
+            options.resolveIdentity = createAccessResolver(this.accessSelector(env));
         }`,
           ]
         : []),

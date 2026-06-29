@@ -471,6 +471,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // `createWorker` options. Lives in generated code (not the dependency-free
     // `@lunora/runtime`) so it can import the add-on packages the app installed.
     const appContent = emitApp({
+        hasAccess: dependencies.has("@lunora/cloudflare-access"),
         hasAi,
         hasAnalytics,
         hasAuth: dependencies.has("@lunora/auth"),
