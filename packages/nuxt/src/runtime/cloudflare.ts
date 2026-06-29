@@ -18,12 +18,7 @@
  * so this seam stays pure (no Nitro types needed) and unit-testable with a plain
  * object — a real `H3Event` is still assignable here.
  */
-
-/** Cloudflare `ExecutionContext` subset Lunora uses (`waitUntil` / `passThroughOnException`). */
-interface ExecutionContextLike {
-    passThroughOnException?: () => void;
-    waitUntil?: (promise: Promise<unknown>) => void;
-}
+import type { ExecutionContextLike } from "../../../../shared/execution-context";
 
 /** The `{ env, context|ctx }` payload Nitro attaches for the Cloudflare runtime. */
 interface CloudflareEventBag {
@@ -70,5 +65,7 @@ const resolveCloudflare = (event: H3EventLike): ResolvedCloudflare => {
     return {};
 };
 
-export type { ExecutionContextLike, H3EventLike, ResolvedCloudflare };
+export type { H3EventLike, ResolvedCloudflare };
 export { resolveCloudflare };
+
+export { type ExecutionContextLike } from "../../../../shared/execution-context";

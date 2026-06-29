@@ -1,3 +1,5 @@
+import type { ExecutionContextLike } from "../../../shared/execution-context";
+import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
 import type { AuthAdmin, AuthIntrospector } from "./auth-admin-routes";
 import { buildAuthAdminRoutes } from "./auth-admin-routes";
 import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit } from "./body-readers";
@@ -38,11 +40,6 @@ interface RpcEnvelope {
     fanOut?: FanOutSpec;
     functionPath: string;
     shardKey?: string;
-}
-
-interface ExecutionContextLike {
-    passThroughOnException: () => void;
-    waitUntil: (promise: Promise<unknown>) => void;
 }
 
 type Route = (request: Request, env: unknown, context: ExecutionContextLike) => Promise<Response> | Response;
@@ -2122,7 +2119,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             const sinkContext: ObservabilitySinkContext | undefined = context
                 ? {
                       waitUntil: (promise) => {
-                          context.waitUntil(promise);
+                          context.waitUntil?.(promise);
                       },
                   }
                 : undefined;
@@ -2510,7 +2507,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const basePath = options.authBasePath ?? DEFAULT_AUTH_BASE_PATH;
 
         if (isAuthAttemptPath(url.pathname, basePath)) {
-            context.waitUntil(recordAuthAttempt(env, authResponse.status >= 400 ? "fail" : "ok"));
+            context.waitUntil?.(recordAuthAttempt(env, authResponse.status >= 400 ? "fail" : "ok"));
         }
 
         return authResponse;
@@ -2640,7 +2637,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     return {
         async fetch(request, env, context) {
             if (options.passThroughOnException) {
-                context.passThroughOnException();
+                context.passThroughOnException?.();
             }
 
             // Resolve env-driven security knobs before the preflight/CSRF guards
@@ -2816,16 +2813,6 @@ const withFrameworkWorker = (host: FrameworkHostHandler, optionsInput: Framework
 type LunoraHandlerOptions = ((env: unknown) => FrameworkWorkerOptions) | Partial<FrameworkWorkerOptions>;
 
 /**
- * No-op `ExecutionContext` used when the host runtime didn't supply one (a
- * non-Cloudflare preview, or a unit test), so the worker's `fetch` always
- * receives a valid third argument.
- */
-const NOOP_EXECUTION_CONTEXT: ExecutionContextLike = {
-    passThroughOnException: () => {},
-    waitUntil: () => {},
-};
-
-/**
  * Resolve per-request Lunora worker options. A factory is called with the
  * request `env`; a partial object has its `shardDO` defaulted to `env.SHARD` so
  * the common case needs no configuration. Throws a clear error when no shard
@@ -2889,7 +2876,7 @@ const createLunoraHandler =
 /** Re-exported helper so callers can roundtrip envelopes in tests. */
 const defineRpcEnvelope = (envelope: RpcEnvelope): RpcEnvelope => envelope;
 
-export { composeWorker, createLunoraHandler, createWorker, defineRpcEnvelope, NOOP_EXECUTION_CONTEXT, resolveLunoraOptions, withFrameworkWorker };
+export { composeWorker, createLunoraHandler, createWorker, defineRpcEnvelope, resolveLunoraOptions, withFrameworkWorker };
 export type {
     AdminTableResolver,
     BackupManifest,
@@ -2897,7 +2884,6 @@ export type {
     CronHandler,
     CronJobDispatch,
     CronJobInfo,
-    ExecutionContextLike,
     FrameworkHostHandler,
     FrameworkWorkerOptions,
     FrameworkWorkerOptionsInput,
@@ -2934,6 +2920,7 @@ export type {
     WorkerOptions,
 };
 
+export { type ExecutionContextLike, NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
 export type {
     AuthAdmin,
     AuthCapabilities,
