@@ -116,6 +116,120 @@ style, test, translation`) does **not** include `dx`, even though `CLAUDE.md`
 - **#8 — merge-conflict markers in this file** — resolved while writing this
   index (took the most-advanced resolution: 056 DONE & REMOVED).
 
+## Wave 4 — local-first sync engine hardening (baseline `9f779358`, 2026-06-29)
+
+Audit focused on the new local-first sync engine (PR #37: `defineShape` /
+`defineMutator`, the op-log + poke protocol, per-client watermarks, the
+TanStack-DB collections + durable outbox) plus the DO/runtime hot paths it added.
+Standard effort, ≤4 concurrent Explore agents. All findings were vetted against
+live code before planning; excerpts in each plan are from first-hand reads at
+`9f779358`. **None executed yet — all TODO.**
+
+Selected bundles (user choice): security + quick perf wins, correctness fixes,
+sync-engine characterization tests, larger perf + refactor.
+
+| Plan | Title                                                          | Category  | Pri | Effort | Risk | Status |
+| ---- | -------------------------------------------------------------- | --------- | --- | ------ | ---- | ------ |
+| 064  | Redact raw `error.message` in DO RPC error fall-through        | security  | P1  | S      | LOW  | TODO   |
+| 065  | Keyed optimistic subscription fan-out (drop triple-match loop) | perf      | P1  | S      | LOW  | TODO   |
+| 066  | Cache synced-row JSON in `@lunora/db` diff-emit                | perf      | P1  | S      | LOW  | TODO   |
+| 067  | Grouped relation count (kill N+1 in `resolveCounts`)           | perf      | P2  | M      | MED  | TODO   |
+| 068  | Fix list optimistic overlay hang on unchanged mutator result   | bug       | P1  | M      | MED  | TODO   |
+| 069  | Tests: client shape re-seed on epoch fork / base divergence    | tests     | P2  | S      | LOW  | TODO   |
+| 070  | Tests: server shape resume-vs-reseed matrix                    | tests     | P2  | M      | LOW  | TODO   |
+| 071  | Tests: mutator handler-failure watermark self-healing          | tests     | P2  | M      | LOW  | TODO   |
+| 072  | Share op-log read across shape pokes in one flush              | perf      | P2  | M      | MED  | TODO   |
+| 073  | Dedup identity-independent reactive query runs across sockets  | perf      | P2  | M      | MED  | TODO   |
+| 074  | Extract shared socket-pool helper (dedup poke worker pools)    | tech-debt | P3  | S      | LOW  | TODO   |
+
+### Recommended execution order & dependencies
+
+- **First, the quick wins (no deps):** 064, 065, 066 — small, isolated,
+  high-leverage. Land them in any order.
+- **Correctness:** 068 is a P1 bug in the headline feature, but MED-confidence and
+  design-y — written **test-first** with a STOP condition if the fix needs a
+  server protocol change. No hard dep, but do it deliberately.
+- **Tests before the refactors they protect:** 069/070/071 stand alone and should
+  land before the perf work on the same paths. Specifically **070 → 072** (the
+  resume/diff matrix is the safety net for the op-log read-sharing change).
+- **Larger perf:** 067 (cross-backend, raise scope carefully), 072 (after 070),
+  073 (sharp RLS/security boundary — STOP if no static identity-independence
+  signal exists).
+- **Last:** 074 (the socket-pool helper extraction) — depends on 072 and 073
+  having reshaped `pokeShapeSubscribers` / `refreshSubscriptions` first, so it
+  consolidates the final duplicated worker-pool boilerplate rather than churning
+  twice.
+
+### Notes
+
+- **068, 073** carry hard STOP conditions because each has a correctness/security
+  cliff (a server-protocol change, and cross-identity result sharing
+  respectively). An executor that hits the cliff must report, not improvise.
+- **074** was filed but is the lowest priority — it's pure boilerplate dedup
+  (`runSocketPool` over the two copies at `shard-do.ts` ~5773–5788 and
+  ~6075–6098) and only pays off cleanly after 072/073 land.
+
+## Findings considered and rejected (Wave 4)
+
+The audit confirmed the sync engine's security posture is **sound** — these were
+checked and need no plan:
+
+- **SQL injection** — the ctx-db/shape SQL paths parameterize (`?`/`$N`) and
+  quote identifiers; no string-concatenated user input reaches `exec`.
+- **Identity spoofing** — the worker strips client-supplied identity headers and
+  re-injects server-verified `x-lunora-identity` / `x-lunora-userid`; the DO trusts
+  only the forwarded values.
+- **Authorization fail-closed** — RLS and the cross-shard relation fan-out gate
+  (`authorizeFanOut`) deny by default; the reserved relation prefix is refused on
+  single-shard envelopes.
+- **RLS under live subscriptions** — confirmed correct (subscriptions evaluate
+  under the socket's verified identity, fixed in `cb632cd7`; see the pinned
+  memory). Not a regression.
+
+Rejected / deferred opportunities:
+
+- **PERF-03 — codegen AST re-walk** — REJECTED. Contradicts Wave-3 plan-063's
+  measurement: warm dev-loop codegen is ~18–20ms (discovery-bound, not AST-walk
+  bound) and the fresh-run cost is ts-morph Project construction, which this
+  wouldn't touch. No leverage.
+- **TECH-01 — `shard-do.ts` god-file split** — DEFERRED as a separate spike. The
+  file is large but cohesive; a split is a big, risky, low-functional-value churn
+  better scoped on its own with a design doc, not bundled into this wave.
+- **CORR-02 (shard-key watermark edge), CORR-03 (poke-buffer eviction)** — NOT
+  selected. CORR-03 is LOW confidence (couldn't construct a concrete failing
+  interleaving); CORR-02 is a narrow edge the existing tests appear to cover.
+  Left for a future targeted pass if symptoms appear.
+- **TECH-02 / TECH-04** — minor; not selected this wave.
+
+## Wave 5 — competitive gap analysis (PartyKit, baseline `9f779358`, 2026-06-29)
+
+Compared Lunora against `cloudflare/partykit` (ISC). Most PartyKit primitives are
+already covered by richer Lunora equivalents (`ShardDO` ⊃ partyserver,
+`@lunora/client` ⊃ PartySocket, `@lunora/scheduler` ⊃ partywhen, `whisper` +
+`usePresence` ⊃ presence/ephemeral broadcast, op-log+poke+`@lunora/db` ⊃
+partysync). Two genuine gaps surfaced; one is filed as a design spike here. The
+other (Yjs/CRDT collaborative editing via `y-partyserver`) is tracked separately
+as a prospective `@lunora/collab` package and is **not** in this directory yet.
+
+| Plan | Title                                                        | Category          | Pri | Effort | Risk | Status                                            |
+| ---- | ------------------------------------------------------------ | ----------------- | --- | ------ | ---- | ------------------------------------------------- |
+| 075  | Auto-elastic fan-out relay tier (hidden high-fanout scaling) | perf/architecture | P3  | XL     | HIGH | TODO (design spike — Phase 0 sign-off gates code) |
+
+### Notes
+
+- **075** is PartyKit's `partysub` reframed to Lunora's "scale without the user
+  thinking about it" principle: not a user-facing pub/sub primitive but an
+  **automatic internal elasticity** of the subscription transport. Depends on
+  plans **072 + 073** (the "compute once" op-range and the identity-independence
+  signal its RLS-uniform gate reuses). Phased: observability → whisper/presence
+  relay → RLS-uniform reactive-shape relay → collapse/ceiling. Start only if the
+  live-broadcast / massive-public-room segment is an explicit product goal.
+- **CRDT / collaborative editing** — the other PartyKit gap (`y-partyserver`).
+  Reuse, don't rebuild: `y-partyserver` is ISC and solves Yjs document
+  persistence + awareness, which map onto `ShardDO` storage + the `whisper`
+  channel. Prospective `@lunora/collab`; no plan filed yet — file one if rich-text
+  / canvas collaboration becomes a goal.
+
 ## Notes for executors (carried from prior waves)
 
 - `dist/` is gitignored and built on demand. Build deps first:
