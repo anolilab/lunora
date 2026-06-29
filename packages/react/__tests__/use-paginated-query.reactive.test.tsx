@@ -152,8 +152,14 @@ const renderTwoPages = async (backend: ReturnType<typeof createReactiveBackend>)
         </LunoraProvider>,
     );
 
+    // `loadMore` is a no-op until the hook reports `CanLoadMore`: the next-page
+    // cursor it reads is published in a post-commit effect, so the first page's
+    // rows can render a tick before the cursor lands. Gating only on rendered
+    // rows can therefore fire `loadMore` too early under CI load, dropping the
+    // call so page 2 never loads (a hard timeout, not a slow settle). Wait for
+    // the status instead.
     await waitFor(() => {
-        expect(screen.getByTestId("results").textContent).not.toBe("");
+        expect(screen.getByTestId("status").textContent).toBe("CanLoadMore");
     });
 
     act(() => {
@@ -238,10 +244,16 @@ describe("usePaginatedQuery — reactive ranges", () => {
             </LunoraProvider>,
         );
 
-        // Page 1 = (null, b] = {a, b}. Open a tiny page 2 so page 1 becomes bounded.
+        // Page 1 = (null, b] = {a, b}. Open a tiny page 2 so page 1 becomes
+        // bounded. Wait for `CanLoadMore` (not just the rendered rows): the
+        // next-page cursor is published in a post-commit effect, so firing
+        // `loadMore` on the rows-rendered tick can drop it and page 2 never
+        // loads.
         await waitFor(() => {
-            expect(screen.getByTestId("results").textContent).toBe("a,b");
+            expect(screen.getByTestId("status").textContent).toBe("CanLoadMore");
         });
+
+        expect(screen.getByTestId("results").textContent).toBe("a,b");
 
         act(() => {
             loadMore(2);
