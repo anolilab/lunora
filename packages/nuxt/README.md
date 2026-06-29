@@ -115,6 +115,30 @@ Single-worker composition rides on two Nitro behaviours that vary across version
 reactive-loader handoff. Safe to import from a Nitro server route (no WebSocket,
 no browser globals).
 
+## Feature flags
+
+`@lunora/nuxt` ships no flag composable — Nuxt _is_ Vue, so read `ctx.flags`
+server-side (a Nitro route, a function, or a reactive loader) and pass the
+resolved value down, or call `useFlag` / `useFlags` from
+[`@lunora/vue`](https://www.npmjs.com/package/@lunora/vue) directly in a
+component for live updates over the WebSocket. Requires
+[`@lunora/flags`](https://www.npmjs.com/package/@lunora/flags) wired in
+`lunora/flags.ts`.
+
+```vue
+<script setup lang="ts">
+import { useFlag } from "@lunora/vue";
+
+// Live over the Lunora WS — holds `false` until the server resolves it.
+const newHero = useFlag("homepage-hero", false);
+</script>
+
+<template>
+    <NewHero v-if="newHero" />
+    <ClassicHero v-else />
+</template>
+```
+
 ## Supported Node.js Versions
 
 Libraries in this ecosystem make the best effort to track [Node.js' release schedule](https://github.com/nodejs/release#release-schedule).

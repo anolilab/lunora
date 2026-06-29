@@ -51,6 +51,7 @@ import { TableEditor } from "../features/data/table-editor";
 import { ExportImportPanel } from "../features/database/export-import";
 import { MigrationsPanel } from "../features/database/migrations";
 import { PitrPanel } from "../features/database/pitr-panel";
+import { FlagsPanel } from "../features/flags/flags-panel";
 import { FunctionRunner } from "../features/functions/function-runner";
 import { FunctionStatsPanel } from "../features/functions/function-stats";
 import { HomePanel } from "../features/home/home-panel";
@@ -96,6 +97,7 @@ type StudioTab =
     | "drains"
     | "export"
     | "files"
+    | "flags"
     | "functions"
     | "health"
     | "home"
@@ -266,6 +268,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     ),
     export: <path d="M12 3v11m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />,
     files: <path d="M4 7a2 2 0 0 1 2-2h3l2 2.5h7a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7Z" />,
+    flags: <path d="M6 21V4m0 0h11l-2 3 2 3H6" />,
     functions: <path d="m9 8-4 4 4 4m6-8 4 4-4 4" />,
     health: <path d="M3 12h4l2 6 4-14 2 8h6" />,
     home: <path d="M3 11.5 12 4l9 7.5M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9" />,
@@ -313,7 +316,7 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "storage", tabs: ["files", "storageRules"] },
     { key: "observability", tabs: ["logs", "audit", "realtime", "metrics", "analytics", "health"] },
     { key: "advisors", tabs: ["security", "rls", "permissions", "insights"] },
-    { key: "operations", tabs: ["schedule", "mail", "drains", "payments"] },
+    { key: "operations", tabs: ["schedule", "mail", "drains", "payments", "flags"] },
     { key: "settings", tabs: ["settings"] },
 ];
 
@@ -329,6 +332,7 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
  */
 const TAB_FEATURE: Partial<Record<StudioTab, keyof StudioFeaturesResult>> = {
     files: "storage",
+    flags: "flags",
     mail: "mail",
     payments: "payments",
     queues: "queues",
@@ -395,6 +399,7 @@ const TABS = [
     "audit",
     "schedule",
     "drains",
+    "flags",
     "settings",
 ] as const;
 
@@ -725,6 +730,7 @@ const StudioLayout = (): ReactElement => {
         drains: t("Log drains"),
         export: t("Export / Import"),
         files: t("Files"),
+        flags: t("Flags"),
         functions: t("Functions"),
         health: t("Health"),
         home: t("Home"),
@@ -775,6 +781,7 @@ const StudioLayout = (): ReactElement => {
         drains: t("Forward logs to Logpush, Tail Workers, or a webhook collector."),
         export: t("Export a shard to NDJSON, or import rows from it."),
         files: t("Browse objects in your R2 storage buckets."),
+        flags: t("Inspect feature flags and their live evaluation under a targeting context."),
         functions: t("Run registered queries, mutations, and actions."),
         health: t("At-a-glance connection, error, and shard signals."),
         home: t("Connection, health, and advisor summary for your deployment."),
@@ -992,6 +999,7 @@ const buildRouter = ({
         drains: <LogDrainsPanel />,
         export: <ExportImportPanel initialShardKey={initialShardKey} />,
         files: <FileBrowser />,
+        flags: <FlagsPanel initialShardKey={initialShardKey} />,
         functions: (
             <div className="flex flex-col gap-8">
                 <FunctionStatsPanel functions={functions} initialShardKey={initialShardKey} />

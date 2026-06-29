@@ -103,6 +103,8 @@ function MessageList({ room }: { room: string }) {
 | `useInfiniteQuery(fn, args, { initialNumItems })`    | `{ pages, status, hasNextPage, fetchNextPage, … }`              | Page-array variant of the same paginator.                                      |
 | `usePreloadedQuery(preloaded)`                       | `T`                                                             | Reads a server `Preloaded` token, then goes live.                              |
 | `usePresence({ heartbeat, listPresent, roomId, … })` | present members                                                 | Drives the `definePresence` heartbeat + list functions.                        |
+| `useFlag(key, default, context?)`                    | flag value (live)                                               | Live OpenFeature flag over the WS; reads `default` until the server answers.   |
+| `useFlags(defaults, context?)`                       | `{ [key]: value }`                                              | Batch variant — one live value per key in the `defaults` map.                  |
 | `useStream(fn, args, options?)`                      | `{ chunks, status, error, cancel }`                             | Consumes a streamed action response chunk by chunk.                            |
 | `useRateLimit(config, options?)`                     | `{ ok, disabled, retryAfter, check, consume, reset }`           | Client-side mirror of a `@lunora/ratelimit` budget for instant UX.             |
 | `useConnectionStatus()`                              | `ConnectionStatus`                                              | `idle` / `connecting` / `connected` / `offline`.                               |

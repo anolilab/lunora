@@ -1,0 +1,195 @@
+---
+title: "@lunora/flags"
+description: OpenFeature-based feature flags for Lunora — ctx.flags, useFlag, and a first-class Cloudflare Flagship provider with any OpenFeature provider pluggable.
+---
+
+`@lunora/flags` brings feature flags to Lunora on top of [OpenFeature](https://openfeature.dev). Configure a provider once with `defineFlags` in `lunora/flags.ts`; codegen wires a typed `ctx.flags` surface onto every query, mutation, and action, and the `useFlag` / `useFlags` hooks make evaluations reactive on the client. Cloudflare Flagship is the first-class default provider, but any OpenFeature provider is pluggable.
+
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```bash tab="pnpm"
+pnpm add @lunora/flags
+```
+
+```bash tab="npm"
+npm install @lunora/flags
+```
+
+```bash tab="yarn"
+yarn add @lunora/flags
+```
+
+```bash tab="bun"
+bun add @lunora/flags
+```
+
+</Tabs>
+
+Scaffold the flags singleton:
+
+```bash
+vis generate lunora-flags
+```
+
+## Configure
+
+`lunora/flags.ts` is a singleton: a single `defineFlags` default export that configures the provider for the whole app. Cloudflare Flagship in Workers binding mode needs no auth token — bind it in wrangler and you're done.
+
+```ts
+// lunora/flags.ts
+import { defineFlags } from "@lunora/flags";
+import { flagshipProvider } from "@lunora/flags/providers/flagship";
+
+export default defineFlags({
+    // Cloudflare Flagship in Workers binding mode (no auth token needed).
+    provider: flagshipProvider({ binding: "FLAGS" }),
+    // HTTP mode instead (no binding required):
+    // provider: flagshipProvider({ appId: "<app-id>", accountId: "<account-id>", authToken: (env) => env.FLAGSHIP_TOKEN }),
+    // Or any OpenFeature provider — a factory that receives env:
+    // provider: (env) => new SomeOpenFeatureProvider({ apiKey: env.FLAGS_API_KEY }),
+    // Optional: default targetingKey for every evaluation (usually the user id).
+    identify: (ctx) => ctx.auth?.userId,
+});
+```
+
+The `provider` is either a Flagship config or any factory `(env) => OpenFeatureProvider`. `identify` derives the default `targetingKey` from each request's context, so per-user targeting works without threading the key through every call.
+
+## Built-in providers
+
+Cloudflare Flagship is the first-class default, but two zero-config providers ship in the box for local development, tests, and binding-driven flags — neither adds a dependency.
+
+### Memory provider
+
+`memoryProvider` wraps OpenFeature's in-memory provider with a flat `key → value` map. The value's runtime type is the flag's kind, so booleans, strings, numbers, and JSON objects all work. Ideal for tests and local defaults.
+
+```ts
+// lunora/flags.ts
+import { defineFlags } from "@lunora/flags";
+import { memoryProvider } from "@lunora/flags/providers/memory";
+
+export default defineFlags({
+    provider: memoryProvider({
+        "dark-mode": true,
+        theme: "system",
+        "page-size": 25,
+        layout: { columns: 2 },
+    }),
+});
+```
+
+### Env-binding provider
+
+`envProvider` reads flags from the Worker's `env` — plain vars or Secrets Store bindings — so flags are configured the same way as the rest of your deployment. By default a flag key maps to `FLAG_` + its `UPPER_SNAKE_CASE` name (`dark-mode` → `FLAG_DARK_MODE`); customise with `prefix` or a full `name` mapper. Booleans accept `1/on/true/yes` and `0/off/false/no`; numbers and JSON objects are parsed from their string form, failing open to the default on a parse error.
+
+```ts
+// lunora/flags.ts
+import { defineFlags } from "@lunora/flags";
+import { envProvider } from "@lunora/flags/providers/env";
+
+export default defineFlags({
+    provider: envProvider(),
+    // Custom prefix or key mapping:
+    // provider: envProvider({ prefix: "FF_" }),
+    // provider: envProvider({ name: (key) => `flags.${key}` }),
+});
+```
+
+## Server usage
+
+Flags ride every ctx (query, mutation, and action) like `ctx.kv`. Each typed accessor takes a flag key and a default that is returned whenever the flag is missing, the provider errors, or evaluation is otherwise unresolved — **evaluations never throw**.
+
+```ts
+import { query } from "./_generated/server";
+
+export const dashboard = query({
+    args: {},
+    handler: async (ctx) => {
+        const darkMode = await ctx.flags.boolean("dark-mode", false);
+        const theme = await ctx.flags.string("theme", "system");
+        const limit = await ctx.flags.number("page-size", 25);
+        const layout = await ctx.flags.object("layout", { columns: 2 });
+
+        return { darkMode, theme, limit, layout };
+    },
+});
+```
+
+For the full resolution (value plus reason, variant, and any error code) use `ctx.flags.details.*`:
+
+```ts
+const result = await ctx.flags.details.boolean("dark-mode", false);
+// result.value, result.reason, result.variant, result.errorCode
+```
+
+`details` mirrors every accessor: `details.boolean`, `details.string`, `details.number`, `details.object`.
+
+## Client usage
+
+`@lunora/react` exposes `useFlag` and `useFlags`. Evaluations are reactive and live over the WebSocket — when a flag's value changes for the current targeting context the component re-renders.
+
+```tsx
+import { useFlag, useFlags } from "@lunora/react";
+
+function Dashboard() {
+    const darkMode = useFlag("dark-mode", false);
+    const { theme, "page-size": pageSize } = useFlags({
+        theme: "system",
+        "page-size": 25,
+    });
+
+    return <Layout dark={darkMode} theme={theme} pageSize={pageSize} />;
+}
+```
+
+`useFlag(key, default)` resolves a single flag; `useFlags({ key: default, ... })` resolves a batch in one round trip.
+
+### Other frameworks
+
+The same reactive contract ships in every Lunora client adapter — one import, idiomatic to each framework, all live over the existing WebSocket:
+
+| Framework | Import           | Single / batch               | Returns          |
+| --------- | ---------------- | ---------------------------- | ---------------- |
+| React     | `@lunora/react`  | `useFlag` / `useFlags`       | the value        |
+| Vue       | `@lunora/vue`    | `useFlag` / `useFlags`       | a readonly `Ref` |
+| Solid     | `@lunora/solid`  | `createFlag` / `createFlags` | an accessor      |
+| Svelte    | `@lunora/svelte` | `flag` / `flags`             | a readable store |
+
+```ts
+// Vue — key and context may be refs or getters, so the subscription is reactive.
+import { useFlag } from "@lunora/vue";
+const darkMode = useFlag("dark-mode", false); // Readonly<Ref<boolean>>
+
+// Solid — pass a plain value or an accessor for a reactive key/context.
+import { createFlag } from "@lunora/solid";
+const darkMode = createFlag("dark-mode", false); // Accessor<boolean>
+
+// Svelte — read with the `$store` idiom (`{$darkMode}`).
+import { flag } from "@lunora/svelte";
+const darkMode = flag("dark-mode", false); // Readable<boolean>
+```
+
+Astro and Nuxt are server-rendered: read flags through `ctx.flags` in a server endpoint or loader and pass the resolved values to an interactive island built with one of the client adapters above.
+
+## Studio
+
+The Lunora Studio surfaces a read-only **Flags** page listing every configured flag and its live evaluation under an editable targeting context — change the targeting key (or other context attributes) and the resolved values update in place, so you can preview exactly what a given user would see.
+
+## Wrangler binding
+
+Flagship binding mode needs a `flagship` binding in `wrangler.jsonc`. The `app_id` can't be auto-provisioned, so add it yourself:
+
+```jsonc
+{
+    "flagship": [{ "binding": "FLAGS", "app_id": "<your-app-id>" }],
+}
+```
+
+HTTP-mode Flagship and other OpenFeature providers need no binding — they reach the service over the network using the credentials you pass to the provider factory.
+
+## See also
+
+- [@lunora/server](/docs/packages/server)
+- [@lunora/react](/docs/packages/react)
+- [@lunora/vue](/docs/packages/vue)
+- [@lunora/solid](/docs/packages/solid)
+- [@lunora/svelte](/docs/packages/svelte)

@@ -34,6 +34,7 @@ overrides:
   "@lunora/db": "workspace:*"
   "@lunora/dispatch": "workspace:*"
   "@lunora/do": "workspace:*"
+  "@lunora/flags": "workspace:*"
   "@lunora/hyperdrive": "workspace:*"
   "@lunora/mail": "workspace:*"
   "@lunora/mcp": "workspace:*"
@@ -172,6 +173,14 @@ catalogs:
   e2e:
     "@playwright/test": ^1.61.1
     playwright: ^1.61.1
+  flags:
+    # Feature flags (@lunora/flags). OpenFeature is the base abstraction; the
+    # Cloudflare Flagship provider is the first-class default. server-sdk is the
+    # only required peer for the core; flagship + web-sdk gate the optional
+    # provider/browser subpaths.
+    "@cloudflare/flagship": ^0.4.2
+    "@openfeature/server-sdk": ^1.20.2
+    "@openfeature/web-sdk": ^1.7.3
   tooling:
     dockerode: ^5.0.1
     ts-morph: ^28.0.0
@@ -434,6 +443,7 @@ minimumReleaseAgeExclude:
   - '@better-auth/prisma-adapter@1.6.16'
   - '@better-auth/telemetry@1.6.16'
   - '@better-fetch/fetch@1.2.2'
+  - '@cloudflare/flagship@0.4.2'
   - '@cloudflare/vite-plugin@1.40.1'
   - '@cloudflare/vitest-pool-workers@0.16.12'
   - '@cloudflare/workers-types@4.20260616.1'

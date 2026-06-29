@@ -40,6 +40,7 @@ export const ADMIN_FUNCTIONS = {
     getAuthMetrics: "__lunora_admin__:getAuthMetrics",
     getCapturedMail: "__lunora_admin__:getCapturedMail",
     getFunctionStats: "__lunora_admin__:getFunctionStats",
+    listFlags: "__lunora_admin__:listFlags",
     listQueues: "__lunora_admin__:listQueues",
     listSubscriptions: "__lunora_admin__:listSubscriptions",
     listTableIndexes: "__lunora_admin__:listTableIndexes",
@@ -503,6 +504,7 @@ export interface StorageRulesResult {
  * fails the build if these keys ever diverge from the source contract.
  */
 export interface StudioFeaturesResult {
+    flags: boolean;
     mail: boolean;
     payments: boolean;
     queues: boolean;
@@ -550,6 +552,34 @@ export interface QueueMetadata {
 /** Payload of a `__lunora_admin__:listQueues` call, hand-mirroring `@lunora/do`'s `QueuesResult`. */
 export interface QueuesResult {
     queues: QueueMetadata[];
+}
+
+/**
+ * One feature flag evaluated under a targeting context, hand-mirroring
+ * `@lunora/do`'s `FlagEvaluation` (the studio can't import `@lunora/do`). `key`
+ * and `type` are statically discovered from the app's `ctx.flags.&lt;type>("key")`
+ * reads; `value`/`reason`/`variant`/`errorCode` come from the live OpenFeature
+ * evaluation. A key-exhaustiveness drift guard in this package's tests (and
+ * `@lunora/do`'s) fails the build if these keys diverge from the source contract.
+ */
+export interface FlagEvaluation {
+    errorCode?: string;
+    key: string;
+    reason?: string;
+    type: "boolean" | "number" | "object" | "string";
+    value: unknown;
+    variant?: string;
+}
+
+/**
+ * Payload of a `__lunora_admin__:listFlags` call, hand-mirroring `@lunora/do`'s
+ * `FlagsResult`. `configured` is `false` when the app wires no `@lunora/flags`
+ * provider, so the Flags page can distinguish "no flags configured" from
+ * "configured but zero flags read".
+ */
+export interface FlagsResult {
+    configured: boolean;
+    flags: FlagEvaluation[];
 }
 
 /* eslint-disable no-secrets/no-secrets -- reserved admin RPC names are framework constants, not credentials */

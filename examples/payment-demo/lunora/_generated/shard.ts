@@ -562,6 +562,7 @@ const LUNORA_STORAGE_RULES: StorageRulesResult = {
 
 /** Which optional package-backed features this app wires up (discovered from imports / `ctx.*` reads / schema signals) served via `__lunora_admin__:studioFeatures` so the studio hides nav pages whose package isn't enabled. */
 const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {
+    "flags": false,
     "mail": false,
     "payments": true,
     "queues": false,

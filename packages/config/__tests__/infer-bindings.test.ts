@@ -454,4 +454,62 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
 
         expect(result.usesMail).toBe(false);
     });
+
+    it("infers the flagship binding + hint from a Flagship binding-mode lunora/flags.ts", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "lunora/flags.ts",
+            `import { defineFlags } from "@lunora/flags";\nimport { flagshipProvider } from "@lunora/flags/providers/flagship";\nexport default defineFlags({ provider: flagshipProvider({ binding: "FLAGS" }) });`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesFlags).toBe(true);
+        expect(result.flagshipBinding).toBe("FLAGS");
+        expect(result.signals.some((signal) => signal.includes('flagship binding ({ binding: "FLAGS"'))).toBe(true);
+    });
+
+    it("infers flags but no flagship binding for an HTTP-mode Flagship provider", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write(
+            "lunora/flags.ts",
+            `import { defineFlags } from "@lunora/flags";\nimport { flagshipProvider } from "@lunora/flags/providers/flagship";\nexport default defineFlags({ provider: flagshipProvider({ appId: "app-abc", accountId: "acct" }) });`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesFlags).toBe(true);
+        expect(result.flagshipBinding).toBeUndefined();
+    });
+
+    it("infers flags but no binding for a custom OpenFeature provider", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/flags.ts", `import { defineFlags } from "@lunora/flags";\nexport default defineFlags({ provider: (env) => new Custom(env.KEY) });`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesFlags).toBe(true);
+        expect(result.flagshipBinding).toBeUndefined();
+    });
+
+    it("does not infer flags for a project without a lunora/flags.ts", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesFlags).toBe(false);
+        expect(result.flagshipBinding).toBeUndefined();
+    });
 });

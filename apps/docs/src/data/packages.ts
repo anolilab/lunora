@@ -302,6 +302,16 @@ export const packages: PackageInfo[] = [
     {
         accentColor: categoryColors["Add-ons"]!,
         category: "Add-ons",
+        description: "OpenFeature feature flags: ctx.flags + useFlag, with a first-class Cloudflare Flagship provider and any OpenFeature provider pluggable.",
+        docsPath: "/docs/packages/flags",
+        features: ["OpenFeature-based ctx.flags", "useFlag / useFlags client hooks", "Flagship, memory & env providers"],
+        name: "Flags",
+        npmName: "@lunora/flags",
+        slug: "flags",
+    },
+    {
+        accentColor: categoryColors["Add-ons"]!,
+        category: "Add-ons",
         description: "Connect an external Postgres/MySQL database via Cloudflare Hyperdrive (ctx.sql).",
         docsPath: "/docs/packages/hyperdrive",
         features: ["BYO Postgres / MySQL", "Driver-agnostic ctx.sql", "Hyperdrive connection pooling"],

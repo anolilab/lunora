@@ -854,6 +854,23 @@ describe("wrangler-validator", () => {
             expect(missingBinding.errors.join(" ")).toContain('must have a non-empty "binding"');
         });
 
+        it("accepts a well-formed flagship binding; warns on a missing app_id; errors on a missing binding", () => {
+            expect.assertions(4);
+
+            const valid = validateWranglerConfig(validBase({ flagship: [{ app_id: "app-abc", binding: "FLAGS" }] }));
+
+            expect(valid.valid).toBe(true);
+
+            const missingAppId = validateWranglerConfig(validBase({ flagship: [{ binding: "FLAGS" }] }));
+
+            expect(missingAppId.valid).toBe(true);
+            expect(missingAppId.warnings.join(" ")).toMatch(/has no "app_id"/u);
+
+            const missingBinding = validateWranglerConfig(validBase({ flagship: [{ app_id: "app-abc" }] }));
+
+            expect(missingBinding.errors.join(" ")).toContain('must have a non-empty "binding"');
+        });
+
         it("accepts a well-formed hyperdrive binding; warns on a missing id; errors on a missing binding", () => {
             expect.assertions(3);
 

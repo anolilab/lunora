@@ -26,6 +26,7 @@ import { init as initLexer, parse as lexModule } from "es-module-lexer";
 
 import type { ContainerIR } from "./container-info";
 import { discoverContainerInfo } from "./container-info";
+import { discoverFlagsInfo } from "./flags-info";
 import join from "./path";
 import type { QueueIR } from "./queue-info";
 import { discoverQueueInfo } from "./queue-info";
@@ -171,6 +172,14 @@ interface InferredBindings {
     containers: InferredContainer[];
     /** Durable Objects the worker entry exports → safe to bind. */
     durableObjects: DurableObjectSpec[];
+
+    /**
+     * The wrangler `flagship[].binding` name implied by `lunora/flags.ts` when it
+     * uses the Flagship provider in binding mode — `undefined` for HTTP-mode
+     * Flagship, a custom OpenFeature provider, or no flags. The binding needs an
+     * un-mintable `app_id`, so it is reconciled as a hint, not auto-written.
+     */
+    flagshipBinding?: string;
     /** Schema declares a `.global()` table → needs the `DB` D1 binding. */
     needsD1: boolean;
     /** Queues declared in `lunora/queues.ts` → reconciled into `queues.producers[]` / `queues.consumers[]`. */
@@ -185,6 +194,8 @@ interface InferredBindings {
     usesAuth: boolean;
     /** `@lunora/browser` is imported → self-describing `browser` binding (auto-writeable). */
     usesBrowser: boolean;
+    /** `lunora/flags.ts` declares a feature-flag provider (any OpenFeature provider — Flagship or custom). */
+    usesFlags: boolean;
     /** `@lunora/hyperdrive` is imported (binding needs an un-mintable remote `id`; hint-only). */
     usesHyperdrive: boolean;
     /** `@lunora/bindings/images` is imported → self-describing `images` binding (auto-writeable). */
@@ -617,6 +628,11 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     // Queues need no worker-entry export (their `queue()` handler rides
     // `createWorker`), so the discovered list is reconcilable as-is.
     const queues = [...discoverQueueInfo(options.projectRoot, schemaDirectory).queues];
+    // Feature flags are declared in `lunora/flags.ts` (any OpenFeature provider).
+    // Only a Flagship binding-mode provider implies a wrangler `flagship` binding
+    // (its `app_id` is un-mintable → reconciled as a hint, never auto-written).
+    const { flags } = discoverFlagsInfo(options.projectRoot, schemaDirectory);
+    const flagshipBinding = flags?.provider === "flagship" && flags.mode === "binding" ? flags.bindingName : undefined;
 
     // The import-driven `uses*` flags are projected straight off the scanned
     // capabilities (keyed by CAPABILITY_SOURCES); `needsD1` is overridden with
@@ -627,12 +643,22 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         capabilityFlags[flag] = capabilities[flag];
     }
 
+    const signals = describeSignals(durableObjects, needsD1, capabilities, containers, workflows);
+
+    if (flagshipBinding !== undefined) {
+        signals.push(
+            `hint: lunora/flags.ts uses Flagship in binding mode; add a flagship binding ({ binding: "${flagshipBinding}", app_id }) — the app_id can't be auto-provisioned`,
+        );
+    }
+
     return {
         containers,
         durableObjects,
+        flagshipBinding,
         needsD1,
         queues,
-        signals: describeSignals(durableObjects, needsD1, capabilities, containers, workflows),
+        signals,
+        usesFlags: flags !== undefined,
         workflows,
         ...capabilityFlags,
     };

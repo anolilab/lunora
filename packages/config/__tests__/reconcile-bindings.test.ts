@@ -24,6 +24,7 @@ const baseInferred = (overrides: Partial<InferredBindings> = {}): InferredBindin
         usesAuth: false,
         usesBrowser: false,
         usesHyperdrive: false,
+        usesFlags: false,
         usesImages: false,
         usesKv: false,
         usesMail: false,
@@ -204,6 +205,45 @@ describe("reconcileWranglerBindings", () => {
 
         expect(result.warnings.join(" ")).toMatch(/r2_buckets/u);
         expect(readConfig().r2_buckets).toBeUndefined();
+    });
+
+    it("warns when Flagship binding mode is used but no flagship binding exists, without writing one", () => {
+        expect.assertions(2);
+
+        const result = reconcileWranglerBindings(root, baseInferred({ flagshipBinding: "FLAGS", usesFlags: true }));
+
+        expect(result.warnings.join(" ")).toMatch(/flagship binding "FLAGS".*app_id/u);
+        // The app_id is un-mintable, so nothing is auto-written.
+        expect(readConfig().flagship).toBeUndefined();
+    });
+
+    it("does not warn about flagship when a matching flagship binding already exists", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "flagship": [{ "binding": "FLAGS", "app_id": "app-abc" }],
+}
+`,
+            "utf8",
+        );
+
+        const result = reconcileWranglerBindings(root, baseInferred({ flagshipBinding: "FLAGS", usesFlags: true }));
+
+        expect(result.warnings.join(" ")).not.toMatch(/flagship binding/u);
+    });
+
+    it("does not warn about flagship for an HTTP-mode provider (no binding implied)", () => {
+        expect.assertions(1);
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesFlags: true }));
+
+        expect(result.warnings.join(" ")).not.toMatch(/flagship binding/u);
     });
 
     it("warns to set the provider secrets when @lunora/payment is used, without adding any binding", () => {

@@ -37,6 +37,8 @@ export type {
 } from "./types";
 export { default as useAuth } from "./use-auth";
 export { default as useConnectionStatus } from "./use-connection-status";
+export type { FlagContext, FlagValue } from "./use-flag";
+export { useFlag, useFlags } from "./use-flag";
 export { default as useInfiniteQuery } from "./use-infinite-query";
 export type { MutationHook } from "./use-mutation";
 export { useMutation } from "./use-mutation";

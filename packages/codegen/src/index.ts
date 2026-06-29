@@ -3,6 +3,7 @@ export { CodegenDiagnosticError, diagnosticAt } from "./diagnostics";
 export { default as discoverAuthApiCalls } from "./discover-authapi-calls";
 export { CONTAINERS_FILENAME, discoverContainers } from "./discover-containers";
 export { default as discoverCrons } from "./discover-crons";
+export { discoverFlags, FLAGS_FILENAME } from "./discover-flags";
 export { discoverFunctions } from "./discover-functions";
 export { default as discoverHttpRoutes } from "./discover-http-routes";
 export { default as discoverInserts } from "./discover-inserts";
@@ -36,6 +37,7 @@ export type {
     AuthApiCallIR,
     ContainerIR,
     CronJobIR,
+    FlagsIR,
     FunctionIR,
     HttpRouteIR,
     IndexIR,

@@ -27,6 +27,8 @@ interface FeatureUsage {
     analytics: boolean;
     /** A `lunora/` source imports `@lunora/browser` or reads `ctx.browser`. */
     browser: boolean;
+    /** A `lunora/` source imports `@lunora/flags` or reads `ctx.flags`. */
+    flags: boolean;
     /** A `lunora/` source imports `@lunora/hyperdrive` or reads `ctx.sql`. */
     hyperdrive: boolean;
     /** A `lunora/` source imports `@lunora/bindings/images` or reads `ctx.images`. */
@@ -63,6 +65,7 @@ const PROBES: Record<keyof FeatureUsage, FeatureProbe> = {
     ai: { contextProperty: "ai", moduleSpecifier: "@lunora/ai" },
     analytics: { contextProperty: "analytics", moduleSpecifier: "@lunora/bindings/analytics" },
     browser: { contextProperty: "browser", moduleSpecifier: "@lunora/browser" },
+    flags: { contextProperty: "flags", moduleSpecifier: "@lunora/flags" },
     hyperdrive: { contextProperty: "sql", moduleSpecifier: "@lunora/hyperdrive" },
     images: { contextProperty: "images", moduleSpecifier: "@lunora/bindings/images" },
     kv: { contextProperty: "kv", moduleSpecifier: "@lunora/bindings/kv" },
@@ -146,6 +149,7 @@ const discoverFeatureUsage = (project: Project, lunoraDirectory: string): Featur
         ai: false,
         analytics: false,
         browser: false,
+        flags: false,
         hyperdrive: false,
         images: false,
         kv: false,
@@ -201,6 +205,7 @@ const discoverFeatureUsage = (project: Project, lunoraDirectory: string): Featur
  */
 const buildStudioFeatures = (usage: FeatureUsage, signals: StudioFeatureSignals): StudioFeaturesResult => {
     return {
+        flags: usage.flags || signals.dependencies.has("@lunora/flags"),
         mail: usage.mail || signals.dependencies.has("@lunora/mail"),
         payments: usage.payments || signals.dependencies.has("@lunora/payment"),
         queues: signals.queueCount > 0 || signals.dependencies.has("@lunora/queue"),

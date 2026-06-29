@@ -7,8 +7,14 @@ interface MockClientHooks {
     asClient: LunoraClient;
     close: ReturnType<typeof vi.fn>;
     connectionStatus: ReturnType<typeof vi.fn>;
-    /** Manually push a value to all active subscribers for `ref`. */
-    emit: (ref: string, value: unknown) => void;
+
+    /**
+     * Manually push a value to active subscribers for `ref`. When `predicate` is
+     * given, only subscriptions whose subscribe-time `args` satisfy it receive the
+     * value — useful for fanning distinct values to per-key flag subscriptions
+     * that share one reserved channel ref.
+     */
+    emit: (ref: string, value: unknown, predicate?: (args: unknown) => boolean) => void;
     getAuthToken: ReturnType<typeof vi.fn>;
     getCurrentUser: ReturnType<typeof vi.fn>;
     mutation: ReturnType<typeof vi.fn>;
@@ -25,6 +31,7 @@ interface MockClientHooks {
 }
 
 interface SubEntry {
+    args: unknown;
     callback: (value: unknown) => void;
     ref: string;
 }
@@ -39,8 +46,8 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
     const mutationFunction = vi.fn<() => Promise<unknown>>(async () => undefined);
     const actionFunction = vi.fn<() => Promise<unknown>>(async () => undefined);
     const subscribeFunction = vi.fn<(reference: FunctionReference, args: unknown, callback: (value: unknown) => void) => Unsubscribe>(
-        (reference: FunctionReference, _args: unknown, callback: (value: unknown) => void): Unsubscribe => {
-            const entry: SubEntry = { callback, ref: reference.__lunoraRef };
+        (reference: FunctionReference, args: unknown, callback: (value: unknown) => void): Unsubscribe => {
+            const entry: SubEntry = { args, callback, ref: reference.__lunoraRef };
 
             subs.add(entry);
 
@@ -107,9 +114,9 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
         }
     };
 
-    const emit = (ref: string, value: unknown): void => {
+    const emit = (ref: string, value: unknown, predicate?: (args: unknown) => boolean): void => {
         for (const entry of subs) {
-            if (entry.ref === ref) {
+            if (entry.ref === ref && (predicate === undefined || predicate(entry.args))) {
                 entry.callback(value);
             }
         }

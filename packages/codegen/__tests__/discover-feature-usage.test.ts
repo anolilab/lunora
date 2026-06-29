@@ -14,6 +14,7 @@ const ALL_OFF: FeatureUsage = {
     ai: false,
     analytics: false,
     browser: false,
+    flags: false,
     hyperdrive: false,
     images: false,
     kv: false,
@@ -136,6 +137,20 @@ describe("discover-feature-usage", () => {
         expect(viaCtx.pipelines).toBe(true);
     });
 
+    it("detects flags via either the `@lunora/flags` import or a `ctx.flags` read", () => {
+        expect.assertions(2);
+
+        writeSource("flags.ts", `import { defineFlags } from "@lunora/flags";\nexport default defineFlags({ provider: () => ({}) });`);
+        const viaImport = discoverFeatureUsage(newProject(), workdir);
+
+        rmSync(join(workdir, "flags.ts"));
+        writeSource("gate.ts", `export const list = async (ctx) => ctx.flags.boolean("x", false);`);
+        const viaContext = discoverFeatureUsage(newProject(), workdir);
+
+        expect(viaImport.flags).toBe(true);
+        expect(viaContext.flags).toBe(true);
+    });
+
     it("flips a flag on a `ctx.*` helper read even without the package import", () => {
         expect.assertions(2);
 
@@ -185,6 +200,7 @@ describe("discover-feature-usage", () => {
             expect.assertions(1);
 
             expect(buildStudioFeatures(ALL_OFF, NO_SIGNALS)).toStrictEqual({
+                flags: false,
                 mail: false,
                 payments: false,
                 queues: false,
@@ -229,6 +245,14 @@ describe("discover-feature-usage", () => {
             const result = buildStudioFeatures(ALL_OFF, { ...NO_SIGNALS, dependencies: new Set(["@lunora/mail", "@lunora/payment"]) });
 
             expect(result).toMatchObject({ mail: true, payments: true });
+        });
+
+        it("shows the flags page from a ctx.flags read or an @lunora/flags dependency", () => {
+            expect.assertions(3);
+
+            expect(buildStudioFeatures(ALL_OFF, NO_SIGNALS).flags).toBe(false);
+            expect(buildStudioFeatures({ ...ALL_OFF, flags: true }, NO_SIGNALS).flags).toBe(true);
+            expect(buildStudioFeatures(ALL_OFF, { ...NO_SIGNALS, dependencies: new Set(["@lunora/flags"]) }).flags).toBe(true);
         });
     });
 });

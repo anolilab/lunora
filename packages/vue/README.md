@@ -85,6 +85,8 @@ const { mutate, pending } = useMutation(api.messages.send);
 | `useInfiniteQuery`    | `useInfiniteQuery`    | Infinite-scroll variant of `usePaginatedQuery`.                                 |
 | `useAuth`             | `useAuth`             | Reactive auth: readonly `token`/`user` refs plus `setToken`.                    |
 | `usePresence`         | `usePresence`         | Collaborative-awareness — heartbeat + live present-members `ShallowRef`.        |
+| `useFlag`             | `useFlag`             | Live OpenFeature flag as a readonly `Ref` — holds `default` until resolved.     |
+| `useFlags`            | `useFlags`            | Batch variant — a readonly `Ref` of one value per key in the defaults map.      |
 | `useRateLimit`        | `useRateLimit`        | Client-side rate-limit mirror — `ok`, `disabled`, `retryAfter` as ComputedRefs. |
 | `useConnectionStatus` | `useConnectionStatus` | Reactive connection state (`idle`, `connecting`, `connected`, `offline`).       |
 | `hydratePreloaded`    | `usePreloadedQuery`   | Seed a query synchronously from an SSR `Preloaded` token, then go live.         |

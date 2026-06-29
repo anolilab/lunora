@@ -29,6 +29,7 @@ import type {
     CreateWorkflowInstanceResult,
     FilterClause,
     FilterOperator,
+    FlagsResult,
     FunctionCallStat,
     FunctionStatsResult,
     MaskPoliciesResult,
@@ -47,6 +48,7 @@ import {
     ADMIN_FUNCTIONS,
     facetColumn,
     findStorageReferences,
+    FLAGS_FUNCTION_PREFIX,
     listTables,
     MAX_PAGE_SIZE,
     readTablePage,
@@ -2567,7 +2569,36 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with the statically-discovered feature flags
     protected studioFeatures(): StudioFeaturesResult {
-        return { mail: false, payments: false, queues: false, scheduler: false, storage: false, vectors: false, workflows: false };
+        return { flags: false, mail: false, payments: false, queues: false, scheduler: false, storage: false, vectors: false, workflows: false };
+    }
+
+    /**
+     * Evaluate every statically-discovered feature flag under `context` for the
+     * studio's read-only Flags page (`__lunora_admin__:listFlags`). The flag keys
+     * + value types are discovered by `@lunora/codegen` from the app's
+     * `ctx.flags.&lt;type>("key", …)` reads and evaluated through the configured
+     * `@lunora/flags` provider — work only the codegen subclass can do, so it
+     * overrides this. The base class wires no provider and reports
+     * `configured: false` with zero flags (an un-generated `ShardDO` has none).
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with live OpenFeature evaluation over the discovered flag keys
+    protected evaluateFlags(_context?: Record<string, unknown>): Promise<FlagsResult> {
+        return Promise.resolve({ configured: false, flags: [] });
+    }
+
+    /**
+     * Serve one reserved {@link FLAGS_FUNCTION_PREFIX} live flag read for the
+     * React client's `useFlag`/`useFlags`. `functionPath` carries the flag key +
+     * type and `args` the per-subscriber targeting context; the codegen subclass
+     * overrides this to evaluate the flag through the app's `@lunora/flags`
+     * provider under `identity` and return the resolved value. The base class
+     * wires no provider, so it returns `null` — `resolveReactiveOutcome` reads
+     * `null` as "nothing to deliver" and the subscriber keeps its default.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this to evaluate the flag through the configured provider
+    protected runFlagSubscriptionRead(_functionPath: string, _arguments: Record<string, unknown>, _identity?: SubscriptionIdentity): Promise<unknown> {
+        // eslint-disable-next-line unicorn/no-null -- the "nothing to deliver" sentinel resolveReactiveOutcome reads
+        return Promise.resolve(null);
     }
 
     /**
@@ -3893,6 +3924,10 @@ abstract class ShardDO {
             return this.handleGetWorkflowInstanceStatus(args);
         }
 
+        if (functionPath === ADMIN_FUNCTIONS.listFlags) {
+            return this.handleListFlags(args);
+        }
+
         return this.handlePitrAdminOp(functionPath, args);
     }
 
@@ -4046,6 +4081,24 @@ abstract class ShardDO {
         return jsonResponse({ result }, 200);
     }
     /* eslint-enable no-secrets/no-secrets */
+
+    /**
+     * Serve `__lunora_admin__:listFlags` — the studio's read-only Flags page.
+     * Evaluates every statically-discovered feature flag under an optional
+     * `args.context` targeting context (the studio's editable context editor)
+     * via the {@link evaluateFlags} hook, which the codegen subclass overrides
+     * with live OpenFeature evaluation. Read-only: a flag lookup mutates no shard
+     * state, so nothing is flushed or audited. Admin-gated by `handleAdminRpc`'s
+     * caller.
+     */
+    private async handleListFlags(args: Record<string, unknown>): Promise<Response> {
+        const rawContext = args.context;
+        const context =
+            typeof rawContext === "object" && rawContext !== null && !Array.isArray(rawContext) ? (rawContext as Record<string, unknown>) : undefined;
+        const result = await this.evaluateFlags(context);
+
+        return jsonResponse({ result }, 200);
+    }
 
     /**
      * Run `run()` with the per-request identity pinned to (`userId`, `identity`),
@@ -4764,6 +4817,35 @@ abstract class ShardDO {
     }
 
     /**
+     * Resolve one subscription (seed or refresh) to its {@link SubscriptionOutcome}
+     * by routing the `functionPath` to the right read path — shared by
+     * {@link seedSubscription} and {@link refreshSubscriptions} so both branch
+     * identically:
+     * - `__lunora_admin__:*` → {@link executeAdminSubscription} (raw SQLite read).
+     * - {@link FLAGS_FUNCTION_PREFIX} → {@link runFlagSubscriptionRead} (the codegen subclass evaluates the flag through the configured provider). The value isn't bound to any table, so it is tagged with the {@link ADMIN_WILDCARD} dep — re-evaluated on every write-flush so a live `useFlag` stays current within a session. A `null` read means "nothing to deliver" (no provider, or a flag that resolved to `null`).
+     * - everything else → {@link executeSubscription} (the user query, under the socket's own by-value identity).
+     */
+    private async resolveReactiveOutcome(
+        functionPath: string,
+        args: Record<string, unknown>,
+        isAdmin: boolean,
+        identity: SubscriptionIdentity,
+    ): Promise<SubscriptionOutcome | null> {
+        if (isAdmin) {
+            return this.executeAdminSubscription(functionPath, args);
+        }
+
+        if (functionPath.startsWith(FLAGS_FUNCTION_PREFIX)) {
+            const result = await this.runFlagSubscriptionRead(functionPath, args, identity);
+
+            // eslint-disable-next-line unicorn/no-null -- matches the flag-read "nothing to deliver" sentinel
+            return result === null ? null : { result, tables: new Set([ADMIN_WILDCARD]) };
+        }
+
+        return this.executeSubscription(functionPath, args, identity);
+    }
+
+    /**
      * Constant-time bearer check against `env.LUNORA_ADMIN_TOKEN`. Returns
      * `false` (closed) when the token is unset so admin introspection is
      * opt-in rather than exposed by default.
@@ -5066,15 +5148,17 @@ abstract class ShardDO {
                 }
 
                 try {
-                    const outcome = isAdmin
-                        ? this.executeAdminSubscription(functionPath, query.args ?? {})
-                        : // Re-run under the socket's OWN verified identity (stamped on the
-                          // attachment at upgrade, unforgeable by the client) — passed BY
-                          // VALUE, so this deferred re-run never reads or mutates the shared
-                          // per-request identity fields. Without it an `rls()` / `ctx.auth`
-                          // scoped live query would evaluate anonymous and return zero rows.
-                          // eslint-disable-next-line no-await-in-loop -- subscriptions on a socket re-run sequentially; each shares the single SQLite handle
-                          await this.executeSubscription(functionPath, query.args ?? {}, { identity: attachment.identity, userId: attachment.userId });
+                    // Re-run under the socket's OWN verified identity (stamped on the
+                    // attachment at upgrade, unforgeable by the client) — passed BY
+                    // VALUE, so this deferred re-run never reads or mutates the shared
+                    // per-request identity fields. Without it an `rls()` / `ctx.auth`
+                    // scoped live query would evaluate anonymous and return zero rows.
+                    // (Admin + reserved flag reads ignore the identity payload.)
+                    // eslint-disable-next-line no-await-in-loop -- subscriptions on a socket re-run sequentially; each shares the single SQLite handle
+                    const outcome = await this.resolveReactiveOutcome(functionPath, query.args ?? {}, isAdmin, {
+                        identity: attachment.identity,
+                        userId: attachment.userId,
+                    });
 
                     if (!outcome) {
                         continue;
@@ -5147,9 +5231,10 @@ abstract class ShardDO {
         // what makes an `rls()` / `ctx.auth`-scoped live query return the
         // subscriber's own rows instead of evaluating anonymous.
         const attachment = this.readAttachment(ws);
-        const outcome = isAdmin
-            ? this.executeAdminSubscription(functionPath, seedArgs)
-            : await this.executeSubscription(functionPath, seedArgs, { identity: attachment.identity, userId: attachment.userId });
+        const outcome = await this.resolveReactiveOutcome(functionPath, seedArgs, isAdmin, {
+            identity: attachment.identity,
+            userId: attachment.userId,
+        });
 
         if (!outcome) {
             return;
