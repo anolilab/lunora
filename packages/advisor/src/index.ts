@@ -22,6 +22,7 @@ import hardcodedSecret from "./lints/static/hardcoded-secret";
 import hyperdriveOutsideAction from "./lints/static/hyperdrive-outside-action";
 import indexReferencesUnknownField from "./lints/static/index-references-unknown-field";
 import maskUncoveredPiiColumn from "./lints/static/mask-uncovered-pii-column";
+import mutatorFullRowReplace from "./lints/static/mutator-full-row-replace";
 import nondeterministicQueryMutation from "./lints/static/nondeterministic-query-mutation";
 import policyReferencesUnknownTable from "./lints/static/policy-references-unknown-table";
 import publicArgumentUsesAny from "./lints/static/public-argument-uses-any";
@@ -66,6 +67,7 @@ export { default as hardcodedSecret } from "./lints/static/hardcoded-secret";
 export { default as hyperdriveOutsideAction } from "./lints/static/hyperdrive-outside-action";
 export { default as indexReferencesUnknownField } from "./lints/static/index-references-unknown-field";
 export { default as maskUncoveredPiiColumn } from "./lints/static/mask-uncovered-pii-column";
+export { default as mutatorFullRowReplace } from "./lints/static/mutator-full-row-replace";
 export { default as nondeterministicQueryMutation } from "./lints/static/nondeterministic-query-mutation";
 export { default as policyReferencesUnknownTable } from "./lints/static/policy-references-unknown-table";
 export { default as publicArgumentUsesAny } from "./lints/static/public-argument-uses-any";
@@ -85,6 +87,7 @@ export { default as userCreatingMutationWithoutCaptcha } from "./lints/static/us
 export { default as workflowUnknownTarget } from "./lints/static/workflow-unknown-target";
 export { default as workflowUnused } from "./lints/static/workflow-unused";
 export type { AdvisorMaskProcedure } from "./mask-procedures";
+export type { AdvisorMutatorWrite } from "./mutator-writes";
 export type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
 export type { AdvisorProcedureProtection } from "./procedure-protections";
 export type { AdvisorQueryRead } from "./queries";
@@ -121,6 +124,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     workflowUnused,
     filterWithoutIndex,
     shapeTargetsGlobalTable,
+    mutatorFullRowReplace,
     nondeterministicQueryMutation,
     hyperdriveOutsideAction,
     r2sqlOutsideAction,

@@ -122,6 +122,45 @@ every push:
 - `seq > watermark + 1` → **out-of-order**: reject with `409 OUT_OF_ORDER` and
   the expected sequence; the client resends from `watermark + 1`.
 
+### Write only the columns you change
+
+The blessed pattern for a mutator's `server` impl is to write **just the columns
+it changes** with `ctx.db.patch(id, { field })` — never read a row and write the
+whole object back with `ctx.db.replace(id, document)`:
+
+```ts title="lunora/mutators.ts"
+export const renameChannel = defineMutator({
+    args: { id: v.id("channels"), name: v.string() },
+    // ✅ Merges at the column level — a concurrent topic edit survives.
+    server: (ctx, { id, name }) => ctx.db.patch(id, { name }),
+});
+```
+
+Mutators are serialized in the shard DO, so two mutators that touch the **same
+row** but **different columns** both run to completion — _as long as each writes
+only its own column_. A `replace` overwrites the entire row from the document the
+mutator assembled, so a concurrent edit to another column (committed between this
+mutator's read and its write, or carried as a pending optimistic overlay on
+another client) is silently clobbered — the "two offline edits to different
+fields fight each other" data loss a column-level merge avoids. Because the
+[client overlay already rebases field-wise](#the-client-store), keeping the
+server write field-scoped too gives you per-column convergence end-to-end with
+**no protocol change**.
+
+The [`mutator_full_row_replace`](/docs/packages/advisor) advisor lint flags a
+`server` impl that calls `ctx.db.replace(...)` so you reach for `patch` by
+default. It's a `WARN`, not an error: `replace` is legitimate when the mutator
+genuinely owns the whole row (a full-form save, a state-machine transition that
+rewrites every field).
+
+> **Why whole-row post-images on the wire, then?** The op-log (`__cdc_log`) and
+> pokes still ship whole-row post-images, not per-column deltas. Shipping
+> column-level deltas would cut bandwidth and allow a finer client merge, but it
+> is an _optimization_, not a correctness fix — the field-wise `patch` +
+> field-wise client overlay above already prevent column clobbering. We've
+> deferred the column-delta poke format until profiling or a real workload asks
+> for it; it adds protocol and `__cdc_log` complexity for no correctness gain.
+
 ## The client store
 
 On the client these surfaces are wired through [`@lunora/db`](/docs/packages/db):

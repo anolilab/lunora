@@ -8,6 +8,7 @@ import type {
     ContainerIR,
     InsertWriteIR,
     MaskProcedureIR,
+    MutatorWriteIR,
     NondeterministicCallIR,
     ProcedureMiddlewareIR,
     QueryReadIR,
@@ -121,6 +122,7 @@ export const lintSchema = (
     adminRoutes?: ReadonlyArray<AdminRouteIR>,
     r2sqlCalls?: ReadonlyArray<R2sqlCallIR>,
     shapes?: ReadonlyArray<ShapeIR>,
+    mutatorWrites?: ReadonlyArray<MutatorWriteIR>,
 ): Finding[] =>
     runAdvisor(
         {
@@ -130,6 +132,7 @@ export const lintSchema = (
             containers,
             inserts,
             maskProcedures,
+            mutatorWrites,
             nondeterministicCalls,
             procedureProtections,
             queries,
