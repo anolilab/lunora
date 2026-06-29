@@ -2242,13 +2242,10 @@ class LunoraClient {
             return optimisticRollbacks;
         }
 
-        const mutationArgsKey = stableStringify(argsRecord);
+        const matchKey = SubscriptionRegistry.key(functionRef, argsRecord, mutationShardKey);
+        const state = this.subscriptions.get(matchKey);
 
-        for (const state of this.subscriptions.all()) {
-            if (state.fn.__lunoraRef !== functionRef || state.shardKey !== mutationShardKey || state.argsKey !== mutationArgsKey) {
-                continue;
-            }
-
+        if (state) {
             const rollback = applyOptimisticToState(state, optimistic);
 
             if (rollback) {

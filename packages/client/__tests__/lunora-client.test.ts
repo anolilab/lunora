@@ -1490,6 +1490,88 @@ describe("lunoraClient", () => {
             expect(received).toEqual([0, 1, 2]);
         });
 
+        it("optimistic update only applies to the subscription matching (fn, args, shardKey) — different args are not mutated", async () => {
+            expect.assertions(2);
+
+            // Two subscriptions to the same function with different args.
+            // A mutation optimistic-targeting args {id:1} must not touch args {id:2}.
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ error: { code: "BOOM", message: "fail" } }, { status: 500 }));
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const receivedA: unknown[] = [];
+            const receivedB: unknown[] = [];
+
+            client.subscribe(fnRef("counter:get"), { id: 1 }, (d) => receivedA.push(d));
+            client.subscribe(fnRef("counter:get"), { id: 2 }, (d) => receivedB.push(d));
+            const socket = latestSocket();
+
+            socket.open();
+
+            const subAId = wireFrames(socket)[0].id as string;
+            const subBId = wireFrames(socket)[1].id as string;
+
+            socket.receive({ delta: 10, id: subAId, type: "delta" });
+            socket.receive({ delta: 20, id: subBId, type: "delta" });
+
+            // Mutation targets {id:1} only.
+            await client
+                .mutation(
+                    fnRef("counter:get"),
+                    { id: 1 },
+                    {
+                        optimistic: (current) => (typeof current === "number" ? current + 1 : 1),
+                    },
+                )
+                .catch(() => undefined);
+
+            // Only the matching subscription (id:1) received the optimistic bump + rollback.
+            expect(receivedA).toEqual([10, 11, 10]);
+            expect(receivedB).toEqual([20]);
+        });
+
+        it("optimistic update only applies to the subscription matching (fn, args, shardKey) — different shardKey is not mutated", async () => {
+            expect.assertions(1);
+
+            // A subscription on shardKey "room-1"; a mutation targeting shardKey
+            // "room-2" (different shard) must not touch it.
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ error: { code: "BOOM", message: "fail" } }, { status: 500 }));
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("counter:get"), {}, (d) => received.push(d), { shardKey: "room-1" });
+            const socket = latestSocket();
+
+            socket.open();
+
+            const subId = firstSub(socket).id as string;
+
+            socket.receive({ delta: 10, id: subId, type: "delta" });
+
+            // Mutation targets shardKey "room-2" — no match for the room-1 subscription.
+            await client
+                .mutation(
+                    fnRef("counter:get"),
+                    {},
+                    {
+                        optimistic: (current) => (typeof current === "number" ? current + 1 : 1),
+                        shardKey: "room-2",
+                    },
+                )
+                .catch(() => undefined);
+
+            // The room-1 subscription must not have been touched.
+            expect(received).toEqual([10]);
+        });
+
         it("setQuery on an unsubscribed query is a no-op", async () => {
             expect.assertions(2);
 
