@@ -130,8 +130,11 @@ checkpoint)` (≈6111) drains the op range from the owner's SQLite and probes
 3. **RLS-uniform gate signal.** Reuse plan 073's identity-independence
    determination as the _necessary_ condition for promoting a **reactive shape**.
    Confirm: is 073's signal available at the granularity this needs (per shape,
-   at runtime)? If not, what is the minimal extension? whisper/presence are
-   uniform by construction and need no per-shape proof.
+   at runtime)? If not, what is the minimal extension? `whisper` topics are
+   uniform by construction (opaque payload, no per-identity result) and need no
+   per-shape proof; presence (`usePresence`) is **not** uniform-by-construction —
+   it is a reactive query (`listPresent`) and goes through this gate like any
+   shape.
 4. **Resume across a shifting topology.** How does a client that reconnects onto a
    _different_ relay resume correctly from its `(sinceSeq, sinceEpoch)`? Proposal:
    relays are stateless re-broadcasters; the **owner remains the checkpoint
@@ -166,14 +169,20 @@ the DX before any topology change exists. Gate behind a flag if needed.
 **Verify**: metrics appear in Studio for a synthetic high-subscriber topic;
 `pnpm --filter "@lunora/do" run test` green; no change to poke output.
 
-### Phase 2 — whisper/presence relay (the natural first adopter)
+### Phase 2 — whisper relay (the natural first adopter)
 
-Relay-scale **whisper topics** (and `usePresence`, which rides whisper-like
-ephemeral fan-out) only — payloads are already opaque and topic-uniform, so no
-owner/relay _data_ split is required, and there is no RLS-uniform proof to
-compute. Owner multicasts the opaque whisper frame to relays; relays fan out to
-their attached sockets. New connections to a hot topic route to a relay via the
-runtime hop.
+Relay-scale **whisper topics** only — their payload is already opaque and
+topic-uniform, so no owner/relay _data_ split is required and there is no
+RLS-uniform proof to compute. Owner multicasts the opaque whisper frame to
+relays; relays fan out to their attached sockets. New connections to a hot topic
+route to a relay via the runtime hop.
+
+> **`usePresence` is _not_ in this phase.** Despite being "ephemeral awareness",
+> presence is implemented as a `heartbeat` **mutation** + a `listPresent`
+> **reactive query** over a presence table (`definePresence`,
+> `packages/server/src/presence.ts` — "Live queries (subscriptions) drive
+> `listPresent`"). It flows through the reactive-shape path, **not** `whisper`,
+> so it is handled in Phase 3 as an RLS-uniform reactive shape, not here.
 
 **Verify**: a topic above T_up serves identical whisper delivery to subscribers
 whether they land on the owner or a relay; sender still never receives its own
@@ -187,6 +196,12 @@ Extend relay-scaling to **reactive query shapes that pass the RLS-uniform gate**
 op-range), then multicasts the opaque delta frame to relays. Resume goes through
 the owner per Decision 4. Non-uniform shapes are **never** promoted and keep
 today's owner-served path byte-for-byte.
+
+`usePresence`'s `listPresent` is the canonical first target here: it is typically
+room-public (so it passes the RLS-uniform gate) and is the highest-fan-out
+reactive query in practice — every member of a large room subscribes to the same
+present-list. Treating it as a reactive shape (not an opaque whisper) is what
+makes its delta correct for every subscriber.
 
 **Verify**: an RLS-uniform public shape with subscribers across owner+relays
 produces byte-identical deltas to today's single-DO path (reuse plan 070's
@@ -251,8 +266,9 @@ Stop and report back if:
 
 - **The RLS-uniform gate is the correctness boundary.** A reactive shape is
   promotable ONLY if its poke is identity-independent (plan 073's signal). Never
-  multicast one delta across an identity boundary. whisper/presence are uniform
-  by construction; reactive shapes must prove it.
+  multicast one delta across an identity boundary. Only `whisper` topics are
+  uniform by construction; every reactive shape — including presence's
+  `listPresent` — must pass the gate.
 - **The owner stays the checkpoint authority.** Relays are stateless
   re-broadcasters. All resume/ordering truth lives at the owner so a client can
   reconnect onto any relay and still resume from its checkpoint.
