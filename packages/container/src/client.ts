@@ -129,9 +129,12 @@ interface ContainerInstanceHandle extends ContainerHandle {
 
     /**
      * Reset the instance's `sleepAfter` idle timer. The platform renews it on
-     * each request automatically, but WebSocket message activity does not yet
-     * renew it (cloudflare/containers#147) — call this on inbound WS traffic to
-     * keep a busy socket's container awake.
+     * each proxied request, and because `@lunora/container` proxies WebSocket
+     * frames through the Durable Object, message traffic on an open socket
+     * renews it too (the WebSocket-keepalive gap of cloudflare/containers#147 is
+     * closed in the bundled base). This manual control is the escape hatch for
+     * keeping a container awake during activity that is neither an HTTP request
+     * nor a WS message — e.g. a long out-of-band job running inside it.
      */
     renewActivityTimeout: () => Promise<void>;
     /** Explicitly start the instance, optionally with per-instance env/entrypoint. */
@@ -167,10 +170,26 @@ interface ContainerAccessor {
      * A random instance from a fixed pool of `count` (defaults to the
      * definition's `maxInstances`, else 3 — mirroring `getRandom` from
      * `@cloudflare/containers`). For stateless, interchangeable workloads.
+     *
+     * Like `.get()`, a path/URL-string fetch transparently retries the
+     * cold-start "instance is provisioning" transients (cloudflare/containers#45,
+     * #139); pass {@link InstanceRetryOptions} to tune or disable it.
      */
-    any: (count?: number) => ContainerHandle;
-    /** The instance for `name` — one container per entity (user, room, job…), with lifecycle control. */
-    get: (name: string) => ContainerInstanceHandle;
+    any: (count?: number, options?: InstanceRetryOptions) => ContainerHandle;
+
+    /**
+     * The instance for `name` — one container per entity (user, room, job…),
+     * with lifecycle control.
+     *
+     * A path/URL-string fetch transparently retries the platform's cold-start
+     * transients — "there is no Container instance available" / "container is
+     * not listening" while an instance is still provisioning
+     * (cloudflare/containers#45, #139) — on the *same* instance with backoff,
+     * since the request never reached the app. Pass {@link InstanceRetryOptions}
+     * to tune attempts/backoff or disable it (`{ attempts: 1 }`). A pre-built
+     * `Request` (possibly a one-shot stream body) is sent once, never retried.
+     */
+    get: (name: string, options?: InstanceRetryOptions) => ContainerInstanceHandle;
 
     /**
      * A resilient handle over the pool: each `fetch` picks a random instance and,
@@ -212,6 +231,25 @@ interface PoolOptions {
     size?: number;
 }
 
+/**
+ * Tuning for the cold-start retry on a `.get()`/`.any()` handle. The retry fires
+ * only on the platform's provisioning transients (no-instance / not-listening /
+ * rate-limited — see {@link isColdStartTransient}), which is why it's safe by
+ * default: those responses mean the request never reached the container.
+ */
+interface InstanceRetryOptions {
+    /**
+     * Total attempts on a cold-start transient before the last outcome is
+     * surfaced as-is. `1` disables the retry. Default
+     * {@link DEFAULT_COLD_START_ATTEMPTS}.
+     */
+    attempts?: number;
+    /** Base backoff in ms between attempts; doubles each retry (0 disables the wait). Default {@link DEFAULT_COLD_START_BACKOFF_MS}. */
+    backoffMs?: number;
+    /** Upper bound on a single backoff sleep, in ms. Default {@link DEFAULT_MAX_BACKOFF_MS} (30s). */
+    maxBackoffMs?: number;
+}
+
 /** Wiring info for one definition, emitted by codegen into the generated DO. */
 interface ContainerBindingSpec {
     /** Durable Object binding name, e.g. `CONTAINER_TRANSCODER`. */
@@ -234,6 +272,16 @@ const DEFAULT_POOL_SIZE = 3;
  */
 const DEFAULT_MAX_BACKOFF_MS = 30_000;
 
+/** Default attempts for the `.get()`/`.any()` cold-start retry (1 = disabled). */
+const DEFAULT_COLD_START_ATTEMPTS = 3;
+
+/**
+ * Default base backoff for the cold-start retry. Larger than the pool default
+ * because the wait is for an instance to *provision*, which is slower than the
+ * load-balancing re-pick a pool retry does.
+ */
+const DEFAULT_COLD_START_BACKOFF_MS = 500;
+
 /** The header `@cloudflare/containers`' `switchPort` sets to target a non-default container port. */
 const TARGET_PORT_HEADER = "cf-container-target-port";
 
@@ -247,20 +295,116 @@ const toRequest = (input: Request | string, init?: RequestInit, port?: number): 
     return request;
 };
 
+const sleep = async (ms: number): Promise<void> => {
+    if (ms <= 0) {
+        return;
+    }
+
+    await new Promise((resolve) => {
+        setTimeout(resolve, ms);
+    });
+};
+
 /**
- * A fetch-only handle over a `send` function, carrying an optional target port.
- * `.port(n)` re-binds the same `send` to a different port, so multi-port
- * routing composes uniformly across `.get()`, `.any()`, and `.pool()`.
+ * Thrown-error shapes the platform raises while an instance is still coming up:
+ * "There is no Container instance…", "the container is not listening", a
+ * rate-limited start, or a "try again later". Always safe to retry — the request
+ * never reached the app.
  */
-const sendingHandle = (send: (request: Request) => Promise<Response>, port?: number): ContainerHandle => {
+const COLD_START_ERROR_PATTERN = /no container instance|not listening|try again later|rate.?limit|provision/i;
+
+/** Body sentinels `@cloudflare/containers` returns (as 503/500) for the same cold-start transients. */
+const COLD_START_NO_INSTANCE_BODY = "no Container instance available";
+const COLD_START_START_FAILURE_BODY = "Failed to start container:";
+
+/** True when a thrown error is one of the platform's cold-start/provisioning transients. */
+const isColdStartError = (error: unknown): boolean => error instanceof Error && COLD_START_ERROR_PATTERN.test(error.message);
+
+/**
+ * True when a *returned* response is a cold-start transient the base class
+ * surfaced instead of throwing: a `429` (rate-limited start) or a `503`/`500`
+ * whose body carries the no-instance / start-failure sentinel. The body is read
+ * off a clone so the caller still gets an untouched response when we don't
+ * retry. A plain app `5xx` (no sentinel) is left alone — this is not a blanket
+ * 5xx retry.
+ */
+const isColdStartTransient = async (response: Response): Promise<boolean> => {
+    if (response.status === 429) {
+        return true;
+    }
+
+    if (response.status !== 500 && response.status !== 503) {
+        return false;
+    }
+
+    try {
+        const body = await response.clone().text();
+
+        return body.includes(COLD_START_NO_INSTANCE_BODY) || body.startsWith(COLD_START_START_FAILURE_BODY);
+    } catch {
+        // An unreadable/streaming body can't carry the sentinel we match — treat
+        // it as a real (non-transient) response rather than retrying blindly.
+        return false;
+    }
+};
+
+/**
+ * Wrap a per-attempt `send` with the cold-start retry: rebuild the request each
+ * attempt and, on a provisioning transient (thrown {@link isColdStartError} or a
+ * {@link isColdStartTransient} response), back off and try the *same* instance
+ * again. A retry must re-issue the request, so it only kicks in for a replayable
+ * path/URL-string input — a pre-built `Request` (possibly a one-shot stream
+ * body) is sent exactly once. `.port()` re-binds the same `send`, so multi-port
+ * routing composes with the retry uniformly.
+ */
+const coldStartRetryingHandle = (send: (request: Request) => Promise<Response>, options: InstanceRetryOptions = {}, port?: number): ContainerHandle => {
+    const attempts = Math.max(1, options.attempts ?? DEFAULT_COLD_START_ATTEMPTS);
+    const baseBackoff = options.backoffMs ?? DEFAULT_COLD_START_BACKOFF_MS;
+    const maxBackoff = options.maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS;
+
     return {
-        fetch: async (input, init) => send(toRequest(input, init, port)),
-        port: (targetPort) => sendingHandle(send, targetPort),
+        fetch: async (input, init) => {
+            // Only a string input can be re-issued safely; a pre-built Request
+            // may carry a body that can be consumed only once.
+            const totalAttempts = typeof input === "string" ? attempts : 1;
+            let lastError: unknown;
+
+            for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
+                const isLastAttempt = attempt === totalAttempts - 1;
+
+                if (attempt > 0) {
+                    // eslint-disable-next-line no-await-in-loop -- sequential retry with backoff between attempts
+                    await sleep(Math.min(baseBackoff * 2 ** (attempt - 1), maxBackoff));
+                }
+
+                try {
+                    // eslint-disable-next-line no-await-in-loop -- attempts are inherently sequential
+                    const response = await send(toRequest(input, init, port));
+
+                    // eslint-disable-next-line no-await-in-loop -- the cold-start check peeks the body
+                    if (isLastAttempt || !(await isColdStartTransient(response))) {
+                        return response;
+                    }
+                } catch (error: unknown) {
+                    lastError = error;
+
+                    // A non-transient throw (or the final attempt) propagates immediately.
+                    if (isLastAttempt || !isColdStartError(error)) {
+                        throw error;
+                    }
+                }
+            }
+
+            // Unreachable in practice (every iteration returns or throws), but
+            // keeps the control flow total for the type checker.
+            throw lastError instanceof Error ? lastError : new Error("ctx.containers: cold-start retry exhausted");
+        },
+        port: (targetPort) => coldStartRetryingHandle(send, options, targetPort),
     };
 };
 
-const handleFor = (namespace: ContainerNamespaceLike, instanceName: string): ContainerHandle =>
-    sendingHandle(async (request) => namespace.get(namespace.idFromName(instanceName)).fetch(request));
+const handleFor = (namespace: ContainerNamespaceLike, instanceName: string, options?: InstanceRetryOptions): ContainerHandle =>
+    coldStartRetryingHandle(async (request) => namespace.get(namespace.idFromName(instanceName)).fetch(request), options);
 
 /** Lifecycle/egress RPCs `instanceHandleFor` forwards to the container DO stub. */
 type ContainerStubMethod = keyof Omit<ContainerStubLike, "fetch">;
@@ -293,16 +437,21 @@ const egressControlsFor = (stub: () => ContainerStubLike, binding: string): Cont
 };
 
 /** A named-instance handle: `fetch`/`.port()` plus the container DO's lifecycle + egress RPCs. */
-const instanceHandleFor = (namespace: ContainerNamespaceLike, spec: ContainerBindingSpec, instanceName: string): ContainerInstanceHandle => {
+const instanceHandleFor = (
+    namespace: ContainerNamespaceLike,
+    spec: ContainerBindingSpec,
+    instanceName: string,
+    options?: InstanceRetryOptions,
+): ContainerInstanceHandle => {
     const stub = (): ContainerStubLike => namespace.get(namespace.idFromName(instanceName));
 
     return {
-        ...sendingHandle(async (request) => stub().fetch(request)),
+        ...coldStartRetryingHandle(async (request) => stub().fetch(request), options),
         destroy: async () => lifecycleCall(stub(), "destroy", spec.binding),
         egress: egressControlsFor(stub, spec.binding),
         getState: async () => lifecycleCall(stub(), "getState", spec.binding),
         renewActivityTimeout: async () => lifecycleCall(stub(), "renewActivityTimeout", spec.binding),
-        start: async (options) => lifecycleCall(stub(), "start", spec.binding, options),
+        start: async (startOptions) => lifecycleCall(stub(), "start", spec.binding, startOptions),
         stop: async (signal) => lifecycleCall(stub(), "stop", spec.binding, signal),
     };
 };
@@ -311,16 +460,6 @@ const instanceHandleFor = (namespace: ContainerNamespaceLike, spec: ContainerBin
 const randomPoolName = (size: number): string =>
     // eslint-disable-next-line sonarjs/pseudo-random -- load-balancing pick across interchangeable instances, not a security decision
     `pool-${String(Math.floor(Math.random() * size))}`;
-
-const sleep = async (ms: number): Promise<void> => {
-    if (ms <= 0) {
-        return;
-    }
-
-    await new Promise((resolve) => {
-        setTimeout(resolve, ms);
-    });
-};
 
 /** Default retry predicate: a server error (5xx) is worth another instance. */
 const retryOnServerError = (response: Response): boolean => response.status >= 500;
@@ -373,8 +512,8 @@ const poolHandleFor = (namespace: ContainerNamespaceLike, spec: ContainerBinding
 
 const accessorFor = (namespace: ContainerNamespaceLike, spec: ContainerBindingSpec): ContainerAccessor => {
     return {
-        any: (count) => handleFor(namespace, randomPoolName(count ?? spec.maxInstances ?? DEFAULT_POOL_SIZE)),
-        get: (name) => instanceHandleFor(namespace, spec, name),
+        any: (count, options) => handleFor(namespace, randomPoolName(count ?? spec.maxInstances ?? DEFAULT_POOL_SIZE), options),
+        get: (name, options) => instanceHandleFor(namespace, spec, name, options),
         pool: (options) => poolHandleFor(namespace, spec, options),
     };
 };
@@ -469,10 +608,11 @@ const createContainerTestContext = (handlers: Record<string, ContainerTestHandle
         containers[exportName] = {
             // `.any()`/`.pool()` route to a fixed `pool-0` so the handler's
             // `instance.name` is deterministic under test; the double doesn't
-            // simulate the random-pick or retry/backoff the real pool does.
-            any: () => handleFor(namespace, "pool-0"),
-            get: (name) => instanceHandleFor(namespace, spec, name),
-            pool: () => handleFor(namespace, "pool-0"),
+            // simulate the random-pick or retry/backoff the real pool/cold-start
+            // path does (`attempts: 1` keeps a handler's own 5xx from looping).
+            any: () => handleFor(namespace, "pool-0", { attempts: 1 }),
+            get: (name) => instanceHandleFor(namespace, spec, name, { attempts: 1 }),
+            pool: () => handleFor(namespace, "pool-0", { attempts: 1 }),
         };
     }
 
@@ -490,6 +630,7 @@ export type {
     ContainerStartOptions,
     ContainerTestHandler,
     DurableObjectJurisdiction,
+    InstanceRetryOptions,
     PoolOptions,
 };
 export { createContainerContext, createContainerTestContext };

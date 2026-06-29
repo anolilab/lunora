@@ -442,6 +442,148 @@ describe("ctx.containers.<name>.pool()", () => {
     });
 });
 
+/** A namespace that records targeted instance names and plays scripted steps, for the cold-start retry. */
+const coldStartNamespace = (steps: ReadonlyArray<() => Promise<Response>>): { calls: number; names: string[]; namespace: ContainerNamespaceLike } => {
+    const state = { calls: 0 };
+    const names: string[] = [];
+
+    return {
+        get calls() {
+            return state.calls;
+        },
+        names,
+        namespace: {
+            get: () => {
+                return {
+                    fetch: async () => {
+                        const step = steps[Math.min(state.calls, steps.length - 1)]!;
+
+                        state.calls += 1;
+
+                        return step();
+                    },
+                };
+            },
+            idFromName: (name: string) => {
+                names.push(name);
+
+                return name;
+            },
+        },
+    };
+};
+
+describe("ctx.containers.<name>.get()/.any() cold-start retry", () => {
+    const ok = async (): Promise<Response> => new Response("ok");
+    // The exact transients `@cloudflare/containers` surfaces while an instance provisions.
+    const noInstance = async (): Promise<Response> =>
+        new Response("There is no Container instance available at this time.\nThis is likely because…", { status: 503 });
+    const startFailure = async (): Promise<Response> => new Response("Failed to start container: boom", { status: 500 });
+    const rateLimited = async (): Promise<Response> => new Response("rate limited", { status: 429 });
+    const notListening = (): Promise<Response> => Promise.reject(new Error("the container is not listening"));
+    const appError = async (): Promise<Response> => new Response("app exploded", { status: 503 });
+
+    const transcoder = { binding: "CONTAINER_TRANSCODER", exportName: "transcoder" };
+
+    it("retries the no-instance 503 on the same instance until it provisions", async () => {
+        expect.assertions(3);
+
+        const scripted = coldStartNamespace([noInstance, noInstance, ok]);
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: scripted.namespace }, [transcoder]);
+
+        const response = await containers.transcoder!.get("video-1", { backoffMs: 0 }).fetch("/transcode");
+
+        await expect(response.text()).resolves.toBe("ok");
+        expect(scripted.calls).toBe(3);
+        // The same named instance is re-targeted every attempt (it's the one provisioning).
+        expect(new Set(scripted.names)).toStrictEqual(new Set(["video-1"]));
+    });
+
+    it("retries a thrown 'not listening' cold-start error and recovers", async () => {
+        expect.assertions(2);
+
+        const scripted = coldStartNamespace([notListening, ok]);
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: scripted.namespace }, [transcoder]);
+
+        const response = await containers.transcoder!.get("video-1", { backoffMs: 0 }).fetch("/transcode");
+
+        await expect(response.text()).resolves.toBe("ok");
+        expect(scripted.calls).toBe(2);
+    });
+
+    it("retries the start-failure 500 and the rate-limited 429", async () => {
+        expect.assertions(2);
+
+        const scripted = coldStartNamespace([startFailure, rateLimited, ok]);
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: scripted.namespace }, [transcoder]);
+
+        const response = await containers.transcoder!.get("video-1", { attempts: 3, backoffMs: 0 }).fetch("/transcode");
+
+        await expect(response.text()).resolves.toBe("ok");
+        expect(scripted.calls).toBe(3);
+    });
+
+    it("does NOT retry a plain app 5xx without the cold-start sentinel", async () => {
+        expect.assertions(2);
+
+        const scripted = coldStartNamespace([appError, ok]);
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: scripted.namespace }, [transcoder]);
+
+        const response = await containers.transcoder!.get("video-1", { backoffMs: 0 }).fetch("/transcode");
+
+        expect(response.status).toBe(503);
+        expect(scripted.calls).toBe(1);
+    });
+
+    it("returns the last transient response when attempts are exhausted", async () => {
+        expect.assertions(2);
+
+        const scripted = coldStartNamespace([noInstance]);
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: scripted.namespace }, [transcoder]);
+
+        const response = await containers.transcoder!.get("video-1", { attempts: 2, backoffMs: 0 }).fetch("/transcode");
+
+        expect(response.status).toBe(503);
+        expect(scripted.calls).toBe(2);
+    });
+
+    it("disables the retry with attempts: 1", async () => {
+        expect.assertions(2);
+
+        const scripted = coldStartNamespace([noInstance, ok]);
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: scripted.namespace }, [transcoder]);
+
+        const response = await containers.transcoder!.get("video-1", { attempts: 1, backoffMs: 0 }).fetch("/transcode");
+
+        expect(response.status).toBe(503);
+        expect(scripted.calls).toBe(1);
+    });
+
+    it("sends a pre-built Request exactly once (a one-shot body is not replayable)", async () => {
+        expect.assertions(2);
+
+        const scripted = coldStartNamespace([noInstance, ok]);
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: scripted.namespace }, [transcoder]);
+
+        const response = await containers.transcoder!.get("video-1", { backoffMs: 0 }).fetch(new Request("https://container/transcode", { method: "POST" }));
+
+        expect(response.status).toBe(503);
+        expect(scripted.calls).toBe(1);
+    });
+
+    it("applies the cold-start retry to .any() too", async () => {
+        expect.assertions(2);
+
+        const scripted = coldStartNamespace([noInstance, ok]);
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: scripted.namespace }, [transcoder]);
+
+        const response = await containers.transcoder!.any(3, { backoffMs: 0 }).fetch("/probe");
+
+        await expect(response.text()).resolves.toBe("ok");
+        expect(scripted.calls).toBe(2);
+    });
+});
+
 describe(createContainerTestContext, () => {
     it("plays the container via the provided handler", async () => {
         expect.assertions(3);
