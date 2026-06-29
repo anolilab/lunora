@@ -5634,6 +5634,51 @@ abstract class ShardDO {
     }
 
     /**
+     * Resolve one subscription's outcome, deduplicating admin reads within a
+     * single flush via `adminFlushCache`.
+     *
+     * **Security boundary** — this cache is populated ONLY when `isAdmin` is
+     * `true`, i.e. only for admin-prefixed function paths that route through
+     * {@link executeAdminSubscription} → raw SQLite introspection. Those reads
+     * never consult `ctx.auth` / RLS and are therefore identity-independent: the
+     * same `(functionPath, args)` always returns the same result for every socket
+     * in the same flush. Every other query (user queries and flag reads) passes
+     * `isAdmin = false` and is handled per-socket with the socket's own verified
+     * identity. The predicate must NEVER be `true` for any query that reads
+     * identity — doing so would push one user's cached rows to another user's
+     * socket.
+     *
+     * **Concurrency model** — the Promise is created synchronously (before any
+     * `await`) and stored in `adminFlushCache` before the call site awaits it.
+     * Concurrent workers that reach the same cache key after the first worker has
+     * stored the Promise therefore retrieve and await the SAME Promise rather than
+     * re-executing the handler: one execution per unique `(functionPath, args)`
+     * pair per flush.
+     */
+    private resolveOutcomeOrCache(
+        functionPath: string,
+        args: Record<string, unknown>,
+        isAdmin: boolean,
+        identity: { identity?: Record<string, unknown>; userId?: string },
+        adminFlushCache: Map<string, Promise<SubscriptionOutcome | null>>,
+    ): Promise<SubscriptionOutcome | null> {
+        if (!isAdmin) {
+            return this.resolveReactiveOutcome(functionPath, args, isAdmin, identity);
+        }
+
+        // eslint-disable-next-line unicorn/no-null -- reactiveCacheKey's identity arg is `null | string`; null is the documented "anonymous caller" discriminator, correct for admin reads that have no real identity
+        const cacheKey = reactiveCacheKey(functionPath, args, null);
+        let cached = adminFlushCache.get(cacheKey);
+
+        if (cached === undefined) {
+            cached = this.resolveReactiveOutcome(functionPath, args, isAdmin, identity);
+            adminFlushCache.set(cacheKey, cached);
+        }
+
+        return cached;
+    }
+
+    /**
      * For every live subscription whose query reads one of `changed`, re-run
      * the query and push a fresh `{ type: "data" }` frame when the result
      * differs from the last one sent. Subscriptions with no `functionPath`
@@ -5697,6 +5742,13 @@ abstract class ShardDO {
         const frameCursor = this.currentCdcCursor();
         const frameEpoch = this.currentCdcEpoch();
 
+        // Per-flush Promise cache for identity-independent (admin) query outcomes.
+        // Created fresh each call — never persisted — so a later flush never reuses
+        // stale data. See {@link ShardDO.resolveOutcomeOrCache} for the security
+        // boundary: this map is populated ONLY for admin reads, never for
+        // identity-dependent user queries or flag reads.
+        const adminFlushCache = new Map<string, Promise<SubscriptionOutcome | null>>();
+
         const refreshOne = async (ws: WebSocket): Promise<void> => {
             // Enforce token-expiry on the OUTBOUND path: a lapsed socket must not
             // keep receiving its user's live (RLS/`ctx.auth`-scoped) data. This is
@@ -5737,10 +5789,16 @@ abstract class ShardDO {
                     // scoped live query would evaluate anonymous and return zero rows.
                     // (Admin + reserved flag reads ignore the identity payload.)
                     // eslint-disable-next-line no-await-in-loop -- subscriptions on a socket re-run sequentially; each shares the single SQLite handle
-                    const outcome = await this.resolveReactiveOutcome(functionPath, query.args ?? {}, isAdmin, {
-                        identity: attachment.identity,
-                        userId: attachment.userId,
-                    });
+                    const outcome = await this.resolveOutcomeOrCache(
+                        functionPath,
+                        query.args ?? {},
+                        isAdmin,
+                        {
+                            identity: attachment.identity,
+                            userId: attachment.userId,
+                        },
+                        adminFlushCache,
+                    );
 
                     if (!outcome) {
                         continue;

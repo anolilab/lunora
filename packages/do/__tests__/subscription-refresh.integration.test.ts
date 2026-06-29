@@ -23,8 +23,9 @@
  * exercisable through the existing protected `executeSubscription`, `recordChangedTable`,
  * `webSocketMessage`, and `fetch` seams exposed by ShardDO.
  */
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { ADMIN_FUNCTIONS } from "../src/introspect";
 import type { ShardDOState, SubscriptionOutcome } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import type { SocketAttachment, SubscriptionEnvelope } from "../src/types";
@@ -760,5 +761,171 @@ describe("shardDO: mutation → subscription-refresh pipeline", () => {
 
         // The socket still converged on the latest value (a frame was delivered).
         expect(subFrames(ws, "sub-A").length).toBeGreaterThan(1);
+    });
+
+    // -------------------------------------------------------------------------
+    // Case 10 — ADMIN-READ DEDUP (positive, plan 073)
+    //
+    // Admin reads (`__lunora_admin__:*`) are identity-independent: the same
+    // `(functionPath, args)` always returns the same result regardless of which
+    // socket issued it.  `refreshSubscriptions` now holds a per-flush Promise
+    // cache (`adminFlushCache`) keyed by `reactiveCacheKey(functionPath, args,
+    // null)`.  The first worker creates the Promise synchronously and stores it;
+    // every subsequent worker awaits the SAME Promise.  N admin sockets subscribed
+    // to the same query therefore trigger exactly ONE `executeAdminSubscription`
+    // call per flush, not N.
+    //
+    // `pushSubscriptionData` still runs per socket so each socket receives its own
+    // (potentially different memo-type) frame — this test confirms both sockets
+    // do receive a frame after the write.
+    //
+    // Spy note: `executeAdminSubscription` is private (TypeScript compile-time
+    // only); we cast to `unknown` first to reach it without TS errors.
+    // -------------------------------------------------------------------------
+    it("admin-read dedup: N admin sockets on the same query share one handler run per flush", async () => {
+        expect.assertions(4);
+
+        const shard = new SubscriptionRefreshShard(state, {});
+
+        type HasExecuteAdminSub = { executeAdminSubscription: (path: string, args: Record<string, unknown>) => unknown };
+        const spy = vi.spyOn(shard as unknown as HasExecuteAdminSub, "executeAdminSubscription");
+
+        const wsA = createFakeWebSocket();
+        const wsB = createFakeWebSocket();
+
+        // Admin sockets are distinguished by `admin: true` in the attachment;
+        // the subscribe path rejects `__lunora_admin__:*` paths on non-admin sockets.
+        shard.registerSocket(wsA, { admin: true, subs: {} });
+        shard.registerSocket(wsB, { admin: true, subs: {} });
+
+        // Subscribe both sockets to the same admin query.
+        // `getMetrics` returns an in-memory request counter that increments on
+        // every `fetch` call, so the result is guaranteed to change after a write
+        // and `pushSubscriptionData`'s JSON-memo suppression will not silence it.
+        await shard.driveMessage(wsA, { id: "admin-A", query: { args: {}, functionPath: ADMIN_FUNCTIONS.getMetrics }, type: "subscribe" });
+        await shard.driveMessage(wsB, { id: "admin-B", query: { args: {}, functionPath: ADMIN_FUNCTIONS.getMetrics }, type: "subscribe" });
+
+        // Both seeds ran independently (seed path does not use the flush cache).
+        const callsAfterSeed = spy.mock.calls.length;
+
+        expect(callsAfterSeed).toBe(2); // one seed call per socket
+
+        // Trigger a write flush.  The `getMetrics` result changes because every
+        // `fetch` call increments `this.metrics.requests`, so both sockets receive
+        // a new frame (the JSON memo differs from the seed value).
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        // DEDUP: only ONE additional `executeAdminSubscription` call was made
+        // during the refresh — the second socket reused the cached Promise.
+        const callsDuringRefresh = spy.mock.calls.length - callsAfterSeed;
+
+        expect(callsDuringRefresh).toBe(1);
+
+        // Both sockets received an updated frame (the metrics value changed).
+        expect(subFrames(wsA, "admin-A").length).toBeGreaterThan(1);
+        expect(subFrames(wsB, "admin-B").length).toBeGreaterThan(1);
+    });
+
+    // -------------------------------------------------------------------------
+    // Case 11 — RLS NO-SHARE / SECURITY (negative, plan 073)
+    //
+    // Identity-DEPENDENT user queries must NEVER be deduplicated.  Two sockets
+    // with different `userId` values subscribed to the same `(functionPath, args)`
+    // must each receive rows filtered to their own identity; no cross-identity
+    // data may appear on either socket.
+    //
+    // The handler must run once PER SOCKET (not once per flush), and the result
+    // pushed to each socket must reflect that socket's identity.
+    //
+    // Guard sanity-check (done once, then reverted, noted in the plan report):
+    // temporarily forcing `isAdmin = true` for ALL queries in `refreshSubscriptions`
+    // makes this test fail — one user's RLS-filtered rows reach the other user's
+    // socket — proving the guard reliably detects cross-identity leakage.
+    // -------------------------------------------------------------------------
+    it("rls no-share: identity-dependent queries run once per socket and never share results across identities", async () => {
+        expect.assertions(6);
+
+        // A shard whose `executeSubscription` filters rows by the caller's userId,
+        // simulating an RLS-scoped query (`ctx.auth.userId === row.ownerId`).
+        class RlsRefreshShard extends SubscriptionRefreshShard {
+            protected override executeSubscription(
+                functionPath: string,
+                _args: Record<string, unknown>,
+                identity?: { userId?: string },
+            ): Promise<SubscriptionOutcome | null> {
+                this.execCounts.set(functionPath, (this.execCounts.get(functionPath) ?? 0) + 1);
+
+                const base = this.outcomes.get(functionPath);
+
+                if (!base) {
+                    return Promise.resolve(null);
+                }
+
+                // Simulate RLS: only return rows that belong to the calling user.
+                const userId = identity?.userId;
+                const allRows = base.result as { ownerId: string; text: string }[];
+                const filtered = allRows.filter((r) => r.ownerId === userId);
+
+                return Promise.resolve({ result: filtered, tables: new Set(base.tables) });
+            }
+        }
+
+        const shard = new RlsRefreshShard(state, {});
+
+        const wsA = createFakeWebSocket();
+        const wsB = createFakeWebSocket();
+
+        // Socket A → user-1, Socket B → user-2.
+        shard.registerSocket(wsA, { subs: {}, userId: "user-1" });
+        shard.registerSocket(wsB, { subs: {}, userId: "user-2" });
+
+        // Shared base data; RLS filters it to each user's own rows.
+        shard.outcomes.set("messages:list", {
+            result: [
+                { ownerId: "user-1", text: "private to user-1" },
+                { ownerId: "user-2", text: "private to user-2" },
+            ],
+            tables: new Set(["messages"]),
+        });
+
+        await subscribeSocket(shard, wsA, "sub-A", "messages:list");
+        await subscribeSocket(shard, wsB, "sub-B", "messages:list");
+
+        // Each socket's seed was identity-scoped.
+        expect(dataFrames(wsA, "sub-A").at(-1)).toEqual([{ ownerId: "user-1", text: "private to user-1" }]);
+        expect(dataFrames(wsB, "sub-B").at(-1)).toEqual([{ ownerId: "user-2", text: "private to user-2" }]);
+
+        // Mutate: add a new row owned by user-1 so the refresh yields different
+        // data for user-1 (new frame) while user-2's result is unchanged (memo
+        // suppression, no new frame — the last delivered frame is still user-2's row).
+        shard.outcomes.set("messages:list", {
+            result: [
+                { ownerId: "user-1", text: "private to user-1" },
+                { ownerId: "user-1", text: "new row for user-1 only" },
+                { ownerId: "user-2", text: "private to user-2" },
+            ],
+            tables: new Set(["messages"]),
+        });
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        // user-1 received an updated frame carrying the new row.
+        expect(dataFrames(wsA, "sub-A").at(-1)).toEqual([
+            { ownerId: "user-1", text: "private to user-1" },
+            { ownerId: "user-1", text: "new row for user-1 only" },
+        ]);
+
+        // user-2's result did NOT change — memo suppression, no second data frame.
+        // The last delivered value is still user-2's own row (no cross-identity data).
+        expect(dataFrames(wsB, "sub-B").at(-1)).toEqual([{ ownerId: "user-2", text: "private to user-2" }]);
+
+        // No cross-identity data appeared on either socket:
+        // wsA never received user-2's row, wsB never received user-1's rows.
+        const allSentA = wsA.sent.map((line) => JSON.parse(line) as { data?: unknown; type: string });
+        const allSentB = wsB.sent.map((line) => JSON.parse(line) as { data?: unknown; type: string });
+
+        expect(allSentA.every((frame) => !JSON.stringify(frame.data ?? "").includes("user-2"))).toBe(true);
+        expect(allSentB.every((frame) => !JSON.stringify(frame.data ?? "").includes("user-1"))).toBe(true);
     });
 });
