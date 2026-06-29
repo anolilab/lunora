@@ -5733,6 +5733,40 @@ abstract class ShardDO {
      * high-fanout shards rather than bolt a second, semantically-divergent dedup
      * into this loop.
      */
+
+    /**
+     * Fan a per-socket operation out over `sockets` with bounded parallelism.
+     *
+     * At most `concurrency` (default 8) sockets are processed in parallel.
+     * Larger batches don't help — subscription handlers and poke builds spend
+     * their time on SQLite, which is single-threaded inside the DO — and risk
+     * exhausting the I/O budget. Workers share a single cursor so every socket
+     * is visited exactly once regardless of how fast individual workers complete.
+     *
+     * `processOne` may be synchronous or async; awaiting a void return is a
+     * no-op, so the sync poke path runs eagerly without allocating extra
+     * promises. This is the one place to evolve the DO's per-flush fan-out
+     * policy (concurrency tuning, backpressure, drain gates).
+     */
+    // eslint-disable-next-line class-methods-use-this -- stateless socket-pool helper; kept beside the flush pipeline it belongs to
+    private async runSocketPool(sockets: ReadonlyArray<WebSocket>, processOne: (ws: WebSocket) => void | Promise<void>, concurrency = 8): Promise<void> {
+        let cursor = 0;
+        const worker = async (): Promise<void> => {
+            let socket = sockets[cursor];
+
+            cursor += 1;
+
+            while (socket !== undefined) {
+                // eslint-disable-next-line no-await-in-loop -- shared-cursor drain; parallelism comes from N concurrent workers
+                await processOne(socket);
+                socket = sockets[cursor];
+                cursor += 1;
+            }
+        };
+
+        await Promise.all(Array.from({ length: Math.min(concurrency, sockets.length) }, () => worker()));
+    }
+
     private async refreshSubscriptions(changed: Set<string>): Promise<void> {
         const sockets = [...this.state.getWebSockets()];
 
@@ -5824,26 +5858,7 @@ abstract class ShardDO {
             }
         };
 
-        // Bounded fan-out: at most 8 sockets refresh in parallel. Larger
-        // batches don't help (subscription handlers spend their time on
-        // SQLite, which is single-threaded inside the DO) and risk
-        // exhausting the I/O budget.
-        const concurrency = 8;
-        let cursor = 0;
-        const worker = async (): Promise<void> => {
-            let socket = sockets[cursor];
-
-            cursor += 1;
-
-            while (socket !== undefined) {
-                // eslint-disable-next-line no-await-in-loop -- each worker drains the shared cursor sequentially; parallelism comes from running `concurrency` workers
-                await refreshOne(socket);
-                socket = sockets[cursor];
-                cursor += 1;
-            }
-        };
-
-        await Promise.all(Array.from({ length: Math.min(concurrency, sockets.length) }, () => worker()));
+        await this.runSocketPool(sockets, refreshOne);
     }
 
     /**
@@ -6136,30 +6151,7 @@ abstract class ShardDO {
             }
         };
 
-        const concurrency = 8;
-        let index = 0;
-        const worker = (): void => {
-            let socket = sockets[index];
-
-            index += 1;
-
-            while (socket !== undefined) {
-                pokeOne(socket);
-                socket = sockets[index];
-                index += 1;
-            }
-        };
-
-        // The poke build + send is synchronous (SQLite reads + `ws.send`), so the
-        // workers complete eagerly; the bounded shape keeps the structure aligned
-        // with `refreshSubscriptions` for when an async drain gate is added.
-        await Promise.all(
-            Array.from({ length: Math.min(concurrency, sockets.length) }, () => {
-                worker();
-
-                return Promise.resolve();
-            }),
-        );
+        await this.runSocketPool(sockets, pokeOne);
     }
 
     /**
