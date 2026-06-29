@@ -1,3 +1,5 @@
+## @lunora/do [1.0.0-alpha.8](https://github.com/anolilab/lunora/compare/%40lunora%2Fdo%401.0.0-alpha.7...%40lunora%2Fdo%401.0.0-alpha.8) (2026-06-29)
+
 ## @lunora/do [1.0.0-alpha.7](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.6...@lunora/do@1.0.0-alpha.7) (2026-06-28)
 
 ### Features
