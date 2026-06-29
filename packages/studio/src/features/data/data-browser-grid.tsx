@@ -868,7 +868,13 @@ const useDataBrowserTable = (page: TablePage | null, sorting: SortingState, onSo
         });
     }, [columns, references]);
 
-    const data = rows ?? [];
+    // `data` MUST keep a stable reference across renders: react-table resets its
+    // internal state (column sizing, row selection, …) whenever `data` changes
+    // identity, which re-renders. With no table selected `page` is null, so a bare
+    // `rows ?? []` would hand a fresh `[]` every render — react-table then resets +
+    // re-renders forever, hard-hanging the data tab. Memoizing pins the empty array
+    // (and the loaded page's rows) to one reference until the rows actually change.
+    const data = useMemo<TableRow[]>(() => rows ?? [], [rows]);
 
     // Row selection (for bulk delete / export-of-selected) and column visibility
     // are page-local view state owned by the table model. Selection is keyed by
