@@ -98,6 +98,24 @@ const preloaded = await preloadQuery(client, api.messages.list, {});
 <my-island data-preloaded={serializePreloaded(preloaded)}></my-island>
 ```
 
+### Feature flags
+
+`@lunora/astro` ships no flag hook — like every other surface, flags follow the same server/island split. Read `ctx.flags` server-side (a server endpoint, a function, or the same `.astro` frontmatter) and hand the resolved value to the island, or call `useFlag` inside the island itself via the adapter you hydrate with (`@lunora/react`, `@lunora/vue`, …). Requires [`@lunora/flags`](https://www.npmjs.com/package/@lunora/flags) wired in `lunora/flags.ts`.
+
+```astro
+---
+// src/pages/index.astro — resolve the flag once, server-side
+import { createServerClient, preloadQuery, preloadedQueryResult } from "@lunora/astro/server";
+import { api } from "../lunora/_generated/api";
+
+const client = createServerClient({ url: Astro.url.origin + "/_lunora/rpc" });
+const preloaded = await preloadQuery(client, api.homepage.heroFlag, {}); // a query that returns ctx.flags.boolean(...)
+const newHero = preloadedQueryResult(preloaded);
+---
+
+{newHero ? <NewHero client:load /> : <ClassicHero client:load />}
+```
+
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/frameworks/bring-your-framework)**.
 
 ## Related
