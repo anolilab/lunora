@@ -103,6 +103,8 @@ render(
 | `createAuth`                                        | `useAuth`             | Reactive auth state (`token`, `user` signals + `setToken`).                      |
 | `Authenticated` / `AuthLoading` / `Unauthenticated` | —                     | Auth-gate components rendering `children` per identity state.                    |
 | `createPresence`                                    | `usePresence`         | Collaborative-awareness — heartbeat + live present-members signal.               |
+| `createFlag`                                        | `useFlag`             | Live OpenFeature flag accessor — returns `default` until the server answers.     |
+| `createFlags`                                       | `useFlags`            | Batch variant — an accessor of one value per key in the defaults map.            |
 | `createRateLimit`                                   | `useRateLimit`        | Client-side rate-limit mirror — `ok`, `disabled`, `retryAfter` as signals.       |
 | `createConnectionStatus`                            | `useConnectionStatus` | Reactive connection state signal.                                                |
 | `hydratePreloaded`                                  | `usePreloadedQuery`   | Seed a query synchronously from an SSR `Preloaded` token, then go live.          |

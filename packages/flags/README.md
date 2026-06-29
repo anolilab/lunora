@@ -52,6 +52,20 @@ Any OpenFeature provider works in place of Flagship:
 export default defineFlags({ provider: (env) => new SomeOpenFeatureProvider(env.SOME_KEY) });
 ```
 
+Two zero-dependency providers ship in the box for tests, local defaults, and
+binding-driven flags:
+
+```ts
+import { memoryProvider } from "@lunora/flags/providers/memory";
+import { envProvider } from "@lunora/flags/providers/env";
+
+// Static key → value map (booleans, strings, numbers, JSON objects):
+export default defineFlags({ provider: memoryProvider({ "dark-mode": true, "page-size": 25 }) });
+
+// Read from the Worker env — `dark-mode` → `env.FLAG_DARK_MODE` (override with `prefix` / `name`):
+export default defineFlags({ provider: envProvider() });
+```
+
 ## Evaluate
 
 ```ts
@@ -74,6 +88,8 @@ any per-call context, and identical evaluations within one request are memoized.
 | ---------------------------------- | ----------------------------------------------- | ---------------------------------------------- |
 | `@lunora/flags`                    | `defineFlags`, `createFlags`, types             | `@openfeature/server-sdk`                      |
 | `@lunora/flags/providers/flagship` | `flagshipProvider` (Cloudflare Flagship)        | `@cloudflare/flagship`                         |
+| `@lunora/flags/providers/memory`   | `memoryProvider` (static `key → value` map)     | — (zero extra deps)                            |
+| `@lunora/flags/providers/env`      | `envProvider` (reads flags from the Worker env) | — (zero extra deps)                            |
 | `@lunora/flags/web`                | `FlagshipClientProvider` (browser escape hatch) | `@openfeature/web-sdk`, `@cloudflare/flagship` |
 
 ## License

@@ -108,6 +108,8 @@ All functions that require a component lifecycle (presence, rate-limit) return a
 | `infiniteQuery`    | `useInfiniteQuery`    | Infinite-scroll variant of `paginatedQuery`.                                           |
 | `auth`             | `useAuth`             | Reactive auth stores (`user`, `token`) plus `setToken`.                                |
 | `presence`         | `usePresence`         | Collaborative-awareness — heartbeat + live present-members readable + `teardown`.      |
+| `flag`             | `useFlag`             | Live OpenFeature flag readable store — holds `default` until the server answers.       |
+| `flags`            | `useFlags`            | Batch variant — a readable store of one value per key in the defaults map.             |
 | `rateLimit`        | `useRateLimit`        | Client-side rate-limit mirror — `ok`, `disabled`, `retryAfter` readables + `teardown`. |
 | `connectionStatus` | `useConnectionStatus` | Reactive connection state store.                                                       |
 | `hydratePreloaded` | `usePreloadedQuery`   | Seed a query store from an SSR `Preloaded` token, then go live.                        |
