@@ -59,7 +59,7 @@ export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
 
     // The one-shot list read (HTTP, no admin-RPC path) seeds the table and drives
     // the polling fallback for the custom-loader case.
-    const jobsQuery = useClientQuery(["lunora-scheduled-jobs", livePush], async () => {
+    const jobsQuery = useClientQuery(["lunora-scheduled-jobs"], async () => {
         const records = await (loadJobs ?? (() => client.listScheduledJobs()))();
 
         return sortByDue(records);

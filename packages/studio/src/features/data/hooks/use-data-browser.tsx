@@ -1,5 +1,5 @@
 import { useLunora } from "@lunora/react";
-import type { SortingState } from "@tanstack/react-table";
+import type { OnChangeFn, SortingState } from "@tanstack/react-table";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAdminQuery } from "../../../hooks/use-admin-query";
@@ -568,9 +568,11 @@ const useDataBrowser = ({
     }, [page, stagedEdits.staged]);
 
     // Search / filters / sort / page-size changes flow straight into `pageArgs`, so
-    // the page query refetches on its own — the `setOffset(0)` effect above resets
-    // to the first page when the server-side view narrows. No manual refetch
-    // effects are needed (this is what the React Query migration removes).
+    // the page query refetches on its own. Each input's handler resets offset to the
+    // first page when it narrows the view (`onFilterChange`, `changeFilters`,
+    // `facetFilter`, `changeSorting`, `changePageSize`, `selectTable`,
+    // `navigateToRef`) — no manual refetch effects are needed (this is what the
+    // React Query migration removes).
 
     // Issue a writeRow op then reload the current page so the change shows. A
     // delete passes no doc; insert (id === "") / patch carry the JSON draft.
@@ -634,10 +636,19 @@ const useDataBrowser = ({
         }
     };
 
+    // Server-side sort: a column-header click changes the order, so reset to the
+    // first page (the operator expects the top of the newly-sorted results, not the
+    // same offset reordered). Wraps `setSorting` for the grid; `selectTable` /
+    // `navigateToRef` already reset offset themselves, so they keep the raw setter.
+    const changeSorting: OnChangeFn<SortingState> = (updater): void => {
+        setSorting(updater);
+        setOffset(0);
+    };
+
     // Headless table model + virtualizer for the loaded page. The page-local
     // `sorting` state stays here (table switches reset it via `setSorting`); the
     // hook owns only the derived react-table/virtualizer wiring.
-    const table = useDataBrowserTable(page, sorting, setSorting);
+    const table = useDataBrowserTable(page, sorting, changeSorting);
 
     // The currently-displayed view, for the "Copy link" / "Save query" affordances.
     // Derived from the live state (not the `loaded` descriptor) so it reflects the

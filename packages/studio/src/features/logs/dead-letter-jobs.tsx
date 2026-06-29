@@ -46,7 +46,7 @@ export const DeadLetterJobs = ({ loadJobs, removeJob, retryJob }: DeadLetterJobs
     // `useClientQuery` over the supplied loader (or `client.listDeadJobs`).
     // Most-attempted first — the jobs that fought hardest before dying are the
     // ones worth triaging.
-    const jobsQuery = useClientQuery(["lunora-dead-jobs", loadJobs === undefined], async () => {
+    const jobsQuery = useClientQuery(["lunora-dead-jobs"], async () => {
         const records = await (loadJobs ?? (() => client.listDeadJobs()))();
 
         return records.toSorted((a, b) => (b.attempts ?? 0) - (a.attempts ?? 0));

@@ -76,6 +76,52 @@ interface AdminQueryResult<T> {
     readonly refetch: () => void;
 }
 
+/** Options for {@link useClientQuery}. */
+interface UseClientQueryOptions {
+    /** Gate the read (rules-of-hooks safe). Defaults to `true`. */
+    readonly enabled?: boolean;
+    /** Keep the previously-resolved data visible while a new key is fetched. Defaults to `false`. */
+    readonly keepPreviousData?: boolean;
+    /** Freshness window; defaults to `0` (re-fetch on remount / refocus). */
+    readonly staleTime?: number;
+}
+
+/**
+ * Read through TanStack Query with a caller-supplied `queryFn` — the base
+ * primitive for the studio's non-admin-RPC reads (the bespoke
+ * `client.listAuthUsers()` / `client.schedulerStatus()` / … methods that aren't
+ * routed as `__lunora_admin__:*` paths). The caller owns the `queryKey` (must be
+ * structurally stable) and the fetch; this hook adds the cache, dedup, and the
+ * uniform `{ data, error, isLoading, refetch }` surface. No live bridge — these
+ * backends are HTTP-only and the panels poll via `useAutoRefresh`.
+ *
+ * {@link useAdminQuery} builds on this for admin-RPC reads (it supplies the
+ * `["lunora-admin", …]` key + `client.query` fetch and layers a live WS
+ * subscription on top).
+ */
+// eslint-disable-next-line func-style -- a generic arrow `<T>(…) =>` is misread as a JSX element by packem's Babel (`.ts` compiled with the React preset); a function declaration is the unambiguous form.
+function useClientQuery<T>(queryKey: QueryKey, queryFunction: () => Promise<T>, options: UseClientQueryOptions = {}): AdminQueryResult<T> {
+    const { enabled = true, keepPreviousData = false, staleTime = 0 } = options;
+
+    const query = useQuery<T>({
+        enabled,
+        queryFn: queryFunction,
+        placeholderData: keepPreviousData ? keepPreviousDataPlaceholder : undefined,
+        queryKey,
+        staleTime,
+    });
+
+    return {
+        data: query.data,
+        error: query.error ? errorMessage(query.error) : query.error,
+        isLoading: query.isLoading,
+        liveError: undefined,
+        refetch: (): void => {
+            fireAndForget(query.refetch());
+        },
+    };
+}
+
 /**
  * Read a reserved admin RPC through TanStack Query — the studio's single data
  * primitive, replacing the per-panel `useState` + `useEffect` + `try/catch`
@@ -100,12 +146,11 @@ function useAdminQuery<T>(path: string, args: Record<string, unknown>, options: 
 
     const queryKey = adminQueryKey(path, args, shardKey);
 
-    // eslint-disable-next-line @tanstack/query/exhaustive-deps -- `client` is provider-stable (it comes from LunoraContext; swapping it remounts the subtree) and is deliberately excluded from the cache key — a non-serialisable client object would break cache identity.
-    const query = useQuery<T>({
+    // The base read shares the generic client-query machinery (cache, dedup, error
+    // normalisation, refetch); admin layers a live WS subscription on top.
+    const base = useClientQuery<T>(queryKey, () => client.query(adminRef(path), args, callOptions(shardKey)) as Promise<T>, {
         enabled,
-        queryFn: () => client.query(adminRef(path), args, callOptions(shardKey)) as Promise<T>,
-        placeholderData: keepPreviousData ? keepPreviousDataPlaceholder : undefined,
-        queryKey,
+        keepPreviousData,
         staleTime: staleTime ?? (live ? Number.POSITIVE_INFINITY : 0),
     });
 
@@ -141,59 +186,7 @@ function useAdminQuery<T>(path: string, args: Record<string, unknown>, options: 
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [keySignature, enabled, live]);
 
-    return {
-        data: query.data,
-        // `query.error` is `Error | null`; return its message or pass the `null`
-        // through (the false branch is already `null`, so no `null` literal here).
-        error: query.error ? errorMessage(query.error) : query.error,
-        isLoading: query.isLoading,
-        liveError,
-        refetch: (): void => {
-            fireAndForget(query.refetch());
-        },
-    };
-}
-
-/** Options for {@link useClientQuery}. */
-interface UseClientQueryOptions {
-    /** Gate the read (rules-of-hooks safe). Defaults to `true`. */
-    readonly enabled?: boolean;
-    /** Keep the previously-resolved data visible while a new key is fetched. Defaults to `false`. */
-    readonly keepPreviousData?: boolean;
-    /** Freshness window; defaults to `0` (re-fetch on remount / refocus). */
-    readonly staleTime?: number;
-}
-
-/**
- * Read through TanStack Query with a caller-supplied `queryFn` — the sibling of
- * {@link useAdminQuery} for the studio's non-admin-RPC reads (the bespoke
- * `client.listAuthUsers()` / `client.schedulerStatus()` / … methods that aren't
- * routed as `__lunora_admin__:*` paths). The caller owns the `queryKey` (must be
- * structurally stable) and the fetch; this hook adds the cache, dedup, and the
- * uniform `{ data, error, isLoading, refetch }` surface. No live bridge — these
- * backends are HTTP-only and the panels poll via `useAutoRefresh`.
- */
-// eslint-disable-next-line func-style -- a generic arrow `<T>(…) =>` is misread as a JSX element by packem's Babel (`.ts` compiled with the React preset); a function declaration is the unambiguous form.
-function useClientQuery<T>(queryKey: QueryKey, queryFunction: () => Promise<T>, options: UseClientQueryOptions = {}): AdminQueryResult<T> {
-    const { enabled = true, keepPreviousData = false, staleTime = 0 } = options;
-
-    const query = useQuery<T>({
-        enabled,
-        queryFn: queryFunction,
-        placeholderData: keepPreviousData ? keepPreviousDataPlaceholder : undefined,
-        queryKey,
-        staleTime,
-    });
-
-    return {
-        data: query.data,
-        error: query.error ? errorMessage(query.error) : query.error,
-        isLoading: query.isLoading,
-        liveError: undefined,
-        refetch: (): void => {
-            fireAndForget(query.refetch());
-        },
-    };
+    return { ...base, liveError };
 }
 
 /**

@@ -56,7 +56,7 @@ export const CronTriggersPanel = ({ loadCronJobs, runCronJob }: CronTriggersPane
 
     // The cron-jobs map is HTTP-only (no admin-RPC path), so it's a
     // `useClientQuery` over the supplied loader (or `client.getCronJobs`).
-    const jobsQuery = useClientQuery(["lunora-cron-jobs", loadCronJobs === undefined], () => (loadCronJobs ?? (() => client.getCronJobs()))());
+    const jobsQuery = useClientQuery(["lunora-cron-jobs"], () => (loadCronJobs ?? (() => client.getCronJobs()))());
     const { data: jobs, error } = jobsQuery;
 
     // Running is available when the host supplies a runner, or when the panel is
