@@ -1,0 +1,57 @@
+---
+title: "@lunora/cloudflare-access"
+description: Cloudflare Access (Zero Trust) identity for Lunora — verify the Cf-Access-Jwt-Assertion JWT against your team JWKS and feed the verified identity into ctx.auth and RLS via a resolveIdentity adapter.
+---
+
+`@lunora/cloudflare-access` turns a Cloudflare Access (Cloudflare One / Zero Trust) request into a Lunora identity. It verifies the `Cf-Access-Jwt-Assertion` JWT that Access stamps on every proxied request against your team's JWKS, then maps the verified claims onto the shape `@lunora/runtime` expects — so a verified SSO user or service token becomes `ctx.auth` for every query, mutation, and action, and feeds row-level security with no per-procedure wiring.
+
+```sh
+pnpm add @lunora/cloudflare-access
+```
+
+## How it fits
+
+Cloudflare Access is an **identity-aware proxy**: it authenticates the caller _before_ the request reaches your Worker and adds a signed JWT header. This package is therefore **not** a better-auth plugin — it is a `resolveIdentity` adapter. The single integration point is the runtime's `resolveIdentity` hook, which already feeds `ctx.auth`, RLS policies, `serverDefault` columns, and live subscriptions.
+
+```ts
+import { createAccessResolver } from "@lunora/cloudflare-access";
+
+options.resolveIdentity = createAccessResolver({
+    teamDomain: env.CF_ACCESS_TEAM_DOMAIN, // "acme" | "acme.cloudflareaccess.com"
+    aud: env.CF_ACCESS_AUD, // the Access application's AUD tag
+});
+```
+
+The resolver is **fail-closed → anonymous**: a missing or invalid token resolves to `null`, the request proceeds unauthenticated, and RLS denies. The verified `exp` is forwarded so live WebSocket subscriptions expire with the credential.
+
+## Composing with `@lunora/auth`
+
+Pair Access with your app's own sessions — Access wins when present, everyone else falls through:
+
+```ts
+import { composeResolvers, createAccessResolver } from "@lunora/cloudflare-access";
+
+options.resolveIdentity = composeResolvers(
+    createAccessResolver({ teamDomain: env.CF_ACCESS_TEAM_DOMAIN, aud: env.CF_ACCESS_AUD }),
+    betterAuthResolver, // your existing better-auth session resolver
+);
+```
+
+## Claims on `ctx.auth`
+
+`userId` is derived from `sub` (SSO) or `common_name` (service tokens). The verified claims — `email`, `groups`, `commonName`, and the full raw set under `access` — are available via `ctx.auth.getIdentity()`, so RLS policies can branch on them:
+
+```ts
+definePolicy({
+    on: "read",
+    table: "documents",
+    when: ({ auth }) => auth.identity?.groups?.includes("eng") ?? false,
+});
+```
+
+## API
+
+- `createAccessResolver(options)` — a `resolveIdentity` adapter (header + cookie, verify, map).
+- `composeResolvers(...resolvers)` — first non-null identity wins.
+- `verifyAccessJwt(token, options)` — low-level: verify a token, return its claims (throws on failure).
+- `accessIssuer(teamDomain)` — normalize a team domain to its canonical issuer URL.

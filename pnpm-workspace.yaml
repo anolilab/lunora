@@ -27,6 +27,7 @@ overrides:
   "@lunora/browser": "workspace:*"
   "@lunora/cli": "workspace:*"
   "@lunora/client": "workspace:*"
+  "@lunora/cloudflare-access": "workspace:*"
   "@lunora/codegen": "workspace:*"
   "@lunora/config": "workspace:*"
   "@lunora/container": "workspace:*"
@@ -343,6 +344,7 @@ catalogs:
   auth:
     "@better-auth/passkey": ^1.6.22
     "better-auth": ^1.6.22
+    jose: ^6.1.0
   drizzle:
     drizzle-orm: ^0.45.2
   http:
