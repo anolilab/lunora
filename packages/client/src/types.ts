@@ -652,6 +652,13 @@ export interface WorkflowInstanceDetail extends WorkflowInstanceSummary {
 
 /** A page of workflow instances. */
 export interface WorkflowInstancePage {
+    /**
+     * Whether workflow inspection is configured on the worker (a Cloudflare
+     * account id + API token). `false` when the admin proxy reports it can't
+     * inspect instances; omitted (treated as configured) otherwise. Lets a
+     * caller render a "set credentials" state without a failed request.
+     */
+    configured?: boolean;
     instances: WorkflowInstanceSummary[];
     page: number;
     perPage: number;

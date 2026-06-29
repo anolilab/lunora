@@ -1138,6 +1138,23 @@ const validateFanOut = (fanOut: unknown): FanOutSpec | undefined => {
     return spec as FanOutSpec;
 };
 
+/**
+ * Dev request-loop diagnostic. With `LUNORA_DEBUG_RPC` set on the worker env
+ * (e.g. in `.dev.vars`), emit one line per RPC so a client-side request loop
+ * shows up as a wall of identical entries in the dev server (vite / wrangler)
+ * terminal — immediately naming the runaway function + shard. Off by default, so
+ * it never adds noise in production unless the flag is explicitly set. Extracted
+ * from `handleRpc` so the guard doesn't inflate that hot path's complexity.
+ */
+const logRpcDebug = (env: unknown, envelope: RpcEnvelope): void => {
+    if (!(env as { LUNORA_DEBUG_RPC?: unknown } | undefined)?.LUNORA_DEBUG_RPC) {
+        return;
+    }
+
+    // eslint-disable-next-line no-console -- intentional, flag-gated dev request-loop diagnostic
+    console.warn(`[lunora:rpc] ${envelope.fanOut ? "fan-out" : `shard=${envelope.shardKey ?? "(root)"}`} ${envelope.functionPath}`);
+};
+
 const parseEnvelope = async (request: Request): Promise<RpcEnvelope> => {
     // Read with a byte budget so a chunked / Content-Length-stripped body can't
     // bypass the size cap the header fast-path only loosely enforces.
@@ -2070,6 +2087,12 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
 
         const envelope = await parseEnvelope(request);
+
+        // Dev diagnostic (opt-in via `LUNORA_DEBUG_RPC`): one line per RPC so a
+        // client-side request loop shows up as a wall of identical entries in the
+        // dev server terminal. Logged before validation so even rejected floods
+        // are visible; off by default.
+        logRpcDebug(env, envelope);
 
         if (envelope.fanOut && envelope.shardKey) {
             throw new LunoraError("RPC envelope cannot set both `shardKey` and `fanOut`", { code: "BAD_REQUEST", status: 400 });

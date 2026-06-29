@@ -439,6 +439,21 @@ const useDataBrowser = ({
         setOffset(0);
     };
 
+    // `facetFetcher` / `refetchFacets` and `onViewChange` are read through refs so
+    // the two effects below can depend on the *view values* alone. Those callbacks'
+    // identities churn every render (recreated unless React Compiler memoizes them);
+    // listing them in the deps made the effects re-fire on every render — wasted
+    // facet refetches and, worse, a self-perpetuating `onViewChange` → `navigate`
+    // loop that re-asserts `/data` and traps the user on the tab. Keying on the
+    // values means each fires only when the displayed view actually changes.
+    const facetFetcherRef = useRef(facetFetcher);
+    const refetchFacetsRef = useRef(refetchFacets);
+    const onViewChangeRef = useRef(onViewChange);
+
+    facetFetcherRef.current = facetFetcher;
+    refetchFacetsRef.current = refetchFacets;
+    onViewChangeRef.current = onViewChange;
+
     // Refetch every toggled-on facet when the active view (filters / search / shard
     // / table) changes, so the summaries always reflect the previewed rows. The
     // shard / search are already debounced, so this tracks the displayed view; it's
@@ -451,8 +466,9 @@ const useDataBrowser = ({
 
         // `refetchFacets` re-runs only the already-open facets (read off the hook's
         // ref); toggling a single facet on is handled by `toggleFacet`'s own fetch.
-        refetchFacets(facetFetcher(debouncedShard, selectedTable, filters, search));
-    }, [debouncedShard, selectedTable, filters, search, facetFetcher, refetchFacets]);
+        refetchFacetsRef.current(facetFetcherRef.current(debouncedShard, selectedTable, filters, search));
+        // Fire on the active view; the facet callbacks are read via refs (see above).
+    }, [debouncedShard, selectedTable, filters, search]);
 
     // Mirror the active view (shard / search / filters / sort) to the host so it can
     // write it into the URL — making every view a real, shareable link. The shard /
@@ -460,18 +476,32 @@ const useDataBrowser = ({
     // mirrored separately by `onSelectTable`.
     useEffect(() => {
         // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- the URL is a projection of the active view (a value, not a discrete event); mirroring it when the view changes is the correct pattern.
-        if (selectedTable === null || onViewChange === undefined) {
+        if (selectedTable === null || onViewChangeRef.current === undefined) {
             return;
         }
 
-        // eslint-disable-next-line react-you-might-not-need-an-effect/no-pass-data-to-parent -- the host writes this into the URL (a side effect, not derivable render state); an effect keyed on the displayed view is the correct place — the same shape as `onSelectTable`.
-        onViewChange({
+        onViewChangeRef.current({
             filters: toFilterClauses(filters),
             orderBy: toOrderBy(sorting),
             search,
             shard: debouncedShard,
         });
-    }, [selectedTable, filters, sorting, search, debouncedShard, onViewChange]);
+        // Fire on the displayed view; `onViewChange` is read via `onViewChangeRef` (see above).
+    }, [selectedTable, filters, sorting, search, debouncedShard]);
+
+    // `selectTable` read through a ref so the reconcile effect below can depend on
+    // `tableParam` ALONE. `selectTable`'s identity churns every render (its deps —
+    // `clearFacets` / `onSelectTable` / `stagedEdits` — are recreated unless React
+    // Compiler memoizes them), and listing it in the effect's deps made the effect
+    // re-fire mid-navigation: an in-app `selectTable("messages")` sets
+    // `appliedTableRef` to "messages" and navigates, but before the URL commits the
+    // effect would re-run with the still-stale `tableParam` ("inbox"), see it differ
+    // from `appliedTableRef`, and "reconcile" by re-selecting "inbox" — bouncing the
+    // click back. Keying on `tableParam` only means it fires solely on real URL
+    // changes (deep link / back-forward / a committed in-app nav), never mid-flight.
+    const selectTableRef = useRef(selectTable);
+
+    selectTableRef.current = selectTable;
 
     // Reconcile the URL's table into the selection. Fires on first load (deep link)
     // and on browser back/forward; an in-app selection already set `appliedTableRef`
@@ -493,10 +523,11 @@ const useDataBrowser = ({
         const target = tableParam;
 
         queueMicrotask(() => {
-            selectTable(target);
+            selectTableRef.current(target);
         });
         /* eslint-enable react-you-might-not-need-an-effect/no-event-handler */
-    }, [tableParam, selectTable]);
+        // Fire only on a real `tableParam` change; `selectTable` is read via `selectTableRef` (see above).
+    }, [tableParam]);
 
     const goToPage = (nextOffset: number): void => {
         if (selectedTable === null) {

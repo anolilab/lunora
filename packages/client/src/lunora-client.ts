@@ -1178,7 +1178,13 @@ class LunoraClient {
 
         const body = (await this.adminFetch(`${WORKFLOWS_INSTANCES_PATH}?${query.toString()}`, "GET")) as Partial<WorkflowInstancePage>;
 
-        return { instances: body.instances ?? [], page: body.page ?? 1, perPage: body.perPage ?? options.perPage ?? 0, totalCount: body.totalCount };
+        return {
+            configured: body.configured,
+            instances: body.instances ?? [],
+            page: body.page ?? 1,
+            perPage: body.perPage ?? options.perPage ?? 0,
+            totalCount: body.totalCount,
+        };
     }
 
     /** Read one workflow instance with its step timeline (`/_lunora/admin/workflows/instance`). */

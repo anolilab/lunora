@@ -92,8 +92,12 @@ const requireQuery = (url: URL, key: string): string => {
 /**
  * Throw the 501 used when no Cloudflare credentials are configured. Raised as a
  * {@link LunoraError} so it serializes through the worker's standard
- * `{ error: { code, message } }` envelope — the client surfaces `.code`, and the
- * studio renders the `WORKFLOWS_NOT_CONFIGURED` case as a "set credentials" state.
+ * `{ error: { code, message } }` envelope — the client surfaces `.code`. Used by
+ * the detail/status endpoints only; those are reachable solely once instances
+ * exist, so they never fire while unconfigured. The instances *list* — the one
+ * endpoint the studio fetches on mount — instead answers a 200 `configured:
+ * false` sentinel (see `handleInstances`) so the studio renders its "set
+ * credentials" state without the browser logging a failed request.
  */
 const throwNotConfigured = (): never => {
     throw new LunoraError("Workflow inspection is unconfigured. Set CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN in your .dev.vars to enable it.", {
@@ -116,8 +120,16 @@ const buildWorkflowsAdminRoutes = (
         assertAdmin(request);
         const client = resolveWorkflowsClient(env);
 
+        // The instance list is the one workflows endpoint the studio fetches
+        // automatically on mount, so an unconfigured worker would log a 501 to
+        // the console on every visit. Mirror the OpenAPI/OpenRPC introspection
+        // routes instead: return a 200 `configured: false` sentinel (an empty
+        // page) so the studio renders its "set credentials" state without the
+        // browser surfacing a failed request. The detail/status endpoints keep
+        // throwing `WORKFLOWS_NOT_CONFIGURED` — they're only reachable once
+        // instances exist, so they never fire while unconfigured.
         if (!client) {
-            return throwNotConfigured();
+            return Response.json({ configured: false, instances: [], page: 1, perPage: 0, totalCount: 0 });
         }
 
         const workflowName = requireQuery(url, "name");

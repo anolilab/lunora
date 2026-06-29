@@ -15,7 +15,36 @@ import type { DataView } from "./saved-queries";
  * none). `schema` is omitted for the default shard tier (mirroring `table-editor`).
  */
 
+/**
+ * The data browser's URL search params, as TanStack Router carries them — the
+ * validated wire shape produced by {@link validateDataViewSearch} (the route's
+ * `validateSearch`). All values are the raw URL strings (`filters` is JSON,
+ * `order` is `column:asc|desc`); {@link searchToDataView} parses them into a
+ * structured {@link DataView}. Typing the route's search here replaces the
+ * untyped `useSearch({ strict: false })` reads scattered through the data feature.
+ *
+ * Declared locally and exported at the end of the file (`import/exports-last`);
+ * interfaces are hoisted, so the functions below reference it freely.
+ */
+interface DataViewSearch {
+    /** JSON-encoded {@link FilterClause}[] (validated to parse into ≥1 clause). */
+    filters?: string;
+    /** Sort as `column:asc` / `column:desc` (validated against that grammar). */
+    order?: string;
+    /** Storage tier; only `"global"` is carried (the shard default is omitted). */
+    schema?: "global";
+    /** Substring search across all columns. */
+    search?: string;
+    /** Shard key the view targets (omitted for the root shard). */
+    shard?: string;
+    /** The open table. */
+    table?: string;
+}
+
 const VALID_OPERATORS = new Set<FilterOperator>(["contains", "eq", "gt", "gte", "lt", "lte", "ne"]);
+
+/** Read a non-empty string off the raw search record, else `undefined`. */
+const stringParameter = (raw: unknown): string | undefined => (typeof raw === "string" && raw !== "" ? raw : undefined);
 
 /** Narrow an unknown parsed entry to a {@link FilterClause}, dropping anything malformed. */
 const isFilterClause = (entry: unknown): entry is FilterClause => {
@@ -66,11 +95,64 @@ const parseOrder = (raw: unknown): DataView["orderBy"] => {
 };
 
 /**
+ * The `/data` route's `validateSearch`: normalise the raw router search into the
+ * typed {@link DataViewSearch} at the router boundary, dropping anything
+ * malformed (a non-`global` `schema`, an `order` that isn't `column:asc|desc`,
+ * `filters` that don't parse into at least one valid clause, empty strings, and
+ * any unknown params). Validating once here — rather than defensively in every
+ * reader — means `useSearch` returns a trustworthy, typed shape, and a
+ * hand-edited or legacy link is sanitised on navigation instead of flowing
+ * garbage downstream. The URL string format is preserved verbatim (valid values
+ * pass through untouched), so shared links and saved queries stay compatible.
+ */
+export const validateDataViewSearch = (search: Record<string, unknown>): DataViewSearch => {
+    const validated: DataViewSearch = {};
+
+    if (search["schema"] === "global") {
+        validated.schema = "global";
+    }
+
+    const table = stringParameter(search["table"]);
+
+    if (table !== undefined) {
+        validated.table = table;
+    }
+
+    const shard = stringParameter(search["shard"]);
+
+    if (shard !== undefined) {
+        validated.shard = shard;
+    }
+
+    const searchText = stringParameter(search["search"]);
+
+    if (searchText !== undefined) {
+        validated.search = searchText;
+    }
+
+    // Keep `order` only when it matches the `column:asc|desc` grammar.
+    const order = stringParameter(search["order"]);
+
+    if (order !== undefined && parseOrder(order) !== undefined) {
+        validated.order = order;
+    }
+
+    // Keep `filters` only when the JSON parses into at least one valid clause.
+    const filters = stringParameter(search["filters"]);
+
+    if (filters !== undefined && parseFilters(filters).length > 0) {
+        validated.filters = filters;
+    }
+
+    return validated;
+};
+
+/**
  * Reconstruct a {@link DataView} from the router's search params. The inverse of
  * {@link dataViewToSearch}. Unknown/garbage params are dropped, never thrown on,
  * so a hand-edited or legacy link still hydrates into a sensible view.
  */
-export const searchToDataView = (search: Record<string, unknown>): DataView => {
+export const searchToDataView = (search: DataViewSearch | Record<string, unknown>): DataView => {
     const filters = parseFilters(search["filters"]);
     const orderBy = parseOrder(search["order"]);
 
@@ -103,3 +185,5 @@ export const dataViewToSearch = (view: DataView): Record<string, string | undefi
         table: view.table !== undefined && view.table !== "" ? view.table : undefined,
     };
 };
+
+export type { DataViewSearch };
