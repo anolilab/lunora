@@ -1,6 +1,6 @@
 {
     "name": "@lunora/mail",
-    "version": "1.0.0-alpha.3",
+    "version": "1.0.0-alpha.4",
     "description": "Email for Lunora: Resend adapter, TSX templates, and queue-backed sends",
     "keywords": [
         "cloudflare",
