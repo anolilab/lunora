@@ -6004,6 +6004,12 @@ abstract class ShardDO {
         const checkpoint = frameCursor ?? this.currentCdcCursor() ?? 0;
         const sql = this.sql as SqlExec;
 
+        // Per-flush op-range cache: keyed by `${table}:${sinceSeq}`.
+        // Shapes that share the same (table, memoCursor) in one flush reuse the
+        // already-drained collapsed range and pay only the per-shape membership
+        // probe. Created fresh each call so a later flush never reuses stale data.
+        const opRangeCache = new Map<string, Map<string, CdcChange>>();
+
         const pokeOne = (ws: WebSocket): void => {
             if (this.isSocketExpired(ws)) {
                 this.dropExpiredSocket(ws);
@@ -6041,7 +6047,7 @@ abstract class ShardDO {
                     }
 
                     const memoCursor = this.shapeMemos.get(ws)?.get(subId)?.cursor ?? 0;
-                    const rowsPatch = this.buildShapeDiff(sql, resolved, memoCursor, checkpoint);
+                    const rowsPatch = this.buildShapeDiff(sql, resolved, memoCursor, checkpoint, opRangeCache);
 
                     if (rowsPatch.length > 0) {
                         parts.push({ rowsPatch, shapeId: subId });
@@ -6099,18 +6105,16 @@ abstract class ShardDO {
     }
 
     /**
-     * Build the row-ops for a shape over the op range `(sinceSeq, upTo]`. Reads
-     * the changelog (drained across pages), collapses to the latest op per row,
-     * then runs ONE membership probe ({@link selectShapeMemberIds}) over the
-     * changed ids: a row still in the set → upsert with its post-image doc
-     * (projected to the shape's columns); a row that left the set, or any delete,
-     * → `delete(key)` (a delete carries no post-image, so membership is
-     * unknowable from the op alone — the client no-ops an unknown key).
+     * Drain and collapse the CDC op-log for `table` over `(sinceSeq, upTo]`.
+     * Returns a map from row-id to its latest {@link CdcChange} across all pages
+     * in the range. The result is shareable across multiple shapes that resolve
+     * the same `(table, sinceSeq)` in one flush — the per-shape membership probe
+     * ({@link buildShapeDiff}) is NOT shared.
      */
-    // eslint-disable-next-line class-methods-use-this -- a pure op-page→membership-diff transform that reads only its args; kept a private method to sit beside the shape-poke pipeline it belongs to.
-    private buildShapeDiff(sql: SqlExec, resolved: ResolvedShape, sinceSeq: number, upTo: number): ShapeRowOp[] {
+    // eslint-disable-next-line class-methods-use-this -- stateless drain helper; kept beside the poke pipeline it belongs to.
+    private collapseOpRange(sql: SqlExec, table: string, sinceSeq: number, upTo: number): Map<string, CdcChange> {
         const latest = new Map<string, CdcChange>();
-        const tables = new Set([resolved.table]);
+        const tables = new Set([table]);
         let from = sinceSeq;
 
         // Drain the op range so a flush larger than one CDC page is fully covered.
@@ -6126,6 +6130,48 @@ abstract class ShardDO {
             }
 
             from = cursor;
+        }
+
+        return latest;
+    }
+
+    /**
+     * Build the row-ops for a shape over the op range `(sinceSeq, upTo]`. Reads
+     * the changelog (drained across pages via {@link collapseOpRange}), collapses
+     * to the latest op per row, then runs ONE membership probe
+     * ({@link selectShapeMemberIds}) over the changed ids: a row still in the set
+     * → upsert with its post-image doc (projected to the shape's columns); a row
+     * that left the set, or any delete, → `delete(key)` (a delete carries no
+     * post-image, so membership is unknowable from the op alone — the client
+     * no-ops an unknown key).
+     *
+     * `opRangeCache`, when provided, is a per-flush cache keyed by
+     * `${table}:${sinceSeq}`. A cache hit reuses the already-drained collapsed
+     * range so multiple shapes sharing the same `(table, memoCursor)` in one
+     * flush each pay only the per-shape membership probe — not the op-read.
+     * Callers that do not share a flush (e.g. the seed path) omit the cache.
+     */
+    private buildShapeDiff(
+        sql: SqlExec,
+        resolved: ResolvedShape,
+        sinceSeq: number,
+        upTo: number,
+        opRangeCache?: Map<string, Map<string, CdcChange>>,
+    ): ShapeRowOp[] {
+        const cacheKey = `${resolved.table}:${String(sinceSeq)}`;
+        let latest: Map<string, CdcChange>;
+
+        if (opRangeCache === undefined) {
+            latest = this.collapseOpRange(sql, resolved.table, sinceSeq, upTo);
+        } else {
+            const cached = opRangeCache.get(cacheKey);
+
+            if (cached === undefined) {
+                latest = this.collapseOpRange(sql, resolved.table, sinceSeq, upTo);
+                opRangeCache.set(cacheKey, latest);
+            } else {
+                latest = cached;
+            }
         }
 
         if (latest.size === 0) {

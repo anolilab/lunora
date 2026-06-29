@@ -251,4 +251,43 @@ describe("shardDO shape poke protocol (dispatch path)", () => {
         expect(pokeOps(a)).toStrictEqual([{ key: "m1", op: "insert", table: "messages", value: expect.objectContaining({ _id: "m1" }) }]);
         expect(b.sent).toStrictEqual([]);
     });
+
+    it("shares the op drain across shapes but keeps membership probes isolated", async () => {
+        expect.assertions(4);
+
+        // Two sockets subscribed to differently-predicated shapes on the same table,
+        // both starting at memo cursor 0. In each flush, both shapes share the same
+        // collapseOpRange result (same table + sinceSeq); only the per-shape
+        // selectShapeMemberIds call separates which rows each subscriber receives.
+        const sockets: FakeWebSocket[] = [];
+        const shard = new ShapePokeShard(makeState(sockets), {});
+        const a = createFakeWebSocket();
+        const b = createFakeWebSocket();
+        sockets.push(a, b);
+
+        // Subscribe a → c1, b → c2. Both seeds are empty; both memos start at 0.
+        await subscribeShape(shard, a, "c1");
+        await shard.webSocketMessage(
+            b as unknown as WebSocket,
+            JSON.stringify({ id: "s1", shape: { args: { channelId: "c2" }, name: "messagesByChannel" }, type: "shape_subscribe" }),
+        );
+        a.sent.length = 0;
+        b.sent.length = 0;
+
+        // Flush 1 — write m1 into c1. Both shapes drain the same op range (messages,
+        // sinceSeq=0); only a's c1 membership probe matches.
+        await shard.fetch(write("messages:send", { _id: "m1", channelId: "c1", text: "hi" }));
+
+        expect(pokeOps(a)).toStrictEqual([{ key: "m1", op: "insert", table: "messages", value: expect.objectContaining({ _id: "m1" }) }]);
+        expect(b.sent).toStrictEqual([]);
+
+        a.sent.length = 0;
+
+        // Flush 2 — write m2 into c2. Both shapes drain the op range (messages,
+        // sinceSeq=1); only b's c2 membership probe matches.
+        await shard.fetch(write("messages:send", { _id: "m2", channelId: "c2", text: "hey" }));
+
+        expect(a.sent).toStrictEqual([]);
+        expect(pokeOps(b)).toStrictEqual([{ key: "m2", op: "insert", table: "messages", value: expect.objectContaining({ _id: "m2" }) }]);
+    });
 });
