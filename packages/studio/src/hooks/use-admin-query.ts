@@ -100,6 +100,14 @@ const RPC_LOOP_WINDOW_MS = 1000;
 const RPC_LOOP_THRESHOLD = 25;
 const rpcCallTimes = new Map<string, number[]>();
 
+// The detector is a DEV-ONLY aid: it adds a `JSON.stringify` + `Map` write on
+// every query and retains a bucket per unique key for the tab's lifetime — fine
+// while debugging, but needless overhead (and a slow leak) in a shipped app.
+// Gate on `process.env.NODE_ENV` — the React-ecosystem convention every bundler
+// inlines (Vite, packem `--development`/`--production`) — so a production build
+// dead-code-eliminates the wrapper and queries call `queryFunction` directly.
+const isDevelopment = process.env.NODE_ENV !== "production";
+
 const noteQueryFetch = (key: string): void => {
     const now = Date.now();
     const recent = (rpcCallTimes.get(key) ?? []).filter((time) => now - time < RPC_LOOP_WINDOW_MS);
@@ -134,16 +142,19 @@ const noteQueryFetch = (key: string): void => {
 function useClientQuery<T>(queryKey: QueryKey, queryFunction: () => Promise<T>, options: UseClientQueryOptions = {}): AdminQueryResult<T> {
     const { enabled = true, keepPreviousData = false, staleTime = 0 } = options;
 
-    // Wrap the caller's fetch with the dev request-loop counter, kept as a plain
+    // Outside dev, call the caller's fetch directly — no diagnostic overhead. In
+    // dev, wrap it with the request-loop counter. Either way it's a plain
     // reference (not an inline literal) so it stays opaque to the query-key
     // exhaustive-deps lint — the caller already encodes the real inputs in
     // `queryKey`; `queryFunction` is derived from them and intentionally not part
     // of the key.
-    const trackedQueryFunction = (): Promise<T> => {
-        noteQueryFetch(JSON.stringify(queryKey));
+    const trackedQueryFunction = isDevelopment
+        ? (): Promise<T> => {
+              noteQueryFetch(JSON.stringify(queryKey));
 
-        return queryFunction();
-    };
+              return queryFunction();
+          }
+        : queryFunction;
 
     const query = useQuery<T>({
         enabled,

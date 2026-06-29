@@ -440,13 +440,24 @@ const useDataBrowser = ({
         // Fire on the active view; the facet callbacks are read via refs (see above).
     }, [debouncedShard, selectedTable, filters, search]);
 
+    // Tracks the table the local view has been (re-)seeded for. Declared before the
+    // mirror effect below so that effect can tell whether the view it's about to
+    // mirror belongs to the current `tableParam` yet. Seeded with the mount
+    // `tableParam` so the first run is a no-op (the `useState` initializers already
+    // hydrated from the URL); the re-seed effect advances it on each table change.
+    const seededTableRef = useRef(tableParam);
+
     // Mirror the active view (shard / search / filters / sort) to the host so it can
     // write it into the URL — making every view a real, shareable link. The shard /
     // search are debounced, so it tracks the displayed view; the table itself is
     // mirrored separately by `onSelectTable`.
     useEffect(() => {
         // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- the URL is a projection of the active view (a value, not a discrete event); mirroring it when the view changes is the correct pattern.
-        if (selectedTable === null || onViewChangeRef.current === undefined) {
+        if (selectedTable === null || onViewChangeRef.current === undefined || seededTableRef.current !== tableParam) {
+            // On a `tableParam` change this effect runs (via `selectedTable`) BEFORE
+            // the re-seed effect below has cleared the previous table's
+            // filters/sort/search. Skipping until the re-seed for this table has run
+            // stops us writing the stale view back into the clean / FK-nav URL.
             return;
         }
 
@@ -457,7 +468,7 @@ const useDataBrowser = ({
             shard: debouncedShard,
         });
         // Fire on the displayed view; `onViewChange` is read via `onViewChangeRef` (see above).
-    }, [selectedTable, filters, sorting, search, debouncedShard]);
+    }, [selectedTable, tableParam, filters, sorting, search, debouncedShard]);
 
     // The URL's view params, mirrored to refs so the re-seed effect can read the
     // CURRENT values while depending on `tableParam` alone (depending on the params
@@ -466,22 +477,23 @@ const useDataBrowser = ({
     const initialFiltersRef = useRef(initialFilters);
     const initialOrderByRef = useRef(initialOrderBy);
     const initialSearchRef = useRef(initialSearch);
+    const initialShardKeyRef = useRef(initialShardKey);
 
     initialFiltersRef.current = initialFilters;
     initialOrderByRef.current = initialOrderBy;
     initialSearchRef.current = initialSearch;
+    initialShardKeyRef.current = initialShardKey;
 
     // Re-seed the per-table local view state whenever the open table changes — an
     // in-app switch, an FK-nav, a deep link, or browser back/forward. The new
     // values come from the new URL (empty on a plain switch, the id on an FK-nav,
     // the saved view on a deep link), so the table and its view never disagree.
     // Skipped on first mount (the `useState` initializers already hydrated from the
-    // URL); a ref seeded with the mount `tableParam` makes the first run a no-op.
+    // URL); `seededTableRef` (declared above, seeded with the mount `tableParam`)
+    // makes the first run a no-op.
     //
     // `selectedTable` is derived from `tableParam`, so there is no separate
     // reconcile/"select the URL's table" step — opening the URL's table is implicit.
-    const seededTableRef = useRef(tableParam);
-
     useEffect(() => {
         // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- URL → view sync: when the open table (a URL value, not a user event) changes, re-seed the per-table view from the new URL. It can't be a render-time computation: `filter` is debounced input state and the resets span several `useState`s + the facet/staged hooks.
         if (seededTableRef.current === tableParam) {
@@ -499,6 +511,10 @@ const useDataBrowser = ({
             setFilter(initialSearchRef.current ?? "");
             setFilters(nextFilters);
             filtersRef.current = nextFilters;
+            // Re-seed the shard from the new URL too, so a switch that also changes
+            // shard (a saved query / cross-shard deep link) points reads AND writes
+            // at the URL's shard instead of leaving the previous table's shard live.
+            setShardKey(initialShardKeyRef.current ?? "");
             clearFacets();
             stagedEdits.clear();
             setEditingCell(null);

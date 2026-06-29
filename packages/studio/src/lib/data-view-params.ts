@@ -43,8 +43,20 @@ interface DataViewSearch {
 
 const VALID_OPERATORS = new Set<FilterOperator>(["contains", "eq", "gt", "gte", "lt", "lte", "ne"]);
 
-/** Read a non-empty string off the raw search record, else `undefined`. */
-const stringParameter = (raw: unknown): string | undefined => (typeof raw === "string" && raw !== "" ? raw : undefined);
+/**
+ * Read a non-blank string off the raw search record, else `undefined`. Trims so a
+ * whitespace-only value (e.g. `?table=%20%20`) is rejected here at the router
+ * boundary rather than flowing downstream as a real table name.
+ */
+const stringParameter = (raw: unknown): string | undefined => {
+    if (typeof raw !== "string") {
+        return undefined;
+    }
+
+    const value = raw.trim();
+
+    return value === "" ? undefined : value;
+};
 
 /** Narrow an unknown parsed entry to a {@link FilterClause}, dropping anything malformed. */
 const isFilterClause = (entry: unknown): entry is FilterClause => {
