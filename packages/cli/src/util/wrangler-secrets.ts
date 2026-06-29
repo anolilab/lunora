@@ -7,8 +7,14 @@
  * reconcile against and `env diff` needs to compare. The command runner is
  * injectable so tests can stub the wrangler invocation.
  */
-import type { ExecFileException } from "node:child_process";
 import { execFile } from "node:child_process";
+
+/**
+ * The shape of an `execFile` callback error we care about. `@types/node`'s
+ * `ExecFileException` covers this but is now deprecated; we only read `code`
+ * (a number, or an `errno` string like `ENOENT`), so type it structurally.
+ */
+type ExecFileError = Error & { code?: number | string | null };
 
 interface SecretListRunnerResult {
     code: number;
@@ -39,7 +45,7 @@ interface ListRemoteSecretsResult {
 }
 
 /** Map an execFile error to an exit code (0 on success, the child's code, else 1). */
-const execCode = (error: ExecFileException | null): number => {
+const execCode = (error: ExecFileError | null): number => {
     if (!error) {
         return 0;
     }

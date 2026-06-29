@@ -48,8 +48,8 @@ export const apiCallsRemaining = action.action(async ({ ctx }): Promise<{ allowe
 });
 
 /** Open the Stripe billing portal for the demo reference (customer derived from the store). */
-export const portal = action.action(
-    async ({ ctx }): Promise<{ url: string }> => ctx.payments.createPortalSession(DEMO_REFERENCE, "https://example.com/account"),
+export const portal = action.action(async ({ ctx }): Promise<{ url: string }> =>
+    ctx.payments.createPortalSession(DEMO_REFERENCE, "https://example.com/account"),
 );
 
 /** Reactive read of the webhook-synced subscriptions for the demo reference. */

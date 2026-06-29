@@ -15,12 +15,11 @@ const limits = { send: { kind: "token bucket", period: 60_000, rate: 30 } } sati
  * schema means the runtime routes this query to exactly the channel's DO —
  * no fan-out, full real-time subscriptions.
  */
-export const list = query.input({ channelId: v.id("channels"), limit: v.optional(v.number()) }).query(
-    async ({ args, ctx }): Promise<Doc<"messages">[]> =>
-        ctx.db
-            .query("messages")
-            .withIndex("by_channel_created", (q) => q.eq("channelId", args.channelId))
-            .take(args.limit ?? 50),
+export const list = query.input({ channelId: v.id("channels"), limit: v.optional(v.number()) }).query(async ({ args, ctx }): Promise<Doc<"messages">[]> =>
+    ctx.db
+        .query("messages")
+        .withIndex("by_channel_created", (q) => q.eq("channelId", args.channelId))
+        .take(args.limit ?? 50),
 );
 
 /**

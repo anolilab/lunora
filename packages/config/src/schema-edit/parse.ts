@@ -47,8 +47,7 @@ interface SchemaTable {
 
 /** Result of parsing a schema source string. */
 type ParseSchemaResult =
-    | { ok: false; reason: "aliased-define-schema" | "no-define-schema" | "non-object-argument" }
-    | { ok: true; tables: ReadonlyArray<SchemaTable> };
+    { ok: false; reason: "aliased-define-schema" | "no-define-schema" | "non-object-argument" } | { ok: true; tables: ReadonlyArray<SchemaTable> };
 
 const OPTIONAL_VALIDATOR_PATTERN = /^v\s*\.\s*optional\s*\(/u;
 const SHARD_BY_PATTERN = /\.shardBy\(\s*["']([^"']+)["']\s*\)/u;

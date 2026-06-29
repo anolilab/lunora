@@ -15,7 +15,8 @@
  * boot required. The thin H3 adapter that reads `env`/`ctx` off the event and
  * the raw `Request`/`Response` lives in the `[...].ts` route module.
  */
-import type { ExecutionContextLike } from "./cloudflare";
+import type { ExecutionContextLike } from "../../../../shared/execution-context";
+import { NOOP_EXECUTION_CONTEXT } from "../../../../shared/execution-context";
 
 /**
  * Structural view of the Lunora worker the route delegates to — just the
@@ -26,12 +27,6 @@ import type { ExecutionContextLike } from "./cloudflare";
 interface LunoraWorkerLike {
     fetch: (request: Request, env: unknown, context: ExecutionContextLike) => Promise<Response> | Response;
 }
-
-/** A no-op `ExecutionContext` used when the Cloudflare runtime didn't supply one (so `worker.fetch` always gets a valid 3rd arg). */
-const NOOP_EXECUTION_CONTEXT: ExecutionContextLike = {
-    passThroughOnException: () => {},
-    waitUntil: () => {},
-};
 
 /**
  * Forward one inbound request to the Lunora worker. `env` must be the Cloudflare
@@ -62,4 +57,6 @@ const delegateToLunora = async (
 };
 
 export type { LunoraWorkerLike };
-export { delegateToLunora, NOOP_EXECUTION_CONTEXT };
+export { delegateToLunora };
+
+export { NOOP_EXECUTION_CONTEXT } from "../../../../shared/execution-context";

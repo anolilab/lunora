@@ -52,11 +52,10 @@ export const onEmail = mutation
     });
 
 /** Most-recently-received inbox messages, newest first via the `by_received` index. */
-export const list = query.input({ limit: v.optional(v.number()) }).query(
-    async ({ args, ctx }): Promise<Doc<"inbox">[]> =>
-        ctx.db
-            .query("inbox")
-            .withIndex("by_received")
-            .order("desc")
-            .take(args.limit ?? 50),
+export const list = query.input({ limit: v.optional(v.number()) }).query(async ({ args, ctx }): Promise<Doc<"inbox">[]> =>
+    ctx.db
+        .query("inbox")
+        .withIndex("by_received")
+        .order("desc")
+        .take(args.limit ?? 50),
 );
