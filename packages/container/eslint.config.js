@@ -43,6 +43,17 @@ export default createConfig(
             "vitest/prefer-expect-assertions": "off",
         },
     },
+    // `@cloudflare/containers` is an intentionally-bundled devDependency, not a
+    // runtime dep: packem inlines its (patched) source into `dist/do` (see
+    // packem.config.ts), so a consuming worker never installs it. The workerd-only
+    // `src/do/**` is the sole importer, so allow the devDependency there rather
+    // than demote it to a `dependencies` edge that would defeat the bundling.
+    {
+        files: ["src/do/**/*.{ts,tsx}"],
+        rules: {
+            "import/no-extraneous-dependencies": "off",
+        },
+    },
     // Behavior-breaking autofixers — kept off (not style). sort-objects reorders the
     // keys of canonical/wire objects, changing bytes on the wire and breaking
     // order-sensitive tests.

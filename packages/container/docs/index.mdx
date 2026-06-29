@@ -126,6 +126,28 @@ const result = await ctx.containers.transcoder
 `Request`, and proxies WebSocket upgrades — a real-time stream to a container
 works the same as any other `fetch`.
 
+#### Cold-start retry
+
+The first request to a sleeping or never-started instance can land while
+Cloudflare is still provisioning it — surfacing as a `503` "no Container
+instance available", a `500` "Failed to start container", a `429`, or a thrown
+"not listening" error. `.get()` and `.any()` absorb that race: they retry the
+**same** instance a few times with exponential backoff (default 3 attempts,
+500 ms base, 30 s ceiling) so transient provisioning blips don't reach your
+handler. Only those platform provisioning signals retry — an honest application
+`5xx` is returned straight through.
+
+```ts
+// Tune or disable per call (attempts: 1 sends exactly once).
+await ctx.containers.transcoder.get(jobId, { attempts: 5, backoffMs: 250 }).fetch("/transcode");
+```
+
+A pre-built `Request` is sent **once** and never retried — its body may be a
+one-shot stream that can't be replayed. Pass a path string (the common case) to
+opt into the retry, or set `attempts: 1` to send a `Request` without it. (This
+is distinct from `.pool()`, which retries on a _fresh_ instance for stateless
+load-balancing; cold-start retry sticks to the one instance you named.)
+
 ### Managing a named instance
 
 The `.get(name)` handle also exposes lifecycle control, for the per-entity
@@ -412,6 +434,25 @@ export const worker = defineContainer({
 });
 ```
 
+To pull from a Cloudflare **[Secrets Store](https://developers.cloudflare.com/secrets-store/)**
+binding instead of a plain Worker secret, map _container env-var name → Secrets
+Store binding name_ with `secretsStore`. Each binding is resolved with its async
+`.get()` the first time the instance starts (memoised thereafter) and injected as
+that env var:
+
+```ts
+export const worker = defineContainer({
+    image: "./containers/worker",
+    secretsStore: { STRIPE_KEY: "STRIPE_SECRET" }, // env.STRIPE_SECRET.get() → STRIPE_KEY inside the container
+});
+```
+
+A name that collides with `env`/`secrets`, or a binding missing from the Worker
+env, is rejected (the collision at authoring time, the missing binding at start)
+— the same fail-closed stance as `secrets`. A per-instance `start({ envVars })`
+replaces the env set wholesale and skips Secrets Store resolution entirely, so
+the injected values apply only to implicit starts or a bare `start()`.
+
 Both `env` and `secrets` are **runtime** values, available when the container
 starts. For **build-time** values — `docker build --build-arg`, exposed to the
 Dockerfile as `ARG` (wrangler's `image_vars`) — use `buildArgs`. They only apply
@@ -496,6 +537,34 @@ Splitting build/push from `lunora deploy` lets CI build the image in one job and
 deploy in another. `lunora deploy` itself runs a Docker preflight and stops with
 an actionable message when a Dockerfile-built container is declared but no engine
 is available.
+
+## Known platform limitations
+
+Some constraints live in Cloudflare Containers itself, not in this package —
+worth knowing before you design around them. They track open issues on
+[`cloudflare/containers`](https://github.com/cloudflare/containers/issues); Lunora
+papers over what it can (cold-start retry, WebSocket keep-alive) and surfaces the
+rest honestly rather than pretending they don't exist.
+
+- **No autoscaling or location-aware routing.** Pools are a fixed size and
+  `.any()`/`.pool()` pick uniformly at random, ignoring instance region. Drive
+  batch work from a [scheduler](/docs/packages/scheduler) cron and prefer
+  `.pool()` for stateless requests. (cloudflare/containers#226)
+- **Disk is ephemeral.** Every (re)start gives a fresh filesystem — persist to
+  [`@lunora/storage`](/docs/packages/storage) (R2). FUSE mounts, a writable
+  `tmpfs`, and some low-level `node:net` socket modes are not available in the
+  container sandbox. (cloudflare/containers#112, #160, #67)
+- **Egress interception is HTTP-first.** The `allowedHosts`/`deniedHosts`
+  firewall gates HTTP egress out of the box; HTTPS needs `interceptHttps: true`
+  plus the Cloudflare CA trusted in the image, and raw gRPC interception isn't
+  supported yet. (cloudflare/containers#195)
+- **Long jobs can be terminated on rollout.** A new deploy moves instances after
+  `rollout.gracePeriodSeconds`; a job longer than that may be sent `SIGTERM`
+  (15 min before `SIGKILL`). Use `hardTimeout` as a cost backstop and make
+  long work resumable. (cloudflare/containers#138)
+- **Local dev can't pull from the Cloudflare Registry.** `lunora dev` builds
+  from a local Dockerfile; `FROM` a registry image inside it if you need one.
+  (cloudflare/containers#155)
 
 ## See also
 

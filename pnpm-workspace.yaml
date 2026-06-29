@@ -534,5 +534,6 @@ packageExtensions:
       "@babel/parser": "^7.24.1"
 
 patchedDependencies:
+  '@cloudflare/containers@0.3.7': patches/@cloudflare__containers@0.3.7.patch
   gray-matter@4.0.3: patches/gray-matter@4.0.3.patch
   recast@0.23.11: patches/recast@0.23.11.patch

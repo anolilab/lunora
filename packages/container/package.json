@@ -65,10 +65,8 @@
         "fallow:dead-code": "fallow dead-code",
         "fallow:health": "fallow health --score"
     },
-    "dependencies": {
-        "@cloudflare/containers": "catalog:cloudflare"
-    },
     "devDependencies": {
+        "@cloudflare/containers": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
