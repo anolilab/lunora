@@ -12,10 +12,15 @@
  * entrypoint via the project's `exports.cloudflare.ts`, so one deploy carries
  * both the SSR handler and the Durable Object class.
  *
- * This file is only ever bundled by Nitro; `h3`'s `defineEventHandler` and
- * `toWebRequest` are its sole framework imports.
+ * This file is only ever bundled by Nitro; `h3`'s `defineEventHandler` is its
+ * sole framework entry. We use a namespace import so the seam spans the h3
+ * v1 → v2 break: v1 exposes `toWebRequest(event)`, while the v2 web-standards
+ * rewrite removed it and carries the web `Request` directly as `event.req`. A
+ * static `import { toWebRequest }` would throw at module-eval under v2 (missing
+ * named export), so we feature-detect it at runtime instead.
  */
-import { defineEventHandler, toWebRequest } from "h3";
+// eslint-disable-next-line import/no-namespace -- a namespace import is required to feature-detect `toWebRequest`, which v2 removed (a static named import would throw at module-eval).
+import * as h3 from "h3";
 
 // `#lunora/app` is a virtual specifier the @lunora/nuxt module registers
 // (nuxt.options.alias + nitro virtual). Its default export is the project's
@@ -32,9 +37,12 @@ import { delegateToLunora } from "../handler";
  * off the event, and return the worker's `Response` verbatim (H3 streams it,
  * including a `101 Switching Protocols` upgrade with its `webSocket`).
  */
-export default defineEventHandler(async (event) => {
+export default h3.defineEventHandler(async (event) => {
     const { ctx, env } = resolveCloudflare(event as never);
-    const request = toWebRequest(event);
+    const request =
+        typeof h3.toWebRequest === "function"
+            ? h3.toWebRequest(event) // h3 v1
+            : (event as unknown as { req: Request }).req; // h3 v2 — `event.req` is the web Request
 
     return delegateToLunora(lunoraApp, request, env, ctx);
 });

@@ -78,7 +78,7 @@
         "vitest": "catalog:test"
     },
     "peerDependencies": {
-        "h3": "^1.0.0",
+        "h3": "^1.0.0 || ^2.0.0",
         "nuxt": "^4.0.0"
     },
     "peerDependenciesMeta": {
