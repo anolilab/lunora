@@ -163,13 +163,15 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
         );
     };
 
-    // Mirror a table selection to the URL (`?table=…`) so it's shareable and recorded
-    // in history for back/forward. Guarded by {@link onDataRoute}: the data browser
-    // reconciles the URL's table into its selection through a deferred microtask, which
-    // can fire just *after* a tab switch has moved the route away — without the guard
-    // that stale mirror would `navigate({ to: "/data" })` straight back, trapping the
-    // user on the data tab whenever the URL carried a `?table=`.
-    const onSelectTable = (table: string): void => {
+    // Navigate the URL to a table (`?table=…`) so it's shareable and recorded in
+    // history for back/forward. A switch opens the table CLEAN — the previous
+    // table's `filters`/`order`/`search` are dropped (the shard + tier are kept) —
+    // so the new table never inherits a stale view; `options.search` pre-fills the
+    // search for an FK-cell traversal. Building the next search explicitly (rather
+    // than spreading `previous`) also drops any unknown/stale params. Guarded by
+    // {@link onDataRoute} so a mirror that lands just after a tab switch can't yank
+    // the route back to the data tab.
+    const onSelectTable = (table: string, options?: { search?: string }): void => {
         if (!onDataRoute()) {
             return;
         }
@@ -177,7 +179,7 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
         fireAndForget(
             navigate({
                 search: (previous: Record<string, unknown>) => {
-                    return { ...previous, table };
+                    return { schema: previous["schema"], search: options?.search, shard: previous["shard"], table };
                 },
                 to: "/data",
             }),
