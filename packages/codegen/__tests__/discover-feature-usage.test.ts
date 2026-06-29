@@ -11,6 +11,7 @@ import { buildStudioFeatures, discoverFeatureUsage } from "../src/discover-featu
 let workdir: string;
 
 const ALL_OFF: FeatureUsage = {
+    access: false,
     ai: false,
     analytics: false,
     browser: false,
@@ -135,6 +136,27 @@ describe("discover-feature-usage", () => {
         expect(viaCtx.images).toBe(true);
         expect(viaCtx.browser).toBe(true);
         expect(viaCtx.pipelines).toBe(true);
+    });
+
+    it("detects ctx.access via a `ctx.access` read or a bare `@lunora/cloudflare-access` import", () => {
+        expect.assertions(3);
+
+        writeSource("who.ts", `export const whoAmI = async (ctx) => ctx.access.email;`);
+        const viaContext = discoverFeatureUsage(newProject(), workdir);
+
+        rmSync(join(workdir, "who.ts"));
+        writeSource("res.ts", `import { createAccessResolver } from "@lunora/cloudflare-access";\nexport const r = () => createAccessResolver({});`);
+        const viaImport = discoverFeatureUsage(newProject(), workdir);
+
+        // The `accessContext()` middleware imports the `/context` subpath, NOT the
+        // bare specifier — so it must NOT trip the global-wiring probe.
+        rmSync(join(workdir, "res.ts"));
+        writeSource("mw.ts", `import { accessContext } from "@lunora/cloudflare-access/context";\nexport const q = accessContext();`);
+        const viaMiddleware = discoverFeatureUsage(newProject(), workdir);
+
+        expect(viaContext.access).toBe(true);
+        expect(viaImport.access).toBe(true);
+        expect(viaMiddleware.access).toBe(false);
     });
 
     it("detects flags via either the `@lunora/flags` import or a `ctx.flags` read", () => {

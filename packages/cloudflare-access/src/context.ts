@@ -83,6 +83,17 @@ const facadeFor = (identity: Record<string, unknown>, userId: string | undefined
 };
 
 /**
+ * Build the `ctx.access` facade from a (possibly absent) resolved identity
+ * envelope. Returns the anonymous facade when no identity is present, so callers
+ * never null-check. Shared by {@link accessContext} and the codegen-wired global
+ * `ctx.access` (which calls this synchronously from the resolved identity locals
+ * at ctx-build time, so a global `ctx.access` adds only this object construction
+ * per request — no extra I/O or re-verification).
+ */
+const accessFacade = (identity: Record<string, unknown> | null | undefined, userId: string | null | undefined): AccessFacade =>
+    identity ? facadeFor(identity, userId ?? undefined) : ANONYMOUS_FACADE;
+
+/**
  * Middleware that attaches a typed `ctx.access` facade derived from the verified
  * Cloudflare Access identity. It resolves `ctx.auth.getIdentity()` once and
  * exposes a **synchronous**, Access-shaped read — `ctx.access.email`,
@@ -111,11 +122,11 @@ const facadeFor = (identity: Record<string, unknown>, userId: string | undefined
 const accessContext =
     <Context extends AccessContextInput>(): Middleware<Context, AccessContextOutput & Context> =>
     async ({ ctx, next }) => {
-        const identity = (await ctx.auth?.getIdentity?.()) ?? undefined;
-        const access = identity ? facadeFor(identity, ctx.auth?.userId ?? undefined) : ANONYMOUS_FACADE;
+        const identity = await ctx.auth?.getIdentity?.();
+        const access = accessFacade(identity, ctx.auth?.userId);
 
         return next({ ctx: { access } });
     };
 
-export { accessContext };
+export { accessContext, accessFacade };
 export type { AccessContextInput, AccessContextOutput, AccessFacade };

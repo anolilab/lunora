@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { AccessContextInput, AccessFacade } from "../src/context";
-import { accessContext } from "../src/context";
+import { accessContext, accessFacade } from "../src/context";
 
 /**
  * Drive `accessContext` once: build a ctx whose `auth.getIdentity()` returns
@@ -97,5 +97,26 @@ describe("accessContext", () => {
         expect(access.userId).toBeUndefined();
         expect(access.groups).toStrictEqual([]);
         expect(access.hasGroup("anything")).toBe(false);
+    });
+});
+
+describe("accessFacade", () => {
+    // The pure factory codegen wires onto every ctx — called synchronously with
+    // the resolved identity/userId locals at ctx-build time.
+    it("builds the facade synchronously from a resolved identity", () => {
+        expect.assertions(3);
+
+        const access = accessFacade(identity({ email: "dev@acme.test", groups: ["eng"] }, { email: "dev@acme.test", groups: ["eng"] }), "user-1");
+
+        expect(access.authenticated).toBe(true);
+        expect(access.email).toBe("dev@acme.test");
+        expect(access.userId).toBe("user-1");
+    });
+
+    it("returns the anonymous facade for a null or undefined identity", () => {
+        expect.assertions(2);
+
+        expect(accessFacade(null, null).authenticated).toBe(false);
+        expect(accessFacade(undefined, undefined).authenticated).toBe(false);
     });
 });

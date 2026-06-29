@@ -21,6 +21,8 @@ import { listLunoraSourceFiles } from "./discover-functions";
  * {@link buildStudioFeatures}.
  */
 interface FeatureUsage {
+    /** A `lunora/` source imports `@lunora/cloudflare-access` or reads `ctx.access`. */
+    access: boolean;
     /** A `lunora/` source imports `@lunora/ai` or reads `ctx.ai`. */
     ai: boolean;
     /** A `lunora/` source imports `@lunora/bindings/analytics` or reads `ctx.analytics`. */
@@ -62,6 +64,11 @@ interface FeatureProbe {
 }
 
 const PROBES: Record<keyof FeatureUsage, FeatureProbe> = {
+    // The middleware (`accessContext()` / `accessRoles()`) imports the `/context`
+    // and `/roles` subpaths, NOT the bare `@lunora/cloudflare-access` specifier —
+    // so the per-procedure middleware never trips the global `ctx.access` wiring.
+    // A handler reading `ctx.access` is the signal that wires it onto every ctx.
+    access: { contextProperty: "access", moduleSpecifier: "@lunora/cloudflare-access" },
     ai: { contextProperty: "ai", moduleSpecifier: "@lunora/ai" },
     analytics: { contextProperty: "analytics", moduleSpecifier: "@lunora/bindings/analytics" },
     browser: { contextProperty: "browser", moduleSpecifier: "@lunora/browser" },
@@ -146,6 +153,7 @@ const readsContextProperty = (sourceFile: SourceFile, property: string): boolean
  */
 const discoverFeatureUsage = (project: Project, lunoraDirectory: string): FeatureUsage => {
     const usage: FeatureUsage = {
+        access: false,
         ai: false,
         analytics: false,
         browser: false,

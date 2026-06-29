@@ -83,7 +83,29 @@ Omit `map` to use each group name as a role verbatim. A group with no mapping co
 
 ## Reading the identity — `ctx.access`
 
-`@lunora/cloudflare-access/context` ships `accessContext()`, a middleware that attaches a typed, **synchronous** `ctx.access` facade derived from the verified identity — so a handler reads `ctx.access.email`, `ctx.access.groups`, `ctx.access.hasGroup("ops")`, or the full `ctx.access.claims` without an `await` or a cast off the generic `ctx.auth.getIdentity()` envelope.
+A typed, **synchronous** `ctx.access` facade exposes the verified identity directly — `ctx.access.email`, `ctx.access.groups`, `ctx.access.hasGroup("ops")`, or the full `ctx.access.claims` — with no `await` and no cast off the generic `ctx.auth.getIdentity()` envelope.
+
+There are two ways to get it; pick one.
+
+### Global (codegen-wired) — recommended
+
+Just read `ctx.access` in a handler. Codegen detects the use and wires the facade onto **every** ctx (query, mutation, and action) — no import, no middleware:
+
+```ts
+export const whoAmI = query({
+    args: {},
+    handler: async (ctx) => ({
+        email: ctx.access.email,
+        isOps: ctx.access.hasGroup("ops"),
+    }),
+});
+```
+
+The facade is built **synchronously** from the same resolved identity `ctx.auth` uses, so a global `ctx.access` adds only one small object construction per request — no extra I/O and no JWT re-verification (that happened once at the edge in `resolveIdentity`). The type seam is emitted only when a handler reads `ctx.access`, so a project that never touches it carries no extra surface.
+
+### Per-procedure middleware
+
+When you want it attached explicitly on chosen procedures (or you aren't relying on codegen discovery), `@lunora/cloudflare-access/context` ships `accessContext()`, a middleware that attaches the same facade:
 
 ```ts
 import { accessContext } from "@lunora/cloudflare-access/context";
@@ -94,7 +116,9 @@ export const whoAmI = query.use(accessContext()).query(async ({ ctx }) => ({
 }));
 ```
 
-When the request is anonymous it attaches the anonymous facade — `authenticated: false`, empty `groups`, `hasGroup` always `false` — so reads stay safe with no null check and authorization still fails closed. It only **surfaces** the identity; pair it with `rls(...)` (or `accessRoles(...)` → `rls(...)`) when you need enforcement.
+The middleware imports the `/context` subpath, so it never trips the global wiring — the two paths don't collide.
+
+Either way, an anonymous request gets the anonymous facade — `authenticated: false`, empty `groups`, `hasGroup` always `false` — so reads stay safe with no null check and authorization still fails closed. `ctx.access` only **surfaces** the identity; pair it with `rls(...)` (or `accessRoles(...)` → `rls(...)`) when you need enforcement.
 
 ## Gating the Studio behind Access
 
@@ -122,6 +146,8 @@ export default defineApp()
 - `composeResolvers(...resolvers)` — first non-null identity wins.
 - `verifyAccessJwt(token, options)` — low-level: verify a token, return its claims (throws on failure).
 - `accessIssuer(teamDomain)` — normalize a team domain to its canonical issuer URL.
-- `accessContext()` _(`@lunora/cloudflare-access/context`)_ — middleware attaching a typed, synchronous `ctx.access` facade over the verified identity.
+- `ctx.access` _(codegen-wired)_ — read it in a handler and codegen attaches a typed, synchronous facade over the verified identity to every ctx.
+- `accessContext()` _(`@lunora/cloudflare-access/context`)_ — the explicit per-procedure middleware form of the same `ctx.access` facade.
+- `accessFacade(identity, userId)` _(`@lunora/cloudflare-access/context`)_ — the pure factory both forms build on; returns the anonymous facade when no identity is present.
 - `accessRoles(options)` _(`@lunora/cloudflare-access/roles`)_ — middleware mapping the verified `groups` claim into `ctx.auth.roles` for RLS.
 - `accessAdminGate(options)` _(`@lunora/cloudflare-access/admin`)_ — a `WorkerOptions.adminGate` that authorizes the `/_lunora/admin/*` plane from a verified Access identity.
