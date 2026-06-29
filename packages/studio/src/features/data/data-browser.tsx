@@ -62,10 +62,11 @@ interface DataBrowserProps {
     readonly onNavigateToGlobal?: (table: string, id: string) => void;
 
     /**
-     * Called whenever the open table changes, so the host can mirror it to the URL
-     * (the Table editor pushes `?table=…`). Omitted in standalone use.
+     * Navigate the URL to a table (the Table editor pushes `?table=…`), opening it
+     * clean; `options.search` pre-fills the search for an FK-cell traversal.
+     * Omitted in standalone use.
      */
-    readonly onSelectTable?: (table: string) => void;
+    readonly onSelectTable?: (table: string, options?: { search?: string }) => void;
 
     /**
      * Called whenever the loaded view (shard / search / filters / sort) changes, so

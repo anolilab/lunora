@@ -74,6 +74,9 @@ const WS_KEEPALIVE_PING = "lunora-ping";
 /** Default heartbeat cadence (ms) — see {@link LunoraClientOptions.heartbeatIntervalMs}. */
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 
+/** Default WS connect timeout (ms) — see {@link LunoraClientOptions.connectTimeoutMs}. */
+const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
+
 /**
  * Debounce window (ms) for durable read-cache writes (Pillar 2). A burst of
  * deltas on one subscription coalesces into a single `put` per key after the
@@ -183,6 +186,14 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
  * are all per-connection so one shard dropping doesn't disturb the others.
  */
 interface ShardConnection {
+    /**
+     * Fail-fast timer armed while the socket is `connecting`; cleared on `open`.
+     * If the handshake doesn't complete within `connectTimeoutMs` (a hung proxy /
+     * cold worker that never upgrades) it force-closes the socket and routes
+     * through the normal disconnect/reconnect path, instead of leaving the live
+     * channel silently stuck on the browser's much longer default WS timeout.
+     */
+    connectTimer: ReturnType<typeof setTimeout> | undefined;
     /** Active keepalive interval while the socket is open; cleared on disconnect/close. */
     heartbeatTimer: ReturnType<typeof setInterval> | undefined;
     /** Stream-start frames buffered while the socket was (re)connecting. Flushed on `open`. */
@@ -407,6 +418,8 @@ class LunoraClient {
 
     private readonly reconnectOptions: ReconnectOptions | undefined;
 
+    /** WS connect timeout (ms); `0` disables it. See {@link LunoraClientOptions.connectTimeoutMs}. */
+    private readonly connectTimeoutMs: number;
     /** Keepalive cadence (ms); `0` disables the heartbeat. See {@link LunoraClientOptions.heartbeatIntervalMs}. */
     private readonly heartbeatIntervalMs: number;
 
@@ -525,6 +538,7 @@ class LunoraClient {
         this.bookmark = options.bookmarkStorage ?? createInMemoryBookmarkStorage();
         this.reconnectOptions = options.reconnect;
         this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+        this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
         this.defaultConnectionContext = options.connectionContext;
         this.persistence = options.persistence;
         this.queryCache = options.queryCache === false ? undefined : options.queryCache;
@@ -1149,8 +1163,12 @@ class LunoraClient {
      * List a workflow's instances via the admin Workflows proxy
      * (`/_lunora/admin/workflows/instances`) — the Cloudflare control-plane data
      * the `Workflow` binding can't expose. Requires the worker to be built with a
-     * `workflowsClient` (Cloudflare account id + API token); otherwise the proxy
-     * responds 501 and this rejects. `name` is the deployed workflow name.
+     * `workflowsClient` (Cloudflare account id + API token). When one isn't
+     * configured this does NOT reject: the proxy returns a `200 { configured:
+     * false }` sentinel, so the result resolves with `configured === false` and an
+     * empty `instances` list — callers should branch on that flag rather than
+     * try/catch. (The instance-detail / status endpoints still reject with 501.)
+     * `name` is the deployed workflow name.
      */
     public async listWorkflowInstances(options: {
         name: string;
@@ -1178,7 +1196,13 @@ class LunoraClient {
 
         const body = (await this.adminFetch(`${WORKFLOWS_INSTANCES_PATH}?${query.toString()}`, "GET")) as Partial<WorkflowInstancePage>;
 
-        return { instances: body.instances ?? [], page: body.page ?? 1, perPage: body.perPage ?? options.perPage ?? 0, totalCount: body.totalCount };
+        return {
+            configured: body.configured,
+            instances: body.instances ?? [],
+            page: body.page ?? 1,
+            perPage: body.perPage ?? options.perPage ?? 0,
+            totalCount: body.totalCount,
+        };
     }
 
     /** Read one workflow instance with its step timeline (`/_lunora/admin/workflows/instance`). */
@@ -2006,6 +2030,11 @@ class LunoraClient {
                 conn.reconnectTimer = undefined;
             }
 
+            if (conn.connectTimer !== undefined) {
+                clearTimeout(conn.connectTimer);
+                conn.connectTimer = undefined;
+            }
+
             this.stopHeartbeat(conn);
 
             if (conn.socket) {
@@ -2272,6 +2301,7 @@ class LunoraClient {
 
         if (!conn) {
             conn = {
+                connectTimer: undefined,
                 heartbeatTimer: undefined,
                 pendingUnsubscribes: [],
                 reconnect: createReconnect(this.reconnectOptions),
@@ -2536,7 +2566,45 @@ class LunoraClient {
 
         conn.socket = socket;
 
+        // Fail-fast connect timeout: if the handshake doesn't reach `open` within
+        // `connectTimeoutMs` (a hung proxy / cold worker that never upgrades),
+        // force-close the socket so `close` → `handleDisconnect` arms the normal
+        // reconnect/backoff and surfaces `offline` — instead of the live channel
+        // hanging on the browser's much longer default. Cleared on `open`/disconnect.
+        if (this.connectTimeoutMs > 0) {
+            conn.connectTimer = setTimeout(() => {
+                conn.connectTimer = undefined;
+
+                // Only act if THIS socket is still the connection's current,
+                // still-connecting socket. A newer reconnect socket (or an
+                // already-resolved open/close) must be left untouched.
+                if (conn.socket !== socket || conn.wsState !== "connecting") {
+                    return;
+                }
+
+                try {
+                    socket.close();
+                } catch {
+                    /* a stuck socket may throw on close — the disconnect below still arms reconnect */
+                }
+
+                this.handleDisconnect(conn);
+            }, this.connectTimeoutMs);
+        }
+
         socket.addEventListener("open", (): void => {
+            // Ignore a late event from a socket that's no longer the connection's
+            // current one — a timed-out/closed socket must never resurrect itself
+            // or stomp the state of the newer socket that replaced it.
+            if (conn.socket !== socket) {
+                return;
+            }
+
+            if (conn.connectTimer !== undefined) {
+                clearTimeout(conn.connectTimer);
+                conn.connectTimer = undefined;
+            }
+
             conn.wsState = "open";
             conn.wasEverConnected = true;
             conn.reconnect.reset();
@@ -2601,6 +2669,13 @@ class LunoraClient {
         });
 
         socket.addEventListener("close", (event?: { code?: number }): void => {
+            // Ignore a late close from a socket the connection already moved past
+            // (e.g. the fail-fast timeout force-closed it and a reconnect already
+            // built a newer socket). Acting on it would tear down the live socket.
+            if (conn.socket !== socket) {
+                return;
+            }
+
             // Close code 4001 is the server's `token_expired` signal: notify
             // listeners so the app can refresh its credential before the
             // (always-armed) reconnect re-resolves identity. The event is
@@ -2613,6 +2688,12 @@ class LunoraClient {
         });
 
         socket.addEventListener("error", (): void => {
+            // Ignore a late error from a superseded socket (see `close` above):
+            // only the connection's current socket may drive a disconnect.
+            if (conn.socket !== socket) {
+                return;
+            }
+
             // Some WebSocket implementations (notably misbehaving proxies and
             // certain test doubles) fire `error` without a follow-up `close`.
             // Treat error in `connecting`/`open` as a disconnect ourselves to
@@ -2639,6 +2720,14 @@ class LunoraClient {
         // the open/close/error handlers all observe the same state machine.
         /* eslint-disable no-param-reassign -- mutate the shared ShardConnection state machine in place */
         this.stopHeartbeat(conn);
+
+        // Cancel the fail-fast connect timer: a `close`/`error` reached us before
+        // (or because of) the timeout, so the reconnect path below owns recovery.
+        if (conn.connectTimer !== undefined) {
+            clearTimeout(conn.connectTimer);
+            conn.connectTimer = undefined;
+        }
+
         conn.socket = undefined;
         conn.wsState = "idle";
         this.emitConnectionStatus();

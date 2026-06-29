@@ -24,10 +24,13 @@
         "shadcn": "catalog:ui"
     },
     "devDependencies": {
+        "@rolldown/plugin-babel": "catalog:web",
         "@tailwindcss/vite": "catalog:vite",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
         "@types/react-dom": "catalog:frontend",
+        "@vitejs/plugin-react": "catalog:web",
+        "babel-plugin-react-compiler": "catalog:build",
         "fallow": "catalog:lint",
         "tailwindcss": "catalog:vite",
         "tw-animate-css": "catalog:vite",

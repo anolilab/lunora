@@ -86,6 +86,45 @@ interface UseClientQueryOptions {
     readonly staleTime?: number;
 }
 
+// ── Dev request-loop detector ───────────────────────────────────────────────
+// A render/effect loop that re-issues the same read can storm the network until
+// the tab locks up — and nothing throws, the requests just pile up (the studio
+// hit exactly this against a cold/cross-origin worker). Count queryFn
+// invocations per key in a rolling 1s window and scream ONCE, with the offending
+// key + a stack, when a single key fires improbably often. 25×/s for one key is
+// never legitimate: TanStack dedupes identical in-flight reads, so this only
+// trips under a loop. Browser-console only; the server-side counterpart is the
+// `LUNORA_DEBUG_RPC` log in `@lunora/runtime`'s RPC handler (visible in the dev
+// terminal).
+const RPC_LOOP_WINDOW_MS = 1000;
+const RPC_LOOP_THRESHOLD = 25;
+const rpcCallTimes = new Map<string, number[]>();
+
+// The detector is a DEV-ONLY aid: it adds a `JSON.stringify` + `Map` write on
+// every query and retains a bucket per unique key for the tab's lifetime — fine
+// while debugging, but needless overhead (and a slow leak) in a shipped app.
+// Gate on `process.env.NODE_ENV` — the React-ecosystem convention every bundler
+// inlines (Vite, packem `--development`/`--production`) — so a production build
+// dead-code-eliminates the wrapper and queries call `queryFunction` directly.
+const isDevelopment = process.env.NODE_ENV !== "production";
+
+const noteQueryFetch = (key: string): void => {
+    const now = Date.now();
+    const recent = (rpcCallTimes.get(key) ?? []).filter((time) => now - time < RPC_LOOP_WINDOW_MS);
+
+    recent.push(now);
+    rpcCallTimes.set(key, recent);
+
+    if (recent.length === RPC_LOOP_THRESHOLD) {
+        /* eslint-disable no-console -- intentional dev diagnostic naming a runaway-request loop + its call site */
+        console.error(
+            `[lunora-studio] possible request loop: ${key} fired ${String(RPC_LOOP_THRESHOLD)}× in <1s — a render/effect is re-issuing this read unbounded.`,
+        );
+        console.trace("[lunora-studio] request-loop call site");
+        /* eslint-enable no-console */
+    }
+};
+
 /**
  * Read through TanStack Query with a caller-supplied `queryFn` — the base
  * primitive for the studio's non-admin-RPC reads (the bespoke
@@ -103,9 +142,23 @@ interface UseClientQueryOptions {
 function useClientQuery<T>(queryKey: QueryKey, queryFunction: () => Promise<T>, options: UseClientQueryOptions = {}): AdminQueryResult<T> {
     const { enabled = true, keepPreviousData = false, staleTime = 0 } = options;
 
+    // Outside dev, call the caller's fetch directly — no diagnostic overhead. In
+    // dev, wrap it with the request-loop counter. Either way it's a plain
+    // reference (not an inline literal) so it stays opaque to the query-key
+    // exhaustive-deps lint — the caller already encodes the real inputs in
+    // `queryKey`; `queryFunction` is derived from them and intentionally not part
+    // of the key.
+    const trackedQueryFunction = isDevelopment
+        ? (): Promise<T> => {
+              noteQueryFetch(JSON.stringify(queryKey));
+
+              return queryFunction();
+          }
+        : queryFunction;
+
     const query = useQuery<T>({
         enabled,
-        queryFn: queryFunction,
+        queryFn: trackedQueryFunction,
         placeholderData: keepPreviousData ? keepPreviousDataPlaceholder : undefined,
         queryKey,
         staleTime,

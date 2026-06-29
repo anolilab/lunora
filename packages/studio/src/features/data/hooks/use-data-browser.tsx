@@ -214,8 +214,13 @@ const useDataBrowser = ({
     /** Substring search to hydrate from a shared link / saved query. */
     initialSearch: string | undefined;
     initialShardKey: string | undefined;
-    /** Called whenever the selected table changes, so the host can mirror it to the URL. */
-    onSelectTable: ((table: string) => void) | undefined;
+
+    /**
+     * Navigate the URL to a table. The host opens it clean (dropping the previous
+     * table's filters/sort/search); pass `options.search` to pre-fill the search
+     * (an FK-cell traversal). The new view is re-seeded from the resulting URL.
+     */
+    onSelectTable: ((table: string, options?: { search?: string }) => void) | undefined;
 
     /**
      * Called whenever the loaded view (shard / search / filters / sort) changes, so
@@ -236,12 +241,12 @@ const useDataBrowser = ({
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
 
-    // Hydrate the view from a shared link / saved query on first mount. Held in a
-    // ref so the table-reconcile effect's `selectTable` can seed the page with the
-    // shared filters/search/sort the first time it opens the URL's table, then
-    // forget them (subsequent selections start clean). Consumed once.
-    const hydrationRef = useRef<DataView | null>({ filters: initialFilters, orderBy: initialOrderBy, search: initialSearch, table: tableParam });
-    const [selectedTable, setSelectedTable] = useState<null | string>(null);
+    // The open table is DERIVED from the URL — the single source of truth. There is
+    // no optimistic local `selectedTable` state mirrored back to the URL: that
+    // optimistic copy raced the async navigation (a rapid table switch could
+    // commit an older nav and bounce the selection). With the URL authoritative,
+    // `selectTable` only navigates and the table can never disagree with the URL.
+    const selectedTable: null | string = tableParam === undefined || tableParam === "" ? null : tableParam;
     const [offset, setOffset] = useState<number>(0);
     const [viewMode, setViewMode] = useState<"json" | "table">("table");
 
@@ -332,58 +337,23 @@ const useDataBrowser = ({
         }
     }, [tablesQuery.data, debouncedShard]);
 
-    // The table last applied to the selection, mirrored in a ref so the URL-reconcile
-    // effect below can tell its own optimistic selections (which set this) apart from
-    // an external change (browser back/forward), and only re-select for the latter.
-    const appliedTableRef = useRef<null | string>(null);
-
+    // Select a table = navigate the URL to it (the host drops the previous
+    // filters/sort/search so the new table opens clean). The selection itself is
+    // derived from the URL, and the per-table local view state is re-seeded by the
+    // `tableParam`-change effect below — so this is just the navigation.
     const selectTable = useCallback(
         (table: string): void => {
-            // First open of a shared/saved view: seed the bar with its filters/search/
-            // sort rather than clearing. Consumed once — later table switches start
-            // clean. Guarded to the URL's own table so an unrelated switch never picks
-            // it up.
-            const hydration = hydrationRef.current?.table === undefined || hydrationRef.current.table === table ? hydrationRef.current : null;
-
-            hydrationRef.current = null;
-
-            const nextSorting = fromOrderBy(hydration?.orderBy);
-            const nextFilters = toEditableFilters(hydration?.filters ?? []);
-            const nextSearch = hydration?.search ?? "";
-
-            // A fresh table means the previous sort/search/filters/facets/staged edits no longer apply.
-            setSorting(nextSorting);
-            setFilter(nextSearch);
-            setFilters(nextFilters);
-            filtersRef.current = nextFilters;
-            clearFacets();
-            stagedEdits.clear();
-            setEditingCell(null);
-            setOffset(0);
-            setSelectedTable(table);
-            appliedTableRef.current = table;
-            // The page query refetches automatically once `selectedTable`/the view
-            // state changes — no imperative fetch needed.
-            // Mirror the selection to the URL so it's shareable and back/forward works.
             onSelectTable?.(table);
         },
-        [clearFacets, onSelectTable, stagedEdits],
+        [onSelectTable],
     );
 
-    // Follow a foreign-key cell: switch to the target table and search for the
-    // referenced id (the row's primary key shows in the `id` column), so an
-    // operator can traverse relations by clicking instead of copy-pasting ids.
+    // Follow a foreign-key cell: navigate to the target table with the referenced
+    // id pre-filled as the search, so an operator can traverse relations by
+    // clicking. Like `selectTable`, this only navigates — the re-seed effect picks
+    // the `search` up from the new URL.
     const navigateToRef = (targetTable: string, id: string): void => {
-        setSorting([]);
-        setFilters([]);
-        filtersRef.current = [];
-        clearFacets();
-        setOffset(0);
-        setSelectedTable(targetTable);
-        appliedTableRef.current = targetTable;
-        setFilter(id);
-        // The page query refetches with the new table + (debounced) search applied.
-        onSelectTable?.(targetTable);
+        onSelectTable?.(targetTable, { search: id });
     };
 
     // One-shot read of the row a foreign-key cell points at, for the hover preview,
@@ -439,6 +409,21 @@ const useDataBrowser = ({
         setOffset(0);
     };
 
+    // `facetFetcher` / `refetchFacets` and `onViewChange` are read through refs so
+    // the two effects below can depend on the *view values* alone. Those callbacks'
+    // identities churn every render (recreated unless React Compiler memoizes them);
+    // listing them in the deps made the effects re-fire on every render — wasted
+    // facet refetches and, worse, a self-perpetuating `onViewChange` → `navigate`
+    // loop that re-asserts `/data` and traps the user on the tab. Keying on the
+    // values means each fires only when the displayed view actually changes.
+    const facetFetcherRef = useRef(facetFetcher);
+    const refetchFacetsRef = useRef(refetchFacets);
+    const onViewChangeRef = useRef(onViewChange);
+
+    facetFetcherRef.current = facetFetcher;
+    refetchFacetsRef.current = refetchFacets;
+    onViewChangeRef.current = onViewChange;
+
     // Refetch every toggled-on facet when the active view (filters / search / shard
     // / table) changes, so the summaries always reflect the previewed rows. The
     // shard / search are already debounced, so this tracks the displayed view; it's
@@ -451,8 +436,16 @@ const useDataBrowser = ({
 
         // `refetchFacets` re-runs only the already-open facets (read off the hook's
         // ref); toggling a single facet on is handled by `toggleFacet`'s own fetch.
-        refetchFacets(facetFetcher(debouncedShard, selectedTable, filters, search));
-    }, [debouncedShard, selectedTable, filters, search, facetFetcher, refetchFacets]);
+        refetchFacetsRef.current(facetFetcherRef.current(debouncedShard, selectedTable, filters, search));
+        // Fire on the active view; the facet callbacks are read via refs (see above).
+    }, [debouncedShard, selectedTable, filters, search]);
+
+    // Tracks the table the local view has been (re-)seeded for. Declared before the
+    // mirror effect below so that effect can tell whether the view it's about to
+    // mirror belongs to the current `tableParam` yet. Seeded with the mount
+    // `tableParam` so the first run is a no-op (the `useState` initializers already
+    // hydrated from the URL); the re-seed effect advances it on each table change.
+    const seededTableRef = useRef(tableParam);
 
     // Mirror the active view (shard / search / filters / sort) to the host so it can
     // write it into the URL — making every view a real, shareable link. The shard /
@@ -460,43 +453,76 @@ const useDataBrowser = ({
     // mirrored separately by `onSelectTable`.
     useEffect(() => {
         // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- the URL is a projection of the active view (a value, not a discrete event); mirroring it when the view changes is the correct pattern.
-        if (selectedTable === null || onViewChange === undefined) {
+        if (selectedTable === null || onViewChangeRef.current === undefined || seededTableRef.current !== tableParam) {
+            // On a `tableParam` change this effect runs (via `selectedTable`) BEFORE
+            // the re-seed effect below has cleared the previous table's
+            // filters/sort/search. Skipping until the re-seed for this table has run
+            // stops us writing the stale view back into the clean / FK-nav URL.
             return;
         }
 
-        // eslint-disable-next-line react-you-might-not-need-an-effect/no-pass-data-to-parent -- the host writes this into the URL (a side effect, not derivable render state); an effect keyed on the displayed view is the correct place — the same shape as `onSelectTable`.
-        onViewChange({
+        onViewChangeRef.current({
             filters: toFilterClauses(filters),
             orderBy: toOrderBy(sorting),
             search,
             shard: debouncedShard,
         });
-    }, [selectedTable, filters, sorting, search, debouncedShard, onViewChange]);
+        // Fire on the displayed view; `onViewChange` is read via `onViewChangeRef` (see above).
+    }, [selectedTable, tableParam, filters, sorting, search, debouncedShard]);
 
-    // Reconcile the URL's table into the selection. Fires on first load (deep link)
-    // and on browser back/forward; an in-app selection already set `appliedTableRef`
-    // to this value, so those are skipped and never double-fetch. The actual select
-    // is deferred to a microtask so its state resets don't run synchronously inside
-    // the effect, and `appliedTableRef` is claimed up front to coalesce repeat fires.
+    // The URL's view params, mirrored to refs so the re-seed effect can read the
+    // CURRENT values while depending on `tableParam` alone (depending on the params
+    // themselves would re-seed — wiping a half-typed filter — every time the user's
+    // own edit mirrors back to the URL).
+    const initialFiltersRef = useRef(initialFilters);
+    const initialOrderByRef = useRef(initialOrderBy);
+    const initialSearchRef = useRef(initialSearch);
+    const initialShardKeyRef = useRef(initialShardKey);
+
+    initialFiltersRef.current = initialFilters;
+    initialOrderByRef.current = initialOrderBy;
+    initialSearchRef.current = initialSearch;
+    initialShardKeyRef.current = initialShardKey;
+
+    // Re-seed the per-table local view state whenever the open table changes — an
+    // in-app switch, an FK-nav, a deep link, or browser back/forward. The new
+    // values come from the new URL (empty on a plain switch, the id on an FK-nav,
+    // the saved view on a deep link), so the table and its view never disagree.
+    // Skipped on first mount (the `useState` initializers already hydrated from the
+    // URL); `seededTableRef` (declared above, seeded with the mount `tableParam`)
+    // makes the first run a no-op.
     //
-    // NB: `GlobalDataBrowser` has the structurally identical twin of this effect.
-    // Kept inline rather than shared because each browser's `selectTable` differs —
-    // this one also resets sort/filter/staged state and is shard-keyed; only the
-    // ~6-line reconcile wiring would be common.
+    // `selectedTable` is derived from `tableParam`, so there is no separate
+    // reconcile/"select the URL's table" step — opening the URL's table is implicit.
     useEffect(() => {
-        /* eslint-disable react-you-might-not-need-an-effect/no-event-handler -- URL → selection sync: open the table named in the URL (deep link / browser back-forward). There is no user event to hook into; the ref guard + microtask keep it from re-firing or looping. */
-        if (tableParam === undefined || tableParam === "" || tableParam === appliedTableRef.current) {
+        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- URL → view sync: when the open table (a URL value, not a user event) changes, re-seed the per-table view from the new URL. It can't be a render-time computation: `filter` is debounced input state and the resets span several `useState`s + the facet/staged hooks.
+        if (seededTableRef.current === tableParam) {
             return;
         }
 
-        appliedTableRef.current = tableParam;
-        const target = tableParam;
+        seededTableRef.current = tableParam;
 
+        // Defer out of the effect's synchronous run (the resets touch several state
+        // setters across hooks) — matching the prior reconcile pattern.
         queueMicrotask(() => {
-            selectTable(target);
+            const nextFilters = toEditableFilters(initialFiltersRef.current ?? []);
+
+            setSorting(fromOrderBy(initialOrderByRef.current));
+            setFilter(initialSearchRef.current ?? "");
+            setFilters(nextFilters);
+            filtersRef.current = nextFilters;
+            // Re-seed the shard from the new URL too, so a switch that also changes
+            // shard (a saved query / cross-shard deep link) points reads AND writes
+            // at the URL's shard instead of leaving the previous table's shard live.
+            setShardKey(initialShardKeyRef.current ?? "");
+            clearFacets();
+            stagedEdits.clear();
+            setEditingCell(null);
+            setOffset(0);
         });
-        /* eslint-enable react-you-might-not-need-an-effect/no-event-handler */
-    }, [tableParam, selectTable]);
+        // Fire only on a real `tableParam` change; the URL params are read via refs above.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [tableParam]);
 
     const goToPage = (nextOffset: number): void => {
         if (selectedTable === null) {

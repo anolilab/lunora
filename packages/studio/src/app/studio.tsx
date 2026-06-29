@@ -78,6 +78,7 @@ import useStudioFeatures from "../hooks/use-studio-features";
 import { useT } from "../i18n/i18n-context";
 import { StudioI18nProvider } from "../i18n/i18n-provider";
 import type { StudioFeaturesResult } from "../lib/admin";
+import { validateDataViewSearch } from "../lib/data-view-params";
 import { fireAndForget } from "../lib/internal";
 import type { FunctionDescriptor } from "../lib/types";
 import { cn } from "../lib/utils";
@@ -1030,13 +1031,29 @@ const buildRouter = ({
         path: "/",
     });
 
-    const tabRoutes = TABS.map((tab) =>
-        createRoute({
+    const tabRoutes = TABS.map((tab) => {
+        // The data browser stores its whole view (table / tier / shard / search /
+        // sort / filters) in the URL; the `/data` route validates + normalises
+        // those params at the router boundary (`validateDataViewSearch`) so
+        // malformed or legacy links are sanitised once and the panel reads a typed,
+        // trustworthy search instead of a raw record. Branched (rather than a
+        // spread into one `createRoute`) because the route-property-order lint can't
+        // analyse a spread element.
+        if (tab === "data") {
+            return createRoute({
+                component: () => panels[tab],
+                getParentRoute: () => rootRoute,
+                path: `/${tab}`,
+                validateSearch: validateDataViewSearch,
+            });
+        }
+
+        return createRoute({
             component: () => panels[tab],
             getParentRoute: () => rootRoute,
             path: `/${tab}`,
-        }),
-    );
+        });
+    });
 
     const routeTree = rootRoute.addChildren([indexRoute, ...tabRoutes]);
     // Browser when a DOM `window` exists; an in-memory history under SSR/tests.

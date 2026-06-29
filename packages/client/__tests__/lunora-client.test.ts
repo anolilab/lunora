@@ -526,6 +526,114 @@ describe("lunoraClient", () => {
             client.close();
         });
 
+        it("force-closes a stuck-connecting socket after the connect timeout and goes offline", () => {
+            expect.assertions(4);
+
+            vi.useFakeTimers();
+
+            const client = new LunoraClient({
+                connectTimeoutMs: 5000,
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.subscribe(fnRef("messages:list"), {}, () => undefined);
+
+            const socket = latestSocket();
+
+            // Handshake hangs: the socket never fires `open`, so it sits connecting.
+            expect(client.connectionStatus()).toBe("connecting");
+
+            // Just before the timeout, nothing has changed.
+            vi.advanceTimersByTime(4999);
+
+            expect(socket.readyState).not.toBe(3);
+
+            // At the timeout, the client force-closes the stuck socket and falls
+            // back to its reconnect path (status `offline`), instead of hanging on
+            // the browser's much longer default.
+            vi.advanceTimersByTime(1);
+
+            expect(socket.readyState).toBe(3);
+            expect(client.connectionStatus()).toBe("offline");
+
+            client.close();
+        });
+
+        it("clears the connect timeout once the socket opens (no spurious close)", () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers();
+
+            const client = new LunoraClient({
+                connectTimeoutMs: 5000,
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.subscribe(fnRef("messages:list"), {}, () => undefined);
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            expect(client.connectionStatus()).toBe("connected");
+
+            // Well past the timeout window: an open socket must not be force-closed.
+            vi.advanceTimersByTime(10_000);
+
+            expect(socket.readyState).toBe(1);
+
+            client.close();
+        });
+
+        it("ignores a late close from a socket the connection already replaced", () => {
+            expect.assertions(4);
+
+            vi.useFakeTimers();
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                // Fixed, jitter-free backoff so a single timer advance fires exactly
+                // one reconnect; no connect timeout so `fresh` arms no competing timer.
+                reconnect: { initialDelayMs: 1000, jitter: false },
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.subscribe(fnRef("messages:list"), {}, () => undefined);
+
+            const stale = latestSocket();
+
+            stale.open();
+
+            expect(client.connectionStatus()).toBe("connected");
+
+            // The socket drops; the client arms its reconnect and, on the timer,
+            // builds a fresh socket that's now the connection's current one.
+            stale.triggerClose();
+            vi.advanceTimersByTime(1000);
+
+            const fresh = latestSocket();
+
+            expect(fresh).not.toBe(stale);
+
+            // A late, duplicate close from the dead socket must NOT tear down the
+            // newer one (the close handler is guarded by `conn.socket === socket`):
+            // the connection stays `connecting` on `fresh`, then opens normally.
+            stale.triggerClose();
+
+            expect(client.connectionStatus()).toBe("connecting");
+
+            fresh.open();
+
+            expect(client.connectionStatus()).toBe("connected");
+
+            client.close();
+        });
+
         it("keys reactive page subscriptions by their (lower, upper] cursor range", () => {
             expect.assertions(3);
 
