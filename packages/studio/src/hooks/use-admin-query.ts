@@ -80,7 +80,7 @@ interface AdminQueryResult<T> {
  * Read a reserved admin RPC through TanStack Query — the studio's single data
  * primitive, replacing the per-panel `useState` + `useEffect` + `try/catch`
  * fetch (whose unstable-dependency footgun caused the studio's render-loop bug)
- * and the hand-rolled `useLiveAdmin`.
+ * and the former hand-rolled live-admin subscription hook.
  *
  * The admin RPCs are intercepted inside the Durable Object and gated by the
  * server's `LUNORA_ADMIN_TOKEN` (sent as the client's bearer / `wsToken`); this
