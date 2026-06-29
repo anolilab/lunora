@@ -1,3 +1,10 @@
+## @lunora/auth [1.0.0-alpha.7](https://github.com/anolilab/lunora/compare/%40lunora%2Fauth%401.0.0-alpha.6...%40lunora%2Fauth%401.0.0-alpha.7) (2026-06-29)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.6
+
 ## @lunora/auth [1.0.0-alpha.6](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.5...@lunora/auth@1.0.0-alpha.6) (2026-06-27)
 
 ### Features
