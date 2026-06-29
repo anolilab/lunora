@@ -99,8 +99,13 @@ export interface VerifyAccessJwtOptions {
     teamDomain: string;
 }
 
-/** Options for `createAccessResolver`; extends {@link VerifyAccessJwtOptions}. */
-export interface CreateAccessResolverOptions extends VerifyAccessJwtOptions {
+/**
+ * Common options for the request-driven Access primitives — how to read the JWT
+ * off the request and what to do when verification fails. Shared by
+ * {@link CreateAccessResolverOptions} and `AccessAdminGateOptions`, which add
+ * their distinct mapping / authorization step on top.
+ */
+export interface RequestVerifyOptions extends VerifyAccessJwtOptions {
     /**
      * Cookie name carrying the Access JWT when the header is absent (browser
      * navigations). Default `"CF_Authorization"`.
@@ -114,19 +119,22 @@ export interface CreateAccessResolverOptions extends VerifyAccessJwtOptions {
     headerName?: string;
 
     /**
+     * Invoked when a token is present but fails verification (bad signature,
+     * wrong audience, expired, …). The caller still fails closed (resolver
+     * returns `null`, admin gate returns `false`); this is your hook to
+     * log/observe. It is **not** called when no token is present at all.
+     */
+    onError?: (error: unknown, request: Request) => void;
+}
+
+/** Options for `createAccessResolver`; extends {@link RequestVerifyOptions}. */
+export interface CreateAccessResolverOptions extends RequestVerifyOptions {
+    /**
      * Remap verified claims into the resolved identity. Return an object to
      * shallow-merge over the defaults; return a `userId` to override the derived
      * caller id. Runs only after signature/issuer/audience/expiry are verified.
      */
     mapClaims?: (claims: AccessClaims) => Record<string, unknown>;
-
-    /**
-     * Invoked when a token is present but fails verification (bad signature,
-     * wrong audience, expired, …). The resolver still returns `null`
-     * (fail-closed → anonymous); this is your hook to log/observe. It is **not**
-     * called when no token is present at all.
-     */
-    onError?: (error: unknown, request: Request) => void;
 }
 
 /**

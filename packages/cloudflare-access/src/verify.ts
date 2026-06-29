@@ -1,7 +1,8 @@
 import type { JWTVerifyGetKey } from "jose";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 
-import type { AccessClaims, VerifyAccessJwtOptions } from "./types";
+import { DEFAULT_COOKIE, DEFAULT_HEADER, readToken } from "./read-token";
+import type { AccessClaims, RequestVerifyOptions, VerifyAccessJwtOptions } from "./types";
 
 /** Cloudflare Access publishes its signing keys at this path under the team domain. */
 const CERTS_PATH = "/cdn-cgi/access/certs";
@@ -75,11 +76,29 @@ const remoteJwks = (issuer: string): JWTVerifyGetKey => {
  */
 const verifyAccessJwt = async (token: string, options: VerifyAccessJwtOptions): Promise<AccessClaims> => {
     const issuer = accessIssuer(options.teamDomain);
+
+    // `aud` is the only claim that scopes a token to *your* Access application —
+    // a token minted for any other app in the same team shares the issuer and
+    // JWKS. `jose` only enforces audience when a truthy value is passed, so a
+    // missing/empty `aud` (a common consequence of an unset `env.CF_ACCESS_AUD`)
+    // would silently disable the check and accept cross-app tokens. Refuse to
+    // verify without one; the throw is caught by the resolver/admin gate and
+    // fails closed.
+    const audiences = (Array.isArray(options.aud) ? options.aud : [options.aud]).filter(
+        (entry): entry is string => typeof entry === "string" && entry.length > 0,
+    );
+
+    if (audiences.length === 0) {
+        throw new Error(
+            "@lunora/cloudflare-access: `aud` is required and must be a non-empty Access AUD tag — refusing to verify a token without an audience to scope it to your application",
+        );
+    }
+
     const keySet = options.keySet ?? remoteJwks(issuer);
 
     const { payload } = await jwtVerify(token, keySet as Parameters<typeof jwtVerify>[1], {
         algorithms: ["RS256"],
-        audience: options.aud,
+        audience: audiences,
         clockTolerance: options.clockToleranceSec,
         issuer,
     });
@@ -87,4 +106,35 @@ const verifyAccessJwt = async (token: string, options: VerifyAccessJwtOptions): 
     return payload;
 };
 
-export { accessIssuer, verifyAccessJwt };
+/**
+ * Read the Access JWT off a request and verify it. Returns the verified claims,
+ * or `undefined` when no token is present **or** verification fails — the single
+ * fail-closed "no Access identity" signal that both `createAccessResolver` and
+ * `accessAdminGate` build their distinct mapping / authorization step on top of.
+ *
+ * This is the package's one place that turns a request into verified claims:
+ * header/cookie default resolution, the {@link readToken} read, the
+ * {@link verifyAccessJwt} call, and the `onError`-observed fail-closed catch all
+ * live here so the resolver and the admin gate carry only their genuinely
+ * distinct line. `onError` fires for a present-but-invalid token, never for an
+ * absent one.
+ */
+const verifyRequest = async (request: Request, options: RequestVerifyOptions): Promise<AccessClaims | undefined> => {
+    const headerName = (options.headerName ?? DEFAULT_HEADER).toLowerCase();
+    const cookieName = options.cookieName ?? DEFAULT_COOKIE;
+    const token = readToken(request, headerName, cookieName);
+
+    if (token === undefined) {
+        return undefined;
+    }
+
+    try {
+        return await verifyAccessJwt(token, options);
+    } catch (error) {
+        options.onError?.(error, request);
+
+        return undefined;
+    }
+};
+
+export { accessIssuer, verifyAccessJwt, verifyRequest };

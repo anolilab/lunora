@@ -2645,6 +2645,27 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
     };
 
+    // Cloudflare Access (or any) admin gate: when configured, verify it ONCE for
+    // an admin path and record a grant the per-route sync gates consult via
+    // `requestIsAdmin`. Restricted to `isAdminPath` so the verification never runs
+    // on the `/_lunora/rpc` + `/_lunora/ws` data hot path. A gate that throws
+    // (rather than returning `false`) degrades to "no grant" — fail closed for the
+    // gate, open for the static bearer — so a request carrying a valid admin token
+    // is never locked out, and the throw never 500s the admin request.
+    const applyAdminGate = async (request: Request, pathname: string): Promise<void> => {
+        if (options.adminGate === undefined || !isAdminPath(pathname)) {
+            return;
+        }
+
+        try {
+            if (await options.adminGate(request)) {
+                accessAdminGrants.add(request);
+            }
+        } catch {
+            // No grant recorded; `requestIsAdmin` still honours the static admin token.
+        }
+    };
+
     const handle = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<Response> => {
         const url = new URL(request.url);
 
@@ -2693,13 +2714,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const internalRoute = internalRoutes[url.pathname];
 
         if (internalRoute) {
-            // Cloudflare Access (or any) admin gate: when configured, verify it ONCE
-            // for an admin path and record a grant the per-route sync gates consult
-            // via `requestIsAdmin`. Restricted to `isAdminPath` so the verification
-            // never runs on the `/_lunora/rpc` + `/_lunora/ws` data hot path.
-            if (options.adminGate !== undefined && isAdminPath(url.pathname) && (await options.adminGate(request))) {
-                accessAdminGrants.add(request);
-            }
+            await applyAdminGate(request, url.pathname);
 
             return internalRoute(request, env, url, context);
         }

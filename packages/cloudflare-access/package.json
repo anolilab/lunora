@@ -70,6 +70,14 @@
     "dependencies": {
         "jose": "catalog:auth"
     },
+    "peerDependencies": {
+        "@lunora/server": "1.0.0-alpha.6"
+    },
+    "peerDependenciesMeta": {
+        "@lunora/server": {
+            "optional": true
+        }
+    },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@lunora/server": "1.0.0-alpha.6",

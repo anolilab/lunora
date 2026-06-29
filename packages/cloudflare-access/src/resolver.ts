@@ -1,6 +1,5 @@
-import { DEFAULT_COOKIE, DEFAULT_HEADER, readToken } from "./read-token";
 import type { AccessClaims, CreateAccessResolverOptions, ResolvedAccessIdentity, ResolvedIdentityLike, ResolveIdentityFunction } from "./types";
-import { verifyAccessJwt } from "./verify";
+import { verifyRequest } from "./verify";
 
 /**
  * The "anonymous" identity. `null` is the runtime's `resolveIdentity` contract
@@ -68,28 +67,13 @@ const toIdentity = (claims: AccessClaims, mapClaims?: CreateAccessResolverOption
  * });
  * ```
  */
-export const createAccessResolver = (options: CreateAccessResolverOptions): ResolveIdentityFunction => {
-    const headerName = (options.headerName ?? DEFAULT_HEADER).toLowerCase();
-    const cookieName = options.cookieName ?? DEFAULT_COOKIE;
+export const createAccessResolver =
+    (options: CreateAccessResolverOptions): ResolveIdentityFunction =>
+    async (request: Request): Promise<ResolvedAccessIdentity | null> => {
+        const claims = await verifyRequest(request, options);
 
-    return async (request: Request): Promise<ResolvedAccessIdentity | null> => {
-        const token = readToken(request, headerName, cookieName);
-
-        if (token === undefined) {
-            return ANONYMOUS;
-        }
-
-        try {
-            const claims = await verifyAccessJwt(token, options);
-
-            return toIdentity(claims, options.mapClaims);
-        } catch (error) {
-            options.onError?.(error, request);
-
-            return ANONYMOUS;
-        }
+        return claims === undefined ? ANONYMOUS : toIdentity(claims, options.mapClaims);
     };
-};
 
 /**
  * Compose several `resolveIdentity` adapters into one: each is tried in order

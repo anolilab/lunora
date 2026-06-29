@@ -71,6 +71,18 @@ describe("verifyAccessJwt", () => {
         await expect(verifyAccessJwt(token, { aud: AUD, keySet: publicKey, teamDomain: TEAM })).rejects.toThrow();
     });
 
+    it("refuses to verify when no audience is configured (missing/empty aud)", async () => {
+        const token = await sign({ sub: "user-1" });
+
+        // A missing or empty `aud` makes jose skip the audience check entirely,
+        // accepting a token minted for any other app in the same team. The guard
+        // throws before `jwtVerify`, so callers fail closed rather than fail open.
+        await expect(verifyAccessJwt(token, { aud: undefined as unknown as string, keySet: publicKey, teamDomain: TEAM })).rejects.toThrow(/aud/);
+        await expect(verifyAccessJwt(token, { aud: "", keySet: publicKey, teamDomain: TEAM })).rejects.toThrow(/aud/);
+        await expect(verifyAccessJwt(token, { aud: [], keySet: publicKey, teamDomain: TEAM })).rejects.toThrow(/aud/);
+        await expect(verifyAccessJwt(token, { aud: [""], keySet: publicKey, teamDomain: TEAM })).rejects.toThrow(/aud/);
+    });
+
     it("rejects a token from a different issuer (team)", async () => {
         const token = await sign({ sub: "user-1" }, { iss: "https://evil.cloudflareaccess.com" });
 

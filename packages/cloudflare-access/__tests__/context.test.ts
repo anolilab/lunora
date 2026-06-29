@@ -69,14 +69,18 @@ describe("accessContext", () => {
         expect(access.email).toBeUndefined();
     });
 
-    it("falls back to the envelope itself when no nested `access` claim is present", async () => {
-        expect.assertions(2);
+    it("reads anonymous for an identity with no nested `access` claim set", async () => {
+        expect.assertions(3);
 
-        // A custom mapClaims that flattened the claims away — no `access` key.
-        const access = await run({ email: "flat@acme.test", groups: ["x"] });
+        // A non-Access identity (e.g. a better-auth session resolved under
+        // composeResolvers, or a custom mapClaims that dropped `access`) carries no
+        // verified Access claim envelope. `ctx.access` surfaces ONLY Access
+        // identities, so it must not misreport a foreign identity as authenticated.
+        const access = await run({ email: "betterauth@acme.test", groups: ["x"] });
 
-        expect(access.email).toBe("flat@acme.test");
-        expect(access.claims?.email).toBe("flat@acme.test");
+        expect(access.authenticated).toBe(false);
+        expect(access.email).toBeUndefined();
+        expect(access.claims).toBeUndefined();
     });
 
     it("ignores non-string entries in the groups claim", async () => {

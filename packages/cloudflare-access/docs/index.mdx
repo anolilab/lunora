@@ -33,6 +33,8 @@ export default defineApp<Env>()
 
 The resolver is **fail-closed → anonymous**: a missing or invalid token resolves to `null`, the request proceeds unauthenticated, and RLS denies. The verified `exp` is forwarded so live WebSocket subscriptions expire with the credential.
 
+> `aud` is mandatory. It is the only claim that scopes a token to _your_ Access application — a token minted for any other app in the same Cloudflare team shares the issuer and JWKS. Verification **refuses to run** (throws, then fails closed to anonymous) when `aud` is missing or empty, so an unset `env.CF_ACCESS_AUD` degrades safely instead of silently accepting cross-app tokens.
+
 ## Composing with `@lunora/auth`
 
 When you also run `@lunora/auth`, both want the `resolveIdentity` hook — and a bare `extend` would clobber the better-auth resolver (extend merges _over_ the derived options). Compose them so Access wins when its JWT is present and everyone else falls through to the app session:
@@ -119,6 +121,8 @@ export const whoAmI = query.use(accessContext()).query(async ({ ctx }) => ({
 The middleware imports the `/context` subpath, so it never trips the global wiring — the two paths don't collide.
 
 Either way, an anonymous request gets the anonymous facade — `authenticated: false`, empty `groups`, `hasGroup` always `false` — so reads stay safe with no null check and authorization still fails closed. `ctx.access` only **surfaces** the identity; pair it with `rls(...)` (or `accessRoles(...)` → `rls(...)`) when you need enforcement.
+
+`ctx.access` surfaces **only Access identities**. Under `composeResolvers(access, …)`, a request authenticated by another adapter (e.g. a better-auth session) resolves an identity with no verified Access claim set, so `ctx.access` reads anonymous (`authenticated: false`) for it — read that caller off `ctx.auth` instead. This keeps `ctx.access.authenticated` an honest "is there a verified Access identity" check rather than "is there any identity".
 
 ## Gating the Studio behind Access
 

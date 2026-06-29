@@ -55,6 +55,43 @@ describe("createWorker — adminGate (async Access-style admin authorization)", 
         expect(response.status).toBe(200);
     });
 
+    it("denies (403) when adminGate throws and no bearer is supplied", async () => {
+        expect.assertions(1);
+
+        // A throwing gate must degrade to "no grant" (fail closed for the gate),
+        // not propagate out and 500 the whole admin request.
+        const worker = createWorker({
+            adminGate: async () => {
+                throw new Error("verification blew up");
+            },
+            functions: REGISTRY,
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(new Request(ADMIN_PATH, { method: "GET" }), {}, fakeContext);
+
+        expect(response.status).toBe(403);
+    });
+
+    it("still accepts the static admin bearer when adminGate throws", async () => {
+        expect.assertions(1);
+
+        // The bearer path must survive a throwing gate — a failing Access check
+        // cannot lock out a request carrying a valid static token.
+        const worker = createWorker({
+            adminGate: async () => {
+                throw new Error("verification blew up");
+            },
+            adminToken: ADMIN_TOKEN,
+            functions: REGISTRY,
+            shardDO: noopNamespace,
+        });
+
+        const response = await worker.fetch(new Request(ADMIN_PATH, { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }), {}, fakeContext);
+
+        expect(response.status).toBe(200);
+    });
+
     it("never evaluates adminGate on the non-admin RPC hot path", async () => {
         expect.assertions(1);
 

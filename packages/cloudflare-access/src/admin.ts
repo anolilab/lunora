@@ -1,21 +1,8 @@
-import { DEFAULT_COOKIE, DEFAULT_HEADER, readToken } from "./read-token";
-import type { AccessClaims, VerifyAccessJwtOptions } from "./types";
-import { verifyAccessJwt } from "./verify";
+import type { AccessClaims, RequestVerifyOptions } from "./types";
+import { verifyRequest } from "./verify";
 
-/** Options for {@link accessAdminGate}; extends {@link VerifyAccessJwtOptions}. */
-interface AccessAdminGateOptions extends VerifyAccessJwtOptions {
-    /**
-     * Cookie name carrying the Access JWT when the header is absent (browser
-     * navigations). Default `"CF_Authorization"`.
-     */
-    cookieName?: string;
-
-    /**
-     * Request header carrying the Access JWT. Default `"cf-access-jwt-assertion"`
-     * (matched case-insensitively).
-     */
-    headerName?: string;
-
+/** Options for {@link accessAdminGate}; extends {@link RequestVerifyOptions}. */
+interface AccessAdminGateOptions extends RequestVerifyOptions {
     /**
      * Decide whether the **verified** claims authorize the Studio/admin plane —
      * e.g. `(claims) => claims.groups?.includes("ops") ?? false` or an email-domain
@@ -23,13 +10,6 @@ interface AccessAdminGateOptions extends VerifyAccessJwtOptions {
      * identity is denied. Runs only after signature/issuer/audience/expiry pass.
      */
     isAdmin: (claims: AccessClaims) => boolean | Promise<boolean>;
-
-    /**
-     * Invoked when a token is present but fails verification. The gate still
-     * returns `false` (fail-closed); this is your hook to log/observe. It is
-     * **not** called when no token is present at all.
-     */
-    onError?: (error: unknown, request: Request) => void;
 }
 
 /**
@@ -54,28 +34,13 @@ interface AccessAdminGateOptions extends VerifyAccessJwtOptions {
  * });
  * ```
  */
-const accessAdminGate = (options: AccessAdminGateOptions): ((request: Request) => Promise<boolean>) => {
-    const headerName = (options.headerName ?? DEFAULT_HEADER).toLowerCase();
-    const cookieName = options.cookieName ?? DEFAULT_COOKIE;
+const accessAdminGate =
+    (options: AccessAdminGateOptions): ((request: Request) => Promise<boolean>) =>
+    async (request: Request): Promise<boolean> => {
+        const claims = await verifyRequest(request, options);
 
-    return async (request: Request): Promise<boolean> => {
-        const token = readToken(request, headerName, cookieName);
-
-        if (token === undefined) {
-            return false;
-        }
-
-        try {
-            const claims = await verifyAccessJwt(token, options);
-
-            return await options.isAdmin(claims);
-        } catch (error) {
-            options.onError?.(error, request);
-
-            return false;
-        }
+        return claims === undefined ? false : options.isAdmin(claims);
     };
-};
 
 export { accessAdminGate };
 export type { AccessAdminGateOptions };

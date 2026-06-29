@@ -63,12 +63,21 @@ const ANONYMOUS_FACADE: AccessFacade = {
 
 /** Build the typed facade from a resolved identity envelope (the resolver's output). */
 const facadeFor = (identity: Record<string, unknown>, userId: string | undefined): AccessFacade => {
-    // The resolver nests the full verified claim set under `access`; fall back to
-    // the envelope itself if a custom `mapClaims` flattened it away.
+    // `createAccessResolver` nests the full verified claim set under `access`; its
+    // presence is what marks this envelope as an *Access* identity. When it is
+    // absent — a non-Access session resolved by another adapter under
+    // `composeResolvers` (e.g. better-auth), or a custom `mapClaims` that dropped
+    // `access` — there is no Access identity to surface, so `ctx.access` reads
+    // anonymous rather than misreporting a foreign identity as Access-authenticated.
     const raw = identity["access"];
-    const claims = (typeof raw === "object" && raw !== null ? raw : identity) as AccessClaims;
-    // Groups may be promoted to the top of the envelope or only present in the
-    // nested claims — read whichever carries them.
+
+    if (typeof raw !== "object" || raw === null) {
+        return ANONYMOUS_FACADE;
+    }
+
+    const claims = raw as AccessClaims;
+    // Promoted fields may be overridden at the envelope top by a custom `mapClaims`;
+    // prefer those, falling back to the verified claim set.
     const groups = stringList(identity["groups"] ?? claims.groups);
 
     return {
