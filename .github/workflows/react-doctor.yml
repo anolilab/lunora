@@ -2,7 +2,7 @@
 
 "on":
     "pull_request":
-        "branches": ["main"]
+        "paths": ["**/*.tsx"]
 
 "permissions":
     "contents": "read"
@@ -18,8 +18,8 @@
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              # diff mode (below) compares against the base branch, which needs full
-              # history — a shallow clone (default depth 1) makes the diff fail.
+              # react-doctor's PR scan compares against the base branch, which needs
+              # full history — a shallow clone (default depth 1) makes the diff fail.
               "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
               "with":
                   "fetch-depth": "0"
@@ -29,6 +29,9 @@
             # Also note: pinning this action SHA does not fully pin the tool if the action
             # internally runs `npx -y react-doctor@latest`; verify and pin that version too.
             - "uses": "millionco/react-doctor@15238de7019167e740c9fc08b800d9732c2ab477" # react-doctor@0.5.6
+              # `scope: changed` (the action's default) auto-compares against the
+              # PR's base branch via a base SHA derived from the PR event — works
+              # for any base (alpha/main/…), so no branch needs to be hardcoded.
+              # The fetch-depth:0 checkout above provides the history it needs.
               "with":
                   "github-token": "${{ secrets.GITHUB_TOKEN }}"
-                  "diff": "main"
