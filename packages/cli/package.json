@@ -1,6 +1,6 @@
 {
     "name": "@lunora/cli",
-    "version": "1.0.0-alpha.34",
+    "version": "1.0.0-alpha.35",
     "description": "The Lunora CLI: init, dev, deploy, codegen, run, reset, and migrate commands",
     "keywords": [
         "agent-skills",
@@ -67,10 +67,10 @@
     },
     "dependencies": {
         "@bomb.sh/tab": "0.0.17",
-        "@lunora/codegen": "1.0.0-alpha.14",
-        "@lunora/config": "1.0.0-alpha.23",
+        "@lunora/codegen": "1.0.0-alpha.15",
+        "@lunora/config": "1.0.0-alpha.24",
         "@lunora/container": "1.0.0-alpha.4",
-        "@lunora/d1": "1.0.0-alpha.7",
+        "@lunora/d1": "1.0.0-alpha.8",
         "@lunora/seed": "1.0.0-alpha.6",
         "@visulima/cerebro": "3.0.0-alpha.32",
         "@visulima/error": "6.0.0-alpha.34",
