@@ -1,0 +1,110 @@
+diff --git a/dist/lib/container.js b/dist/lib/container.js
+index b7567e230cf5d6168a3b6d5e1fbb1fc009eaf235..8e6e3e08e1619c860c79bed5b4c2fd8a48af2493 100644
+--- a/dist/lib/container.js
++++ b/dist/lib/container.js
+@@ -9,13 +9,15 @@ const NO_CONTAINER_INSTANCE_ERROR = 'there is no container instance that can be
+ const RATE_LIMITED_ERROR = 'you are requesting too many containers per second';
+ const RUNTIME_SIGNALLED_ERROR = 'runtime signalled the container to exit:';
+ const UNEXPECTED_EXIT_ERROR = 'container exited with unexpected exit code:';
+-const NOT_LISTENING_ERROR = 'the container is not listening';
++const NOT_LISTENING_ERROR = 'container is not listening';
+ const CONTAINER_STATE_KEY = '__CF_CONTAINER_STATE';
+ const OUTBOUND_CONFIGURATION_KEY = 'OUTBOUND_CONFIGURATION';
+ // maxRetries before scheduling next alarm is purposely set to 3,
+ // as according to DO docs at https://developers.cloudflare.com/durable-objects/api/alarms/
+ // the maximum amount for alarm retries is 6.
+ const MAX_ALARM_RETRIES = 3;
++const MIN_ALARM_REARM_MS = 100; // Floor for alarm re-arm times
++const MAX_ALARM_REARM_MS = 3 * 60 * 1000; // Default heartbeat
+ const PING_TIMEOUT_MS = 5000;
+ const DEFAULT_SLEEP_AFTER = '10m'; // Default sleep after inactivity time
+ const INSTANCE_POLL_INTERVAL_MS = 300; // Default interval for polling container state
+@@ -1482,11 +1484,6 @@ export class Container extends DurableObject {
+             }
+             this.monitoredPromise = undefined;
+             this.monitor = undefined;
+-            if (this.timeout) {
+-                if (this.resolve)
+-                    this.resolve();
+-                clearTimeout(this.timeout);
+-            }
+         });
+     }
+     deleteSchedules(name) {
+@@ -1510,18 +1507,11 @@ export class Container extends DurableObject {
+             }
+             return;
+         }
+-        // do not remove this, container DOs ALWAYS need an alarm right now.
+-        // The only way for this DO to stop having alarms is:
+-        //  1. The container is not running anymore.
+-        //  2. Activity expired and it exits.
+-        const prevAlarm = Date.now();
+-        await this.ctx.storage.setAlarm(prevAlarm);
+-        await this.ctx.storage.sync();
+         // Get all schedules that should be executed now
+         const result = this.sql `
+          SELECT * FROM container_schedules;
+        `;
+-        let minTime = Date.now() + 3 * 60 * 1000;
++        let minTime = Date.now() + MAX_ALARM_REARM_MS;
+         const now = Date.now() / 1000;
+         // Process each due schedule
+         for (const row of result) {
+@@ -1567,29 +1557,18 @@ export class Container extends DurableObject {
+             await this.onActivityExpired();
+             // renewActivityTimeout makes sure we don't spam calls here
+             this.renewActivityTimeout();
++            await this.ctx.storage.setAlarm(Date.now() + MIN_ALARM_REARM_MS);
+             return;
+         }
+         // Math.min(3m or maxTime, sleepTimeout)
+         minTime = Math.min(minTimeFromSchedules, minTime, this.sleepAfterMs);
+-        const timeout = Math.max(0, minTime - Date.now());
+-        // await a sleep for maxTime to keep the DO alive for
+-        // at least this long
+-        await new Promise(resolve => {
+-            this.resolve = resolve;
+-            if (!this.container.running) {
+-                resolve();
+-                return;
+-            }
+-            this.timeout = setTimeout(() => {
+-                resolve();
+-            }, timeout);
+-        });
+-        await this.ctx.storage.setAlarm(Date.now());
+-        // we exit and we have another alarm,
+-        // the next alarm is the one that decides if it should stop the loop.
++        // Re-arm a single storage alarm at the next deadline instead of pairing
++        // an in-memory setTimeout sleep with an unconditional setAlarm(now), which
++        // spun the alarm at sub-second cadence under concurrent callers
++        // (cloudflare/containers#191). Floor it so we never busy-loop.
++        const nextAlarm = Math.max(minTime, Date.now() + MIN_ALARM_REARM_MS);
++        await this.ctx.storage.setAlarm(nextAlarm);
+     }
+-    timeout;
+-    resolve;
+     // synchronises container state with the container source of truth to process events
+     async syncPendingStoppedEvents() {
+         const state = await this.state.getState();
+@@ -1622,12 +1601,13 @@ export class Container extends DurableObject {
+      * Schedule the next alarm based on upcoming tasks
+      */
+     async scheduleNextAlarm(ms = 1000) {
+-        const nextTime = ms + Date.now();
+-        // if not already set
+-        if (this.timeout) {
+-            if (this.resolve)
+-                this.resolve();
+-            clearTimeout(this.timeout);
++        // Idempotent — no-op if an alarm is already set to fire sooner than the
++        // requested time, so concurrent callers can't reset the alarm into a
++        // sub-second spinloop (cloudflare/containers#191).
++        const nextTime = Date.now() + Math.max(ms, MIN_ALARM_REARM_MS);
++        const existing = await this.ctx.storage.getAlarm();
++        if (existing !== null && existing <= nextTime) {
++            return;
+         }
+         await this.ctx.storage.setAlarm(nextTime);
+         await this.ctx.storage.sync();
