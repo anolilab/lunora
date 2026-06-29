@@ -40,6 +40,10 @@
             "types": "./dist/admin.d.ts",
             "import": "./dist/admin.mjs"
         },
+        "./context": {
+            "types": "./dist/context.d.ts",
+            "import": "./dist/context.mjs"
+        },
         "./roles": {
             "types": "./dist/roles.d.ts",
             "import": "./dist/roles.mjs"

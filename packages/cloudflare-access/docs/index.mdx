@@ -81,6 +81,21 @@ export const listInvoices = query
 
 Omit `map` to use each group name as a role verbatim. A group with no mapping contributes no role (fail-closed). Roles are unioned with any already on `ctx.auth.roles`, then deduped. Pass `readGroups` when your IdP nests groups somewhere other than the `groups` claim.
 
+## Reading the identity — `ctx.access`
+
+`@lunora/cloudflare-access/context` ships `accessContext()`, a middleware that attaches a typed, **synchronous** `ctx.access` facade derived from the verified identity — so a handler reads `ctx.access.email`, `ctx.access.groups`, `ctx.access.hasGroup("ops")`, or the full `ctx.access.claims` without an `await` or a cast off the generic `ctx.auth.getIdentity()` envelope.
+
+```ts
+import { accessContext } from "@lunora/cloudflare-access/context";
+
+export const whoAmI = query.use(accessContext()).query(async ({ ctx }) => ({
+    email: ctx.access.email,
+    isOps: ctx.access.hasGroup("ops"),
+}));
+```
+
+When the request is anonymous it attaches the anonymous facade — `authenticated: false`, empty `groups`, `hasGroup` always `false` — so reads stay safe with no null check and authorization still fails closed. It only **surfaces** the identity; pair it with `rls(...)` (or `accessRoles(...)` → `rls(...)`) when you need enforcement.
+
 ## Gating the Studio behind Access
 
 `@lunora/cloudflare-access/admin` ships `accessAdminGate()`, which builds a value for the runtime's `WorkerOptions.adminGate` — an async authorization gate for the `/_lunora/admin/*` plane (the Studio's HTTP + WebSocket endpoints), OR-ed with the static `adminToken` bearer. It verifies the request's Access JWT and applies your `isAdmin(claims)` predicate, so a verified Access identity in the right group can reach the Studio without a shared token. It is fail-closed: no token, a token that fails verification, or an `isAdmin` returning `false` all deny (the bearer stays the only other path). It runs only on admin routes, never on the RPC/WebSocket data path.
@@ -107,5 +122,6 @@ export default defineApp()
 - `composeResolvers(...resolvers)` — first non-null identity wins.
 - `verifyAccessJwt(token, options)` — low-level: verify a token, return its claims (throws on failure).
 - `accessIssuer(teamDomain)` — normalize a team domain to its canonical issuer URL.
+- `accessContext()` _(`@lunora/cloudflare-access/context`)_ — middleware attaching a typed, synchronous `ctx.access` facade over the verified identity.
 - `accessRoles(options)` _(`@lunora/cloudflare-access/roles`)_ — middleware mapping the verified `groups` claim into `ctx.auth.roles` for RLS.
 - `accessAdminGate(options)` _(`@lunora/cloudflare-access/admin`)_ — a `WorkerOptions.adminGate` that authorizes the `/_lunora/admin/*` plane from a verified Access identity.

@@ -1,0 +1,121 @@
+import type { Middleware } from "@lunora/server";
+
+import type { AccessClaims } from "./types";
+
+/**
+ * The slice of context {@link accessContext} reads: the `auth` facade every
+ * Lunora ctx carries. `getIdentity()` returns the verified identity envelope —
+ * `createAccessResolver`'s {@link import("./types").ResolvedAccessIdentity}
+ * output, which carries the full claim set under `access` plus the promoted
+ * `email` / `groups` / `commonName` fields.
+ */
+interface AccessContextInput {
+    auth?: {
+        getIdentity?: () => (Record<string, unknown> | null) | Promise<Record<string, unknown> | null>;
+        userId?: string | null;
+    };
+}
+
+/**
+ * The typed, per-request `ctx.access` facade {@link accessContext} attaches. A
+ * synchronous, Access-shaped read over the already-resolved identity — so a
+ * handler reads `ctx.access.email` / `ctx.access.hasGroup("ops")` without an
+ * `await` or a cast off the generic `ctx.auth.getIdentity()` envelope.
+ */
+interface AccessFacade {
+    /** True when a verified Access identity is present on the request. */
+    readonly authenticated: boolean;
+    /** The full verified claim set, or `undefined` when anonymous. */
+    readonly claims: AccessClaims | undefined;
+    /** Service-token name (`common_name`), for machine callers; `undefined` otherwise. */
+    readonly commonName: string | undefined;
+    /** Verified SSO email; `undefined` for service tokens or anonymous requests. */
+    readonly email: string | undefined;
+    /** IdP group memberships — empty when none are emitted or the request is anonymous. */
+    readonly groups: ReadonlyArray<string>;
+    /** True when the verified groups include `group`. Always `false` when anonymous. */
+    hasGroup: (group: string) => boolean;
+    /** The stable caller id (`ctx.auth.userId`), or `undefined` when anonymous. */
+    readonly userId: string | undefined;
+}
+
+/** The context shape {@link accessContext} produces — the input widened with `access`. */
+interface AccessContextOutput extends AccessContextInput {
+    access: AccessFacade;
+}
+
+/** Keep only the string entries of a claim that should be a `string[]` (e.g. `groups`). */
+const stringList = (value: unknown): ReadonlyArray<string> => (Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : []);
+
+/** Read a string claim, narrowing non-strings (and `undefined`) away. */
+const stringClaim = (value: unknown): string | undefined => (typeof value === "string" ? value : undefined);
+
+/** The anonymous facade — no identity resolved. Every field empty, `hasGroup` always false. */
+const ANONYMOUS_FACADE: AccessFacade = {
+    authenticated: false,
+    claims: undefined,
+    commonName: undefined,
+    email: undefined,
+    groups: [],
+    hasGroup: () => false,
+    userId: undefined,
+};
+
+/** Build the typed facade from a resolved identity envelope (the resolver's output). */
+const facadeFor = (identity: Record<string, unknown>, userId: string | undefined): AccessFacade => {
+    // The resolver nests the full verified claim set under `access`; fall back to
+    // the envelope itself if a custom `mapClaims` flattened it away.
+    const raw = identity["access"];
+    const claims = (typeof raw === "object" && raw !== null ? raw : identity) as AccessClaims;
+    // Groups may be promoted to the top of the envelope or only present in the
+    // nested claims — read whichever carries them.
+    const groups = stringList(identity["groups"] ?? claims.groups);
+
+    return {
+        authenticated: true,
+        claims,
+        commonName: stringClaim(identity["commonName"]) ?? stringClaim(claims.common_name),
+        email: stringClaim(identity["email"]) ?? stringClaim(claims.email),
+        groups,
+        hasGroup: (group) => groups.includes(group),
+        userId,
+    };
+};
+
+/**
+ * Middleware that attaches a typed `ctx.access` facade derived from the verified
+ * Cloudflare Access identity. It resolves `ctx.auth.getIdentity()` once and
+ * exposes a **synchronous**, Access-shaped read — `ctx.access.email`,
+ * `ctx.access.groups`, `ctx.access.hasGroup("ops")`, `ctx.access.claims` — so a
+ * handler reads the verified identity ergonomically and with full typing instead
+ * of casting off the generic `getIdentity()` envelope.
+ *
+ * When no identity is resolved (anonymous request) it attaches the anonymous
+ * facade — `authenticated: false`, empty `groups`, `hasGroup` always `false` —
+ * so reads stay safe without a null check, and authorization decisions still
+ * fail closed.
+ *
+ * It does not gate the request; pair it with `rls(...)` (or
+ * `accessRoles(...)` → `rls(...)`) when you need enforcement. It only surfaces
+ * the identity for branching inside a handler.
+ *
+ * ```ts
+ * export const whoAmI = query
+ *   .use(accessContext())
+ *   .query(async ({ ctx }) => ({
+ *       email: ctx.access.email,
+ *       isOps: ctx.access.hasGroup("ops"),
+ *   }));
+ * ```
+ */
+const accessContext =
+    <Context extends AccessContextInput>(): Middleware<Context, AccessContextOutput & Context> =>
+    async ({ ctx, next }) => {
+        const identity = (await ctx.auth?.getIdentity?.()) ?? undefined;
+        const access = identity ? facadeFor(identity, ctx.auth?.userId ?? undefined) : ANONYMOUS_FACADE;
+
+        return next({ ctx: { access } });
+    };
+
+export { accessContext };
+export type { AccessContextInput, AccessContextOutput, AccessFacade };
