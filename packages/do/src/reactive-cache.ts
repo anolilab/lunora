@@ -46,16 +46,8 @@
  * surface (see `ctx-db.ts`).
  */
 
+import { stableStringify } from "../../../shared/stable-key";
 import { depKey, SCAN_DEP } from "./dependency-tracker";
-
-/** Code-point-stable key comparator (no locale dependence) for deterministic JSON encoding. */
-const compareKeys = (a: string, b: string): number => {
-    if (a < b) {
-        return -1;
-    }
-
-    return a > b ? 1 : 0;
-};
 
 /** A single memoized result, the deps it read, and any active subscribers. */
 interface CacheEntry {
@@ -390,48 +382,6 @@ class ReactiveCache {
 }
 
 /**
- * Stable, sorted JSON encoding of `args` for use in a cache key. Object keys
- * are visited in lexical order at every depth so `{ a: 1, b: 2 }` and
- * `{ b: 2, a: 1 }` hash to the same string. Arrays preserve their order
- * (the index IS the key). `undefined` values are skipped at the object level
- * so `{ a: undefined }` collides with `{}` — matches Convex behavior and
- * avoids spurious cache misses on optional args. Inside arrays `undefined`
- * encodes as `null` to keep positional semantics.
- */
-const stableStringify = (value: unknown): string => {
-    // Top-level / inside-array encoding. `JSON.stringify(undefined)` returns
-    // the literal `undefined`, so we coerce to `null` to preserve array
-    // positions when callers drop us into an array context.
-    if (value === undefined) {
-        return "null";
-    }
-
-    if (value === null || typeof value !== "object") {
-        return JSON.stringify(value);
-    }
-
-    if (Array.isArray(value)) {
-        return `[${value.map((item) => stableStringify(item)).join(",")}]`;
-    }
-
-    const record = value as Record<string, unknown>;
-    const keys = Object.keys(record).toSorted(compareKeys);
-    const parts: string[] = [];
-
-    for (const key of keys) {
-        const raw = record[key];
-
-        if (raw === undefined) {
-            continue;
-        }
-
-        parts.push(`${JSON.stringify(key)}:${stableStringify(raw)}`);
-    }
-
-    return `{${parts.join(",")}}`;
-};
-
-/**
  * Compose a cache key from a function path, a stably-encoded args object, and
  * the caller's identity discriminator. Exported so the wiring layer and tests
  * build identical keys without each side reinventing the format.
@@ -446,5 +396,7 @@ const stableStringify = (value: unknown): string => {
 const reactiveCacheKey = (functionPath: string, args: Record<string, unknown>, identity: null | string): string =>
     `${identity ?? " anon"} ${functionPath}:${stableStringify(args)}`;
 
-export { ReactiveCache, reactiveCacheKey, stableStringify };
+export { ReactiveCache, reactiveCacheKey };
 export type { CacheEntry, ReactiveCacheOptions };
+
+export { stableStringify } from "../../../shared/stable-key";

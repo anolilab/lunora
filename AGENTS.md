@@ -131,6 +131,17 @@ Every package follows the same shape:
 - `package.json` — ESM (`"type": "module"`), `"sideEffects": false`, conditional exports
 - `.releaserc.json` — extends `@anolilab/semantic-release-preset/pnpm` (multi-semantic-release picks it up)
 
+### Top-level `shared/` — bundler-inlined source (not a package)
+
+The repo root holds a **`shared/`** folder for tiny, dependency-free helpers that more than one package needs but that must **not** create a runtime dependency edge between those packages. The canonical example is `shared/stable-key.ts` (the `stableStringify` cache/dedup-key encoder), imported by `@lunora/client`, `@lunora/react`, and `@lunora/do` — packages on opposite tiers (dependency-free browser SDK vs. leaf server runtime) with no common low-level package to host it.
+
+Rules and caveats for `shared/`:
+
+- **Not a package.** No `package.json`, no `project.json`, not in the pnpm workspace globs. Consumers import it by **relative path** (`../../../shared/<file>`) and the bundler (packem/rollup) **inlines** it into each consumer's `dist` — zero runtime deps, no new dependency edge. Keep these files genuinely zero-dependency (only relative or built-in imports) or inlining breaks.
+- **Tooling coverage.** `shared/` is **Prettier-formatted** and **type-checked transitively** (each consumer's `tsc --noEmit` pulls it into the program), but it is **outside per-package ESLint** (ESLint is scoped to `packages/**`). So the no-`.js`-extension and named-export-only conventions are not auto-enforced here — follow them by hand.
+- **Consumer tsconfig.** A package importing `shared/*` must drop `outDir`/`rootDir` from its `tsconfig.json` (a set `rootDir` raises TS6059 for the out-of-package file under `tsc --noEmit`). Those options are vestigial anyway — `lint:types` is `tsc --noEmit` and the real build is packem. A breadcrumb comment in each such tsconfig explains the divergence.
+- **Don't reach for `shared/` first.** Prefer a real `@lunora/*` package when a runtime dependency edge is acceptable; `shared/` is specifically for the no-coupling, inline-only case.
+
 ### Module imports — no `.js` extensions
 
 Every package compiles with `"moduleResolution": "bundler"` (see `tsconfig.base.json`). Relative imports must therefore be written **without** a file extension — `import { x } from "./foo"`, never `import { x } from "./foo.js"`. Hand-written `.js` extensions are redundant clutter; do not add them and strip any you encounter.

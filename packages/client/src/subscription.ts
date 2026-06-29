@@ -1,3 +1,4 @@
+import { stableStringify } from "../../../shared/stable-key";
 import type { FunctionReference } from "./types";
 
 export type SubscriptionCallback = (data: unknown) => void;
@@ -58,12 +59,15 @@ export interface SubscriptionState {
 
 /**
  * Active subscription registry. The client keys subscriptions by
- * `(functionPath, JSON.stringify(args), shardKey)` so duplicate calls share a
- * single server-side registration.
+ * `(functionPath, stableStringify(args), shardKey)` so duplicate calls share a
+ * single server-side registration. Args are stably encoded (keys sorted at every
+ * depth) so two structurally-equal arg records constructed with a different key
+ * order (`{ a, b }` vs `{ b, a }`) collapse to the same key instead of leaking a
+ * duplicate subscription.
  */
 export class SubscriptionRegistry {
     public static key(functionPath: string, args: Record<string, unknown>, shardKey?: string): string {
-        return `${functionPath}::${JSON.stringify(args)}::${shardKey ?? ""}`;
+        return `${functionPath}::${stableStringify(args)}::${shardKey ?? ""}`;
     }
 
     private readonly byKey = new Map<string, SubscriptionState>();

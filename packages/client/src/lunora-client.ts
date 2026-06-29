@@ -1,3 +1,4 @@
+import { stableStringify } from "../../../shared/stable-key";
 import createInMemoryBookmarkStorage from "./bookmark";
 import { applyDelta, isMutationDelta } from "./delta-merge";
 import type { OptimisticUpdate } from "./local-store";
@@ -173,34 +174,6 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
     optimisticUpdate?: OptimisticUpdate<TArgs>;
     shardKey?: string;
 }
-
-/**
- * Stable JSON stringify: keys are sorted at every object level so two
- * structurally-equal args records always serialise to the same string. Used to
- * match a mutation's `args` against subscription `args` when applying
- * optimistic updates.
- */
-const compareEntryKeys = ([a]: [string, unknown], [b]: [string, unknown]): number => {
-    if (a < b) {
-        return -1;
-    }
-
-    return a > b ? 1 : 0;
-};
-
-const stableStringify = (value: unknown): string => {
-    if (value === null || typeof value !== "object") {
-        return JSON.stringify(value);
-    }
-
-    if (Array.isArray(value)) {
-        return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
-    }
-
-    const entries = Object.entries(value as Record<string, unknown>).toSorted(compareEntryKeys);
-
-    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(",")}}`;
-};
 
 /**
  * One WebSocket per shard key. Subscriptions and the writes they observe must

@@ -1,37 +1,23 @@
 import type { FunctionReference } from "@lunora/client";
 import type { QueryKey } from "@tanstack/react-query";
 
+import { stableStringify } from "../../../shared/stable-key";
+
 /**
  * Pure, transport-free query-key helpers shared by the client hooks
- * (`./cache.js`) and the server entry (`./server.js`). Kept in their own module
- * — with only type-level imports — so importing them server-side never pulls in
- * the browser-oriented subscription registry or a `LunoraClient` instance.
+ * (`./cache.js`) and the server entry (`./server.js`). The only runtime import
+ * is `stableStringify` — a pure, dependency-free string encoder the bundler
+ * inlines — so importing this module server-side still never pulls in the
+ * browser-oriented subscription registry or a `LunoraClient` instance.
  */
-
-/** Stringified queryKey used as a stable index/dep-list key. */
-const keyHash = (queryKey: QueryKey): string => JSON.stringify(queryKey);
 
 /**
- * `JSON.stringify` with deterministic key ordering for plain objects. Keeps a
- * subscription/stream cache key stable across rerenders where the consumer
- * happens to construct `args` with a different key order (`{a,b}` vs `{b,a}`).
- *
- * Shared by `useSubscription` and `useStream` so a key-order edge case fixed in
- * one never silently drifts from the other.
+ * Stringified queryKey used as a stable index/dep-list key. Encoded with
+ * `stableStringify` (not raw `JSON.stringify`) so the `args` object nested in
+ * the key hashes identically regardless of property insertion order — matching
+ * how TanStack itself hashes query keys.
  */
-const stableStringify = (value: unknown): string => {
-    if (value === null || typeof value !== "object") {
-        return JSON.stringify(value);
-    }
-
-    if (Array.isArray(value)) {
-        return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
-    }
-
-    const entries = Object.entries(value as Record<string, unknown>).toSorted(([a], [b]) => a.localeCompare(b));
-
-    return `{${entries.map(([key, value_]) => `${JSON.stringify(key)}:${stableStringify(value_)}`).join(",")}}`;
-};
+const keyHash = (queryKey: QueryKey): string => stableStringify(queryKey);
 
 /**
  * Project a Lunora `(fn, args, shardKey)` triple into the structural query key
@@ -59,4 +45,6 @@ const lunoraQueryKey = (function_: FunctionReference, args: Record<string, unkno
  */
 const serializeQueryKey = (queryKey: QueryKey): string => keyHash(queryKey);
 
-export { keyHash, lunoraQueryKey, serializeQueryKey, stableStringify };
+export { keyHash, lunoraQueryKey, serializeQueryKey };
+
+export { stableStringify } from "../../../shared/stable-key";

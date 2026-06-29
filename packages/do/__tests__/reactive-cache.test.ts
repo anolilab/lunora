@@ -52,7 +52,7 @@ describe("stableStringify", () => {
     it("encodes object keys in lexical order regardless of input order", () => {
         expect.assertions(1);
 
-        expect(stableStringify({ a: 1, b: 2 })).toBe(stableStringify({ a: 1, b: 2 }));
+        expect(stableStringify({ a: 1, b: 2 })).toBe(stableStringify({ b: 2, a: 1 }));
     });
 
     it("treats { a: undefined } the same as {}", () => {

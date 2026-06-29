@@ -33,6 +33,12 @@ const compareStrings = (a: string, b: string): number => {
  * `{ a: 1, b: 2 }` and `{ b: 2, a: 1 }` hash identically (copycat parity).
  * `bigint` is serialized as its decimal string (plain `JSON.stringify` throws on
  * it); `undefined` becomes the literal `"undefined"` so it is distinguishable.
+ *
+ * This is an INTENTIONAL fork of the canonical `shared/stable-key.ts` encoder —
+ * do not consolidate the two. copycat's deterministic-seed hash domain depends on
+ * this exact encoding: `undefined` must stay distinguishable (the shared encoder
+ * skips `undefined` object fields), `bigint` must serialize, and outputs must
+ * never start with `U+0000` (see {@link STRING_DOMAIN_TAG}). Different contracts.
  */
 const stableStringify = (input: unknown): string => {
     if (input === undefined) {
