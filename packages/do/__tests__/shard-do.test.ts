@@ -218,7 +218,7 @@ describe("shardDO", () => {
         expect(response.status).toBe(400);
     });
 
-    it("returns 500 with mapped error when handleRpc throws", async () => {
+    it("returns 500 with RPC_FAILED and generic message when handleRpc throws", async () => {
         expect.assertions(2);
 
         shard.rpcResult = undefined;
@@ -236,7 +236,32 @@ describe("shardDO", () => {
         const response = await failing.fetch(request);
 
         expect(response.status).toBe(500);
-        await expect(response.json()).resolves.toMatchObject({ error: { code: "RPC_FAILED", message: "boom" } });
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "RPC_FAILED", message: "internal error" } });
+    });
+
+    it("does not echo raw error.message to clients on unhandled handler throw (redaction regression)", async () => {
+        expect.assertions(3);
+
+        const sensitiveMessage = "table users column secret_token does not exist";
+        const failing = new TestShard(state, {});
+
+        failing.handleRpc = async () => {
+            throw new Error(sensitiveMessage);
+        };
+
+        const request = new Request("https://shard.internal/rpc", {
+            body: JSON.stringify({ args: {}, functionPath: "fail" }),
+            method: "POST",
+        });
+
+        const response = await failing.fetch(request);
+        const rawBody = await response.text();
+
+        expect(response.status).toBe(500);
+        // Sensitive throw text must NOT appear anywhere in the response body.
+        expect(rawBody).not.toContain(sensitiveMessage);
+        // Generic redacted message must be returned instead.
+        expect(JSON.parse(rawBody)).toMatchObject({ error: { code: "RPC_FAILED", message: "internal error" } });
     });
 
     it("subscribe updates attachment registry and acks", async () => {
