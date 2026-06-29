@@ -141,41 +141,58 @@ export const toMap = <T extends object>(rows: ReadonlyArray<T>, getKey: (row: T)
  * Build an `emit(next)` that diffs a desired keyed snapshot into a collection's
  * sync channel — only changed rows are written, so a reconnect snapshot or a
  * scope change never churns the synced view out from under a pending optimistic
- * row. The last-synced base is tracked in `synced`.
+ * row.
+ *
+ * The last-synced base is owned here, as each row's serialized form keyed by id.
+ * Keeping it internal (rather than accepting it as a parameter) is what makes the
+ * diff restart-safe: TanStack DB re-invokes a collection's `sync` closure after a
+ * GC teardown, and that teardown clears the collection's data (`state.cleanup()`
+ * → `syncedData.clear()`). A fresh `emit` therefore starts from an empty base and
+ * re-inserts every row into the emptied collection, instead of diffing against a
+ * stale prior snapshot and skipping the re-inserts. The serialized base also can
+ * never drift from the row set it describes — there is no second map to keep in
+ * lockstep.
  *
  * Change detection compares rows by `JSON.stringify`, which is key-order
- * sensitive — safe here because `synced` only ever holds server snapshots, whose
+ * sensitive — safe here because the base only ever holds server snapshots, whose
  * column order is stable across reconnects (same query projection). A sync source
  * with unstable key ordering would need a structural compare instead.
  */
-export const makeDiffEmit =
-    <T extends object>(synced: Map<string, T>, writer: SyncWriter<T>) =>
-    (next: Map<string, T>): void => {
+export const makeDiffEmit = <T extends object>(writer: SyncWriter<T>) => {
+    // Last-emitted base: each row's serialized form keyed by id. Reassigned (not
+    // mutated) each emit so the comparison never sees a half-updated map.
+    let syncedJson = new Map<string, string>();
+
+    return (next: Map<string, T>): void => {
         writer.begin();
 
-        for (const [key, value] of next) {
-            const previous = synced.get(key);
+        const nextJson = new Map<string, string>();
 
-            if (previous === undefined) {
+        for (const [key, value] of next) {
+            const valueJson = JSON.stringify(value);
+
+            nextJson.set(key, valueJson);
+
+            const previousJson = syncedJson.get(key);
+
+            if (previousJson === undefined) {
                 writer.write({ type: "insert", value });
-            } else if (JSON.stringify(previous) !== JSON.stringify(value)) {
+            } else if (previousJson !== valueJson) {
                 writer.write({ type: "update", value });
             }
         }
 
-        for (const key of synced.keys()) {
+        for (const key of syncedJson.keys()) {
             if (!next.has(key)) {
                 writer.write({ key, type: "delete" });
             }
         }
 
         writer.commit();
-        synced.clear();
 
-        for (const [key, value] of next) {
-            synced.set(key, value);
-        }
+        syncedJson = nextJson;
     };
+};
 
 /**
  * Run a Lunora mutation under the outbox's retry policy.

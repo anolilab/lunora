@@ -108,9 +108,8 @@ const recordingWriter = (): { ops: ({ key: string; type: "delete" } | { type: "i
 
 describe(makeDiffEmit, () => {
     it("emits only the rows that changed between snapshots", () => {
-        const synced = new Map<string, Row>();
         const { ops, writer } = recordingWriter();
-        const emit = makeDiffEmit(synced, writer);
+        const emit = makeDiffEmit(writer);
 
         // First snapshot: two inserts.
         emit(
@@ -127,7 +126,6 @@ describe(makeDiffEmit, () => {
             { type: "insert", value: { _id: "a", text: "1" } },
             { type: "insert", value: { _id: "b", text: "2" } },
         ]);
-        expect(synced.size).toBe(2);
 
         // Second snapshot: `a` changed, `b` removed, `c` added.
         ops.length = 0;
@@ -149,9 +147,8 @@ describe(makeDiffEmit, () => {
     });
 
     it("writes nothing when the snapshot is unchanged", () => {
-        const synced = new Map<string, Row>();
         const { ops, writer } = recordingWriter();
-        const emit = makeDiffEmit(synced, writer);
+        const emit = makeDiffEmit(writer);
         const snapshot = (): Map<string, Row> => toMap([{ _id: "a", text: "1" }] satisfies Row[], (r) => r._id);
 
         emit(snapshot());
@@ -159,6 +156,43 @@ describe(makeDiffEmit, () => {
         emit(snapshot());
 
         expect(ops).toStrictEqual([]);
+    });
+
+    it("re-inserts every row when sync restarts into a fresh writer", () => {
+        // TanStack DB clears a collection's data on GC teardown (`state.cleanup()`
+        // → `syncedData.clear()`) and re-invokes the `sync` closure on restart, so
+        // each `makeDiffEmit` must start from an empty base and re-insert every
+        // row into the emptied collection — never carry a stale base that would
+        // suppress the re-inserts (or churn unchanged rows as spurious updates).
+        const snapshot = (): Map<string, Row> =>
+            toMap(
+                [
+                    { _id: "a", text: "1" },
+                    { _id: "b", text: "2" },
+                ] satisfies Row[],
+                (r) => r._id,
+            );
+
+        const first = recordingWriter();
+        const emitBeforeRestart = makeDiffEmit(first.writer);
+
+        emitBeforeRestart(snapshot());
+
+        expect(first.ops).toStrictEqual([
+            { type: "insert", value: { _id: "a", text: "1" } },
+            { type: "insert", value: { _id: "b", text: "2" } },
+        ]);
+
+        // Restart: a brand-new emit over a brand-new (empty) writer, same rows.
+        const second = recordingWriter();
+        const emitAfterRestart = makeDiffEmit(second.writer);
+
+        emitAfterRestart(snapshot());
+
+        expect(second.ops).toStrictEqual([
+            { type: "insert", value: { _id: "a", text: "1" } },
+            { type: "insert", value: { _id: "b", text: "2" } },
+        ]);
     });
 });
 
