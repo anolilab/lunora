@@ -173,6 +173,33 @@ describe("studioPlugin", () => {
         expect(next).not.toHaveBeenCalled();
     });
 
+    it("serves studio assets with revalidation headers and honours a matching ETag", () => {
+        const middleware = installMiddleware("localhost");
+        const next = vi.fn<() => void>();
+        const { response } = makeResponse();
+
+        middleware({ url: `${STUDIO_PATH}/studio.js` }, response, next);
+
+        // No built studio (501) → no asset bytes to cache; skip.
+        if (response.statusCode !== 200) {
+            return;
+        }
+
+        const headers = Object.fromEntries((response.setHeader as ReturnType<typeof vi.fn>).mock.calls as [string, string][]);
+
+        // Unhashed URL → revalidate every load so a rebuild is never shadowed.
+        expect(headers["Cache-Control"]).toBe("no-cache");
+        expect(headers.ETag).toMatch(/^W\/"js-/);
+
+        const second = makeResponse();
+
+        middleware({ headers: { "if-none-match": headers.ETag }, url: `${STUDIO_PATH}/studio.js` } as { url?: string }, second.response, next);
+
+        expect(second.response.statusCode).toBe(304);
+        expect(second.end).toHaveBeenCalledWith();
+        expect(next).not.toHaveBeenCalled();
+    });
+
     it("returns 403 on a non-loopback bind", () => {
         expect.assertions(3);
 

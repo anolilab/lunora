@@ -50,6 +50,11 @@ const baseOptions = {
     bundle: true,
     format: "esm",
     minify: true,
+    // `minify` mangles top-level function/class names, but some bundled deps
+    // (e.g. `@floating-ui/react`, TanStack Router) branch on `Function.name` at
+    // runtime — mangling flips those guards into a render loop that hangs the
+    // data tab. `keepNames` restores the original `.name` after minification.
+    keepNames: true,
     // The studio is a browser SPA.
     platform: "browser",
     target: ["es2022"],

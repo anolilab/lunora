@@ -252,9 +252,14 @@ const createStudioHandler = (
     const projectRoot = server.config.root ?? process.cwd();
 
     // Serve a static studio asset (script/styles), re-reading from disk when a
-    // mid-session `@lunora/studio` rebuild changes the bytes. Returns `true` once
-    // it has written a response so the caller can stop dispatching.
-    const serveStaticAsset = (pathname: string, response: ServerResponse): void => {
+    // mid-session `@lunora/studio` rebuild changes the bytes.
+    //
+    // The assets sit at stable, unhashed URLs, so the browser would heuristically
+    // cache them and shadow a picked-up rebuild until a hard-reload (this once
+    // masked a fixed render loop behind a stale bundle). Send `no-cache` + a
+    // stamp-derived `ETag` so the browser must revalidate: unchanged assets cost
+    // a cheap `304`, a rebuild is always fetched fresh.
+    const serveStaticAsset = (pathname: string, request: IncomingMessage, response: ServerResponse): void => {
         const stamp = studioAssetsStamp();
 
         if (assets === undefined || stamp !== assetsStamp) {
@@ -271,6 +276,22 @@ const createStudioHandler = (
         }
 
         const isScript = pathname === STUDIO_SCRIPT_PATH;
+        const assetKind = isScript ? "js" : "css";
+        const etag = stamp === undefined ? undefined : `W/"${assetKind}-${String(stamp)}"`;
+
+        response.setHeader("Cache-Control", "no-cache");
+
+        if (etag !== undefined) {
+            response.setHeader("ETag", etag);
+
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `headers` is typed required but partial/mocked requests omit it
+            if (headerValue(request.headers?.["if-none-match"]) === etag.toLowerCase()) {
+                response.statusCode = 304;
+                response.end();
+
+                return;
+            }
+        }
 
         sendOk(response, isScript ? assets.script : assets.styles, isScript ? "text/javascript; charset=utf-8" : "text/css; charset=utf-8");
     };
@@ -335,7 +356,7 @@ const createStudioHandler = (
         // SPA route and gets the history fallback (the document) below, so a hard
         // load of a deep link like `/__lunora/data` boots the router there.
         if (pathname === STUDIO_SCRIPT_PATH || pathname === STUDIO_STYLE_PATH) {
-            serveStaticAsset(pathname, response);
+            serveStaticAsset(pathname, request, response);
 
             return;
         }
