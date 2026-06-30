@@ -150,7 +150,11 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
 
     const getKey = options.getKey ?? ((row: TRow) => row._id);
     const checkpoints = createCheckpointRegistry();
-    const synced = new Map<string, TRow>();
+    // JSON-serialized form of each last-synced row, keyed by row id.
+    // Owned here (outside sync.sync) so it persists correctly across sync
+    // restarts — a new makeDiffEmit closure on restart receives the same
+    // reference and starts from the committed synced state.
+    const syncedJson = new Map<string, string>();
 
     // Mutable sync handles, populated when TanStack calls the `sync` closure and
     // driven by `scope(...)` from outside it.
@@ -204,7 +208,7 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
         id: options.id ?? options.list?.__lunoraRef ?? `shape:${options.shape?.name ?? ""}`,
         sync: {
             sync: (writer) => {
-                emit = makeDiffEmit<TRow>(synced, writer);
+                emit = makeDiffEmit<TRow>(syncedJson, writer);
 
                 // Surface a subscription error and move the collection out of
                 // `loading`, so a rejected subscription never hangs it forever.

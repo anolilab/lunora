@@ -108,9 +108,10 @@ const recordingWriter = (): { ops: ({ key: string; type: "delete" } | { type: "i
 
 describe(makeDiffEmit, () => {
     it("emits only the rows that changed between snapshots", () => {
-        const synced = new Map<string, Row>();
+        // syncedJson is the single Map<string, string> cache owned at the caller level.
+        const syncedJson = new Map<string, string>();
         const { ops, writer } = recordingWriter();
-        const emit = makeDiffEmit(synced, writer);
+        const emit = makeDiffEmit(syncedJson, writer);
 
         // First snapshot: two inserts.
         emit(
@@ -127,7 +128,7 @@ describe(makeDiffEmit, () => {
             { type: "insert", value: { _id: "a", text: "1" } },
             { type: "insert", value: { _id: "b", text: "2" } },
         ]);
-        expect(synced.size).toBe(2);
+        expect(syncedJson.size).toBe(2);
 
         // Second snapshot: `a` changed, `b` removed, `c` added.
         ops.length = 0;
@@ -149,9 +150,9 @@ describe(makeDiffEmit, () => {
     });
 
     it("writes nothing when the snapshot is unchanged", () => {
-        const synced = new Map<string, Row>();
+        const syncedJson = new Map<string, string>();
         const { ops, writer } = recordingWriter();
-        const emit = makeDiffEmit(synced, writer);
+        const emit = makeDiffEmit(syncedJson, writer);
         const snapshot = (): Map<string, Row> => toMap([{ _id: "a", text: "1" }] satisfies Row[], (r) => r._id);
 
         emit(snapshot());
@@ -159,6 +160,70 @@ describe(makeDiffEmit, () => {
         emit(snapshot());
 
         expect(ops).toStrictEqual([]);
+    });
+
+    it("does not emit spurious updates for unchanged rows after a sync restart", () => {
+        // Simulates the sync-restart path in collection-options: syncedJson is
+        // owned at the outer closure level and shared across makeDiffEmit calls.
+        // A new `emit` closure (representing a sync.sync restart) must receive
+        // the same syncedJson reference so already-committed rows are seen as
+        // known, not inserted/updated anew.
+        const syncedJson = new Map<string, string>();
+        const { ops: ops1, writer: writer1 } = recordingWriter();
+
+        // First sync session: two rows arrive.
+        const emit1 = makeDiffEmit(syncedJson, writer1);
+        emit1(
+            toMap(
+                [
+                    { _id: "a", text: "hello" },
+                    { _id: "b", text: "world" },
+                ] satisfies Row[],
+                (r) => r._id,
+            ),
+        );
+
+        expect(ops1).toStrictEqual([
+            { type: "insert", value: { _id: "a", text: "hello" } },
+            { type: "insert", value: { _id: "b", text: "world" } },
+        ]);
+        expect(syncedJson.size).toBe(2);
+
+        // Sync restart: a new writer (and therefore a new emit closure) is created,
+        // but the same syncedJson is passed — the committed state must be preserved.
+        const { ops: ops2, writer: writer2 } = recordingWriter();
+        const emit2 = makeDiffEmit(syncedJson, writer2);
+
+        // Server re-delivers the same rows (identical snapshot after reconnect).
+        // No writes should be emitted — they are NOT new or changed.
+        emit2(
+            toMap(
+                [
+                    { _id: "a", text: "hello" },
+                    { _id: "b", text: "world" },
+                ] satisfies Row[],
+                (r) => r._id,
+            ),
+        );
+
+        expect(ops2).toStrictEqual([]);
+    });
+
+    it("correctly detects a change on the first emit after a sync restart", () => {
+        // After restart, a row whose value actually changed must still emit "update".
+        const syncedJson = new Map<string, string>();
+        const { writer: writer1 } = recordingWriter();
+        const emit1 = makeDiffEmit(syncedJson, writer1);
+
+        emit1(toMap([{ _id: "a", text: "v1" }] satisfies Row[], (r) => r._id));
+
+        // Restart with a new writer/closure, same syncedJson.
+        const { ops: ops2, writer: writer2 } = recordingWriter();
+        const emit2 = makeDiffEmit(syncedJson, writer2);
+
+        emit2(toMap([{ _id: "a", text: "v2" }] satisfies Row[], (r) => r._id));
+
+        expect(ops2).toStrictEqual([{ type: "update", value: { _id: "a", text: "v2" } }]);
     });
 });
 
