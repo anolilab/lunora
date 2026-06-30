@@ -11,12 +11,29 @@ interface QueuedMutation<T = unknown> {
      * signed out). Absent on hydrated legacy records, which replay ambiently.
      */
     readonly identity?: string | null;
+
+    /**
+     * `true` when a live caller is still awaiting this write's `mutation()`
+     * Promise; `false`/absent for a write restored from durable storage after a
+     * reload (its original awaiter is gone). Carried so terminal-verdict
+     * observers can distinguish "the caller already saw this" from "nothing else
+     * will report this". Maps to the public `MutationSettledEvent.hadAwaiter`.
+     */
+    liveAwaiter?: boolean;
     /** Rejects if the mutation can no longer be replayed. */
     readonly reject: (error: unknown) => void;
     /** Resolves once the mutation has been replayed against the server. */
     readonly resolve: (value: T) => void;
     readonly shardKey?: string;
 }
+
+/**
+ * Invoked when the queue itself discards an entry on overflow (capacity
+ * eviction), so the client can surface the dropped write on its
+ * terminal-verdict observer even when the entry has no live awaiter (a hydrated
+ * record). The `error` carries the `OFFLINE_QUEUE_OVERFLOW` code.
+ */
+type EvictHandler = (entry: QueuedMutation, error: Error & { code?: string }) => void;
 
 let idCounter = 0;
 
@@ -87,13 +104,16 @@ class OfflineQueue {
 
     private readonly persistence: PersistenceAdapter | undefined;
 
+    private readonly onEvict: EvictHandler | undefined;
+
     private readonly items: QueuedMutation[] = [];
 
-    public constructor(options: OfflineQueueOptions = {}, persistence?: PersistenceAdapter) {
+    public constructor(options: OfflineQueueOptions = {}, persistence?: PersistenceAdapter, onEvict?: EvictHandler) {
         this.maxItems = options.maxItems ?? 1000;
         this.queueBeforeFirstConnect = options.queueBeforeFirstConnect ?? false;
         this.onPersistenceError = options.onPersistenceError;
         this.persistence = persistence;
+        this.onEvict = onEvict;
     }
 
     public get size(): number {
@@ -126,6 +146,10 @@ class OfflineQueue {
 
                 (error as Error & { code?: string }).code = "OFFLINE_QUEUE_OVERFLOW";
                 dropped.reject(error);
+                // Also surface on the client's terminal-verdict observer: a
+                // hydrated entry's `reject` is a no-op, so without this an
+                // overflow eviction would silently drop a durable write.
+                this.onEvict?.(dropped, error);
             }
         }
     }

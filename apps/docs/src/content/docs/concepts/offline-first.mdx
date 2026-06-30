@@ -174,6 +174,36 @@ you writing sync glue:
    the cached reads and the queued writes rather than replaying them under the
    new identity.
 
+## Surfacing rejected writes
+
+A queued write that the server ultimately rejects (a coded conflict, a validation
+or RLS denial) rolls its optimistic row back. For a write you `await` directly,
+that surfaces as the rejected `mutation()` Promise. But a write queued in one
+session and replayed in the next — after a reload — has no awaiter left, and the
+same is true for a write the queue evicts on overflow or discards on an identity
+change. Without a signal, the optimistic row would simply vanish, which users
+read as data loss.
+
+`onMutationSettled` is the durable channel for exactly this. It fires once per
+queued write that reaches a terminal verdict — `committed` or `rejected` — and
+includes replays whose original Promise is gone (`hadAwaiter: false`):
+
+```ts
+client.onMutationSettled((event) => {
+    if (event.status === "rejected" && !event.hadAwaiter) {
+        // A queued change couldn't be saved and no caller is awaiting it —
+        // tell the user instead of silently dropping the rolled-back row.
+        toast.error(`Couldn't save your change (${event.code ?? "error"}).`);
+    }
+});
+```
+
+`event` carries the `functionPath`, `args`, `shardKey`, and — on rejection — the
+`code` (e.g. `CONFLICT`, `OFFLINE_QUEUE_OVERFLOW`, `OFFLINE_IDENTITY_CHANGED`)
+and `error`. Causally dependent writes that the server rejects in turn each
+surface their own event, in FIFO order. The [`@lunora/db`](/docs/packages/db)
+collection layer exposes the same idea as `onWriteRejected`.
+
 ## See also
 
 - [@lunora/db](/docs/packages/db) — the same outbox + optimistic model as a

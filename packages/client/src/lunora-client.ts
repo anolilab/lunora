@@ -1,6 +1,7 @@
 import { stableStringify } from "../../../shared/stable-key";
 import createInMemoryBookmarkStorage from "./bookmark";
 import { applyDelta, isMutationDelta } from "./delta-merge";
+import Listeners from "./listeners";
 import type { OptimisticUpdate } from "./local-store";
 import { createLocalStore } from "./local-store";
 import type { QueuedMutation } from "./offline-queue";
@@ -185,6 +186,42 @@ type WSState = "idle" | "connecting" | "open" | "closed";
  * `offline` = sockets exist but all are down (between reconnect attempts).
  */
 type ConnectionStatus = "connected" | "connecting" | "idle" | "offline";
+
+/**
+ * Terminal verdict for a mutation that passed through the offline queue,
+ * delivered to {@link LunoraClient.onMutationSettled}.
+ *
+ * Unlike the Promise returned by {@link LunoraClient.mutation} — which only the
+ * original caller can await, and which no longer exists after a reload — this
+ * fires for *every* queued write the server (or the queue) reaches a verdict on,
+ * including writes restored from durable storage in a later session. It is the
+ * channel a UI uses to tell the user "your queued change couldn't be saved"
+ * instead of silently dropping a rolled-back optimistic row.
+ *
+ * `status: "rejected"` carries the failure `code` (e.g. `CONFLICT`,
+ * `OFFLINE_QUEUE_OVERFLOW`, `OFFLINE_IDENTITY_CHANGED`) and the `error`.
+ * `hadAwaiter` is `false` for a write whose original `mutation()` Promise is
+ * gone (a hydrated/post-reload replay or an eviction), so a listener can tell
+ * "the caller already saw this" apart from "nothing else will report this".
+ */
+interface MutationSettledEvent {
+    /** The write's args, so a listener can describe or re-offer the change. */
+    readonly args: Record<string, unknown>;
+    /** Server/queue error code on `rejected` (e.g. `CONFLICT`), when present. */
+    readonly code?: string;
+    /** The rejection error on `status: "rejected"`. */
+    readonly error?: unknown;
+    /** The `&lt;file>:&lt;function>` reference of the mutation. */
+    readonly functionPath: string;
+    /** Whether a live caller was still awaiting this write's `mutation()` Promise. */
+    readonly hadAwaiter: boolean;
+    /** The write's stable id (idempotency key / queue id). */
+    readonly id: string;
+    /** Shard the write targeted, if any. */
+    readonly shardKey?: string;
+    /** Terminal outcome. */
+    readonly status: "committed" | "rejected";
+}
 
 /**
  * Per-call options for {@link LunoraClient.mutation} — the optimistic-update
@@ -617,13 +654,16 @@ class LunoraClient {
     private closed = false;
 
     /** Subscribers to auth-token changes (see `onAuthTokenChange`). */
-    private readonly authTokenListeners = new Set<(token: string | null) => void>();
+    private readonly authTokenListeners = new Listeners<string | null>();
 
     /** Subscribers to aggregate connection-status changes (see `onConnectionStatus`). */
-    private readonly statusListeners = new Set<(status: ConnectionStatus) => void>();
+    private readonly statusListeners = new Listeners<ConnectionStatus>();
 
     /** Subscribers notified when the server drops a socket for an expired token (see `onTokenExpired`). */
-    private readonly tokenExpiredListeners = new Set<() => void>();
+    private readonly tokenExpiredListeners = new Listeners();
+
+    /** Subscribers to offline-queued mutation verdicts (see `onMutationSettled`). */
+    private readonly mutationSettledListeners = new Listeners<MutationSettledEvent>();
 
     /**
      * Whisper-topic handlers, keyed by `connectionKey(shardKey)` → topic → set
@@ -672,7 +712,9 @@ class LunoraClient {
         this.persistence = options.persistence;
         this.queryCache = options.queryCache === false ? undefined : options.queryCache;
         this.onPersistenceError = options.offlineQueue?.onPersistenceError;
-        this.offlineQueue = new OfflineQueue(options.offlineQueue, options.persistence);
+        this.offlineQueue = new OfflineQueue(options.offlineQueue, options.persistence, (entry, error) => {
+            this.emitItemSettled(entry, "rejected", error);
+        });
         this.outbox = options.outbox;
         // A db app persists a stable id alongside the outbox and passes it in; the
         // standalone client gets an ephemeral per-session id, fine because it only
@@ -723,13 +765,7 @@ class LunoraClient {
         // path so a token swap doesn't leave another user's writes lingering.)
         this.rejectQueuedForIdentityChange();
 
-        for (const listener of this.authTokenListeners) {
-            try {
-                listener(token);
-            } catch {
-                /* listener threw — ignore */
-            }
-        }
+        this.authTokenListeners.emit(token);
     }
 
     public getAuthToken(): string | null {
@@ -832,11 +868,7 @@ class LunoraClient {
      * the current value.
      */
     public onAuthTokenChange(listener: (token: string | null) => void): Unsubscribe {
-        this.authTokenListeners.add(listener);
-
-        return () => {
-            this.authTokenListeners.delete(listener);
-        };
+        return this.authTokenListeners.add(listener);
     }
 
     /**
@@ -1098,11 +1130,7 @@ class LunoraClient {
      * with a freshly minted one. Returns an unsubscribe function.
      */
     public onTokenExpired(listener: () => void): Unsubscribe {
-        this.tokenExpiredListeners.add(listener);
-
-        return () => {
-            this.tokenExpiredListeners.delete(listener);
-        };
+        return this.tokenExpiredListeners.add(listener);
     }
 
     // --- Connection status --------------------------------------------------
@@ -1121,12 +1149,26 @@ class LunoraClient {
      * unsubscribe function.
      */
     public onConnectionStatus(listener: (status: ConnectionStatus) => void): Unsubscribe {
-        this.statusListeners.add(listener);
+        const unsubscribe = this.statusListeners.add(listener);
+
         listener(this.computeStatus());
 
-        return () => {
-            this.statusListeners.delete(listener);
-        };
+        return unsubscribe;
+    }
+
+    /**
+     * Subscribe to terminal verdicts for offline-queued mutations. The listener
+     * fires once per queued write that commits or is rejected — including a write
+     * restored from durable storage after a reload, whose original `mutation()`
+     * Promise no longer exists (`hadAwaiter: false`), and a write the queue
+     * evicts on overflow or discards on an identity change. This is the durable
+     * channel for surfacing a rolled-back optimistic write to the UI; an online
+     * mutation that never queued still surfaces through the Promise `mutation()`
+     * returns. The listener is NOT invoked on registration. Returns an
+     * unsubscribe function. See {@link MutationSettledEvent}.
+     */
+    public onMutationSettled(listener: (event: MutationSettledEvent) => void): Unsubscribe {
+        return this.mutationSettledListeners.add(listener);
     }
 
     // --- RPC ---------------------------------------------------------------
@@ -2310,6 +2352,7 @@ class LunoraClient {
         this.authTokenListeners.clear();
         this.statusListeners.clear();
         this.tokenExpiredListeners.clear();
+        this.mutationSettledListeners.clear();
         this.whisperHandlers.clear();
 
         // Shape subscriptions retain user row/error callbacks and replicated
@@ -2371,6 +2414,10 @@ class LunoraClient {
             const entry: QueuedMutation<ReturnOf<F>> = {
                 args: argsRecord,
                 functionPath: function_.__lunoraRef,
+                // A live caller is awaiting this Promise, so a terminal verdict
+                // reaches them directly; the observer event carries
+                // `hadAwaiter: true`. Hydrated replays leave this unset.
+                liveAwaiter: true,
                 // Reuse the call's idempotency key as the queue id so the replay
                 // carries the same `x-lunora-mutation-id` the server dedups on.
                 id: mutationId,
@@ -2541,13 +2588,26 @@ class LunoraClient {
 
         this.lastStatus = next;
 
-        for (const listener of this.statusListeners) {
-            try {
-                listener(next);
-            } catch {
-                /* listener threw — ignore */
-            }
-        }
+        this.statusListeners.emit(next);
+    }
+
+    /**
+     * Build a {@link MutationSettledEvent} from a queued entry and emit it on the
+     * {@link onMutationSettled} channel. `item.id` is always assigned by the time
+     * a write settles (`enqueue`/`hydrate` guarantee it), so the `?? ""` fallback
+     * is unreachable — present only to satisfy the optional queue-id type.
+     */
+    private emitItemSettled(item: QueuedMutation, status: "committed" | "rejected", error?: unknown): void {
+        this.mutationSettledListeners.emit({
+            args: item.args,
+            code: error === undefined ? undefined : (error as { code?: string }).code,
+            error,
+            functionPath: item.functionPath,
+            hadAwaiter: item.liveAwaiter ?? false,
+            id: item.id ?? "",
+            shardKey: item.shardKey,
+            status,
+        });
     }
 
     /**
@@ -3628,13 +3688,7 @@ class LunoraClient {
 
     /** Notify every {@link onTokenExpired} listener (best-effort, listener throws swallowed). */
     private notifyTokenExpired(): void {
-        for (const listener of this.tokenExpiredListeners) {
-            try {
-                listener();
-            } catch {
-                /* listener threw — ignore */
-            }
-        }
+        this.tokenExpiredListeners.emit();
     }
 
     private handleCompleteMessage(id: string): void {
@@ -3717,6 +3771,7 @@ class LunoraClient {
 
             (error as Error & { code?: string }).code = "OFFLINE_IDENTITY_CHANGED";
             item.reject(error);
+            this.emitItemSettled(item, "rejected", error);
         }
 
         this.clearQueryCacheForIdentityChange();
@@ -3789,6 +3844,7 @@ class LunoraClient {
 
                 (error as Error & { code?: string }).code = "OFFLINE_IDENTITY_CHANGED";
                 item.reject(error);
+                this.emitItemSettled(item, "rejected", error);
 
                 continue;
             }
@@ -3804,6 +3860,7 @@ class LunoraClient {
 
                 this.unpersist(item.id);
                 item.resolve(value);
+                this.emitItemSettled(item, "committed");
             } catch (error) {
                 // Only a *coded* error means the server reached a verdict on a
                 // mutation it received: replaying would re-trigger the same
@@ -3814,6 +3871,7 @@ class LunoraClient {
                 if ((error as { code?: string }).code !== undefined) {
                     this.unpersist(item.id);
                     item.reject(error);
+                    this.emitItemSettled(item, "rejected", error);
 
                     continue;
                 }
@@ -3831,4 +3889,4 @@ class LunoraClient {
 }
 
 export { LunoraClient };
-export type { ConnectionStatus, MutationCallOptions, SyncWatermark };
+export type { ConnectionStatus, MutationCallOptions, MutationSettledEvent, SyncWatermark };

@@ -63,6 +63,21 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 new LunoraClient({ url, persistence: createAsyncStoragePersistence({ storage: AsyncStorage }) });
 ```
 
+A queued write that is replayed after a reload — or evicted on overflow, or
+discarded on an identity change — has no live `mutation()` Promise left to
+reject, so its rolled-back optimistic row would vanish silently. Subscribe to
+`onMutationSettled` for a durable, per-write terminal verdict (`committed` /
+`rejected`, with `hadAwaiter: false` for those orphaned replays) and surface the
+rejection in your UI:
+
+```ts
+client.onMutationSettled((event) => {
+    if (event.status === "rejected") {
+        toast.error(`Couldn't save your change (${event.code ?? "error"}).`);
+    }
+});
+```
+
 See [Offline-first](/docs/concepts/offline-first) for the full reads + writes story.
 
 ## Optimistic updates
