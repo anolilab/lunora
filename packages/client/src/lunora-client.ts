@@ -3558,6 +3558,7 @@ class LunoraClient {
      * client must re-render changed, but the resume position may have moved".
      */
     private ackAndAdvanceCursor(state: SubscriptionState, cursor: number | undefined, epoch: string | undefined): void {
+        /* eslint-disable no-param-reassign -- advance the shared subscription state in place (same pattern as the optimistic-update path above) */
         state.acked = true;
 
         if ((cursor !== undefined && cursor !== state.serverCursor) || (epoch !== undefined && epoch !== state.serverEpoch)) {
@@ -3571,6 +3572,7 @@ class LunoraClient {
 
             this.persistQueryValue(state);
         }
+        /* eslint-enable no-param-reassign */
     }
 
     /**

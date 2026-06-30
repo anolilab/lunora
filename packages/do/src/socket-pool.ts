@@ -9,18 +9,13 @@
  * single, shared loop.
  *
  * Semantics:
- * - Each item is visited EXACTLY once: `concurrency` workers pull from a shared
- *   cursor, so no item is processed twice and none is skipped.
- * - At most `concurrency` (default 8) `processOne` calls are in flight at once.
- *   Larger batches don't help the subscription paths — their handlers spend
- *   their time on the DO's single-threaded SQLite — and risk exhausting the
- *   I/O budget.
- * - Within a worker, items run one at a time (awaited), so a `processOne` that
- *   awaits `awaitWsDrain` before each `ws.send` genuinely paces that socket.
- * - `undefined` is the past-the-end sentinel (an out-of-range index), so callers
- *   must not pass an array containing `undefined` items.
+ * - Each item is visited EXACTLY once: `concurrency` workers pull from a shared cursor, so no item is processed twice and none is skipped.
+ * - At most `concurrency` (default 8) `processOne` calls are in flight at once. Larger batches don't help the subscription paths (their handlers spend their time on the DO's single-threaded SQLite) and risk exhausting the I/O budget.
+ * - Within a worker, items run one at a time (awaited), so a `processOne` that awaits `awaitWsDrain` before each `ws.send` genuinely paces that socket.
+ * - `undefined` is the past-the-end sentinel (an out-of-range index), so callers must not pass an array containing `undefined` items.
  */
-export const runSocketPool = async <T>(items: readonly T[], processOne: (item: T) => Promise<void>, concurrency = 8): Promise<void> => {
+// eslint-disable-next-line import/prefer-default-export -- named export: import sites stay uniform (`import { runSocketPool }`), per the repo's no-default-mixing convention
+export const runSocketPool = async <T>(items: ReadonlyArray<T>, processOne: (item: T) => Promise<void>, concurrency = 8): Promise<void> => {
     let cursor = 0;
 
     const worker = async (): Promise<void> => {

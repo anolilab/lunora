@@ -514,6 +514,7 @@ export interface ServerSettledMessage {
     /** The CDC epoch this settled frame's cursor belongs to (see {@link CachedQuery.serverEpoch}). */
     epoch?: string;
     id: string;
+
     /**
      * The highest custom-mutator `mutationId` from this client the server has
      * now applied (the per-client `__client_watermark`). Forwarded to a

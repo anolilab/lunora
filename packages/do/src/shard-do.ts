@@ -5494,13 +5494,13 @@ abstract class ShardDO {
      * different identity, so this predicate gates {@link resolveReactiveOutcomeDeduped}
      * shut for them.
      */
-    // eslint-disable-next-line class-methods-use-this -- a pure predicate over the function path; a method so the security boundary lives in one named place (and tests can probe it)
+    // eslint-disable-next-line class-methods-use-this, @typescript-eslint/member-ordering -- pure predicate over the function path; a protected method so the security boundary lives in one named place (and tests can probe it), co-located with the reactive dedup it gates rather than hoisted away from its only caller
     protected isIdentityIndependent(functionPath: string): boolean {
         return functionPath.startsWith(ADMIN_FUNCTION_PREFIX);
     }
 
     /**
-     * {@link resolveReactiveOutcome} with flush-local memoization across sockets.
+     * Memoizing wrapper over {@link resolveReactiveOutcome}: flush-local sharing across sockets.
      * Within a single {@link refreshSubscriptions} pass, N sockets subscribed to
      * the SAME identity-independent `(functionPath, args)` re-run the query N
      * times today (see the Case-6 fan-out characterization). When the read is
@@ -5571,7 +5571,7 @@ abstract class ShardDO {
      * 4. On normal completion send `{type:"complete"}`; on throw send
      * `{type:"error"}`. Either way drop the controller.
      */
-
+    // eslint-disable-next-line sonarjs/cognitive-complexity -- the stream lifecycle (ack → chunk pump → complete/error) plus the structured-vs-redacted error branch is the wire protocol and reads clearer inline than split across helpers sharing the controller + socket
     private async handleStream(ws: WebSocket, id: string, functionPath: string, args: Record<string, unknown>): Promise<void> {
         const iterable = this.executeStream(functionPath, args);
 
@@ -5646,7 +5646,8 @@ abstract class ShardDO {
                 console.error("[@lunora/do] unhandled stream error:", error);
             }
 
-            const message = isStructured ? (error instanceof Error ? error.message : String(error)) : "internal error";
+            const rawMessage = error instanceof Error ? error.message : String(error);
+            const message = isStructured ? rawMessage : "internal error";
 
             ws.send(
                 JSON.stringify({
@@ -6316,7 +6317,7 @@ abstract class ShardDO {
      * changelog read that {@link readShapeOpRange} memoizes per flush, and gives
      * tests a point to count the reads the op-range cache collapses.
      */
-    // eslint-disable-next-line class-methods-use-this -- thin pass-through seam over the module-level reader; a method so the op-range cache + tests share one read point
+    // eslint-disable-next-line class-methods-use-this, @typescript-eslint/member-ordering -- thin pass-through seam over the module-level reader; a protected method so the op-range cache + tests share one read point, co-located with the poke path it serves rather than hoisted away from its only caller
     protected readShapeCdcPage(sql: SqlExec, sinceSeq: number, tables: ReadonlySet<string>): { changes: CdcChange[]; cursor: number } {
         return readCdcChanges(sql, { sinceSeq, tables });
     }

@@ -4,12 +4,12 @@ import { runSocketPool } from "../src/socket-pool";
 
 /** A deferred whose `resolve` is callable from outside the executor. */
 const defer = (): { promise: Promise<void>; resolve: () => void } => {
-    let resolve: () => void = () => {};
-    const promise = new Promise<void>((r) => {
-        resolve = r;
+    let resolveFn: () => void = () => {};
+    const promise = new Promise<void>((resolve) => {
+        resolveFn = resolve;
     });
 
-    return { promise, resolve };
+    return { promise, resolve: resolveFn };
 };
 
 describe(runSocketPool, () => {
@@ -26,7 +26,7 @@ describe(runSocketPool, () => {
         });
 
         expect(visits).toHaveLength(items.length);
-        expect([...visits].sort((a, b) => a - b)).toStrictEqual(items);
+        expect(visits.toSorted((a, b) => a - b)).toStrictEqual(items);
     });
 
     it("never runs more than `concurrency` workers at once", async () => {
@@ -51,6 +51,7 @@ describe(runSocketPool, () => {
 
         // Let the workers ramp up, then release the gates in waves.
         for (const gate of gates) {
+            // eslint-disable-next-line no-await-in-loop -- intentionally yield a microtask between gate releases so workers ramp up before draining
             await Promise.resolve();
             gate.resolve();
         }
@@ -85,6 +86,6 @@ describe(runSocketPool, () => {
             return Promise.resolve();
         });
 
-        expect(visits.sort((a, b) => a - b)).toStrictEqual([1, 2]);
+        expect(visits.toSorted((a, b) => a - b)).toStrictEqual([1, 2]);
     });
 });

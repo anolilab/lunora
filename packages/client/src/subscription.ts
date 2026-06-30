@@ -23,20 +23,6 @@ export interface SubscriptionState {
      */
     readonly argsKey: string;
     readonly callbacks: Set<SubscriptionCallback>;
-    /** Notified when the server rejects this subscription (e.g. admin auth). */
-    readonly errorCallbacks: Set<SubscriptionErrorCallback>;
-    readonly fn: FunctionReference;
-    readonly id: string;
-
-    /**
-     * The highest custom-mutator `mutationId` from this client the server has
-     * applied, captured from the last `settled` frame (the suppressed-list-frame
-     * watermark). Forwarded to {@link SubscriptionState.checkpointCallbacks}.
-     * Absent until a `settled` frame arrives.
-     */
-    lastMutationId?: number;
-    /** Last known value, used to short-circuit `useQuery`-style consumers. */
-    lastValue: unknown;
 
     /**
      * Notified when a `settled` frame advances this subscription's watermark — a
@@ -52,6 +38,22 @@ export interface SubscriptionState {
      * `useQuery` consumers register nothing, leaving the set empty.
      */
     readonly checkpointCallbacks: Set<(watermark: { checkpoint?: number; mutationId?: number }) => void>;
+    /** Notified when the server rejects this subscription (e.g. admin auth). */
+    readonly errorCallbacks: Set<SubscriptionErrorCallback>;
+    readonly fn: FunctionReference;
+
+    readonly id: string;
+
+    /**
+     * The highest custom-mutator `mutationId` from this client the server has
+     * applied, captured from the last `settled` frame (the suppressed-list-frame
+     * watermark). Forwarded to {@link SubscriptionState.checkpointCallbacks}.
+     * Absent until a `settled` frame arrives.
+     */
+    lastMutationId?: number;
+
+    /** Last known value, used to short-circuit `useQuery`-style consumers. */
+    lastValue: unknown;
 
     /**
      * The `__cdc_log` high-watermark (`cursor`) the `lastValue` reflects,

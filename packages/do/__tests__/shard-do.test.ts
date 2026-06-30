@@ -248,7 +248,7 @@ describe("shardDO", () => {
         expect(text).not.toContain(sensitive);
         expect(JSON.parse(text)).toMatchObject({ error: { code: "RPC_FAILED", message: "internal error" } });
         // ...but it is logged server-side for diagnosis.
-        expect(errorSpy).toHaveBeenCalled();
+        expect(errorSpy).toHaveBeenCalledWith();
 
         errorSpy.mockRestore();
     });

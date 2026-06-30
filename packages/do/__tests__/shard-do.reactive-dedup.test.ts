@@ -11,12 +11,9 @@
  * The SECURITY boundary is `isIdentityIndependent`: an RLS / `ctx.auth` / flag
  * read evaluates under the socket's own verified identity and MUST NOT be
  * shared, or one identity's rows leak to another. These tests lock in:
- *   1. POSITIVE — an identity-independent query runs once for N sockets.
- *   2. NEGATIVE — an identity-dependent query runs once PER socket, each under
- *      its own identity (no cross-identity leak).
- *   3. SANITY — forcing the predicate true on an identity-dependent query
- *      reintroduces the leak (1 run, the second socket served the first's
- *      identity), proving the predicate is load-bearing.
+ * 1. POSITIVE — an identity-independent query runs once for N sockets.
+ * 2. NEGATIVE — an identity-dependent query runs once PER socket, each under its own identity (no cross-identity leak).
+ * 3. SANITY — forcing the predicate true on an identity-dependent query reintroduces the leak (1 run, the second socket served the first's identity), proving the predicate is load-bearing.
  */
 import { describe, expect, it } from "vitest";
 
@@ -74,7 +71,7 @@ const createFakeState = (): ShardDOState & { sockets: FakeWebSocket[] } => {
                 },
             },
         },
-    } as unknown as ShardDOState & { sockets: FakeWebSocket[] };
+    };
 };
 
 interface IdentityArg {
@@ -92,10 +89,10 @@ interface IdentityArg {
 class DedupShard extends ShardDO {
     public readonly runs: { functionPath: string; userId: string }[] = [];
 
-    private counter = 0;
-
     /** `functionPaths` forced identity-independent on top of the admin default. */
     public forcedIndependent = new Set<string>();
+
+    private counter = 0;
 
     public override handleRpc(): Promise<unknown> {
         this.recordChangedTable("messages");
@@ -147,7 +144,9 @@ const lastOwner = (ws: FakeWebSocket, subId: string): string | undefined => {
     return frames.at(-1)?.data?.owner;
 };
 
-const attachmentFor = (userId: string): SocketAttachment => ({ identity: { userId }, subs: {}, userId }) as SocketAttachment;
+const attachmentFor = (userId: string): SocketAttachment => {
+    return { identity: { userId }, subs: {}, userId };
+};
 
 describe("shardDO reactive dedup (identity-independent runs)", () => {
     it("positive: an identity-independent query runs ONCE for N sockets in a flush", async () => {

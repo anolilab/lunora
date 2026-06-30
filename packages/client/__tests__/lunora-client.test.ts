@@ -492,7 +492,9 @@ describe("lunoraClient", () => {
 
             // An older client (or one with no settled support) safely ignores an
             // unknown frame — the default switch arm is a no-op.
-            expect(() => socket.receive({ id: sub.id, type: "totally-unknown-frame" })).not.toThrow();
+            expect(() => {
+                socket.receive({ id: sub.id, type: "totally-unknown-frame" });
+            }).not.toThrow();
 
             client.close();
         });
@@ -513,7 +515,9 @@ describe("lunoraClient", () => {
 
             socket.open();
 
-            expect(() => socket.receive({ cursor: 1, id: "sub_does_not_exist", type: "settled" })).not.toThrow();
+            expect(() => {
+                socket.receive({ cursor: 1, id: "sub_does_not_exist", type: "settled" });
+            }).not.toThrow();
 
             client.close();
         });
