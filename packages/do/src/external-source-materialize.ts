@@ -17,9 +17,11 @@
  * next tick retries (design §3.4).
  */
 
-import type { DatabaseWriterLike } from "./ctx-db";
+import type { DatabaseWriterLike, SqlExec } from "./ctx-db";
 import { applyCdcChanges } from "./ctx-db-cdc";
-import { diffExternalSource } from "./external-source-diff";
+import { selectShapeRows } from "./ctx-db-shapes";
+import { diffExternalSource, projectExternalSourceRow } from "./external-source-diff";
+import { stableStringify } from "./reactive-cache";
 
 /** The outcome of one materialize pass: how many changes were applied, and the baseline the next tick diffs from. */
 interface MaterializeResult {
@@ -47,5 +49,42 @@ const materializeExternalRows = async (
     return { applied: changes.length, nextBaseline };
 };
 
-export { materializeExternalRows };
+/**
+ * Read the materialized table's current membership as the canonical full-pull
+ * baseline (`id → canonical JSON`). Reuses the shape scanner (`selectShapeRows`)
+ * and the SAME {@link projectExternalSourceRow} + {@link stableStringify} the diff
+ * uses, so a stored row (with `_creationTime` + arbitrary key order) compares
+ * byte-identical to its freshly-pulled source counterpart — an unchanged row
+ * produces no spurious update.
+ */
+const readExternalSourceBaseline = (sql: SqlExec, table: string, columns?: ReadonlyArray<string>): Map<string, string> => {
+    const baseline = new Map<string, string>();
+
+    for (const { doc, id } of selectShapeRows(sql, table, undefined)) {
+        baseline.set(id, stableStringify(projectExternalSourceRow({ ...doc, _id: id }, columns)));
+    }
+
+    return baseline;
+};
+
+/**
+ * Run one full-pull materialize tick: read the table's current membership as the
+ * baseline, diff the freshly-pulled rows against it, and apply the delta. This is
+ * the system-driven loop body the DO poll alarm calls — the table IS the baseline
+ * (design §1 Fact A), so no separate snapshot is kept. Pass both the read handle
+ * (`sql`) and the validated `writer` (the DO has both); they must address the same
+ * table.
+ */
+const runExternalSourceTick = async (
+    sql: SqlExec,
+    writer: DatabaseWriterLike,
+    pulled: ReadonlyArray<Record<string, unknown>>,
+    options: { columns?: ReadonlyArray<string>; table: string },
+): Promise<MaterializeResult> => {
+    const baseline = readExternalSourceBaseline(sql, options.table, options.columns);
+
+    return materializeExternalRows(writer, pulled, baseline, options);
+};
+
+export { materializeExternalRows, readExternalSourceBaseline, runExternalSourceTick };
 export type { MaterializeResult };

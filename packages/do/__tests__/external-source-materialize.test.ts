@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, readCdcChanges, runShardMigrations } from "../src/ctx-db";
-import { materializeExternalRows } from "../src/external-source-materialize";
+import { materializeExternalRows, runExternalSourceTick } from "../src/external-source-materialize";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
@@ -103,5 +103,64 @@ describe("materializeExternalRows", () => {
 
         expect(applied).toBe(0);
         expect([...nextBaseline]).toStrictEqual([...baseline]);
+    });
+});
+
+describe("runExternalSourceTick (real baseline read from the table)", () => {
+    beforeEach(() => {
+        harness = createSqliteExec();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("a steady tick applies nothing — the stored _creationTime + key order do not register as a change", async () => {
+        expect.assertions(2);
+
+        const writer = setupWriter();
+
+        // Seed: the writer stamps `_creationTime` and stores the doc in its own key order.
+        await writer.insert("documents", { _id: "d1", orgId: "org_1", title: "one" }, { allowExplicitId: true });
+        await writer.insert("documents", { _id: "d2", orgId: "org_1", title: "two" }, { allowExplicitId: true });
+
+        // Pulled rows are the SOURCE shape: no `_creationTime`, keys in a different
+        // order than stored. Canonicalization must make these compare equal.
+        const pulled = [
+            { title: "one", _id: "d1", orgId: "org_1" },
+            { orgId: "org_1", title: "two", _id: "d2" },
+        ];
+
+        const first = await runExternalSourceTick(harness.sql, writer, pulled, { table: "documents" });
+
+        expect(first.applied).toBe(0);
+
+        // A second tick is also a no-op — the baseline derived from the table is stable.
+        const second = await runExternalSourceTick(harness.sql, writer, pulled, { table: "documents" });
+
+        expect(second.applied).toBe(0);
+    });
+
+    it("reads the live table as the baseline, so it applies only the upstream delta and deletes", async () => {
+        expect.assertions(4);
+
+        const writer = setupWriter();
+
+        await writer.insert("documents", { _id: "d1", orgId: "org_1", title: "one" }, { allowExplicitId: true });
+        await writer.insert("documents", { _id: "d2", orgId: "org_1", title: "two" }, { allowExplicitId: true });
+
+        // Upstream: d1 retitled, d2 gone, d3 new.
+        const pulled = [
+            { _id: "d1", orgId: "org_1", title: "one-edited" },
+            { _id: "d3", orgId: "org_1", title: "three" },
+        ];
+
+        const { applied } = await runExternalSourceTick(harness.sql, writer, pulled, { table: "documents" });
+
+        // update d1 + insert d3 + delete d2 = 3.
+        expect(applied).toBe(3);
+        await expect(writer.get("d1")).resolves.toMatchObject({ title: "one-edited" });
+        await expect(writer.get("d2")).resolves.toBeNull();
+        await expect(writer.get("d3")).resolves.toMatchObject({ title: "three" });
     });
 });
