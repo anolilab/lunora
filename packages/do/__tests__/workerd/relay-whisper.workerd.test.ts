@@ -109,4 +109,40 @@ describe("relay whisper hub (workerd e2e)", () => {
         expect(whispersOf(r2).some((frame) => (frame.data as { probe?: number }).probe !== undefined)).toBe(true); // the relay's other socket too
         expect(whispersOf(o1).some((frame) => (frame.data as { probe?: number }).probe !== undefined)).toBe(false); // owner sender excluded
     });
+
+    it("re-forwards a relay's whisper to the OTHER relays via the owner, skipping the origin", async () => {
+        expect.assertions(3);
+
+        const owner = env.SHARD.get(env.SHARD.idFromName("room-2"));
+        const relayA = env.SHARD.get(env.SHARD.idFromName("room-2::relay::0"));
+        const relayB = env.SHARD.get(env.SHARD.idFromName("room-2::relay::1"));
+
+        const o1 = await open(owner, "room-2");
+        const a1 = await open(relayA, "room-2-relay-0");
+        const b1 = await open(relayB, "room-2-relay-1");
+
+        subscribe(o1, "t");
+        subscribe(a1, "t");
+        subscribe(b1, "t");
+
+        // A whisper from a socket on relay A must reach the owner AND relay B (the
+        // owner re-forwards to every relay EXCEPT the origin), but never echo back to
+        // the sender on relay A. Both relays must have attached to the owner first;
+        // probe with fresh markers until relay B (the cross-relay hop) receives one.
+        let probe = 0;
+        await waitFor(
+            () => {
+                probe += 1;
+                whisper(a1, "t", { probe });
+
+                return b1.frames.some((frame) => frame.type === "whisper" && (frame.data as { probe?: number } | undefined)?.probe !== undefined);
+            },
+            80,
+            40,
+        );
+
+        expect(whispersOf(b1).some((frame) => (frame.data as { probe?: number }).probe !== undefined)).toBe(true); // the OTHER relay got it
+        expect(whispersOf(o1).some((frame) => (frame.data as { probe?: number }).probe !== undefined)).toBe(true); // the owner got it
+        expect(whispersOf(a1)).toHaveLength(0); // the origin-relay sender is never echoed
+    });
 });
