@@ -254,6 +254,19 @@ describe("lunoraCollectionOptions (list source)", () => {
         expect(subscribeOptionsFrom(client).onCheckpoint).toBeTypeOf("function");
     });
 
+    it("maps load: 'eager' to TanStack startSync, and defaults to lazy (omitted)", () => {
+        const { client } = makeClient();
+
+        const lazy = lunoraCollectionOptions({ client, list: ref("messages:list") });
+        const eager = lunoraCollectionOptions({ client, list: ref("teams:list"), load: "eager" });
+
+        // Lazy is the default: `startSync` is omitted (TanStack's default false →
+        // sync starts on the first subscriber), keeping the config byte-identical.
+        expect((lazy.config as { startSync?: boolean }).startSync).toBeUndefined();
+        // Eager opts the collection into syncing at creation (instant reference data).
+        expect((eager.config as { startSync?: boolean }).startSync).toBe(true);
+    });
+
     it("drops a stuck overlay when a settled frame's onCheckpoint advances the watermark", async () => {
         const { client } = makeClient();
 

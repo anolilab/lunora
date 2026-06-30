@@ -213,6 +213,25 @@ db.scope.messages({ channelId }); // sync this channel
 db.scope.messages(); // detach (e.g. on unmount)
 ```
 
+## When collections load
+
+Each collection chooses _when_ it starts syncing — together with `scopeBy` this
+gives the full lazy / partial / eager load taxonomy declaratively:
+
+```ts
+defineCollections(client, {
+    // lazy (default): syncs on the first useLiveQuery subscriber
+    messages: { list: api.messages.list, scopeBy: "channelId" }, // + partial: only the scoped channel
+    // eager: syncs at boot — for small "instant" reference data you want warm
+    labels: { list: api.labels.list, load: "eager" },
+});
+```
+
+`load: "eager"` maps to TanStack DB's `startSync`. Even eager, a collection
+pauses syncing while it has no subscribers (TanStack's `gcTime` lifecycle), so
+it's "warm while referenced", not pinned in memory forever. `load` has no effect
+on a `scopeBy` collection (nothing to sync until you `scope` it).
+
 ## Client-generated ids
 
 For the optimistic row and the persisted server row to reconcile by key, the
@@ -331,6 +350,8 @@ clears only once every concurrent call settles.
 - `getKey?` — row key extractor; defaults to `row._id`.
 - `scopeBy?` — a field that scopes the list (a shard key); makes the collection
   re-pointable via `db.scope.<table>`.
+- `load?` — `"eager"` to sync at boot, or `"lazy"` (default) to sync on first use
+  (see [When collections load](#when-collections-load)).
 - `insert?` — `{ mutation, optimistic, toArgs }` to make the table writable
   through the outbox.
 

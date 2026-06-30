@@ -44,6 +44,16 @@ export interface CollectionDef<TList extends FunctionReference, TInput = never> 
     list: TList;
 
     /**
+     * When this collection starts syncing — `"lazy"` (default) on the first
+     * `useLiveQuery` subscriber, or `"eager"` at creation, for small "instant"
+     * reference data you want warm at boot. Pairs with `scopeBy` for partial
+     * (per-scope) loading — together they give the full lazy/partial/eager
+     * (Linear `lazy`/`partial`/`instant`) load taxonomy declaratively. No effect
+     * on a `scopeBy` collection (nothing to sync until scoped).
+     */
+    load?: "eager" | "lazy";
+
+    /**
      * Notified when the underlying `list` subscription errors (e.g. the server
      * rejects it). Without this the error would be swallowed and the collection
      * could hang in `loading`; the binding always moves the collection out of
@@ -173,6 +183,7 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
             id: name,
             // `AnyDef` erases `list` to `any` (`TList = any`); it's a `FunctionReference` here.
             list: definition.list as FunctionReference,
+            ...(definition.load === undefined ? {} : { load: definition.load }),
             onError: definition.onError,
             scopeBy: definition.scopeBy,
         });
