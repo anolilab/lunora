@@ -2537,11 +2537,18 @@ class LunoraClient {
     }
 
     /**
-     * Apply an optimistic update to every subscription that matches the
-     * mutation's function ref, shard key, and args, returning the rollback
-     * callbacks to invoke if the mutation later fails. Scoping to the same
-     * (fn, shardKey, args) keeps one user's mutation from clobbering another
-     * subscriber's value on the same function (e.g. two users on different rooms).
+     * Apply an optimistic update to the subscription that matches the mutation's
+     * `(functionRef, args, shardKey)` triple, returning the rollback callbacks to
+     * invoke if the mutation later fails.
+     *
+     * The registry is already indexed by exactly this triple via
+     * `SubscriptionRegistry.key`, so at most one subscription can match. A direct
+     * O(1) keyed lookup replaces the former O(N) linear scan over all subscriptions.
+     *
+     * `shardKey` normalization: both `undefined` and `""` map to the empty string
+     * inside `SubscriptionRegistry.key` (via `?? ""`), so a mutation fired without
+     * a shardKey correctly matches a subscription registered without one regardless
+     * of whether the caller passed `undefined` or omitted the field.
      */
     private applyOptimisticUpdates(
         functionRef: string,
@@ -2555,13 +2562,13 @@ class LunoraClient {
             return optimisticRollbacks;
         }
 
-        const mutationArgsKey = stableStringify(argsRecord);
+        // Build the same composite key the registry used when the subscription was
+        // registered so we can retrieve the matching state in O(1) instead of
+        // scanning all subscriptions.
+        const matchKey = SubscriptionRegistry.key(functionRef, argsRecord, mutationShardKey);
+        const state = this.subscriptions.get(matchKey);
 
-        for (const state of this.subscriptions.all()) {
-            if (state.fn.__lunoraRef !== functionRef || state.shardKey !== mutationShardKey || state.argsKey !== mutationArgsKey) {
-                continue;
-            }
-
+        if (state) {
             const rollback = applyOptimisticToState(state, optimistic);
 
             if (rollback) {

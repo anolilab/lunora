@@ -1616,6 +1616,41 @@ describe("lunoraClient", () => {
             expect(received).toEqual([0]);
             expect(result).toEqual({ ok: true });
         });
+
+        it("optimistic update is scoped to the matching (fn, args) pair and does not touch subscriptions with different args", async () => {
+            // This test locks in the keyed-lookup invariant: an optimistic transform
+            // applied to (fn, { room: "a" }) must NOT bleed into the subscription
+            // for (fn, { room: "b" }) even though both watch the same function.
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const aReceived: unknown[] = [];
+            const bReceived: unknown[] = [];
+
+            client.subscribe(fnRef("c:get"), { room: "a" }, (d) => aReceived.push(d));
+            client.subscribe(fnRef("c:get"), { room: "b" }, (d) => bReceived.push(d));
+            const socket = latestSocket();
+
+            socket.open();
+
+            const aId = firstSub(socket).id as string;
+            const bId = wireFrames(socket)[1].id as string;
+
+            socket.receive({ delta: 10, id: aId, type: "delta" });
+            socket.receive({ delta: 20, id: bId, type: "delta" });
+
+            // Mutation targets { room: "a" } only — subscription B must be unchanged.
+            await client.mutation(fnRef("c:get"), { room: "a" }, { optimistic: (c) => (typeof c === "number" ? c + 1 : 1) });
+
+            expect(aReceived).toEqual([10, 11]);
+            expect(bReceived).toEqual([20]);
+        });
     });
 
     // --- Scheduler admin --------------------------------------------------------
