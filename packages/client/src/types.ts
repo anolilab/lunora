@@ -107,6 +107,15 @@ export interface PersistedMutation {
      */
     identity?: string | null;
     shardKey?: string;
+
+    /**
+     * App/schema version stamped at enqueue (from `LunoraClientOptions.persistenceVersion`).
+     * On hydrate, a record whose `version` doesn't match the current one is dropped
+     * and purged rather than replayed — so a write persisted by an older deploy
+     * (with a now-changed function signature) can't replay against the new schema.
+     * Absent when no `persistenceVersion` is configured (no version gating).
+     */
+    version?: string;
 }
 
 /**
@@ -199,6 +208,14 @@ export interface CachedQuery {
 
     /** The full query result last seen from the server. */
     value: unknown;
+
+    /**
+     * App/schema version stamped when persisted (from `LunoraClientOptions.persistenceVersion`).
+     * A cached value whose `version` doesn't match the current one is not hydrated —
+     * so a result of a now-changed shape from an older deploy can't render. Absent
+     * when no `persistenceVersion` is configured (no version gating).
+     */
+    version?: string;
 }
 
 /**
@@ -280,6 +297,16 @@ export interface LunoraClientOptions {
     outbox?: OutboxSink;
     /** Durable store for the offline mutation queue; omit to keep it in memory. */
     persistence?: PersistenceAdapter;
+
+    /**
+     * App/schema version stamped onto every persisted queued write and cached
+     * read. Bump it on a breaking change to a function signature or query shape:
+     * on the next boot, persisted writes / cached reads stamped with a different
+     * version are dropped (and purged) rather than replayed / hydrated against the
+     * new schema. Omit to disable version gating (records are never invalidated by
+     * version).
+     */
+    persistenceVersion?: string;
 
     /**
      * Durable store for the read cache (Pillar 2). When supplied, query results

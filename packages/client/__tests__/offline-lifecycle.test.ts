@@ -564,4 +564,43 @@ describe("offline lifecycle (e2e)", () => {
 
         client.close();
     });
+
+    it("9. drops and purges a persisted write whose schema version no longer matches", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        const storage = createFakeAsyncStorage();
+
+        // A durable write left by an OLDER app version (stamped "v1").
+        await createAsyncStoragePersistence({ storage }).append({
+            args: { title: "old-build" },
+            functionPath: "posts:create",
+            id: "m1",
+            identity: null,
+            version: "v1",
+        });
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { id: "m1" } }));
+
+        // The new build runs persistenceVersion "v2".
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            persistence: createAsyncStoragePersistence({ storage }),
+            persistenceVersion: "v2",
+            reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        await vi.runAllTimersAsync();
+
+        // The stale-version write is NOT replayed against the new schema...
+        expect(fetchMock).not.toHaveBeenCalled();
+        // ...and is purged from durable storage.
+        await expect(createAsyncStoragePersistence({ storage }).load()).resolves.toEqual([]);
+
+        client.close();
+    });
 });

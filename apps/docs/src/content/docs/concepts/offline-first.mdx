@@ -67,11 +67,60 @@ Each cached query stores `{ identity, value, serverCursor, ts }`, keyed by
 entries evicted first) and written with a short debounce as values advance, so a
 chatty subscription doesn't thrash the disk.
 
-The `identity` field is a fingerprint of the auth token at write time. On boot
-the client only hydrates entries whose identity matches the **current** token.
+The `identity` field is a fingerprint of the auth identity at write time. On boot
+the client only hydrates entries whose identity matches the **current** one.
 A signed-out cache never leaks into a new session, and an identity change clears
 the cache outright. The offline outbox is gated by the same rule, so queued
 writes are never replayed under a different user.
+
+By default the fingerprint is a hash of the bearer token — which means a **token
+refresh** (same user, new JWT) reads as an identity change and would discard
+queued writes. Pass a stable subject (the user id) so a refresh during an offline
+window keeps them:
+
+```ts
+client.setAuthToken(accessToken, user.id); // identity keyed on user.id, not the token bytes
+```
+
+A real user switch (different subject) still drops the previous user's queued
+writes. Omit the second argument to keep the legacy token-hash behaviour.
+
+## Surviving a breaking deploy
+
+Set `persistenceVersion` to invalidate persisted writes and cached reads across a
+breaking change to a function signature or query shape. Bump it on deploy; on the
+next boot, any persisted write or cached read stamped with a different version is
+dropped (and purged) instead of replayed/hydrated against the new schema:
+
+```ts
+new LunoraClient({ url, persistence: createIndexedDbPersistence(), persistenceVersion: "2024-06-30" });
+```
+
+Omit it to disable version gating (records are never invalidated by version).
+
+## Multiple tabs
+
+The durable outbox is shared across a profile's tabs. To avoid every tab
+re-queuing and replaying the same persisted writes on reconnect, the standalone
+client elects a single **leader** (via the Web Locks API) that owns hydration;
+when the leader tab closes, another takes over. Server-side idempotency keeps
+replays exactly-once regardless, so this is an efficiency guard, not a
+correctness one. (Where Web Locks are unavailable — React Native, SSR — a single
+context hydrates directly.) Apps with heavy multi-tab offline use should prefer
+[`@lunora/db`](/docs/packages/db) collections, whose outbox is fully
+leader-coordinated.
+
+## Sync status
+
+Beyond connection status, surface how many writes are waiting to sync:
+
+```ts
+client.pendingCount(); // number of queued offline writes not yet sent
+const off = client.onPendingChange((n) => setBadge(n === 0 ? "Synced" : `Syncing ${n}…`));
+```
+
+A `@lunora/db` app reads `db.pendingCount()` (its writes ride the unified outbox,
+not the built-in queue).
 
 ## Connection status UI
 
