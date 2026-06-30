@@ -5,25 +5,26 @@
  * key — never an N+1. `resolveWith` takes a page of already-fetched parent
  * rows and, for each requested relation, issues a single `IN (...)` query
  * against the target table, then attaches the loaded rows back onto each
- * parent in place. `_count` aggregation is the one exception: it issues one
- * `count` per *distinct* parent FK value (no single GROUP BY yet), since the
- * injected `counter` returns a scalar rather than grouped tallies.
+ * parent in place. `_count` aggregation follows the same batching discipline:
+ * a single `GROUP BY :fk … WHERE :fk IN (...)` returns every per-parent
+ * tally in one round-trip via the injected `groupedCounter`.
  *
- * The fetcher/counter are injected (the DO passes its `writer.findMany` /
- * `writer.count`, D1 passes its async twins), so the same helper serves both
- * dialects. Nested `with` recurses for free: the injected fetcher re-enters
- * its own `findMany`, which calls `resolveWith` again on the child page.
+ * The fetcher/groupedCounter are injected (the DO passes its `writer.findMany`
+ * and a grouped-count helper over the local SQLite, D1 passes its async twins),
+ * so the same helper serves both dialects. Nested `with` recurses for free:
+ * the injected fetcher re-enters its own `findMany`, which calls `resolveWith`
+ * again on the child page.
  *
  * Cross-backend scope: BOTH directions are supported, and routing is the
- * injected `fetcher`/`counter`'s job — `resolveWith` itself is backend-agnostic.
- * Forward (shard-local parent → global D1 child) is a single bounded `IN (...)`
- * read routed to the D1 writer. Reverse (global D1 parent → shard-local child):
- * the child's rows span every shard DO, so the D1 ctx-db routes the child's
- * read/count to an injected cross-shard reader built on the Query Coordinator's
- * RLS-correct `fanOut` (identity forwarded → RLS per shard). When that
- * capability isn't wired the injected fetcher throws a clear "not supported"
- * error, so the loader never pre-rejects the direction itself. Same-backend
- * relations route straight back to the local writer.
+ * injected `fetcher`/`groupedCounter`'s job — `resolveWith` itself is
+ * backend-agnostic. Forward (shard-local parent → global D1 child) is a
+ * single bounded `IN (...)` read routed to the D1 writer. Reverse (global D1
+ * parent → shard-local child): the child's rows span every shard DO, so the
+ * D1 ctx-db routes the child's read/count to an injected cross-shard reader
+ * built on the Query Coordinator's RLS-correct `fanOut` (identity forwarded →
+ * RLS per shard). When that capability isn't wired the injected fetcher throws
+ * a clear "not supported" error, so the loader never pre-rejects the direction
+ * itself. Same-backend relations route straight back to the local writer.
  *
  * Ordering caveat (reverse direction only): a `many` relation with `orderBy` +
  * `limit` whose children span MULTIPLE shards is grouped correctly but globally
@@ -84,8 +85,18 @@ interface WithInput {
 }
 
 interface ResolveWithOptions {
-    counter: (tableName: string, where?: WhereInput) => Promise<number>;
     fetcher: (tableName: string, args: QueryArgs) => Promise<QueryPage>;
+
+    /**
+     * Grouped aggregate: for every FK value in `values`, return the count of
+     * child rows in `tableName` whose `whereField` equals that value,
+     * optionally AND-ing in `policyWhere` (the child table's RLS read filter).
+     * Returns a `Map` keyed by FK value with the per-group count — missing
+     * keys (groups with zero children) are not included; callers default to 0.
+     * A single `GROUP BY :whereField … WHERE :whereField IN (values)` query
+     * replaces the former one-query-per-distinct-value loop.
+     */
+    groupedCounter: (tableName: string, whereField: string, values: unknown[], policyWhere?: WhereInput) => Promise<Map<unknown, number>>;
     parents: Record<string, unknown>[];
 
     /**
@@ -98,6 +109,33 @@ interface ResolveWithOptions {
     tableName: string;
     with: WithInput;
 }
+
+/**
+ * Cross-backend fan-out for grouped `_count` on backends whose `groupedCounter`
+ * must fall back to scalar calls (e.g. a DO's global-D1 child or the sql-store's
+ * cross-shard reverse direction). Issues one `counter(table, where)` per FK
+ * value in parallel and collects the results into a Map.
+ *
+ * Used by both the DO and sql-store `relationGroupedCounter` implementations so
+ * the parallel fan-out logic isn't duplicated.
+ */
+const fanOutScalarCounts = async (
+    counter: (tableName: string, where?: WhereInput) => Promise<number>,
+    tableName: string,
+    whereField: string,
+    values: unknown[],
+    policyWhere: WhereInput | undefined,
+): Promise<Map<unknown, number>> => {
+    const pairs = await Promise.all(
+        values.map(async (value) => {
+            const countWhere: WhereInput = policyWhere ? { AND: [{ [whereField]: value }, policyWhere] } : { [whereField]: value };
+
+            return [value, await counter(tableName, countWhere)] as const;
+        }),
+    );
+
+    return new Map(pairs);
+};
 
 /** Distinct, non-nullish values of `field` across `rows`, preserving first-seen order. */
 const distinctValues = (rows: Record<string, unknown>[], field: string): unknown[] => {
@@ -120,7 +158,7 @@ const distinctValues = (rows: Record<string, unknown>[], field: string): unknown
  * `Doc[]`, `_count` → merged into `parent._count`.
  */
 const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
-    const { counter, fetcher, parents, relationBaseWhere, schema, tableName, with: withInput } = options;
+    const { groupedCounter, fetcher, parents, relationBaseWhere, schema, tableName, with: withInput } = options;
 
     if (parents.length === 0) {
         return;
@@ -239,25 +277,28 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
             // `one`: count target rows the parent's FK points at (0 or 1).
             const [whereField, parentField] = relation.kind === "many" ? [relation.field, relation.references] : [relation.references, relation.field];
 
-            // One count per *distinct* parent value (deduped), so repeated FKs
-            // across the page collapse to a single aggregate query each.
-            const countByValue = new Map<unknown, number>();
-
-            // RLS: AND the child table's read policy into the count so a
-            // `_count` can't reveal rows the caller couldn't read.
+            // RLS: AND the child table's read policy into the grouped count so
+            // a `_count` can never reveal rows the caller couldn't read.
             const policyWhere = relationBaseWhere?.(relation.table);
 
-            for (const value of distinctValues(parents, parentField)) {
-                const countWhere: WhereInput = policyWhere ? { AND: [{ [whereField]: value }, policyWhere] } : { [whereField]: value };
+            // Collect the distinct parent values we need counts for; skip the
+            // query entirely when the page is empty or all FKs are null.
+            const values = distinctValues(parents, parentField);
 
-                // eslint-disable-next-line no-await-in-loop -- one aggregate query per distinct FK value; sequential keeps the count fan-out bounded
-                countByValue.set(value, await counter(relation.table, countWhere));
-            }
+            // Single grouped query: GROUP BY <whereField> WHERE <whereField> IN (values).
+            // All per-parent tallies come back in one round-trip. The outer loop
+            // is per-relation (sequential over relations, not per value); each
+            // iteration issues exactly one async call.
+            // eslint-disable-next-line no-await-in-loop -- one grouped query per relation; collapses D per-value queries into 1
+            const countByValue = values.length === 0 ? new Map<unknown, number>() : await groupedCounter(relation.table, whereField, values, policyWhere);
 
             for (const parent of parents) {
                 const counts = (parent["_count"] as Record<string, number> | undefined) ?? {};
                 const parentValue = parent[parentField];
 
+                // JS SameValueZero Map lookup: safe for string ids; numeric FK
+                // values must arrive from SQL as the same JS type as parent[parentField]
+                // (the SQL→JS key-equality invariant introduced by the grouped path).
                 counts[name] = parentValue === null || parentValue === undefined ? 0 : (countByValue.get(parentValue) ?? 0);
                 parent["_count"] = counts;
             }
@@ -427,5 +468,5 @@ const runRowValidators = (definition: TableDefinitionLike, document: Record<stri
     }
 };
 
-export { applyOnDelete, distinctValues, resolveWith, runRowValidators };
+export { applyOnDelete, distinctValues, fanOutScalarCounts, resolveWith, runRowValidators };
 export type { ApplyOnDeleteOptions, NestedWith, OnDeleteActionLike, RelationDefinitionLike, ResolveWithOptions, WithInput };

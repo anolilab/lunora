@@ -55,6 +55,7 @@ import {
     encodeAggregateKey,
     encodeCursor,
     encodePartitionKey,
+    fanOutScalarCounts,
     foldAggregateTally,
     ftsTableName,
     hasTrigger,
@@ -2620,12 +2621,81 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             // as the top-level `relationPredicateFetcher`; aliased here for the
             // nested `with` load.
             const relationFetcher = relationPredicateFetcher;
-            const relationCounter: DatabaseWriterLike["count"] = (childTable, where) => {
-                if (!isShardLocalTarget(childTable)) {
-                    return writer.count(childTable, where);
+
+            /**
+             * Grouped aggregate counter for `_count` relation loading. For
+             * local D1 children, issues one `SELECT :whereField AS __fk__,
+             * COUNT(*) … GROUP BY :whereField` and returns all tallies in a
+             * single round-trip. For shard-local (cross-shard reverse
+             * direction), fans out parallel scalar `crossShardCounter` calls
+             * since the coordinator interface doesn't expose grouped counts.
+             *
+             * CORRECTNESS: `policyWhere` may contain relation predicates (e.g.
+             * `{author:{is:W}}`). These are resolved via `resolveAggregateRelations`
+             * BEFORE `compileWhereSql` so they are rewritten into flat IN clauses
+             * rather than compiled raw as scalar equality (which never matches).
+             * The cross-shard fan-out path routes through `crossShardCounter`,
+             * which uses the full `count()` method and resolves predicates
+             * internally — so only the local D1 path needs this step.
+             */
+            const relationGroupedCounter = async (
+                childTable: string,
+                whereField: string,
+                values: unknown[],
+                policyWhere?: WhereInput,
+            ): Promise<Map<unknown, number>> => {
+                if (isShardLocalTarget(childTable)) {
+                    // Cross-shard reverse direction: parallel scalar counts per FK value.
+                    if (!crossShardCounter) {
+                        return crossBackendUnsupported(childTable);
+                    }
+
+                    return fanOutScalarCounts(crossShardCounter, childTable, whereField, values, policyWhere);
                 }
 
-                return crossShardCounter ? crossShardCounter(childTable, where) : crossBackendUnsupported(childTable);
+                // Local D1 child: one grouped SQL query.
+                const childDefinition = schema.tables[childTable];
+
+                if (!childDefinition) {
+                    throw new Error(`unknown table: ${childTable}`);
+                }
+
+                // Build WHERE: whereField IN (values) [AND policyWhere] [AND softDeleteScope].
+                // Then resolve any relation predicates before SQL compilation — without
+                // this, a relation predicate in policyWhere is compiled as scalar equality
+                // and silently returns 0 for every group (fail-closed but wrong).
+                const softScope = softDeleteScope(childDefinition.softDeleteMode, undefined);
+                const inFilter: WhereInput = { [whereField]: { in: values } };
+                const combined = mergeWhere(mergeWhere(inFilter, policyWhere), softScope);
+                // resolveAggregateRelations rewrites relation-crossing predicates (e.g.
+                // {author:{is:W}}) into flat IN clauses — consistent with count() /
+                // findMany(). Pass `undefined` for relationBaseWhere (no nested policy
+                // threading, matching what the old scalar counter did).
+                const resolvedCombined = await resolveAggregateRelations(combined, childTable, undefined);
+                const whereCondition = compileWhereSql(resolvedCombined, whereSqlStrategy);
+
+                // `physicalColumn` maps `_id`/`id` → `id`; all other fields are themselves.
+                const fieldRef = columnRefSql(whereField);
+
+                let groupQuery = sql`SELECT ${fieldRef} AS __fk__, COUNT(*) AS count FROM ${sql.identifier(childTable)}`;
+
+                if (whereCondition) {
+                    groupQuery = sql`${groupQuery} WHERE ${whereCondition}`;
+                }
+
+                groupQuery = sql`${groupQuery} GROUP BY ${fieldRef}`;
+
+                const groupRows = await queryAll(exec, dialect, groupQuery);
+                const result = new Map<unknown, number>();
+
+                for (const row of groupRows) {
+                    // JS SameValueZero Map lookup: safe for string ids; numeric FK
+                    // values must arrive from SQL as the same JS type as parent[parentField]
+                    // (the SQL→JS key-equality invariant introduced by the grouped path).
+                    result.set(row["__fk__"], Number(row["count"] ?? 0));
+                }
+
+                return result;
             };
 
             // RLS (3.2) / aggregates (3.1) inject `baseWhere` we AND-merge
@@ -2677,7 +2747,14 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
 
             if (limit === undefined) {
                 if (args.with) {
-                    await resolveWith({ counter: relationCounter, fetcher: relationFetcher, parents: documents, schema, tableName, with: args.with });
+                    await resolveWith({
+                        fetcher: relationFetcher,
+                        groupedCounter: relationGroupedCounter,
+                        parents: documents,
+                        schema,
+                        tableName,
+                        with: args.with,
+                    });
                 }
 
                 // eslint-disable-next-line unicorn/no-null -- findMany's public return uses `continueCursor: string | null`; an unpaged result has no cursor.
@@ -2689,7 +2766,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const last = page.at(-1);
 
             if (args.with) {
-                await resolveWith({ counter: relationCounter, fetcher: relationFetcher, parents: page, schema, tableName, with: args.with });
+                await resolveWith({ fetcher: relationFetcher, groupedCounter: relationGroupedCounter, parents: page, schema, tableName, with: args.with });
             }
 
             return {
