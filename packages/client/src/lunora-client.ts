@@ -9,7 +9,8 @@ import { nextId, OfflineQueue, reportPersistenceError } from "./offline-queue";
 import type { OptimisticLayerHandle } from "./optimistic-layers";
 import { applyOptimisticLayer, dropConfirmedLayers, foldOptimistic, notifySubscription } from "./optimistic-layers";
 import isStaleVersion from "./persisted-version";
-import { queryCacheKey } from "./query-cache";
+import { resolvePersistenceAdapter } from "./persistence";
+import { queryCacheKey, resolveQueryCacheAdapter } from "./query-cache";
 import type { ReconnectCalculator } from "./reconnect";
 import { createReconnect } from "./reconnect";
 import type { StreamHandle, StreamIterable } from "./stream";
@@ -652,9 +653,14 @@ class LunoraClient {
         this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
         this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
         this.defaultConnectionContext = options.connectionContext;
-        this.persistence = options.persistence;
+        // Auto-probe durable stores: an omitted option defaults to IndexedDB when
+        // the environment supports it (browsers), so the bare client is local-first
+        // out of the box; `false` opts out, an explicit adapter is used as-is. The
+        // write-queue auto-default is suppressed when an outbox (the `@lunora/db`
+        // path) owns the durable write path, so we never persist a second copy.
+        this.persistence = resolvePersistenceAdapter(options.persistence, options.outbox === undefined);
         this.persistenceVersion = options.persistenceVersion;
-        this.queryCache = options.queryCache === false ? undefined : options.queryCache;
+        this.queryCache = resolveQueryCacheAdapter(options.queryCache);
         this.onPersistenceError = options.offlineQueue?.onPersistenceError;
         this.offlineQueue = new OfflineQueue(options.offlineQueue, {
             onEvict: (entry, error) => {
@@ -663,7 +669,7 @@ class LunoraClient {
             onSizeChange: (size) => {
                 this.pendingChangeListeners.emit(size);
             },
-            persistence: options.persistence,
+            persistence: this.persistence,
             version: options.persistenceVersion,
         });
         this.outbox = options.outbox;

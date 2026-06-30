@@ -295,8 +295,17 @@ export interface LunoraClientOptions {
      * standalone client, which keeps using {@link LunoraClientOptions.persistence}.
      */
     outbox?: OutboxSink;
-    /** Durable store for the offline mutation queue; omit to keep it in memory. */
-    persistence?: PersistenceAdapter;
+
+    /**
+     * Durable store for the offline mutation queue. Tri-state — an explicit
+     * {@link PersistenceAdapter} is used as-is; `false` opts out (the queue stays
+     * in memory, lost on reload); omitted (the default) auto-probes a durable
+     * IndexedDB store when the `indexedDB` global is present (browsers), otherwise
+     * in-memory, so SSR/Node/React-Native keep the in-memory behaviour and only
+     * environments that can persist do. Pass `createAsyncStoragePersistence()` on
+     * React Native.
+     */
+    persistence?: false | PersistenceAdapter;
 
     /**
      * App/schema version stamped onto every persisted queued write and cached
@@ -315,11 +324,13 @@ export interface LunoraClientOptions {
     persistenceVersion?: string;
 
     /**
-     * Durable store for the read cache (Pillar 2). When supplied, query results
+     * Durable store for the read cache (Pillar 2). When active, query results
      * are persisted as their subscriptions advance and hydrated on construction
      * so a reload renders cached data before the socket reconnects, then resumes
-     * the live subscription from the persisted cursor. Omit (or pass `false`) to
-     * keep reads in memory only — the default, unchanged behaviour.
+     * the live subscription from the persisted cursor. Tri-state — an explicit
+     * {@link QueryCacheAdapter} is used as-is; `false` opts out (reads stay in
+     * memory only); omitted (the default) auto-probes IndexedDB exactly like
+     * {@link LunoraClientOptions.persistence}.
      */
     queryCache?: QueryCacheAdapter | false;
     reconnect?: ReconnectOptions;
