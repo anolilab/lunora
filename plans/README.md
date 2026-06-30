@@ -260,6 +260,36 @@ genuine improvements surfaced:
   Phased: typed child-spawn → hibernating join → optional group saga. Start only
   if workflow fan-out is an explicit product goal.
 
+## Wave 7 — external ingest gap (Hyperdrive → DO shapes, baseline `825c5cc0`, 2026-06-30)
+
+External question (Mats Erdkamp): a multitenant Postgres behind Hyperdrive, with
+per-agent DOs that should each materialize only their own slice into their private
+SQLite, and clients consuming that same slice. The **DO SQLite → client** half is
+already shipped (`defineShape` + `@lunora/db`, RLS-filtered op-log pokes). The
+missing half is the **upstream edge**: getting the external Postgres slice into the
+per-agent DO in the first place (`ctx.sql` is action-only/non-reactive, no CDC).
+
+| Plan | Title                                  | Category          | Pri | Effort | Risk | Status                                                                                                                                                                                                                                                                             |
+| ---- | -------------------------------------- | ----------------- | --- | ------ | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 077  | Hyperdrive → per-agent DO shape ingest | architecture/data | P2  | XL     | HIGH | PHASE 0 DRAFTED + BENCHMARKED; pure diff core landed — design/Decisions in [077-phase0-design.md](077-phase0-design.md); `__bench__/external-source-*` (green) close the gate (~10k full-pull cap); `src/external-source-diff.ts` + test green; `.source()`/codegen await sign-off |
+
+### Notes
+
+- **077** generalizes the **existing** `.global()`-table latency-tiered alarm poll
+  (external read → diff vs durable baseline → poke) into an external-source
+  materialization loop: poll Hyperdrive → diff → `applyCdcChanges` into a real local
+  table → `defineShape` carries it to clients unchanged. Phase 1 blesses the manual
+  `ctx.sql`→`ctx.db` bridge that unblocks the use case today; Phase 2 is the
+  declarative `.source({ binding, query, tenantBy, refresh })` table modifier; Phase 3
+  (optional, gated) is live trigger→queue CDC; Phase 4 (stretch, likely separate) is
+  DO-consumes-another-DO's-shape. **Tenant scoping (shard key → source predicate) is
+  the non-negotiable correctness boundary** — an unscoped sourced+sharded table would
+  replicate the whole multitenant table into every agent.
+- **Phase 0 benchmark** (`packages/do/__bench__/external-source-{materialize-tick,apply}.bench.ts`):
+  full-pull steady tick is read-dominated — ~18 µs (10 rows) → ~1.4 ms (1k) → ~20 ms
+  (10k); `applyCdcChanges` ~17 µs/row. Sets a ~10k full-pull row cap (incremental mode
+  above) and a size-scaled cadence (2 s floor for ≲1k slices, slower for larger).
+
 ## Notes for executors (carried from prior waves)
 
 - `dist/` is gitignored and built on demand. Build deps first:
