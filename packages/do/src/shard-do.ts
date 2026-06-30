@@ -92,6 +92,7 @@ import { buildSecurityAudit } from "./security-audit";
 import { buildSettings, isDevEnvironment } from "./settings";
 import type { ShapePokePart, ShapeRowOp } from "./shape-global-diff";
 import { buildPokeFrames, diffGlobalMembership, projectColumns } from "./shape-global-diff";
+import { runSocketPool } from "./socket-pool";
 import { runReadonlySql } from "./sql-console";
 import { findDanglingReferences } from "./storage-correlation";
 import { sendDeltaFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
@@ -5916,26 +5917,10 @@ abstract class ShardDO {
             }
         };
 
-        // Bounded fan-out: at most 8 sockets refresh in parallel. Larger
-        // batches don't help (subscription handlers spend their time on
-        // SQLite, which is single-threaded inside the DO) and risk
-        // exhausting the I/O budget.
-        const concurrency = 8;
-        let cursor = 0;
-        const worker = async (): Promise<void> => {
-            let socket = sockets[cursor];
-
-            cursor += 1;
-
-            while (socket !== undefined) {
-                // eslint-disable-next-line no-await-in-loop -- each worker drains the shared cursor sequentially; parallelism comes from running `concurrency` workers
-                await refreshOne(socket);
-                socket = sockets[cursor];
-                cursor += 1;
-            }
-        };
-
-        await Promise.all(Array.from({ length: Math.min(concurrency, sockets.length) }, () => worker()));
+        // Bounded fan-out (default 8 in flight): each worker drains its sockets
+        // one at a time so the per-subscription `awaitWsDrain` gate above paces a
+        // slow consumer. See {@link runSocketPool}.
+        await runSocketPool(sockets, refreshOne);
     }
 
     /**
@@ -6196,50 +6181,44 @@ abstract class ShardDO {
                 return;
             }
 
-            const identity: SubscriptionIdentity = { identity: attachment.identity, userId: attachment.userId };
-            const { emptyAdvanced, partAdvanced, parts } = this.collectShapePokeParts(ws, shapes, identity, changed, checkpoint, sql, opRangeCache);
+            try {
+                const identity: SubscriptionIdentity = { identity: attachment.identity, userId: attachment.userId };
+                const { emptyAdvanced, partAdvanced, parts } = this.collectShapePokeParts(ws, shapes, identity, changed, checkpoint, sql, opRangeCache);
 
-            // Empty-diff shapes advance regardless (nothing to deliver for them),
-            // so the next flush doesn't re-scan the same op range.
-            for (const subId of emptyAdvanced) {
-                this.recordShapeMemo(ws, subId, checkpoint);
-            }
+                // Empty-diff shapes advance regardless (nothing to deliver for them),
+                // so the next flush doesn't re-scan the same op range.
+                for (const subId of emptyAdvanced) {
+                    this.recordShapeMemo(ws, subId, checkpoint);
+                }
 
-            // Await drain before the (potentially large) poke so a slow consumer
-            // can't grow this socket's outbound buffer without bound — the same
-            // backpressure the seed/refresh paths apply. Part-bearing shapes
-            // advance only after the poke lands; a failed send leaves their memos
-            // so the next flush re-emits the rows.
-            if (parts.length > 0) {
-                await awaitWsDrain(ws);
+                // Await drain before the (potentially large) poke so a slow consumer
+                // can't grow this socket's outbound buffer without bound — the same
+                // backpressure the seed/refresh paths apply. Part-bearing shapes
+                // advance only after the poke lands; a failed send leaves their memos
+                // so the next flush re-emits the rows.
+                if (parts.length > 0) {
+                    await awaitWsDrain(ws);
 
-                if (this.sendPoke(ws, parts, checkpoint, frameEpoch, undefined)) {
-                    for (const subId of partAdvanced) {
-                        this.recordShapeMemo(ws, subId, checkpoint);
+                    if (this.sendPoke(ws, parts, checkpoint, frameEpoch, undefined)) {
+                        for (const subId of partAdvanced) {
+                            this.recordShapeMemo(ws, subId, checkpoint);
+                        }
                     }
                 }
-            }
-        };
-
-        const concurrency = 8;
-        let index = 0;
-        const worker = async (): Promise<void> => {
-            let socket = sockets[index];
-
-            index += 1;
-
-            while (socket !== undefined) {
-                // eslint-disable-next-line no-await-in-loop -- serialize this worker's sockets so the per-send drain gate actually applies backpressure
-                await pokeOne(socket);
-                socket = sockets[index];
-                index += 1;
+            } catch {
+                // A throwing socket (e.g. awaitWsDrain/sendPoke rejecting on a dead
+                // connection) must not abort the poke fan-out to its siblings — the
+                // bounded pool runs sockets in parallel and one bad socket would
+                // otherwise reject the whole Promise.all. Memos are left untouched,
+                // so the next flush re-pokes this socket. Mirrors refreshSubscriptions.
+                /* poke error contained to this socket */
             }
         };
 
         // Bounded fan-out matching `refreshSubscriptions`: each worker drains its
-        // sockets one at a time so the per-send `awaitWsDrain` gate above can
-        // apply backpressure on a slow consumer.
-        await Promise.all(Array.from({ length: Math.min(concurrency, sockets.length) }, () => worker()));
+        // sockets one at a time so the per-send `awaitWsDrain` gate above applies
+        // backpressure on a slow consumer. See {@link runSocketPool}.
+        await runSocketPool(sockets, pokeOne);
     }
 
     /**
