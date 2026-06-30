@@ -320,65 +320,6 @@ const withQuery = (path: string, params: Record<string, number | string | undefi
 const connectionKey = (shardKey: string | undefined): string => shardKey ?? "";
 
 /**
- * Write an already-computed optimistic value `next` onto a single subscription
- * state and return its rollback closure. The shared write+rollback primitive
- * behind both the legacy per-call `optimistic` transform and `createLocalStore`'s
- * `setQuery`: it mutates `state.lastValue` in place (so live subscribers see the
- * value immediately) and binds `state`/`previous`/`version`/`next` into locals so
- * the rollback's version check and restore run synchronously, with no `await`
- * between read and write that could let a server delta sneak in unobserved.
- *
- * The rollback only restores when (a) no server delta has bumped `serverVersion`
- * past the apply point (the server is now closer to truth) and (b) our `next` is
- * still the live value (a later stacked optimistic write hasn't superseded it).
- */
-const writeOptimisticToState = (state: SubscriptionState, next: unknown): (() => void) => {
-    const previous = state.lastValue;
-    const versionAtApply = state.serverVersion;
-
-    // Intentionally mutate the shared subscription state in place so live
-    // subscribers observe the optimistic value immediately.
-    // eslint-disable-next-line no-param-reassign -- optimistic update mutates the shared subscription state
-    state.lastValue = next;
-
-    for (const callback of state.callbacks) {
-        try {
-            callback(next);
-        } catch {
-            /* user callback threw — ignore */
-        }
-    }
-
-    return () => {
-        // If a server-pushed delta has bumped serverVersion since we applied
-        // the optimistic update, the server has given us newer-than-`previous`
-        // data — don't roll back, the current value is closer to truth.
-        if (state.serverVersion > versionAtApply) {
-            return;
-        }
-
-        // If another optimistic write has since stacked on this same
-        // subscription (so `lastValue` is no longer the value WE set), restoring
-        // our captured `previous` would clobber that newer still-pending value.
-        // Only roll back when our value is still the live one.
-        if (state.lastValue !== next) {
-            return;
-        }
-
-        // eslint-disable-next-line no-param-reassign -- rollback restores the shared subscription state
-        state.lastValue = previous;
-
-        for (const callback of state.callbacks) {
-            try {
-                callback(previous);
-            } catch {
-                /* user callback threw — ignore */
-            }
-        }
-    };
-};
-
-/**
  * Build a coded `Error` from a stream-scoped server `error` frame. Pulls the
  * `code`/`message` off either the top-level fields or the nested `error`
  * envelope (the server uses both shapes), falling back to "stream error".
@@ -1192,13 +1133,13 @@ class LunoraClient {
         // its retry stays server-idempotent instead of minting a fresh key.
         const mutationId = options.mutationId ?? nextId();
 
-        // Apply optimistic updates to any subscriber listening on this fn. The
-        // per-call `optimistic` transform patches the matching (fn, args, shard)
-        // subscription as a rebaseable, cursor-gated layer (dropped when the
-        // server confirms the write's commit cursor); the Convex-parity
-        // `optimisticUpdate` callback patches many queries at once via a localStore
-        // (one-shot). Both funnel into the same LIFO rollback list (unwound on
-        // failure); per-call layers additionally confirm on success.
+        // Apply optimistic updates to any subscriber listening on this fn. Both
+        // APIs ride the same rebaseable, cursor-gated layer engine: the per-call
+        // `optimistic` transform patches the matching (fn, args, shard)
+        // subscription, and the Convex-parity `optimisticUpdate` callback patches
+        // many queries at once via a localStore (each `setQuery` a constant layer).
+        // Their `confirm`/`rollback` closures collect into shared lists — all
+        // confirmed on success, all unwound (LIFO) on failure.
         const { confirms: optimisticConfirms, rollbacks: optimisticRollbacks } = this.applyOptimisticUpdates(
             function_.__lunoraRef,
             argsRecord,
@@ -1207,7 +1148,7 @@ class LunoraClient {
         );
 
         if (options.optimisticUpdate) {
-            this.applyOptimisticUpdate(options.optimisticUpdate, args, options.shardKey, optimisticRollbacks);
+            this.applyOptimisticUpdate(options.optimisticUpdate, args, options.shardKey, optimisticRollbacks, optimisticConfirms);
         }
 
         // Queue while offline (only mutations — queries fail fast). We also
@@ -2095,7 +2036,6 @@ class LunoraClient {
                 optimisticLayers: [],
                 serverBase: cached?.value,
                 serverCursor: cached?.serverCursor,
-                serverVersion: 0,
                 shardKey: options.shardKey,
                 ...(cached?.serverEpoch === undefined ? {} : { serverEpoch: cached.serverEpoch }),
             };
@@ -2688,20 +2628,23 @@ class LunoraClient {
 
     /**
      * Run a Convex-parity `optimisticUpdate` callback against a localStore bound
-     * to the live subscription registry, appending each `setQuery` write's
-     * rollback to `optimisticRollbacks` (the same LIFO list the legacy path uses,
-     * unwound on settle/error). A throwing callback unwinds its own partial
-     * writes — LIFO over just the rollbacks it produced — and is swallowed, so a
-     * buggy optimistic update can never fail the mutation or leave a partial
-     * patch live, mirroring the legacy transform's throw handling.
+     * to the live subscription registry. Each `setQuery` registers a constant
+     * optimistic LAYER on its target subscription (via the same engine the
+     * per-call `optimistic` path uses), so the multi-query patch rebases onto
+     * incoming deltas and drops gaplessly on its commit cursor — its `confirm` /
+     * `rollback` closures are appended to the mutation's settle lists. A throwing
+     * callback unwinds its own partial writes — LIFO over just the rollbacks it
+     * produced — and is swallowed, so a buggy optimistic update can never fail the
+     * mutation or leave a partial patch live.
      */
     private applyOptimisticUpdate<F extends FunctionReference>(
         optimisticUpdate: OptimisticUpdate<ArgsOf<F>>,
         args: ArgsOf<F>,
         shardKey: string | undefined,
         optimisticRollbacks: (() => void)[],
+        optimisticConfirms: ((commitCursor: number | undefined) => void)[],
     ): void {
-        const { rollbacks, store } = createLocalStore(this.subscriptions, shardKey, writeOptimisticToState, stableStringify);
+        const { confirms, rollbacks, store } = createLocalStore(this.subscriptions, shardKey, stableStringify);
 
         try {
             optimisticUpdate(store, args);
@@ -2716,6 +2659,7 @@ class LunoraClient {
         }
 
         optimisticRollbacks.push(...rollbacks);
+        optimisticConfirms.push(...confirms);
     }
 
     private getConnection(shardKey: string | undefined): ShardConnection | undefined {
@@ -3577,7 +3521,6 @@ class LunoraClient {
         // layers active (the common case) the displayed value is just `payload`,
         // byte-identical to the historical behaviour.
         state.serverBase = payload;
-        state.serverVersion += 1;
 
         // Advance the resume cursor + epoch when the frame carries them
         // (CDC-enabled shard); replayed as `sinceSeq` / `sinceEpoch` on the

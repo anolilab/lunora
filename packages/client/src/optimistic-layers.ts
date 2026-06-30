@@ -15,15 +15,19 @@ import type { OptimisticLayer, SubscriptionState } from "./subscription";
  * server-confirmed cursor, never on RPC-response timing (which races the
  * WebSocket broadcast).
  *
- * The multi-query `optimisticUpdate`/localStore path keeps its one-shot
- * `writeOptimisticToState` model and is NOT routed through here. The two are
- * independent ONLY across distinct subscriptions: both write `state.lastValue`,
- * so if a per-call layer and a localStore overlay are live on the SAME
- * subscription, this engine wins — a layer's re-fold/rollback recomputes from
- * `serverBase` and drops the concurrent one-shot overlay. Apps shouldn't target
- * one query with both APIs at once. Unifying localStore onto layers (modelling
- * `setQuery(value)` as a constant-transform layer, deleting `writeOptimisticToState`
- * + `serverVersion`) is the tracked follow-up that removes this overlap entirely.
+ * BOTH optimistic APIs route through this one engine: the single-query per-call
+ * `optimistic` registers a TRANSFORM layer (`(current) => next`, which re-derives
+ * from the new base on each delta — true rebasing), and the multi-query
+ * Convex-parity `optimisticUpdate` registers a CONSTANT-value layer per `setQuery`
+ * (see `createLocalStore`). They compose on a shared subscription by fold order
+ * (a `setQuery` is an absolute override, so it supersedes earlier layers it folds
+ * over), and both get the same gapless cursor-gated drop.
+ *
+ * Note the constant layer MASKS rather than merges: while pending, it re-clamps to
+ * its predicted value and hides any concurrent server change to that query, until
+ * the confirming (or `settled`/error) frame drops it. That's the intended absolute
+ * -override semantics — and strictly better than the old one-shot model, which
+ * the next unrelated frame clobbered outright.
  */
 
 /**
@@ -46,8 +50,17 @@ export const foldOptimistic = (base: unknown, layers: ReadonlyArray<OptimisticLa
     return value;
 };
 
-/** Set a subscription's displayed value and notify its callbacks (throws swallowed). */
+/**
+ * Set a subscription's displayed value and notify its callbacks (throws
+ * swallowed). A no-op when `value` is identical to the current `lastValue` — so a
+ * fold that re-derives the value already displayed (a confirmed layer dropping, a
+ * server frame whose folded result is unchanged) fires no spurious callback.
+ */
 export const notifySubscription = (state: SubscriptionState, value: unknown): void => {
+    if (value === state.lastValue) {
+        return;
+    }
+
     // eslint-disable-next-line no-param-reassign -- in-place update of the shared subscription state
     state.lastValue = value;
 
@@ -108,6 +121,8 @@ export const applyOptimisticLayer = (state: SubscriptionState, optimistic: (curr
     };
 
     const refold = (): void => {
+        // Re-derive the displayed value from the authoritative base through the
+        // remaining layers. `notifySubscription` no-ops if it's unchanged.
         notifySubscription(state, foldOptimistic(state.serverBase, state.optimisticLayers));
     };
 

@@ -107,13 +107,6 @@ export interface SubscriptionState {
      * until the first epoch-stamped frame arrives.
      */
     serverEpoch?: string;
-
-    /**
-     * Monotonic counter incremented on every server-pushed delta or data.
-     * Used by optimistic-update rollback to detect whether the server has
-     * already moved past the value we'd otherwise restore.
-     */
-    serverVersion: number;
     readonly shardKey?: string;
 }
 

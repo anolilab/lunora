@@ -1,3 +1,4 @@
+import { applyOptimisticLayer } from "./optimistic-layers";
 import type { SubscriptionRegistry, SubscriptionState } from "./subscription";
 import type { ArgsOf, FunctionReference, ReturnOf } from "./types";
 
@@ -7,10 +8,10 @@ import type { ArgsOf, FunctionReference, ReturnOf } from "./types";
  * many subscribed queries at once (Convex's `OptimisticLocalStore` model).
  *
  * `getQuery` reads the current value (server value or any still-pending
- * optimistic override) of a subscribed query; `setQuery` writes an optimistic
- * override on top. Every write is collected as a rollback closure so the whole
- * batch unwinds atomically when the mutation settles or the server advances
- * past it — the same per-subscription rollback machinery the legacy
+ * optimistic override) of a subscribed query; `setQuery` registers a constant
+ * optimistic layer on top. The whole batch rebases onto incoming deltas and
+ * settles together — confirmed on the mutation's commit cursor, or rolled back
+ * on failure — the same per-subscription layer machinery the single-query
  * per-call `optimistic` transform uses, generalized to N queries.
  */
 export interface OptimisticLocalStore {
@@ -41,18 +42,21 @@ export interface OptimisticLocalStore {
 export type OptimisticUpdate<Args> = (localStore: OptimisticLocalStore, args: Args) => void;
 
 /**
- * Build an {@link OptimisticLocalStore} bound to a subscription registry, the
- * mutation's shard key, and the `writeOptimisticToState` primitive. Returns the
- * store plus the ordered rollback closures every `setQuery` produced, so the
- * caller can unwind the whole batch (LIFO) if the mutation later fails — and
- * leave them in place to be GC'd alongside the subscription on success.
+ * Build an {@link OptimisticLocalStore} bound to a subscription registry and the
+ * mutation's shard key. Each `setQuery(value)` registers a constant-value layer
+ * on its target subscription (via `applyOptimisticLayer`): the predicted value
+ * survives incoming server deltas (re-clamped, masking concurrent changes to that
+ * query — not merged) and drops gaplessly on the mutation's commit cursor, like
+ * the single-query per-call `optimistic` path. Returns the store plus the ordered
+ * `confirm` (success) and `rollback` (failure) closures every `setQuery` produced,
+ * so the caller settles the whole batch when the mutation does.
  */
 export const createLocalStore = (
     subscriptions: SubscriptionRegistry,
     shardKey: string | undefined,
-    write: (state: SubscriptionState, next: unknown) => () => void,
     stableStringify: (value: unknown) => string,
-): { rollbacks: (() => void)[]; store: OptimisticLocalStore } => {
+): { confirms: ((commitCursor: number | undefined) => void)[]; rollbacks: (() => void)[]; store: OptimisticLocalStore } => {
+    const confirms: ((commitCursor: number | undefined) => void)[] = [];
     const rollbacks: (() => void)[] = [];
 
     // Resolve the live subscription for one (fn, args) pair on the mutation's
@@ -92,9 +96,14 @@ export const createLocalStore = (
                 return;
             }
 
-            rollbacks.push(write(state, value));
+            const handle = applyOptimisticLayer(state, () => value);
+
+            if (handle) {
+                confirms.push(handle.confirm);
+                rollbacks.push(handle.rollback);
+            }
         },
     };
 
-    return { rollbacks, store };
+    return { confirms, rollbacks, store };
 };
