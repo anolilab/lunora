@@ -16,6 +16,8 @@
  * invisible runtime elasticity).
  */
 
+import type { ShapeRowOp } from "./shape-global-diff";
+
 /** Whether a fan-out key is owner-served (the default) or has been promoted to a relay set. */
 type PromotionState = "owned" | "promoted";
 
@@ -139,11 +141,31 @@ interface RelayShapeSeed {
     frames?: string[];
 }
 
+/**
+ * The owner multicasts ONE shape delta per flush to its relays (plan 075 Phase 3
+ * slice B.2): it computes the membership `rowsPatch` once (over plan 072's shared
+ * op-range) and ships it with the cursor window `(fromCursor, checkpoint]`. A relay
+ * delivers it ONLY to its sockets whose memo for this shape is `fromCursor` —
+ * advancing them to `checkpoint` — so a socket that seeded at a different cursor
+ * (mid-flush) is skipped and never double-applies a delta. The relay wraps the
+ * `rowsPatch` in per-socket poke frames (each socket's own `subId`); `name`/`args`
+ * identify the shape so the relay can match its subscribers.
+ */
+interface RelayShapePoke {
+    args: Record<string, unknown>;
+    checkpoint: number;
+    epoch?: string;
+    fromCursor: number;
+    name: string;
+    rowsPatch: ShapeRowOp[];
+    type: "relay_shape_poke";
+}
+
 /** Internal owner↔relay control messages (plan 075). NOT the public client protocol — the app never sees these. */
-type OwnerRelayFrame = RelayAttach | RelayDetach | RelayFrame | RelayShapeSubscribe;
+type OwnerRelayFrame = RelayAttach | RelayDetach | RelayFrame | RelayShapePoke | RelayShapeSubscribe;
 
 export { DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, relayCountFor };
-export type { OwnerRelayFrame, PromotionState, PromotionThresholds, RelayAttach, RelayDetach, RelayFrame, RelayShapeSeed, RelayShapeSubscribe };
+export type { OwnerRelayFrame, PromotionState, PromotionThresholds, RelayAttach, RelayDetach, RelayFrame, RelayShapePoke, RelayShapeSeed, RelayShapeSubscribe };
 // The DO-name contract lives in `shared/` so `@lunora/runtime` (which mints relay
 // names) and this package (which parses them) can't drift; re-exported so `./relay`
 // stays the single import surface for the relay tier inside `@lunora/do`.

@@ -70,8 +70,8 @@ describe("relay shape seed (workerd e2e)", () => {
         const relay = env.SYNC.get(env.SYNC.idFromName("shape-room::relay::0"));
 
         // The data lives on the OWNER: two messages, one in each channel.
-        await sendRpc(owner, "messages:send", { _id: "m1", channelId: "c1" });
-        await sendRpc(owner, "messages:send", { _id: "m2", channelId: "c2" });
+        await sendRpc(owner, "messages:send", { _id: "m1", channelId: "c1", text: "t1" });
+        await sendRpc(owner, "messages:send", { _id: "m2", channelId: "c2", text: "t2" });
 
         // A socket on the RELAY subscribes to the c1 shape.
         const socket = await openRelaySocket(relay, "shape-room-relay-0");
@@ -88,5 +88,48 @@ describe("relay shape seed (workerd e2e)", () => {
         expect(ops).toHaveLength(1);
         expect(ops[0]?.key).toBe("m1");
         expect(ops[0]?.op).toBe("insert");
+    });
+
+    it("multicasts live shape deltas to a relay cohort, and a late seeder never double-applies", async () => {
+        expect.assertions(5);
+
+        const owner = env.SYNC.get(env.SYNC.idFromName("cohort-room"));
+        const relay = env.SYNC.get(env.SYNC.idFromName("cohort-room::relay::0"));
+
+        const keysOf = (socket: OpenSocket): string[] => pokeOps(socket).map((op) => op.key);
+        const subscribe = async (socket: OpenSocket): Promise<void> => {
+            const before = frameTypes(socket).filter((type) => type === "ack").length;
+            socket.ws.send(JSON.stringify({ id: "s1", shape: { args: { channelId: "c1" }, name: "messagesByChannel" }, type: "shape_subscribe" }));
+            await waitFor(() => frameTypes(socket).filter((type) => type === "ack").length > before);
+        };
+
+        await sendRpc(owner, "messages:send", { _id: "m1", channelId: "c1", text: "t1" });
+
+        // Two sockets join the cohort at the same cursor and seed with m1.
+        const a = await openRelaySocket(relay, "cohort-room-relay-0");
+        const b = await openRelaySocket(relay, "cohort-room-relay-0");
+        await subscribe(a);
+        await subscribe(b);
+
+        // A write fans out ONE owner-computed delta to the whole cohort.
+        await sendRpc(owner, "messages:send", { _id: "m2", channelId: "c1", text: "t2" });
+        await waitFor(() => keysOf(a).includes("m2") && keysOf(b).includes("m2"));
+
+        // A third socket seeds AFTER m2 — its seed already contains m1+m2.
+        const c = await openRelaySocket(relay, "cohort-room-relay-0");
+        await subscribe(c);
+
+        // The next write reaches the whole (merged) cohort exactly once.
+        await sendRpc(owner, "messages:send", { _id: "m3", channelId: "c1", text: "t3" });
+        await waitFor(() => keysOf(a).includes("m3") && keysOf(c).includes("m3"));
+
+        // Every socket converges on the full membership, each key exactly once.
+        expect(keysOf(a).toSorted((x, y) => x.localeCompare(y))).toStrictEqual(["m1", "m2", "m3"]);
+        expect(keysOf(c).toSorted((x, y) => x.localeCompare(y))).toStrictEqual(["m1", "m2", "m3"]);
+        // The late seeder got m2 ONCE (in its seed), never as a re-applied live delta.
+        expect(keysOf(c).filter((key) => key === "m2")).toHaveLength(1);
+        // A got two live pokes (m2, m3); C, seeding after m2, got only one (m3).
+        expect(frameTypes(a).filter((type) => type === "pokeStart")).toHaveLength(3);
+        expect(frameTypes(c).filter((type) => type === "pokeStart")).toHaveLength(2);
     });
 });
