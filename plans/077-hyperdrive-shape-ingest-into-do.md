@@ -265,13 +265,19 @@ materialized table with **zero** new client code — it is an ordinary table to 
   no-op → zero regression) alongside the global-shape poll; `scheduleSourcePoll()`
   arms the shared alarm. Subclass-driven test proves alarm → tick → materialize +
   re-arm; global-shape + shard-do suites green.
-- **REMAINING — codegen emission (the one piece left):** generate the DO subclass's
-  `pollExternalSources` override — per sourced table, build a `createShardCtxDb`
-  writer, construct the Hyperdrive `SqlClient` from `env[binding]` (reuse the
-  `globalDb`-wiring emission), read the slice via `tenantBy(this.shardKey)`, and
-  `runExternalSourceTick`; arm via `scheduleSourcePoll()`. This is the golden-fixture
-  change in `emit.ts`. Everything it calls is built + tested, so it is mechanical
-  glue — but the riskiest codegen change; wants a stable repo + golden-fixture review.
+- **Codegen emission LANDED** — `emit.ts` generates the DO subclass's
+  `pollExternalSources` override (per sourced table: system `createShardCtxDb` writer,
+  Hyperdrive query via `tenantBy(this.currentShardKey())`, project, `runExternalSourceTick`),
+  a constructor that arms the alarm (`scheduleSourcePoll`), a per-binding client memo,
+  and the `sourceClient?: (env, binding) => SqlClient` config seam. All gated on
+  `hasSourcedTables`, so a non-sourced `shard.ts` is byte-identical (481 codegen tests
+  confirm). Focused emit test + the runtime alarm test cover it.
+
+**Phase 2 is COMPLETE.** `.source()` → codegen → DO poll loop → materialize →
+`defineShape` → clients works end-to-end. Open follow-ups (non-blocking): per-source
+cadence (`refresh.everyMs` honored vs every-tick), `"manual"`-mode pull RPC, Studio
+freshness surface, and the incremental-mode delete-visibility lint (§3.3) — all
+deferred refinements, not gates.
 
 **Verify**: a sourced+sharded table on agent DO `tenant-A` only ever contains
 tenant-A rows (explicit cross-tenant isolation test); membership diff applies
