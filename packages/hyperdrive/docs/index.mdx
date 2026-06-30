@@ -157,6 +157,73 @@ export const syncOrder = action.input({ id: v.string() }).action(async ({ ctx, a
 });
 ```
 
+### Per-agent shape ingest (multitenant Postgres → per-tenant DOs)
+
+A common shape of the pattern above: a **multitenant** Postgres is the source of
+truth, and you want each tenant (or agent) to work against **only its own slice**,
+materialized into its own sharded Durable Object — with clients riding the same
+live slice. `.shardBy()` gives each tenant a private DO + SQLite; `pullSourceRows`
+(read side) and `materializeExternalRows` (write side) bridge the Postgres slice
+into it; `defineShape` carries it to clients with no extra wiring.
+
+```ts
+// lunora/schema.ts — one DO per tenant, plus a shape clients subscribe to
+export default defineSchema({
+    documents: defineTable({ title: v.string(), body: v.string(), orgId: v.string() }).shardBy("orgId").externallyManaged(), // rows are written by the ingest bridge, not user mutations
+});
+
+export const tenantDocs = defineShape({ table: "documents", where: () => ({}) });
+```
+
+```ts
+// The action pulls THIS tenant's slice (the shard key binds into the WHERE — the
+// tenant-isolation boundary), then a mutation materializes it.
+import { pullSourceRows } from "@lunora/hyperdrive";
+import postgres from "postgres";
+
+import { api } from "@/lunora/_generated/api";
+import { action, mutation, v } from "@/lunora/_generated/server";
+import { fromPostgresJs } from "@lunora/hyperdrive";
+import { materializeExternalRows } from "@lunora/do";
+
+export const refreshTenant = action.input({ orgId: v.string() }).action(async ({ ctx, args: { orgId } }) => {
+    const { connectionString } = createHyperdrive(ctx.env.HYPERDRIVE);
+    ctx.sql = fromPostgresJs(postgres(connectionString));
+
+    const docs = await pullSourceRows(ctx.sql, {
+        query: 'select id, title, body, org_id as "orgId" from documents where org_id = $1',
+        params: [orgId], // ← tenant scope. NEVER omit this on a sharded source.
+        map: (row) => ({ body: row.body, orgId: row.orgId, title: row.title }),
+    });
+
+    await ctx.runMutation(api.documents.ingest, { orgId, docs });
+});
+
+export const ingest = mutation.input({ orgId: v.string(), docs: v.array(v.any()) }).mutation(async ({ ctx, args: { docs } }) => {
+    // Empty baseline = upsert-only (inserts + updates, no deletes). The materialized
+    // rows append to the CDC log, so `tenantDocs` subscribers are poked live.
+    await materializeExternalRows(ctx.db, docs, new Map(), { table: "documents" });
+});
+```
+
+Clients consume the same slice with the shape they'd use over any table:
+
+```ts
+const docs = useShape(api.shapes.tenantDocs, {}); // RLS-filtered, live, per-tenant
+```
+
+Refresh on a schedule with `@lunora/scheduler` (`ctx.scheduler.runAfter(...)` /
+a cron) so each tenant's slice stays current.
+
+> **Tenant scoping is the correctness boundary.** Per-shard SQLite isolation only
+> controls _where_ rows land — not _what the query pulls_. The shard key MUST bind
+> into the source `WHERE` (as a parameter), or every tenant's DO would replicate the
+> whole table. **Deletes:** the empty-baseline call above is upsert-only; to
+> propagate upstream deletes, pass the table's current membership as the baseline so
+> `materializeExternalRows` can diff it. The declarative `.source()` table modifier
+> (planned) automates this whole loop — full-pull diff, tenant scoping, and a poll
+> cadence — so you won't hand-write the action/mutation/cron.
+
 ## Reactive `.global()` over Hyperdrive
 
 The `@lunora/hyperdrive/global` subpath is the inverse trade-off: instead of an
@@ -214,13 +281,15 @@ lower-level pieces are also exported:
 
 ## Public API
 
-| Export                                                                                              | Purpose                                                  |
-| --------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| `createHyperdrive(binding)`                                                                         | Lift `connectionString` + discrete parts off the binding |
-| `fromPostgresJs(client)`                                                                            | Wrap a postgres.js client as a `SqlClient`               |
-| `fromNodePg(client)`                                                                                | Wrap a `pg` Client/Pool as a `SqlClient`                 |
-| `fromMysql2(connection)`                                                                            | Wrap a `mysql2/promise` connection/pool as a `SqlClient` |
-| `SqlClient`, `HyperdriveLike`, `HyperdriveConnection`, `PostgresJsLike`, `NodePgLike`, `Mysql2Like` | Type-only                                                |
+| Export                                                                                                                                     | Purpose                                                                           |
+| ------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| `createHyperdrive(binding)`                                                                                                                | Lift `connectionString` + discrete parts off the binding                          |
+| `fromPostgresJs(client)`                                                                                                                   | Wrap a postgres.js client as a `SqlClient`                                        |
+| `fromNodePg(client)`                                                                                                                       | Wrap a `pg` Client/Pool as a `SqlClient`                                          |
+| `fromMysql2(connection)`                                                                                                                   | Wrap a `mysql2/promise` connection/pool as a `SqlClient`                          |
+| `pullSourceRows(sql, { query, params, idColumn?, map? })`                                                                                  | Run a tenant query + project rows to Lunora docs (read side of the ingest bridge) |
+| `projectSourceRow(row, { idColumn?, map? })`                                                                                               | Project one external row → a document with `_id`                                  |
+| `SqlClient`, `HyperdriveLike`, `HyperdriveConnection`, `PostgresJsLike`, `NodePgLike`, `Mysql2Like`, `ProjectOptions`, `PullSourceOptions` | Type-only                                                                         |
 
 From `@lunora/hyperdrive/global` (reactive `.global()` backend):
 

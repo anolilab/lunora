@@ -92,6 +92,10 @@ export type { DependencyTracker } from "./dependency-tracker";
 export { createDependencyTracker, depKey, SCAN_DEP } from "./dependency-tracker";
 export type { RenderedSql, SqlEngine } from "./drizzle";
 export { renderSql } from "./drizzle";
+export type { ExternalSourceDiffResult } from "./external-source-diff";
+export { diffExternalSource } from "./external-source-diff";
+export type { MaterializeResult } from "./external-source-materialize";
+export { materializeExternalRows } from "./external-source-materialize";
 export type { FunctionMetricBucket, FunctionMetricIndexHit, RecordFunctionMetricInput } from "./function-metrics";
 export {
     ensureFunctionMetricsTables,

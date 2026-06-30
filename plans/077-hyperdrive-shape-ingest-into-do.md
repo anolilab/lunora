@@ -210,17 +210,13 @@ file (or a sibling design doc). **Maintainer sign-off required before Phase 1.**
 Deliverable: a measured poll cost on `ShardDO` (rows pulled vs per-tick CPU/IO),
 not a guessed cadence floor.
 
-**Status: DRAFTED + BENCHMARKED; pure diff core landed** — the design + Decision
-answers live in the sibling [077-phase0-design.md](077-phase0-design.md) (grounded in
-HEAD code: the `.global()`-shape poll loop, `applyCdcChanges`, the schema-builder
-modes). The measured gate is **closed**:
+**Status: SIGNED OFF (2026-06-30); Phases 0–1 landed.** The design + Decision
+answers live in the sibling [077-phase0-design.md](077-phase0-design.md) (§11
+checklist all approved). The measured gate is **closed**:
 `packages/do/__bench__/external-source-{materialize-tick,apply}.bench.ts`
-(lint/types/run green) measure the full-pull read+diff and the `applyCdcChanges`
-apply; results + the derived **~10k full-pull row cap** and **size-scaled cadence**
-are in §9. The **pure diff core is built ahead** (`packages/do/src/external-source-diff.ts`
-`diffExternalSource` + 6-case unit test, green) since it has zero public-API/schema/
-codegen footprint. Everything API-facing (the `.source()` modifier + codegen wiring)
-still awaits maintainer sign-off before Phase 1.
+(lint/types/run green); results + the derived **~10k full-pull row cap** and
+**size-scaled cadence** are in §9. Phase 2 (`.source()` modifier + codegen + poll
+loop) may now proceed on the signed-off answers.
 
 ### Phase 1 — Manual bridge, documented + hardened (ship first, lowest risk)
 
@@ -235,6 +231,14 @@ periodic refresh.
 **Verify**: example app pulls a tenant slice into a sharded DO table, a client
 `subscribeShape`s it live; `pnpm --filter "@lunora/hyperdrive" run test` +
 `@lunora/do` tests green; no public-API change beyond the new helper export.
+
+**Status: LANDED.** Read side `pullSourceRows` / `projectSourceRow` in
+`@lunora/hyperdrive` (`src/source.ts`, 7-case test green); write side
+`materializeExternalRows` + `diffExternalSource` exported from `@lunora/do`
+(round-trip integration test green); docs recipe "Per-agent shape ingest" in
+`packages/hyperdrive/docs/index.mdx`. Empty-baseline call = upsert-only; full-pull
+deletes come with the Phase 2 poll loop. No public-API change beyond the new
+exports.
 
 ### Phase 2 — Declarative polled external-source table (the core deliverable)
 

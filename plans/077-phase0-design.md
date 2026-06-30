@@ -366,14 +366,18 @@ cutoff rather than a guess.
 
 ## 11. Sign-off checklist (maintainer)
 
-- [ ] `.source()` grammar + orthogonality to `shardMode` + `externallyManaged`
+**SIGNED OFF — 2026-06-30** (maintainer approved all six as recommended). Phase 1
+unblocked; Phase 2 builder/codegen/poll-loop may proceed on these answers.
+
+- [x] `.source()` grammar + orthogonality to `shardMode` + `externallyManaged`
       implication approved (§2).
-- [ ] System-owned read via `applyCdcChanges`-only ingress accepted as the determinism
+- [x] System-owned read via `applyCdcChanges`-only ingress accepted as the determinism
       boundary; `ctx.sql` stays action-only (§1 Fact B, §3.2).
-- [ ] Mandatory `tenantBy` + `external_source_unscoped` lint accepted as the
-      non-negotiable tenant boundary (§4).
-- [ ] full-pull (default, sees deletes) vs incremental (cheap, needs delete-visibility)
-      fork accepted; STOP condition on incremental-without-delete-path agreed (§3.3).
-- [ ] Phase 3 (live CDC) split into its own plan; Phase 4 (DO-consumes-DO) deferred with
+- [x] Mandatory `tenantBy` + `external_source_unscoped` lint accepted as the
+      non-negotiable tenant boundary (§4) — **hard build error, not a warning**.
+- [x] full-pull (default, sees deletes) vs incremental (cheap, needs delete-visibility)
+      fork accepted; STOP condition on incremental-without-delete-path agreed (§3.3);
+      ~10k full-pull row cap.
+- [x] Phase 3 (live CDC) split into its own plan; Phase 4 (DO-consumes-DO) deferred with
       the seam preserved (§8.5, §8.6).
-- [ ] Phase 0 benchmark scope accepted as the gate for the default cadence/cap (§9).
+- [x] Phase 0 benchmark scope accepted as the gate for the default cadence/cap (§9).
