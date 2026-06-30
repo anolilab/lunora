@@ -181,6 +181,7 @@ export { serveRelationFanout } from "./relation-fanout";
 export type { ResolveRelationPredicatesOptions } from "./relation-predicates";
 export {
     assertFlatPredicate,
+    assertShapeShardable,
     containsRelationPredicate,
     DEFAULT_MAX_RELATION_KEYS,
     isRelationPredicate,
@@ -240,7 +241,7 @@ export type {
     TriggerTimingLike,
 } from "./triggers";
 export { hasTrigger, runTriggers } from "./triggers";
-export type { MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "./types";
+export type { MutationDelta, RpcRequest, ShapeSubscriptionQuery, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "./types";
 export type { WhereSqlStrategy } from "./where-sql";
 export { compileWhereSql } from "./where-sql";
 export type { FieldOperators, WhereInput } from "./where-types";

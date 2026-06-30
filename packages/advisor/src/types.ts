@@ -6,6 +6,7 @@ import type { AdvisorHyperdriveCall } from "./hyperdrive-calls";
 import type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
 import type { AdvisorInsertWrite } from "./inserts";
 import type { AdvisorMaskProcedure } from "./mask-procedures";
+import type { AdvisorMutatorWrite } from "./mutator-writes";
 import type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
 import type { AdvisorProcedureProtection } from "./procedure-protections";
 import type { AdvisorQueryRead } from "./queries";
@@ -13,6 +14,7 @@ import type { AdvisorR2sqlCall } from "./r2sql-calls";
 import type { AdvisorRlsProcedure } from "./rls-procedures";
 import type { AdvisorSchema } from "./schema";
 import type { AdvisorSecretLiteral } from "./secrets";
+import type { AdvisorShape } from "./shapes";
 import type { AdvisorShardTraffic } from "./shard-traffic";
 import type { AdvisorSqlInterpolation } from "./sql-interpolation";
 import type { AdvisorTableSample } from "./table-samples";
@@ -152,6 +154,15 @@ export interface LintContext {
     maskProcedures?: ReadonlyArray<AdvisorMaskProcedure>;
 
     /**
+     * Whole-row `ctx.db.replace(id, document)` writes lifted from custom
+     * mutators' authoritative `server` impls (the `mutator_full_row_replace`
+     * input). Each `replace` overwrites the entire row, clobbering a concurrent
+     * edit to a different column on a synced table. Supplied by the codegen
+     * feeder; absent for runtime callers, where the lint finds nothing.
+     */
+    mutatorWrites?: ReadonlyArray<AdvisorMutatorWrite>;
+
+    /**
      * Non-deterministic API calls (`Date.now`, `Math.random`,
      * `crypto.randomUUID`, `crypto.getRandomValues`, `fetch`) discovered lexically
      * inside `query`/`mutation` handler bodies — the `nondeterministic_query_mutation`
@@ -205,6 +216,15 @@ export interface LintContext {
      * where the lint finds nothing.
      */
     secretLiterals?: ReadonlyArray<AdvisorSecretLiteral>;
+
+    /**
+     * Replication shapes declared via `defineShape` in `lunora/shapes.ts` — the
+     * `shape_unknown_table` and `shape_targets_global_table` lint input. Each
+     * carries the export name and its static `table` literal, cross-referenced
+     * against {@link LintContext.schema}. Supplied by the codegen feeder; absent
+     * for runtime callers, where the shape lints find nothing.
+     */
+    shapes?: ReadonlyArray<AdvisorShape>;
 
     /**
      * Per-shard observed traffic — the `hot_shard` lint input. Supplied by the

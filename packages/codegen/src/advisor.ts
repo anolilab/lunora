@@ -1,4 +1,4 @@
-import type { AdvisorIndex, AdvisorSchema, Finding } from "@lunora/advisor";
+import type { AdvisorIndex, AdvisorSchema, AdvisorShape, Finding } from "@lunora/advisor";
 import { runAdvisor } from "@lunora/advisor";
 
 import type {
@@ -8,6 +8,7 @@ import type {
     ContainerIR,
     InsertWriteIR,
     MaskProcedureIR,
+    MutatorWriteIR,
     NondeterministicCallIR,
     ProcedureMiddlewareIR,
     QueryReadIR,
@@ -15,6 +16,7 @@ import type {
     RlsProcedureIR,
     SchemaIR,
     SecretLiteralIR,
+    ShapeIR,
     SqlInterpolationIR,
     TableIR,
     WorkflowCallIR,
@@ -71,10 +73,22 @@ const toAdvisorSchema = (schema: SchemaIR): AdvisorSchema => {
                         table: relation.table,
                     };
                 }),
+                shardKind: typeof table.shardMode === "string" ? table.shardMode : "shardBy",
             };
         }),
     };
 };
+
+/**
+ * Map discovered {@link ShapeIR}s to the advisor's {@link AdvisorShape} evidence
+ * — the `shape_unknown_table` / `shape_targets_global_table` lint input. Only
+ * the export name + static `table` literal cross the boundary; the runtime
+ * object stays authoritative for `columns`/`compileWhere`.
+ */
+const toAdvisorShapes = (shapes: ReadonlyArray<ShapeIR>): AdvisorShape[] =>
+    shapes.map((shape) => {
+        return { exportName: shape.exportName, file: `lunora/${shape.filePath}.ts`, table: shape.table };
+    });
 
 /**
  * Run the static lints against a discovered {@link SchemaIR} and the reads/writes/calls
@@ -107,6 +121,8 @@ export const lintSchema = (
     sqlInterpolations?: ReadonlyArray<SqlInterpolationIR>,
     adminRoutes?: ReadonlyArray<AdminRouteIR>,
     r2sqlCalls?: ReadonlyArray<R2sqlCallIR>,
+    shapes?: ReadonlyArray<ShapeIR>,
+    mutatorWrites?: ReadonlyArray<MutatorWriteIR>,
 ): Finding[] =>
     runAdvisor(
         {
@@ -116,6 +132,7 @@ export const lintSchema = (
             containers,
             inserts,
             maskProcedures,
+            mutatorWrites,
             nondeterministicCalls,
             procedureProtections,
             queries,
@@ -123,6 +140,7 @@ export const lintSchema = (
             rlsProcedures,
             schema: toAdvisorSchema(schema),
             secretLiterals,
+            shapes: shapes === undefined ? undefined : toAdvisorShapes(shapes),
             sqlInterpolations,
             workflowCalls,
             workflows,

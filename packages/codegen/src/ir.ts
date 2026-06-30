@@ -208,6 +208,63 @@ export interface MigrationIR {
 }
 
 /**
+ * A `defineShape({...})` declaration discovered in `lunora/shapes.ts`
+ * (local-first sync engine, Phase 7). The emitted `LUNORA_SHAPES` registry keys
+ * on {@link ShapeIR.exportName}; the generated DO's `resolveShape` override
+ * dispatches a `shape_subscribe` to the matching registered shape. Discovery is
+ * marker-driven (the `__lunoraShape` brand) — no field metadata is lifted here
+ * because the runtime object (`columns`/`compileWhere`) carries the authority.
+ */
+export interface ShapeIR {
+    /** Export binding name — the shape's registry key and import member. */
+    exportName: string;
+    /** Path relative to `&lt;projectRoot>/lunora/` without extension — always `"shapes"`. */
+    filePath: string;
+
+    /**
+     * The `table` string literal from the `defineShape({ table })` call, lifted
+     * only for static advisor lints (the runtime object stays authoritative).
+     * `undefined` when `table` is not a plain string literal — lints skip those.
+     */
+    table?: string;
+}
+
+/**
+ * A `defineMutator({...})` declaration discovered in `lunora/mutators.ts`
+ * (local-first sync engine, Phase 7). The emitted registry registers the
+ * authoritative `server` impl into the DO's `LUNORA_FUNCTIONS` table (so
+ * `handleRpc` transaction-wraps it) and records its path in
+ * `LUNORA_MUTATOR_PATHS` so the DO's `isCustomMutator` override routes the
+ * client-watermark push protocol. The client `client` impl is split into the
+ * browser bundle separately — only the path crosses to the server side.
+ */
+export interface MutatorIR {
+    /** Export binding name — the mutator's registry key and import member. */
+    exportName: string;
+    /** Path relative to `&lt;projectRoot>/lunora/` without extension — always `"mutators"`. */
+    filePath: string;
+}
+
+/**
+ * A whole-row `ctx.db.replace(id, document)` write discovered inside a custom
+ * mutator's inline `server` impl (`lunora/mutators.ts`) — the input the
+ * `mutator_full_row_replace` advisor lint consumes. A `replace` overwrites the
+ * entire row, so a concurrent edit to a different column on a synced table is
+ * clobbered; `ctx.db.patch(id, { field })` merges at the column level instead.
+ * Structurally identical to `AdvisorMutatorWrite` so it passes straight through
+ * to the advisor without conversion, exactly as `InsertWriteIR` does for
+ * `AdvisorInsertWrite`.
+ */
+export interface MutatorWriteIR {
+    /** The mutator export whose `server` impl performs the replace, e.g. `renameChannel`. */
+    exportName: string;
+    /** Openable source path the replace appears in — always `lunora/mutators.ts`. */
+    file: string;
+    /** 1-based line of the `replace(...)` call. */
+    line: number;
+}
+
+/**
  * A single cron job lifted from a `cronJobs()` builder in `lunora/crons.ts`.
  * Mirrors `@lunora/scheduler`'s `CronJob`: {@link CronJobIR.cron} is the compiled
  * standard cron expression, {@link CronJobIR.functionPath} is the target

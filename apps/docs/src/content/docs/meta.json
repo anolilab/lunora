@@ -12,6 +12,7 @@
         "concepts/function-context",
         "concepts/realtime",
         "concepts/offline-first",
+        "concepts/local-first",
         "---Functions---",
         "concepts/actions",
         "concepts/internal-functions",

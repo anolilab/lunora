@@ -6,10 +6,12 @@ export { applyDelta, isMutationDelta } from "./delta-merge";
 export { CONFLICT_ERROR_CODE, isConflictError } from "./errors";
 export type { OptimisticLocalStore, OptimisticUpdate } from "./local-store";
 export { createLocalStore } from "./local-store";
-export type { ConnectionStatus, MutationCallOptions } from "./lunora-client";
+export type { ConnectionStatus, MutationCallOptions, SyncWatermark } from "./lunora-client";
 export { LunoraClient } from "./lunora-client";
 export type { MutationRunnerSinks } from "./mutation-runner";
 export { createMutationRunner } from "./mutation-runner";
+export type { MutatorHandle, MutatorRunnerSinks, MutatorTransaction } from "./mutator-runner";
+export { createMutatorRunner } from "./mutator-runner";
 export type { QueuedMutation } from "./offline-queue";
 export { OfflineQueue } from "./offline-queue";
 export type { IndexedDbPersistenceOptions } from "./persistence";
@@ -33,6 +35,8 @@ export type {
     BookmarkStorage,
     CachedQuery,
     ClientMessage,
+    ClientShapeSubscribeMessage,
+    ClientShapeUnsubscribeMessage,
     CronJobInfo,
     FunctionArgumentDescriptor,
     FunctionDescriptor,
@@ -44,18 +48,24 @@ export type {
     GlobalTablePage,
     LunoraClientOptions,
     OfflineQueueOptions,
+    OutboxMutation,
+    OutboxSink,
     PersistedMutation,
     PersistenceAdapter,
     Preloaded,
     QueryCacheAdapter,
     ReconnectOptions,
     ReturnOf,
+    RowOp,
     RpcEnvelope,
     RpcResponseBody,
     ScheduleRecord,
     SchedulerPoolStatus,
     SchedulerStatus,
     ServerMessage,
+    ServerPokeEndMessage,
+    ServerPokePartMessage,
+    ServerPokeStartMessage,
     ShardTrafficEntry,
     ShardTrafficResult,
     StorageListPage,

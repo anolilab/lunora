@@ -85,6 +85,28 @@ describe("ctx-db change-data-capture", () => {
         expect(secondPage.changes.map((change) => change.id)).toStrictEqual(["c"]);
     });
 
+    it("narrows the page to the requested tables when a filter is given", async () => {
+        expect.assertions(3);
+
+        const writer = setupWriter(true);
+
+        await writer.insert("messages", { _id: "m1", authorId: "u1", channelId: "c1", text: "1" }, { allowExplicitId: true });
+        await writer.insert("roomMembers", { _id: "rm1", roomId: "r1", userId: "u1" }, { allowExplicitId: true });
+        await writer.insert("messages", { _id: "m2", authorId: "u1", channelId: "c1", text: "2" }, { allowExplicitId: true });
+
+        const onlyMessages = readCdcChanges(harness.sql, { tables: new Set(["messages"]) });
+
+        // Only the two `messages` rows come back; the `roomMembers` op is filtered out…
+        expect(onlyMessages.changes.map((change) => change.id)).toStrictEqual(["m1", "m2"]);
+        // …but the cursor still tracks the last *seq scanned for those tables*.
+        expect(onlyMessages.changes.map((change) => change.table)).toStrictEqual(["messages", "messages"]);
+
+        // An empty set means "no filter" — the full page, every table.
+        const unfiltered = readCdcChanges(harness.sql, { tables: new Set() });
+
+        expect(unfiltered.changes.map((change) => change.id)).toStrictEqual(["m1", "rm1", "m2"]);
+    });
+
     it("returns the prior cursor unchanged when the page is empty", async () => {
         expect.assertions(2);
 

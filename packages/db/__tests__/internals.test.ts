@@ -2,8 +2,95 @@
 import { NonRetriableError } from "@tanstack/offline-transactions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Row, SyncWriter } from "../src/internals";
-import { createOptimisticOnlineDetector, makeDiffEmit, runOutboxMutation, toMap } from "../src/internals";
+import type { OutboxExecutor, OutboxMutationMetadata, Row, SyncWriter } from "../src/internals";
+import { createExecutorOutboxSink, createOptimisticOnlineDetector, makeDiffEmit, OUTBOX_MUTATION_FN_NAME, runOutboxMutation, toMap } from "../src/internals";
+
+/**
+ * A fake `OfflineExecutor` slice: every `createOfflineTransaction(...).mutate()`
+ * appends a persisted entry and `getPendingCount` reports the depth. Records the
+ * metadata each transaction carried so the sink's persisted payload can be asserted.
+ */
+const fakeExecutor = (): { committed: OutboxMutationMetadata[]; executor: OutboxExecutor; outbox: { id: string }[] } => {
+    const outbox: { id: string }[] = [];
+    const committed: OutboxMutationMetadata[] = [];
+    let counter = 0;
+
+    return {
+        committed,
+        executor: {
+            createOfflineTransaction: (options) => {
+                return {
+                    mutate: () => {
+                        counter += 1;
+                        outbox.push({ id: `tx-${counter.toString()}` });
+                        committed.push(options.metadata as OutboxMutationMetadata);
+                    },
+                };
+            },
+            getPendingCount: () => outbox.length,
+        },
+        outbox,
+    };
+};
+
+const outboxMutation = (mutationId: number) => {
+    return {
+        args: { text: `m${mutationId.toString()}` },
+        clientId: "c1",
+        functionPath: "messages:send",
+        idempotencyKey: `c1:${mutationId.toString()}`,
+        identity: "ident-a",
+        mutationId,
+    };
+};
+
+describe(createExecutorOutboxSink, () => {
+    it("persists each write as an executor transaction carrying the replay metadata", async () => {
+        const { committed, executor, outbox } = fakeExecutor();
+        const sink = createExecutorOutboxSink(executor);
+
+        await sink.enqueue({ ...outboxMutation(1), shardKey: "room-7" });
+
+        expect(outbox).toHaveLength(1);
+        expect(committed[0]).toStrictEqual({
+            args: { text: "m1" },
+            clientId: "c1",
+            functionPath: "messages:send",
+            idempotencyKey: "c1:1",
+            identity: "ident-a",
+            mutationId: 1,
+            shardKey: "room-7",
+        });
+    });
+
+    it("rejects with OFFLINE_QUEUE_OVERFLOW at capacity instead of evicting", async () => {
+        const { executor, outbox } = fakeExecutor();
+        const sink = createExecutorOutboxSink(executor, { maxItems: 2 });
+
+        await sink.enqueue(outboxMutation(1));
+        await sink.enqueue(outboxMutation(2));
+
+        // At capacity — the next write is rejected, and no persisted write is dropped.
+        await expect(sink.enqueue(outboxMutation(3))).rejects.toMatchObject({ code: "OFFLINE_QUEUE_OVERFLOW" });
+        expect(outbox.map((entry) => entry.id)).toStrictEqual(["tx-1", "tx-2"]);
+    });
+
+    it("uses the configured reserved mutationFn name", async () => {
+        const seen: string[] = [];
+        const executor: OutboxExecutor = {
+            createOfflineTransaction: (options) => {
+                seen.push(options.mutationFnName);
+
+                return { mutate: () => undefined };
+            },
+            getPendingCount: () => 0,
+        };
+
+        await createExecutorOutboxSink(executor).enqueue(outboxMutation(1));
+
+        expect(seen).toStrictEqual([OUTBOX_MUTATION_FN_NAME]);
+    });
+});
 
 /** A SyncWriter that records the writes it received, in order. */
 const recordingWriter = (): { ops: ({ key: string; type: "delete" } | { type: "insert" | "update"; value: Row })[]; writer: SyncWriter<Row> } => {

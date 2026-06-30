@@ -17,7 +17,7 @@ import {
     refreshCodegenProject,
     runCodegen,
 } from "../src/index";
-import type { FunctionIR, SchemaIR } from "../src/ir";
+import type { FunctionIR, SchemaIR, ShapeIR } from "../src/ir";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "fixtures", "simple");
@@ -144,6 +144,131 @@ describe("run-codegen", () => {
             expect(result.generated.server).not.toContain('from "@lunora/server"');
             expect(result.generated.shard).not.toContain('from "@lunora/do"');
             expect(result.generated.api).not.toContain('from "@lunora/client"');
+        });
+
+        describe("local-first sync engine (shapes, mutators, collections)", () => {
+            const writeShapes = (): void => {
+                writeFileSync(
+                    join(workdir, "lunora", "shapes.ts"),
+                    `import { defineShape, v } from "@lunora/server";
+export const channelMessages = defineShape({
+    table: "messages",
+    args: { channelId: v.id("channels") },
+    columns: ["channelId", "text"],
+    where: (_ctx, args) => ({ channelId: args.channelId }),
+});
+`,
+                    "utf8",
+                );
+            };
+
+            const writeMutators = (): void => {
+                writeFileSync(
+                    join(workdir, "lunora", "mutators.ts"),
+                    `import { defineMutator, v } from "@lunora/server";
+export const sendMessage = defineMutator({
+    args: { channelId: v.id("channels"), text: v.string() },
+    server: async (_ctx, args) => ({ channelId: args.channelId, text: args.text }),
+    client: (_tx, _args) => {},
+});
+`,
+                    "utf8",
+                );
+            };
+
+            it("registers shapes into LUNORA_SHAPES and overrides resolveShape on the DO", () => {
+                expect.assertions(10);
+
+                writeShapes();
+
+                const result = runCodegen({ lint: false, projectRoot: workdir });
+
+                // functions.ts gains the shape registry, keyed by export name.
+                expect(result.generated.functions).toContain("export const LUNORA_SHAPES");
+                expect(result.generated.functions).toContain('"channelMessages":');
+                // The generated DO resolves shape subscriptions against the registry.
+                expect(result.generated.shard).toContain("LUNORA_SHAPES");
+                expect(result.generated.shard).toContain("protected override resolveShape");
+                expect(result.generated.shard).toContain("compileWhere");
+                // The cross-shard-join guard is imported + called against the compiled predicate.
+                expect(result.generated.shard).toContain("assertShapeShardable");
+                expect(result.generated.shard).toContain("assertShapeShardable(effectiveWhere, schema as unknown as SchemaLike, shape.table)");
+                // The shape predicate is AND-merged with the table's RLS read base-where:
+                // a module-scope registry is built from the function table, the helper is
+                // imported, and the resolver composes it before the shardability guard.
+                // eslint-disable-next-line no-secrets/no-secrets -- asserting on generated TS, not a credential
+                expect(result.generated.shard).toContain("const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCTIONS));");
+                expect(result.generated.shard).toContain("buildRlsReadRegistry, composeShapeReadWhere");
+                // eslint-disable-next-line no-secrets/no-secrets -- asserting on generated TS, not a credential
+                expect(result.generated.shard).toContain("composeShapeReadWhere(LUNORA_RLS_READ_REGISTRY,");
+            });
+
+            it("registers mutators into the dispatch table + LUNORA_MUTATOR_PATHS and overrides isCustomMutator", () => {
+                expect.assertions(5);
+
+                writeMutators();
+
+                const result = runCodegen({ lint: false, projectRoot: workdir });
+
+                // Mutators register into the function dispatch table (transaction-wrapped),
+                // keyed by their file-scoped path, never leaking into the api surface.
+                expect(result.generated.functions).toContain('"mutators:sendMessage"');
+                expect(result.generated.functions).toContain("export const LUNORA_MUTATOR_PATHS");
+                expect(result.generated.api).not.toContain("sendMessage");
+                // The generated DO routes the push/watermark protocol through the override.
+                expect(result.generated.shard).toContain("LUNORA_MUTATOR_PATHS");
+                expect(result.generated.shard).toContain("protected override isCustomMutator");
+            });
+
+            it("emits _generated/collections.ts (one factory per shape) when @lunora/db is a dependency", () => {
+                expect.assertions(4);
+
+                writeShapes();
+                writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/db": "*" }, name: "db-app" }));
+
+                const result = runCodegen({ lint: false, projectRoot: workdir });
+
+                expect(result.generated.collections).toContain('import { lunoraCollectionOptions } from "@lunora/db/collections"');
+                expect(result.generated.collections).toContain('import type { LunoraClient } from "@lunora/client"');
+                expect(result.generated.collections).toContain("export const channelMessagesCollection");
+                expect(result.generated.collections).toContain('shape: { args, name: "channelMessages" }');
+            });
+
+            it("routes the collection client import through the umbrella but keeps @lunora/db scoped", () => {
+                expect.assertions(3);
+
+                writeShapes();
+                writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/db": "*", lunorash: "*" }, name: "umbrella-db-app" }));
+
+                const result = runCodegen({ lint: false, projectRoot: workdir });
+
+                // @lunora/client is in the umbrella base → remapped.
+                expect(result.generated.collections).toContain('import type { LunoraClient } from "lunorash/client"');
+                // @lunora/db is an opt-in add-on → stays scoped even under the umbrella.
+                expect(result.generated.collections).toContain('from "@lunora/db/collections"');
+                expect(result.generated.collections).not.toContain('from "lunorash/db');
+            });
+
+            it("does not emit collections.ts when shapes exist but @lunora/db is absent", () => {
+                expect.assertions(2);
+
+                writeShapes();
+
+                const result = runCodegen({ lint: false, projectRoot: workdir });
+
+                expect(result.generated.collections).toBe("");
+                expect(existsSync(join(workdir, "lunora", "_generated", "collections.ts"))).toBe(false);
+            });
+
+            it("leaves generated output byte-identical when neither shapes nor mutators are declared", () => {
+                expect.assertions(3);
+
+                const baseline = runCodegen({ lint: false, projectRoot: workdir }).generated;
+
+                expect(baseline.collections).toBe("");
+                expect(baseline.functions).not.toContain("LUNORA_SHAPES");
+                expect(baseline.functions).not.toContain("LUNORA_MUTATOR_PATHS");
+            });
         });
 
         it("wires ctx.ai end-to-end when a function reads ctx.ai", () => {
@@ -1307,6 +1432,36 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("config.hyperdriveGlobal?.(env, { identity, userId }) ?? globalDbStub");
             expect(output).toContain("hyperdriveGlobal?: (env: Record<string, unknown>");
             expect(output).not.toContain("config.d1?.(env");
+        });
+
+        const settingsShape: ShapeIR = { exportName: "allSettings", filePath: "shapes", table: "settings" };
+
+        it("emits the global-shape poll override when a project has shapes AND a `.global()` table", () => {
+            expect.assertions(3);
+
+            const output = emitShard({ schema: globalSchema("d1"), shapes: [settingsShape] });
+
+            // resolveShape flags a `.global()`-table shape so the base serves it via the poll path.
+            expect(output).toContain('const isGlobal = (schema as unknown as SchemaLike).tables[shape.table]?.shardMode?.kind === "global"');
+            // The DO reads the global membership by draining the global backend's findMany.
+            expect(output).toContain("protected override async readGlobalShapeRows");
+            expect(output).toContain("await globalDb.findMany(resolved.table, { cursor, where: resolved.effectiveWhere })");
+        });
+
+        it("does not emit readGlobalShapeRows when the project has shapes but no `.global()` table", () => {
+            expect.assertions(1);
+
+            const output = emitShard({
+                schema: {
+                    tables: [
+                        { indexes: [], name: "messages", rankIndexes: [], relations: [], searchIndexes: [], shape: {}, shardMode: "root", vectorIndexes: [] },
+                    ],
+                    vectorIndexes: [],
+                },
+                shapes: [{ exportName: "msgs", filePath: "shapes", table: "messages" }],
+            });
+
+            expect(output).not.toContain("protected override async readGlobalShapeRows");
         });
     });
 

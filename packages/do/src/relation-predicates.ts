@@ -482,5 +482,93 @@ const resolveRelationPredicates = async (where: WhereInput | undefined, options:
     });
 };
 
-export { assertFlatPredicate, containsRelationPredicate, DEFAULT_MAX_RELATION_KEYS, isRelationPredicate, resolveRelationPredicates };
+type ShardedRelationHit = { relation: string; target: string };
+
+/** First sharded hit across a set of sibling sub-wheres (each scanned under `tableName`). */
+const firstShardedHit = (branches: Iterable<WhereInput>, schema: ResolveContext["schema"], tableName: string): ShardedRelationHit | undefined => {
+    for (const branch of branches) {
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: a branch is itself a where to re-scan.
+        const hit = findShardedRelationTarget(branch, schema, tableName);
+
+        if (hit) {
+            return hit;
+        }
+    }
+
+    return undefined;
+};
+
+/** Scan one `where` key (boolean branch or relation predicate) for a sharded-join hit. */
+const inspectKey = (key: string, value: WhereInput[string], schema: ResolveContext["schema"], tableName: string): ShardedRelationHit | undefined => {
+    if (key === "AND" || key === "OR") {
+        return firstShardedHit(branchesOf(value), schema, tableName);
+    }
+
+    if (key === "NOT") {
+        return firstShardedHit([(value ?? {}) as WhereInput], schema, tableName);
+    }
+
+    const relation = schema.tables[tableName]?.relationMap?.[key];
+
+    if (!relation || !isRelationPredicate(value)) {
+        return undefined;
+    }
+
+    if (schema.tables[relation.table]?.shardMode?.kind === "shardBy") {
+        return { relation: key, target: relation.table };
+    }
+
+    // The relation target isn't sharded itself, but its OWN nested predicate may
+    // still hop into a shard — keep descending under the target table.
+    return firstShardedHit(Object.values(value), schema, relation.table);
+};
+
+/**
+ * Walk every relation predicate reachable from `where` (descending through
+ * `AND`/`OR`/`NOT` branches and the nested where of each relation operator),
+ * returning the first one whose target table is `.shardBy()`. Relations to a
+ * `root` (same Durable Object) or `.global()` (D1) table are fine — only a hop
+ * into another shard's DO is unreachable from a live poke loop.
+ */
+const findShardedRelationTarget = (where: WhereInput, schema: ResolveContext["schema"], tableName: string): ShardedRelationHit | undefined => {
+    for (const key of Object.keys(where)) {
+        const hit = inspectKey(key, where[key], schema, tableName);
+
+        if (hit) {
+            return hit;
+        }
+    }
+
+    return undefined;
+};
+
+/**
+ * Registration-time guard for partial-replication shapes. A live shape can only
+ * be poked from the op-log of its OWN shard Durable Object, so an
+ * `effectiveWhere` that joins to a `.shardBy()` table reaches rows that live in
+ * other DOs the poke loop can never observe. Reject such a shape up front with
+ * the two supported remedies. Called from the generated `resolveShape` override
+ * the moment a socket subscribes (the first point the compiled predicate and the
+ * schema's shard modes are both in hand).
+ */
+const assertShapeShardable = (effectiveWhere: WhereInput | undefined, schema: ResolveContext["schema"], table: string): void => {
+    if (!effectiveWhere) {
+        return;
+    }
+
+    const offending = findShardedRelationTarget(effectiveWhere, schema, table);
+
+    if (!offending) {
+        return;
+    }
+
+    throw Object.assign(
+        new Error(
+            `shape on "${table}" joins the sharded table "${offending.target}" via relation "${offending.relation}" — a live shape cannot replicate rows that live in another shard's Durable Object. Fix it by (a) denormalizing the joined columns into "${table}", or (b) moving "${offending.target}" to .global() so it is served through the latency-tiered D1 shape tier.`,
+        ),
+        { code: "SHAPE_CROSS_SHARD_JOIN", name: "LunoraError", status: 400 },
+    );
+};
+
+export { assertFlatPredicate, assertShapeShardable, containsRelationPredicate, DEFAULT_MAX_RELATION_KEYS, isRelationPredicate, resolveRelationPredicates };
 export type { RelationExistsMarker, ResolveRelationPredicatesOptions };

@@ -1,8 +1,120 @@
+/* eslint-disable import/exports-last -- a helpers module: public constants/types are declared next to the code they support */
+import type { OutboxMutation, OutboxSink } from "@lunora/client";
 import type { OnlineDetector } from "@tanstack/offline-transactions";
 import { NonRetriableError } from "@tanstack/offline-transactions";
 
 /** How often the optimistic detector nudges the executor to drain the outbox. */
 const OUTBOX_DRAIN_INTERVAL_MS = 1000;
+
+/**
+ * Reserved `mutationFns` key the unified outbox routes raw `client.mutation`
+ * offline writes through. `defineCollections` registers a handler under this
+ * name that reads `transaction.metadata` (functionPath + args) and replays the
+ * write, so a db app's direct mutations ride the same durable executor as its
+ * collection inserts instead of the standalone {@link OutboxSink} fallback.
+ */
+export const OUTBOX_MUTATION_FN_NAME = "__lunora_outbox__";
+
+/** The metadata an outbox-routed transaction carries so its replay can call `client.mutation`. */
+export interface OutboxMutationMetadata extends Record<string, unknown> {
+    args: Record<string, unknown>;
+    clientId: string;
+    functionPath: string;
+    /** Stable `${clientId}:${mutationId}` replay key; passed back as the mutation id so a committed-but-unacked replay is server-idempotent. */
+    idempotencyKey: string;
+    /** Issuing identity fingerprint; the replay handler drops the write when it no longer matches. */
+    identity: string | null;
+    mutationId: number;
+    shardKey?: string;
+}
+
+/** A committable outbox transaction handle (the `OfflineTransaction` the executor mints). */
+interface OutboxTransaction {
+    mutate: (callback: () => void) => unknown;
+}
+
+/**
+ * The slice of the TanStack `OfflineExecutor` the {@link createExecutorOutboxSink}
+ * drives. Declared structurally so `@lunora/db`'s outbox glue doesn't widen its
+ * coupling to the executor's full surface (and stays unit-testable with a fake).
+ */
+export interface OutboxExecutor {
+    createOfflineTransaction: (options: {
+        autoCommit?: boolean;
+        idempotencyKey?: string;
+        metadata?: Record<string, unknown>;
+        mutationFnName: string;
+    }) => OutboxTransaction;
+    getPendingCount: () => number;
+}
+
+/** Tuning for {@link createExecutorOutboxSink}. */
+export interface ExecutorOutboxSinkOptions {
+    /** Max persisted-but-unconfirmed writes before `enqueue` rejects with `OFFLINE_QUEUE_OVERFLOW` (default 1000, matching `OfflineQueue`). */
+    maxItems?: number;
+    /** `mutationFns` key the replay handler is registered under (default {@link OUTBOX_MUTATION_FN_NAME}). */
+    mutationFnName?: string;
+}
+
+/**
+ * The blessed {@link OutboxSink} over the TanStack `OfflineExecutor` — the single
+ * durable write path for a `@lunora/db` app. It persists each offline write as an
+ * executor transaction carrying the `client.mutation` target in `metadata`, then
+ * ports the two semantics the executor lacks vs the built-in `OfflineQueue`.
+ *
+ * First: a `maxItems` cap that **rejects** a new write at capacity with an
+ * `OFFLINE_QUEUE_OVERFLOW`-coded error — the {@link OutboxSink} contract, matching
+ * `OfflineQueue`. Rejecting (rather than evicting the oldest) preserves the
+ * at-least-once promise: an already-persisted write is never silently dropped, and
+ * the caller surfaces back-pressure to the issuing mutation (which rolls its
+ * optimistic write back).
+ * Second: the identity guard lives in the replay handler (`defineCollections`), which drops a write whose captured `identity` no longer matches — see {@link OutboxMutationMetadata}.
+ */
+export const createExecutorOutboxSink = (executor: OutboxExecutor, options: ExecutorOutboxSinkOptions = {}): OutboxSink => {
+    const maxItems = options.maxItems ?? 1000;
+    const mutationFunctionName = options.mutationFnName ?? OUTBOX_MUTATION_FN_NAME;
+
+    return {
+        enqueue(mutation: OutboxMutation): Promise<void> {
+            // Cap: reject at capacity before persisting, so an already-queued
+            // durable write is never silently lost. Mirrors `OfflineQueue` and the
+            // `OutboxSink` contract (`OFFLINE_QUEUE_OVERFLOW`).
+            if (executor.getPendingCount() >= maxItems) {
+                const error = new Error("offline outbox is full") as Error & { code?: string };
+
+                error.code = "OFFLINE_QUEUE_OVERFLOW";
+
+                return Promise.reject(error);
+            }
+
+            const metadata: OutboxMutationMetadata = {
+                args: mutation.args,
+                clientId: mutation.clientId,
+                functionPath: mutation.functionPath,
+                // Persist the stable replay key so a committed-but-unacked retry
+                // resends the same `x-lunora-mutation-id` and the server dedups it.
+                idempotencyKey: mutation.idempotencyKey,
+                identity: mutation.identity,
+                mutationId: mutation.mutationId,
+                shardKey: mutation.shardKey,
+            };
+
+            // Persist + schedule replay. `autoCommit` flushes on `mutate`, and the
+            // empty callback means no collection row is touched — the optimistic
+            // update already applied client-side; this transaction is pure transport.
+            const transaction = executor.createOfflineTransaction({
+                autoCommit: true,
+                idempotencyKey: mutation.idempotencyKey,
+                metadata,
+                mutationFnName: mutationFunctionName,
+            });
+
+            transaction.mutate(() => undefined);
+
+            return Promise.resolve();
+        },
+    };
+};
 
 /** A row carrying the Lunora document id. */
 export type Row = Record<string, unknown> & { _id: string };

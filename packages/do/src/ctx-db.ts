@@ -3246,8 +3246,19 @@ export { assertValidClientId, createShardCtxDb, normalizeIdStructurally, NotUniq
 export { backfillAggregateIndexes, backfillRankIndexes } from "./ctx-db-backfill";
 export type { CdcChange } from "./ctx-db-cdc";
 export { applyCdcChanges, bumpCdcEpoch, CDC_LOG_TABLE, minCdcSeq, readCdcChanges, readCdcCursor, readCdcEpoch, trimCdcChanges } from "./ctx-db-cdc";
+export { advanceClientWatermark, CLIENT_WATERMARK_TABLE, migrateClientWatermark, readClientWatermark } from "./ctx-db-client-watermark";
+export {
+    deleteGlobalShapeSnapshot,
+    deleteGlobalShapeSnapshotsForConnection,
+    GLOBAL_SHAPE_SNAPSHOT_TABLE,
+    migrateGlobalShapeSnapshot,
+    readGlobalShapeSnapshot,
+    writeGlobalShapeSnapshot,
+} from "./ctx-db-global-shape-snapshot";
 export { IDEMPOTENCY_TABLE, readIdempotent, trimIdempotent, writeIdempotent } from "./ctx-db-idempotency";
 export { runShardMigrations } from "./ctx-db-migrations";
+export type { ShapeRow } from "./ctx-db-shapes";
+export { selectShapeMemberIds, selectShapeRows } from "./ctx-db-shapes";
 export type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike } from "./triggers";
 export type {
     BroadcastDelta,

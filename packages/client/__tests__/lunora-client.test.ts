@@ -325,6 +325,97 @@ describe("lunoraClient", () => {
         });
     });
 
+    // --- Custom-mutator watermark ----------------------------------------------
+
+    describe("lunoraClient — callMutator watermark", () => {
+        it("sends the client id + seq and reports applied when the DO runs the push as next", async () => {
+            expect.assertions(4);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ lastMutationId: 1, result: "ok" }));
+
+            const client = new LunoraClient({
+                clientId: "client-A",
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const ack = await client.callMutator("messages:send", { text: "hi" }, { clientSeq: 1, shardKey: "room-1" });
+
+            expect(ack).toStrictEqual({ applied: true, result: "ok" });
+            expect(client.confirmedMutationWatermark("room-1")).toBe(1);
+
+            const headers = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].headers as Record<string, string>;
+
+            expect(headers["x-lunora-client-id"]).toBe("client-A");
+            expect(headers["x-lunora-client-seq"]).toBe("1");
+        });
+
+        it("reports applied=false and surfaces the echoed watermark when the DO swallows a stale push as a replay", async () => {
+            expect.assertions(2);
+
+            // The server's replay ack echoes its (higher) stored watermark with a
+            // null result — clientSeq 1 was already applied in a prior session.
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ lastMutationId: 5, result: null }));
+
+            const client = new LunoraClient({
+                clientId: "client-A",
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const ack = await client.callMutator("messages:send", { text: "hi" }, { clientSeq: 1, shardKey: "room-1" });
+
+            expect(ack).toStrictEqual({ applied: false, result: null });
+            // The client now knows the real watermark, so the next seq can clear it.
+            expect(client.confirmedMutationWatermark("room-1")).toBe(5);
+        });
+
+        it("omits the seq header when no clientSeq is given so the push rides the idempotency path", async () => {
+            expect.assertions(3);
+
+            // No `lastMutationId` echo — a non-watermarked call the DO ran once.
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: "ok" }));
+
+            const client = new LunoraClient({
+                clientId: "client-A",
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            // No `clientSeq` — must NOT default to 0 (a seq of 0 is `<=` the initial
+            // watermark, which the DO would swallow as a replay without running it).
+            const ack = await client.callMutator("messages:send", { text: "hi" });
+
+            expect(ack).toStrictEqual({ applied: true, result: "ok" });
+
+            const headers = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].headers as Record<string, string>;
+
+            expect(headers["x-lunora-client-id"]).toBe("client-A");
+            expect(headers["x-lunora-client-seq"]).toBeUndefined();
+        });
+
+        it("tracks the watermark per shard bucket", async () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ lastMutationId: 3, result: null }));
+
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await client.callMutator("messages:send", {}, { clientSeq: 3, shardKey: "room-1" });
+
+            expect(client.confirmedMutationWatermark("room-1")).toBe(3);
+            // A different shard keeps its own watermark (untouched).
+            expect(client.confirmedMutationWatermark("room-2")).toBe(0);
+        });
+    });
+
     // --- Subscriptions ----------------------------------------------------------
 
     describe("lunoraClient — subscriptions", () => {
@@ -369,6 +460,7 @@ describe("lunoraClient", () => {
             expect.assertions(3);
 
             const client = new LunoraClient({
+                clientId: "client-A",
                 fetch: vi.fn<typeof fetch>(),
                 url: "https://app.example",
                 WebSocket: createMockWebSocket(),
@@ -376,7 +468,8 @@ describe("lunoraClient", () => {
 
             // No connection context registered: the socket must still announce
             // itself so the server's `onConnect` hooks fire symmetrically with
-            // `onDisconnect`. The envelope simply carries no `context`.
+            // `onDisconnect`. The envelope carries the `clientId` (so pokes can
+            // echo this client's `lastMutationId`) but no `context`.
             client.subscribe(fnRef("messages:list"), {}, () => undefined);
 
             const socket = latestSocket();
@@ -385,7 +478,7 @@ describe("lunoraClient", () => {
 
             const connect = JSON.parse(socket.sent[0]!);
 
-            expect(connect).toEqual({ id: "connect", type: "connect" });
+            expect(connect).toEqual({ clientId: "client-A", id: "connect", type: "connect" });
             // The connect frame leads, then the subscribe — order matters so the
             // hook runs with any context in place before subscriptions replay.
             expect(JSON.parse(socket.sent[1]!).type).toBe("subscribe");
@@ -398,6 +491,7 @@ describe("lunoraClient", () => {
             expect.assertions(1);
 
             const client = new LunoraClient({
+                clientId: "client-A",
                 connectionContext: { roomId: "room-1" },
                 fetch: vi.fn<typeof fetch>(),
                 url: "https://app.example",
@@ -410,7 +504,7 @@ describe("lunoraClient", () => {
 
             socket.open();
 
-            expect(JSON.parse(socket.sent[0]!)).toEqual({ context: { roomId: "room-1" }, id: "connect", type: "connect" });
+            expect(JSON.parse(socket.sent[0]!)).toEqual({ clientId: "client-A", context: { roomId: "room-1" }, id: "connect", type: "connect" });
 
             client.close();
         });

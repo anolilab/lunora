@@ -44,6 +44,17 @@ export interface AdvisorTable {
     optionalFields?: ReadonlySet<string>;
     /** Declared relations (`.relations((r) => …)`). */
     relations: ReadonlyArray<AdvisorRelation>;
+
+    /**
+     * Storage tier the table is declared in: `"global"` (a `.global()` table,
+     * lives in D1 — the cross-shard tier), `"shardBy"` (partitioned across
+     * shard DOs by a key), or `"root"` (the default single-DO table). Read by
+     * the `shape_*` lints to flag replication shapes targeting a `.global()`
+     * table (poll-refreshed/latency-tiered, not poke-live). Optional — the
+     * codegen feeder always supplies it, the runtime feeder derives it; a feeder
+     * that omits it leaves tier-sensitive lints to treat the table as local.
+     */
+    shardKind?: "global" | "root" | "shardBy";
 }
 
 /**
@@ -130,6 +141,7 @@ export const fromServerSchema = (schema: Schema): AdvisorSchema => {
                 indexes,
                 name,
                 optionalFields,
+                shardKind: table.shardMode.kind,
                 relations: Object.entries(table.relationMap).map(([accessor, relation]) => {
                     return {
                         field: relation.field,

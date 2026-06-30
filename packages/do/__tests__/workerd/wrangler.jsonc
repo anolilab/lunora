@@ -14,7 +14,8 @@
         "bindings": [
             { "name": "SHARD", "class_name": "TestShardDO" },
             { "name": "SESSION", "class_name": "TestSessionDO" },
+            { "name": "SYNC", "class_name": "TestSyncDO" },
         ],
     },
-    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TestShardDO", "TestSessionDO"] }],
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TestShardDO", "TestSessionDO", "TestSyncDO"] }],
 }

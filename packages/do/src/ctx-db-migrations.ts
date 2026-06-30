@@ -24,6 +24,8 @@ import { aggregateTableName } from "./aggregate-tally";
 // would create a runtime cycle with `ctx-db.ts` (which imports this module).
 import type { SchemaLike, SqlExec, TableDefinitionLike } from "./ctx-db";
 import { migrateCdcLog, migrateCdcMeta } from "./ctx-db-cdc";
+import { migrateClientWatermark } from "./ctx-db-client-watermark";
+import { migrateGlobalShapeSnapshot } from "./ctx-db-global-shape-snapshot";
 import { migrateIdempotency } from "./ctx-db-idempotency";
 import { runDrizzle } from "./do-exec";
 import { AGG_COUNT, AGG_KEY, AGG_VALUE, createIndexSql, DOC_COLUMN, isFtsAvailable, jsonPathSql, tableColumns } from "./do-sql";
@@ -188,9 +190,19 @@ export const runShardMigrations = (sql: SqlExec, schema: SchemaLike, options: { 
         // prove timeline continuity; created upfront (the row itself is minted
         // lazily by `readCdcEpoch` on first frame).
         migrateCdcMeta(sql);
+        // Custom mutators imply CDC, so the per-client watermark table rides the
+        // same gate: it holds the monotonic `last_mutation_id` the poke protocol
+        // echoes back so the client's outbox can drop confirmed pending writes.
+        migrateClientWatermark(sql);
     }
 
     // Always present: the mutation-replay dedup table is independent of CDC and
     // costs nothing until the first id-bearing mutation writes to it.
     migrateIdempotency(sql);
+
+    // Always present: the durable per-socket baseline for `.global()`-shape diff
+    // pokes. Independent of CDC (global shapes are polled, not poke-live) and
+    // empty until the first global shape is seeded, so a non-global DO pays
+    // nothing — but persisting it lets the poll-loop diff survive hibernation.
+    migrateGlobalShapeSnapshot(sql);
 };

@@ -98,10 +98,15 @@ const usePaginatedCore = function <T>(
 
     // Read latest desired entries from a ref so the attach effect's dep list can
     // stay keyed on `pageKeysHash` alone — args/fn changes already move the hash.
-    const desiredRef = useRef<{ entries: typeof pageEntries; fn: FunctionReference; shardKey: string | undefined }>({ entries: [], fn: function_, shardKey });
+    const desiredRef = useRef<{ baseArgs: Record<string, unknown>; entries: typeof pageEntries; fn: FunctionReference; shardKey: string | undefined }>({
+        baseArgs,
+        entries: [],
+        fn: function_,
+        shardKey,
+    });
 
     useEffect(() => {
-        desiredRef.current = { entries: pageEntries, fn: function_, shardKey };
+        desiredRef.current = { baseArgs, entries: pageEntries, fn: function_, shardKey };
     });
 
     // Per-page detach handles so a page falling out of the request set releases
@@ -243,24 +248,36 @@ const usePaginatedCore = function <T>(
         }
     });
 
-    const { nextCursor, status } = derivePaginationStatus(skipped, pageResults);
+    const { status } = derivePaginationStatus(skipped, pageResults);
 
-    const nextCursorRef = useRef<null | string | undefined>(undefined);
+    const loadMore = useCallback(
+        (numberItems: number) => {
+            setPages((current) => {
+                // Resolve the next-page cursor from COMMITTED state at call time —
+                // the authoritative `current` pages plus the live query cache —
+                // rather than a cursor snapshotted into a ref during render. A
+                // render-phase ref write can be left holding a value from an
+                // interrupted/discarded concurrent render, which `loadMore` (a
+                // user-triggered event handler) would then read; deriving here
+                // reads only state that actually committed. `fn`/`baseArgs`/
+                // `shardKey` come from the effect-updated `desiredRef` so the
+                // callback stays identity-stable.
+                const desired = desiredRef.current;
+                const results = current.map((page) => {
+                    const pageArgs = { ...desired.baseArgs, paginationOpts: { cursor: page.lower, endCursor: page.upper, numItems: page.numItems } };
 
-    // Sync the next-page cursor via an effect rather than a render-phase ref
-    // write (which trips React Compiler). It's read only inside the
-    // user-triggered `loadMore` below, so the post-commit value is always current
-    // by the time it fires — and `loadMore` keeps a stable identity.
-    useEffect(() => {
-        nextCursorRef.current = status === "CanLoadMore" ? nextCursor : undefined;
-    });
+                    return queryClient.getQueryData<PaginationResult<T>>(lunoraQueryKey(desired.fn, pageArgs, desired.shardKey));
+                });
 
-    const loadMore = useCallback((numberItems: number) => {
-        const cursor = nextCursorRef.current;
+                const { nextCursor, status: liveStatus } = derivePaginationStatus(false, results);
+                const cursor = liveStatus === "CanLoadMore" ? nextCursor : undefined;
 
-        // applyLoadMore returns undefined when cursor is invalid — no-op.
-        setPages((current) => applyLoadMore(current, cursor, numberItems) ?? current);
-    }, []);
+                // applyLoadMore returns undefined when cursor is invalid — no-op.
+                return applyLoadMore(current, cursor, numberItems) ?? current;
+            });
+        },
+        [queryClient],
+    );
 
     return { loadMore, pageResults, status };
 };

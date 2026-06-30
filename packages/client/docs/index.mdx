@@ -73,6 +73,30 @@ the call. To patch several subscribed queries from one mutation, pass
 `optimisticUpdate` instead — it receives an `OptimisticLocalStore` over the
 live cache, and every write is rolled back atomically on failure.
 
+## Shape subscriptions
+
+`subscribeShape` is the [local-first sync engine](/docs/concepts/local-first)'s
+parallel to `subscribe` — it replicates a **partial view** of a table (a
+[shape](/docs/concepts/local-first#shapes--partial-replication)) over the poke
+diff protocol instead of re-running a query:
+
+```ts
+const unsubscribe = client.subscribeShape({ name: "messagesByChannel", args: { channelId: "general" } }, (rows) => console.log("current shape rows", rows), {
+    onError: (e) => console.error(e),
+});
+```
+
+You send the shape _name_ + validated `args` (never a `where` the client could
+forge); the server seeds the current membership as an insert-poke and streams
+live membership diffs, materializing the rowset into `callback` on each applied
+poke. Unlike `subscribe`, shape subscriptions are **not** deduped by
+`(name, args)` — the server resolves each under the socket's verified identity,
+so every call gets its own view. Pass `{ shardKey }` to route a
+[sharded](/docs/concepts/sharding) shape to its DO.
+
+Most apps don't call this directly — [`@lunora/db`](/docs/packages/db)'s
+`lunoraCollectionOptions({ shape })` wires it into a TanStack DB collection.
+
 ## Auth
 
 `client.setAuthToken(jwt)` stamps an `Authorization: Bearer <jwt>` header on
@@ -112,3 +136,4 @@ const preloaded = await preloadQuery(client, api.messages.list, { channelId: "ge
 - [@lunora/react](/docs/packages/react)
 - [Concepts: real-time](/docs/concepts/realtime)
 - [Offline-first](/docs/concepts/offline-first)
+- [Local-first sync](/docs/concepts/local-first) — `subscribeShape` + shapes
