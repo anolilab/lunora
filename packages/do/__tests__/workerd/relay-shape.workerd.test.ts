@@ -132,4 +132,78 @@ describe("relay shape seed (workerd e2e)", () => {
         expect(frameTypes(a).filter((type) => type === "pokeStart")).toHaveLength(3);
         expect(frameTypes(c).filter((type) => type === "pokeStart")).toHaveLength(2);
     });
+
+    it("resumes a still-current relay shape through the owner with no re-seed", async () => {
+        expect.assertions(3);
+
+        const owner = env.SYNC.get(env.SYNC.idFromName("resume-room"));
+        const relay = env.SYNC.get(env.SYNC.idFromName("resume-room::relay::0"));
+
+        await sendRpc(owner, "messages:send", { _id: "m1", channelId: "c1", text: "t1" });
+
+        // First socket seeds the full membership and learns the checkpoint + epoch
+        // the owner computed it at (carried on the seed's pokeEnd frame).
+        const first = await openRelaySocket(relay, "resume-room-relay-0");
+        first.ws.send(JSON.stringify({ id: "s1", shape: { args: { channelId: "c1" }, name: "messagesByChannel" }, type: "shape_subscribe" }));
+        await waitFor(() => frameTypes(first).includes("ack"));
+
+        const pokeEnd = first.received
+            .map((raw) => JSON.parse(raw) as { checkpoint?: number; epoch?: string; type: string })
+            .find((frame) => frame.type === "pokeEnd");
+
+        expect(pokeOps(first)).toHaveLength(1);
+
+        // A second socket reconnects at that exact checkpoint with no writes in
+        // between — the owner's resume fast-path returns an EMPTY catch-up diff
+        // (rowsPatch []), proving the relay round-trip carried sinceSeq/sinceEpoch.
+        const second = await openRelaySocket(relay, "resume-room-relay-0");
+        second.ws.send(
+            JSON.stringify({
+                id: "s1",
+                shape: { args: { channelId: "c1" }, name: "messagesByChannel" },
+                sinceCheckpoint: pokeEnd?.checkpoint,
+                sinceEpoch: pokeEnd?.epoch,
+                type: "shape_subscribe",
+            }),
+        );
+        await waitFor(() => frameTypes(second).includes("ack"));
+
+        // The resume seed carries the catch-up baseCheckpoint (a full re-seed would
+        // have none) and an empty membership diff — no rows re-sent.
+        const start = second.received.map((raw) => JSON.parse(raw) as { baseCheckpoint?: number; type: string }).find((frame) => frame.type === "pokeStart");
+
+        expect(start?.baseCheckpoint).toBe(pokeEnd?.checkpoint);
+        expect(pokeOps(second)).toHaveLength(0);
+    });
+
+    it("seeds a non-uniform (identity-scoped) relay shape but never live-multicasts it", async () => {
+        expect.assertions(2);
+
+        const owner = env.SYNC.get(env.SYNC.idFromName("nonuniform-room"));
+        const relay = env.SYNC.get(env.SYNC.idFromName("nonuniform-room::relay::0"));
+
+        // `myInbox` resolves under the caller's identity, so the RLS-uniform gate
+        // keeps it out of the relay registry — it stays owner-served.
+        const scoped = await openRelaySocket(relay, "nonuniform-room-relay-0");
+        scoped.ws.send(JSON.stringify({ id: "s1", shape: { args: {}, name: "myInbox" }, type: "shape_subscribe" }));
+        await waitFor(() => frameTypes(scoped).includes("ack"));
+
+        const seedPokes = frameTypes(scoped).filter((type) => type === "pokeStart").length;
+
+        expect(seedPokes).toBe(1); // exactly the one-time seed, nothing live yet
+
+        // A uniform witness on the same room/relay IS multicast — waiting for ITS
+        // live poke is a deterministic barrier proving the flush + multicast cycle
+        // completed, by which point the non-uniform socket would have its poke too.
+        const witness = await openRelaySocket(relay, "nonuniform-room-relay-0");
+        witness.ws.send(JSON.stringify({ id: "w1", shape: { args: { channelId: "c1" }, name: "messagesByChannel" }, type: "shape_subscribe" }));
+        await waitFor(() => frameTypes(witness).includes("ack"));
+
+        await sendRpc(owner, "messages:send", { _id: "n1", channelId: "c1", text: "n1" });
+        await waitFor(() => pokeOps(witness).some((op) => op.key === "n1"));
+
+        // The witness saw the live delta; the non-uniform socket's poke count never
+        // moved past its one-time seed — it received no relay multicast.
+        expect(frameTypes(scoped).filter((type) => type === "pokeStart")).toHaveLength(seedPokes);
+    });
 });

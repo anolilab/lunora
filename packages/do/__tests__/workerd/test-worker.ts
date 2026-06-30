@@ -131,14 +131,26 @@ class ConcreteSyncShard extends ShardDO {
         return functionPath === "messages:sendMutator";
     }
 
-    protected override resolveShape(name: string, args: Record<string, unknown>): { effectiveWhere?: Record<string, unknown>; table: string } | undefined {
+    protected override resolveShape(
+        name: string,
+        args: Record<string, unknown>,
+        identity?: { userId?: string },
+    ): { effectiveWhere?: Record<string, unknown>; table: string } | undefined {
         this.ensureMigrated();
 
-        if (name !== "messagesByChannel") {
-            return undefined;
+        // Identity-INDEPENDENT (relay-uniform): the where depends only on args, so
+        // every caller resolves the same query — eligible for relay multicast.
+        if (name === "messagesByChannel") {
+            return { effectiveWhere: { channelId: args["channelId"] }, table: "messages" };
         }
 
-        return { effectiveWhere: { channelId: args["channelId"] }, table: "messages" };
+        // Identity-DEPENDENT (non-uniform): scoped to the caller, so it must stay
+        // owner-served and never be registered for relay multicast (plan 075 C2).
+        if (name === "myInbox") {
+            return { effectiveWhere: { authorId: identity?.userId ?? "anon" }, table: "messages" };
+        }
+
+        return undefined;
     }
 
     protected override ensureMigrated(): void {
