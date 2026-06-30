@@ -7,8 +7,9 @@ import { ShardDO } from "../src/shard-do";
 /**
  * The RLS-uniform gate (plan 075 Phase 3): a reactive shape may be relay-multicast
  * ONLY if its resolved query is identical regardless of the caller's identity and
- * none of its projected columns are masked. The gate probes `resolveShape` under
- * two distinct synthetic identities and compares — airtight and fail-closed.
+ * none of its projected columns are masked. The gate combines a static RLS
+ * read-policy guard with a claim-diverse identity probe (whose base is the exact
+ * anonymous identity the owner multicasts under) — fail-closed on every ground.
  */
 interface Resolved {
     columns?: ReadonlyArray<string>;

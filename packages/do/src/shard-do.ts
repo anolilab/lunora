@@ -1856,7 +1856,7 @@ abstract class ShardDO {
     /** Relay-side guard: `true` once this relay has announced itself to its owner this wake, so a hot socket churn doesn't re-`relay_attach` on every subscribe. */
     private relayAnnounced = false;
 
-    /** Memoized RLS-uniform verdict per `(name, args)` shape — uniformity is a stable property, so the dual-identity probe runs at most once per distinct shape (plan 075 Phase 3). */
+    /** Memoized RLS-uniform verdict per `(name, args)` shape — uniformity is a stable property, so the gate probe runs at most once per distinct shape (plan 075 Phase 3). */
     private readonly shapeUniformCache = new Map<string, boolean>();
 
     /**
