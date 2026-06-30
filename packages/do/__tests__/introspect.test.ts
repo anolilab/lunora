@@ -1,6 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { facetColumn, findStorageReferences, listTables, readTablePage, selectMatchingIds, summarizeSubscriptions } from "../src/introspect";
+import {
+    createFanoutCounters,
+    facetColumn,
+    findStorageReferences,
+    listTables,
+    readTablePage,
+    recordFanoutPass,
+    selectMatchingIds,
+    summarizeFanoutTopics,
+    summarizeSubscriptions,
+} from "../src/introspect";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 describe("introspect", () => {
@@ -597,6 +607,100 @@ describe("introspect", () => {
                 totalConnections: 1,
                 totalSubscriptions: 0,
             });
+        });
+    });
+
+    describe("summarizeFanoutTopics", () => {
+        it("returns an empty result with zeroed peak for no sockets", () => {
+            expect.assertions(1);
+
+            expect(summarizeFanoutTopics([])).toEqual({ peakSubscribers: 0, topics: [], totalConnections: 0 });
+        });
+
+        it("counts shapes by name and whispers by topic, busiest first", () => {
+            expect.assertions(1);
+
+            const result = summarizeFanoutTopics([
+                { shapes: { "s-1": { name: "roomMessages" } }, whispers: ["cursor:general"] },
+                { shapes: { "s-2": { name: "roomMessages" } }, whispers: ["cursor:general"] },
+                { shapes: { "s-3": { name: "roomMessages" }, "s-4": { name: "roster" } } },
+                { whispers: ["cursor:general", "typing:42"] },
+            ]);
+
+            // roomMessages: 3 sockets, cursor:general: 3 sockets, roster: 1, typing:42: 1.
+            expect(result).toEqual({
+                peakSubscribers: 3,
+                topics: [
+                    { kind: "whisper", subscribers: 3, topic: "cursor:general" },
+                    { kind: "shape", subscribers: 3, topic: "roomMessages" },
+                    { kind: "shape", subscribers: 1, topic: "roster" },
+                    { kind: "whisper", subscribers: 1, topic: "typing:42" },
+                ],
+                totalConnections: 4,
+            });
+        });
+
+        it("falls back to a sentinel name for a shape with no registered name", () => {
+            expect.assertions(1);
+
+            expect(summarizeFanoutTopics([{ shapes: { "s-1": {} } }])).toEqual({
+                peakSubscribers: 1,
+                topics: [{ kind: "shape", subscribers: 1, topic: "(unknown shape)" }],
+                totalConnections: 1,
+            });
+        });
+
+        it("caps the returned topics at the supplied limit while peak still reflects the busiest", () => {
+            expect.assertions(3);
+
+            // "a" is joined by both sockets; "b"/"c" by one each. A limit of 2 keeps
+            // only the two busiest, but the peak still reflects the global maximum.
+            const result = summarizeFanoutTopics([{ whispers: ["a", "b", "c"] }, { whispers: ["a"] }], 2);
+
+            expect(result.topics).toHaveLength(2);
+            expect(result.topics[0]).toEqual({ kind: "whisper", subscribers: 2, topic: "a" });
+            expect(result.peakSubscribers).toBe(2);
+        });
+    });
+
+    describe("recordFanoutPass / createFanoutCounters", () => {
+        it("starts every counter at zero", () => {
+            expect.assertions(1);
+
+            expect(createFanoutCounters()).toEqual({
+                maxMs: 0,
+                passes: 0,
+                peakSocketsIterated: 0,
+                socketsDelivered: 0,
+                socketsIterated: 0,
+                totalMs: 0,
+            });
+        });
+
+        it("accumulates totals and lifts the peak-width and slowest-pass high-water marks", () => {
+            expect.assertions(2);
+
+            let counters = createFanoutCounters();
+
+            counters = recordFanoutPass(counters, 10, 4, 3);
+            counters = recordFanoutPass(counters, 25, 25, 1);
+            counters = recordFanoutPass(counters, 7, 0, 12);
+
+            expect(counters).toEqual({
+                maxMs: 12,
+                passes: 3,
+                peakSocketsIterated: 25,
+                socketsDelivered: 29,
+                socketsIterated: 42,
+                totalMs: 16,
+            });
+
+            // Pure: a single pass returns a fresh object and never mutates its input.
+            const base = createFanoutCounters();
+
+            recordFanoutPass(base, 5, 5, 5);
+
+            expect(base).toEqual(createFanoutCounters());
         });
     });
 });

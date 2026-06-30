@@ -59,6 +59,7 @@ const ADMIN_FUNCTIONS = {
     getAuditLog: "__lunora_admin__:getAuditLog",
     getAuthMetrics: "__lunora_admin__:getAuthMetrics",
     getCapturedMail: "__lunora_admin__:getCapturedMail",
+    getFanoutMetrics: "__lunora_admin__:getFanoutMetrics",
     getFunctionStats: "__lunora_admin__:getFunctionStats",
     listSubscriptions: "__lunora_admin__:listSubscriptions",
     listTableIndexes: "__lunora_admin__:listTableIndexes",
@@ -1292,17 +1293,178 @@ const summarizeSubscriptions = (attachments: SocketAttachmentLike[]): Subscripti
     return { connections, totalConnections: connections.length, totalSubscriptions };
 };
 
+/**
+ * One topic or shape with the number of sockets currently subscribed to it, as
+ * surfaced by `__lunora_admin__:getFanoutMetrics`. `subscribers` is the fan-out
+ * **width** one poke/broadcast incurs for this topic — the O(subscribers) cost
+ * the auto-elastic relay tier (plan 075) targets — so a single hot topic is
+ * visible here long before it becomes a bottleneck.
+ */
+interface FanoutTopicStat {
+    /** `"shape"` = a reactive-query shape (poked from SQLite); `"whisper"` = an ephemeral whisper topic. */
+    kind: "shape" | "whisper";
+    /** Connected sockets currently subscribed — the fan-out width one flush/broadcast incurs for this topic. */
+    subscribers: number;
+    /** The shape name (the `defineShape` export) or the whisper topic string. */
+    topic: string;
+}
+
+/**
+ * Running fan-out counters for one delivery path (the reactive shape poke or the
+ * whisper broadcast) since this DO instance woke. In-memory and reset on
+ * hibernation/restart — the same "since this instance woke" granularity as
+ * `getMetrics`/`getFunctionStats`.
+ *
+ * `socketsIterated` is the O(subscribers) loop cost the relay tier targets;
+ * `socketsDelivered` is how many of those iterated sockets actually received a
+ * frame (the rest were visited but had no matching shape, or were the whisper
+ * sender). `totalMs`/`maxMs` are **coarse** wall-clock for the asynchronous
+ * shape-poke path only: a Durable Object's clock advances only across I/O, so
+ * treat them as directional, not exact. They stay `0` for the synchronous
+ * whisper path, which performs no awaited I/O to time.
+ */
+interface FanoutPathCounters {
+    /** Coarse slowest single pass, in ms (shape-poke path only; `0` for whisper). */
+    maxMs: number;
+    /** Fan-out passes that ran (shape-poke flushes / whisper broadcasts). */
+    passes: number;
+    /** Widest single pass — the most sockets iterated in one flush/broadcast. */
+    peakSocketsIterated: number;
+    /** Sockets that actually received a frame, summed across every pass. */
+    socketsDelivered: number;
+    /** Sockets visited, summed across every pass — the O(subscribers) iteration cost. */
+    socketsIterated: number;
+    /** Coarse summed wall-clock across every pass, in ms (shape-poke path only; `0` for whisper). */
+    totalMs: number;
+}
+
+/**
+ * Payload of a `__lunora_admin__:getFanoutMetrics` call: the current per-topic
+ * subscriber counts plus the running fan-out counters for each delivery path.
+ * The point-in-time `topics`/`peakSubscribers`/`totalConnections` are derived
+ * live from `getWebSockets()` + each socket's attachment; the `shapePoke`/
+ * `whisper` counters are the in-memory running tallies (reset on hibernation).
+ * Feeds the Studio fan-out observability panel — the "you can see it scale"
+ * half of plan 075 Phase 1, before any topology change exists.
+ */
+interface FanoutMetricsResult {
+    /** Highest current subscriber count across all topics/shapes — the widest single fan-out right now. */
+    peakSubscribers: number;
+    /** Running reactive-shape-poke fan-out counters since this instance woke. */
+    shapePoke: FanoutPathCounters;
+    /** Epoch-ms this instance began collecting (shared with `getMetrics`/`getFunctionStats`). */
+    sinceMs: number;
+    /** Hottest topics/shapes by current subscriber count, busiest first (capped at {@link DEFAULT_FANOUT_TOPIC_LIMIT}). */
+    topics: FanoutTopicStat[];
+    /** Live socket count on this shard. */
+    totalConnections: number;
+    /** Running whisper-broadcast fan-out counters since this instance woke. */
+    whisper: FanoutPathCounters;
+}
+
+/**
+ * One socket's attachment as seen by {@link summarizeFanoutTopics} — the subset
+ * of `./types`' `SocketAttachment` the fan-out summary reads (live `shapes` keyed
+ * by subscription id, and the joined whisper `topics`). Narrowed so the summary
+ * stays a pure, harness-testable function with no dependency on the DO runtime.
+ */
+interface FanoutAttachmentLike {
+    shapes?: Record<string, { name?: string }>;
+    whispers?: string[];
+}
+
+/** Default cap on the number of hot topics {@link summarizeFanoutTopics} returns, so a deployment with thousands of distinct shapes can't return an unbounded list. */
+const DEFAULT_FANOUT_TOPIC_LIMIT = 20;
+
+/** A freshly-zeroed {@link FanoutPathCounters}, for a DO instance waking up. */
+const createFanoutCounters = (): FanoutPathCounters => {
+    return { maxMs: 0, passes: 0, peakSocketsIterated: 0, socketsDelivered: 0, socketsIterated: 0, totalMs: 0 };
+};
+
+/**
+ * Fold one fan-out pass into a running {@link FanoutPathCounters}, returning the
+ * updated counters: bump the pass count, add the iterated/delivered socket
+ * totals, and lift the peak-width and slowest-pass high-water marks. Pure (a new
+ * object, no mutation) so it stays trivially testable; the caller swaps the
+ * stored counters for the result. `ms` is `0` for the synchronous whisper path
+ * (nothing awaited to time).
+ */
+const recordFanoutPass = (counters: FanoutPathCounters, iterated: number, delivered: number, ms: number): FanoutPathCounters => {
+    return {
+        maxMs: Math.max(counters.maxMs, ms),
+        passes: counters.passes + 1,
+        peakSocketsIterated: Math.max(counters.peakSocketsIterated, iterated),
+        socketsDelivered: counters.socketsDelivered + delivered,
+        socketsIterated: counters.socketsIterated + iterated,
+        totalMs: counters.totalMs + ms,
+    };
+};
+
+/**
+ * Fold a per-socket list of attachments into the point-in-time half of a
+ * {@link FanoutMetricsResult}: current subscriber count per shape (grouped by
+ * `defineShape` name) and per whisper topic, the busiest `limit` of them, the
+ * peak width across all of them, and the live socket count. Pure — the DO method
+ * feeds it `getWebSockets().map(readAttachment)` and merges in the running
+ * counters.
+ */
+const summarizeFanoutTopics = (
+    attachments: FanoutAttachmentLike[],
+    limit = DEFAULT_FANOUT_TOPIC_LIMIT,
+): { peakSubscribers: number; topics: FanoutTopicStat[]; totalConnections: number } => {
+    const shapeCounts = new Map<string, number>();
+    const whisperCounts = new Map<string, number>();
+
+    for (const attachment of attachments) {
+        for (const shape of Object.values(attachment.shapes ?? {})) {
+            const key = shape.name ?? "(unknown shape)";
+
+            shapeCounts.set(key, (shapeCounts.get(key) ?? 0) + 1);
+        }
+
+        for (const topic of attachment.whispers ?? []) {
+            whisperCounts.set(topic, (whisperCounts.get(topic) ?? 0) + 1);
+        }
+    }
+
+    const topics: FanoutTopicStat[] = [
+        ...[...shapeCounts].map(([topic, subscribers]): FanoutTopicStat => {
+            return { kind: "shape", subscribers, topic };
+        }),
+        ...[...whisperCounts].map(([topic, subscribers]): FanoutTopicStat => {
+            return { kind: "whisper", subscribers, topic };
+        }),
+    ];
+
+    // Busiest first; ties broken by name so the order is stable across reads.
+    topics.sort((a, b) => b.subscribers - a.subscribers || a.topic.localeCompare(b.topic));
+
+    let peakSubscribers = 0;
+
+    for (const topic of topics) {
+        if (topic.subscribers > peakSubscribers) {
+            peakSubscribers = topic.subscribers;
+        }
+    }
+
+    return { peakSubscribers, topics: topics.slice(0, limit), totalConnections: attachments.length };
+};
+
 export {
     ADMIN_FUNCTION_PREFIX,
     ADMIN_FUNCTIONS,
+    createFanoutCounters,
+    DEFAULT_FANOUT_TOPIC_LIMIT,
     facetColumn,
     findStorageReferences,
     FLAGS_FUNCTION_PREFIX,
     listTables,
     MAX_PAGE_SIZE,
     readTablePage,
+    recordFanoutPass,
     RELATION_FUNCTION_PREFIX,
     selectMatchingIds,
+    summarizeFanoutTopics,
     summarizeSubscriptions,
 };
 export type {
@@ -1315,6 +1477,9 @@ export type {
     FacetColumnOptions,
     FacetColumnResult,
     FacetValue,
+    FanoutMetricsResult,
+    FanoutPathCounters,
+    FanoutTopicStat,
     FilterClause,
     FilterOperator,
     FlagEvaluation,

@@ -5,7 +5,16 @@ import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../src/ctx-db";
 import { applyCdcChanges, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import type { DataMigrationLike, MigrationRunResult } from "../src/data-migration";
 import { runDataMigration } from "../src/data-migration";
-import type { AdvisoryFinding, FlagEvaluation, FlagsResult, QueueMetadata, StudioFeaturesResult } from "../src/introspect";
+import type {
+    AdvisoryFinding,
+    FanoutMetricsResult,
+    FanoutPathCounters,
+    FanoutTopicStat,
+    FlagEvaluation,
+    FlagsResult,
+    QueueMetadata,
+    StudioFeaturesResult,
+} from "../src/introspect";
 import { ADMIN_FUNCTIONS } from "../src/introspect";
 import type { RankIndexDefinitionLike, ShardRankPageResult } from "../src/rank";
 import { rankKeyFromDoc } from "../src/rank";
@@ -61,6 +70,25 @@ const FLAG_EVALUATION_KEY_GUARD: KeysMatch<keyof FlagEvaluation, (typeof FLAG_EV
 const FLAGS_RESULT_KEYS = ["configured", "flags"] as const;
 
 const FLAGS_RESULT_KEY_GUARD: KeysMatch<keyof FlagsResult, (typeof FLAGS_RESULT_KEYS)[number]> = true;
+
+/**
+ * Canonical key sets of the `getFanoutMetrics` wire shapes (plan 075 Phase 1),
+ * duplicated by `@lunora/studio`'s hand mirror the same way as the types above.
+ * Forces both packages' copies of the fan-out observability payload to move
+ * together — adding or dropping a counter/topic field fails the build rather than
+ * silently shipping a missing studio cell.
+ */
+const FANOUT_TOPIC_STAT_KEYS = ["kind", "subscribers", "topic"] as const;
+
+const FANOUT_TOPIC_STAT_KEY_GUARD: KeysMatch<keyof FanoutTopicStat, (typeof FANOUT_TOPIC_STAT_KEYS)[number]> = true;
+
+const FANOUT_PATH_COUNTERS_KEYS = ["maxMs", "passes", "peakSocketsIterated", "socketsDelivered", "socketsIterated", "totalMs"] as const;
+
+const FANOUT_PATH_COUNTERS_KEY_GUARD: KeysMatch<keyof FanoutPathCounters, (typeof FANOUT_PATH_COUNTERS_KEYS)[number]> = true;
+
+const FANOUT_METRICS_RESULT_KEYS = ["peakSubscribers", "shapePoke", "sinceMs", "topics", "totalConnections", "whisper"] as const;
+
+const FANOUT_METRICS_RESULT_KEY_GUARD: KeysMatch<keyof FanoutMetricsResult, (typeof FANOUT_METRICS_RESULT_KEYS)[number]> = true;
 
 /**
  * A real-SQLite-backed ShardDO whose `handleRpc` throws — proving the admin
@@ -442,6 +470,17 @@ describe("shardDO admin introspection", () => {
         expect([...FLAG_EVALUATION_KEYS]).toStrictEqual(["errorCode", "key", "reason", "type", "value", "variant"]);
         expect(FLAGS_RESULT_KEY_GUARD).toBe(true);
         expect([...FLAGS_RESULT_KEYS]).toStrictEqual(["configured", "flags"]);
+    });
+
+    it("keeps the getFanoutMetrics wire shapes in lockstep with the studio's hand-mirror", () => {
+        expect.assertions(6);
+
+        expect(FANOUT_TOPIC_STAT_KEY_GUARD).toBe(true);
+        expect([...FANOUT_TOPIC_STAT_KEYS]).toStrictEqual(["kind", "subscribers", "topic"]);
+        expect(FANOUT_PATH_COUNTERS_KEY_GUARD).toBe(true);
+        expect([...FANOUT_PATH_COUNTERS_KEYS]).toStrictEqual(["maxMs", "passes", "peakSocketsIterated", "socketsDelivered", "socketsIterated", "totalMs"]);
+        expect(FANOUT_METRICS_RESULT_KEY_GUARD).toBe(true);
+        expect([...FANOUT_METRICS_RESULT_KEYS]).toStrictEqual(["peakSubscribers", "shapePoke", "sinceMs", "topics", "totalConnections", "whisper"]);
     });
 
     it("serves declared-workflow metadata from the codegen-overridden hook", async () => {

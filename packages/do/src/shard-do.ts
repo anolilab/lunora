@@ -47,6 +47,7 @@ import type {
     AuditLogResult,
     ColumnMeta,
     CreateWorkflowInstanceResult,
+    FanoutMetricsResult,
     FilterClause,
     FilterOperator,
     FlagsResult,
@@ -66,14 +67,17 @@ import type {
 import {
     ADMIN_FUNCTION_PREFIX,
     ADMIN_FUNCTIONS,
+    createFanoutCounters,
     facetColumn,
     findStorageReferences,
     FLAGS_FUNCTION_PREFIX,
     listTables,
     MAX_PAGE_SIZE,
     readTablePage,
+    recordFanoutPass,
     RELATION_FUNCTION_PREFIX,
     selectMatchingIds,
+    summarizeFanoutTopics,
     summarizeSubscriptions,
 } from "./introspect";
 import type { LogEntry } from "./log-buffer";
@@ -1765,6 +1769,19 @@ abstract class ShardDO {
      * (durable aggregation would be a separate, heavier feature).
      */
     private readonly metrics = { errors: 0, requests: 0, sinceMs: Date.now() };
+
+    /**
+     * Running fan-out cost counters surfaced by the
+     * `__lunora_admin__:getFanoutMetrics` RPC — one tally for the reactive
+     * shape-poke path (`pokeShapeSubscribers`) and one for the whisper broadcast
+     * path (`broadcastWhisper`). Each pass records the sockets it iterated (the
+     * O(subscribers) cost) and delivered to. In-memory and reset on
+     * hibernation/restart, sharing `metrics.sinceMs` as the "since this instance
+     * woke" epoch. This is the observability half of plan 075's auto-elastic
+     * relay tier (Phase 1): measure the per-flush fan-out cost so the promotion
+     * threshold is grounded in real numbers, with no behavior change.
+     */
+    private readonly fanout = { shapePoke: createFanoutCounters(), whisper: createFanoutCounters() };
 
     /**
      * Declared indexes (`table:index`) a query has exercised since this instance
@@ -5207,6 +5224,13 @@ abstract class ShardDO {
             return this.collectSubscriptions();
         }
 
+        if (functionPath === ADMIN_FUNCTIONS.getFanoutMetrics) {
+            // Per-topic subscriber counts + running fan-out cost counters (plan
+            // 075 Phase 1 observability). Deployment-wide live state, so it carries
+            // the wildcard like the other read-only admin reads.
+            return this.collectFanoutMetrics();
+        }
+
         if (functionPath === ADMIN_FUNCTIONS.getLogs) {
             return { entries: this.logs.entries() };
         }
@@ -5287,6 +5311,21 @@ abstract class ShardDO {
      */
     private collectSubscriptions(): SubscriptionsResult {
         return summarizeSubscriptions(this.state.getWebSockets().map((ws) => this.readAttachment(ws)));
+    }
+
+    /**
+     * Assemble the `__lunora_admin__:getFanoutMetrics` payload for the Studio
+     * fan-out observability panel (plan 075 Phase 1). The point-in-time topic
+     * subscriber counts are folded live from each socket's attachment via
+     * {@link summarizeFanoutTopics}; the running per-path cost counters are the
+     * in-memory {@link ShardDO.fanout} tallies, sharing `metrics.sinceMs` as the
+     * "since this instance woke" epoch. Read-only: touches no SQLite and mutates
+     * no socket state.
+     */
+    private collectFanoutMetrics(): FanoutMetricsResult {
+        const summary = summarizeFanoutTopics(this.state.getWebSockets().map((ws) => this.readAttachment(ws)));
+
+        return { ...summary, shapePoke: this.fanout.shapePoke, sinceMs: this.metrics.sinceMs, whisper: this.fanout.whisper };
     }
 
     /** Resolve a `getAuditLog` admin read, parsing the optional `limit`/`sinceSeq` cursor args and ensuring the reserved table first. */
@@ -6185,6 +6224,11 @@ abstract class ShardDO {
         // per flush so a slice is never reused across writes (it would go stale).
         const opRangeCache = new Map<string, Map<string, CdcChange>>();
 
+        // Observability (plan 075 Phase 1): count sockets this flush actually
+        // poked so `getFanoutMetrics` can report the delivered-vs-iterated split.
+        // Pure measurement — it never alters which sockets are poked.
+        let delivered = 0;
+
         const pokeOne = async (ws: WebSocket): Promise<void> => {
             if (this.isSocketExpired(ws)) {
                 this.dropExpiredSocket(ws);
@@ -6218,6 +6262,8 @@ abstract class ShardDO {
                     await awaitWsDrain(ws);
 
                     if (this.sendPoke(ws, parts, checkpoint, frameEpoch, undefined)) {
+                        delivered += 1;
+
                         for (const subId of partAdvanced) {
                             this.recordShapeMemo(ws, subId, checkpoint);
                         }
@@ -6236,7 +6282,16 @@ abstract class ShardDO {
         // Bounded fan-out matching `refreshSubscriptions`: each worker drains its
         // sockets one at a time so the per-send `awaitWsDrain` gate above applies
         // backpressure on a slow consumer. See {@link runSocketPool}.
+        const startMs = Date.now();
+
         await runSocketPool(sockets, pokeOne);
+
+        // Record the fan-out cost of this flush (plan 075 Phase 1). `startMs` wraps
+        // the whole pool, so the elapsed time captures the awaited drain/send I/O
+        // across every socket; it is coarse (a DO clock advances only on I/O) but
+        // the socket counts are exact. Recorded even for a zero-delivery flush so
+        // the iterated-vs-delivered ratio reflects wasted work honestly.
+        this.fanout.shapePoke = recordFanoutPass(this.fanout.shapePoke, sockets.length, delivered, Date.now() - startMs);
     }
 
     /**
@@ -7166,14 +7221,27 @@ abstract class ShardDO {
         const fromSuffix = from === undefined ? "" : `,"from":${JSON.stringify(from)}`;
         const frame = `{"type":"whisper","topic":${JSON.stringify(topic)},"data":${dataJson}${fromSuffix}}`;
 
+        // Observability (plan 075 Phase 1): tally the sockets scanned vs. actually
+        // delivered to so `getFanoutMetrics` shows the whisper fan-out width. Pure
+        // counting — it never changes who receives the whisper.
+        let scanned = 0;
+        let delivered = 0;
+
         for (const ws of this.state.getWebSockets()) {
+            scanned += 1;
+
             if (ws === sender || this.readAttachment(ws).whispers?.includes(topic) !== true) {
                 continue;
             }
 
             // Best-effort fan-out; a closed socket is simply skipped.
             trySendFrame(ws, frame);
+            delivered += 1;
         }
+
+        // The broadcast is synchronous (no awaited I/O), so no wall-clock is
+        // captured (`0` ms); the scanned/delivered socket counts are exact.
+        this.fanout.whisper = recordFanoutPass(this.fanout.whisper, scanned, delivered, 0);
     }
 
     // eslint-disable-next-line class-methods-use-this -- cohesive DO instance method grouped with the hibernation/attachment helpers; reads only the socket
