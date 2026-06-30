@@ -151,6 +151,16 @@ export interface LunoraDb<D extends Record<string, AnyDef>> {
     collections: { [K in keyof D]: Collection<RowOf<D[K]>, string> };
     /** The shared offline executor (the outbox). */
     executor: OfflineExecutor;
+
+    /**
+     * Number of writes still pending in the durable outbox — the depth for a
+     * "N changes waiting to sync" indicator. A convenience over reaching through
+     * `executor.getPendingCount()`. **Pull-only** (the underlying TanStack
+     * executor exposes no change subscription): read it after a `db.actions.*`
+     * call and on connection-status changes, or poll. The standalone
+     * `LunoraClient` exposes the reactive `onPendingChange` for its built-in queue.
+     */
+    pendingCount: () => number;
     /** Re-point a `scopeBy` collection's subscription (omit `args` to detach) — present for scoped collections. */
     scope: { [K in keyof D]: D[K] extends { scopeBy: string } ? (args?: Record<string, unknown>) => void : never };
 }
@@ -304,5 +314,5 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
         };
     }
 
-    return { actions, collections, executor, scope } as unknown as LunoraDb<D>;
+    return { actions, collections, executor, pendingCount: () => executor.getPendingCount(), scope } as unknown as LunoraDb<D>;
 };

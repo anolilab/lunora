@@ -8,6 +8,7 @@ import type { QueuedMutation } from "./offline-queue";
 import { nextId, OfflineQueue, reportPersistenceError } from "./offline-queue";
 import type { OptimisticLayerHandle } from "./optimistic-layers";
 import { applyOptimisticLayer, dropConfirmedLayers, foldOptimistic, notifySubscription } from "./optimistic-layers";
+import isStaleVersion from "./persisted-version";
 import { queryCacheKey } from "./query-cache";
 import type { ReconnectCalculator } from "./reconnect";
 import { createReconnect } from "./reconnect";
@@ -511,6 +512,12 @@ class LunoraClient {
 
     private readonly persistence: PersistenceAdapter | undefined;
 
+    /** App/schema version stamped on persisted writes + cached reads; mismatches are purged. */
+    private readonly persistenceVersion: string | undefined;
+
+    /** Releases the multi-tab outbox-leader Web Lock on close (see `hydrateAsOutboxLeader`). */
+    private outboxLeaderRelease: (() => void) | undefined;
+
     /** Durable read cache (Pillar 2); `undefined` when `queryCache` is omitted or `false`. */
     private readonly queryCache: QueryCacheAdapter | undefined;
 
@@ -567,6 +574,15 @@ class LunoraClient {
     private authToken: string | null = null;
 
     /**
+     * Optional STABLE identity subject (a user id), the basis of the offline-queue
+     * identity stamp when supplied. Keeps a same-user token *refresh* from looking
+     * like an identity change (which would discard queued writes). `undefined` =
+     * not supplied, so identity falls back to a hash of the raw token. See
+     * `setAuthToken` / `identityFingerprint`.
+     */
+    private authSubject: string | null | undefined = undefined;
+
+    /**
      * Identity stamp recorded against each queued offline mutation, keyed by
      * the queue-assigned mutation id. Captured at enqueue from the auth token
      * in effect at the time, and re-checked at flush so a queued write can
@@ -588,6 +604,9 @@ class LunoraClient {
 
     /** Subscribers to offline-queued mutation verdicts (see `onMutationSettled`). */
     private readonly mutationSettledListeners = new Listeners<MutationSettledEvent>();
+
+    /** Subscribers to the offline-queue pending-count (see `onPendingChange`). */
+    private readonly pendingChangeListeners = new Listeners<number>();
 
     /**
      * Whisper-topic handlers, keyed by `connectionKey(shardKey)` → topic → set
@@ -634,10 +653,18 @@ class LunoraClient {
         this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
         this.defaultConnectionContext = options.connectionContext;
         this.persistence = options.persistence;
+        this.persistenceVersion = options.persistenceVersion;
         this.queryCache = options.queryCache === false ? undefined : options.queryCache;
         this.onPersistenceError = options.offlineQueue?.onPersistenceError;
-        this.offlineQueue = new OfflineQueue(options.offlineQueue, options.persistence, (entry, error) => {
-            this.emitItemSettled(entry, "rejected", error);
+        this.offlineQueue = new OfflineQueue(options.offlineQueue, {
+            onEvict: (entry, error) => {
+                this.emitItemSettled(entry, "rejected", error);
+            },
+            onSizeChange: (size) => {
+                this.pendingChangeListeners.emit(size);
+            },
+            persistence: options.persistence,
+            version: options.persistenceVersion,
         });
         this.outbox = options.outbox;
         // A db app persists a stable id alongside the outbox and passes it in; the
@@ -648,9 +675,10 @@ class LunoraClient {
         if (this.persistence) {
             // Deferred to a microtask so the constructor itself stays
             // synchronous; hydration then opens sockets for any restored writes
-            // so they flush once the WS connects.
+            // so they flush once the WS connects. Gated behind a Web Lock so only
+            // ONE tab re-queues the shared durable writes (see the method).
             queueMicrotask((): void => {
-                this.hydratePersistedQueue().catch(() => undefined);
+                this.hydrateAsOutboxLeader();
             });
         }
 
@@ -671,25 +699,57 @@ class LunoraClient {
      * {@link onAuthTokenChange} listeners so React hooks like `useAuth` stay in
      * sync across all mounted instances.
      *
+     * Pass a STABLE `subject` (the user id) to key the offline-queue identity on
+     * it instead of the token bytes, so a token *refresh* (same user, new JWT)
+     * doesn't read as an identity change and discard queued writes. The subject is
+     * **sticky**: a later call that omits it (or passes `undefined`) keeps the
+     * established subject — so `setAuthToken(refreshedToken)` after a prior
+     * `setAuthToken(token, user.id)` retains the identity. Pass `null` to clear it
+     * (an explicit sign-out). Establishing the subject for the first time on an
+     * UNCHANGED token (e.g. the user id resolves a tick after the token was set)
+     * re-stamps any in-flight queued writes rather than dropping them — same
+     * credential, just a more stable label. A real user switch (the token AND
+     * subject both change) still drops the previous user's writes.
+     *
      * Does NOT update the WebSocket auth — the WS token is fixed at upgrade
      * time and lives in the URL. To refresh live WS auth, call
      * {@link setWsToken} explicitly, which closes existing shard sockets to
      * force a reconnect with the new credential.
      */
-    public setAuthToken(token: string | null): void {
-        if (this.authToken === token) {
-            return;
-        }
+    public setAuthToken(token: string | null, subject?: string | null): void {
+        const tokenChanged = this.authToken !== token;
+        // Compare the IDENTITY (subject when supplied, else token hash), not the
+        // raw token, so a same-subject refresh doesn't trip the identity-change
+        // drain. Capture the old fingerprint before mutating the inputs.
+        const previousIdentity = this.identityFingerprint();
 
         this.authToken = token;
+        // Sticky: only an explicit value (incl. `null` = sign-out) changes the
+        // subject; omitting it keeps the established one.
+        if (subject !== undefined) {
+            this.authSubject = subject;
+        }
 
-        // Identity changed — drain and reject any in-memory offline writes
-        // queued under the previous identity so they can never replay as the
-        // new user. (Flush also re-checks each item's stamp; this is the eager
-        // path so a token swap doesn't leave another user's writes lingering.)
-        this.rejectQueuedForIdentityChange();
+        const newIdentity = this.identityFingerprint();
 
-        this.authTokenListeners.emit(token);
+        if (newIdentity !== previousIdentity) {
+            if (tokenChanged) {
+                // A genuine credential change — drain and reject any in-memory
+                // offline writes queued under the previous identity so they can
+                // never replay as the new user. (Flush also re-checks each stamp.)
+                this.rejectQueuedForIdentityChange();
+            } else {
+                // The token is unchanged (same credential) — the identity label
+                // just got more stable (a subject resolved). Migrate queued writes
+                // to the new fingerprint instead of dropping them.
+                this.restampQueuedIdentity(previousIdentity, newIdentity);
+            }
+        }
+
+        // Notify token listeners only on an actual token change (useAuth refetch).
+        if (tokenChanged) {
+            this.authTokenListeners.emit(token);
+        }
     }
 
     public getAuthToken(): string | null {
@@ -1076,6 +1136,30 @@ class LunoraClient {
         const unsubscribe = this.statusListeners.add(listener);
 
         listener(this.computeStatus());
+
+        return unsubscribe;
+    }
+
+    /**
+     * Number of offline writes waiting in the built-in queue to be sent — the
+     * depth for a "N changes waiting to sync" indicator. Counts writes that are
+     * queued (offline / mid-reconnect), not ones already in flight on the wire.
+     * A `@lunora/db` app whose writes ride the unified outbox should read
+     * `LunoraDb.pendingCount()` instead (this counts only the built-in queue).
+     */
+    public pendingCount(): number {
+        return this.offlineQueue.size;
+    }
+
+    /**
+     * Subscribe to changes in {@link pendingCount}. Invokes `listener` immediately
+     * with the current count, then whenever the queue depth changes (a write is
+     * enqueued, flushed, or discarded). Returns an unsubscribe function.
+     */
+    public onPendingChange(listener: (pending: number) => void): Unsubscribe {
+        const unsubscribe = this.pendingChangeListeners.add(listener);
+
+        listener(this.offlineQueue.size);
 
         return unsubscribe;
     }
@@ -2246,6 +2330,10 @@ class LunoraClient {
     public close(): void {
         this.closed = true;
 
+        // Release multi-tab outbox leadership so another tab can take over.
+        this.outboxLeaderRelease?.();
+        this.outboxLeaderRelease = undefined;
+
         // Fail any in-flight streams so consumers see a deterministic
         // termination instead of an iterator that hangs forever after the
         // underlying socket goes away.
@@ -2302,6 +2390,7 @@ class LunoraClient {
         this.statusListeners.clear();
         this.tokenExpiredListeners.clear();
         this.mutationSettledListeners.clear();
+        this.pendingChangeListeners.clear();
         this.whisperHandlers.clear();
 
         // Shape subscriptions retain user row/error callbacks and replicated
@@ -2432,6 +2521,54 @@ class LunoraClient {
     }
 
     /**
+     * Re-queue the durable offline writes — but only as the multi-tab LEADER. The
+     * persisted queue is shared across a profile's tabs; without coordination
+     * every tab would re-queue and replay the same writes (correct only because
+     * the server dedups by idempotency key, but wasteful + racy). A Web Lock makes
+     * exactly one tab hydrate; it holds the lock for its lifetime, so when it
+     * closes another tab acquires the lock and takes over. Falls back to
+     * unconditional hydration where Web Locks are unavailable (React Native, older
+     * browsers, SSR) — single-context there, so no coordination is needed.
+     */
+    private hydrateAsOutboxLeader(): void {
+        const hydrate = (): void => {
+            this.hydratePersistedQueue().catch(() => undefined);
+        };
+        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser-only API; the `!locks` branch is the React Native / older-browser / SSR fallback
+        const locks = (globalThis as { navigator?: { locks?: LockManager } }).navigator?.locks;
+
+        if (!locks) {
+            // No Web Locks (React Native / older browser / SSR) — single context,
+            // no coordination needed.
+            hydrate();
+
+            return;
+        }
+
+        locks
+            // Lock request rejected/aborted → fall back to direct hydration.
+            .request(`lunora:outbox-leader:${this.url}`, () => {
+                // Leadership acquired. Hydrate once, then hold the lock (an
+                // unresolved promise) until close() releases it — at which point
+                // the next tab waiting on the lock becomes leader.
+                if (!this.closed) {
+                    hydrate();
+                }
+
+                return new Promise<void>((resolve) => {
+                    if (this.closed) {
+                        resolve();
+
+                        return;
+                    }
+
+                    this.outboxLeaderRelease = resolve;
+                });
+            })
+            .catch(hydrate);
+    }
+
+    /**
      * Load every cached query into {@link hydratedQueryCache} so the next
      * `subscribe()` for each key seeds its initial value off disk. A
      * subscription created before this resolves simply misses the cache (it
@@ -2447,6 +2584,14 @@ class LunoraClient {
             const entries = await this.queryCache.load();
 
             for (const { key, ...entry } of entries) {
+                // Version gate: a value persisted under a different app/schema
+                // version is dropped and purged rather than hydrated.
+                if (isStaleVersion(this.persistenceVersion, entry.version)) {
+                    this.queryCache.remove(key).catch(() => undefined);
+
+                    continue;
+                }
+
                 this.hydratedQueryCache.set(key, entry);
             }
         } catch {
@@ -2500,6 +2645,7 @@ class LunoraClient {
             ts: Date.now(),
             value: authoritative,
             ...(state.serverEpoch === undefined ? {} : { serverEpoch: state.serverEpoch }),
+            ...(this.persistenceVersion === undefined ? {} : { version: this.persistenceVersion }),
         });
 
         this.cacheFlushTimer ??= setTimeout(() => {
@@ -3727,6 +3873,16 @@ class LunoraClient {
     // which means "not stamped / hydrated"); the two must not be conflated.
 
     private identityFingerprint(): string | null {
+        // A stable subject (user id), when supplied to `setAuthToken`, is the
+        // identity — so a same-user token refresh keeps the same fingerprint and
+        // doesn't discard queued writes. `null` subject = explicitly signed out.
+        if (this.authSubject !== undefined) {
+            // `subj:` is a distinct namespace from the token-hash format
+            // (`<len>:<hash>`) so a subject can never alias a token fingerprint.
+            // eslint-disable-next-line unicorn/no-null -- signed-out identity sentinel, distinct from undefined
+            return this.authSubject === null ? null : `subj:${this.authSubject}`;
+        }
+
         const token = this.authToken;
 
         if (token === null) {
@@ -3771,6 +3927,22 @@ class LunoraClient {
         }
 
         this.clearQueryCacheForIdentityChange();
+    }
+
+    /**
+     * Migrate every live identity stamp from `from` to `to` — used when the auth
+     * identity label changes but the underlying credential (token) does NOT, e.g.
+     * the user id resolves a tick after the token was set. The in-memory
+     * `queuedIdentities` map is the flush-time source of truth, so re-stamping it
+     * keeps the in-flight writes replayable under the new (more stable) identity
+     * instead of the flush guard discarding them as a mismatch.
+     */
+    private restampQueuedIdentity(from: string | null, to: string | null): void {
+        for (const [id, stamp] of this.queuedIdentities) {
+            if (stamp === from) {
+                this.queuedIdentities.set(id, to);
+            }
+        }
     }
 
     /**

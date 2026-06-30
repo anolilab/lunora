@@ -1,3 +1,4 @@
+import isStaleVersion from "./persisted-version";
 import type { OfflineQueueOptions, PersistenceAdapter, PersistenceErrorContext, PersistenceOperation } from "./types";
 
 interface QueuedMutation<T = unknown> {
@@ -41,6 +42,18 @@ interface QueuedMutation<T = unknown> {
  * record). The `error` carries the `OFFLINE_QUEUE_OVERFLOW` code.
  */
 type EvictHandler = (entry: QueuedMutation, error: Error & { code?: string }) => void;
+
+/** Injected dependencies for {@link OfflineQueue} (kept off the user-facing {@link OfflineQueueOptions}). */
+interface OfflineQueueDeps {
+    /** Invoked when an entry is discarded on capacity overflow (carries `OFFLINE_QUEUE_OVERFLOW`). */
+    onEvict?: EvictHandler;
+    /** Invoked with the new depth after any size change (drives the client's pending-sync count). */
+    onSizeChange?: (size: number) => void;
+    /** Durable store; when present, writes are mirrored and restored across reloads. */
+    persistence?: PersistenceAdapter;
+    /** App/schema version stamped on persisted writes; mismatched records are purged on hydrate. */
+    version?: string;
+}
 
 let idCounter = 0;
 
@@ -113,14 +126,21 @@ class OfflineQueue {
 
     private readonly onEvict: EvictHandler | undefined;
 
+    private readonly onSizeChange: ((size: number) => void) | undefined;
+
+    /** App/schema version stamped on persisted writes; mismatched records are purged on hydrate. */
+    private readonly version: string | undefined;
+
     private readonly items: QueuedMutation[] = [];
 
-    public constructor(options: OfflineQueueOptions = {}, persistence?: PersistenceAdapter, onEvict?: EvictHandler) {
+    public constructor(options: OfflineQueueOptions = {}, deps: OfflineQueueDeps = {}) {
         this.maxItems = options.maxItems ?? 1000;
         this.queueBeforeFirstConnect = options.queueBeforeFirstConnect ?? false;
         this.onPersistenceError = options.onPersistenceError;
-        this.persistence = persistence;
-        this.onEvict = onEvict;
+        this.persistence = deps.persistence;
+        this.onEvict = deps.onEvict;
+        this.onSizeChange = deps.onSizeChange;
+        this.version = deps.version;
     }
 
     public get size(): number {
@@ -134,7 +154,14 @@ class OfflineQueue {
         this.items.push(item);
 
         this.persistence
-            ?.append({ args: item.args, functionPath: item.functionPath, id: item.id, identity: item.identity, shardKey: item.shardKey })
+            ?.append({
+                args: item.args,
+                functionPath: item.functionPath,
+                id: item.id,
+                identity: item.identity,
+                shardKey: item.shardKey,
+                ...(this.version === undefined ? {} : { version: this.version }),
+            })
             .catch((error: unknown) => {
                 reportPersistenceError(this.onPersistenceError, "append", error, item.id);
             });
@@ -159,6 +186,8 @@ class OfflineQueue {
                 this.onEvict?.(dropped, error);
             }
         }
+
+        this.notifySize();
     }
 
     /**
@@ -182,6 +211,16 @@ class OfflineQueue {
                 continue;
             }
 
+            // Version gate: a write persisted by a different app/schema version is
+            // dropped and purged rather than replayed against the current schema.
+            if (isStaleVersion(this.version, mutation.version)) {
+                this.persistence.remove(mutation.id).catch((error: unknown) => {
+                    reportPersistenceError(this.onPersistenceError, "remove", error, mutation.id);
+                });
+
+                continue;
+            }
+
             this.items.push({
                 args: mutation.args,
                 functionPath: mutation.functionPath,
@@ -193,6 +232,8 @@ class OfflineQueue {
             });
             shardKeys.add(mutation.shardKey);
         }
+
+        this.notifySize();
 
         return [...shardKeys];
     }
@@ -208,6 +249,7 @@ class OfflineQueue {
             const drained = [...this.items];
 
             this.items.length = 0;
+            this.notifySize();
 
             return drained;
         }
@@ -221,6 +263,7 @@ class OfflineQueue {
 
         this.items.length = 0;
         this.items.push(...kept);
+        this.notifySize();
 
         return drained;
     }
@@ -237,6 +280,7 @@ class OfflineQueue {
         }
 
         this.items.unshift(...items);
+        this.notifySize();
     }
 
     public clear(): void {
@@ -253,6 +297,12 @@ class OfflineQueue {
         }
 
         this.items.length = 0;
+        this.notifySize();
+    }
+
+    /** Notify the size observer (the client's pending-sync count) after any change. */
+    private notifySize(): void {
+        this.onSizeChange?.(this.items.length);
     }
 }
 

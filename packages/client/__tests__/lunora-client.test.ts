@@ -1459,6 +1459,128 @@ describe("lunoraClient", () => {
 
             client.close();
         });
+
+        it("a same-subject token refresh during the offline window keeps the queued writes", async () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers();
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                heartbeatIntervalMs: 0,
+                reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            // Same user (subject "user-1"), initial access token.
+            client.setAuthToken("token-v1", "user-1");
+
+            client.subscribe(fnRef("posts:list"), {}, () => undefined);
+            latestSocket().open();
+            latestSocket().triggerClose();
+
+            const pending = client.mutation(fnRef("posts:create"), { title: "queued" });
+
+            // The access token is refreshed (new JWT) for the SAME user before flush.
+            client.setAuthToken("token-v2", "user-1");
+
+            // Reconnect and flush.
+            await vi.advanceTimersByTimeAsync(20);
+            latestSocket().open();
+            await vi.runAllTimersAsync();
+
+            // The write survives the refresh (identity keyed on subject, not token).
+            await expect(pending).resolves.toEqual({ ok: true });
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+
+            client.close();
+            vi.useRealTimers();
+        });
+
+        it("re-stamps queued writes when the subject is established later on the same token (no drop)", async () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers();
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                heartbeatIntervalMs: 0,
+                reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            // The common React pattern: token set before the user id is known
+            // (`user?.id` is transiently undefined), so identity is the token hash.
+            client.setAuthToken("token-1");
+
+            client.subscribe(fnRef("posts:list"), {}, () => undefined);
+            latestSocket().open();
+            latestSocket().triggerClose();
+
+            const pending = client.mutation(fnRef("posts:create"), { title: "queued" });
+
+            // The user id resolves a tick later — SAME token, just a stabler label.
+            // The in-flight write must be re-stamped, not dropped.
+            client.setAuthToken("token-1", "user-1");
+
+            await vi.advanceTimersByTimeAsync(20);
+            latestSocket().open();
+            await vi.runAllTimersAsync();
+
+            await expect(pending).resolves.toEqual({ ok: true });
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+
+            client.close();
+            vi.useRealTimers();
+        });
+
+        it("pendingCount and onPendingChange track queued writes draining on reconnect", async () => {
+            expect.assertions(4);
+
+            vi.useFakeTimers();
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                heartbeatIntervalMs: 0,
+                reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const counts: number[] = [];
+
+            client.onPendingChange((n) => counts.push(n));
+
+            // Fires immediately with the current (0) count.
+            expect(client.pendingCount()).toBe(0);
+
+            client.subscribe(fnRef("posts:list"), {}, () => undefined);
+            latestSocket().open();
+            latestSocket().triggerClose();
+
+            // Two writes queue offline → pending count climbs.
+            client.mutation(fnRef("posts:create"), { title: "a" }).catch(() => undefined);
+            client.mutation(fnRef("posts:create"), { title: "b" }).catch(() => undefined);
+
+            expect(client.pendingCount()).toBe(2);
+
+            // Reconnect → flush drains the queue.
+            await vi.advanceTimersByTimeAsync(20);
+            latestSocket().open();
+            await vi.runAllTimersAsync();
+
+            expect(client.pendingCount()).toBe(0);
+            // The observer saw the climb to 2 and the drain back to 0.
+            expect(counts).toEqual(expect.arrayContaining([0, 1, 2, 0]));
+
+            client.close();
+            vi.useRealTimers();
+        });
     });
 
     // --- Optimistic updates -----------------------------------------------------
