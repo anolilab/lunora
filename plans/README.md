@@ -211,9 +211,9 @@ partysync). Two genuine gaps surfaced; one is filed as a design spike here. The
 other (Yjs/CRDT collaborative editing via `y-partyserver`) is tracked separately
 as a prospective `@lunora/collab` package and is **not** in this directory yet.
 
-| Plan | Title                                                        | Category          | Pri | Effort | Risk | Status                                            |
-| ---- | ------------------------------------------------------------ | ----------------- | --- | ------ | ---- | ------------------------------------------------- |
-| 075  | Auto-elastic fan-out relay tier (hidden high-fanout scaling) | perf/architecture | P3  | XL     | HIGH | TODO (design spike — Phase 0 sign-off gates code) |
+| Plan | Title                                                        | Category          | Pri | Effort | Risk | Status                                                                 |
+| ---- | ------------------------------------------------------------ | ----------------- | --- | ------ | ---- | ---------------------------------------------------------------------- |
+| 075  | Auto-elastic fan-out relay tier (hidden high-fanout scaling) | perf/architecture | P3  | XL     | HIGH | Phase 1 (observability) SHIPPED — Phases 2–4 gated on Phase 0 sign-off |
 
 ### Notes
 
@@ -221,8 +221,9 @@ as a prospective `@lunora/collab` package and is **not** in this directory yet.
   thinking about it" principle: not a user-facing pub/sub primitive but an
   **automatic internal elasticity** of the subscription transport. Depends on
   plans **072 + 073** (the "compute once" op-range and the identity-independence
-  signal its RLS-uniform gate reuses). Phased: observability → whisper/presence
-  relay → RLS-uniform reactive-shape relay → collapse/ceiling. Start only if the
+  signal its RLS-uniform gate reuses). Phased: observability → whisper relay →
+  RLS-uniform reactive-shape relay (incl. `usePresence`'s `listPresent`, which is
+  a reactive query, not whisper) → collapse/ceiling. Start only if the
   live-broadcast / massive-public-room segment is an explicit product goal.
 - **CRDT / collaborative editing** — the other PartyKit gap (`y-partyserver`).
   Reuse, don't rebuild: `y-partyserver` is ISC and solves Yjs document
