@@ -997,6 +997,7 @@ const MESSAGE_IDS = [
     "Integrity",
     // Fan-out observability panel (plan 075 Phase 1).
     "Fan-out",
+    "auto-scaled: {relayCount}/{maxRelays} relays",
     "Realtime fan-out cost and per-topic subscriber counts for this shard.",
     "No fan-out activity yet.",
     "peak {count} subscribers",

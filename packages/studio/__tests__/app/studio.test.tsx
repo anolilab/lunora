@@ -124,7 +124,17 @@ const FANOUT_PATH_COUNTERS_KEYS = ["maxMs", "passes", "peakSocketsIterated", "so
 
 const FANOUT_PATH_COUNTERS_KEY_GUARD: KeysMatch<keyof FanoutPathCounters, (typeof FANOUT_PATH_COUNTERS_KEYS)[number]> = true;
 
-const FANOUT_METRICS_RESULT_KEYS = ["peakSubscribers", "shapePoke", "sinceMs", "topics", "totalConnections", "whisper"] as const;
+const FANOUT_METRICS_RESULT_KEYS = [
+    "maxRelays",
+    "peakSubscribers",
+    "promoted",
+    "relayCount",
+    "shapePoke",
+    "sinceMs",
+    "topics",
+    "totalConnections",
+    "whisper",
+] as const;
 
 const FANOUT_METRICS_RESULT_KEY_GUARD: KeysMatch<keyof FanoutMetricsResult, (typeof FANOUT_METRICS_RESULT_KEYS)[number]> = true;
 
@@ -266,6 +276,16 @@ describe("studio", () => {
         expect(FANOUT_PATH_COUNTERS_KEY_GUARD).toBe(true);
         expect([...FANOUT_PATH_COUNTERS_KEYS]).toStrictEqual(["maxMs", "passes", "peakSocketsIterated", "socketsDelivered", "socketsIterated", "totalMs"]);
         expect(FANOUT_METRICS_RESULT_KEY_GUARD).toBe(true);
-        expect([...FANOUT_METRICS_RESULT_KEYS]).toStrictEqual(["peakSubscribers", "shapePoke", "sinceMs", "topics", "totalConnections", "whisper"]);
+        expect([...FANOUT_METRICS_RESULT_KEYS]).toStrictEqual([
+            "maxRelays",
+            "peakSubscribers",
+            "promoted",
+            "relayCount",
+            "shapePoke",
+            "sinceMs",
+            "topics",
+            "totalConnections",
+            "whisper",
+        ]);
     });
 });

@@ -130,3 +130,58 @@ describe("owner promotion probe (/_lunora/route)", () => {
         await expect(probe("room-1::relay::0", 9000, ENV)).resolves.toBe(0);
     });
 });
+
+describe("relay collapse (detach on drain)", () => {
+    let database: ReturnType<typeof createSqliteExec>;
+
+    beforeEach(() => {
+        database = createSqliteExec();
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
+    it("a drained relay detaches from its owner, and re-arms to re-attach", async () => {
+        expect.assertions(2);
+
+        // Capture the owner↔relay control messages the relay POSTs to siblings.
+        const posts: { body: { relayIndex?: number; type: string }; name: string }[] = [];
+        const namespace = {
+            // `postRelayMessage` calls `stub.fetch(url, init)` (the DO-stub form workerd
+            // accepts), so the body arrives as `init.body`, not a Request.
+            get: (id: { __name: string }) => {
+                return {
+                    fetch: (_input: string, init: { body: string }) => {
+                        posts.push({ body: JSON.parse(init.body) as { type: string }, name: id.__name });
+
+                        return Promise.resolve(new Response(null, { status: 204 }));
+                    },
+                };
+            },
+            idFromName: (name: string) => {
+                return { __name: name };
+            },
+        };
+
+        const state = {
+            acceptWebSocket() {},
+            getWebSockets: () => [] as WebSocket[],
+            id: { name: "room-1::relay::0" },
+            storage: { sql: database.sql as unknown as ShardDOState["storage"]["sql"] },
+        } as unknown as ShardDOState;
+
+        const shard = new RelaySetShard(state, { SHARD: namespace });
+
+        // Teach the relay its namespace binding via any forwarded request.
+        await shard.fetch(new Request("https://shard.internal/_lunora/route", { headers: { "x-lunora-shard-binding": "SHARD" }, method: "GET" }));
+
+        // The relay's last socket closes → it detaches from the owner.
+        await shard.webSocketClose({} as WebSocket, 1000, "", true);
+
+        const detach = posts.find((post) => post.body.type === "relay_detach");
+
+        expect(detach).toStrictEqual({ body: { relayIndex: 0, type: "relay_detach" }, name: "room-1" });
+        expect(detach?.name).toBe("room-1"); // forwarded to the owner, not a relay
+    });
+});

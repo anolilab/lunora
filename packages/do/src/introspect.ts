@@ -1355,8 +1355,14 @@ interface FanoutPathCounters {
  * half of plan 075 Phase 1, before any topology change exists.
  */
 interface FanoutMetricsResult {
+    /** Cost ceiling — the hard cap on relays per shard (`LUNORA_MAX_RELAYS`); the relay tier never spawns more, even for a viral shard. */
+    maxRelays: number;
     /** Highest current subscriber count across all topics/shapes — the widest single fan-out right now. */
     peakSubscribers: number;
+    /** `true` once this shard crossed the promotion threshold and is spreading new connections across relays (plan 075 Phase 2). */
+    promoted: boolean;
+    /** How many relays new connections are currently spread across (`0` when owner-served). */
+    relayCount: number;
     /** Running reactive-shape-poke fan-out counters since this instance woke. */
     shapePoke: FanoutPathCounters;
     /** Epoch-ms this instance began collecting (shared with `getMetrics`/`getFunctionStats`). */

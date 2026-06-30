@@ -2439,6 +2439,10 @@ abstract class ShardDO {
 
         // Clear the attachment so a future reconnection starts clean.
         (ws as HibernatableWebSocket).serializeAttachment?.(undefined);
+
+        // Relay tier collapse (plan 075 Phase 2): a relay that just lost its last
+        // socket detaches from its owner, so the owner stops forwarding to it.
+        await this.announceRelayDrainIfNeeded(ws);
     }
 
     /** Hibernation API: invoked on socket error. */
@@ -5421,8 +5425,17 @@ abstract class ShardDO {
      */
     private collectFanoutMetrics(): FanoutMetricsResult {
         const summary = summarizeFanoutTopics(this.state.getWebSockets().map((ws) => this.readAttachment(ws)));
+        const relayCount = this.computeRelayCount();
 
-        return { ...summary, shapePoke: this.fanout.shapePoke, sinceMs: this.metrics.sinceMs, whisper: this.fanout.whisper };
+        return {
+            ...summary,
+            maxRelays: envPositiveInt(this.env, "LUNORA_MAX_RELAYS", DEFAULT_MAX_RELAYS),
+            promoted: relayCount > 0,
+            relayCount,
+            shapePoke: this.fanout.shapePoke,
+            sinceMs: this.metrics.sinceMs,
+            whisper: this.fanout.whisper,
+        };
     }
 
     /** Resolve a `getAuditLog` admin read, parsing the optional `limit`/`sinceSeq` cursor args and ensuring the reserved table first. */
@@ -7585,6 +7598,27 @@ abstract class ShardDO {
 
         this.relayAnnounced = true;
         await this.postRelayMessage(role.ownerKey, { relayIndex: role.relayIndex, type: "relay_attach" });
+    }
+
+    /**
+     * A relay that just lost its last socket (the `closing` one excluded) detaches
+     * from its owner so the owner stops forwarding frames to it, and re-arms its
+     * announce flag so it re-attaches if a new socket joins later. No-op on an owner
+     * or in single-DO mode, or while the relay still serves sockets.
+     */
+    private async announceRelayDrainIfNeeded(closing: WebSocket): Promise<void> {
+        const role = this.relayRole();
+
+        if (role?.relayIndex === undefined) {
+            return;
+        }
+
+        if (this.state.getWebSockets().some((ws) => ws !== closing)) {
+            return;
+        }
+
+        this.relayAnnounced = false;
+        await this.postRelayMessage(role.ownerKey, { relayIndex: role.relayIndex, type: "relay_detach" });
     }
 
     // eslint-disable-next-line class-methods-use-this -- cohesive DO instance method grouped with the hibernation/attachment helpers; reads only the socket

@@ -108,6 +108,11 @@ const FanoutPanel = ({ initialShardKey }: FanoutPanelProps): ReactElement => {
                 <ShardInput onChange={setShardKey} testId="fanout-shard-input" value={shardKey} />
                 {result !== undefined && (
                     <div className="ml-auto flex items-center gap-2 text-sm text-muted-foreground" data-testid="fanout-count">
+                        {result.promoted && (
+                            <Badge data-testid="fanout-promoted" variant="default">
+                                {t("auto-scaled: {relayCount}/{maxRelays} relays", { maxRelays: result.maxRelays, relayCount: result.relayCount })}
+                            </Badge>
+                        )}
                         <Badge variant="secondary">{t("{count} connections", { count: result.totalConnections })}</Badge>
                         <Badge variant="secondary">{t("peak {count} subscribers", { count: result.peakSubscribers })}</Badge>
                     </div>

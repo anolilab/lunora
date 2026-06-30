@@ -724,7 +724,10 @@ export interface FanoutPathCounters {
  * (in-memory, reset on hibernation). Feeds the Studio fan-out observability panel.
  */
 export interface FanoutMetricsResult {
+    maxRelays: number;
     peakSubscribers: number;
+    promoted: boolean;
+    relayCount: number;
     shapePoke: FanoutPathCounters;
     sinceMs: number;
     topics: FanoutTopicStat[];
