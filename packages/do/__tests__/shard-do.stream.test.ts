@@ -314,7 +314,7 @@ describe("shardDO streaming queries", () => {
         expect((errorFrame?.error as { code?: string; message?: string })?.code).toBe("INTERNAL_SERVER_ERROR");
         expect((errorFrame?.error as { code?: string; message?: string })?.message).toBe("internal error");
         // ...but it is logged server-side for diagnosis.
-        expect(errorSpy).toHaveBeenCalledWith();
+        expect(errorSpy).toHaveBeenCalledWith("[@lunora/do] unhandled stream error:", expect.anything());
 
         errorSpy.mockRestore();
     });

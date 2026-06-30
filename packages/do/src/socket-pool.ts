@@ -24,8 +24,17 @@ export const runSocketPool = async <T>(items: ReadonlyArray<T>, processOne: (ite
         cursor += 1;
 
         while (item !== undefined) {
-            // eslint-disable-next-line no-await-in-loop -- each worker drains its picks sequentially; parallelism comes from running `concurrency` workers
-            await processOne(item);
+            try {
+                // eslint-disable-next-line no-await-in-loop -- each worker drains its picks sequentially; parallelism comes from running `concurrency` workers
+                await processOne(item);
+            } catch {
+                // Contain a per-item failure so one rejecting item never aborts the
+                // pool — the other workers keep draining. Callers that need retry or
+                // diagnostics handle it inside `processOne` (the refresh/poke paths
+                // leave their memos so the next flush retries); this is the safety
+                // net that makes the contract hold regardless of the caller.
+            }
+
             item = items[cursor];
             cursor += 1;
         }

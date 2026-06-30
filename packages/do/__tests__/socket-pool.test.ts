@@ -88,4 +88,25 @@ describe(runSocketPool, () => {
 
         expect(visits.toSorted((a, b) => a - b)).toStrictEqual([1, 2]);
     });
+
+    it("contains a per-item failure so the remaining items still run", async () => {
+        expect.assertions(2);
+
+        const items = [0, 1, 2, 3, 4];
+        const visited: number[] = [];
+
+        // Item 2 rejects; the pool must swallow it and keep draining the rest.
+        await runSocketPool(
+            items,
+            (item) => {
+                visited.push(item);
+
+                return item === 2 ? Promise.reject(new Error("boom")) : Promise.resolve();
+            },
+            1,
+        );
+
+        expect(visited.toSorted((a, b) => a - b)).toStrictEqual(items);
+        expect(visited).toContain(4);
+    });
 });
