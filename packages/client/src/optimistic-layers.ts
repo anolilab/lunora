@@ -129,8 +129,13 @@ export const applyOptimisticLayer = (state: SubscriptionState, optimistic: (curr
     return {
         confirm: (commitCursor) => {
             if (commitCursor === undefined) {
-                // No server cursor to gate on (CDC off): fall back to dropping the
-                // layer silently — the next frame supersedes it as before.
+                // No server cursor to gate on (CDC off): drop the layer but DON'T
+                // re-fold. `confirm` runs on SUCCESS, so the displayed optimistic
+                // value reflects the write that just committed — re-folding here
+                // would revert it to the pre-write `serverBase` (a visible regress
+                // of a successful write) until the authoritative frame, which
+                // supersedes it shortly. The failure path (`rollback`) is the one
+                // that re-folds to drop a bad value.
                 remove();
 
                 return;

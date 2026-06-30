@@ -361,8 +361,10 @@ side) below.
 
 An optional third argument carries layer-wide options:
 
-- `onWriteRejected?` — fires once per **permanently** rejected write, after its
-  optimistic row is rolled back (see [Surfacing rejected writes](#surfacing-rejected-writes)).
+- `onWriteRejected?` — fires once per **permanently** rejected write, _as_ it is
+  rejected (the optimistic-row rollback follows) — so read the event's `row` /
+  `error` directly rather than the collection's post-rollback state (see
+  [Surfacing rejected writes](#surfacing-rejected-writes)).
 
 It returns `{ collections, actions, scope, executor }`. The row and action-input
 types are inferred from each binding's `list` return and `optimistic` input, so

@@ -208,8 +208,14 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
                         // fire-and-forget caller still learns the write was dropped, then
                         // rethrow so the rollback proceeds. Transient errors retry — only
                         // the NonRetriableError verdict is terminal, so only it is reported.
-                        if (error instanceof NonRetriableError) {
-                            options.onWriteRejected?.({ code: (error as Error & { code?: string }).code, collection: name, error, row });
+                        if (error instanceof NonRetriableError && options.onWriteRejected) {
+                            try {
+                                options.onWriteRejected({ code: (error as Error & { code?: string }).code, collection: name, error, row });
+                            } catch {
+                                // A throwing listener must not escape and replace the
+                                // NonRetriableError — that would turn a terminal verdict
+                                // retriable (poison-message loop) and skip the rollback.
+                            }
                         }
 
                         throw error;
@@ -256,15 +262,19 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
         // NonRetriableError *before* our per-collection `mutationFns` catch runs, so
         // this hook is the only place to surface it on `onWriteRejected`.
         onUnknownMutationFn: (name: string, tx: OfflineTransaction) => {
-            options.onWriteRejected?.({
-                code: "UNKNOWN_MUTATION_FN",
-                collection: name,
-                error: new Error(`offline write dropped: mutation "${name}" no longer exists (removed or renamed in a deploy?)`),
-                // Best-effort recovered row: the persisted `modified` shape isn't a
-                // validated `Row`, and a batched transaction surfaces only its first
-                // mutation's row. Enough to describe the dropped write to the user.
-                row: tx.mutations[0]?.modified as Row | undefined,
-            });
+            try {
+                options.onWriteRejected?.({
+                    code: "UNKNOWN_MUTATION_FN",
+                    collection: name,
+                    error: new Error(`offline write dropped: mutation "${name}" no longer exists (removed or renamed in a deploy?)`),
+                    // Best-effort recovered row: the persisted `modified` shape isn't a
+                    // validated `Row`, and a batched transaction surfaces only its first
+                    // mutation's row. Enough to describe the dropped write to the user.
+                    row: tx.mutations[0]?.modified as Row | undefined,
+                });
+            } catch {
+                // A throwing listener must not escape into the executor's drop path.
+            }
         },
     });
 

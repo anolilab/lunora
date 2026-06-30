@@ -123,6 +123,7 @@ export const App = (): ReactElement => {
 
             <form onSubmit={submit} style={{ display: "flex", gap: 8, margin: "16px 0" }}>
                 <input
+                    aria-label="Message"
                     onChange={(event) => {
                         setDraft(event.target.value);
                     }}
