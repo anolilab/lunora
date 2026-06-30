@@ -75,7 +75,7 @@ import type { ReactiveCache } from "./reactive-cache";
 import type { RelationExistsMarker } from "./relation-predicates";
 import { assertFlatPredicate as assertFlatRelationPredicate, resolveRelationPredicates } from "./relation-predicates";
 import type { RelationDefinitionLike } from "./relations";
-import { applyOnDelete, resolveWith, runRowValidators } from "./relations";
+import { applyOnDelete, fanOutScalarCounts, resolveWith, runRowValidators } from "./relations";
 import { guardWriter } from "./rls-guard";
 import { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text";
 import type { SystemDatabaseReader, SystemReaderSchedulerLike, SystemReaderStorageLike } from "./system-reader";
@@ -1683,15 +1683,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const globalFallback = (): DatabaseWriterLike | undefined => globalDb;
 
     /**
-     * Backend-routed `fetcher`/`counter` pair handed to {@link resolveWith} so a
-     * shard-local parent's `with` can load a global (D1) child in one bounded
-     * `IN (...)` read. The unsupported direction (global parent → shard-local
-     * child) is rejected upstream in `resolveWith`'s `requireRelation`.
+     * Backend-routed `fetcher`/`groupedCounter` pair handed to {@link resolveWith}
+     * so a shard-local parent's `with` can load a global (D1) child in one bounded
+     * `IN (...)` read and count children in one grouped query.
      */
     const relationFetcher = (relationTable: string, relationArgs: QueryArgs): Promise<QueryPage> =>
         routeBackend(relationTable, "relation load").findMany(relationTable, relationArgs);
-    const relationCounter = (relationTable: string, relationWhere?: WhereInput): Promise<number> =>
-        routeBackend(relationTable, "relation load").count(relationTable, relationWhere);
 
     /**
      * Child reader for relation-predicate semijoin resolution. A local child
@@ -1751,6 +1748,83 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             schema,
             tableName: predicateTable,
         });
+
+    /**
+     * Grouped aggregate counter for `_count` relation loading. For shard-local
+     * children, runs a single `SELECT :whereField AS __fk__, COUNT(*) … GROUP BY
+     * :whereField` against this DO's SQLite and returns all per-parent tallies in
+     * one query. For global (D1) children, fans out parallel scalar `count()`
+     * calls — one per distinct FK value — through the `globalDb` writer, since
+     * the `DatabaseWriterLike` interface doesn't expose a grouped-count method.
+     *
+     * CORRECTNESS: `policyWhere` (the child table's RLS read filter) may contain
+     * Prisma-style relation predicates (e.g. `{author:{is:W}}`). These must be
+     * resolved via `resolveAggregateRelations` BEFORE `compileWhereSql` is called;
+     * otherwise the relation node is treated as scalar equality and never matches,
+     * making every `_count` return 0. The cross-backend (fan-out) path routes
+     * through the full `count()` method, which already resolves relation predicates
+     * internally, so only the local grouped path needs this step.
+     */
+    const relationGroupedCounter = async (
+        relationTable: string,
+        whereField: string,
+        values: unknown[],
+        policyWhere?: WhereInput,
+    ): Promise<Map<unknown, number>> => {
+        const globalWriter = globalWriterFor(relationTable, "relation grouped count");
+
+        if (globalWriter) {
+            // Global (D1) child: parallel scalar counts through the D1 writer.
+            // The D1 writer's count() already resolves relation predicates internally.
+            // Stamp a scan dependency: any row in the child table can shift a count.
+            onRead(relationTable, SCAN_DEP);
+
+            return fanOutScalarCounts((t, w) => globalWriter.count(t, w), relationTable, whereField, values, policyWhere);
+        }
+
+        // Shard-local child: one grouped SQL query.
+        const definition = schema.tables[relationTable];
+
+        if (!definition) {
+            throw new Error(`unknown table: ${relationTable}`);
+        }
+
+        // Register a scan dependency — any insert/delete in the child table can
+        // shift a count, so invalidate the same way the scalar count path did.
+        onRead(relationTable, SCAN_DEP);
+
+        // Build WHERE: whereField IN (values) [AND policyWhere] [AND softDeleteScope].
+        // Then resolve any relation predicates in the combined WHERE before compiling
+        // to SQL. Without resolution, a relation predicate in policyWhere (e.g.
+        // {author:{is:W}}) is compiled as scalar equality and never matches, causing
+        // every _count to silently return 0 (fail-closed but wrong).
+        const softScope = softDeleteScope(definition.softDeleteMode, undefined);
+        const inFilter: WhereInput = { [whereField]: { in: values } };
+        const combined = mergeWhere(mergeWhere(inFilter, policyWhere), softScope);
+        // resolveAggregateRelations rewrites relation-crossing predicates (e.g.
+        // {author:{is:W}}) into flat IN clauses before SQL compilation — same path
+        // count() / findMany() use. Pass `undefined` for relationBaseWhere (consistent
+        // with how the scalar counter was called: no nested policy threading).
+        const resolvedCombined = await resolveAggregateRelations(combined, relationTable, undefined);
+        const whereCondition = compileWhereSql(resolvedCombined, doWhereSqlStrategy);
+
+        // `jsonPathSql` maps `_id` → `id` (physical column) and user fields to
+        // `json_extract(__doc__, '$.field')`, matching how WHERE compiles the
+        // same field — so GROUP BY and WHERE are consistent.
+        const fieldSql = jsonPathSql(whereField);
+
+        let query = dsql`SELECT ${fieldSql} AS __fk__, COUNT(*) AS count FROM ${dsql.identifier(relationTable)}`;
+
+        if (whereCondition) {
+            query = dsql`${query} WHERE ${whereCondition}`;
+        }
+
+        query = dsql`${query} GROUP BY ${fieldSql}`;
+
+        const rows = runDrizzle<{ __fk__: unknown; count: number }>(sql, query).toArray();
+
+        return new Map(rows.map((row) => [row["__fk__"], row.count]));
+    };
 
     let triggerDepth = 0;
 
@@ -2395,7 +2469,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             if (limit === undefined) {
                 if (args.with) {
                     await resolveWith({
-                        counter: relationCounter,
+                        groupedCounter: relationGroupedCounter,
                         fetcher: relationFetcher,
                         parents: docs,
                         relationBaseWhere: args.relationBaseWhere,
@@ -2415,8 +2489,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             if (args.with) {
                 await resolveWith({
-                    counter: relationCounter,
                     fetcher: relationFetcher,
+                    groupedCounter: relationGroupedCounter,
                     parents: page,
                     relationBaseWhere: args.relationBaseWhere,
                     schema,

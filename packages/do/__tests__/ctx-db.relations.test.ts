@@ -205,6 +205,146 @@ describe("ctx-db relations", () => {
             expect(page[0]!["reactions"]).toBeUndefined();
         });
 
+        it("_count excludes rows hidden by a flat-column read policy (grouped WHERE ANDs the policy)", async () => {
+            // The grouped-count WHERE must AND policyWhere so a _count can never reveal
+            // child rows the caller couldn't read.
+            expect.assertions(2);
+
+            const writer = makeWriter(schema);
+
+            await seed(writer);
+
+            // Policy: only "👍" reactions are visible.
+            const { page } = await writer.findMany("messages", {
+                orderBy: [{ _id: "asc" }],
+                relationBaseWhere: (table) => (table === "reactions" ? { emoji: "👍" } : undefined),
+                with: { _count: { reactions: true } },
+            });
+
+            // m1 has r1 (👍) + r2 (🎉); policy hides r2 → count is 1.
+            // m2 has r3 (🔥); policy hides it → count is 0.
+            expect((page[0]!["_count"] as Record<string, number>)["reactions"]).toBe(1);
+            expect((page[1]!["_count"] as Record<string, number>)["reactions"]).toBe(0);
+        });
+
+        it("_count with a relation-predicate read policy returns correct counts (not zeroed)", async () => {
+            // CORRECTNESS FIX: policyWhere from relationBaseWhere may be a relation
+            // predicate (e.g. {author:{is:{name:"Ada"}}}). Without resolveAggregateRelations
+            // the predicate is compiled as scalar equality → always false → every _count = 0.
+            // This test FAILS without the fix and passes with it.
+            expect.assertions(2);
+
+            // Extend the schema: reactions gain a userId FK + relation to users.
+            const extSchema: SchemaLike = {
+                tables: {
+                    messages: {
+                        indexes: [{ fields: ["authorId"], name: "by_author" }],
+                        relationMap: {
+                            reactions: { field: "messageId", kind: "many", references: "_id", table: "reactions" },
+                        },
+                        shape: { authorId: { kind: "string" }, body: { kind: "string" } },
+                    },
+                    reactions: {
+                        indexes: [
+                            { fields: ["messageId"], name: "by_message" },
+                            { fields: ["userId"], name: "by_user" },
+                        ],
+                        relationMap: {
+                            author: { field: "userId", kind: "one", references: "_id", table: "users" },
+                        },
+                        shape: { emoji: { kind: "string" }, messageId: { kind: "string" }, userId: { kind: "string" } },
+                    },
+                    users: { indexes: [], shape: { name: { kind: "string" } } },
+                },
+            };
+
+            const writer = makeWriter(extSchema);
+
+            await writer.insert("users", { _id: "u1", name: "Ada" }, { allowExplicitId: true });
+            await writer.insert("users", { _id: "u2", name: "Bot" }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "m1", authorId: "u1", body: "hi" }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "m2", authorId: "u2", body: "hey" }, { allowExplicitId: true });
+            // m1: r1 by Ada (✓), r2 by Bot (✗ under policy)
+            // m2: r3 by Ada (✓)
+            await writer.insert("reactions", { _id: "r1", emoji: "👍", messageId: "m1", userId: "u1" }, { allowExplicitId: true });
+            await writer.insert("reactions", { _id: "r2", emoji: "🎉", messageId: "m1", userId: "u2" }, { allowExplicitId: true });
+            await writer.insert("reactions", { _id: "r3", emoji: "🔥", messageId: "m2", userId: "u1" }, { allowExplicitId: true });
+
+            // RLS: only reactions whose author is "Ada" are visible.
+            // This is a RELATION predicate on reactions: {author:{is:{name:"Ada"}}}.
+            const { page } = await writer.findMany("messages", {
+                orderBy: [{ _id: "asc" }],
+                relationBaseWhere: (table) => (table === "reactions" ? { author: { is: { name: "Ada" } } } : undefined),
+                with: { _count: { reactions: true } },
+            });
+
+            // Without the fix, both would be 0 (relation predicate compiled as scalar → no match).
+            // With the fix: m1 → 1 (r1 by Ada), m2 → 1 (r3 by Ada).
+            expect((page[0]!["_count"] as Record<string, number>)["reactions"]).toBe(1);
+            expect((page[1]!["_count"] as Record<string, number>)["reactions"]).toBe(1);
+        });
+
+        it("_count works with numeric FK values (SQL→JS key-equality invariant)", async () => {
+            // The grouped path reads the FK back from SQL and uses Map.get (JS SameValueZero).
+            // Numeric FKs stored in the JSON blob are returned as JS numbers by json_extract;
+            // as long as the parent field is also a number, the lookup succeeds.
+            expect.assertions(2);
+
+            const numSchema: SchemaLike = {
+                tables: {
+                    ratings: {
+                        indexes: [{ fields: ["score"], name: "by_score" }],
+                        relationMap: {
+                            reviews: { field: "ratingScore", kind: "many", references: "score", table: "reviews" },
+                        },
+                        shape: { score: { kind: "number" } },
+                    },
+                    reviews: {
+                        indexes: [{ fields: ["ratingScore"], name: "by_rating" }],
+                        shape: { ratingScore: { kind: "number" }, text: { kind: "string" } },
+                    },
+                },
+            };
+
+            const writer = makeWriter(numSchema);
+
+            // Insert parents with a numeric `score` field (not _id).
+            await writer.insert("ratings", { _id: "rat1", score: 5 }, { allowExplicitId: true });
+            await writer.insert("ratings", { _id: "rat2", score: 3 }, { allowExplicitId: true });
+            // Insert children with a numeric FK `ratingScore`.
+            await writer.insert("reviews", { _id: "rev1", ratingScore: 5, text: "great" }, { allowExplicitId: true });
+            await writer.insert("reviews", { _id: "rev2", ratingScore: 5, text: "also great" }, { allowExplicitId: true });
+            await writer.insert("reviews", { _id: "rev3", ratingScore: 3, text: "ok" }, { allowExplicitId: true });
+
+            const { page } = await writer.findMany("ratings", {
+                orderBy: [{ score: "desc" }],
+                with: { _count: { reviews: true } },
+            });
+
+            // score=5 → 2 reviews, score=3 → 1 review.
+            // If the SQL→JS type invariant is broken (e.g. Map.get("5") on a number key),
+            // both would return 0.
+            expect((page[0]!["_count"] as Record<string, number>)["reviews"]).toBe(2);
+            expect((page[1]!["_count"] as Record<string, number>)["reviews"]).toBe(1);
+        });
+
+        it("_count is 0 when the parent FK is null (one relation)", async () => {
+            // For a `one` relation the FK is ON the parent. When it is null/absent,
+            // _count must return 0 without issuing any query.
+            expect.assertions(1);
+
+            const writer = makeWriter(schema);
+
+            // Insert a message with no authorId (the FK for the `author` one-relation).
+            await writer.insert("messages", { _id: "m_null", body: "orphan" }, { allowExplicitId: true });
+
+            // `author` is a `one` relation: parentField = messages.authorId.
+            // authorId is null/absent → parentValue is null → _count.author must be 0.
+            const { page } = await writer.findMany("messages", { where: { _id: "m_null" }, with: { _count: { author: true } } });
+
+            expect((page[0]!["_count"] as Record<string, number>)["author"]).toBe(0);
+        });
+
         it("throws on an unknown relation name", async () => {
             expect.assertions(1);
 
@@ -387,12 +527,12 @@ describe("ctx-db relations", () => {
             const parents = [{ _id: "g1", ownerId: "l1" }];
 
             await resolveWith({
-                counter: async () => 0,
                 fetcher: async (table) => {
                     fetchedTables.push(table);
 
                     return { continueCursor: null, isDone: true, page: [{ _id: "l1", name: "Local One" }] };
                 },
+                groupedCounter: async () => new Map(),
                 parents,
                 schema: reverseSchema,
                 tableName: "globals",
