@@ -230,6 +230,35 @@ as a prospective `@lunora/collab` package and is **not** in this directory yet.
   channel. Prospective `@lunora/collab`; no plan filed yet — file one if rich-text
   / canvas collaboration becomes a goal.
 
+## Wave 6 — competitive gap analysis (workflais, baseline `0d0c8f1e`, 2026-06-30)
+
+Compared `@lunora/workflow` against `mksglu/workflais` (declarative CF Workflows
+DSL). Most of workflais is a thinner, less-integrated take on what Lunora already
+ships (schema-validated `defineStep`/`runStep`, codegen-emitted
+`WorkflowEntrypoint` classes + wrangler reconciliation, `ctx.run` durable
+function calls, the `ctx.workflows` producer surface, REST instance management).
+Its string-DSL (`ctx.prev`, `compile`/`execute`) is a deliberate non-goal. Two
+genuine improvements surfaced:
+
+| Plan | Title                                             | Category          | Pri | Effort | Risk | Status                                                                                                                                                                                                                                                                                                                                            |
+| ---- | ------------------------------------------------- | ----------------- | --- | ------ | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| —    | `workflow_duplicate_step_name` advisor lint       | feat (advisor)    | P2  | S      | LOW  | DONE (shipped) — codegen lifts durable step labels from the handler body; new static lint flags a name reused within one workflow (CF memoizes by name → second call returns the first's cached result). `discover-workflows.ts` + `WorkflowIR.steps`, `workflow-duplicate-step-name.ts`, tests green.                                            |
+| 076  | Workflow fan-out with child-DO resource isolation | feat/architecture | P2  | XL     | MED  | PHASES 1–2 SHIPPED — `ctx.spawn` + `ctx.parallel(branch(...))` in `packages/workflow/src/fan-out.ts` (child-DO isolation, deterministic replay-safe ids, child→parent completion-event join, fail-fast, `MAX_BRANCHES` cap); base class signals the parent; 66 tests green, types/eslint clean. Remaining: Phase 3 group saga + real-workerd e2e. |
+
+### Notes
+
+- **The lint** is the cheap, certain win: duplicate `step.do`/`sleep`/
+  `sleepUntil`/`waitForEvent` names are a silent CF correctness bug, now caught
+  statically alongside `workflow_unknown_target` / `workflow_unused`.
+- **076** is workflais' one novel idea — `parallel()` that spawns each branch as
+  its own child workflow instance (own DO: 128 MB / 5 min CPU / independent
+  retry), parent hibernating via `waitForEvent` — reframed to Lunora's "scale
+  invisibly" principle as a typed `ctx.parallel(...)` over declared child
+  workflows. Lunora has no fan-out primitive today; the only parallelism a user
+  can express (`Promise.all` of `runStep`s) collapses onto one DO's shared budget.
+  Phased: typed child-spawn → hibernating join → optional group saga. Start only
+  if workflow fan-out is an explicit product goal.
+
 ## Notes for executors (carried from prior waves)
 
 - `dist/` is gitignored and built on demand. Build deps first:
