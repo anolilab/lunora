@@ -14,7 +14,7 @@ describe("emitApi", () => {
         expect.assertions(5);
 
         const workflows: ReadonlyArray<WorkflowIR> = [
-            { bindingName: "WORKFLOW_DIGEST_PIPELINE", className: "DigestPipelineWorkflow", exportName: "digestPipeline", name: "digest-pipeline" },
+            { bindingName: "WORKFLOW_DIGEST_PIPELINE", className: "DigestPipelineWorkflow", exportName: "digestPipeline", name: "digest-pipeline", steps: [] },
         ];
 
         const rendered = emitApi([], workflows);

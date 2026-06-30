@@ -75,20 +75,21 @@ counters; it appears in the same Advisors view once a deployment has traffic.
 
 ### Schema
 
-| Lint                                | Level   | Flags                                                          |
-| ----------------------------------- | ------- | -------------------------------------------------------------- |
-| `index_references_unknown_field`    | `ERROR` | An index naming a field the table doesn't have                 |
-| `relation_references_unknown_field` | `ERROR` | A relation pointing at a field that doesn't exist              |
-| `relation_references_unknown_table` | `ERROR` | A relation pointing at a table that doesn't exist              |
-| `workflow_unknown_target`           | `ERROR` | A workflow call naming a workflow that doesn't exist           |
-| `circular_fk`                       | `WARN`  | A circular foreign-key dependency between tables               |
-| `empty_index`                       | `WARN`  | An index declared with no fields                               |
-| `nondeterministic_query_mutation`   | `WARN`  | `fetch` / `Date.now` / `Math.random` in a query or mutation    |
-| `hyperdrive_outside_action`         | `WARN`  | `ctx.sql` used outside an action                               |
-| `r2sql_outside_action`              | `WARN`  | `ctx.r2sql` used outside an action                             |
-| `mutator_full_row_replace`          | `WARN`  | A mutator `server` impl overwriting a whole row with `replace` |
-| `table_without_insert`              | `INFO`  | A table no function inserts into                               |
-| `workflow_unused`                   | `INFO`  | A workflow that is never started                               |
+| Lint                                | Level   | Flags                                                                                              |
+| ----------------------------------- | ------- | -------------------------------------------------------------------------------------------------- |
+| `index_references_unknown_field`    | `ERROR` | An index naming a field the table doesn't have                                                     |
+| `relation_references_unknown_field` | `ERROR` | A relation pointing at a field that doesn't exist                                                  |
+| `relation_references_unknown_table` | `ERROR` | A relation pointing at a table that doesn't exist                                                  |
+| `workflow_unknown_target`           | `ERROR` | A workflow call naming a workflow that doesn't exist                                               |
+| `workflow_duplicate_step_name`      | `ERROR` | A durable step name reused within one workflow (the second call returns the first's cached result) |
+| `circular_fk`                       | `WARN`  | A circular foreign-key dependency between tables                                                   |
+| `empty_index`                       | `WARN`  | An index declared with no fields                                                                   |
+| `nondeterministic_query_mutation`   | `WARN`  | `fetch` / `Date.now` / `Math.random` in a query or mutation                                        |
+| `hyperdrive_outside_action`         | `WARN`  | `ctx.sql` used outside an action                                                                   |
+| `r2sql_outside_action`              | `WARN`  | `ctx.r2sql` used outside an action                                                                 |
+| `mutator_full_row_replace`          | `WARN`  | A mutator `server` impl overwriting a whole row with `replace`                                     |
+| `table_without_insert`              | `INFO`  | A table no function inserts into                                                                   |
+| `workflow_unused`                   | `INFO`  | A workflow that is never started                                                                   |
 
 ## Runtime lints
 
