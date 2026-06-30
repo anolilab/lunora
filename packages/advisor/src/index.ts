@@ -39,6 +39,7 @@ import unboundedStringArgument from "./lints/static/unbounded-string-argument";
 import unindexedForeignKey from "./lints/static/unindexed-foreign-key";
 import unindexedRelationTarget from "./lints/static/unindexed-relation-target";
 import userCreatingMutationWithoutCaptcha from "./lints/static/user-creating-mutation-without-captcha";
+import workflowDuplicateStepName from "./lints/static/workflow-duplicate-step-name";
 import workflowUnknownTarget from "./lints/static/workflow-unknown-target";
 import workflowUnused from "./lints/static/workflow-unused";
 import type { Finding, Lint, LintContext, LintSource } from "./types";
@@ -84,6 +85,7 @@ export { default as unboundedStringArgument } from "./lints/static/unbounded-str
 export { default as unindexedForeignKey } from "./lints/static/unindexed-foreign-key";
 export { default as unindexedRelationTarget } from "./lints/static/unindexed-relation-target";
 export { default as userCreatingMutationWithoutCaptcha } from "./lints/static/user-creating-mutation-without-captcha";
+export { default as workflowDuplicateStepName } from "./lints/static/workflow-duplicate-step-name";
 export { default as workflowUnknownTarget } from "./lints/static/workflow-unknown-target";
 export { default as workflowUnused } from "./lints/static/workflow-unused";
 export type { AdvisorMaskProcedure } from "./mask-procedures";
@@ -114,6 +116,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     relationReferencesUnknownTable,
     relationReferencesUnknownField,
     workflowUnknownTarget,
+    workflowDuplicateStepName,
     shapeUnknownTable,
     emptyIndex,
     circularFk,

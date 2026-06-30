@@ -5,6 +5,7 @@ export { defineStep, isStepDefinition } from "./define-step";
 export { defineWorkflow, isWorkflowDefinition, workflowBindingName, workflowClassName, workflowDefaultName } from "./define-workflow";
 export type { NativeNonRetryableErrorConstructor } from "./errors";
 export { convertNonRetryableError, isNonRetryableError, NonRetryableError, toNativeNonRetryableError } from "./errors";
+export { branch, MAX_BRANCHES } from "./fan-out";
 export type {
     WorkflowInstanceAction,
     WorkflowInstanceDetail,
@@ -32,6 +33,8 @@ export type {
     StepRollbackHandler,
     StepRunContext,
     WorkflowBindingLike,
+    WorkflowBranch,
+    WorkflowBranchOutputs,
     WorkflowConfig,
     WorkflowCreateOptions,
     WorkflowDefinition,
@@ -41,12 +44,15 @@ export type {
     WorkflowInstanceLike,
     WorkflowInstanceStatus,
     WorkflowLogger,
+    WorkflowParallelFunction,
     WorkflowRollbackContextLike,
     WorkflowRollbackHandlerLike,
     WorkflowRunContext,
     WorkflowRunFunction,
     WorkflowRunStepFunction,
     Workflows,
+    WorkflowSpawnFunction,
+    WorkflowSpawnOptions,
     WorkflowStatusResult,
     WorkflowStepConfigLike,
     WorkflowStepContextLike,

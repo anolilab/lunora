@@ -2,14 +2,17 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import { workflowBindingName, workflowClassName, workflowDefaultName } from "@lunora/workflow";
-import type { CallExpression, Expression, Identifier, Project, SourceFile } from "ts-morph";
+import type { CallExpression, Expression, Identifier, ObjectLiteralExpression, Project, PropertyAccessExpression, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "./diagnostics";
-import type { WorkflowIR } from "./ir";
+import type { WorkflowIR, WorkflowStepIR } from "./ir";
 
 /** The only file workflows may be declared in — mirrors `lunora/containers.ts`. */
 const WORKFLOWS_FILENAME = "workflows.ts";
+
+/** The native durable-step methods whose first string argument names a memoized step. */
+const STEP_METHODS = new Set(["do", "sleep", "sleepUntil", "waitForEvent"]);
 
 /**
  * Decide whether a callee identifier refers to `defineWorkflow` from
@@ -51,6 +54,74 @@ const stringProperty = (expression: Expression, exportName: string, property: st
     );
 };
 
+/**
+ * True when a call expression is a native durable-step invocation —
+ * `ctx.step.do(...)`, `ctx.step.sleep(...)`, etc., or a destructured
+ * `step.do(...)`. Matches on the `.step.method` / `step.method` shape rather
+ * than the receiver identity, so a renamed/destructured context still resolves.
+ */
+const isStepCall = (call: CallExpression): boolean => {
+    const callee = call.getExpression();
+
+    if (!Node.isPropertyAccessExpression(callee) || !STEP_METHODS.has(callee.getName())) {
+        return false;
+    }
+
+    const receiver = callee.getExpression();
+
+    // `<x>.step.<method>(...)` — receiver is a `.step` property access.
+    if (Node.isPropertyAccessExpression(receiver) && receiver.getName() === "step") {
+        return true;
+    }
+
+    // `const { step } = ctx; step.<method>(...)` — receiver is a bare `step`.
+    return Node.isIdentifier(receiver) && receiver.getText() === "step";
+};
+
+/**
+ * Lift the durable step labels from a workflow's `handler` body — the first
+ * string-literal argument of each native step call. Steps named by a non-literal
+ * (a variable, template with substitutions) are omitted: they can't be compared
+ * for duplication statically. A shorthand/external handler (no inline body) yields
+ * `[]`. Order follows source order so the lint's "first wins" is deterministic.
+ */
+const stepsFromHandler = (argument: ObjectLiteralExpression): WorkflowStepIR[] => {
+    const handlerProperty = argument.getProperty("handler");
+
+    if (!handlerProperty) {
+        return [];
+    }
+
+    const body = Node.isPropertyAssignment(handlerProperty) ? handlerProperty.getInitializer() : handlerProperty;
+
+    if (!body) {
+        return [];
+    }
+
+    const steps: WorkflowStepIR[] = [];
+
+    for (const call of body.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+        if (!isStepCall(call)) {
+            continue;
+        }
+
+        const nameArgument = call.getArguments()[0];
+
+        if (!nameArgument || !(Node.isStringLiteral(nameArgument) || Node.isNoSubstitutionTemplateLiteral(nameArgument))) {
+            continue;
+        }
+
+        steps.push({
+            line: call.getStartLineNumber(),
+            // `isStepCall` already proved the callee is a `.<method>` property access.
+            method: (call.getExpression() as PropertyAccessExpression).getName(),
+            name: nameArgument.getLiteralValue(),
+        });
+    }
+
+    return steps;
+};
+
 /** Lift one exported `defineWorkflow({...})` declaration into {@link WorkflowIR}. */
 const workflowFromCall = (call: CallExpression, exportName: string): WorkflowIR => {
     const argument = call.getArguments()[0];
@@ -64,6 +135,7 @@ const workflowFromCall = (call: CallExpression, exportName: string): WorkflowIR 
         className: workflowClassName(exportName),
         exportName,
         name: workflowDefaultName(exportName),
+        steps: stepsFromHandler(argument),
     };
 
     const nameProperty = argument.getProperty("name");

@@ -2001,6 +2001,23 @@ abstract class ShardDO {
 
             this.recordPostDispatchBookkeeping(result, mutatorClass);
 
+            // Custom-mutator watermark WRITE: advance the per-client high-water
+            // mark to this sequence now that the authoritative writes committed.
+            // No-op unless this dispatch was classified `"next"` above.
+            //
+            // NOT atomic with the handler: the handler's writes auto-commit per
+            // statement, then `persistIdempotentResult` and this advance run as
+            // two further separate writes. A crash after the handler commits but
+            // before this advance leaves the watermark behind — the client's
+            // unacked replay re-classifies as `"next"` (the read side treats a
+            // missing/lower row as already-processed) and re-runs idempotently,
+            // re-advancing. So the gap self-heals; it never drops or double-applies
+            // the write. The advance helper below documents the same
+            // replay-recovery contract for a failed watermark write.
+            if (mutatorClass?.kind === "next") {
+                this.advanceClientMutationWatermark();
+            }
+
             const durationMs = Date.now() - dispatchStartedAt;
 
             // Record the handler's own latency (before the subscription

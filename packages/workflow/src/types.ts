@@ -291,10 +291,65 @@ export type WorkflowRunStepFunction = <A extends StepArgsValidator, Result>(
     options?: RunStepOptions,
 ) => Promise<Result>;
 
+// --- Fan-out: child-workflow isolation (`ctx.parallel` / `ctx.spawn`) -------
+
+/**
+ * One branch of a {@link WorkflowParallelFunction} fan-out — a declared child
+ * workflow (referenced by its `lunora/workflows.ts` export name) plus the params
+ * it is created with. The phantom `Output` carries the child's result type into
+ * the `ctx.parallel(...)` result tuple. Build one with the `branch(...)` helper.
+ */
+export interface WorkflowBranch<Output = unknown> {
+    /** Phantom marker for the branch output type — never present at runtime. */
+    readonly __output?: Output;
+    /** Optional explicit child instance id (defaults to a deterministic parent-derived id). */
+    readonly id?: string;
+    /** The params the child instance is created with — surfaced as the child's `ctx.params`. */
+    readonly params?: Record<string, unknown>;
+    /** Optional wait timeout for this branch (the parent's `waitForEvent` timeout). */
+    readonly timeout?: number | string;
+    /** The `lunora/workflows.ts` export name of the child workflow to run. */
+    readonly workflow: string;
+}
+
+/** Map a tuple of {@link WorkflowBranch}es to the tuple of their output types, preserving order. */
+export type WorkflowBranchOutputs<B extends ReadonlyArray<WorkflowBranch>> = {
+    -readonly [K in keyof B]: B[K] extends WorkflowBranch<infer Output> ? Output : never;
+};
+
+/**
+ * Run branches as isolated child workflow instances and resolve with their
+ * outputs in declaration order. Each branch gets its own Durable Object (own
+ * memory / CPU / retry budget); the parent hibernates while they execute. Rejects
+ * (non-retryable) on the first branch that fails.
+ *
+ * ```ts
+ * const [tags, thumb] = await ctx.parallel([
+ *     branch("imageTag", { key }),
+ *     branch("thumbnail", { key }),
+ * ]);
+ * ```
+ */
+export type WorkflowParallelFunction = <const B extends ReadonlyArray<WorkflowBranch>>(branches: B) => Promise<WorkflowBranchOutputs<B>>;
+
+/** Per-call options for {@link WorkflowSpawnFunction}. */
+export interface WorkflowSpawnOptions {
+    /** Explicit child instance id (defaults to a deterministic parent-derived id). */
+    id?: string;
+}
+
+/**
+ * Fire-and-forget start of a declared child workflow from inside a workflow body
+ * — replay-safe (idempotent create), returns a live handle to the child. Use
+ * {@link WorkflowParallelFunction} instead when you need to await results.
+ */
+export type WorkflowSpawnFunction = (workflow: string, params?: Record<string, unknown>, options?: WorkflowSpawnOptions) => Promise<WorkflowInstanceLike>;
+
 /**
  * The context object passed to a `defineWorkflow` handler. Bundles the native
  * Cloudflare durability primitives (`step`, `event`) with the Lunora runner
- * (`run`), the reusable-step runner (`runStep`), the Worker `env`, and a logger.
+ * (`run`), the reusable-step runner (`runStep`), the fan-out primitives
+ * (`parallel` / `spawn`), the Worker `env`, and a logger.
  */
 export interface WorkflowRunContext<Params = Record<string, unknown>> {
     /** The Worker environment bindings. */
@@ -303,12 +358,16 @@ export interface WorkflowRunContext<Params = Record<string, unknown>> {
     readonly event: WorkflowEventLike<Params>;
     /** Structured logger surfaced in `wrangler tail` / Studio logs. */
     readonly log: WorkflowLogger;
+    /** Run branches as isolated child workflow instances and await their outputs (declaration-ordered tuple). */
+    readonly parallel: WorkflowParallelFunction;
     /** Convenience alias for `event.payload`. */
     readonly params: Readonly<Params>;
     /** Invoke a Lunora function; wrap in `step.do(...)` for durability. */
     readonly run: WorkflowRunFunction;
     /** Run a reusable, schema-validated {@link StepDefinition} as a durable step. */
     readonly runStep: WorkflowRunStepFunction;
+    /** Fire-and-forget start of a declared child workflow (replay-safe; returns a live handle). */
+    readonly spawn: WorkflowSpawnFunction;
     /** The native Cloudflare Workflows durable-step API. */
     readonly step: WorkflowStepLike;
 }

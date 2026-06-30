@@ -361,6 +361,26 @@ export interface WorkflowIR {
      * definition overrides it.
      */
     name: string;
+
+    /**
+     * Durable step labels lifted from the handler body — the first string-literal
+     * argument of every `ctx.step.do` / `.sleep` / `.sleepUntil` / `.waitForEvent`
+     * call. Feeds the duplicate-step-name lint, which flags a name used twice
+     * (Cloudflare memoizes by name, so the second call silently returns the
+     * first's cached result). Calls with a non-literal name are omitted (not
+     * statically comparable).
+     */
+    steps: ReadonlyArray<WorkflowStepIR>;
+}
+
+/** One durable step call lifted from a workflow handler body (the use side of {@link WorkflowIR.steps}). */
+export interface WorkflowStepIR {
+    /** 1-based line of the durable step call. */
+    line: number;
+    /** The native step method invoked: `do` / `sleep` / `sleepUntil` / `waitForEvent`. */
+    method: string;
+    /** The step's static label (the first string-literal argument). */
+    name: string;
 }
 
 /**

@@ -56,14 +56,61 @@ describe("discover-workflows", () => {
                 className: "EtlWorkflow",
                 exportName: "etl",
                 name: "nightly-etl",
+                steps: [],
             },
             {
                 bindingName: "WORKFLOW_ORDER_PIPELINE",
                 className: "OrderPipelineWorkflow",
                 exportName: "orderPipeline",
                 name: "order-pipeline",
+                steps: [],
             },
         ]);
+    });
+
+    it("lifts the durable step labels from the handler body", () => {
+        expect.assertions(1);
+
+        writeWorkflows(`
+            import { defineWorkflow } from "@lunora/workflow";
+
+            export const orderPipeline = defineWorkflow({
+                handler: async (ctx) => {
+                    const order = await ctx.step.do("load", () => ctx.run(api.orders.get, {}));
+                    await ctx.step.sleep("cool-off", "1 minute");
+                    await ctx.step.do("charge", () => ctx.run(api.payments.charge, {}));
+                    return order;
+                },
+            });
+        `);
+
+        expect(discoverWorkflows(newProject(), workdir)[0]?.steps).toEqual([
+            { line: 6, method: "do", name: "load" },
+            { line: 7, method: "sleep", name: "cool-off" },
+            { line: 8, method: "do", name: "charge" },
+        ]);
+    });
+
+    it("resolves a destructured step and omits dynamically-named steps", () => {
+        expect.assertions(1);
+
+        writeWorkflows(`
+            import { defineWorkflow } from "@lunora/workflow";
+
+            export const fanOut = defineWorkflow({
+                handler: async (ctx) => {
+                    const { step } = ctx;
+                    await step.do("seed", () => undefined);
+                    for (const id of ctx.params.ids) {
+                        await step.do(\`process-\${id}\`, () => undefined);
+                    }
+                },
+            });
+        `);
+
+        // The template-with-substitution name is not statically comparable, so it
+        // is omitted — only the literal "seed" survives.
+        expect(discoverWorkflows(newProject(), workdir)[0]?.steps).toEqual([{ line: 7, method: "do", name: "seed" }]);
     });
 
     it("ignores non-defineWorkflow exports and unexported definitions", () => {

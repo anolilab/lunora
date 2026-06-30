@@ -11,6 +11,7 @@ import { WorkflowEntrypoint } from "cloudflare:workers";
 import { NonRetryableError } from "cloudflare:workflows";
 
 import { convertNonRetryableError } from "../errors";
+import { errorOutcome, extractBranchMarker, okOutcome, signalBranchParent, stripBranchMarker } from "../fan-out";
 import { createWorkflowRunContext } from "../run-context";
 import type { WorkflowDefinition, WorkflowStepLike } from "../types";
 
@@ -50,23 +51,48 @@ class LunoraWorkflow<Params = Record<string, unknown>, Output = unknown> extends
     }
 
     public override async run(event: Readonly<WorkflowEvent<Params>>, step: WorkflowStep): Promise<Output> {
+        const nativeStep = step as unknown as WorkflowStepLike;
+
+        // When this instance was spawned as a `ctx.parallel` branch, the parent
+        // stamped a callback marker into the params. Read it (to signal completion
+        // back) and hand the user handler a clean payload without the marker.
+        const marker = extractBranchMarker(event.payload);
+        const handlerEvent = marker ? ({ ...event, payload: stripBranchMarker(event.payload) } as Readonly<WorkflowEvent<Params>>) : event;
+
         const context = createWorkflowRunContext<Params>({
             env: this.env,
-            event,
+            event: handlerEvent,
             exportName: this.#lunoraName,
             nonRetryableErrorClass: NonRetryableError,
-            step: step as unknown as WorkflowStepLike,
+            step: nativeStep,
         });
 
+        let output: Output;
+
         try {
-            return await this.#definition.handler(context);
+            output = await this.#definition.handler(context);
         } catch (error: unknown) {
+            // A branch child: tell the parent it failed (best-effort durable send)
+            // before the instance itself errors, so the parent fails fast instead
+            // of waiting out its `waitForEvent` timeout.
+            if (marker) {
+                await signalBranchParent({ env: this.env, step: nativeStep }, marker, errorOutcome(error));
+            }
+
             // Convert a portable `NonRetryableError` thrown outside a step (in
             // the handler body) to the native one so Cloudflare fails the
             // instance immediately. Errors thrown inside `ctx.runStep` are
             // already converted at the step boundary.
             return convertNonRetryableError(error, NonRetryableError);
         }
+
+        // A branch child: report the result to the parent so its `ctx.parallel`
+        // join resolves this branch's slot.
+        if (marker) {
+            await signalBranchParent({ env: this.env, step: nativeStep }, marker, okOutcome(output));
+        }
+
+        return output;
     }
 }
 

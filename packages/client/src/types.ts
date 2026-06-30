@@ -483,6 +483,14 @@ export interface ServerDataMessage {
     /** The CDC epoch this frame's cursor belongs to (see {@link CachedQuery.serverEpoch}). */
     epoch?: string;
     id: string;
+
+    /**
+     * The highest custom-mutator `mutationId` from this client the server has
+     * now applied (the per-client `__client_watermark`). Echoed so the client's
+     * outbox can drop confirmed pending mutations and let TanStack DB collapse
+     * the matching optimistic overlay. Absent on shards without custom mutators.
+     */
+    lastMutationId?: number;
     type: "data" | "delta";
 }
 
@@ -497,6 +505,8 @@ export interface ServerResumeMessage {
     /** The CDC epoch this resume's cursor belongs to (see {@link CachedQuery.serverEpoch}). */
     epoch?: string;
     id: string;
+    /** Per-client custom-mutator watermark (see {@link ServerDataMessage.lastMutationId}). */
+    lastMutationId?: number;
     type: "resume";
 }
 

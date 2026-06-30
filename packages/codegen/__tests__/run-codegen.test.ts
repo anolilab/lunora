@@ -1402,7 +1402,13 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             const output = emitShard({
                 schema: { tables: [], vectorIndexes: [] },
                 workflows: [
-                    { bindingName: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" },
+                    {
+                        bindingName: "WORKFLOW_ORDER_PIPELINE",
+                        className: "OrderPipelineWorkflow",
+                        exportName: "orderPipeline",
+                        name: "order-pipeline",
+                        steps: [],
+                    },
                 ],
             });
 
@@ -1943,7 +1949,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                     },
                 ],
                 hasAi: true,
-                workflows: [{ bindingName: "WORKFLOW_ORDERS", className: "OrdersWorkflow", exportName: "orders", name: "orders" }],
+                workflows: [{ bindingName: "WORKFLOW_ORDERS", className: "OrdersWorkflow", exportName: "orders", name: "orders", steps: [] }],
             });
 
             expect(server).toContain("readonly AI?: unknown;");

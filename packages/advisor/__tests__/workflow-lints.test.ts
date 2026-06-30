@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import type { AdvisorWorkflow, AdvisorWorkflowCall, LintContext } from "../src";
 import { fromServerSchema } from "../src";
+import workflowDuplicateStepName from "../src/lints/static/workflow-duplicate-step-name";
 import workflowUnknownTarget from "../src/lints/static/workflow-unknown-target";
 import workflowUnused from "../src/lints/static/workflow-unused";
 
@@ -102,5 +103,91 @@ describe("workflow_unknown_target", () => {
         const calls: AdvisorWorkflowCall[] = [{ exportName: "dynamic", file: "channels", line: 9, workflow: "" }];
 
         expect(workflowUnknownTarget.run(context({ workflowCalls: calls, workflows: [WELCOME] }))).toHaveLength(0);
+    });
+});
+
+// eslint-disable-next-line no-secrets/no-secrets -- the lint's rule id, not a credential
+describe("workflow_duplicate_step_name", () => {
+    it("finds nothing when no declaration evidence is supplied", () => {
+        expect.assertions(1);
+
+        // A runtime caller (no workflow feeder) must not flag anything.
+        expect(workflowDuplicateStepName.run(context({}))).toHaveLength(0);
+    });
+
+    it("clears a workflow whose step names are all unique", () => {
+        expect.assertions(1);
+
+        const workflows: AdvisorWorkflow[] = [
+            {
+                exportName: "orderPipeline",
+                steps: [
+                    { line: 3, method: "do", name: "load" },
+                    { line: 4, method: "sleep", name: "cool-off" },
+                    { line: 5, method: "do", name: "charge" },
+                ],
+            },
+        ];
+
+        expect(workflowDuplicateStepName.run(context({ workflows }))).toHaveLength(0);
+    });
+
+    it("flags a reused step name, pointing at the first and the duplicate line", () => {
+        expect.assertions(2);
+
+        const workflows: AdvisorWorkflow[] = [
+            {
+                exportName: "orderPipeline",
+                steps: [
+                    { line: 3, method: "do", name: "charge" },
+                    { line: 7, method: "do", name: "charge" },
+                ],
+            },
+        ];
+
+        const findings = workflowDuplicateStepName.run(context({ workflows }));
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({
+            // eslint-disable-next-line no-secrets/no-secrets -- the lint's cache key, not a credential
+            cacheKey: "workflow_duplicate_step_name:orderPipeline:charge",
+            level: "ERROR",
+            metadata: { firstLine: 3, line: 7, stepName: "charge", workflow: "orderPipeline" },
+            // eslint-disable-next-line no-secrets/no-secrets -- the lint's rule id, not a credential
+            name: "workflow_duplicate_step_name",
+        });
+    });
+
+    it("flags a name reused across different step methods (the cache key is the name)", () => {
+        expect.assertions(1);
+
+        const workflows: AdvisorWorkflow[] = [
+            {
+                exportName: "orderPipeline",
+                steps: [
+                    { line: 3, method: "do", name: "settle" },
+                    { line: 6, method: "sleep", name: "settle" },
+                ],
+            },
+        ];
+
+        expect(workflowDuplicateStepName.run(context({ workflows }))).toHaveLength(1);
+    });
+
+    it("emits one finding per duplicated name even when a name repeats three times", () => {
+        expect.assertions(1);
+
+        const workflows: AdvisorWorkflow[] = [
+            {
+                exportName: "orderPipeline",
+                steps: [
+                    { line: 3, method: "do", name: "charge" },
+                    { line: 5, method: "do", name: "charge" },
+                    { line: 7, method: "do", name: "charge" },
+                ],
+            },
+        ];
+
+        expect(workflowDuplicateStepName.run(context({ workflows }))).toHaveLength(1);
     });
 });

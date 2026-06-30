@@ -96,8 +96,9 @@ const toAdvisorShapes = (shapes: ReadonlyArray<ShapeIR>): AdvisorShape[] =>
  * feed `table_without_insert`, authApi calls feed `auth_api_call_without_headers`,
  * rls procedure snapshots feed `rls_uncovered_table`, and mask procedure
  * snapshots feed `mask_uncovered_pii_column`; declared containers
- * feed the `container_*` lints; declared workflows + `ctx.workflows.get(...)` call
- * sites feed the `workflow_unused` / `workflow_unknown_target` lints; non-deterministic
+ * feed the `container_*` lints; declared workflows (with their durable step labels)
+ * + `ctx.workflows.get(...)` call sites feed the `workflow_unused` /
+ * `workflow_unknown_target` / duplicate-step-name lints; non-deterministic
  * calls inside query/mutation handlers feed the `nondeterministic_query_mutation` lint
  * (all default empty for callers that don't analyze functions/containers/workflows).
  * The IR types are structurally identical to the advisor's evidence types so they
