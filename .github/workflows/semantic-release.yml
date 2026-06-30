@@ -9,9 +9,16 @@
         "branches": ["main", "alpha", "next", "beta"]
     "workflow_dispatch": # yamllint disable-line rule:empty-values
 
+# Release runs must NEVER be cancelled mid-flight. multi-semantic-release pushes
+# a git tag AND a per-tag channel note (refs/notes/semantic-release-<tag>) for each
+# package; cancelling between those pushes leaves a tag whose channel note is missing.
+# A later run then can't map that tag to the `alpha` channel (get-last-release filters
+# prerelease tags by note channel), decides "no previous release", recomputes
+# 1.0.0-alpha.1, and dies on `git tag` (exit 128) because the tag already exists.
+# Queue release runs instead of cancelling them so each completes its tag+note+publish.
 "concurrency":
     "group": "${{ github.workflow }}-${{ github.ref }}"
-    "cancel-in-progress": true
+    "cancel-in-progress": false
 
 "permissions":
     "contents": "read" # for checkout
@@ -57,6 +64,15 @@
                   "GIT_COMMITTER_NAME": "GitHub Actions Shell"
                   "GIT_AUTHOR_NAME": "GitHub Actions Shell"
                   "EMAIL": "github-actions[bot]@users.noreply.github.com"
+
+            # Belt-and-suspenders: semantic-release fetches notes itself, but a release
+            # run cancelled mid-push (historically) could leave a tag without its channel
+            # note. Re-fetch ALL notes refs explicitly so get-last-release can map every
+            # @lunora/*@<ver> tag to its `alpha`/`beta`/`next` channel and never re-release
+            # an already-published version. Static command — no untrusted input.
+            - "name": "Fetch semantic-release notes"
+              "shell": "bash"
+              "run": "git fetch origin '+refs/notes/*:refs/notes/*'"
 
             - "name": "Setup pnpm"
               "uses": "pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093" # v6.0.8
