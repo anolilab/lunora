@@ -1,3 +1,4 @@
+import isStaleVersion from "./persisted-version";
 import type { OfflineQueueOptions, PersistenceAdapter, PersistenceErrorContext, PersistenceOperation } from "./types";
 
 interface QueuedMutation<T = unknown> {
@@ -41,6 +42,18 @@ interface QueuedMutation<T = unknown> {
  * record). The `error` carries the `OFFLINE_QUEUE_OVERFLOW` code.
  */
 type EvictHandler = (entry: QueuedMutation, error: Error & { code?: string }) => void;
+
+/** Injected dependencies for {@link OfflineQueue} (kept off the user-facing {@link OfflineQueueOptions}). */
+interface OfflineQueueDeps {
+    /** Invoked when an entry is discarded on capacity overflow (carries `OFFLINE_QUEUE_OVERFLOW`). */
+    onEvict?: EvictHandler;
+    /** Invoked with the new depth after any size change (drives the client's pending-sync count). */
+    onSizeChange?: (size: number) => void;
+    /** Durable store; when present, writes are mirrored and restored across reloads. */
+    persistence?: PersistenceAdapter;
+    /** App/schema version stamped on persisted writes; mismatched records are purged on hydrate. */
+    version?: string;
+}
 
 let idCounter = 0;
 
@@ -120,20 +133,14 @@ class OfflineQueue {
 
     private readonly items: QueuedMutation[] = [];
 
-    public constructor(
-        options: OfflineQueueOptions = {},
-        persistence?: PersistenceAdapter,
-        onEvict?: EvictHandler,
-        onSizeChange?: (size: number) => void,
-        version?: string,
-    ) {
+    public constructor(options: OfflineQueueOptions = {}, deps: OfflineQueueDeps = {}) {
         this.maxItems = options.maxItems ?? 1000;
         this.queueBeforeFirstConnect = options.queueBeforeFirstConnect ?? false;
         this.onPersistenceError = options.onPersistenceError;
-        this.persistence = persistence;
-        this.onEvict = onEvict;
-        this.onSizeChange = onSizeChange;
-        this.version = version;
+        this.persistence = deps.persistence;
+        this.onEvict = deps.onEvict;
+        this.onSizeChange = deps.onSizeChange;
+        this.version = deps.version;
     }
 
     public get size(): number {
@@ -206,7 +213,7 @@ class OfflineQueue {
 
             // Version gate: a write persisted by a different app/schema version is
             // dropped and purged rather than replayed against the current schema.
-            if (this.version !== undefined && mutation.version !== this.version) {
+            if (isStaleVersion(this.version, mutation.version)) {
                 this.persistence.remove(mutation.id).catch((error: unknown) => {
                     reportPersistenceError(this.onPersistenceError, "remove", error, mutation.id);
                 });

@@ -155,7 +155,10 @@ export interface LunoraDb<D extends Record<string, AnyDef>> {
     /**
      * Number of writes still pending in the durable outbox — the depth for a
      * "N changes waiting to sync" indicator. A convenience over reaching through
-     * `executor.getPendingCount()`.
+     * `executor.getPendingCount()`. **Pull-only** (the underlying TanStack
+     * executor exposes no change subscription): read it after a `db.actions.*`
+     * call and on connection-status changes, or poll. The standalone
+     * `LunoraClient` exposes the reactive `onPendingChange` for its built-in queue.
      */
     pendingCount: () => number;
     /** Re-point a `scopeBy` collection's subscription (omit `args` to detach) — present for scoped collections. */

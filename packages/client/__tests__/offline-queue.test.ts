@@ -57,7 +57,7 @@ describe("offlineQueue", () => {
         expect.assertions(4);
 
         const onEvict = vi.fn<(entry: { functionPath: string; liveAwaiter?: boolean }, error: Error & { code?: string }) => void>();
-        const queue = new OfflineQueue({ maxItems: 1 }, undefined, onEvict);
+        const queue = new OfflineQueue({ maxItems: 1 }, { onEvict });
 
         // A hydrated-style entry (no live awaiter) is evicted by a newer write.
         queue.enqueue({ args: {}, functionPath: "old", liveAwaiter: false, reject: () => undefined, resolve: () => undefined });
@@ -76,7 +76,7 @@ describe("offlineQueue", () => {
         expect.assertions(3);
 
         const persistence = createInMemoryPersistence();
-        const queue = new OfflineQueue({}, persistence);
+        const queue = new OfflineQueue({}, { persistence });
 
         queue.enqueue({ args: {}, functionPath: "a", reject: () => undefined, resolve: () => undefined });
         queue.enqueue({ args: {}, functionPath: "b", reject: () => undefined, resolve: () => undefined });
@@ -120,7 +120,7 @@ describe("offlineQueue — persistence", () => {
         expect.assertions(4);
 
         const persistence = createInMemoryPersistence();
-        const queue = new OfflineQueue({}, persistence);
+        const queue = new OfflineQueue({}, { persistence });
 
         queue.enqueue({ args: { title: "hi" }, functionPath: "posts:create", reject: () => undefined, resolve: () => undefined, shardKey: "room-1" });
 
@@ -141,7 +141,7 @@ describe("offlineQueue — persistence", () => {
 
         const persistence = createInMemoryPersistence();
         const append = vi.spyOn(persistence, "append");
-        const queue = new OfflineQueue({}, persistence);
+        const queue = new OfflineQueue({}, { persistence });
 
         queue.enqueue({ args: {}, functionPath: "posts:create", identity: "1:abc", reject: () => undefined, resolve: () => undefined });
 
@@ -156,7 +156,7 @@ describe("offlineQueue — persistence", () => {
 
         await persistence.append({ args: {}, functionPath: "a", identity: "1:abc", id: "1" });
 
-        const queue = new OfflineQueue({}, persistence);
+        const queue = new OfflineQueue({}, { persistence });
 
         await queue.hydrate();
 
@@ -172,7 +172,7 @@ describe("offlineQueue — persistence", () => {
 
         await persistence.append({ args: {}, functionPath: "a", id: "1" });
 
-        const queue = new OfflineQueue({}, persistence);
+        const queue = new OfflineQueue({}, { persistence });
 
         await queue.hydrate();
 
@@ -185,7 +185,7 @@ describe("offlineQueue — persistence", () => {
         expect.assertions(1);
 
         const persistence = createInMemoryPersistence();
-        const queue = new OfflineQueue({ maxItems: 1 }, persistence);
+        const queue = new OfflineQueue({ maxItems: 1 }, { persistence });
 
         queue.enqueue({ args: {}, functionPath: "old", reject: () => undefined, resolve: () => undefined });
         queue.enqueue({ args: {}, functionPath: "new", reject: () => undefined, resolve: () => undefined });
@@ -204,7 +204,7 @@ describe("offlineQueue — persistence", () => {
         await persistence.append({ args: {}, functionPath: "b", id: "2", shardKey: "room-2" });
         await persistence.append({ args: {}, functionPath: "c", id: "3", shardKey: "room-1" });
 
-        const queue = new OfflineQueue({}, persistence);
+        const queue = new OfflineQueue({}, { persistence });
         const shardKeys = await queue.hydrate();
 
         expect(queue.size).toBe(3);
@@ -222,7 +222,7 @@ describe("offlineQueue — persistence", () => {
 
         await persistence.append({ args: {}, functionPath: "a", id: "1" });
 
-        const queue = new OfflineQueue({}, persistence);
+        const queue = new OfflineQueue({}, { persistence });
 
         await queue.hydrate();
         // A second hydrate (or one after the live enqueue assigned the same id)
@@ -239,7 +239,7 @@ describe("offlineQueue — persistence", () => {
 
         await persistence.append({ args: {}, functionPath: "a", id: "1" });
 
-        const queue = new OfflineQueue({}, persistence);
+        const queue = new OfflineQueue({}, { persistence });
 
         await queue.hydrate();
 
@@ -255,7 +255,7 @@ describe("offlineQueue — persistence", () => {
         expect.assertions(2);
 
         const persistence = createInMemoryPersistence();
-        const queue = new OfflineQueue({}, persistence);
+        const queue = new OfflineQueue({}, { persistence });
 
         queue.enqueue({ args: {}, functionPath: "a", reject: () => undefined, resolve: () => undefined });
         queue.clear();
@@ -275,7 +275,7 @@ describe("offlineQueue — persistence error reporting", () => {
             append: () => Promise.reject(appendError),
         };
         const handler = vi.fn<(context: PersistenceErrorContext) => void>();
-        const queue = new OfflineQueue({ onPersistenceError: handler }, faultyPersistence);
+        const queue = new OfflineQueue({ onPersistenceError: handler }, { persistence: faultyPersistence });
 
         queue.enqueue({ args: {}, functionPath: "posts:create", reject: () => undefined, resolve: () => undefined });
 
@@ -295,7 +295,7 @@ describe("offlineQueue — persistence error reporting", () => {
             append: () => Promise.reject(new Error("quota")),
         };
         const handler = vi.fn<(context: PersistenceErrorContext) => void>();
-        const queue = new OfflineQueue({ onPersistenceError: handler }, faultyPersistence);
+        const queue = new OfflineQueue({ onPersistenceError: handler }, { persistence: faultyPersistence });
 
         queue.enqueue({ args: {}, functionPath: "posts:create", reject: () => undefined, resolve: () => undefined });
 
@@ -316,7 +316,7 @@ describe("offlineQueue — persistence error reporting", () => {
         const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
         try {
-            const queue = new OfflineQueue({}, faultyPersistence);
+            const queue = new OfflineQueue({}, { persistence: faultyPersistence });
 
             queue.enqueue({ args: {}, functionPath: "posts:create", reject: () => undefined, resolve: () => undefined });
 
@@ -334,7 +334,7 @@ describe("offlineQueue — persistence error reporting", () => {
 
         const persistence = createInMemoryPersistence();
         const handler = vi.fn<(context: PersistenceErrorContext) => void>();
-        const queue = new OfflineQueue({ onPersistenceError: handler }, persistence);
+        const queue = new OfflineQueue({ onPersistenceError: handler }, { persistence });
 
         queue.enqueue({ args: {}, functionPath: "posts:create", reject: () => undefined, resolve: () => undefined });
 
@@ -352,7 +352,7 @@ describe("offlineQueue — persistence error reporting", () => {
             remove: () => Promise.reject(removeError),
         };
         const handler = vi.fn<(context: PersistenceErrorContext) => void>();
-        const queue = new OfflineQueue({ maxItems: 1, onPersistenceError: handler }, faultyPersistence);
+        const queue = new OfflineQueue({ maxItems: 1, onPersistenceError: handler }, { persistence: faultyPersistence });
 
         queue.enqueue({ args: {}, functionPath: "old", reject: () => undefined, resolve: () => undefined });
         queue.enqueue({ args: {}, functionPath: "new", reject: () => undefined, resolve: () => undefined });

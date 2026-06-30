@@ -1499,6 +1499,45 @@ describe("lunoraClient", () => {
             vi.useRealTimers();
         });
 
+        it("re-stamps queued writes when the subject is established later on the same token (no drop)", async () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers();
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                heartbeatIntervalMs: 0,
+                reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            // The common React pattern: token set before the user id is known
+            // (`user?.id` is transiently undefined), so identity is the token hash.
+            client.setAuthToken("token-1");
+
+            client.subscribe(fnRef("posts:list"), {}, () => undefined);
+            latestSocket().open();
+            latestSocket().triggerClose();
+
+            const pending = client.mutation(fnRef("posts:create"), { title: "queued" });
+
+            // The user id resolves a tick later — SAME token, just a stabler label.
+            // The in-flight write must be re-stamped, not dropped.
+            client.setAuthToken("token-1", "user-1");
+
+            await vi.advanceTimersByTimeAsync(20);
+            latestSocket().open();
+            await vi.runAllTimersAsync();
+
+            await expect(pending).resolves.toEqual({ ok: true });
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+
+            client.close();
+            vi.useRealTimers();
+        });
+
         it("pendingCount and onPendingChange track queued writes draining on reconnect", async () => {
             expect.assertions(4);
 

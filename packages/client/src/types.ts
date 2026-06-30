@@ -305,6 +305,12 @@ export interface LunoraClientOptions {
      * version are dropped (and purged) rather than replayed / hydrated against the
      * new schema. Omit to disable version gating (records are never invalidated by
      * version).
+     *
+     * **Adoption is itself an invalidation event:** records written before you set
+     * `persistenceVersion` carry no version, so the first boot after enabling it
+     * purges all currently-queued offline writes (and cached reads) as stale. Adopt
+     * it on a build where that clean slate is acceptable — typically the same
+     * breaking deploy you're protecting against — not purely speculatively.
      */
     persistenceVersion?: string;
 

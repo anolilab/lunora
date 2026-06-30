@@ -82,8 +82,15 @@ window keeps them:
 client.setAuthToken(accessToken, user.id); // identity keyed on user.id, not the token bytes
 ```
 
-A real user switch (different subject) still drops the previous user's queued
-writes. Omit the second argument to keep the legacy token-hash behaviour.
+The subject is **sticky**: a later `setAuthToken(refreshedToken)` that omits it
+keeps the established subject, and establishing the subject for the first time on
+an unchanged token (e.g. the user id resolves a tick after the token was set)
+re-stamps in-flight queued writes rather than dropping them. A real user switch
+(the token _and_ subject both change) still drops the previous user's writes; pass
+`null` to clear the subject on an explicit sign-out. Prefer passing a stable id
+consistently — avoid a `user?.id` that's transiently `undefined` across a reload
+boundary, since a value queued under the token-hash and replayed under the subject
+after a reload can still mismatch.
 
 ## Surviving a breaking deploy
 
@@ -97,6 +104,11 @@ new LunoraClient({ url, persistence: createIndexedDbPersistence(), persistenceVe
 ```
 
 Omit it to disable version gating (records are never invalidated by version).
+**Adopting it is itself an invalidation event:** records written before you set
+`persistenceVersion` carry no version, so the first boot after enabling it purges
+all currently-queued offline writes (and cached reads). Enable it on a build where
+that clean slate is acceptable — typically the same breaking deploy you're
+protecting against — not purely speculatively.
 
 ## Multiple tabs
 
@@ -106,9 +118,14 @@ client elects a single **leader** (via the Web Locks API) that owns hydration;
 when the leader tab closes, another takes over. Server-side idempotency keeps
 replays exactly-once regardless, so this is an efficiency guard, not a
 correctness one. (Where Web Locks are unavailable — React Native, SSR — a single
-context hydrates directly.) Apps with heavy multi-tab offline use should prefer
-[`@lunora/db`](/docs/packages/db) collections, whose outbox is fully
-leader-coordinated.
+context hydrates directly.) One trade-off: because only the leader hydrates the
+_pre-existing_ persisted queue, writes left over from a prior session can sit until
+the leader flushes them — so if the leader is a backgrounded/offline tab while a
+foreground tab is online, those carried-over writes wait for the leader (the writes
+stay durable and replay exactly-once; only their latency is affected). New writes
+made in any tab flush over that tab's own socket. Apps with heavy multi-tab offline
+use should prefer [`@lunora/db`](/docs/packages/db) collections, whose outbox is
+fully leader-coordinated.
 
 ## Sync status
 
