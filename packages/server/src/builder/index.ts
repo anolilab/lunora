@@ -1,8 +1,8 @@
 import type { Validator } from "@lunora/values";
 
 import { validateArgs } from "../functions";
+import type { RlsTag } from "../rls/policy-tag";
 import { readRlsTag } from "../rls/policy-tag";
-import type { Policy, Role } from "../rls/types";
 import type { ActionCtx as ActionContext, ArgsValidator, FunctionKind, InferArgs, MutationCtx as MutationContext, QueryCtx as QueryContext } from "../types";
 import runMiddlewareChain from "./run-middleware";
 import type {
@@ -127,11 +127,16 @@ const makeStreamHandler =
  * reads would bypass the table's read policies (see `rls/shape-read-base.ts`).
  * Returns `undefined` when no `rls()` middleware is present, so a non-RLS
  * function carries no `rls` key.
+ *
+ * Each `rls()` step is preserved as its own `{ policies, roles }` tag rather than
+ * flattened into shared arrays: a policy's `auth.can(...)` must resolve against
+ * the role→permission map of the SAME middleware that declared it (exactly as the
+ * request-time `rls()` path does). Flattening would let a permission registered on
+ * one middleware satisfy another middleware's policy, replicating rows an
+ * equivalent guarded query would deny.
  */
-const collectRls = (middlewares: ReadonlyArray<Middleware<unknown, unknown>>): undefined | { policies: ReadonlyArray<Policy>; roles: ReadonlyArray<Role> } => {
-    const policies: Policy[] = [];
-    const roles: Role[] = [];
-    let found = false;
+const collectRls = (middlewares: ReadonlyArray<Middleware<unknown, unknown>>): undefined | { tags: ReadonlyArray<RlsTag> } => {
+    const tags: RlsTag[] = [];
 
     for (const middleware of middlewares) {
         const tag = readRlsTag(middleware);
@@ -140,12 +145,10 @@ const collectRls = (middlewares: ReadonlyArray<Middleware<unknown, unknown>>): u
             continue;
         }
 
-        found = true;
-        policies.push(...tag.policies);
-        roles.push(...tag.roles);
+        tags.push(tag);
     }
 
-    return found ? { policies, roles } : undefined;
+    return tags.length > 0 ? { tags } : undefined;
 };
 
 /**

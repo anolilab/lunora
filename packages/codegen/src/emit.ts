@@ -3182,6 +3182,7 @@ const vectorsStub: VectorSearchLike = {
     // just against D1/Hyperdrive instead of this DO's op-log. Emitted only when
     // both features are present so a shape-free or global-free `shard.ts` stays
     // byte-identical.
+    /* eslint-disable no-secrets/no-secrets -- the emitted override method body references dense generated identifiers (`withinGlobalShapeBound`, `ShardDOBase.GLOBAL_SHAPE_MAX_ROWS`), not credentials */
     const globalShapeReaderOverride =
         hasShapes && hasGlobalTables
             ? `
@@ -3193,13 +3194,20 @@ const vectorsStub: VectorSearchLike = {
             let cursor: null | string = null;
 
             // Drain every page of the global membership so the seed/diff sees the
-            // full rowset (D1 \`findMany\` is paginated).
+            // full rowset (D1 \`findMany\` is paginated). Stop one row past the cap:
+            // a broad \`.global()\` shape would otherwise materialize an unbounded
+            // array before the caller's \`withinGlobalShapeBound\` check rejects it,
+            // so bail early and let the caller fail it closed.
             do {
                 // eslint-disable-next-line no-await-in-loop -- sequential page drain to assemble the full membership
                 const page = await globalDb.findMany(resolved.table, { cursor, where: resolved.effectiveWhere });
 
                 for (const doc of page.page) {
                     rows.push({ doc, id: String((doc as { _id?: unknown })._id) });
+
+                    if (rows.length > ShardDOBase.GLOBAL_SHAPE_MAX_ROWS) {
+                        return rows;
+                    }
                 }
 
                 cursor = page.isDone ? null : page.continueCursor;
@@ -3209,6 +3217,7 @@ const vectorsStub: VectorSearchLike = {
         }
 `
             : "";
+    /* eslint-enable no-secrets/no-secrets */
 
     const facadeBlock = hasTables
         ? `\n            const facade = db as unknown as Record<string, ReturnType<typeof bindTableFacade>>;
@@ -3414,8 +3423,20 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // do external I/O that can't be rolled back, so both dispatch directly.
             // \`ctx.run*\` composition runs inside this span (it never re-enters
             // handleRpc); runInTransaction's own guard rejects accidental nesting.
+            //
+            // The replay bookkeeping (idempotency dedup row + custom-mutator
+            // watermark advance) commits INSIDE this span via
+            // \`commitMutationBookkeeping\`, so the writes, the dedup row, and the
+            // watermark are atomic — a crash can't leave the writes durable without
+            // the replay guard.
             if (registered.kind === "mutation") {
-                return this.runInTransaction(() => registered.handler(ctx, args));
+                return this.runInTransaction(async () => {
+                    const result = await registered.handler(ctx, args);
+
+                    this.commitMutationBookkeeping(result);
+
+                    return result;
+                });
             }
 
             return registered.handler(ctx, args);

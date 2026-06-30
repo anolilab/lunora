@@ -40,17 +40,75 @@ describe("buildRlsReadRegistry", () => {
         expect(registry.byTable.get("docs")).toHaveLength(1);
     });
 
-    it("ignores non-read policies and de-dupes a policy reused across procedures", () => {
-        expect.assertions(2);
+    it("ignores non-read policies and folds a shared rls() middleware once", () => {
+        expect.assertions(3);
 
         const readDocs = definePolicy({ on: "read", table: "docs", when: () => true });
         const writeDocs = definePolicy({ on: "insert", table: "docs", when: () => true });
-        // Same `readDocs` reference reused by two procedures.
-        const registry = buildRlsReadRegistry([guardedQuery(definePolicies([readDocs, writeDocs])), guardedQuery(definePolicies([readDocs]))]);
+        // One shared `rls(...)` middleware reused by two procedures — the same tag
+        // reference, so the registry folds it to a single read-policy group.
+        const guard = rls(definePolicies([readDocs, writeDocs]));
+        const use = (middleware: unknown) =>
+            (builders.query as unknown as { use: (m: unknown) => { query: (h: () => unknown) => unknown } }).use(middleware).query(() => null);
+        const registry = buildRlsReadRegistry([use(guard), use(guard)]);
 
-        expect(registry.byTable.get("docs")).toHaveLength(1);
+        const groups = registry.byTable.get("docs");
+
+        expect(groups).toHaveLength(1);
         // The write policy never lands in the read registry.
-        expect(registry.byTable.get("docs")?.[0]?.on).toBe("read");
+        expect(groups?.[0]?.policies).toHaveLength(1);
+        expect(groups?.[0]?.policies?.[0]?.on).toBe("read");
+    });
+
+    it("scopes auth.can(...) to each tag's roles — a permission on another middleware can't satisfy a policy", () => {
+        expect.assertions(2);
+
+        const secret = definePermission("docs:read-all");
+        // `guardedDocs` checks `auth.can(secret)` but registers NO role that grants
+        // it, so under its own scope no caller can pass.
+        const readDocs = definePolicy({
+            on: "read",
+            table: "docs",
+            when: ({ auth }) => (auth.can(secret) ? true : { ownerId: auth.userId }),
+        });
+        const guardedDocs = guardedQuery(definePolicies([readDocs]));
+
+        // A SEPARATE middleware on an unrelated table grants `secret` to "admin".
+        // Pre-fix this leaked into the global role map and satisfied `readDocs`.
+        const readNotes = definePolicy({ on: "read", table: "notes", when: () => true });
+        const admin = defineRole("admin", { permissions: [secret] });
+        const guardedNotes = guardedQuery(definePolicies([readNotes]), { roles: [admin] });
+
+        const registry = buildRlsReadRegistry([guardedDocs, guardedNotes]);
+
+        const asAdmin = composeShapeReadWhere(registry, {
+            ctx: {},
+            identity: null,
+            rlsRequired: true,
+            roles: ["admin"],
+            shapeWhere: { channelId: "c1" },
+            table: "docs",
+            tablePublic: false,
+            userId: "u1",
+        });
+
+        // `docs`'s policy never granted `secret` under its own roles, so the admin
+        // is scoped to their own rows — the cross-middleware permission is ignored.
+        expect(asAdmin).toStrictEqual({ AND: [{ ownerId: "u1" }, { channelId: "c1" }] });
+
+        // The `notes` shape, whose own middleware DOES grant the role, stays open.
+        const notesAsAdmin = composeShapeReadWhere(registry, {
+            ctx: {},
+            identity: null,
+            rlsRequired: true,
+            roles: ["admin"],
+            shapeWhere: { channelId: "c1" },
+            table: "notes",
+            tablePublic: false,
+            userId: "u1",
+        });
+
+        expect(notesAsAdmin).toStrictEqual({ channelId: "c1" });
     });
 });
 

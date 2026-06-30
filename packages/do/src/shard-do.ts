@@ -1634,6 +1634,24 @@ abstract class ShardDO {
     private currentRequestClientSeq: number | undefined;
 
     /**
+     * The in-flight push's custom-mutator classification, stashed by `fetch`
+     * before `handleRpc` so the in-transaction bookkeeping ({@link
+     * ShardDO.commitMutationBookkeeping}) can advance the `__client_watermark` for
+     * a `"next"` push inside the same commit as the writes. `undefined` for an
+     * ordinary mutation / non-mutator push. Cleared per request.
+     */
+    private currentMutatorClass: ClientMutationClass | undefined;
+
+    /**
+     * Set once a mutation's replay bookkeeping (idempotency row + watermark
+     * advance) has committed INSIDE the handler transaction, so the post-dispatch
+     * path skips the now-redundant best-effort writes. Cleared per request; stays
+     * `false` for actions/queries (no transaction wrapper) so their dispatch-level
+     * idempotency persist still runs.
+     */
+    private mutationBookkeepingCommitted = false;
+
+    /**
      * Wall-clock millis of the last `__idempotency` GC sweep on this warm
      * instance. The dedup write throttles `trimIdempotent` to at most once an
      * hour off this field (in-memory, so a fresh instance just sweeps on its
@@ -1893,6 +1911,11 @@ abstract class ShardDO {
         // watermark path (the call falls back to the legacy idempotency dedup).
         this.currentRequestClientId = request.headers.get("x-lunora-client-id") ?? undefined;
         this.currentRequestClientSeq = parseClientSeqHeader(request.headers.get("x-lunora-client-seq"));
+        // Reset the in-transaction bookkeeping handshake: `handleRpc` sets the
+        // classification + flag for a mutation push so the writes, dedup row, and
+        // watermark advance all commit atomically (see `commitMutationBookkeeping`).
+        this.currentMutatorClass = undefined;
+        this.mutationBookkeepingCommitted = false;
         this.currentRequestIdentity = parseIdentityHeader(request.headers.get("x-lunora-identity"));
         // The caller's IP, forwarded server-side from Cloudflare's trusted
         // `CF-Connecting-IP` (never copied from a client header). Surfaced as
@@ -1949,6 +1972,11 @@ abstract class ShardDO {
             // ride the idempotency path below unchanged.
             const mutatorClass = this.isCustomMutator(payload.functionPath) ? this.classifyClientMutation() : undefined;
 
+            // Stash it so the in-transaction bookkeeping (run from `handleRpc`'s
+            // mutation transaction) advances the watermark for a `"next"` push in
+            // the same commit as the writes.
+            this.currentMutatorClass = mutatorClass;
+
             const watermarkShortCircuit = this.rejectNonNextMutation(payload.functionPath, mutatorClass, dispatchStartedAt);
 
             if (watermarkShortCircuit !== undefined) {
@@ -1970,29 +1998,7 @@ abstract class ShardDO {
 
             const result = await this.handleRpc(payload.functionPath, payload.args ?? {});
 
-            // Mutation-replay dedup WRITE: now that the handler's writes have
-            // auto-committed, record the result against this request's
-            // `(identity, mutationId)` so a replay of the same id short-circuits
-            // through the cached-read check above. No-op for queries / legacy
-            // clients (no `x-lunora-mutation-id` header).
-            this.persistIdempotentResult(result);
-
-            // Custom-mutator watermark WRITE: advance the per-client high-water
-            // mark to this sequence now that the authoritative writes committed.
-            // No-op unless this dispatch was classified `"next"` above.
-            //
-            // NOT atomic with the handler: the handler's writes auto-commit per
-            // statement, then `persistIdempotentResult` and this advance run as
-            // two further separate writes. A crash after the handler commits but
-            // before this advance leaves the watermark behind — the client's
-            // unacked replay re-classifies as `"next"` (the read side treats a
-            // missing/lower row as already-processed) and re-runs idempotently,
-            // re-advancing. So the gap self-heals; it never drops or double-applies
-            // the write. The advance helper below documents the same
-            // replay-recovery contract for a failed watermark write.
-            if (mutatorClass?.kind === "next") {
-                this.advanceClientMutationWatermark();
-            }
+            this.recordPostDispatchBookkeeping(result, mutatorClass);
 
             const durationMs = Date.now() - dispatchStartedAt;
 
@@ -2071,6 +2077,8 @@ abstract class ShardDO {
             this.currentRequestMutationId = undefined;
             this.currentRequestClientId = undefined;
             this.currentRequestClientSeq = undefined;
+            this.currentMutatorClass = undefined;
+            this.mutationBookkeepingCommitted = false;
             this.currentRequestIdentity = undefined;
             this.currentRequestIp = undefined;
             this.currentRequestSystem = false;
@@ -3244,13 +3252,15 @@ abstract class ShardDO {
      * unless the request carried an `x-lunora-mutation-id` header (queries and
      * legacy clients leave `currentRequestMutationId` undefined).
      *
-     * Called on the live dispatch path right after the handler's writes have
-     * auto-committed, through the same `this.sql` handle, so the dedup row is
-     * durable iff those writes are. (The DO has no ambient BEGIN/COMMIT around a
-     * mutation — `handleRpc` invokes the user handler directly — so this can't
-     * piggyback on a surrounding transaction; it commits as its own statement
-     * immediately after.) `INSERT OR IGNORE` keeps a concurrent double-dispatch
-     * of the same id idempotent. Also runs the throttled dedup-table GC.
+     * For a mutation this runs INSIDE the handler's transaction (via
+     * {@link ShardDO.commitMutationBookkeeping}, which `handleRpc` invokes before
+     * the transaction commits), so the dedup row is durable iff the writes are —
+     * closing the crash window where the writes commit but the replay guard does
+     * not. Actions/queries aren't transaction-wrapped, so they call this on the
+     * live dispatch path right after the handler resolves, through the same
+     * `this.sql` handle. `INSERT OR IGNORE` keeps a concurrent double-dispatch (or
+     * the now-skipped post-dispatch call) of the same id idempotent. Also runs the
+     * throttled dedup-table GC.
      */
     protected persistIdempotentResult(result: unknown): void {
         if (this.currentRequestMutationId === undefined) {
@@ -3430,15 +3440,59 @@ abstract class ShardDO {
     }
 
     /**
-     * Advance the stored high-watermark for the in-flight custom mutator to
-     * `currentRequestClientSeq`. Called right after the handler's writes commit
-     * (next to {@link persistIdempotentResult}), through the same `this.sql`
-     * handle, so the watermark is durable iff the writes are — a crash between
-     * the write and this advance can only replay the mutation (caught next time
-     * by `seq &lt;= watermark`), never skip it. Best-effort: a missing table never
-     * fails a mutation whose writes already committed.
+     * Commit a mutation's replay bookkeeping — the `(identity, mutationId)`
+     * idempotency dedup row and, for a `"next"` custom-mutator push, the
+     * `__client_watermark` advance — INSIDE the handler's transaction. Called by
+     * the generated `handleRpc` mutation branch after the user handler resolves
+     * but before the transaction commits, so the writes, the dedup row, and the
+     * watermark land in one atomic commit: a crash can't leave the writes durable
+     * without the replay guard (which a re-dispatch would otherwise re-run) nor
+     * without the watermark. Sets {@link ShardDO.mutationBookkeepingCommitted} so
+     * `fetch` skips the redundant post-dispatch persist.
      */
-    protected advanceClientMutationWatermark(): void {
+    protected commitMutationBookkeeping(result: unknown): void {
+        this.persistIdempotentResult(result);
+
+        // Strict: a watermark write that throws here rolls the whole mutation back
+        // rather than committing writes whose watermark was never advanced.
+        if (this.currentMutatorClass?.kind === "next") {
+            this.advanceClientMutationWatermark({ strict: true });
+        }
+
+        this.mutationBookkeepingCommitted = true;
+    }
+
+    /**
+     * Best-effort replay bookkeeping for the live dispatch path, run after
+     * `handleRpc` returns. A generated mutation already committed it atomically
+     * inside its transaction (via {@link ShardDO.commitMutationBookkeeping}, which
+     * sets the flag), so this skips. Actions/queries aren't transaction-wrapped,
+     * so they record their dedup row here (a no-op without an `x-lunora-mutation-id`),
+     * and a `"next"` push advances its watermark (the gap self-heals on replay).
+     */
+    protected recordPostDispatchBookkeeping(result: unknown, mutatorClass: ClientMutationClass | undefined): void {
+        if (this.mutationBookkeepingCommitted) {
+            return;
+        }
+
+        this.persistIdempotentResult(result);
+
+        if (mutatorClass?.kind === "next") {
+            this.advanceClientMutationWatermark();
+        }
+    }
+
+    /**
+     * Advance the stored high-watermark for the in-flight custom mutator to
+     * `currentRequestClientSeq` through the same `this.sql` handle. On the
+     * transactional path ({@link ShardDO.commitMutationBookkeeping}, `strict`) it
+     * runs inside the handler's commit, so the watermark is durable iff the writes
+     * are; a failure rethrows to roll the mutation back. On the best-effort
+     * cache-hit recovery path (`strict` omitted) a missing table is swallowed —
+     * the replay re-runs and re-advances (the read side treats a missing row as
+     * watermark 0), so the gap self-heals.
+     */
+    protected advanceClientMutationWatermark(options?: { strict?: boolean }): void {
         const clientId = this.currentRequestClientId;
         const seq = this.currentRequestClientSeq;
 
@@ -3448,10 +3502,15 @@ abstract class ShardDO {
 
         try {
             advanceClientWatermark(this.sql as SqlExec, this.currentRequestUserId ?? "", clientId, seq);
-        } catch {
-            // Missing table / stub handle — see persistIdempotentResult. The
-            // replay re-runs and re-advances (the read side treats a missing row
-            // as watermark 0).
+        } catch (error) {
+            // On the strict (in-transaction) path, fail loudly so the mutation
+            // rolls back instead of committing without its watermark.
+            if (options?.strict) {
+                throw error;
+            }
+
+            // Best-effort cache-hit recovery: a missing table / stub handle is
+            // tolerated — the replay re-runs and re-advances.
         }
     }
 
@@ -5946,14 +6005,39 @@ abstract class ShardDO {
             return { code: "SHAPE_NOT_FOUND", message: `shape "${shape.name}" not found or not permitted` };
         }
 
-        // A `.global()`-table shape has no op-log to resume/diff: seed it from D1
-        // and let the alarm poll loop drive updates (latency-tiered, not poke-live).
-        if (resolved.global) {
-            await this.seedGlobalShape(ws, subId, resolved, identity, attachment.connectionId ?? "");
+        // Everything past resolution — the global D1 read, the op-log diff/seed
+        // build, and the membership probes inside them — can throw (a missing
+        // backend, a stub `sql` handle, an over-cap global membership). Wrap the
+        // whole seed so any failure becomes a structured `{ code, message }` the
+        // caller rolls back and errors on, rather than rejecting `webSocketMessage`
+        // and tearing down the socket's message handling.
+        try {
+            // A `.global()`-table shape has no op-log to resume/diff: seed it from D1
+            // and let the alarm poll loop drive updates (latency-tiered, not poke-live).
+            if (resolved.global) {
+                return await this.seedGlobalShape(ws, subId, resolved, identity, attachment.connectionId ?? "");
+            }
 
-            return "ok";
+            return await this.seedOpLogShape(ws, subId, shape, resolved);
+        } catch (error) {
+            this.recordShapeError(`shape:seed:${subId}`, error);
+
+            const code = typeof (error as { code?: unknown }).code === "string" ? (error as { code: string }).code : "SHAPE_SEED_FAILED";
+
+            return { code, message: error instanceof Error ? error.message : "shape seed failed" };
         }
+    }
 
+    /**
+     * Seed a non-`.global()` (op-log-backed) shape: either a catch-up diff over
+     * `(sinceSeq, cursor]` when the client supplied a still-current checkpoint on
+     * this epoch within the CDC retention window, or a full membership insert-poke
+     * otherwise. The memo advances to `cursor` only once the poke is delivered, so
+     * a failed send re-diffs from the prior point rather than skipping rows. May
+     * throw (a stub `sql` handle, a membership probe failure); the caller converts
+     * it to a structured `shape_subscribe` error.
+     */
+    private async seedOpLogShape(ws: WebSocket, subId: string, shape: ShapeSubscriptionQuery, resolved: ResolvedShape): Promise<"ok"> {
         const sql = this.sql as SqlExec;
         const cursor = this.currentCdcCursor() ?? 0;
         const epoch = this.currentCdcEpoch();
@@ -5976,10 +6060,7 @@ abstract class ShardDO {
             canResume && shape.sinceSeq !== undefined ? this.buildShapeDiff(sql, resolved, shape.sinceSeq, cursor) : this.buildShapeSeed(sql, resolved);
 
         // Await drain before the (potentially large) seed poke so a slow consumer
-        // can't grow this socket's outbound buffer without bound. Advance the memo
-        // only once the seed is actually delivered — a failed send leaves the memo
-        // at its prior point so the next flush re-diffs from there rather than
-        // skipping the rows this seed carried.
+        // can't grow this socket's outbound buffer without bound.
         await awaitWsDrain(ws);
 
         if (this.sendPoke(ws, [{ rowsPatch, shapeId: subId }], cursor, epoch, canResume ? shape.sinceSeq : undefined)) {
@@ -6004,7 +6085,7 @@ abstract class ShardDO {
         const checkpoint = frameCursor ?? this.currentCdcCursor() ?? 0;
         const sql = this.sql as SqlExec;
 
-        const pokeOne = (ws: WebSocket): void => {
+        const pokeOne = async (ws: WebSocket): Promise<void> => {
             if (this.isSocketExpired(ws)) {
                 this.dropExpiredSocket(ws);
 
@@ -6019,43 +6100,7 @@ abstract class ShardDO {
             }
 
             const identity: SubscriptionIdentity = { identity: attachment.identity, userId: attachment.userId };
-            const parts: ShapePokePart[] = [];
-            // Shapes whose diff was empty (table touched, no member changed) carry
-            // no part, so they advance unconditionally; shapes that contribute a
-            // part advance only once the poke is actually delivered, so a failed
-            // send doesn't strand their rows past an advanced memo.
-            const emptyAdvanced: string[] = [];
-            const partAdvanced: string[] = [];
-
-            for (const [subId, shape] of Object.entries(shapes)) {
-                try {
-                    const resolved = this.resolveShape(shape.name, shape.args ?? {}, identity);
-
-                    // Unresolvable now (revoked policy / dropped shape): leave the
-                    // memo so a later flush retries rather than silently advancing
-                    // past it. A `.global()` shape is driven by the alarm poll loop,
-                    // not this op-log flush (its table can't appear in this DO's
-                    // `changed` set anyway), so it is always skipped here.
-                    if (!resolved || resolved.global || !changed.has(resolved.table)) {
-                        continue;
-                    }
-
-                    const memoCursor = this.shapeMemos.get(ws)?.get(subId)?.cursor ?? 0;
-                    const rowsPatch = this.buildShapeDiff(sql, resolved, memoCursor, checkpoint);
-
-                    if (rowsPatch.length > 0) {
-                        parts.push({ rowsPatch, shapeId: subId });
-                        partAdvanced.push(subId);
-                    } else {
-                        emptyAdvanced.push(subId);
-                    }
-                } catch (error) {
-                    // One shape's resolve/diff failure must not drop this socket's
-                    // other shapes — or abort the whole flush fan-out. Skip it with
-                    // its memo unadvanced so a later flush retries.
-                    this.recordShapeError(`shape:poke:${subId}`, error);
-                }
-            }
+            const { emptyAdvanced, partAdvanced, parts } = this.collectShapePokeParts(ws, shapes, identity, changed, checkpoint, sql);
 
             // Empty-diff shapes advance regardless (nothing to deliver for them),
             // so the next flush doesn't re-scan the same op range.
@@ -6063,39 +6108,87 @@ abstract class ShardDO {
                 this.recordShapeMemo(ws, subId, checkpoint);
             }
 
-            // Part-bearing shapes advance only after the poke lands; a failed send
-            // leaves their memos so the next flush re-emits the rows.
-            if (parts.length > 0 && this.sendPoke(ws, parts, checkpoint, frameEpoch, undefined)) {
-                for (const subId of partAdvanced) {
-                    this.recordShapeMemo(ws, subId, checkpoint);
+            // Await drain before the (potentially large) poke so a slow consumer
+            // can't grow this socket's outbound buffer without bound — the same
+            // backpressure the seed/refresh paths apply. Part-bearing shapes
+            // advance only after the poke lands; a failed send leaves their memos
+            // so the next flush re-emits the rows.
+            if (parts.length > 0) {
+                await awaitWsDrain(ws);
+
+                if (this.sendPoke(ws, parts, checkpoint, frameEpoch, undefined)) {
+                    for (const subId of partAdvanced) {
+                        this.recordShapeMemo(ws, subId, checkpoint);
+                    }
                 }
             }
         };
 
         const concurrency = 8;
         let index = 0;
-        const worker = (): void => {
+        const worker = async (): Promise<void> => {
             let socket = sockets[index];
 
             index += 1;
 
             while (socket !== undefined) {
-                pokeOne(socket);
+                // eslint-disable-next-line no-await-in-loop -- serialize this worker's sockets so the per-send drain gate actually applies backpressure
+                await pokeOne(socket);
                 socket = sockets[index];
                 index += 1;
             }
         };
 
-        // The poke build + send is synchronous (SQLite reads + `ws.send`), so the
-        // workers complete eagerly; the bounded shape keeps the structure aligned
-        // with `refreshSubscriptions` for when an async drain gate is added.
-        await Promise.all(
-            Array.from({ length: Math.min(concurrency, sockets.length) }, () => {
-                worker();
+        // Bounded fan-out matching `refreshSubscriptions`: each worker drains its
+        // sockets one at a time so the per-send `awaitWsDrain` gate above can
+        // apply backpressure on a slow consumer.
+        await Promise.all(Array.from({ length: Math.min(concurrency, sockets.length) }, () => worker()));
+    }
 
-                return Promise.resolve();
-            }),
-        );
+    /**
+     * Diff every op-log-backed shape a socket holds against this flush, splitting
+     * the results into the poke parts to send and the per-shape memo advances. A
+     * `.global()` shape (driven by the alarm poll loop, not this flush) and a shape
+     * whose table didn't change are skipped; a shape whose resolve/diff throws is
+     * logged and skipped with its memo unadvanced so a later flush retries. Empty
+     * diffs advance unconditionally; part-bearing shapes advance only once the
+     * caller confirms the poke was delivered.
+     */
+    private collectShapePokeParts(
+        ws: WebSocket,
+        shapes: Record<string, ShapeSubscriptionQuery>,
+        identity: SubscriptionIdentity,
+        changed: Set<string>,
+        checkpoint: number,
+        sql: SqlExec,
+    ): { emptyAdvanced: string[]; partAdvanced: string[]; parts: ShapePokePart[] } {
+        const parts: ShapePokePart[] = [];
+        const emptyAdvanced: string[] = [];
+        const partAdvanced: string[] = [];
+
+        for (const [subId, shape] of Object.entries(shapes)) {
+            try {
+                const resolved = this.resolveShape(shape.name, shape.args ?? {}, identity);
+
+                if (!resolved || resolved.global || !changed.has(resolved.table)) {
+                    continue;
+                }
+
+                const memoCursor = this.shapeMemos.get(ws)?.get(subId)?.cursor ?? 0;
+                const rowsPatch = this.buildShapeDiff(sql, resolved, memoCursor, checkpoint);
+
+                if (rowsPatch.length > 0) {
+                    parts.push({ rowsPatch, shapeId: subId });
+                    partAdvanced.push(subId);
+                } else {
+                    emptyAdvanced.push(subId);
+                }
+            } catch (error) {
+                this.recordShapeError(`shape:poke:${subId}`, error);
+            }
+        }
+
+        return { emptyAdvanced, partAdvanced, parts };
     }
 
     /**
@@ -6181,13 +6274,24 @@ abstract class ShardDO {
      * so the poke is stamped at this DO's current cursor (informational only) and
      * carries no resume base — a reconnect always re-seeds full.
      */
-    private async seedGlobalShape(ws: WebSocket, subId: string, resolved: ResolvedShape, identity: SubscriptionIdentity, connectionId: string): Promise<void> {
+    private async seedGlobalShape(
+        ws: WebSocket,
+        subId: string,
+        resolved: ResolvedShape,
+        identity: SubscriptionIdentity,
+        connectionId: string,
+    ): Promise<"ok" | { code: string; message: string }> {
         const rows = await this.readGlobalShapeRows(resolved, identity);
 
         // Refuse to materialize an unbounded membership into a per-socket snapshot
-        // (and never arm the poll loop for it) — fail this one shape closed.
+        // (and never arm the poll loop for it) — fail this one shape closed. Report
+        // the over-cap as a structured error so the caller errors the subscribe
+        // instead of acking "ok" without ever delivering data.
         if (!this.withinGlobalShapeBound(rows.length, `shape:seed:${subId}`, resolved.table)) {
-            return;
+            return {
+                code: "SHAPE_GLOBAL_TOO_LARGE",
+                message: `global shape membership for "${resolved.table}" exceeds the ${String(ShardDO.GLOBAL_SHAPE_MAX_ROWS)}-row cap; narrow it with a shape predicate or an RLS read policy`,
+            };
         }
 
         // Seeding is a diff against an empty baseline — every surviving row an insert.
@@ -6204,6 +6308,8 @@ abstract class ShardDO {
         }
 
         await this.scheduleGlobalPoll();
+
+        return "ok";
     }
 
     /**

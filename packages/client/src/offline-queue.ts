@@ -20,6 +20,16 @@ interface QueuedMutation<T = unknown> {
 
 let idCounter = 0;
 
+/**
+ * A process-unique id, used both per-mutation and as the fallback `clientId`. It
+ * MUST be globally unique: the server scopes a custom mutator's replay watermark
+ * by `(verifiedIdentity, clientId)`, and an anonymous push has no verified
+ * identity — so two anonymous clients that collide on `clientId` would share one
+ * watermark namespace, letting one stall/suppress the other's ordered mutations.
+ * `crypto.randomUUID` covers every modern runtime; the fallback still mixes
+ * crypto-quality (or `Math.random`) entropy with the timestamp + counter so it
+ * can't collide across two clients started in the same millisecond.
+ */
 const nextId = (): string => {
     if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
         return crypto.randomUUID();
@@ -27,7 +37,13 @@ const nextId = (): string => {
 
     idCounter += 1;
 
-    return `m_${Date.now().toString(36)}_${idCounter.toString(36)}`;
+    const entropy =
+        typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function"
+            ? [...crypto.getRandomValues(new Uint8Array(8))].map((byte) => byte.toString(16).padStart(2, "0")).join("")
+            : // eslint-disable-next-line sonarjs/pseudo-random -- non-cryptographic uniqueness entropy, not a security token; only reached when neither crypto.randomUUID nor crypto.getRandomValues exists
+              Math.random().toString(16).slice(2, 12);
+
+    return `m_${Date.now().toString(36)}_${idCounter.toString(36)}_${entropy}`;
 };
 
 /**
