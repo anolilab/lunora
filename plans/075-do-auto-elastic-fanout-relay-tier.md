@@ -197,13 +197,33 @@ the DX before any topology change exists. Gate behind a flag if needed.
 > reliable cost signal. The full `@lunora/do` suite is green and the wire shapes
 > carry key drift-guards on both the `@lunora/do` and `@lunora/studio` sides.
 
-### Phase 2 — whisper relay (the natural first adopter)
+### Phase 2 — whisper relay (the natural first adopter) — **SHIPPED**
 
 Relay-scale **whisper topics** only — their payload is already opaque and
 topic-uniform, so no owner/relay _data_ split is required and there is no
 RLS-uniform proof to compute. Owner multicasts the opaque whisper frame to
 relays; relays fan out to their attached sockets. New connections to a hot topic
 route to a relay via the runtime hop.
+
+> **Shipped (slices 1–4).** The owner↔relay whisper hub (`shard-do.ts`:
+> `broadcastWhisper` → `forwardWhisperToHub`, the `/_lunora/relay` control
+> channel, the `__lunora_relays` set), the runtime upgrade-hop routing
+> (`create-worker.ts`: a `/_lunora/route` promotion probe + `x-lunora-shard-binding`
+>
+> - relay selection), and demand-driven collapse (`relay_detach` on drain). The
+>   relay-name contract lives in `shared/relay-name.ts` so the minting (runtime)
+>   and parsing (DO) sides can't drift. Proven against real Durable Objects in
+>   workerd (up-path, down-path, multi-relay origin-exclusion, no echo).
+>
+> **Granularity refinement vs § 2 of the design doc.** The design assumed the
+> upgrade hop routes by _topic_. For whisper that can't hold — a socket connects
+> first, then joins a topic via `whisper_subscribe`, so the topic is unknown at
+> upgrade. v1 therefore relays at **shard granularity** (the upgrade already keys
+> on `?shard=`; "one giant public room = one shard" is the canonical case).
+> Per-topic relay is a later refinement. Right-sizing the relay fan to live demand
+> (vs the fixed `LUNORA_RELAY_FAN`) also remains a follow-up — the owner can't see
+> total demand from its own socket count once promoted; relays heartbeating their
+> counts would close that gap.
 
 > **`usePresence` is _not_ in this phase.** Despite being "ephemeral awareness",
 > presence is implemented as a `heartbeat` **mutation** + a `listPresent`

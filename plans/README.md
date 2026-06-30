@@ -211,9 +211,9 @@ partysync). Two genuine gaps surfaced; one is filed as a design spike here. The
 other (Yjs/CRDT collaborative editing via `y-partyserver`) is tracked separately
 as a prospective `@lunora/collab` package and is **not** in this directory yet.
 
-| Plan | Title                                                        | Category          | Pri | Effort | Risk | Status                                                                                                                          |
-| ---- | ------------------------------------------------------------ | ----------------- | --- | ------ | ---- | ------------------------------------------------------------------------------------------------------------------------------- |
-| 075  | Auto-elastic fan-out relay tier (hidden high-fanout scaling) | perf/architecture | P3  | XL     | HIGH | Phase 1 SHIPPED; Phase 0 design WRITTEN (awaiting sign-off, see `075-phase0-relay-protocol-design.md`) — Phases 2–4 gated on it |
+| Plan | Title                                                        | Category          | Pri | Effort | Risk | Status                                                                                                                                                                                                                                                  |
+| ---- | ------------------------------------------------------------ | ----------------- | --- | ------ | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 075  | Auto-elastic fan-out relay tier (hidden high-fanout scaling) | perf/architecture | P3  | XL     | HIGH | Phases 0–2 SHIPPED (observability + design/calibration + whisper relay hub, runtime routing, collapse, Studio surface; workerd-proven). Follow-ups: per-topic granularity + demand-based relay right-sizing; Phase 3 (RLS-uniform reactive-shape relay) |
 
 ### Notes
 

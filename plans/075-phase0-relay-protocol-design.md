@@ -1,9 +1,13 @@
 # Plan 075 Phase 0 — Relay-tier protocol design (sign-off doc)
 
-> **Status**: DESIGN — awaiting maintainer sign-off. No production code in this
-> phase (the benchmark harness is throwaway; see § 7). The fan-out cost is measured
-> in both Node and real workerd (§ 7). Phases 2–4 do not start until the Decisions
-> in § 8 are accepted.
+> **Status**: SIGNED OFF — Phase 2 (whisper relay) has shipped on top of this
+> design (the owner↔relay hub, runtime upgrade-hop routing, and demand-driven
+> collapse, workerd-proven). One refinement landed in implementation: whisper
+> relays at **shard granularity**, not per-topic (§ 2's "route by topic at the
+> upgrade hop" can't hold — a whisper topic is joined _after_ connect, so it's
+> unknown at upgrade; the upgrade already keys on `?shard=`). Per-topic relay +
+> demand-based right-sizing are tracked follow-ups. The fan-out cost is measured
+> in both Node and real workerd (§ 7).
 >
 > Companion to [`075-do-auto-elastic-fanout-relay-tier.md`](075-do-auto-elastic-fanout-relay-tier.md).
 > Phase 1 (observability) has shipped; this doc designs the transport that Phases
