@@ -237,7 +237,20 @@ whether they land on the owner or a relay; sender still never receives its own
 whisper; reconnection re-attaches correctly. Load test: subscriber count beyond a
 single DO's WS cap succeeds.
 
-### Phase 3 — reactive-shape relay (RLS-uniform only)
+### Phase 3 — reactive-shape relay (RLS-uniform only) — **SHIPPED**
+
+Shipped as three slices on `feat/075-fanout-relay`: (A) the RLS-uniform gate
+(`isShapeRelayUniform` — a dual-identity `resolveShape` probe + mask check,
+codegen-free and fail-closed), (B) seed-through-owner + one-delta-per-flush
+cohort multicast (`buildShapeSeedFrames` / `multicastRelayShapePokes` /
+`deliverRelayShapePoke`, gated by a per-socket `fromCursor` memo so a mid-flush
+seeder never double-applies), and (C) the verification below. Resume rides the
+same `computeOpLogShapeSeed` core as the local seed, so the relay round-trip is
+byte-identical by construction. Non-uniform shapes are seeded RLS-correctly via
+the owner but never registered for multicast (a documented low-fan-out
+limitation; per-socket proxy is a Phase 4 follow-up). Proven in real workerd
+(`__tests__/workerd/relay-shape.workerd.test.ts`, 4 tests) + the gate unit test
+(`__tests__/relay-uniform-gate.test.ts`).
 
 Extend relay-scaling to **reactive query shapes that pass the RLS-uniform gate**
 (Decision 3). Owner computes the delta once (building on plan 072's shared
