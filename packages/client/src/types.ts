@@ -510,6 +510,23 @@ export interface ServerResumeMessage {
     type: "resume";
 }
 
+/**
+ * Rows-free signal that the server re-evaluated this list subscription after a
+ * write and found the result unchanged. The client advances its cursor/epoch
+ * (for the reconnect resume path) and fires `onCheckpoint` (if registered) so
+ * a `@lunora/db` custom mutator can drop its optimistic overlay without
+ * re-rendering — no row callbacks fire because the cached value is still current.
+ */
+export interface ServerSettledMessage {
+    cursor?: number;
+    /** The CDC epoch this settled frame's cursor belongs to (see {@link CachedQuery.serverEpoch}). */
+    epoch?: string;
+    id: string;
+    /** Per-client custom-mutator watermark (see {@link ServerDataMessage.lastMutationId}). */
+    lastMutationId?: number;
+    type: "settled";
+}
+
 export interface ServerErrorMessage {
     error?: unknown;
     id?: string;
@@ -619,6 +636,7 @@ export type ServerMessage =
     | ServerPokePartMessage
     | ServerPokeStartMessage
     | ServerResumeMessage
+    | ServerSettledMessage
     | ServerWhisperMessage;
 
 /**

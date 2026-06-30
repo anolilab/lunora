@@ -31,6 +31,17 @@ export interface SubscriptionState {
     lastValue: unknown;
 
     /**
+     * Invoked when a `settled` frame arrives for this subscription — the
+     * list-path analog of the shape's poke `onCheckpoint`. The server
+     * re-evaluated the query after a write and found the result unchanged; the
+     * client advances the cursor/epoch and fires this so a `@lunora/db`
+     * optimistic overlay can drop without re-rendering (no row callbacks fire).
+     * Only the first `subscribe()` caller that provides this option wins;
+     * subsequent callers sharing the deduped state do not override it.
+     */
+    onCheckpoint?: (watermark: { checkpoint?: number; mutationId?: number }) => void;
+
+    /**
      * The `__cdc_log` high-watermark (`cursor`) the `lastValue` reflects,
      * captured from the last `data`/`delta`/`resume` frame. Persisted to the
      * durable read cache and replayed as `sinceSeq` on reconnect so the server

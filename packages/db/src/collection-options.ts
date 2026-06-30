@@ -192,7 +192,12 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
             });
         }
 
-        return options.client.subscribe(options.list as FunctionReference, args, onRows, { onError });
+        return options.client.subscribe(options.list as FunctionReference, args, onRows, {
+            onCheckpoint: () => {
+                checkpoints.resolve({ mutationId: options.client.confirmedMutationWatermark() });
+            },
+            onError,
+        });
     };
 
     const config: CollectionConfig<TRow, string> = {

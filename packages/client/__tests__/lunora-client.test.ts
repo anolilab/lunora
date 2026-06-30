@@ -2561,6 +2561,56 @@ describe("lunoraClient", () => {
                 { identity: null, key: queryCacheKey("messages:list", "{}"), serverCursor: 12, ts: expect.any(Number), value: { count: 5 } },
             ]);
         });
+
+        it("settled frame fires onCheckpoint but not the row callback, and advances serverCursor", async () => {
+            expect.assertions(4);
+
+            const cache = createInMemoryQueryCache();
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                queryCache: cache,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const rowCallbacks: unknown[] = [];
+            const checkpointCallbacks: { checkpoint?: number; mutationId?: number }[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, (d) => rowCallbacks.push(d), {
+                onCheckpoint: (w) => checkpointCallbacks.push(w),
+            });
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            const sub = firstSub(socket);
+
+            // Deliver a data frame first so the subscription has a baseline cursor.
+            socket.receive({ cursor: 5, data: [{ _id: "m1" }], id: sub.id, type: "data" });
+
+            expect(rowCallbacks).toHaveLength(1);
+
+            // Deliver a settled frame (same result, no rows) — onCheckpoint must fire,
+            // row callback must NOT fire, and serverCursor must advance.
+            socket.receive({ cursor: 9, id: sub.id, lastMutationId: 3, type: "settled" });
+
+            // Row callback must NOT have fired again.
+            expect(rowCallbacks).toHaveLength(1);
+
+            // onCheckpoint must have fired exactly once with the new cursor.
+            expect(checkpointCallbacks).toStrictEqual([{ checkpoint: 9, mutationId: 3 }]);
+
+            // serverCursor must be persisted; close() flushes the debounced write.
+            client.close();
+            await flushMicrotasks();
+
+            const stored = await cache.load();
+
+            expect(stored).toEqual([
+                { identity: null, key: queryCacheKey("messages:list", "{}"), serverCursor: 9, ts: expect.any(Number), value: [{ _id: "m1" }] },
+            ]);
+        });
     });
 
     describe("lunoraClient — whispering", () => {

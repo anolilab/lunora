@@ -47,6 +47,7 @@ import type {
     ServerPokePartMessage,
     ServerPokeStartMessage,
     ServerResumeMessage,
+    ServerSettledMessage,
     ServerWhisperMessage,
     ShardTrafficResult,
     StorageListPage,
@@ -2013,7 +2014,7 @@ class LunoraClient {
         function_: F,
         args: ArgsOf<F>,
         callback: (data: ReturnOf<F>) => void,
-        options: { onError?: SubscriptionErrorCallback; shardKey?: string } = {},
+        options: { onCheckpoint?: (watermark: SyncWatermark) => void; onError?: SubscriptionErrorCallback; shardKey?: string } = {},
     ): Unsubscribe {
         if (this.closed) {
             throw new Error("LunoraClient is closed");
@@ -2041,6 +2042,7 @@ class LunoraClient {
                 fn: function_,
                 id,
                 lastValue: cached?.value,
+                ...(options.onCheckpoint === undefined ? {} : { onCheckpoint: options.onCheckpoint }),
                 serverCursor: cached?.serverCursor,
                 serverVersion: 0,
                 shardKey: options.shardKey,
@@ -3267,6 +3269,11 @@ class LunoraClient {
 
                 break;
             }
+            case "settled": {
+                this.handleSettledMessage(message);
+
+                break;
+            }
             case "whisper": {
                 this.dispatchWhisper(message, shardKey);
 
@@ -3503,6 +3510,44 @@ class LunoraClient {
 
             this.persistQueryValue(state);
         }
+    }
+
+    /**
+     * Handle a `settled` frame: the server re-evaluated this list subscription
+     * after a write and found the result unchanged (byte-identical to the last
+     * push). No row data arrives, so no callbacks fire and no re-render occurs.
+     * We advance the cursor/epoch (persisting for the next reconnect resume) and
+     * fire `onCheckpoint` if registered, so a `@lunora/db` custom mutator can
+     * drop its optimistic overlay without waiting for a data frame that will
+     * never come.
+     *
+     * Mirrors the shape path's `onCheckpoint` invocation after `pokeEnd`
+     * (the list analog: rows-free, watermark-only).
+     */
+    private handleSettledMessage(message: ServerSettledMessage): void {
+        const state = this.subscriptions.getById(message.id);
+
+        if (!state) {
+            return;
+        }
+
+        state.acked = true;
+
+        if ((message.cursor !== undefined && message.cursor !== state.serverCursor) || (message.epoch !== undefined && message.epoch !== state.serverEpoch)) {
+            if (message.cursor !== undefined) {
+                state.serverCursor = message.cursor;
+            }
+
+            if (message.epoch !== undefined) {
+                state.serverEpoch = message.epoch;
+            }
+
+            this.persistQueryValue(state);
+        }
+
+        // Fire the rows-free gate-advance — mirrors shape `onCheckpoint` at pokeEnd.
+        // MUST NOT iterate state.callbacks: no rows arrived, no re-render.
+        state.onCheckpoint?.({ checkpoint: state.serverCursor, mutationId: message.lastMutationId });
     }
 
     /**

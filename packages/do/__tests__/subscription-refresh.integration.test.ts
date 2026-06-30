@@ -170,6 +170,12 @@ const subFrames = (ws: FakeWebSocket, subId: string): { id: string; type: string
         .map((line) => JSON.parse(line) as { id: string; type: string })
         .filter((frame) => (frame.type === "data" || frame.type === "delta") && frame.id === subId);
 
+/** All `{type:"settled"}` frames for a given subId. */
+const settledFrames = (ws: FakeWebSocket, subId: string): { cursor?: number; id: string; lastMutationId?: number; type: string }[] =>
+    ws.sent
+        .map((line) => JSON.parse(line) as { cursor?: number; id: string; lastMutationId?: number; type: string })
+        .filter((frame) => frame.type === "settled" && frame.id === subId);
+
 /** Only `{type:"data"}` frames for a given subId — used to read the most recent full snapshot. */
 const dataFrames = (ws: FakeWebSocket, subId: string): unknown[] =>
     ws.sent
@@ -760,5 +766,46 @@ describe("shardDO: mutation → subscription-refresh pipeline", () => {
 
         // The socket still converged on the latest value (a frame was delivered).
         expect(subFrames(ws, "sub-A").length).toBeGreaterThan(1);
+    });
+
+    // -------------------------------------------------------------------------
+    // Case 10 — SETTLED FRAME ON SUPPRESSED RESULT
+    //
+    // When a subscription's result is byte-identical to its last pushed value,
+    // `pushSubscriptionData` formerly returned silently. Now it must send a
+    // rows-free `{type:"settled"}` frame so the client can advance the gate for
+    // pending optimistic overlays without re-rendering.
+    //
+    // Assertions:
+    //   A. First flush sends a `{type:"data"}` frame (the seed).
+    //   B. Second flush with an identical result sends a `{type:"settled"}` frame
+    //      (not silence, not another `{type:"data"}`).
+    //   C. The subscription's memo tables still advance on suppression (so the
+    //      dependency tracking remains correct).
+    // -------------------------------------------------------------------------
+    it("suppressed identical result sends a settled frame instead of silence", async () => {
+        expect.assertions(4);
+
+        const shard = new SubscriptionRefreshShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("messages:list", {
+            result: [{ _id: "m1", text: "hello" }],
+            tables: new Set(["messages"]),
+        });
+        await subscribeSocket(shard, ws, "sub-1", "messages:list");
+
+        // Assertion A: the seed produced exactly one data (or delta) frame.
+        expect(subFrames(ws, "sub-1")).toHaveLength(1);
+        expect(settledFrames(ws, "sub-1")).toHaveLength(0);
+
+        // Second flush: same result → suppression path now sends a settled frame.
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        // Assertion B: a settled frame arrived; no additional data/delta frame.
+        expect(subFrames(ws, "sub-1")).toHaveLength(1); // still only the seed
+        expect(settledFrames(ws, "sub-1")).toHaveLength(1);
     });
 });

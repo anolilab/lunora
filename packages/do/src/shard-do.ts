@@ -6587,6 +6587,10 @@ abstract class ShardDO {
         if (existing?.lastJson === json) {
             existing.tables = outcome.tables;
 
+            const watermark = this.socketClientWatermark(ws);
+            const watermarkSuffix = watermark === undefined ? "" : `,"lastMutationId":${String(watermark)}`;
+            trySendFrame(ws, `{"type":"settled","id":${JSON.stringify(subId)}${cursorSuffix}${watermarkSuffix}}`);
+
             return;
         }
 

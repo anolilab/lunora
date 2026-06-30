@@ -785,8 +785,8 @@ describe("shardDO subscription re-execution", () => {
         expect(JSON.parse(ws.sent.at(-1)!)).toEqual({ data: [{ sessionId: "a", x: 50, y: 80 }], id: "sub-1", type: "data" });
     });
 
-    it("re-executes but does not re-send when the result is byte-identical", async () => {
-        expect.assertions(2);
+    it("re-executes and sends a settled frame (not a data frame) when the result is byte-identical", async () => {
+        expect.assertions(3);
 
         const shard = new ReexecShard(state, {});
         const ws = createFakeWebSocket();
@@ -804,7 +804,9 @@ describe("shardDO subscription re-execution", () => {
         await shard.writeRpc();
 
         expect(shard.execCount).toBe(execBefore + 1); // re-ran the query
-        expect(ws.sent).toHaveLength(sentBefore); // identical → deduped, no push
+        // A rows-free settled frame is sent instead of silence so the client can drop overlays.
+        expect(ws.sent).toHaveLength(sentBefore + 1);
+        expect(JSON.parse(ws.sent.at(-1)!)).toMatchObject({ type: "settled" });
     });
 
     it("skips re-execution entirely when the write touches a table the subscription never read", async () => {
