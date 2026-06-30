@@ -6710,6 +6710,23 @@ abstract class ShardDO {
         if (existing?.lastJson === json) {
             existing.tables = outcome.tables;
 
+            // The result is byte-identical to the last frame, so no data/delta
+            // frame goes out (frame suppression). For a `@lunora/db`
+            // custom-mutator client (one that announced a `clientId`, hence has a
+            // client watermark), a confirmed write whose authoritative result did
+            // NOT change this list would otherwise leave its optimistic overlay
+            // stuck forever — with no frame, the client's checkpoint gate never
+            // advances. Emit a lightweight `settled` frame (carrying the same
+            // cursor/epoch as the data path) so the client drops the overlay
+            // without a visible change. Plain `useQuery` subscribers (no
+            // `clientId`, no watermark) never receive it, and an old client
+            // ignores the unknown frame.
+            const settledWatermark = this.socketClientWatermark(ws);
+
+            if (settledWatermark !== undefined) {
+                trySendFrame(ws, `{"type":"settled","id":${JSON.stringify(subId)},"lastMutationId":${String(settledWatermark)}${cursorSuffix}}`);
+            }
+
             return;
         }
 

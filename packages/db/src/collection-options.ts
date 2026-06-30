@@ -172,31 +172,37 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
             emit?.(toMap(data as TRow[], getKey));
             onReady?.();
 
-            // The shape path resolves the registry from the poke `checkpoint`
-            // (below). A `list` frame carries no per-frame watermark, so advance
-            // from the client's server-confirmed custom-mutator watermark (the
-            // push-ack stream) as synced rows land — a `bindMutators` optimistic
-            // overlay then drops exactly when the server rows arrive instead of
-            // `awaitMutationId` hanging forever after the write is accepted.
+            // The shape path resolves the registry from the poke `checkpoint`,
+            // and the list path resolves it from the `onCheckpoint` watermark a
+            // `settled` frame forwards (both wired below). A `list` *data* frame
+            // carries no per-frame watermark, so advance from the client's
+            // server-confirmed custom-mutator watermark (the push-ack stream) as
+            // synced rows land — a `bindMutators` optimistic overlay then drops
+            // exactly when the server rows arrive instead of `awaitMutationId`
+            // hanging forever after the write is accepted.
             if (options.shape === undefined) {
                 checkpoints.resolve({ mutationId: options.client.confirmedMutationWatermark() });
             }
         };
         const onError = (error: SubscriptionError): void => onErrorHandler?.(error);
 
+        // Advance the registry as the source syncs, so a mutator runtime can drop
+        // optimistic overlays once the server's rows (or a `settled` no-change
+        // acknowledgement) have landed. Both paths forward the same watermark
+        // shape, so the handler is identical.
+        const onCheckpoint = (watermark: { checkpoint?: number; mutationId?: number }): void => {
+            checkpoints.resolve(watermark);
+        };
+
         if (options.shape !== undefined) {
             return options.client.subscribeShape({ args, name: options.shape.name }, onRows, {
-                // Advance the registry as the shape syncs, so a mutator runtime can
-                // drop optimistic overlays once the server's rows have landed.
-                onCheckpoint: (watermark) => {
-                    checkpoints.resolve(watermark);
-                },
+                onCheckpoint,
                 onError,
                 shardKey: options.shape.shardKey,
             });
         }
 
-        return options.client.subscribe(options.list as FunctionReference, args, onRows, { onError });
+        return options.client.subscribe(options.list as FunctionReference, args, onRows, { onCheckpoint, onError });
     };
 
     const config: CollectionConfig<TRow, string> = {

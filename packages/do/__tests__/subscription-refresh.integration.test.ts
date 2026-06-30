@@ -170,6 +170,12 @@ const subFrames = (ws: FakeWebSocket, subId: string): { id: string; type: string
         .map((line) => JSON.parse(line) as { id: string; type: string })
         .filter((frame) => (frame.type === "data" || frame.type === "delta") && frame.id === subId);
 
+/** `{type:"settled"}` frames for a given subId — the suppressed-list watermark frame. */
+const settledFrames = (ws: FakeWebSocket, subId: string): { id: string; lastMutationId?: number; type: string }[] =>
+    ws.sent
+        .map((line) => JSON.parse(line) as { id: string; lastMutationId?: number; type: string })
+        .filter((frame) => frame.type === "settled" && frame.id === subId);
+
 /** Only `{type:"data"}` frames for a given subId — used to read the most recent full snapshot. */
 const dataFrames = (ws: FakeWebSocket, subId: string): unknown[] =>
     ws.sent
@@ -251,6 +257,54 @@ describe("shardDO: mutation → subscription-refresh pipeline", () => {
         // Socket B must NOT have received any additional frame — memo skip.
         // "settings" was not in the changed set, so the subscription is skipped entirely.
         expect(subFrames(wsB, "sub-B")).toHaveLength(1); // only the seed; no refresh
+    });
+
+    // -------------------------------------------------------------------------
+    // SETTLED FRAME — suppressed-list watermark for custom-mutator clients.
+    //
+    // A write touches a subscribed table but the query re-runs to a byte-identical
+    // result, so `pushSubscriptionData` suppresses the data/delta frame. For a
+    // `@lunora/db` custom-mutator client (one that announced a `clientId`), that
+    // silence would otherwise strand its optimistic overlay forever. The server
+    // emits a lightweight `settled` frame carrying the client's watermark so the
+    // overlay drops; a plain `useQuery` client (no `clientId`) gets nothing.
+    // -------------------------------------------------------------------------
+    it("settled frame: a no-change refresh emits a settled frame only to a clientId socket", async () => {
+        expect.assertions(6);
+
+        const shard = new SubscriptionRefreshShard(state, {});
+
+        // Socket A announced a clientId (a custom-mutator @lunora/db client).
+        const wsA = createFakeWebSocket();
+
+        shard.registerSocket(wsA, { clientId: "client-A", subs: {}, userId: "" });
+
+        // Socket B is a plain useQuery client — no clientId.
+        const wsB = createFakeWebSocket();
+
+        shard.registerSocket(wsB);
+
+        const stableOutcome = { result: [{ _id: "m1", text: "hello" }], tables: new Set(["messages"]) };
+
+        shard.outcomes.set("messages:list", stableOutcome);
+        await subscribeSocket(shard, wsA, "sub-A", "messages:list");
+        await subscribeSocket(shard, wsB, "sub-B", "messages:list");
+
+        // Both seeded with a data frame, neither has a settled frame yet.
+        expect(subFrames(wsA, "sub-A")).toHaveLength(1);
+        expect(subFrames(wsB, "sub-B")).toHaveLength(1);
+        expect(settledFrames(wsA, "sub-A")).toHaveLength(0);
+
+        // A write touches "messages" but the query re-runs to the SAME result, so
+        // both subscriptions hit the byte-identical suppression branch.
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        // No new data/delta frame on either socket (result unchanged).
+        expect(subFrames(wsA, "sub-A")).toHaveLength(1);
+        // Socket A (clientId) received a settled watermark frame; socket B did not.
+        expect(settledFrames(wsA, "sub-A")).toHaveLength(1);
+        expect(settledFrames(wsB, "sub-B")).toHaveLength(0);
     });
 
     // -------------------------------------------------------------------------
