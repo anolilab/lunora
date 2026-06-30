@@ -483,14 +483,6 @@ export interface ServerDataMessage {
     /** The CDC epoch this frame's cursor belongs to (see {@link CachedQuery.serverEpoch}). */
     epoch?: string;
     id: string;
-
-    /**
-     * The highest custom-mutator `mutationId` from this client the server has
-     * now applied (the per-client `__client_watermark`). Echoed so the client's
-     * outbox can drop confirmed pending mutations and let TanStack DB collapse
-     * the matching optimistic overlay. Absent on shards without custom mutators.
-     */
-    lastMutationId?: number;
     type: "data" | "delta";
 }
 
@@ -505,9 +497,32 @@ export interface ServerResumeMessage {
     /** The CDC epoch this resume's cursor belongs to (see {@link CachedQuery.serverEpoch}). */
     epoch?: string;
     id: string;
-    /** Per-client custom-mutator watermark (see {@link ServerDataMessage.lastMutationId}). */
-    lastMutationId?: number;
     type: "resume";
+}
+
+/**
+ * Settled acknowledgement for a **list** subscription: a write touched one of
+ * the subscription's read tables but produced a byte-identical result, so the
+ * server suppressed the data frame. Sent ONLY to a `@lunora/db` custom-mutator
+ * client (one that announced a `clientId`, hence has a server-side
+ * `__client_watermark`) so its optimistic list overlay drops even when no data
+ * frame arrives. Plain `useQuery` subscribers never receive it, and an older
+ * client safely ignores the unknown frame.
+ */
+export interface ServerSettledMessage {
+    cursor?: number;
+    /** The CDC epoch this settled frame's cursor belongs to (see {@link CachedQuery.serverEpoch}). */
+    epoch?: string;
+    id: string;
+
+    /**
+     * The highest custom-mutator `mutationId` from this client the server has
+     * now applied (the per-client `__client_watermark`). Forwarded to a
+     * collection's `onCheckpoint` so it can drop the overlay for the confirmed
+     * write whose result didn't change this list.
+     */
+    lastMutationId?: number;
+    type: "settled";
 }
 
 export interface ServerErrorMessage {
@@ -584,7 +599,7 @@ export interface ServerPokeStartMessage {
 
 /** One shape's slice of an in-flight poke: the row-ops to apply for `shapeId`. */
 export interface ServerPokePartMessage {
-    /** Per-client custom-mutator watermark carried with this slice (see {@link ServerDataMessage.lastMutationId}). */
+    /** Per-client custom-mutator watermark carried with this slice (see {@link ServerSettledMessage.lastMutationId}). */
     lastMutationId?: number;
     pokeId: string;
     /** Ordered row-level changes for this shape, applied in sequence at `pokeEnd`. */
@@ -619,6 +634,7 @@ export type ServerMessage =
     | ServerPokePartMessage
     | ServerPokeStartMessage
     | ServerResumeMessage
+    | ServerSettledMessage
     | ServerWhisperMessage;
 
 /**

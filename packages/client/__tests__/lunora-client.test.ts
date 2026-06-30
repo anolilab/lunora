@@ -456,6 +456,114 @@ describe("lunoraClient", () => {
             expect(last).toEqual({ id: sub.id, type: "unsubscribe" });
         });
 
+        it("forwards a settled frame's watermark to onCheckpoint without firing the data callback", () => {
+            expect.assertions(3);
+
+            const client = new LunoraClient({
+                clientId: "client-A",
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const received: unknown[] = [];
+            const checkpoints: { checkpoint?: number; mutationId?: number }[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, (d) => received.push(d), {
+                onCheckpoint: (watermark) => checkpoints.push(watermark),
+            });
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            const sub = firstSub(socket);
+
+            socket.receive({ id: sub.id, type: "ack" });
+            // A write touched the read tables but the result was byte-identical, so
+            // the server sent a `settled` frame instead of a data frame.
+            socket.receive({ cursor: 12, epoch: "e1", id: sub.id, lastMutationId: 5, type: "settled" });
+
+            // No value changed — the data callback must not fire...
+            expect(received).toEqual([]);
+            // ...but the echoed watermark + advanced cursor reach onCheckpoint so a
+            // @lunora/db list overlay can drop.
+            expect(checkpoints).toEqual([{ checkpoint: 12, mutationId: 5 }]);
+
+            // An older client (or one with no settled support) safely ignores an
+            // unknown frame — the default switch arm is a no-op.
+            expect(() => {
+                socket.receive({ id: sub.id, type: "totally-unknown-frame" });
+            }).not.toThrow();
+
+            client.close();
+        });
+
+        it("ignores a settled frame for an unknown subscription id", () => {
+            expect.assertions(1);
+
+            const client = new LunoraClient({
+                clientId: "client-A",
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.subscribe(fnRef("messages:list"), {}, () => undefined);
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            expect(() => {
+                socket.receive({ cursor: 1, id: "sub_does_not_exist", type: "settled" });
+            }).not.toThrow();
+
+            client.close();
+        });
+
+        it("fans a settled frame out to every subscriber sharing the same subscription state", () => {
+            // Regression: SubscriptionState is shared across subscribers to the same
+            // (fn, args, shardKey). A second subscriber (e.g. a @lunora/db collection)
+            // that joins AFTER a plain useQuery must still receive `settled` fan-out —
+            // a single onCheckpoint slot would only ever notify the state's creator.
+            expect.assertions(2);
+
+            const client = new LunoraClient({
+                clientId: "client-A",
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const first: { checkpoint?: number; mutationId?: number }[] = [];
+            const second: { checkpoint?: number; mutationId?: number }[] = [];
+
+            // First subscriber CREATES the shared state...
+            client.subscribe(fnRef("messages:list"), {}, () => undefined, {
+                onCheckpoint: (watermark) => first.push(watermark),
+            });
+            // ...second subscriber JOINS the existing state (same fn + args).
+            client.subscribe(fnRef("messages:list"), {}, () => undefined, {
+                onCheckpoint: (watermark) => second.push(watermark),
+            });
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            const sub = firstSub(socket);
+
+            socket.receive({ id: sub.id, type: "ack" });
+            socket.receive({ cursor: 7, epoch: "e1", id: sub.id, lastMutationId: 3, type: "settled" });
+
+            // BOTH checkpoint callbacks fire, not just the creator's.
+            expect(first).toEqual([{ checkpoint: 7, mutationId: 3 }]);
+            expect(second).toEqual([{ checkpoint: 7, mutationId: 3 }]);
+
+            client.close();
+        });
+
         it("announces every socket with a context-less connect envelope before resubscribing", () => {
             expect.assertions(3);
 
