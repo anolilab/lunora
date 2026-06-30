@@ -170,6 +170,53 @@ owns the driver per `@lunora/hyperdrive`; codegen wires `createHyperdrive(env[bi
   `ctx.sql`'s action-only contract (Decision 2). `ExternalRow` is `Record<string,
 unknown>`; the loop applies `source.map` + `source.idColumn` to produce `{ _id, …doc }`.
 
+### 3.2.1 Codegen emission spec (the one remaining build step) — EVIDENCE
+
+All the runtime primitives are landed + tested (`diffExternalSource`,
+`materializeExternalRows`, `readExternalSourceBaseline`, `runExternalSourceTick`, the
+`ShardDO.pollExternalSources()` / `scheduleSourcePoll()` seam). What remains is one
+codegen change in `packages/codegen/src/emit.ts` that generates the DO subclass's
+`pollExternalSources` override. This is **not** pure glue — it needs a user-config
+seam, exactly like `.global()` does for `globalDb`:
+
+- **Precedent.** The emitted subclass already overrides `readGlobalShapeRows`
+  (`emit.ts:3238`) and resolves the backend from a **user-provided config thunk** —
+  `const globalDb = config.d1?.(env, { identity, userId }) ?? globalDbStub`
+  (`emit.ts:3224`; generated form at `fixtures/simple/expected/_generated/shard.ts:704`).
+  The user supplies `config.d1` / `config.hyperdrive` (the driver/connection) in their
+  project — codegen does **not** invent the connection.
+
+- **The seam to design.** External-source ingest needs the analogous user-provided
+  thunk for the source connection — e.g. `config.sources?.[binding]?.(env)` returning a
+  `SqlClient` (the user builds it with `createHyperdrive` + their chosen adapter, the
+  same one-liner as the Phase 1 docs recipe). **Open decision for the maintainer:** one
+  thunk per binding vs a single `config.source(env, binding)`. Recommend per-binding to
+  mirror `config.d1`/`config.hyperdrive`.
+
+- **What `emit.ts` emits** (only when the schema has ≥1 `.source()` table, mirroring the
+  `hasGlobalTables` gate at `emit.ts:3161`/`:3210`):
+    1. A `protected override async pollExternalSources()` that, for each sourced table in
+       the IR (`TableIR.externalSource`, already captured): resolves the `SqlClient` from
+       the config thunk; `query(source.query, tenantBy(this.shardKey))`; projects rows via
+       the emitted `map`/`idColumn` (reuse `@lunora/hyperdrive`'s `projectSourceRow`);
+       `await runExternalSourceTick(this.sql, db, rows, { table, columns })` with a
+       `createShardCtxDb` writer (the same `db` it already builds for writes, `shard.ts:704-718`);
+       returns the count of polled tables so the alarm re-arms.
+    2. A `scheduleSourcePoll()` call in the subclass's init path (mirroring how global
+       shapes arm on subscribe) so a sourced DO starts polling.
+    3. The `config` type gains the `sources` thunk field.
+
+- **Golden fixtures.** A new codegen fixture with a `.source()` schema (or extend
+  `fixtures/simple`) whose `expected/_generated/shard.ts` carries the emitted override;
+  regenerate via the codegen test's update mode and review the diff. This is the step
+  that **must run against a quiescent repo** — a golden snapshot captured while HEAD
+  moves is invalid.
+
+- **Verify.** `pnpm --filter "@lunora/codegen" run test` (golden match) + the existing
+  `shard-do.external-source` test (proves the emitted override's runtime target works) +
+  a workerd e2e if available. No client-protocol change (clients `subscribeShape` an
+  ordinary table).
+
 ### 3.3 Diff → writer ops — the two modes (Decision-grade)
 
 The membership read must become an ordered `CdcChange[]` fed to `applyCdcChanges`.
