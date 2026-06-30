@@ -248,6 +248,22 @@ codegen wiring + the generalized poll/materialize loop in the DO (read Hyperdriv
 table). Tenant scoping mandatory under `.shardBy()`. Clients shape over the
 materialized table with **zero** new client code — it is an ordinary table to them.
 
+**Status: IN PROGRESS.**
+
+- **Builder LANDED** — `.source()` on `@lunora/server`'s `TableBuilder`
+  (`ExternalSourceDefinition` type, `externalSource` on `TableDefinition`, implies
+  `.externallyManaged()`, composes with `.shardBy()`; 6-case test green). Codegen's
+  chain walker ignores `.source()` via its default case, so no regression.
+- **NEXT — codegen IR + advisor lints** (a discrete unit, touches golden fixtures):
+  add `case "source"` to `discover-schema.ts` `applyTableMethod` → `TableIR.externalSource`
+  (+ set `externallyManaged`); thread it through `toAdvisorSchema`; add the two
+  signed-off **hard-error** lints `external_source_unscoped` (sharded + no `tenantBy`)
+  and `external_source_on_global` (sourced + `.global()`). Regenerate codegen golden
+  fixtures.
+- **THEN — the DO poll loop** (highest risk): generalize the `.global()`-shape alarm
+  poll into the external-source materialize loop, reusing `diffExternalSource` +
+  `materializeExternalRows`, with the read hook calling Hyperdrive.
+
 **Verify**: a sourced+sharded table on agent DO `tenant-A` only ever contains
 tenant-A rows (explicit cross-tenant isolation test); membership diff applies
 upserts AND deletes correctly; the slice live-pokes to a `defineShape` client as
