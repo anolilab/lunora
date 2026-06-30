@@ -248,21 +248,30 @@ codegen wiring + the generalized poll/materialize loop in the DO (read Hyperdriv
 table). Tenant scoping mandatory under `.shardBy()`. Clients shape over the
 materialized table with **zero** new client code — it is an ordinary table to them.
 
-**Status: IN PROGRESS.**
+**Status: IN PROGRESS — all logic landed; only codegen emission remains.**
 
 - **Builder LANDED** — `.source()` on `@lunora/server`'s `TableBuilder`
   (`ExternalSourceDefinition` type, `externalSource` on `TableDefinition`, implies
-  `.externallyManaged()`, composes with `.shardBy()`; 6-case test green). Codegen's
-  chain walker ignores `.source()` via its default case, so no regression.
-- **NEXT — codegen IR + advisor lints** (a discrete unit, touches golden fixtures):
-  add `case "source"` to `discover-schema.ts` `applyTableMethod` → `TableIR.externalSource`
-  (+ set `externallyManaged`); thread it through `toAdvisorSchema`; add the two
-  signed-off **hard-error** lints `external_source_unscoped` (sharded + no `tenantBy`)
-  and `external_source_on_global` (sourced + `.global()`). Regenerate codegen golden
-  fixtures.
-- **THEN — the DO poll loop** (highest risk): generalize the `.global()`-shape alarm
-  poll into the external-source materialize loop, reusing `diffExternalSource` +
-  `materializeExternalRows`, with the read hook calling Hyperdrive.
+  `.externallyManaged()`, composes with `.shardBy()`; 6-case test).
+- **Codegen IR + advisor lints LANDED** — `discover-schema` captures `.source()` into
+  `TableIR.externalSource` (threaded through both advisor feeders); the two signed-off
+  hard-error lints `external_source_unscoped` + `external_source_on_global` ship
+  (5-case suite). No golden-fixture change (nothing emits it yet).
+- **Materialize core LANDED** — `diffExternalSource` (canonical `stableStringify` +
+  `_creationTime`-stripping projection), `materializeExternalRows`,
+  `readExternalSourceBaseline`, `runExternalSourceTick` in `@lunora/do` (+ benchmarks);
+  steady-tick canonicalization proven.
+- **DO alarm seam LANDED** — `ShardDO.alarm()` drives `pollExternalSources()` (base
+  no-op → zero regression) alongside the global-shape poll; `scheduleSourcePoll()`
+  arms the shared alarm. Subclass-driven test proves alarm → tick → materialize +
+  re-arm; global-shape + shard-do suites green.
+- **REMAINING — codegen emission (the one piece left):** generate the DO subclass's
+  `pollExternalSources` override — per sourced table, build a `createShardCtxDb`
+  writer, construct the Hyperdrive `SqlClient` from `env[binding]` (reuse the
+  `globalDb`-wiring emission), read the slice via `tenantBy(this.shardKey)`, and
+  `runExternalSourceTick`; arm via `scheduleSourcePoll()`. This is the golden-fixture
+  change in `emit.ts`. Everything it calls is built + tested, so it is mechanical
+  glue — but the riskiest codegen change; wants a stable repo + golden-fixture review.
 
 **Verify**: a sourced+sharded table on agent DO `tenant-A` only ever contains
 tenant-A rows (explicit cross-tenant isolation test); membership diff applies
