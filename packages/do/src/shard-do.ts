@@ -2396,6 +2396,18 @@ abstract class ShardDO {
             remaining = 1;
         }
 
+        // External-source (`.source(...)`) ingest shares this alarm (plan 077). The
+        // base hook is a no-op (0); the codegen subclass overrides it to materialize
+        // each sourced table. Summed into `remaining` so the shared alarm re-arms
+        // while either tier still has work. A contained failure re-arms (remaining)
+        // rather than stranding the ingest loop.
+        try {
+            remaining += await this.pollExternalSources();
+        } catch (error) {
+            this.recordShapeError("source:poll", error);
+            remaining += 1;
+        }
+
         if (remaining > 0) {
             await this.scheduleGlobalPoll();
         }
@@ -3858,6 +3870,35 @@ abstract class ShardDO {
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this to read the global (D1) backend; the base has none
     protected readGlobalShapeRows(_resolved: ResolvedShape, _identity?: SubscriptionIdentity): Promise<ShapeRow[]> {
         return Promise.resolve([]);
+    }
+
+    /**
+     * Poll external-source (`.source(...)`) tables once (plan 077): materialize
+     * each sourced table's freshly-pulled tenant slice into this DO's SQLite. The
+     * base `ShardDO` has no sourced tables, so it returns `0` and the ingest tier
+     * stays dormant — zero behavior change for every existing DO. The codegen
+     * subclass overrides it to, per sourced table, build a `createShardCtxDb`
+     * writer, read the tenant slice from Hyperdrive under this DO's shard key, and
+     * run `runExternalSourceTick` (read local baseline → diff → apply via the
+     * validated CDC writer). Returns the number of sourced tables still being
+     * polled, so the shared poll alarm ({@link ShardDO.alarm}) re-arms while ingest
+     * is active.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass implements the real Hyperdrive-backed poll
+    protected pollExternalSources(): Promise<number> {
+        return Promise.resolve(0);
+    }
+
+    /**
+     * Arm the shared poll alarm for external-source ingest (plan 077). The alarm is
+     * shared with the global-shape poll tier; the codegen subclass calls this once
+     * (on construction / first sourced write) so a sourced DO starts its ingest
+     * loop, after which {@link ShardDO.alarm} re-arms itself while
+     * {@link ShardDO.pollExternalSources} reports remaining work. Idempotent; a
+     * no-op when the runtime exposes no `setAlarm` (unit harness).
+     */
+    protected scheduleSourcePoll(): Promise<void> {
+        return this.scheduleGlobalPoll();
     }
 
     /**
