@@ -550,6 +550,7 @@ describe("reconcileWranglerBindings", () => {
             exported: true,
             exportName: "orderPipeline",
             name: "order-pipeline",
+            steps: [],
         };
 
         it("provisions only the workflows[] entry — no DO binding, no migration class", () => {
@@ -605,6 +606,7 @@ describe("reconcileWranglerBindings", () => {
                 exported: true,
                 exportName: "sendReceipt",
                 name: "send-receipt",
+                steps: [],
             };
 
             const result = reconcileWranglerBindings(root, baseInferred({ workflows: [ORDER_PIPELINE, SECOND] }));

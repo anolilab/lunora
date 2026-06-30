@@ -180,8 +180,8 @@ describe("shardDO global-shape poll tier", () => {
         expect(alarmBox.scheduled).not.toBeNull();
     });
 
-    it("fails an over-cap global shape closed: no poke, no armed alarm", async () => {
-        expect.assertions(2);
+    it("fails an over-cap global shape closed: error frame, no poke, no armed alarm", async () => {
+        expect.assertions(3);
 
         const sockets: FakeWebSocket[] = [];
         const shard = new GlobalShapeShard(makeState(sockets), {});
@@ -189,8 +189,9 @@ describe("shardDO global-shape poll tier", () => {
         sockets.push(ws);
 
         // One row past the membership cap — materializing it into a per-socket
-        // snapshot is refused, so the shape is left empty (logged) rather than
-        // retained, and the poll alarm is never armed for it.
+        // snapshot is refused, so the subscription is rolled back and the client
+        // gets a structured error (never an `ack` without data), and the poll alarm
+        // is never armed for it.
         const cap = (ShardDO as unknown as { GLOBAL_SHAPE_MAX_ROWS: number }).GLOBAL_SHAPE_MAX_ROWS;
 
         shard.rows = Array.from({ length: cap + 1 }, (_, index) => {
@@ -199,8 +200,12 @@ describe("shardDO global-shape poll tier", () => {
 
         await subscribeShape(shard, ws);
 
-        // Only the subscribe `ack` — no seed poke for the refused shape.
-        expect(frameTypes(ws)).toStrictEqual(["ack"]);
+        // The refused shape errors instead of acking, and carries no seed poke.
+        expect(frameTypes(ws)).toStrictEqual(["error"]);
+
+        const errorFrame = ws.sent.map((raw) => JSON.parse(raw) as { code?: string; type?: string }).find((frame) => frame.type === "error");
+
+        expect(errorFrame?.code).toBe("SHAPE_GLOBAL_TOO_LARGE");
         expect(alarmBox.scheduled).toBeNull();
     });
 

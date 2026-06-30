@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import type { DatabaseWriterLike } from "../src/ctx-db";
+import type { CdcChange, DatabaseWriterLike, SqlExec } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
@@ -103,6 +103,21 @@ class ShapePokeShard extends ShardDO {
         });
 
         return this.writer;
+    }
+}
+
+/**
+ * {@link ShapePokeShard} that counts every `__cdc_log` page read backing a shape
+ * diff, so a test can prove the flush-local op-range cache collapses N
+ * same-range shape diffs to ONE changelog drain.
+ */
+class CountingShapePokeShard extends ShapePokeShard {
+    public cdcPageReads = 0;
+
+    protected override readShapeCdcPage(sql: SqlExec, sinceSeq: number, tables: ReadonlySet<string>): { changes: CdcChange[]; cursor: number } {
+        this.cdcPageReads += 1;
+
+        return super.readShapeCdcPage(sql, sinceSeq, tables);
     }
 }
 
@@ -250,5 +265,50 @@ describe("shardDO shape poke protocol (dispatch path)", () => {
         // Only the c1 subscriber is poked.
         expect(pokeOps(a)).toStrictEqual([{ key: "m1", op: "insert", table: "messages", value: expect.objectContaining({ _id: "m1" }) }]);
         expect(b.sent).toStrictEqual([]);
+    });
+
+    it("shares one op-log drain across same-range shape diffs in a flush (op-range cache)", async () => {
+        expect.assertions(3);
+
+        // Run the SAME single write against a shard holding `socketCount` shapes
+        // on the identical (table, range), counting only the page reads the write
+        // flush performs.
+        const measure = async (socketCount: number): Promise<{ reads: number; sockets: FakeWebSocket[] }> => {
+            harness = createSqliteExec();
+            runShardMigrations(harness.sql, messagesSchema, { cdc: true });
+
+            const sockets: FakeWebSocket[] = [];
+            const shard = new CountingShapePokeShard(makeState(sockets), {});
+
+            // Every socket subscribes to the SAME shape (c1) before any write, so
+            // each shape memo records the same seed cursor → an identical diff
+            // range `(memoCursor, checkpoint]` for all of them on the write flush.
+            for (let index = 0; index < socketCount; index += 1) {
+                const ws = createFakeWebSocket();
+
+                sockets.push(ws);
+                // eslint-disable-next-line no-await-in-loop -- sequential subscribe keeps seed cursors identical
+                await subscribeShape(shard, ws, "c1");
+            }
+
+            shard.cdcPageReads = 0;
+            await shard.fetch(write("messages:send", { _id: "m1", channelId: "c1", text: "hi" }));
+
+            return { reads: shard.cdcPageReads, sockets };
+        };
+
+        const one = await measure(1);
+        const three = await measure(3);
+
+        // A single shape diff drains the op range with at least one page read.
+        expect(one.reads).toBeGreaterThan(0);
+
+        // Three sockets on the identical (table, range) share that ONE drain — the
+        // flush-local cache collapses the extra two, so the page-read count is
+        // unchanged (pre-cache this would have been 3x).
+        expect(three.reads).toBe(one.reads);
+
+        // Correctness is intact: every subscriber still received the insert poke.
+        expect(three.sockets.every((ws) => pokeOps(ws).some((op) => op.key === "m1" && op.op === "insert"))).toBe(true);
     });
 });

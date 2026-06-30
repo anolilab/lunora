@@ -23,10 +23,35 @@ export interface SubscriptionState {
      */
     readonly argsKey: string;
     readonly callbacks: Set<SubscriptionCallback>;
+
+    /**
+     * Notified when a `settled` frame advances this subscription's watermark — a
+     * write touched the subscription's tables but the result was byte-identical,
+     * so the server suppressed the data frame. A `@lunora/db` list collection
+     * uses this to drop the optimistic overlay for the confirmed write.
+     *
+     * A SET (not a single slot) because `SubscriptionState` is SHARED across
+     * every subscriber to the same `(fn, args, shardKey)`: a `@lunora/db`
+     * collection may subscribe to a query a plain `useQuery` already opened, so
+     * each subscriber registers its own callback (mirroring `callbacks` /
+     * `errorCallbacks`) and a `settled` frame fans out to all of them. Plain
+     * `useQuery` consumers register nothing, leaving the set empty.
+     */
+    readonly checkpointCallbacks: Set<(watermark: { checkpoint?: number; mutationId?: number }) => void>;
     /** Notified when the server rejects this subscription (e.g. admin auth). */
     readonly errorCallbacks: Set<SubscriptionErrorCallback>;
     readonly fn: FunctionReference;
+
     readonly id: string;
+
+    /**
+     * The highest custom-mutator `mutationId` from this client the server has
+     * applied, captured from the last `settled` frame (the suppressed-list-frame
+     * watermark). Forwarded to {@link SubscriptionState.checkpointCallbacks}.
+     * Absent until a `settled` frame arrives.
+     */
+    lastMutationId?: number;
+
     /** Last known value, used to short-circuit `useQuery`-style consumers. */
     lastValue: unknown;
 

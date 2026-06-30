@@ -12,6 +12,15 @@
  * echoes back so the client's outbox can drop confirmed pending mutations and
  * TanStack DB can collapse the matching optimistic overlay.
  *
+ * Anonymous clients have no authenticated `identity`, so the pair degrades to
+ * `("", clientId)` and the `clientId` alone is the principal. The protocol
+ * contract is therefore that `clientId` MUST be globally unique per client — the
+ * SDK mints it with `crypto.randomUUID` (with a collision-resistant fallback, see
+ * `@lunora/client`'s `nextId`), so two anonymous clients never share a watermark
+ * namespace. A caller that overrides `clientId` is responsible for the same
+ * uniqueness; reusing one across anonymous clients is what the `identity` key
+ * guards against once they authenticate.
+ *
  * The dispatch contract the watermark enforces (see the DO push path):
  * - `id &lt;= watermark` → already processed (skip, return ok);
  * - `id == watermark + 1` → run the server impl authoritatively and advance the

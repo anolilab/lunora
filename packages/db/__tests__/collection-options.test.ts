@@ -19,6 +19,7 @@ interface ShapeSubscribeCall {
 const makeClient = () => {
     const shapeSubscribes: ShapeSubscribeCall[] = [];
     const client = {
+        confirmedMutationWatermark: vi.fn<() => number>(() => 0),
         subscribe: vi.fn<(...arguments_: unknown[]) => () => void>(),
         subscribeShape: vi.fn<
             (
@@ -220,6 +221,62 @@ describe("lunoraCollectionOptions (shape source)", () => {
 
         // The next poke syncs the write's watermark → the overlay drop unblocks.
         call?.onCheckpoint?.({ checkpoint: 9, mutationId: 4 });
+        await pending;
+
+        expect(order).toStrictEqual(["dropped"]);
+    });
+});
+
+/**
+ * The full-table `list` sync source. A `list` collection live-syncs through
+ * `client.subscribe`; a write that touches the read tables but produces a
+ * byte-identical result emits no data frame (server-side frame suppression), so
+ * the server's `settled` frame drives `onCheckpoint` to drop the optimistic
+ * overlay — without it, a custom-mutator overlay would hang forever.
+ */
+describe("lunoraCollectionOptions (list source)", () => {
+    const subscribeOptionsFrom = (client: never): { onCheckpoint?: (watermark: { checkpoint?: number; mutationId?: number }) => void } => {
+        const subscribeMock = (client as unknown as { subscribe: ReturnType<typeof vi.fn> }).subscribe;
+
+        return (subscribeMock.mock.calls[0]?.[3] ?? {}) as { onCheckpoint?: (watermark: { checkpoint?: number; mutationId?: number }) => void };
+    };
+
+    it("wires an onCheckpoint into the list subscription", async () => {
+        const { client } = makeClient();
+
+        const options = lunoraCollectionOptions({ client, list: ref("messages:list") });
+        const collection = createCollection(options.config);
+
+        collection.subscribeChanges(() => {});
+        await flush();
+
+        expect((client as unknown as { subscribe: ReturnType<typeof vi.fn> }).subscribe).toHaveBeenCalledTimes(1);
+        expect(subscribeOptionsFrom(client).onCheckpoint).toBeTypeOf("function");
+    });
+
+    it("drops a stuck overlay when a settled frame's onCheckpoint advances the watermark", async () => {
+        const { client } = makeClient();
+
+        const options = lunoraCollectionOptions({ client, list: ref("messages:list") });
+        const collection = createCollection(options.config);
+
+        collection.subscribeChanges(() => {});
+        await flush();
+
+        const { onCheckpoint } = subscribeOptionsFrom(client);
+        const order: string[] = [];
+
+        // A confirmed write at seq 7 whose authoritative result did not change the
+        // list. No data frame arrives — only the suppressed-frame `settled`
+        // watermark, forwarded here.
+        const pending = options.checkpoints.awaitMutationId(7).then(() => order.push("dropped"));
+
+        onCheckpoint?.({ checkpoint: 3, mutationId: 6 });
+        await Promise.resolve();
+
+        expect(order).toStrictEqual([]);
+
+        onCheckpoint?.({ checkpoint: 4, mutationId: 7 });
         await pending;
 
         expect(order).toStrictEqual(["dropped"]);

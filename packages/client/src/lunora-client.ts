@@ -47,6 +47,7 @@ import type {
     ServerPokePartMessage,
     ServerPokeStartMessage,
     ServerResumeMessage,
+    ServerSettledMessage,
     ServerWhisperMessage,
     ShardTrafficResult,
     StorageListPage,
@@ -2013,7 +2014,7 @@ class LunoraClient {
         function_: F,
         args: ArgsOf<F>,
         callback: (data: ReturnOf<F>) => void,
-        options: { onError?: SubscriptionErrorCallback; shardKey?: string } = {},
+        options: { onCheckpoint?: (watermark: SyncWatermark) => void; onError?: SubscriptionErrorCallback; shardKey?: string } = {},
     ): Unsubscribe {
         if (this.closed) {
             throw new Error("LunoraClient is closed");
@@ -2037,6 +2038,7 @@ class LunoraClient {
                 args: argsRecord,
                 argsKey,
                 callbacks: new Set<SubscriptionCallback>(),
+                checkpointCallbacks: new Set(),
                 errorCallbacks: new Set<SubscriptionErrorCallback>(),
                 fn: function_,
                 id,
@@ -2053,6 +2055,14 @@ class LunoraClient {
 
         if (errorCallback) {
             state.errorCallbacks.add(errorCallback);
+        }
+
+        // Register this subscriber's checkpoint callback on the SHARED state, so a
+        // `@lunora/db` collection still receives `settled` fan-out even when it
+        // joins a query a plain `useQuery` opened first (the state already existed
+        // above). One slot would drop every subscriber but the state's creator.
+        if (options.onCheckpoint) {
+            state.checkpointCallbacks.add(options.onCheckpoint);
         }
 
         // Replay last value to new subscriber synchronously if available.
@@ -2074,6 +2084,10 @@ class LunoraClient {
 
             if (errorCallback) {
                 subscriptionState.errorCallbacks.delete(errorCallback);
+            }
+
+            if (options.onCheckpoint) {
+                subscriptionState.checkpointCallbacks.delete(options.onCheckpoint);
             }
 
             if (subscriptionState.callbacks.size === 0) {
@@ -2537,11 +2551,18 @@ class LunoraClient {
     }
 
     /**
-     * Apply an optimistic update to every subscription that matches the
-     * mutation's function ref, shard key, and args, returning the rollback
-     * callbacks to invoke if the mutation later fails. Scoping to the same
-     * (fn, shardKey, args) keeps one user's mutation from clobbering another
-     * subscriber's value on the same function (e.g. two users on different rooms).
+     * Apply an optimistic update to the subscription that matches the mutation's
+     * `(functionRef, args, shardKey)` triple, returning the rollback callbacks to
+     * invoke if the mutation later fails.
+     *
+     * The registry is already indexed by exactly this triple via
+     * `SubscriptionRegistry.key`, so at most one subscription can match. A direct
+     * O(1) keyed lookup replaces the former O(N) linear scan over all subscriptions.
+     *
+     * `shardKey` normalization: both `undefined` and `""` map to the empty string
+     * inside `SubscriptionRegistry.key` (via `?? ""`), so a mutation fired without
+     * a shardKey correctly matches a subscription registered without one regardless
+     * of whether the caller passed `undefined` or omitted the field.
      */
     private applyOptimisticUpdates(
         functionRef: string,
@@ -2555,13 +2576,13 @@ class LunoraClient {
             return optimisticRollbacks;
         }
 
-        const mutationArgsKey = stableStringify(argsRecord);
+        // Build the same composite key the registry used when the subscription was
+        // registered so we can retrieve the matching state in O(1) instead of
+        // scanning all subscriptions.
+        const matchKey = SubscriptionRegistry.key(functionRef, argsRecord, mutationShardKey);
+        const state = this.subscriptions.get(matchKey);
 
-        for (const state of this.subscriptions.all()) {
-            if (state.fn.__lunoraRef !== functionRef || state.shardKey !== mutationShardKey || state.argsKey !== mutationArgsKey) {
-                continue;
-            }
-
+        if (state) {
             const rollback = applyOptimisticToState(state, optimistic);
 
             if (rollback) {
@@ -3267,6 +3288,11 @@ class LunoraClient {
 
                 break;
             }
+            case "settled": {
+                this.handleSettledMessage(message);
+
+                break;
+            }
             case "whisper": {
                 this.dispatchWhisper(message, shardKey);
 
@@ -3490,19 +3516,63 @@ class LunoraClient {
             return;
         }
 
+        this.ackAndAdvanceCursor(state, message.cursor, message.epoch);
+    }
+
+    /**
+     * Handle a `settled` frame: a write touched one of this subscription's read
+     * tables but produced a byte-identical result, so the server suppressed the
+     * data frame. Like {@link handleResumeMessage} the value didn't change — we
+     * advance the resume position and re-persist — but we ALSO surface the echoed
+     * custom-mutator watermark via `onCheckpoint` so a `@lunora/db` list
+     * collection drops the optimistic overlay for the confirmed write (otherwise
+     * its checkpoint gate, fed only by data frames, would hang forever). Sent
+     * only to custom-mutator clients; plain `useQuery` subscribers leave
+     * `onCheckpoint` unset and this is a near no-op.
+     */
+    private handleSettledMessage(message: ServerSettledMessage): void {
+        const state = this.subscriptions.getById(message.id);
+
+        if (!state) {
+            return;
+        }
+
+        this.ackAndAdvanceCursor(state, message.cursor, message.epoch);
+
+        if (message.lastMutationId !== undefined) {
+            state.lastMutationId = message.lastMutationId;
+        }
+
+        // Fan out to every registered subscriber (shared state — see
+        // SubscriptionState.checkpointCallbacks). A snapshot isn't needed: a
+        // checkpoint callback never (un)subscribes to this same state mid-flush.
+        for (const onCheckpoint of state.checkpointCallbacks) {
+            onCheckpoint({ checkpoint: state.serverCursor, mutationId: state.lastMutationId });
+        }
+    }
+
+    /**
+     * Mark `state` acked and, when the frame carries a newer cursor/epoch than
+     * the cached position, advance the resume watermark and re-persist. Shared by
+     * the `resume` and `settled` frame handlers — both acknowledge "nothing the
+     * client must re-render changed, but the resume position may have moved".
+     */
+    private ackAndAdvanceCursor(state: SubscriptionState, cursor: number | undefined, epoch: string | undefined): void {
+        /* eslint-disable no-param-reassign -- advance the shared subscription state in place (same pattern as the optimistic-update path above) */
         state.acked = true;
 
-        if ((message.cursor !== undefined && message.cursor !== state.serverCursor) || (message.epoch !== undefined && message.epoch !== state.serverEpoch)) {
-            if (message.cursor !== undefined) {
-                state.serverCursor = message.cursor;
+        if ((cursor !== undefined && cursor !== state.serverCursor) || (epoch !== undefined && epoch !== state.serverEpoch)) {
+            if (cursor !== undefined) {
+                state.serverCursor = cursor;
             }
 
-            if (message.epoch !== undefined) {
-                state.serverEpoch = message.epoch;
+            if (epoch !== undefined) {
+                state.serverEpoch = epoch;
             }
 
             this.persistQueryValue(state);
         }
+        /* eslint-enable no-param-reassign */
     }
 
     /**

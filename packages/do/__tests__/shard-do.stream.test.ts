@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
@@ -284,5 +284,38 @@ describe("shardDO streaming queries", () => {
         expect((errorFrame?.error as { code?: string; message?: string })?.code).toBe("FORBIDDEN");
         expect((errorFrame?.error as { code?: string; message?: string })?.message).toBe("kaboom");
         expect(frames.filter((f) => f.type === "complete")).toHaveLength(0);
+    });
+
+    it("redacts a bare (codeless) handler throw from the stream error frame", async () => {
+        expect.assertions(4);
+
+        const shard = new StreamShard(state, {});
+        const sensitive = "SELECT secret_token FROM users WHERE id = 42";
+
+        shard.registered.set("metrics:leak", async function* leakGen() {
+            yield 1;
+            // A plain Error with no `code` is the generic catch-all — its message
+            // may carry SQL / internal identifiers and must be redacted.
+            throw new Error(sensitive);
+        });
+
+        const ws = createFakeWebSocket();
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        shard.registerSocket(ws, { subs: {} });
+        await shard.driveMessage(ws, { id: "stream_7", query: { functionPath: "metrics:leak" }, type: "stream" });
+        await waitForTerminator(ws);
+
+        const frames = parseFrames(ws);
+        const errorFrame = frames.find((f) => f.type === "error");
+
+        expect(errorFrame).toBeDefined();
+        // The raw message must not leak; the code falls back to the generic code.
+        expect((errorFrame?.error as { code?: string; message?: string })?.code).toBe("INTERNAL_SERVER_ERROR");
+        expect((errorFrame?.error as { code?: string; message?: string })?.message).toBe("internal error");
+        // ...but it is logged server-side for diagnosis.
+        expect(errorSpy).toHaveBeenCalledWith("[@lunora/do] unhandled stream error:", expect.anything());
+
+        errorSpy.mockRestore();
     });
 });

@@ -23,18 +23,29 @@
  */
 
 import { computeReadBaseWhere, indexRolePermissions, permissionName } from "./middleware";
+import type { RlsTag } from "./policy-tag";
 import { readRlsTag } from "./policy-tag";
-import type { Policy, Role, WhereInput } from "./types";
+import type { Policy, WhereInput } from "./types";
 
-/** A registered function that may carry policies hoisted from its `.use(rls(...))` chain. */
+/** A registered function that may carry the rls() tags hoisted from its `.use(rls(...))` chain. */
 interface FunctionWithRls {
-    readonly rls?: { readonly policies: ReadonlyArray<Policy>; readonly roles: ReadonlyArray<Role> };
+    readonly rls?: { readonly tags: ReadonlyArray<RlsTag> };
 }
 
-/** Table-indexed read policies + the role→permission grants that back `auth.can(...)`. */
-interface RlsReadRegistry {
-    readonly byTable: ReadonlyMap<string, ReadonlyArray<Policy>>;
+/**
+ * One `rls()` tag's read policies for a table, paired with the role→permission
+ * grants of that SAME middleware. Keeping the role map per-group is what lets a
+ * policy's `auth.can(...)` resolve against its own middleware's roles — never a
+ * permission registered on a different `rls()` step.
+ */
+interface ScopedReadPolicies {
+    readonly policies: ReadonlyArray<Policy>;
     readonly rolePermissions: ReadonlyMap<string, ReadonlySet<string>>;
+}
+
+/** Table-indexed read-policy groups, each scoped to the roles of the rls() middleware that declared it. */
+interface RlsReadRegistry {
+    readonly byTable: ReadonlyMap<string, ReadonlyArray<ScopedReadPolicies>>;
 }
 
 /** The trusted, server-resolved facts a shape's RLS evaluation runs under. */
@@ -57,50 +68,59 @@ interface ShapeReadWhereRequest {
     readonly userId: null | string;
 }
 
-/** Mutable accumulator threaded through {@link buildRlsReadRegistry}. */
-interface RegistryAccumulator {
-    readonly byTable: Map<string, Policy[]>;
-    readonly roles: Role[];
-    readonly seenByTable: Map<string, Set<Policy["when"]>>;
-    readonly seenRoles: Set<string>;
-}
-
 /** Sentinel `WhereInput` compiling to a vacuously-false predicate (deny). Mirrors the middleware. */
 const FALSE_PREDICATE: WhereInput = { OR: [] };
 
-/** Fold one function's `read` policies + roles into the accumulator (deduped by `(table, when)` / role name). */
-const collectFunctionRls = (accumulator: RegistryAccumulator, tag: FunctionWithRls["rls"]): void => {
-    if (!tag) {
-        return;
+/** Normalize a registered function (or a raw tagged middleware) to the list of rls() tags it carries. */
+const readEntryTags = (entry: unknown): ReadonlyArray<RlsTag> => {
+    const hoisted = (entry as FunctionWithRls | null)?.rls?.tags;
+
+    if (hoisted) {
+        return hoisted;
     }
+
+    const tag = readRlsTag(entry);
+
+    return tag ? [tag] : [];
+};
+
+/**
+ * Fold one rls() tag's `read` policies into the registry as a role-scoped group,
+ * one entry per table the tag touches. `when` closures are de-duplicated within
+ * the tag so a policy reused across its own steps contributes once; the tag's
+ * roles are resolved into a per-group `auth.can(...)` map so evaluation matches
+ * the request-time `rls()` path for the SAME middleware.
+ */
+const addTagToRegistry = (byTable: Map<string, ScopedReadPolicies[]>, tag: RlsTag): void => {
+    const rolePermissions = indexRolePermissions(tag.roles);
+    const seenWhenByTable = new Map<string, Set<Policy["when"]>>();
+    const policiesByTable = new Map<string, Policy[]>();
 
     for (const policy of tag.policies) {
         if (policy.on !== "read") {
             continue;
         }
 
-        const seen = accumulator.seenByTable.get(policy.table) ?? new Set<Policy["when"]>();
+        const seen = seenWhenByTable.get(policy.table) ?? new Set<Policy["when"]>();
 
         if (seen.has(policy.when)) {
             continue;
         }
 
         seen.add(policy.when);
-        accumulator.seenByTable.set(policy.table, seen);
+        seenWhenByTable.set(policy.table, seen);
 
-        const list = accumulator.byTable.get(policy.table) ?? [];
+        const list = policiesByTable.get(policy.table) ?? [];
 
         list.push(policy);
-        accumulator.byTable.set(policy.table, list);
+        policiesByTable.set(policy.table, list);
     }
 
-    for (const role of tag.roles) {
-        if (accumulator.seenRoles.has(role.name)) {
-            continue;
-        }
+    for (const [table, policies] of policiesByTable) {
+        const groups = byTable.get(table) ?? [];
 
-        accumulator.seenRoles.add(role.name);
-        accumulator.roles.push(role);
+        groups.push({ policies, rolePermissions });
+        byTable.set(table, groups);
     }
 };
 
@@ -131,26 +151,21 @@ const andMerge = (injected: undefined | WhereInput, caller: WhereInput): WhereIn
     return { AND: [injected, caller] };
 };
 
-/** Resolve the table's read base-where (or the fail-closed sentinel), or `undefined` when unrestricted. */
-const resolveReadBaseWhere = (registry: RlsReadRegistry, request: ShapeReadWhereRequest): undefined | WhereInput => {
-    const policies = registry.byTable.get(request.table);
-
-    if (!policies || policies.length === 0) {
-        // No read policy for this table. Under `.rls("required")` a non-public
-        // table is denied (secure-by-default, matching `guardWriter`); otherwise
-        // it is unrestricted.
-        return request.rlsRequired && !request.tablePublic ? FALSE_PREDICATE : undefined;
-    }
-
+/**
+ * Evaluate one role-scoped policy group's read base-where under the request's
+ * roles — restricted to the grants of the rls() middleware that declared it, so
+ * a permission registered on a different middleware can never satisfy it.
+ */
+const evaluateGroupBaseWhere = (group: ScopedReadPolicies, request: ShapeReadWhereRequest): undefined | WhereInput => {
     const granted = new Set<string>();
 
     for (const roleName of request.roles) {
-        for (const name of registry.rolePermissions.get(roleName) ?? []) {
+        for (const name of group.rolePermissions.get(roleName) ?? []) {
             granted.add(name);
         }
     }
 
-    return computeReadBaseWhere(policies, {
+    return computeReadBaseWhere(group.policies, {
         auth: {
             can: (permission) => granted.has(permissionName(permission)),
             identity: request.identity,
@@ -161,28 +176,72 @@ const resolveReadBaseWhere = (registry: RlsReadRegistry, request: ShapeReadWhere
     });
 };
 
-/**
- * Build the read-policy registry from the registered functions (pass
- * `Object.values(LUNORA_FUNCTIONS)`). Only `on: "read"` policies are collected;
- * a `(table, when)` pair is de-duplicated so the same policy reused across
- * several procedures contributes once. Roles from every `rls(..., { roles })`
- * are unioned so `auth.can(...)` resolves the same as at request time.
- */
-const buildRlsReadRegistry = (functions: Iterable<unknown>): RlsReadRegistry => {
-    const accumulator: RegistryAccumulator = {
-        byTable: new Map<string, Policy[]>(),
-        roles: [],
-        seenByTable: new Map<string, Set<Policy["when"]>>(),
-        seenRoles: new Set<string>(),
-    };
+/** Resolve the table's read base-where (or the fail-closed sentinel), or `undefined` when unrestricted. */
+const resolveReadBaseWhere = (registry: RlsReadRegistry, request: ShapeReadWhereRequest): undefined | WhereInput => {
+    const groups = registry.byTable.get(request.table);
 
-    for (const entry of functions) {
-        const tag = (entry as FunctionWithRls | null)?.rls ?? readRlsTag(entry);
-
-        collectFunctionRls(accumulator, tag);
+    if (!groups || groups.length === 0) {
+        // No read policy for this table. Under `.rls("required")` a non-public
+        // table is denied (secure-by-default, matching `guardWriter`); otherwise
+        // it is unrestricted.
+        return request.rlsRequired && !request.tablePublic ? FALSE_PREDICATE : undefined;
     }
 
-    return { byTable: accumulator.byTable, rolePermissions: indexRolePermissions(accumulator.roles) };
+    const predicates: WhereInput[] = [];
+
+    // Each group carries one rls() middleware's read policies and its OWN
+    // role→permission map; OR the grants across groups — the same broadening
+    // semantics `computeReadBaseWhere` applies to policies within one middleware.
+    for (const group of groups) {
+        const base = evaluateGroupBaseWhere(group, request);
+
+        // A group granting unrestricted access makes the whole table unrestricted.
+        if (base === undefined) {
+            return undefined;
+        }
+
+        // A group that denies (all its policies abstained/denied) can't broaden
+        // access — another group may still grant, so skip it rather than fail.
+        if (isFalsePredicate(base)) {
+            continue;
+        }
+
+        predicates.push(base);
+    }
+
+    // Every group denied/abstained: fail closed (never reveal the whole table).
+    if (predicates.length === 0) {
+        return FALSE_PREDICATE;
+    }
+
+    return predicates.length === 1 ? predicates[0] : { OR: predicates };
+};
+
+/**
+ * Build the read-policy registry from the registered functions (pass
+ * `Object.values(LUNORA_FUNCTIONS)`). Only `on: "read"` policies are collected,
+ * grouped per `rls()` middleware so each group keeps its own role→permission map
+ * (a `(table, when)` pair is de-duplicated within a tag). A tag reused across
+ * several procedures (a shared `const guard = rls(...)`) is folded once. This
+ * mirrors the request-time `rls()` path exactly: a policy's `auth.can(...)`
+ * resolves against the roles of the middleware that declared it, never a union.
+ */
+const buildRlsReadRegistry = (functions: Iterable<unknown>): RlsReadRegistry => {
+    const byTable = new Map<string, ScopedReadPolicies[]>();
+    const seenTags = new Set<RlsTag>();
+
+    for (const entry of functions) {
+        for (const tag of readEntryTags(entry)) {
+            if (seenTags.has(tag)) {
+                continue;
+            }
+
+            seenTags.add(tag);
+            addTagToRegistry(byTable, tag);
+        }
+    }
+
+    return { byTable };
 };
 
 /**

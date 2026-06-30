@@ -141,39 +141,61 @@ export const toMap = <T extends object>(rows: ReadonlyArray<T>, getKey: (row: T)
  * Build an `emit(next)` that diffs a desired keyed snapshot into a collection's
  * sync channel — only changed rows are written, so a reconnect snapshot or a
  * scope change never churns the synced view out from under a pending optimistic
- * row. The last-synced base is tracked in `synced`.
+ * row. The last-synced base is tracked in `syncedJson`.
  *
  * Change detection compares rows by `JSON.stringify`, which is key-order
- * sensitive — safe here because `synced` only ever holds server snapshots, whose
- * column order is stable across reconnects (same query projection). A sync source
- * with unstable key ordering would need a structural compare instead.
+ * sensitive — safe here because server snapshots have stable column order
+ * across reconnects (same query projection). A sync source with unstable key
+ * ordering would need a structural compare instead.
+ *
+ * `syncedJson` holds the JSON-serialized form of each last-synced row, keyed
+ * by row id. It is the **sole** synced-state map — no parallel row-object map
+ * is kept. Each incoming value is serialized exactly once per tick (for both
+ * comparison and cache update), so the previous value is never re-serialized.
+ *
+ * Lifecycle: `syncedJson` must be owned by the caller at the same scope as any
+ * other per-collection state (e.g. outside the `sync.sync` callback), so the
+ * cache persists correctly across sync restarts. A new `makeDiffEmit` closure
+ * created on restart receives the same map reference and starts from the
+ * committed synced state — no spurious diffs on reconnect.
  */
 export const makeDiffEmit =
-    <T extends object>(synced: Map<string, T>, writer: SyncWriter<T>) =>
+    <T extends object>(syncedJson: Map<string, string>, writer: SyncWriter<T>) =>
     (next: Map<string, T>): void => {
         writer.begin();
 
-        for (const [key, value] of next) {
-            const previous = synced.get(key);
+        // Serialize each incoming row once; the string is used for both the
+        // change comparison and to repopulate the cache after commit.
+        const nextJson = new Map<string, string>();
 
-            if (previous === undefined) {
+        for (const [key, value] of next) {
+            const valueJson = JSON.stringify(value);
+
+            nextJson.set(key, valueJson);
+
+            if (!syncedJson.has(key)) {
                 writer.write({ type: "insert", value });
-            } else if (JSON.stringify(previous) !== JSON.stringify(value)) {
+            } else if (syncedJson.get(key) !== valueJson) {
                 writer.write({ type: "update", value });
             }
+            // Unchanged row: no write. The cached string equality check replaces
+            // the previous JSON.stringify(previous) call, halving serialization work.
         }
 
-        for (const key of synced.keys()) {
+        for (const key of syncedJson.keys()) {
             if (!next.has(key)) {
                 writer.write({ key, type: "delete" });
             }
         }
 
         writer.commit();
-        synced.clear();
 
-        for (const [key, value] of next) {
-            synced.set(key, value);
+        // Replace the JSON cache atomically with the new snapshot.
+        // All valueJson strings were already computed above — no extra serialization.
+        syncedJson.clear();
+
+        for (const [key, valueJson] of nextJson) {
+            syncedJson.set(key, valueJson);
         }
     };
 

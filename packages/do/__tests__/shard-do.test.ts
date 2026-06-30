@@ -218,15 +218,20 @@ describe("shardDO", () => {
         expect(response.status).toBe(400);
     });
 
-    it("returns 500 with mapped error when handleRpc throws", async () => {
-        expect.assertions(2);
+    it("returns 500 with a redacted message when handleRpc throws", async () => {
+        expect.assertions(4);
 
         shard.rpcResult = undefined;
         const failing = new TestShard(state, {});
+        const sensitive = "table users column secret_token does not exist";
 
         failing.handleRpc = async () => {
-            throw new Error("boom");
+            throw new Error(sensitive);
         };
+
+        // The unhandled throw is logged server-side; the client must only see a
+        // generic message. Silence + capture the diagnostic.
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
         const request = new Request("https://shard.internal/rpc", {
             body: JSON.stringify({ args: {}, functionPath: "fail" }),
@@ -236,7 +241,16 @@ describe("shardDO", () => {
         const response = await failing.fetch(request);
 
         expect(response.status).toBe(500);
-        await expect(response.json()).resolves.toMatchObject({ error: { code: "RPC_FAILED", message: "boom" } });
+
+        const text = await response.text();
+
+        // The raw thrown message must never reach the client.
+        expect(text).not.toContain(sensitive);
+        expect(JSON.parse(text)).toMatchObject({ error: { code: "RPC_FAILED", message: "internal error" } });
+        // ...but it is logged server-side for diagnosis.
+        expect(errorSpy).toHaveBeenCalledWith("[@lunora/do] unhandled RPC error:", expect.anything());
+
+        errorSpy.mockRestore();
     });
 
     it("subscribe updates attachment registry and acks", async () => {

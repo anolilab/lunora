@@ -23,10 +23,45 @@ class CountingMutatorShard extends ShardDO {
     public runs = 0;
 
     public override handleRpc(): Promise<unknown> {
+        // Mirror the codegen subclass: a mutation commits its replay bookkeeping
+        // (dedup row + watermark advance) INSIDE its own transaction.
         return this.runInTransaction(() => {
             this.runs += 1;
 
-            return { runs: this.runs };
+            const result = { runs: this.runs };
+
+            this.commitMutationBookkeeping(result);
+
+            return result;
+        });
+    }
+
+    // eslint-disable-next-line class-methods-use-this -- test stub override: classifies by `functionPath` alone, no instance state.
+    protected override isCustomMutator(functionPath: string): boolean {
+        return functionPath === "messages:sendMutator";
+    }
+}
+
+/**
+ * Like {@link CountingMutatorShard} but its handler throws until `shouldThrow` is
+ * cleared — so the transaction (and the watermark advance committed inside it via
+ * `commitMutationBookkeeping`) rolls back together. Proves the watermark never
+ * advances for a mutation that didn't commit, so the same seq re-runs on retry.
+ */
+class AtomicMutatorShard extends ShardDO {
+    public shouldThrow = true;
+
+    public override handleRpc(): Promise<unknown> {
+        return this.runInTransaction(() => {
+            if (this.shouldThrow) {
+                throw new Error("mutator boom");
+            }
+
+            const result = { ok: true };
+
+            this.commitMutationBookkeeping(result);
+
+            return result;
         });
     }
 
@@ -178,6 +213,37 @@ describe("shardDO custom-mutator watermark (dispatch path)", () => {
             const next = await shard.fetch(push("c1", 1));
 
             await expect(next.json()).resolves.toEqual({ lastMutationId: 1, result: { runs: 3 } });
+        } finally {
+            database.close();
+        }
+    });
+
+    it("rolls the watermark back with a failed mutator — the same seq re-runs", async () => {
+        expect.assertions(3);
+
+        const database = createSqliteExec();
+
+        try {
+            runShardMigrations(database.sql, messagesSchema, { cdc: true });
+            const shard = new AtomicMutatorShard(makeState(database), {});
+
+            // seq 1's handler throws → the transaction (and the watermark advance
+            // committed inside it) rolls back, so the push fails and nothing sticks.
+            const failed = await shard.fetch(push("c1", 1));
+
+            expect(failed.status).toBe(500);
+
+            // Retrying seq 1 is still "next" (the watermark never advanced past 0),
+            // so it re-runs — never wrongly classified as an already-applied replay.
+            shard.shouldThrow = false;
+            const retry = await shard.fetch(push("c1", 1));
+
+            await expect(retry.json()).resolves.toEqual({ lastMutationId: 1, result: { ok: true } });
+
+            // And the watermark advanced exactly once: the next in-order push is 2.
+            const next = await shard.fetch(push("c1", 2));
+
+            await expect(next.json()).resolves.toEqual({ lastMutationId: 2, result: { ok: true } });
         } finally {
             database.close();
         }
