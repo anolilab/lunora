@@ -351,6 +351,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // These flip the emitted ctx type seam in `server.ts` (type-only dynamic
     // imports); the runtime ShardDO wiring lands with each capability's package.
     const hasKv = featureUsage.kv;
+    // `ctx.access` — the verified Cloudflare Access identity facade, wired onto
+    // every ctx when a `lunora/` source reads `ctx.access`. NB: distinct from the
+    // `hasAccess` below (a declared `@lunora/cloudflare-access` dependency, which
+    // gates the worker's `.access()` resolveIdentity builder method). The
+    // `accessContext()` middleware imports the package's `/context` subpath, so it
+    // never trips this usage probe — the two paths don't collide.
+    const hasAccessFacade = featureUsage.access;
     // `ctx.flags` is gated on the project actually declaring a `lunora/flags.ts`
     // (`defineFlags(...)`) — the generated ShardDO imports that module's default
     // export for its OpenFeature provider, so wiring `ctx.flags` without it would
@@ -401,6 +408,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const apiContent = emitApi(functions, workflows, useUmbrella);
     const serverContent = emitServer({
         containers,
+        hasAccessFacade,
         hasAi,
         hasAnalytics,
         hasBrowser,
@@ -422,6 +430,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         advisories,
         containers,
         flagKeys,
+        hasAccessFacade,
         hasAi,
         hasAnalytics,
         hasBrowser,
@@ -471,6 +480,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // `createWorker` options. Lives in generated code (not the dependency-free
     // `@lunora/runtime`) so it can import the add-on packages the app installed.
     const appContent = emitApp({
+        hasAccess: dependencies.has("@lunora/cloudflare-access"),
         hasAi,
         hasAnalytics,
         hasAuth: dependencies.has("@lunora/auth"),

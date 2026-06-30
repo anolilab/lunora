@@ -337,6 +337,36 @@ export const cached = query({ args: { key: v.string() }, handler: async (ctx, { 
             expect(result.generated.server).toContain('readonly kv: import("@lunora/bindings/kv").Kv;');
         });
 
+        it("wires ctx.access end-to-end (every ctx) when a query reads ctx.access", () => {
+            expect.assertions(5);
+
+            writeFileSync(
+                join(workdir, "lunora", "whoami.ts"),
+                `import { query } from "@lunora/server";
+export const whoAmI = query({ args: {}, handler: async (ctx) => ({ email: ctx.access.email, isOps: ctx.access.hasGroup("ops") }) });
+`,
+                "utf8",
+            );
+
+            const result = runCodegen({ lint: false, projectRoot: workdir });
+
+            expect(result.generated.shard).toContain('import { accessFacade } from "@lunora/cloudflare-access/context"');
+            expect(result.generated.shard).toContain("const access = accessFacade(identity, userId);");
+            expect(result.generated.shard).toContain("\n                access,");
+            // Access rides every ctx, so it must NOT be gated behind the action-only block.
+            expect(result.generated.shard).not.toContain("ctx.access = access;");
+            expect(result.generated.server).toContain('readonly access: import("@lunora/cloudflare-access/context").AccessFacade;');
+        });
+
+        it("does not wire ctx.access for a project that doesn't read it", () => {
+            expect.assertions(2);
+
+            const result = runCodegen({ lint: false, projectRoot: workdir });
+
+            expect(result.generated.shard).not.toContain("@lunora/cloudflare-access");
+            expect(result.generated.server).not.toContain("@lunora/cloudflare-access");
+        });
+
         it("does not wire @lunora/flags for a project without a lunora/flags.ts", () => {
             expect.assertions(2);
 

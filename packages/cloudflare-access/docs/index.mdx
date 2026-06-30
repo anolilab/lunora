@@ -1,0 +1,157 @@
+---
+title: "@lunora/cloudflare-access"
+description: Cloudflare Access (Zero Trust) identity for Lunora — verify the Cf-Access-Jwt-Assertion JWT against your team JWKS and feed the verified identity into ctx.auth and RLS via a resolveIdentity adapter.
+---
+
+`@lunora/cloudflare-access` turns a Cloudflare Access (Cloudflare One / Zero Trust) request into a Lunora identity. It verifies the `Cf-Access-Jwt-Assertion` JWT that Access stamps on every proxied request against your team's JWKS, then maps the verified claims onto the shape `@lunora/runtime` expects — so a verified SSO user or service token becomes `ctx.auth` for every query, mutation, and action, and feeds row-level security with no per-procedure wiring.
+
+```sh
+pnpm add @lunora/cloudflare-access
+```
+
+## How it fits
+
+Cloudflare Access is an **identity-aware proxy**: it authenticates the caller _before_ the request reaches your Worker and adds a signed JWT header. This package is therefore **not** a better-auth plugin — it is a `resolveIdentity` adapter. The single integration point is the runtime's `resolveIdentity` hook, which already feeds `ctx.auth`, RLS policies, `serverDefault` columns, and live subscriptions.
+
+Wire it onto your generated app with the `extend` escape hatch (in your worker entry, e.g. `_generated/server` is consumed by `lunora/server.ts`):
+
+```ts
+import { createAccessResolver } from "@lunora/cloudflare-access";
+
+import { defineApp } from "./_generated/server";
+
+export default defineApp<Env>()
+    .shard((env) => env.SHARD)
+    .extend((env) => ({
+        resolveIdentity: createAccessResolver({
+            teamDomain: env.CF_ACCESS_TEAM_DOMAIN, // "acme" | "acme.cloudflareaccess.com"
+            aud: env.CF_ACCESS_AUD, // the Access application's AUD tag
+        }),
+    }))
+    .build();
+```
+
+The resolver is **fail-closed → anonymous**: a missing or invalid token resolves to `null`, the request proceeds unauthenticated, and RLS denies. The verified `exp` is forwarded so live WebSocket subscriptions expire with the credential.
+
+> `aud` is mandatory. It is the only claim that scopes a token to _your_ Access application — a token minted for any other app in the same Cloudflare team shares the issuer and JWKS. Verification **refuses to run** (throws, then fails closed to anonymous) when `aud` is missing or empty, so an unset `env.CF_ACCESS_AUD` degrades safely instead of silently accepting cross-app tokens.
+
+## Composing with `@lunora/auth`
+
+When you also run `@lunora/auth`, both want the `resolveIdentity` hook — and a bare `extend` would clobber the better-auth resolver (extend merges _over_ the derived options). Compose them so Access wins when its JWT is present and everyone else falls through to the app session:
+
+```ts
+import { composeResolvers, createAccessResolver } from "@lunora/cloudflare-access";
+
+export default defineApp<Env>()
+    .auth({ d1: (env) => env.DB, options: authOptions })
+    .extend((env, derived) => ({
+        resolveIdentity: composeResolvers(
+            createAccessResolver({ teamDomain: env.CF_ACCESS_TEAM_DOMAIN, aud: env.CF_ACCESS_AUD }),
+            derived.resolveIdentity, // the better-auth resolver the .auth() call wired
+        ),
+    }))
+    .build();
+```
+
+> The codegen integration (below) wires this composition for you when it detects an Access configuration, so you rarely write it by hand.
+
+## Claims on `ctx.auth`
+
+`userId` is derived from `sub` (SSO) or `common_name` (service tokens). The verified claims — `email`, `groups`, `commonName`, and the full raw set under `access` — are available via `ctx.auth.getIdentity()`, so RLS policies can branch on them:
+
+```ts
+definePolicy({
+    on: "read",
+    table: "documents",
+    when: ({ auth }) => auth.identity?.groups?.includes("eng") ?? false,
+});
+```
+
+## Groups → RLS roles
+
+`@lunora/cloudflare-access/roles` ships `accessRoles()`, a procedure middleware that lifts the verified `groups` claim into `ctx.auth.roles` — the per-request role list `rls()` unions permissions over. Place it **before** `rls(...)` in the chain; with no token (anonymous) it forwards the context unchanged, so RLS still fails closed.
+
+```ts
+import { accessRoles } from "@lunora/cloudflare-access/roles";
+
+export const listInvoices = query
+    // groups used verbatim, or remap with a table / function
+    .use(accessRoles({ map: { "idp-admins": "admin", "idp-billing": ["billing", "viewer"] } }))
+    .use(rls(policies, { roles }))
+    .query(async ({ ctx }) => ctx.db.from("invoices").all());
+```
+
+Omit `map` to use each group name as a role verbatim. A group with no mapping contributes no role (fail-closed). Roles are unioned with any already on `ctx.auth.roles`, then deduped. Pass `readGroups` when your IdP nests groups somewhere other than the `groups` claim.
+
+## Reading the identity — `ctx.access`
+
+A typed, **synchronous** `ctx.access` facade exposes the verified identity directly — `ctx.access.email`, `ctx.access.groups`, `ctx.access.hasGroup("ops")`, or the full `ctx.access.claims` — with no `await` and no cast off the generic `ctx.auth.getIdentity()` envelope.
+
+There are two ways to get it; pick one.
+
+### Global (codegen-wired) — recommended
+
+Just read `ctx.access` in a handler. Codegen detects the use and wires the facade onto **every** ctx (query, mutation, and action) — no import, no middleware:
+
+```ts
+export const whoAmI = query({
+    args: {},
+    handler: async (ctx) => ({
+        email: ctx.access.email,
+        isOps: ctx.access.hasGroup("ops"),
+    }),
+});
+```
+
+The facade is built **synchronously** from the same resolved identity `ctx.auth` uses, so a global `ctx.access` adds only one small object construction per request — no extra I/O and no JWT re-verification (that happened once at the edge in `resolveIdentity`). The type seam is emitted only when a handler reads `ctx.access`, so a project that never touches it carries no extra surface.
+
+### Per-procedure middleware
+
+When you want it attached explicitly on chosen procedures (or you aren't relying on codegen discovery), `@lunora/cloudflare-access/context` ships `accessContext()`, a middleware that attaches the same facade:
+
+```ts
+import { accessContext } from "@lunora/cloudflare-access/context";
+
+export const whoAmI = query.use(accessContext()).query(async ({ ctx }) => ({
+    email: ctx.access.email,
+    isOps: ctx.access.hasGroup("ops"),
+}));
+```
+
+The middleware imports the `/context` subpath, so it never trips the global wiring — the two paths don't collide.
+
+Either way, an anonymous request gets the anonymous facade — `authenticated: false`, empty `groups`, `hasGroup` always `false` — so reads stay safe with no null check and authorization still fails closed. `ctx.access` only **surfaces** the identity; pair it with `rls(...)` (or `accessRoles(...)` → `rls(...)`) when you need enforcement.
+
+`ctx.access` surfaces **only Access identities**. Under `composeResolvers(access, …)`, a request authenticated by another adapter (e.g. a better-auth session) resolves an identity with no verified Access claim set, so `ctx.access` reads anonymous (`authenticated: false`) for it — read that caller off `ctx.auth` instead. This keeps `ctx.access.authenticated` an honest "is there a verified Access identity" check rather than "is there any identity".
+
+## Gating the Studio behind Access
+
+`@lunora/cloudflare-access/admin` ships `accessAdminGate()`, which builds a value for the runtime's `WorkerOptions.adminGate` — an async authorization gate for the `/_lunora/admin/*` plane (the Studio's HTTP + WebSocket endpoints), OR-ed with the static `adminToken` bearer. It verifies the request's Access JWT and applies your `isAdmin(claims)` predicate, so a verified Access identity in the right group can reach the Studio without a shared token. It is fail-closed: no token, a token that fails verification, or an `isAdmin` returning `false` all deny (the bearer stays the only other path). It runs only on admin routes, never on the RPC/WebSocket data path.
+
+Wire it on the generated app builder via `.extend((env) => …)`:
+
+```ts
+import { accessAdminGate } from "@lunora/cloudflare-access/admin";
+
+export default defineApp()
+    .extend((env) => ({
+        adminGate: accessAdminGate({
+            teamDomain: env.CF_ACCESS_TEAM_DOMAIN,
+            aud: env.CF_ACCESS_ADMIN_AUD, // a dedicated Access app over /_lunora/admin
+            isAdmin: (claims) => claims.groups?.includes("lunora-admins") ?? false,
+        }),
+    }))
+    .build();
+```
+
+## API
+
+- `createAccessResolver(options)` — a `resolveIdentity` adapter (header + cookie, verify, map).
+- `composeResolvers(...resolvers)` — first non-null identity wins.
+- `verifyAccessJwt(token, options)` — low-level: verify a token, return its claims (throws on failure).
+- `accessIssuer(teamDomain)` — normalize a team domain to its canonical issuer URL.
+- `ctx.access` _(codegen-wired)_ — read it in a handler and codegen attaches a typed, synchronous facade over the verified identity to every ctx.
+- `accessContext()` _(`@lunora/cloudflare-access/context`)_ — the explicit per-procedure middleware form of the same `ctx.access` facade.
+- `accessFacade(identity, userId)` _(`@lunora/cloudflare-access/context`)_ — the pure factory both forms build on; returns the anonymous facade when no identity is present.
+- `accessRoles(options)` _(`@lunora/cloudflare-access/roles`)_ — middleware mapping the verified `groups` claim into `ctx.auth.roles` for RLS.
+- `accessAdminGate(options)` _(`@lunora/cloudflare-access/admin`)_ — a `WorkerOptions.adminGate` that authorizes the `/_lunora/admin/*` plane from a verified Access identity.

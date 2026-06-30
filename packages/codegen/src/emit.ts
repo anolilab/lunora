@@ -1007,6 +1007,14 @@ const buildStorageBucketNames = (schema: SchemaIR, ruleBuckets: ReadonlyArray<st
 
 interface EmitServerOptions {
     containers?: ReadonlyArray<ContainerIR>;
+
+    /**
+     * A `lunora/` source reads `ctx.access` — wires the verified Cloudflare Access
+     * facade (`@lunora/cloudflare-access/context`) onto every ctx. Distinct from
+     * `emitApp`'s `hasAccess` (which gates the worker's `.access()` resolveIdentity
+     * method); this one gates the per-request `ctx.access` read surface.
+     */
+    hasAccessFacade?: boolean;
     hasAi?: boolean;
     /** A `lunora/` source uses `@lunora/bindings/analytics` / `ctx.analytics` — wires the write helper onto every ctx. */
     hasAnalytics?: boolean;
@@ -1037,6 +1045,7 @@ interface EmitServerOptions {
 /* eslint-disable sonarjs/cognitive-complexity -- emitter that gates each Cloudflare-capability fragment behind its own `has*`/length flag to assemble dense generated TS; the branching is the per-binding emission contract, not refactorable logic */
 const emitServer = ({
     containers = [],
+    hasAccessFacade = false,
     hasAi = false,
     hasAnalytics = false,
     hasBrowser = false,
@@ -1144,6 +1153,14 @@ export type Env = CloudflareBindings;`;
     // `ctx.kv` — Workers KV. Typed on EVERY ctx (a KV read is allowed in a
     // deterministic read path the way `ctx.db` is; the binding is user-named).
     const kvContextField = hasKv ? `\n    readonly kv: import("@lunora/bindings/kv").Kv;` : "";
+    // `ctx.access` — the verified Cloudflare Access identity, a synchronous facade
+    // over the already-resolved claims. Rides EVERY ctx (a deterministic read of
+    // the per-request identity, like `ctx.auth`; no I/O — verification happened
+    // once at the edge in `resolveIdentity`). Gated on a `lunora/` source reading
+    // `ctx.access`; the opt-in `accessContext()` middleware is the alternative.
+    const accessContextField = hasAccessFacade
+        ? `\n    /** Verified Cloudflare Access identity — a synchronous facade over the resolved claims (email / groups / hasGroup / claims). Anonymous when no Access token is present. */\n    readonly access: import("@lunora/cloudflare-access/context").AccessFacade;`
+        : "";
     // `ctx.flags` — OpenFeature feature flags. Typed on EVERY ctx: a flag read is
     // an external lookup like `ctx.kv`, sanctioned in deterministic read paths and
     // memoized per request. Gated on the project declaring `lunora/flags.ts`.
@@ -1285,19 +1302,19 @@ type TypedTableGet = <T extends TableName>(id: IdOfTable<T>) => Promise<Doc<T> |
 export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"> {
     readonly db: Omit<DatabaseReader, "query" | "get"> & DatabaseReaderFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmReader;
-    readonly storage: ReadOnlyStorage<StorageBucketName>;${kvContextField}${flagsContextField}${analyticsContextField}
+    readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${analyticsContextField}
 }
 
 export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${workflowsOmit}> {
     readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: ReadOnlyStorage<StorageBucketName>;${kvContextField}${flagsContextField}${analyticsContextField}${workflowsContextField}${queuesContextField}
+    readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${analyticsContextField}${workflowsContextField}${queuesContextField}
 }
 
 export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${workflowsOmit}> {
     readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: StorageBase<StorageBucketName>;${aiActionField}${paymentsActionField}${containersActionField}${kvContextField}${flagsContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${workflowsContextField}${queuesContextField}
+    readonly storage: StorageBase<StorageBucketName>;${accessContextField}${aiActionField}${paymentsActionField}${containersActionField}${kvContextField}${flagsContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${workflowsContextField}${queuesContextField}
 }
 
 /**
@@ -1881,6 +1898,33 @@ const emitFlagsFragments = (hasFlags: boolean): HelperFragments => {
         configField: `\n    flags?: (env: Record<string, unknown>) => import("@lunora/flags").Provider;`,
         contextField: `\n                flags,`,
         importLines: [`import { createFlags } from "@lunora/flags";`, `import flagsConfig from "../flags.js";`],
+        stub: "",
+    };
+};
+
+/**
+ * `ctx.access` (verified Cloudflare Access identity) fragments. Rides EVERY ctx —
+ * a deterministic read of the per-request identity, like `ctx.auth`. The facade
+ * is built **synchronously** from the resolved `identity`/`userId` locals already
+ * in scope at the ctx-build site (the same source `ctx.auth` uses), via the
+ * package's pure `accessFacade(identity, userId)` factory — so a global
+ * `ctx.access` adds only one object construction per request: no I/O, and no
+ * JWT re-verification (that happened once at the edge in `resolveIdentity`).
+ * `accessFacade` returns the anonymous facade when no identity is present, so
+ * there is no stub fallback.
+ */
+const emitAccessFragments = (hasAccessFacade: boolean): HelperFragments => {
+    if (!hasAccessFacade) {
+        return EMPTY_HELPER_FRAGMENTS;
+    }
+
+    return {
+        build: `
+            const access = accessFacade(identity, userId);
+`,
+        configField: "",
+        contextField: `\n                access,`,
+        importLines: [`import { accessFacade } from "@lunora/cloudflare-access/context";`],
         stub: "",
     };
 };
@@ -2692,6 +2736,8 @@ interface EmitShardOptions {
     containers?: ReadonlyArray<ContainerIR>;
     /** Statically-discovered `ctx.flags.&lt;type>("key")` reads — the studio Flags page + reactive evaluation iterate these. */
     flagKeys?: ReadonlyArray<{ key: string; type: "boolean" | "number" | "object" | "string" }>;
+    /** A `lunora/` source reads `ctx.access` — wires the verified Cloudflare Access facade onto every ctx. */
+    hasAccessFacade?: boolean;
     hasAi?: boolean;
     /** A `lunora/` source reads `ctx.analytics` — wires the Analytics Engine write helper onto every ctx. */
     hasAnalytics?: boolean;
@@ -2731,6 +2777,7 @@ const emitShard = ({
     advisories = [],
     containers = [],
     flagKeys = [],
+    hasAccessFacade = false,
     hasAi = false,
     hasAnalytics = false,
     hasBrowser = false,
@@ -2760,6 +2807,7 @@ const emitShard = ({
     // `analytics` ride EVERY ctx (deterministic-read / fire-and-forget-write);
     // `images` / `sql` / `browser` are ActionCtx-only (external, non-deterministic
     // I/O) and are woven onto the action ctx object only — see the `isAction` gate.
+    const accessFragments = emitAccessFragments(hasAccessFacade);
     const kvFragments = emitKvFragments(hasKv);
     const flagsFragments = emitFlagsFragments(hasFlags);
     const flagsOverrides = emitFlagsOverrides(flagKeys, hasFlags);
@@ -2982,6 +3030,7 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
     }
 
     importLines.push(
+        ...accessFragments.importLines,
         ...kvFragments.importLines,
         ...flagsFragments.importLines,
         ...analyticsFragments.importLines,
@@ -3242,8 +3291,8 @@ ${schema.tables
     const secretsBuild = `
             const secrets = createSecrets(env);
 `;
-    const everyContextBuild = `${kvFragments.build}${flagsFragments.build}${analyticsFragments.build}${secretsBuild}`;
-    const everyContextField = `${kvFragments.contextField}${flagsFragments.contextField}${analyticsFragments.contextField}\n                secrets,`;
+    const everyContextBuild = `${accessFragments.build}${kvFragments.build}${flagsFragments.build}${analyticsFragments.build}${secretsBuild}`;
+    const everyContextField = `${accessFragments.contextField}${kvFragments.contextField}${flagsFragments.contextField}${analyticsFragments.contextField}\n                secrets,`;
 
     // `ctx.images` / `ctx.sql` (Hyperdrive) / `ctx.browser` are ActionCtx-ONLY:
     // external, non-deterministic I/O the typed `ActionCtx` exposes but
