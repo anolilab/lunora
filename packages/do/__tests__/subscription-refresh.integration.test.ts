@@ -269,7 +269,7 @@ describe("shardDO: mutation → subscription-refresh pipeline", () => {
     // emits a lightweight `settled` frame carrying the client's watermark so the
     // overlay drops; a plain `useQuery` client (no `clientId`) gets nothing.
     // -------------------------------------------------------------------------
-    it("settled frame: a no-change refresh emits a settled frame only to a clientId socket", async () => {
+    it("settled frame: a no-change refresh emits a settled frame to every subscriber", async () => {
         expect.assertions(6);
 
         const shard = new SubscriptionRefreshShard(state, {});
@@ -302,9 +302,11 @@ describe("shardDO: mutation → subscription-refresh pipeline", () => {
 
         // No new data/delta frame on either socket (result unchanged).
         expect(subFrames(wsA, "sub-A")).toHaveLength(1);
-        // Socket A (clientId) received a settled watermark frame; socket B did not.
+        // BOTH sockets now receive a settled frame carrying the cursor: socket A
+        // (clientId) to advance its checkpoint watermark, socket B (plain useQuery)
+        // so a per-call optimistic overlay can drop on a byte-identical write.
         expect(settledFrames(wsA, "sub-A")).toHaveLength(1);
-        expect(settledFrames(wsB, "sub-B")).toHaveLength(0);
+        expect(settledFrames(wsB, "sub-B")).toHaveLength(1);
     });
 
     // -------------------------------------------------------------------------

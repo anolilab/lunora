@@ -818,7 +818,13 @@ describe("shardDO subscription re-execution", () => {
         await shard.writeRpc();
 
         expect(shard.execCount).toBe(execBefore + 1); // re-ran the query
-        expect(ws.sent).toHaveLength(sentBefore); // identical → deduped, no push
+
+        // Byte-identical result → no `data`/`delta` re-push; the only new frame is a
+        // lightweight `settled` (carrying the cursor) so a pending optimistic overlay
+        // can drop without a visible change.
+        const pushed = ws.sent.slice(sentBefore).map((raw) => JSON.parse(raw));
+
+        expect(pushed.filter((frame) => frame.type === "data" || frame.type === "delta")).toHaveLength(0);
     });
 
     it("skips re-execution entirely when the write touches a table the subscription never read", async () => {

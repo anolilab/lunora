@@ -11,6 +11,24 @@ export interface SubscriptionError {
 
 export type SubscriptionErrorCallback = (error: SubscriptionError) => void;
 
+/**
+ * One active per-call optimistic transform layered onto a subscription. The
+ * displayed value is the authoritative {@link SubscriptionState.serverBase}
+ * folded through every layer's `transform`, in order — so an incoming server
+ * frame re-folds the still-pending layers onto the new base (rebasing) instead
+ * of clobbering them. A layer is dropped — gaplessly — once a `data`/`delta`
+ * frame whose `cursor >= commitCursor` arrives (its write is now reflected in
+ * `serverBase`); `commitCursor` is the CDC cursor the server echoed on the
+ * mutation's response, and stays `undefined` while the write is still queued/
+ * in-flight (so the overlay survives unrelated deltas until confirmed).
+ */
+export interface OptimisticLayer {
+    /** The committed CDC cursor (from the mutation response); `undefined` until confirmed. */
+    commitCursor?: number;
+    readonly id: symbol;
+    readonly transform: (current: unknown) => unknown;
+}
+
 export interface SubscriptionState {
     /** True once the server has acked the subscription on the current socket. */
     acked: boolean;
@@ -54,6 +72,23 @@ export interface SubscriptionState {
 
     /** Last known value, used to short-circuit `useQuery`-style consumers. */
     lastValue: unknown;
+
+    /**
+     * Active per-call optimistic layers, in application order (see
+     * {@link OptimisticLayer}). Empty for subscriptions with no pending per-call
+     * optimistic write — the common case, where `lastValue` tracks `serverBase`
+     * exactly and behaviour is identical to a plain server-value assignment.
+     */
+    optimisticLayers: OptimisticLayer[];
+
+    /**
+     * The authoritative server value the optimistic layers fold onto — the value
+     * with NO optimistic overlay. Tracks `lastValue` exactly whenever no layers
+     * are active; diverges only while a per-call optimistic write is pending. A
+     * server frame updates this (and re-folds the layers); the durable read cache
+     * persists this, never the optimistic overlay.
+     */
+    serverBase: unknown;
 
     /**
      * The `__cdc_log` high-watermark (`cursor`) the `lastValue` reflects,

@@ -20,6 +20,13 @@ interface QueuedMutation<T = unknown> {
      * will report this". Maps to the public `MutationSettledEvent.hadAwaiter`.
      */
     liveAwaiter?: boolean;
+
+    /**
+     * Invoked on a successful replay with the server's echoed commit CDC cursor,
+     * so a live per-call optimistic layer drops gaplessly once a frame reaches it.
+     * Absent on hydrated records (the optimistic write lived in a prior session).
+     */
+    readonly onCommit?: (commitCursor: number | undefined) => void;
     /** Rejects if the mutation can no longer be replayed. */
     readonly reject: (error: unknown) => void;
     /** Resolves once the mutation has been replayed against the server. */

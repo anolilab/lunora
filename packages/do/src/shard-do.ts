@@ -3440,21 +3440,45 @@ abstract class ShardDO {
             return this.buildDispatchResponse(mutatorClass, cachedValue);
         }
 
-        return jsonResponse({ result: cachedValue }, 200, this.currentResponseBookmark);
+        // A replayed plain mutation already committed in a prior dispatch, so its
+        // real commit cursor is in the past; the current high-watermark is a safe
+        // conservative bound (CDC only grows, so a frame at `>= ` it is also `>= `
+        // the original), letting an in-session requeue still drop its optimistic
+        // overlay. {@link mutationCommitCursor} applies the same mutation/CDC scope.
+        const commitCursor = this.mutationCommitCursor();
+
+        return jsonResponse(commitCursor === undefined ? { result: cachedValue } : { commitCursor, result: cachedValue }, 200, this.currentResponseBookmark);
+    }
+
+    /**
+     * The CDC cursor a just-committed plain mutation landed at — the post-write
+     * high-watermark, on the same scale as the `cursor` on `data`/`delta` frames.
+     * The client drops a pending per-call optimistic overlay once it sees a frame
+     * with `cursor >= commitCursor` (gapless reconciliation that keeps mutations
+     * concurrent, without the serialized custom-mutator watermark). Scoped to a
+     * mutation (carries an `x-lunora-mutation-id`) on a CDC-enabled shard;
+     * `undefined` otherwise, leaving the wire byte-identical for queries/actions
+     * and CDC-off shards.
+     */
+    protected mutationCommitCursor(): number | undefined {
+        return this.currentRequestMutationId === undefined ? undefined : this.currentCdcCursor();
     }
 
     /**
      * Build the success response for a dispatched RPC. A `"next"` custom-mutator
      * push echoes the applied `lastMutationId` so the client drops the pending
-     * optimistic overlay as soon as the ack lands; ordinary calls return the bare
-     * `{ result }` envelope unchanged.
+     * optimistic overlay as soon as the ack lands; a plain mutation echoes
+     * `commitCursor` (see {@link mutationCommitCursor}); other calls return the
+     * bare `{ result }` envelope unchanged.
      */
     protected buildDispatchResponse(mutatorClass: ClientMutationClass | undefined, result: unknown): Response {
         if (mutatorClass?.kind === "next") {
             return jsonResponse({ lastMutationId: this.currentRequestClientSeq, result }, 200, this.currentResponseBookmark);
         }
 
-        return jsonResponse({ result }, 200, this.currentResponseBookmark);
+        const commitCursor = this.mutationCommitCursor();
+
+        return jsonResponse(commitCursor === undefined ? { result } : { commitCursor, result }, 200, this.currentResponseBookmark);
     }
 
     /**
@@ -6831,21 +6855,21 @@ abstract class ShardDO {
             existing.tables = outcome.tables;
 
             // The result is byte-identical to the last frame, so no data/delta
-            // frame goes out (frame suppression). For a `@lunora/db`
-            // custom-mutator client (one that announced a `clientId`, hence has a
-            // client watermark), a confirmed write whose authoritative result did
-            // NOT change this list would otherwise leave its optimistic overlay
-            // stuck forever — with no frame, the client's checkpoint gate never
-            // advances. Emit a lightweight `settled` frame (carrying the same
-            // cursor/epoch as the data path) so the client drops the overlay
-            // without a visible change. Plain `useQuery` subscribers (no
-            // `clientId`, no watermark) never receive it, and an old client
-            // ignores the unknown frame.
+            // frame goes out (frame suppression). But a confirmed write whose
+            // authoritative result did NOT change this query still committed at
+            // this cursor, and BOTH overlay mechanisms need the cursor to drop
+            // their pending optimistic state, or it sticks forever with no frame:
+            //   - a `@lunora/db` custom-mutator client (announced a `clientId`)
+            //     advances its checkpoint gate off `lastMutationId`;
+            //   - a plain `useQuery` client with a per-call `optimistic` layer
+            //     drops it once `cursor >= commitCursor`.
+            // So emit a lightweight `settled` frame (carrying the cursor/epoch)
+            // unconditionally, with `lastMutationId` only when this socket has a
+            // watermark. An old client ignores the unknown frame.
             const settledWatermark = this.socketClientWatermark(ws);
+            const watermarkField = settledWatermark === undefined ? "" : `,"lastMutationId":${String(settledWatermark)}`;
 
-            if (settledWatermark !== undefined) {
-                trySendFrame(ws, `{"type":"settled","id":${JSON.stringify(subId)},"lastMutationId":${String(settledWatermark)}${cursorSuffix}}`);
-            }
+            trySendFrame(ws, `{"type":"settled","id":${JSON.stringify(subId)}${watermarkField}${cursorSuffix}}`);
 
             return;
         }

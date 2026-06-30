@@ -341,8 +341,10 @@ export interface RpcEnvelope {
  * watermarked custom-mutator push additionally carries `lastMutationId` — the
  * highest per-client sequence the DO has applied — which the client uses to keep
  * its `clientSeq` generator monotonic across reloads (see `LunoraClient.callMutator`).
+ * A plain mutation on a CDC shard carries `commitCursor` — the cursor the write
+ * committed at — which gates the drop of a per-call optimistic layer.
  */
-export type RpcResponseBody = { error: { code: string; message: string } } | { lastMutationId?: number; result: unknown };
+export type RpcResponseBody = { error: { code: string; message: string } } | { commitCursor?: number; lastMutationId?: number; result: unknown };
 
 /** Subscription protocol — client → server. */
 export interface ClientSubscribeMessage {
