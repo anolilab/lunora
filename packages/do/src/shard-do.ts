@@ -89,7 +89,7 @@ import type { QueryStatEntry } from "./query-metrics";
 import { readQueryMetrics, recordQueryMetric } from "./query-metrics";
 import type { ShardRankPageResult } from "./rank";
 import type { ReactiveCacheOptions } from "./reactive-cache";
-import { ReactiveCache, reactiveCacheKey } from "./reactive-cache";
+import { ReactiveCache, reactiveCacheKey, stableStringify } from "./reactive-cache";
 import type { OwnerRelayFrame } from "./relay";
 import { DEFAULT_PROMOTION_THRESHOLDS, parseRelayName, relayName } from "./relay";
 import type { AppendRequestLogEntry, ContextLogLevel, LogEventInput, RequestLogResult, RequestLogWriteOptions } from "./request-log";
@@ -1838,6 +1838,9 @@ abstract class ShardDO {
 
     /** Relay-side guard: `true` once this relay has announced itself to its owner this wake, so a hot socket churn doesn't re-`relay_attach` on every subscribe. */
     private relayAnnounced = false;
+
+    /** Memoized RLS-uniform verdict per `(name, args)` shape — uniformity is a stable property, so the dual-identity probe runs at most once per distinct shape (plan 075 Phase 3). */
+    private readonly shapeUniformCache = new Map<string, boolean>();
 
     /**
      * Declared indexes (`table:index`) a query has exercised since this instance
@@ -3905,6 +3908,33 @@ abstract class ShardDO {
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to dispatch via the generated shape registry
     protected resolveShape(_name: string, _args: Record<string, unknown>, _identity?: SubscriptionIdentity): ResolvedShape | undefined {
         return undefined;
+    }
+
+    /**
+     * The RLS-uniform gate (plan 075 Phase 3): whether a reactive shape may be
+     * relay-multicast — i.e. one delta is correct for **every** subscriber. True
+     * iff the shape's resolved query (table + `effectiveWhere` + `columns`) is
+     * **identical regardless of the caller's identity** AND none of its projected
+     * columns are masked. Probed by resolving the shape under two distinct
+     * synthetic identities and comparing — airtight (the resolved `effectiveWhere`
+     * already composes the shape predicate AND the table's RLS read-where) and
+     * **fail-closed**: a resolve that throws, a per-identity `effectiveWhere`, a
+     * masked column, or a `.global()` table all yield `false`, keeping the shape
+     * owner-served. Cached per `(name, args)`, whose uniformity is stable.
+     */
+    protected isShapeRelayUniform(name: string, args: Record<string, unknown>): boolean {
+        const cacheKey = stableStringify({ args, name });
+        const cached = this.shapeUniformCache.get(cacheKey);
+
+        if (cached !== undefined) {
+            return cached;
+        }
+
+        const uniform = this.probeShapeRelayUniform(name, args);
+
+        this.shapeUniformCache.set(cacheKey, uniform);
+
+        return uniform;
     }
 
     /**
@@ -7619,6 +7649,50 @@ abstract class ShardDO {
 
         this.relayAnnounced = false;
         await this.postRelayMessage(role.ownerKey, { relayIndex: role.relayIndex, type: "relay_detach" });
+    }
+
+    /** Resolve a shape under two distinct probe identities and compare — the one-shot computation behind {@link ShardDO.isShapeRelayUniform}. */
+    private probeShapeRelayUniform(name: string, args: Record<string, unknown>): boolean {
+        const probeA: SubscriptionIdentity = { identity: { __lunora_relay_probe: 1, sub: "__lunora_probe_a__" }, userId: "__lunora_probe_a__" };
+        const probeB: SubscriptionIdentity = { identity: { __lunora_relay_probe: 2, sub: "__lunora_probe_b__" }, userId: "__lunora_probe_b__" };
+
+        let a: ResolvedShape | undefined;
+        let b: ResolvedShape | undefined;
+
+        try {
+            a = this.resolveShape(name, args, probeA);
+            b = this.resolveShape(name, args, probeB);
+        } catch {
+            // An identity-gated resolve threw for a probe → not uniform (fail-closed).
+            return false;
+        }
+
+        if (a === undefined || b === undefined || a.global === true || b.global === true || a.table !== b.table) {
+            return false;
+        }
+
+        if (stableStringify(a.effectiveWhere) !== stableStringify(b.effectiveWhere) || stableStringify(a.columns) !== stableStringify(b.columns)) {
+            return false;
+        }
+
+        return !this.shapeColumnsMasked(a.table, a.columns);
+    }
+
+    /** Whether any column the shape projects from `table` is masked — a masked value is identity-dependent, so the shape can't be relay-uniform. */
+    private shapeColumnsMasked(table: string, columns: ReadonlyArray<string> | undefined): boolean {
+        const masked = this.maskMetadata().columns.filter((entry) => entry.table === table);
+
+        if (masked.length === 0) {
+            return false;
+        }
+
+        if (columns === undefined) {
+            return true; // projects every column → any mask on the table makes it non-uniform
+        }
+
+        const projected = new Set(columns);
+
+        return masked.some((entry) => projected.has(entry.column));
     }
 
     // eslint-disable-next-line class-methods-use-this -- cohesive DO instance method grouped with the hibernation/attachment helpers; reads only the socket
