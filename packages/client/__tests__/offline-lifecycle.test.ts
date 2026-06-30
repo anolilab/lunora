@@ -417,6 +417,102 @@ describe("offline lifecycle (e2e)", () => {
         clientB.close();
     });
 
+    it("7. surfaces a hydrated write's coded rejection on onMutationSettled (no live awaiter)", async () => {
+        expect.assertions(5);
+
+        vi.useFakeTimers();
+
+        const storage = createFakeAsyncStorage();
+
+        // A durable write left by a prior session — its original `mutation()`
+        // Promise is long gone after the reload.
+        await createAsyncStoragePersistence({ storage }).append({
+            args: { title: "durable" },
+            functionPath: "posts:create",
+            id: "m1",
+            identity: null,
+        });
+
+        // The server now rejects the replay with a coded error (e.g. the row was
+        // deleted server-side). Without the observer this is silently dropped.
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ error: { code: "CONFLICT", message: "row no longer exists" } }, { status: 409 }));
+
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            persistence: createAsyncStoragePersistence({ storage }),
+            reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        const settled: { code?: string; functionPath: string; hadAwaiter: boolean; status: string }[] = [];
+
+        client.onMutationSettled((event) => settled.push(event));
+
+        // Hydration opens a socket for the restored write's shard → flush.
+        await vi.advanceTimersByTimeAsync(0);
+        latestSocket().open();
+        await vi.runAllTimersAsync();
+
+        expect(settled).toHaveLength(1);
+        expect(settled[0]?.status).toBe("rejected");
+        expect(settled[0]?.code).toBe("CONFLICT");
+        // The decisive bit: a post-reload replay has no awaiter, so this observer
+        // is the ONLY channel that can tell the UI the write was dropped.
+        expect(settled[0]?.hadAwaiter).toBe(false);
+        // The poison write is purged from durable storage (no replay loop).
+        await expect(createAsyncStoragePersistence({ storage }).load()).resolves.toEqual([]);
+
+        client.close();
+    });
+
+    it("8. surfaces a committed flush and a live-awaiter rejection on onMutationSettled", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers();
+
+        const storage = createFakeAsyncStorage();
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { id: "1" } }));
+
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            persistence: createAsyncStoragePersistence({ storage }),
+            reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        const settled: { hadAwaiter: boolean; status: string }[] = [];
+
+        client.onMutationSettled((event) => settled.push(event));
+
+        // Connect once, drop offline, then queue a write with a live awaiter.
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        const pending = client.mutation(fnRef("posts:create"), { title: "queued" }).catch(() => undefined);
+
+        await vi.advanceTimersByTimeAsync(0);
+
+        // Fire the reconnect timer so a fresh socket is created, then open it →
+        // flush → commit. (Opening stops the reconnect loop.)
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.advanceTimersByTimeAsync(0);
+        await pending;
+
+        expect(settled).toHaveLength(1);
+        expect(settled[0]?.status).toBe("committed");
+        // A live caller was awaiting this write's Promise.
+        expect(settled[0]?.hadAwaiter).toBe(true);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        client.close();
+    });
+
     it("5. drops cached reads and queued writes from a different identity across sessions", async () => {
         expect.assertions(3);
 

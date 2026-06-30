@@ -1,10 +1,13 @@
 import { stableStringify } from "../../../shared/stable-key";
 import createInMemoryBookmarkStorage from "./bookmark";
 import { applyDelta, isMutationDelta } from "./delta-merge";
+import Listeners from "./listeners";
 import type { OptimisticUpdate } from "./local-store";
 import { createLocalStore } from "./local-store";
 import type { QueuedMutation } from "./offline-queue";
 import { nextId, OfflineQueue, reportPersistenceError } from "./offline-queue";
+import type { OptimisticLayerHandle } from "./optimistic-layers";
+import { applyOptimisticLayer, dropConfirmedLayers, foldOptimistic, notifySubscription } from "./optimistic-layers";
 import { queryCacheKey } from "./query-cache";
 import type { ReconnectCalculator } from "./reconnect";
 import { createReconnect } from "./reconnect";
@@ -187,6 +190,42 @@ type WSState = "idle" | "connecting" | "open" | "closed";
 type ConnectionStatus = "connected" | "connecting" | "idle" | "offline";
 
 /**
+ * Terminal verdict for a mutation that passed through the offline queue,
+ * delivered to {@link LunoraClient.onMutationSettled}.
+ *
+ * Unlike the Promise returned by {@link LunoraClient.mutation} — which only the
+ * original caller can await, and which no longer exists after a reload — this
+ * fires for *every* queued write the server (or the queue) reaches a verdict on,
+ * including writes restored from durable storage in a later session. It is the
+ * channel a UI uses to tell the user "your queued change couldn't be saved"
+ * instead of silently dropping a rolled-back optimistic row.
+ *
+ * `status: "rejected"` carries the failure `code` (e.g. `CONFLICT`,
+ * `OFFLINE_QUEUE_OVERFLOW`, `OFFLINE_IDENTITY_CHANGED`) and the `error`.
+ * `hadAwaiter` is `false` for a write whose original `mutation()` Promise is
+ * gone (a hydrated/post-reload replay or an eviction), so a listener can tell
+ * "the caller already saw this" apart from "nothing else will report this".
+ */
+interface MutationSettledEvent {
+    /** The write's args, so a listener can describe or re-offer the change. */
+    readonly args: Record<string, unknown>;
+    /** Server/queue error code on `rejected` (e.g. `CONFLICT`), when present. */
+    readonly code?: string;
+    /** The rejection error on `status: "rejected"`. */
+    readonly error?: unknown;
+    /** The `&lt;file>:&lt;function>` reference of the mutation. */
+    readonly functionPath: string;
+    /** Whether a live caller was still awaiting this write's `mutation()` Promise. */
+    readonly hadAwaiter: boolean;
+    /** The write's stable id (idempotency key / queue id). */
+    readonly id: string;
+    /** Shard the write targeted, if any. */
+    readonly shardKey?: string;
+    /** Terminal outcome. */
+    readonly status: "committed" | "rejected";
+}
+
+/**
  * Per-call options for {@link LunoraClient.mutation} — the optimistic-update
  * machinery plus `shardKey`. Exported (at the end of this file) so the framework
  * adapters (`@lunora/react`, `/solid`, `/svelte`, `/vue`) can type their
@@ -279,84 +318,6 @@ const withQuery = (path: string, params: Record<string, number | string | undefi
 
 /** Map a shard key to its connection-map key (the default shard uses `""`). */
 const connectionKey = (shardKey: string | undefined): string => shardKey ?? "";
-
-/**
- * Write an already-computed optimistic value `next` onto a single subscription
- * state and return its rollback closure. The shared write+rollback primitive
- * behind both the legacy per-call `optimistic` transform and `createLocalStore`'s
- * `setQuery`: it mutates `state.lastValue` in place (so live subscribers see the
- * value immediately) and binds `state`/`previous`/`version`/`next` into locals so
- * the rollback's version check and restore run synchronously, with no `await`
- * between read and write that could let a server delta sneak in unobserved.
- *
- * The rollback only restores when (a) no server delta has bumped `serverVersion`
- * past the apply point (the server is now closer to truth) and (b) our `next` is
- * still the live value (a later stacked optimistic write hasn't superseded it).
- */
-const writeOptimisticToState = (state: SubscriptionState, next: unknown): (() => void) => {
-    const previous = state.lastValue;
-    const versionAtApply = state.serverVersion;
-
-    // Intentionally mutate the shared subscription state in place so live
-    // subscribers observe the optimistic value immediately.
-    // eslint-disable-next-line no-param-reassign -- optimistic update mutates the shared subscription state
-    state.lastValue = next;
-
-    for (const callback of state.callbacks) {
-        try {
-            callback(next);
-        } catch {
-            /* user callback threw — ignore */
-        }
-    }
-
-    return () => {
-        // If a server-pushed delta has bumped serverVersion since we applied
-        // the optimistic update, the server has given us newer-than-`previous`
-        // data — don't roll back, the current value is closer to truth.
-        if (state.serverVersion > versionAtApply) {
-            return;
-        }
-
-        // If another optimistic write has since stacked on this same
-        // subscription (so `lastValue` is no longer the value WE set), restoring
-        // our captured `previous` would clobber that newer still-pending value.
-        // Only roll back when our value is still the live one.
-        if (state.lastValue !== next) {
-            return;
-        }
-
-        // eslint-disable-next-line no-param-reassign -- rollback restores the shared subscription state
-        state.lastValue = previous;
-
-        for (const callback of state.callbacks) {
-            try {
-                callback(previous);
-            } catch {
-                /* user callback threw — ignore */
-            }
-        }
-    };
-};
-
-/**
- * Apply one optimistic transform to a single subscription state and return its
- * rollback closure (or `undefined` if the optimistic callback threw, in which
- * case the state is left untouched). Computes the next value, then delegates the
- * value-write and rollback to {@link writeOptimisticToState}.
- */
-
-const applyOptimisticToState = (state: SubscriptionState, optimistic: (current: unknown) => unknown): (() => void) | undefined => {
-    let next: unknown;
-
-    try {
-        next = optimistic(state.lastValue);
-    } catch {
-        return undefined;
-    }
-
-    return writeOptimisticToState(state, next);
-};
 
 /**
  * Build a coded `Error` from a stream-scoped server `error` frame. Pulls the
@@ -617,13 +578,16 @@ class LunoraClient {
     private closed = false;
 
     /** Subscribers to auth-token changes (see `onAuthTokenChange`). */
-    private readonly authTokenListeners = new Set<(token: string | null) => void>();
+    private readonly authTokenListeners = new Listeners<string | null>();
 
     /** Subscribers to aggregate connection-status changes (see `onConnectionStatus`). */
-    private readonly statusListeners = new Set<(status: ConnectionStatus) => void>();
+    private readonly statusListeners = new Listeners<ConnectionStatus>();
 
     /** Subscribers notified when the server drops a socket for an expired token (see `onTokenExpired`). */
-    private readonly tokenExpiredListeners = new Set<() => void>();
+    private readonly tokenExpiredListeners = new Listeners();
+
+    /** Subscribers to offline-queued mutation verdicts (see `onMutationSettled`). */
+    private readonly mutationSettledListeners = new Listeners<MutationSettledEvent>();
 
     /**
      * Whisper-topic handlers, keyed by `connectionKey(shardKey)` → topic → set
@@ -672,7 +636,9 @@ class LunoraClient {
         this.persistence = options.persistence;
         this.queryCache = options.queryCache === false ? undefined : options.queryCache;
         this.onPersistenceError = options.offlineQueue?.onPersistenceError;
-        this.offlineQueue = new OfflineQueue(options.offlineQueue, options.persistence);
+        this.offlineQueue = new OfflineQueue(options.offlineQueue, options.persistence, (entry, error) => {
+            this.emitItemSettled(entry, "rejected", error);
+        });
         this.outbox = options.outbox;
         // A db app persists a stable id alongside the outbox and passes it in; the
         // standalone client gets an ephemeral per-session id, fine because it only
@@ -723,13 +689,7 @@ class LunoraClient {
         // path so a token swap doesn't leave another user's writes lingering.)
         this.rejectQueuedForIdentityChange();
 
-        for (const listener of this.authTokenListeners) {
-            try {
-                listener(token);
-            } catch {
-                /* listener threw — ignore */
-            }
-        }
+        this.authTokenListeners.emit(token);
     }
 
     public getAuthToken(): string | null {
@@ -832,11 +792,7 @@ class LunoraClient {
      * the current value.
      */
     public onAuthTokenChange(listener: (token: string | null) => void): Unsubscribe {
-        this.authTokenListeners.add(listener);
-
-        return () => {
-            this.authTokenListeners.delete(listener);
-        };
+        return this.authTokenListeners.add(listener);
     }
 
     /**
@@ -1098,11 +1054,7 @@ class LunoraClient {
      * with a freshly minted one. Returns an unsubscribe function.
      */
     public onTokenExpired(listener: () => void): Unsubscribe {
-        this.tokenExpiredListeners.add(listener);
-
-        return () => {
-            this.tokenExpiredListeners.delete(listener);
-        };
+        return this.tokenExpiredListeners.add(listener);
     }
 
     // --- Connection status --------------------------------------------------
@@ -1121,12 +1073,26 @@ class LunoraClient {
      * unsubscribe function.
      */
     public onConnectionStatus(listener: (status: ConnectionStatus) => void): Unsubscribe {
-        this.statusListeners.add(listener);
+        const unsubscribe = this.statusListeners.add(listener);
+
         listener(this.computeStatus());
 
-        return () => {
-            this.statusListeners.delete(listener);
-        };
+        return unsubscribe;
+    }
+
+    /**
+     * Subscribe to terminal verdicts for offline-queued mutations. The listener
+     * fires once per queued write that commits or is rejected — including a write
+     * restored from durable storage after a reload, whose original `mutation()`
+     * Promise no longer exists (`hadAwaiter: false`), and a write the queue
+     * evicts on overflow or discards on an identity change. This is the durable
+     * channel for surfacing a rolled-back optimistic write to the UI; an online
+     * mutation that never queued still surfaces through the Promise `mutation()`
+     * returns. The listener is NOT invoked on registration. Returns an
+     * unsubscribe function. See {@link MutationSettledEvent}.
+     */
+    public onMutationSettled(listener: (event: MutationSettledEvent) => void): Unsubscribe {
+        return this.mutationSettledListeners.add(listener);
     }
 
     // --- RPC ---------------------------------------------------------------
@@ -1167,15 +1133,22 @@ class LunoraClient {
         // its retry stays server-idempotent instead of minting a fresh key.
         const mutationId = options.mutationId ?? nextId();
 
-        // Apply optimistic updates to any subscriber listening on this fn. The
-        // legacy per-call `optimistic` transform patches the matching (fn, args,
-        // shard) subscriptions; the Convex-parity `optimisticUpdate` callback can
-        // patch many subscribed queries at once via a localStore. Both funnel into
-        // the same LIFO rollback list (unwound on settle/error).
-        const optimisticRollbacks = this.applyOptimisticUpdates(function_.__lunoraRef, argsRecord, options.shardKey, options.optimistic);
+        // Apply optimistic updates to any subscriber listening on this fn. Both
+        // APIs ride the same rebaseable, cursor-gated layer engine: the per-call
+        // `optimistic` transform patches the matching (fn, args, shard)
+        // subscription, and the Convex-parity `optimisticUpdate` callback patches
+        // many queries at once via a localStore (each `setQuery` a constant layer).
+        // Their `confirm`/`rollback` closures collect into shared lists — all
+        // confirmed on success, all unwound (LIFO) on failure.
+        const { confirms: optimisticConfirms, rollbacks: optimisticRollbacks } = this.applyOptimisticUpdates(
+            function_.__lunoraRef,
+            argsRecord,
+            options.shardKey,
+            options.optimistic,
+        );
 
         if (options.optimisticUpdate) {
-            this.applyOptimisticUpdate(options.optimisticUpdate, args, options.shardKey, optimisticRollbacks);
+            this.applyOptimisticUpdate(options.optimisticUpdate, args, options.shardKey, optimisticRollbacks, optimisticConfirms);
         }
 
         // Queue while offline (only mutations — queries fail fast). We also
@@ -1193,11 +1166,28 @@ class LunoraClient {
         const midReconnect = wsState === "connecting" && connectedGate;
 
         if ((wsState !== "open" && !hasSocket && shouldQueueOffline) || midReconnect) {
-            return this.enqueueOfflineMutation(function_, argsRecord, options.shardKey, mutationId, optimisticRollbacks);
+            return this.enqueueOfflineMutation(function_, argsRecord, options.shardKey, mutationId, optimisticRollbacks, optimisticConfirms);
         }
 
         try {
-            return (await this.rpc(function_.__lunoraRef, argsRecord, options.shardKey, { captureBookmark: true, mutationId })) as ReturnOf<F>;
+            let commitCursor: number | undefined;
+            const result = (await this.rpc(function_.__lunoraRef, argsRecord, options.shardKey, {
+                captureBookmark: true,
+                mutationId,
+                onCommitCursor: (cursor) => {
+                    commitCursor = cursor;
+                },
+            })) as ReturnOf<F>;
+
+            // Confirm each per-call optimistic layer against the write's committed
+            // CDC cursor: the layer drops gaplessly when (or once) a frame at that
+            // cursor lands — never on this RPC-resolve timing, which races the WS
+            // broadcast.
+            for (const confirm of optimisticConfirms) {
+                confirm(commitCursor);
+            }
+
+            return result;
         } catch (error) {
             // LIFO rollback: see the offline-queue reject path above.
             rollbackOptimistic(optimisticRollbacks);
@@ -2043,8 +2033,9 @@ class LunoraClient {
                 fn: function_,
                 id,
                 lastValue: cached?.value,
+                optimisticLayers: [],
+                serverBase: cached?.value,
                 serverCursor: cached?.serverCursor,
-                serverVersion: 0,
                 shardKey: options.shardKey,
                 ...(cached?.serverEpoch === undefined ? {} : { serverEpoch: cached.serverEpoch }),
             };
@@ -2310,6 +2301,7 @@ class LunoraClient {
         this.authTokenListeners.clear();
         this.statusListeners.clear();
         this.tokenExpiredListeners.clear();
+        this.mutationSettledListeners.clear();
         this.whisperHandlers.clear();
 
         // Shape subscriptions retain user row/error callbacks and replicated
@@ -2339,6 +2331,7 @@ class LunoraClient {
         shardKey: string | undefined,
         mutationId: string,
         optimisticRollbacks: (() => void)[],
+        optimisticConfirms: ((commitCursor: number | undefined) => void)[],
     ): Promise<ReturnOf<F>> {
         // Bind the issuing identity at enqueue time so the write can only replay
         // under the same identity (see flushOfflineQueue).
@@ -2364,6 +2357,14 @@ class LunoraClient {
                 throw error instanceof Error ? error : new Error(String(error));
             }
 
+            // The unified outbox (a `@lunora/db` app) manages its own optimistic
+            // overlays via the checkpoint watermark; a raw per-call optimistic layer
+            // can't be cursor-confirmed through this path, so drop it now (confirm
+            // with no cursor) rather than leak it onto every later frame.
+            for (const confirm of optimisticConfirms) {
+                confirm(undefined);
+            }
+
             return undefined as ReturnOf<F>;
         }
 
@@ -2371,12 +2372,23 @@ class LunoraClient {
             const entry: QueuedMutation<ReturnOf<F>> = {
                 args: argsRecord,
                 functionPath: function_.__lunoraRef,
+                // A live caller is awaiting this Promise, so a terminal verdict
+                // reaches them directly; the observer event carries
+                // `hadAwaiter: true`. Hydrated replays leave this unset.
+                liveAwaiter: true,
                 // Reuse the call's idempotency key as the queue id so the replay
                 // carries the same `x-lunora-mutation-id` the server dedups on.
                 id: mutationId,
                 // Persist the stamp alongside the record so a hydrated write can
                 // only replay under the identity that queued it.
                 identity: issuingIdentity,
+                // Confirm the per-call optimistic layer(s) against the commit cursor
+                // the flush replay echoes (see flushOfflineQueue).
+                onCommit: (commitCursor) => {
+                    for (const confirm of optimisticConfirms) {
+                        confirm(commitCursor);
+                    }
+                },
                 reject: (error) => {
                     // Drop this write's identity stamp on any rejection (overflow
                     // eviction, identity change, close) so the `queuedIdentities`
@@ -2470,7 +2482,13 @@ class LunoraClient {
      * (nothing to render offline).
      */
     private persistQueryValue(state: SubscriptionState): void {
-        if (!this.queryCache || state.lastValue === undefined) {
+        // Persist the authoritative server value (`serverBase`), never an optimistic
+        // overlay, so a reload restores confirmed data (pending writes re-hydrate
+        // from the durable outbox separately). `serverBase` tracks `lastValue` when
+        // no optimistic layer is active.
+        const authoritative = state.serverBase;
+
+        if (!this.queryCache || authoritative === undefined) {
             return;
         }
 
@@ -2480,7 +2498,7 @@ class LunoraClient {
             identity: this.identityFingerprint(),
             serverCursor: state.serverCursor,
             ts: Date.now(),
-            value: state.lastValue,
+            value: authoritative,
             ...(state.serverEpoch === undefined ? {} : { serverEpoch: state.serverEpoch }),
         });
 
@@ -2541,13 +2559,26 @@ class LunoraClient {
 
         this.lastStatus = next;
 
-        for (const listener of this.statusListeners) {
-            try {
-                listener(next);
-            } catch {
-                /* listener threw — ignore */
-            }
-        }
+        this.statusListeners.emit(next);
+    }
+
+    /**
+     * Build a {@link MutationSettledEvent} from a queued entry and emit it on the
+     * {@link onMutationSettled} channel. `item.id` is always assigned by the time
+     * a write settles (`enqueue`/`hydrate` guarantee it), so the `?? ""` fallback
+     * is unreachable — present only to satisfy the optional queue-id type.
+     */
+    private emitItemSettled(item: QueuedMutation, status: "committed" | "rejected", error?: unknown): void {
+        this.mutationSettledListeners.emit({
+            args: item.args,
+            code: error === undefined ? undefined : (error as { code?: string }).code,
+            error,
+            functionPath: item.functionPath,
+            hadAwaiter: item.liveAwaiter ?? false,
+            id: item.id ?? "",
+            shardKey: item.shardKey,
+            status,
+        });
     }
 
     /**
@@ -2569,11 +2600,12 @@ class LunoraClient {
         argsRecord: Record<string, unknown>,
         mutationShardKey: string | undefined,
         optimistic: ((current: unknown) => unknown) | undefined,
-    ): (() => void)[] {
-        const optimisticRollbacks: (() => void)[] = [];
+    ): { confirms: ((commitCursor: number | undefined) => void)[]; rollbacks: (() => void)[] } {
+        const confirms: ((commitCursor: number | undefined) => void)[] = [];
+        const rollbacks: (() => void)[] = [];
 
         if (!optimistic) {
-            return optimisticRollbacks;
+            return { confirms, rollbacks };
         }
 
         // Build the same composite key the registry used when the subscription was
@@ -2583,32 +2615,36 @@ class LunoraClient {
         const state = this.subscriptions.get(matchKey);
 
         if (state) {
-            const rollback = applyOptimisticToState(state, optimistic);
+            const handle: OptimisticLayerHandle | undefined = applyOptimisticLayer(state, optimistic);
 
-            if (rollback) {
-                optimisticRollbacks.push(rollback);
+            if (handle) {
+                confirms.push(handle.confirm);
+                rollbacks.push(handle.rollback);
             }
         }
 
-        return optimisticRollbacks;
+        return { confirms, rollbacks };
     }
 
     /**
      * Run a Convex-parity `optimisticUpdate` callback against a localStore bound
-     * to the live subscription registry, appending each `setQuery` write's
-     * rollback to `optimisticRollbacks` (the same LIFO list the legacy path uses,
-     * unwound on settle/error). A throwing callback unwinds its own partial
-     * writes — LIFO over just the rollbacks it produced — and is swallowed, so a
-     * buggy optimistic update can never fail the mutation or leave a partial
-     * patch live, mirroring the legacy transform's throw handling.
+     * to the live subscription registry. Each `setQuery` registers a constant
+     * optimistic LAYER on its target subscription (via the same engine the
+     * per-call `optimistic` path uses), so the multi-query patch rebases onto
+     * incoming deltas and drops gaplessly on its commit cursor — its `confirm` /
+     * `rollback` closures are appended to the mutation's settle lists. A throwing
+     * callback unwinds its own partial writes — LIFO over just the rollbacks it
+     * produced — and is swallowed, so a buggy optimistic update can never fail the
+     * mutation or leave a partial patch live.
      */
     private applyOptimisticUpdate<F extends FunctionReference>(
         optimisticUpdate: OptimisticUpdate<ArgsOf<F>>,
         args: ArgsOf<F>,
         shardKey: string | undefined,
         optimisticRollbacks: (() => void)[],
+        optimisticConfirms: ((commitCursor: number | undefined) => void)[],
     ): void {
-        const { rollbacks, store } = createLocalStore(this.subscriptions, shardKey, writeOptimisticToState, stableStringify);
+        const { confirms, rollbacks, store } = createLocalStore(this.subscriptions, shardKey, stableStringify);
 
         try {
             optimisticUpdate(store, args);
@@ -2623,6 +2659,7 @@ class LunoraClient {
         }
 
         optimisticRollbacks.push(...rollbacks);
+        optimisticConfirms.push(...confirms);
     }
 
     private getConnection(shardKey: string | undefined): ShardConnection | undefined {
@@ -2722,6 +2759,8 @@ class LunoraClient {
             clientId?: string;
             clientSeq?: number;
             mutationId?: string;
+            /** Invoked on a successful response with the server's echoed commit CDC cursor (if any) — gates per-call optimistic-layer drops. */
+            onCommitCursor?: (commitCursor: number | undefined) => void;
             /** Invoked on a successful response with the server's echoed custom-mutator watermark (if any). */
             onMutationAck?: (lastMutationId: number | undefined) => void;
         } = {},
@@ -2773,6 +2812,7 @@ class LunoraClient {
         }
 
         flags.onMutationAck?.(body.lastMutationId);
+        flags.onCommitCursor?.(body.commitCursor);
 
         return body.result;
     }
@@ -3475,8 +3515,12 @@ class LunoraClient {
 
         const payload = this.resolveDataPayload(message, state);
 
-        state.lastValue = payload;
-        state.serverVersion += 1;
+        // `payload` is the new authoritative base. Update it first, then advance
+        // the cursor, so a layer whose write committed at/under this cursor is
+        // dropped (its effect is now in `payload`) before we re-fold. With no
+        // layers active (the common case) the displayed value is just `payload`,
+        // byte-identical to the historical behaviour.
+        state.serverBase = payload;
 
         // Advance the resume cursor + epoch when the frame carries them
         // (CDC-enabled shard); replayed as `sinceSeq` / `sinceEpoch` on the
@@ -3489,16 +3533,15 @@ class LunoraClient {
             state.serverEpoch = message.epoch;
         }
 
-        // Persist the new value to the durable read cache (debounced).
+        // Persist the authoritative server value (never the optimistic overlay)
+        // to the durable read cache (debounced).
         this.persistQueryValue(state);
 
-        for (const callback of state.callbacks) {
-            try {
-                callback(payload);
-            } catch {
-                /* user callback threw — ignore */
-            }
-        }
+        // Drop any optimistic layer the server has now confirmed (its commit cursor
+        // is at/under this frame's cursor), then display `serverBase` re-folded
+        // through whatever optimistic layers remain pending (rebasing).
+        dropConfirmedLayers(state, state.serverCursor);
+        notifySubscription(state, state.optimisticLayers.length === 0 ? payload : foldOptimistic(payload, state.optimisticLayers));
     }
 
     /**
@@ -3571,6 +3614,15 @@ class LunoraClient {
             }
 
             this.persistQueryValue(state);
+
+            // A `resume`/`settled` frame advances the cursor without a value change
+            // — but a write whose result was byte-identical for this query still
+            // committed at/under this cursor, so its optimistic layer is now
+            // confirmed. Sweep confirmed layers here too (not just on `data`
+            // frames), or a no-visible-change write would leave its overlay stuck.
+            if (dropConfirmedLayers(state, state.serverCursor)) {
+                notifySubscription(state, foldOptimistic(state.serverBase, state.optimisticLayers));
+            }
         }
         /* eslint-enable no-param-reassign */
     }
@@ -3595,8 +3647,12 @@ class LunoraClient {
 
         const { delta } = message;
 
-        if (isMutationDelta(delta) && state.lastValue !== undefined) {
-            const merged = applyDelta(state.lastValue, delta);
+        // Merge into the authoritative `serverBase`, NOT the displayed `lastValue`
+        // (which may carry an optimistic overlay) — a delta describes a change to
+        // server truth, re-folded under the overlay afterwards. With no optimistic
+        // layers active `serverBase === lastValue`, so this is the historical path.
+        if (isMutationDelta(delta) && state.serverBase !== undefined) {
+            const merged = applyDelta(state.serverBase, delta);
 
             if (merged !== undefined) {
                 return merged;
@@ -3628,13 +3684,7 @@ class LunoraClient {
 
     /** Notify every {@link onTokenExpired} listener (best-effort, listener throws swallowed). */
     private notifyTokenExpired(): void {
-        for (const listener of this.tokenExpiredListeners) {
-            try {
-                listener();
-            } catch {
-                /* listener threw — ignore */
-            }
-        }
+        this.tokenExpiredListeners.emit();
     }
 
     private handleCompleteMessage(id: string): void {
@@ -3717,6 +3767,7 @@ class LunoraClient {
 
             (error as Error & { code?: string }).code = "OFFLINE_IDENTITY_CHANGED";
             item.reject(error);
+            this.emitItemSettled(item, "rejected", error);
         }
 
         this.clearQueryCacheForIdentityChange();
@@ -3789,6 +3840,7 @@ class LunoraClient {
 
                 (error as Error & { code?: string }).code = "OFFLINE_IDENTITY_CHANGED";
                 item.reject(error);
+                this.emitItemSettled(item, "rejected", error);
 
                 continue;
             }
@@ -3799,11 +3851,23 @@ class LunoraClient {
                 // Replay under the write's stable id so the server dedups a
                 // mutation it already committed (e.g. the response was lost on the
                 // first send) — exactly-once rather than at-least-once.
+                let commitCursor: number | undefined;
                 // eslint-disable-next-line no-await-in-loop -- sequential replay preserves the FIFO order callers depend on (see above)
-                const value = await this.rpc(item.functionPath, item.args, item.shardKey, { captureBookmark: true, mutationId: item.id });
+                const value = await this.rpc(item.functionPath, item.args, item.shardKey, {
+                    captureBookmark: true,
+                    mutationId: item.id,
+                    onCommitCursor: (cursor) => {
+                        commitCursor = cursor;
+                    },
+                });
 
                 this.unpersist(item.id);
+                // Confirm the optimistic layer against the replay's commit cursor
+                // BEFORE resolving, so the gapless drop is in place when the awaiter
+                // (and any confirming frame) observes the settle.
+                item.onCommit?.(commitCursor);
                 item.resolve(value);
+                this.emitItemSettled(item, "committed");
             } catch (error) {
                 // Only a *coded* error means the server reached a verdict on a
                 // mutation it received: replaying would re-trigger the same
@@ -3814,6 +3878,7 @@ class LunoraClient {
                 if ((error as { code?: string }).code !== undefined) {
                     this.unpersist(item.id);
                     item.reject(error);
+                    this.emitItemSettled(item, "rejected", error);
 
                     continue;
                 }
@@ -3831,4 +3896,4 @@ class LunoraClient {
 }
 
 export { LunoraClient };
-export type { ConnectionStatus, MutationCallOptions, SyncWatermark };
+export type { ConnectionStatus, MutationCallOptions, MutationSettledEvent, SyncWatermark };

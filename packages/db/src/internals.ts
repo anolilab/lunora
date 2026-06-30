@@ -217,7 +217,15 @@ export const runOutboxMutation = async (mutate: () => Promise<unknown>): Promise
         await mutate();
     } catch (error) {
         if (typeof (error as { code?: unknown }).code === "string") {
-            throw new NonRetriableError(error instanceof Error ? error.message : String(error));
+            const nonRetriable = new NonRetriableError(error instanceof Error ? error.message : String(error));
+
+            // Carry the server's machine-readable `code` through to the executor so
+            // an `onWriteRejected` consumer can branch on it (CONFLICT vs FORBIDDEN
+            // vs …) exactly like the client's `MutationSettledEvent` — otherwise the
+            // verdict would be flattened to a message-only error.
+            (nonRetriable as Error & { code?: string }).code = (error as { code: string }).code;
+
+            throw nonRetriable;
         }
 
         throw error;

@@ -1525,12 +1525,14 @@ describe("lunoraClient", () => {
             expect(received).toEqual([0, 9]);
         });
 
-        it("stacked optimistic mutations: older failing first does not clobber newer pending value", async () => {
+        it("stacked optimistic mutations: an older failure rebases the newer pending write onto the base", async () => {
             expect.assertions(2);
 
             // Two outstanding RPCs on the same (fn, args, shard) subscription. The
-            // older one (A) rejects first; its rollback must NOT restore the value
-            // from before B applied, because B's optimistic value is still pending.
+            // older one (A) rejects first; its rollback drops only A's layer and
+            // re-folds the still-pending B onto the authoritative base — so B's
+            // displayed value drops from 2 to 1 (only B's increment on base 0),
+            // rather than leaving a stale 2 that double-counts the rejected A.
             const deferreds: { reject: (error: unknown) => void; resolve: (value: Response) => void }[] = [];
             const fetchMock = vi.fn<typeof fetch>(
                 async () =>
@@ -1560,17 +1562,150 @@ describe("lunoraClient", () => {
 
             expect(received).toEqual([0, 1, 2]);
 
-            // A fails first. Its rollback must leave B's pending value (2) intact.
+            // A fails first → drop A's layer, re-fold B onto base 0 → 1.
             deferreds[0]!.reject(new Error("A failed"));
             await promiseA.catch(() => undefined);
 
-            // Settle B so the test doesn't leak a pending promise.
+            // Settle B (success). The response carries no commitCursor, so B's layer
+            // is dropped silently (no further notify).
             deferreds[1]!.resolve(jsonResponse({ result: { ok: true } }));
             await promiseB;
 
-            // The fixed rollback only restores when its own value is still live;
-            // B's value (2) survived A's failure.
-            expect(received).toEqual([0, 1, 2]);
+            // B was rebased onto the base when A was rejected — its increment now
+            // reflects only itself (1), not the double-counted 2.
+            expect(received).toEqual([0, 1, 2, 1]);
+        });
+
+        it("drops a confirmed optimistic layer once a frame reaches its commit cursor (no double-count)", async () => {
+            expect.assertions(1);
+
+            // The mutation response echoes the CDC cursor the write committed at.
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ commitCursor: 10, result: { ok: true } }));
+            const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("counter:get"), {}, (d) => received.push(d));
+            const socket = latestSocket();
+
+            socket.open();
+            const subId = firstSub(socket).id as string;
+
+            socket.receive({ cursor: 5, data: 5, id: subId, type: "data" });
+            // Optimistic +1 → 6; response confirms commit at cursor 10 (not yet reached).
+            await client.mutation(fnRef("counter:get"), {}, { optimistic: (c) => (typeof c === "number" ? c + 1 : 1) });
+
+            // The confirming frame lands at cursor 10 carrying the authoritative 6.
+            // The layer (commit cursor 10) drops; the value is already 6, so no
+            // spurious re-notify fires — and crucially it is NOT 7 (which a
+            // still-applied layer would fold on top).
+            socket.receive({ cursor: 10, data: 6, id: subId, type: "data" });
+
+            expect(received).toEqual([5, 6]);
+        });
+
+        it("self-heals the H1 race when the confirming frame beats the RPC response", async () => {
+            expect.assertions(2);
+
+            const deferreds: { reject: (error: unknown) => void; resolve: (value: Response) => void }[] = [];
+            const fetchMock = vi.fn<typeof fetch>(
+                async () =>
+                    new Promise<Response>((resolve, reject) => {
+                        deferreds.push({ reject, resolve });
+                    }),
+            );
+            const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("counter:get"), {}, (d) => received.push(d));
+            const socket = latestSocket();
+
+            socket.open();
+            const subId = firstSub(socket).id as string;
+
+            socket.receive({ cursor: 5, data: 5, id: subId, type: "data" });
+            const pending = client.mutation(fnRef("counter:get"), {}, { optimistic: (c) => (typeof c === "number" ? c + 1 : 1) });
+
+            // The confirming frame (cursor 10, authoritative 6) arrives BEFORE the
+            // RPC response. The layer's commit cursor is unknown, so it's still
+            // folded → a transient 7 (this is the race the reverted version left
+            // permanent).
+            socket.receive({ cursor: 10, data: 6, id: subId, type: "data" });
+
+            expect(received).toEqual([5, 6, 7]);
+
+            // The response lands with commitCursor 10; the layer is now confirmed at
+            // an already-reached cursor → dropped + re-folded → corrects to 6.
+            deferreds[0]!.resolve(jsonResponse({ commitCursor: 10, result: { ok: true } }));
+            await pending;
+
+            // No permanent double-count: it self-heals to the authoritative value.
+            expect(received).toEqual([5, 6, 7, 6]);
+        });
+
+        it("rebases a pending optimistic value onto an unrelated incoming delta (not clobbered)", async () => {
+            expect.assertions(2);
+
+            const deferreds: { reject: (error: unknown) => void; resolve: (value: Response) => void }[] = [];
+            const fetchMock = vi.fn<typeof fetch>(
+                async () =>
+                    new Promise<Response>((resolve, reject) => {
+                        deferreds.push({ reject, resolve });
+                    }),
+            );
+            const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("counter:get"), {}, (d) => received.push(d));
+            const socket = latestSocket();
+
+            socket.open();
+            const subId = firstSub(socket).id as string;
+
+            socket.receive({ cursor: 5, data: 5, id: subId, type: "data" });
+            // Optimistic +1 → 6; the RPC stays in flight (commit cursor unknown).
+            const pending = client.mutation(fnRef("counter:get"), {}, { optimistic: (c) => (typeof c === "number" ? c + 1 : 1) });
+
+            expect(received).toEqual([5, 6]);
+
+            // An UNRELATED server delta moves the base to 10 (e.g. another client).
+            // The still-pending layer is REBASED onto 10 → 11, not clobbered to 10.
+            socket.receive({ cursor: 8, data: 10, id: subId, type: "data" });
+
+            expect(received).toEqual([5, 6, 11]);
+
+            deferreds[0]!.reject(new Error("done"));
+            await pending.catch(() => undefined);
+        });
+
+        it("drops a confirmed optimistic layer on a byte-identical settled frame (no stuck overlay)", async () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ commitCursor: 10, result: { ok: true } }));
+            const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("counter:get"), {}, (d) => received.push(d));
+            const socket = latestSocket();
+
+            socket.open();
+            const subId = firstSub(socket).id as string;
+
+            socket.receive({ cursor: 5, data: 5, id: subId, type: "data" });
+            // Optimistic +1 → 6; commit cursor 10 (not yet reached → layer kept).
+            await client.mutation(fnRef("counter:get"), {}, { optimistic: (c) => (typeof c === "number" ? c + 1 : 1) });
+
+            expect(received).toEqual([5, 6]);
+
+            // The write committed at cursor 10 but the query result is byte-identical,
+            // so the server sends a `settled` frame (no data). The layer is confirmed
+            // at 10 ≤ 10 → dropped → reverts to the authoritative base 5 (no stuck +1).
+            socket.receive({ cursor: 10, id: subId, type: "settled" });
+
+            expect(received).toEqual([5, 6, 5]);
         });
 
         it("optimisticUpdate patches two different subscribed queries and rolls both back on error", async () => {
@@ -1645,6 +1780,53 @@ describe("lunoraClient", () => {
             );
 
             expect(received).toEqual([0, 42]);
+        });
+
+        it("optimisticUpdate rebases onto an unrelated delta instead of being clobbered", async () => {
+            expect.assertions(2);
+
+            // Unification win: the multi-query optimisticUpdate path now rides the
+            // same rebaseable layer engine as per-call `optimistic`, so its value
+            // survives an unrelated server delta on the same query (it used to be
+            // clobbered one-shot).
+            const deferreds: { reject: (error: unknown) => void; resolve: (value: Response) => void }[] = [];
+            const fetchMock = vi.fn<typeof fetch>(
+                async () =>
+                    new Promise<Response>((resolve, reject) => {
+                        deferreds.push({ reject, resolve });
+                    }),
+            );
+            const client = new LunoraClient({ fetch: fetchMock, url: "https://app.example", WebSocket: createMockWebSocket() });
+
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("q:list"), {}, (d) => received.push(d));
+            const socket = latestSocket();
+
+            socket.open();
+            const subId = firstSub(socket).id as string;
+
+            socket.receive({ cursor: 5, data: 5, id: subId, type: "data" });
+            // optimisticUpdate sets the query to 42; the RPC stays in flight.
+            const pending = client.mutation(
+                fnRef("m:set"),
+                {},
+                {
+                    optimisticUpdate: (store) => {
+                        store.setQuery(fnRef("q:list"), {}, 42);
+                    },
+                },
+            );
+
+            // An unrelated server delta moves the base to 10. The optimistic 42
+            // survives (rebased), rather than being clobbered to 10.
+            socket.receive({ cursor: 8, data: 10, id: subId, type: "data" });
+
+            expect(received.at(-1)).toBe(42);
+            expect(received).not.toContain(10);
+
+            deferreds[0]!.reject(new Error("done"));
+            await pending.catch(() => undefined);
         });
 
         it("stacked optimisticUpdate mutations compose without clobbering each other", async () => {

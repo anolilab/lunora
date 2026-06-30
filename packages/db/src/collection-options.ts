@@ -114,6 +114,16 @@ export interface LunoraCollectionConfig<TRow extends Row> {
     id?: string;
     /** The Lunora query that lists the rows (the full-table sync source). Mutually exclusive with {@link LunoraCollectionConfig.shape}. */
     list?: FunctionReference;
+
+    /**
+     * When the collection starts syncing. `"lazy"` (default) starts on the first
+     * `useLiveQuery` subscriber; `"eager"` starts at creation (TanStack's
+     * `startSync`) — for small "instant" reference data you want warm at boot.
+     * No effect on a `scopeBy` collection, which has nothing to sync until scoped.
+     * (Even eager, TanStack pauses sync while there are no subscribers, per its
+     * `gcTime` lifecycle — "warm while referenced", not pinned forever.)
+     */
+    load?: "eager" | "lazy";
     /** Notified when the underlying subscription errors; the collection always leaves `loading` regardless. */
     onError?: (error: SubscriptionError) => void;
     /** When set, the collection stays empty until {@link LunoraCollectionOptions.scope} points it at args (sharded). */
@@ -212,6 +222,9 @@ export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollect
         defaultIndexType: BTreeIndex,
         getKey,
         id: options.id ?? options.list?.__lunoraRef ?? `shape:${options.shape?.name ?? ""}`,
+        // `"eager"` syncs at creation; omitted otherwise so the wire stays
+        // byte-identical to the lazy default (sync on first subscriber).
+        ...(options.load === "eager" ? { startSync: true } : {}),
         sync: {
             sync: (writer) => {
                 emit = makeDiffEmit<TRow>(syncedJson, writer);

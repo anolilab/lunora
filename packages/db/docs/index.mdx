@@ -161,6 +161,41 @@ const { id, transaction } = db.actions.messages({ channelId, text, userId });
 await transaction.isPersisted.promise;
 ```
 
+### Surfacing rejected writes
+
+Awaiting `transaction.isPersisted.promise` only works for the caller that
+holds the `transaction`. A write made in one session and replayed in the next
+(after a reload), or any fire-and-forget `db.actions.*` call, has no such
+awaiter — so a permanent rejection would roll the optimistic row back with no UI
+signal. Pass `onWriteRejected` to get an aggregate, fire-and-forget-safe channel
+that fires once per **permanently** rejected write (a coded application error —
+validation, RLS denial, conflict). Transient failures (offline, 5xx) are retried
+by the outbox, not reported here:
+
+```ts
+const db = defineCollections(client, defs, {
+    onWriteRejected: ({ collection, row, error, code }) => {
+        toast.error(`Couldn't save your ${collection} change: ${error.message}`);
+        // `code` is the server's machine-readable reason (e.g. "CONFLICT") so you
+        // can branch; `row` is the optimistic row being rolled back (re-open a
+        // draft, etc.). The callback fires as the write is rejected — the row
+        // rollback follows it, so read `row`/`error` here rather than the
+        // collection's post-rollback state.
+    },
+    // Optional: a write whose target collection was removed/renamed in a deploy
+    // arrives here too, with `code: "UNKNOWN_MUTATION_FN"`.
+    onStorageFailure: ({ code, message }) => {
+        // The durable outbox couldn't persist (IndexedDB blocked in private mode,
+        // quota exceeded, …) — the write won't survive a reload. Warn the user.
+        toast.warning(`Your change may not be saved offline (${code}).`);
+    },
+});
+```
+
+`onStorageFailure` is the collection-layer counterpart to the standalone client's
+`offlineQueue.onPersistenceError`; `onLeadershipChange(isLeader)` is also
+available (informational — only the leader tab drains the outbox).
+
 This is the same durable-outbox and reconciliation model `@lunora/client`
 exposes directly — see [Offline-first](/docs/concepts/offline-first) for the
 lower-level `persistence` + `queryCache` options, the service-worker app-shell
@@ -177,6 +212,25 @@ which shard it syncs, or with no args to detach:
 db.scope.messages({ channelId }); // sync this channel
 db.scope.messages(); // detach (e.g. on unmount)
 ```
+
+## When collections load
+
+Each collection chooses _when_ it starts syncing — together with `scopeBy` this
+gives the full lazy / partial / eager load taxonomy declaratively:
+
+```ts
+defineCollections(client, {
+    // lazy (default): syncs on the first useLiveQuery subscriber
+    messages: { list: api.messages.list, scopeBy: "channelId" }, // + partial: only the scoped channel
+    // eager: syncs at boot — for small "instant" reference data you want warm
+    labels: { list: api.labels.list, load: "eager" },
+});
+```
+
+`load: "eager"` maps to TanStack DB's `startSync`. Even eager, a collection
+pauses syncing while it has no subscribers (TanStack's `gcTime` lifecycle), so
+it's "warm while referenced", not pinned in memory forever. `load` has no effect
+on a `scopeBy` collection (nothing to sync until you `scope` it).
 
 ## Client-generated ids
 
@@ -296,8 +350,21 @@ clears only once every concurrent call settles.
 - `getKey?` — row key extractor; defaults to `row._id`.
 - `scopeBy?` — a field that scopes the list (a shard key); makes the collection
   re-pointable via `db.scope.<table>`.
+- `load?` — `"eager"` to sync at boot, or `"lazy"` (default) to sync on first use
+  (see [When collections load](#when-collections-load)).
 - `insert?` — `{ mutation, optimistic, toArgs }` to make the table writable
   through the outbox.
+
+A `CollectionDef` may also carry `onError?` — notified when its `list`
+subscription errors (the read side), distinct from `onWriteRejected` (the write
+side) below.
+
+An optional third argument carries layer-wide options:
+
+- `onWriteRejected?` — fires once per **permanently** rejected write, _as_ it is
+  rejected (the optimistic-row rollback follows) — so read the event's `row` /
+  `error` directly rather than the collection's post-rollback state (see
+  [Surfacing rejected writes](#surfacing-rejected-writes)).
 
 It returns `{ collections, actions, scope, executor }`. The row and action-input
 types are inferred from each binding's `list` return and `optimistic` input, so

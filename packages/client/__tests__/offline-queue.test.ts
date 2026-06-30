@@ -53,6 +53,25 @@ describe("offlineQueue", () => {
         expect(drained.map((d) => d.functionPath)).toEqual(["mid", "new"]);
     });
 
+    it("invokes onEvict with the dropped entry and code on overflow", () => {
+        expect.assertions(4);
+
+        const onEvict = vi.fn<(entry: { functionPath: string; liveAwaiter?: boolean }, error: Error & { code?: string }) => void>();
+        const queue = new OfflineQueue({ maxItems: 1 }, undefined, onEvict);
+
+        // A hydrated-style entry (no live awaiter) is evicted by a newer write.
+        queue.enqueue({ args: {}, functionPath: "old", liveAwaiter: false, reject: () => undefined, resolve: () => undefined });
+        queue.enqueue({ args: {}, functionPath: "new", liveAwaiter: true, reject: () => undefined, resolve: () => undefined });
+
+        expect(onEvict).toHaveBeenCalledTimes(1);
+
+        const [entry, error] = onEvict.mock.calls[0]!;
+
+        expect(entry.functionPath).toBe("old");
+        expect(entry.liveAwaiter).toBe(false);
+        expect(error.code).toBe("OFFLINE_QUEUE_OVERFLOW");
+    });
+
     it("requeue restores drained items to the front in FIFO order without re-persisting", async () => {
         expect.assertions(3);
 

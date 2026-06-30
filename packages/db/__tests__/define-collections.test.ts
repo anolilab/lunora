@@ -227,6 +227,61 @@ describe(defineCollections, () => {
         expect(mutation).toHaveBeenCalledWith(messagesSend, { channelId: "c1", id, text: "hi" });
     });
 
+    it("reports a permanently-rejected write on onWriteRejected (fire-and-forget safe)", async () => {
+        // The server rejects the write with a coded application error — a
+        // permanent verdict the outbox surfaces as a NonRetriableError.
+        const coded = Object.assign(new Error("duplicate name"), { code: "CONFLICT" });
+        const { client } = makeClient(async () => {
+            throw coded;
+        });
+        const onWriteRejected = vi.fn<(event: { code?: string; collection: string; error: Error; row?: { _id: string } }) => void>();
+
+        const database = defineCollections(
+            client,
+            {
+                messages: {
+                    insert: {
+                        mutation: messagesSend,
+                        optimistic: (input: { channelId: string; text: string }, id) => {
+                            return { _creationTime: 0, _id: id, channelId: input.channelId, text: input.text };
+                        },
+                        toArgs: (row) => {
+                            return { channelId: row.channelId, id: row._id, text: row.text };
+                        },
+                    },
+                    list: messagesList,
+                    scopeBy: "channelId",
+                },
+            },
+            { onWriteRejected },
+        ) as unknown as TestDb & { actions: { messages: (input: { channelId: string; text: string }) => { id: string } } };
+
+        executors.push(database.executor);
+
+        database.collections.messages.subscribeChanges(() => {});
+        database.scope.messages({ channelId: "c1" });
+        await database.executor.waitForInit();
+        await flush();
+
+        // Fire-and-forget: we never retain the returned transaction.
+        const { id } = database.actions.messages({ channelId: "c1", text: "dupe" });
+
+        await vi.waitFor(() => {
+            expect(onWriteRejected).toHaveBeenCalledTimes(1);
+        });
+
+        const event = onWriteRejected.mock.calls[0]![0];
+
+        expect(event.collection).toBe("messages");
+        expect(event.row?._id).toBe(id);
+        expect(event.error.message).toContain("duplicate name");
+
+        // The optimistic row was rolled back once the verdict landed.
+        await vi.waitFor(() => {
+            expect(database.collections.messages.get(id)).toBeUndefined();
+        });
+    });
+
     it("surfaces a failed subscription via onError and does not leave the collection stuck loading", async () => {
         const { client, subscribes } = makeClient();
         const onError = vi.fn<(error: { code?: string; message: string }) => void>();

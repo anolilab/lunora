@@ -167,12 +167,49 @@ you writing sync glue:
 2. **Writes flush exactly once.** Queued mutations are deduped by `mutationKey`
    and replayed on reconnect; the idempotency key means a retry after a flaky
    ack is a no-op server-side, not a duplicate.
-3. **Optimistic rows settle.** A mutation's optimistic patch renders instantly,
-   is superseded by the authoritative server row on acknowledgement, and rolls
-   back if the server rejects it with a coded conflict.
+3. **Optimistic patches rebase, then settle gaplessly.** A per-call `optimistic`
+   transform is recorded as a layer on the query, not applied once-and-forgotten.
+   An unrelated server delta that lands while the write is still pending (queued
+   offline, or in flight) is re-folded _under_ the layer instead of clobbering
+   it, so your change never flickers away and back. The layer is dropped — with
+   no double-count and no flicker — the moment a frame whose `cursor` reaches the
+   write's committed cursor arrives (the server echoes that cursor on the
+   mutation response), so the drop is keyed on server-confirmed state rather than
+   RPC-response timing, which races the WebSocket broadcast. A coded rejection
+   rolls the layer back.
 4. **Identity is the trust boundary.** A token change between sessions drops both
    the cached reads and the queued writes rather than replaying them under the
    new identity.
+
+## Surfacing rejected writes
+
+A queued write that the server ultimately rejects (a coded conflict, a validation
+or RLS denial) rolls its optimistic row back. For a write you `await` directly,
+that surfaces as the rejected `mutation()` Promise. But a write queued in one
+session and replayed in the next — after a reload — has no awaiter left, and the
+same is true for a write the queue evicts on overflow or discards on an identity
+change. Without a signal, the optimistic row would simply vanish, which users
+read as data loss.
+
+`onMutationSettled` is the durable channel for exactly this. It fires once per
+queued write that reaches a terminal verdict — `committed` or `rejected` — and
+includes replays whose original Promise is gone (`hadAwaiter: false`):
+
+```ts
+client.onMutationSettled((event) => {
+    if (event.status === "rejected" && !event.hadAwaiter) {
+        // A queued change couldn't be saved and no caller is awaiting it —
+        // tell the user instead of silently dropping the rolled-back row.
+        toast.error(`Couldn't save your change (${event.code ?? "error"}).`);
+    }
+});
+```
+
+`event` carries the `functionPath`, `args`, `shardKey`, and — on rejection — the
+`code` (e.g. `CONFLICT`, `OFFLINE_QUEUE_OVERFLOW`, `OFFLINE_IDENTITY_CHANGED`)
+and `error`. Causally dependent writes that the server rejects in turn each
+surface their own event, in FIFO order. The [`@lunora/db`](/docs/packages/db)
+collection layer exposes the same idea as `onWriteRejected`.
 
 ## See also
 
