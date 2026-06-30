@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { MaskPoliciesResult } from "../src/introspect";
+import type { MaskPoliciesResult, RlsPoliciesResult } from "../src/introspect";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 
@@ -33,12 +33,28 @@ class GateShard extends ShardDO {
         return { columns: [{ column: "ssn", strategy: "redact", table: "people" }] };
     }
 
+    // A declared RLS *read* policy on `secured` — its presence alone must keep any
+    // shape over that table off the relay, even when the resolved where looks uniform.
+    // eslint-disable-next-line class-methods-use-this -- test fixture: a per-table RLS read-policy declaration
+    protected override rlsMetadata(): RlsPoliciesResult {
+        return { policies: [{ file: "secured", on: "read", procedure: "listSecured", table: "secured" }], roles: [] };
+    }
+
     // eslint-disable-next-line class-methods-use-this -- test fixture: a pure name→shape lookup
-    protected override resolveShape(name: string, args: Record<string, unknown>, identity?: { userId?: string }): Resolved | undefined {
+    protected override resolveShape(
+        name: string,
+        args: Record<string, unknown>,
+        identity?: { identity?: Record<string, unknown>; userId?: string },
+    ): Resolved | undefined {
         switch (name) {
             // No where at all — identity-independent.
             case "allMessages": {
                 return { table: "messages" };
+            }
+            // Narrows ONLY for an authenticated caller — uniform under the old
+            // two-authed-probe gate, but the anonymous multicast identity diverges.
+            case "authNarrow": {
+                return identity?.userId === undefined ? { table: "messages" } : { effectiveWhere: { published: true }, table: "messages" };
             }
             // A `.global()` table is never poke-relayable.
             case "globalFeed": {
@@ -52,6 +68,11 @@ class GateShard extends ShardDO {
             case "myInbox": {
                 return { effectiveWhere: { ownerId: identity?.userId }, table: "messages" };
             }
+            // Identity-DEPENDENT on a NON-userId claim (org) — only caught when the
+            // probes vary more than `userId`.
+            case "orgScoped": {
+                return { effectiveWhere: { org: identity?.identity?.["org_id"] }, table: "messages" };
+            }
             // Projects a masked column → the value is identity-dependent.
             case "peopleCard": {
                 return { columns: ["name", "ssn"], effectiveWhere: { teamId: args["teamId"] }, table: "people" };
@@ -63,6 +84,11 @@ class GateShard extends ShardDO {
             // Identity-independent: the where depends only on args.
             case "publicRoom": {
                 return { effectiveWhere: { roomId: args["roomId"] }, table: "messages" };
+            }
+            // Resolved where is identity-independent, but the table carries an RLS
+            // read policy → the static guard must still reject it.
+            case "securedRoom": {
+                return { effectiveWhere: { roomId: args["roomId"] }, table: "secured" };
             }
             default: {
                 return undefined;
@@ -91,6 +117,24 @@ describe("relay-uniform shape gate", () => {
         expect.assertions(1);
 
         expect(makeShard().uniform("myInbox", {})).toBe(false);
+    });
+
+    it("rejects identity-dependence on a non-userId claim (claim-diverse probes)", () => {
+        expect.assertions(1);
+
+        expect(makeShard().uniform("orgScoped", {})).toBe(false);
+    });
+
+    it("rejects a shape that narrows only for authenticated callers (anon multicast identity is probed)", () => {
+        expect.assertions(1);
+
+        expect(makeShard().uniform("authNarrow", {})).toBe(false);
+    });
+
+    it("rejects a shape over a table with an RLS read policy, even when its where looks uniform", () => {
+        expect.assertions(1);
+
+        expect(makeShard().uniform("securedRoom", { roomId: "r1" })).toBe(false);
     });
 
     it("rejects a shape that projects a masked column, but allows one that doesn't", () => {

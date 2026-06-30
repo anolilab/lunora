@@ -16,7 +16,19 @@
  * invisible runtime elasticity).
  */
 
+import { stableStringify } from "./reactive-cache";
 import type { ShapeRowOp } from "./shape-global-diff";
+
+/**
+ * The single canonical cohort routing key for a reactive shape `(name, args)`,
+ * used everywhere the owner and its relays must agree on "the same shape": the
+ * uniform-cache key, the owner registry key, and the relay-side delivery match.
+ * Normalizing `args ?? {}` in ONE place is load-bearing — the owner registers
+ * with already-defaulted args while a relay matches against the live attachment's
+ * possibly-undefined `args`, so any per-site disagreement on the empty-args
+ * default would silently break cohort matching (dropped or double-applied deltas).
+ */
+const shapeRoutingKey = (name: string, args?: Record<string, unknown>): string => stableStringify({ args: args ?? {}, name });
 
 /** Whether a fan-out key is owner-served (the default) or has been promoted to a relay set. */
 type PromotionState = "owned" | "promoted";
@@ -164,7 +176,7 @@ interface RelayShapePoke {
 /** Internal owner↔relay control messages (plan 075). NOT the public client protocol — the app never sees these. */
 type OwnerRelayFrame = RelayAttach | RelayDetach | RelayFrame | RelayShapePoke | RelayShapeSubscribe;
 
-export { DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, relayCountFor };
+export { DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, relayCountFor, shapeRoutingKey };
 export type { OwnerRelayFrame, PromotionState, PromotionThresholds, RelayAttach, RelayDetach, RelayFrame, RelayShapePoke, RelayShapeSeed, RelayShapeSubscribe };
 // The DO-name contract lives in `shared/` so `@lunora/runtime` (which mints relay
 // names) and this package (which parses them) can't drift; re-exported so `./relay`

@@ -91,7 +91,7 @@ import type { ShardRankPageResult } from "./rank";
 import type { ReactiveCacheOptions } from "./reactive-cache";
 import { ReactiveCache, reactiveCacheKey, stableStringify } from "./reactive-cache";
 import type { OwnerRelayFrame, RelayShapePoke, RelayShapeSeed, RelayShapeSubscribe } from "./relay";
-import { DEFAULT_PROMOTION_THRESHOLDS, parseRelayName, relayName } from "./relay";
+import { DEFAULT_PROMOTION_THRESHOLDS, parseRelayName, relayName, shapeRoutingKey } from "./relay";
 import type { AppendRequestLogEntry, ContextLogLevel, LogEventInput, RequestLogResult, RequestLogWriteOptions } from "./request-log";
 import { appendRequestLogEntry, emitLogEvent, emitRequestLogEvent, ensureRequestLogTable, readRequestLog, renderLogMessage } from "./request-log";
 import { buildSecurityAudit } from "./security-audit";
@@ -492,6 +492,18 @@ const IDEMPOTENCY_GC_INTERVAL_MS = 3_600_000;
  * Reserved shard name for the fallback Durable Object that hosts every
  * table without an explicit `.shardBy()` or `.global()` modifier.
  */
+
+/**
+ * The identity the owner computes a relay-multicast shape delta under (plan 075
+ * Phase 3). It is the empty (anonymous) identity, and it is **load-bearing for
+ * RLS**: a shape may only be relay-multicast if the uniform gate has PROVEN its
+ * resolved query is identical for this exact identity and every other — so the
+ * one delta computed here is correct for every cohort subscriber. The gate
+ * probes this same constant (see `probeShapeRelayUniform`), so the validated
+ * identity and the multicast identity can never drift apart.
+ */
+const RELAY_MULTICAST_IDENTITY: SubscriptionIdentity = {};
+
 const ROOT_SHARD_NAME = "__root__";
 
 /**
@@ -3940,7 +3952,7 @@ abstract class ShardDO {
      * owner-served. Cached per `(name, args)`, whose uniformity is stable.
      */
     protected isShapeRelayUniform(name: string, args: Record<string, unknown>): boolean {
-        const cacheKey = stableStringify({ args, name });
+        const cacheKey = shapeRoutingKey(name, args);
         const cached = this.shapeUniformCache.get(cacheKey);
 
         if (cached !== undefined) {
@@ -6419,7 +6431,7 @@ abstract class ShardDO {
         // forwarded identity) but isn't registered — it gets no live multicast (those
         // sockets are inherently low-fan-out; a per-socket proxy is a follow-up).
         if (this.isShapeRelayUniform(request.name, request.args)) {
-            const routingKey = stableStringify({ args: request.args, name: request.name });
+            const routingKey = shapeRoutingKey(request.name, request.args);
 
             if (!this.relayShapeRegistry.has(routingKey)) {
                 this.relayShapeRegistry.set(routingKey, { args: request.args, cursor, name: request.name });
@@ -7753,7 +7765,7 @@ abstract class ShardDO {
             let resolved: ResolvedShape | undefined;
 
             try {
-                resolved = this.resolveShape(entry.name, entry.args, {});
+                resolved = this.resolveShape(entry.name, entry.args, RELAY_MULTICAST_IDENTITY);
             } catch {
                 continue;
             }
@@ -7798,7 +7810,7 @@ abstract class ShardDO {
      * for custom mutators).
      */
     private deliverRelayShapePoke(poke: RelayShapePoke): void {
-        const routingKey = stableStringify({ args: poke.args, name: poke.name });
+        const routingKey = shapeRoutingKey(poke.name, poke.args);
 
         for (const ws of this.state.getWebSockets()) {
             const { shapes } = this.readAttachment(ws);
@@ -7809,7 +7821,7 @@ abstract class ShardDO {
             }
 
             for (const [subId, sub] of Object.entries(shapes)) {
-                if (memos.get(subId) !== poke.fromCursor || stableStringify({ args: sub.args ?? {}, name: sub.name }) !== routingKey) {
+                if (memos.get(subId) !== poke.fromCursor || shapeRoutingKey(sub.name, sub.args) !== routingKey) {
                     continue;
                 }
 
@@ -7962,31 +7974,89 @@ abstract class ShardDO {
         await this.postRelayMessage(role.ownerKey, { relayIndex: role.relayIndex, type: "relay_detach" });
     }
 
-    /** Resolve a shape under two distinct probe identities and compare — the one-shot computation behind {@link ShardDO.isShapeRelayUniform}. */
+    /**
+     * The one-shot computation behind {@link ShardDO.isShapeRelayUniform}, made
+     * sound against the cross-identity row-leak the naive two-probe version allowed
+     * (plan 075 review). It is fail-closed on three independent grounds:
+     *
+     * 1. **Static RLS guard.** If the resolved table has ANY declared RLS *read*
+     * policy, reads are identity-scoped by construction — a single multicast delta
+     * can never be correct for every subscriber — so the shape is never relayable,
+     * regardless of what the probes happen to resolve. This closes the leak where a
+     * policy keyed on a claim the probes don't vary (org/tenant/role) resolves
+     * identically for all of them and looks falsely uniform.
+     * 2. **Multicast identity is in the probe set.** The first probe is the EXACT
+     * identity the owner multicasts under ({@link RELAY_MULTICAST_IDENTITY}); every
+     * other probe must match it. So the validated property is precisely the one the
+     * multicast relies on — never a different sampled identity.
+     * 3. **Claim-diverse probes.** The populated probes differ on every common claim
+     * dimension (user/org/tenant/team/role/groups), so a resolver that narrows on
+     * any of them diverges from the anonymous base and is rejected.
+     */
     private probeShapeRelayUniform(name: string, args: Record<string, unknown>): boolean {
-        const probeA: SubscriptionIdentity = { identity: { __lunora_relay_probe: 1, sub: "__lunora_probe_a__" }, userId: "__lunora_probe_a__" };
-        const probeB: SubscriptionIdentity = { identity: { __lunora_relay_probe: 2, sub: "__lunora_probe_b__" }, userId: "__lunora_probe_b__" };
+        // The multicast identity is the base; a populated probe per "side" varies
+        // every common claim dimension so an identity-dependent resolve diverges.
+        const populate = (side: string): SubscriptionIdentity => {return {
+            identity: {
+                groups: [`g_${side}`],
+                org_id: `org_${side}`,
+                orgId: `org_${side}`,
+                role: side,
+                roles: [side],
+                sub: `__lunora_probe_${side}__`,
+                team: `team_${side}`,
+                teamId: `team_${side}`,
+                tenant: `tenant_${side}`,
+                tenantId: `tenant_${side}`,
+            },
+            userId: `__lunora_probe_${side}__`,
+        }};
+        const probes: SubscriptionIdentity[] = [RELAY_MULTICAST_IDENTITY, populate("a"), populate("b")];
 
-        let a: ResolvedShape | undefined;
-        let b: ResolvedShape | undefined;
+        let base: ResolvedShape | undefined;
 
         try {
-            a = this.resolveShape(name, args, probeA);
-            b = this.resolveShape(name, args, probeB);
+            base = this.resolveShape(name, args, RELAY_MULTICAST_IDENTITY);
         } catch {
-            // An identity-gated resolve threw for a probe → not uniform (fail-closed).
+            // An identity-gated resolve threw for the base probe → not uniform (fail-closed).
             return false;
         }
 
-        if (a === undefined || b === undefined || a.global === true || b.global === true || a.table !== b.table) {
+        if (base === undefined || base.global === true) {
             return false;
         }
 
-        if (stableStringify(a.effectiveWhere) !== stableStringify(b.effectiveWhere) || stableStringify(a.columns) !== stableStringify(b.columns)) {
+        // Static RLS guard: an identity-scoped table is never relay-uniform.
+        if (this.rlsMetadata().policies.some((policy) => policy.on === "read" && policy.table === base.table)) {
             return false;
         }
 
-        return !this.shapeColumnsMasked(a.table, a.columns);
+        if (this.shapeColumnsMasked(base.table, base.columns)) {
+            return false;
+        }
+
+        const baseWhere = stableStringify(base.effectiveWhere);
+        const baseColumns = stableStringify(base.columns);
+
+        // Every probe (including the anonymous multicast identity) must resolve to
+        // the identical table + where + columns, or the shape isn't uniform.
+        return probes.every((probe) => {
+            let resolved: ResolvedShape | undefined;
+
+            try {
+                resolved = this.resolveShape(name, args, probe);
+            } catch {
+                return false;
+            }
+
+            return (
+                resolved !== undefined &&
+                resolved.global !== true &&
+                resolved.table === base.table &&
+                stableStringify(resolved.effectiveWhere) === baseWhere &&
+                stableStringify(resolved.columns) === baseColumns
+            );
+        });
     }
 
     /** Whether any column the shape projects from `table` is masked — a masked value is identity-dependent, so the shape can't be relay-uniform. */
