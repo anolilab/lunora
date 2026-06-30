@@ -1330,7 +1330,14 @@ interface FanoutPathCounters {
     passes: number;
     /** Widest single pass — the most sockets iterated in one flush/broadcast. */
     peakSocketsIterated: number;
-    /** Sockets that actually received a frame, summed across every pass. */
+
+    /**
+     * Sockets a frame was sent to, summed across every pass. The shape-poke path
+     * counts only confirmed sends (`sendPoke` returned `true`); the whisper path
+     * counts matched receivers (the best-effort `trySendFrame` may silently no-op
+     * on a socket that closed between the snapshot and the send), so it can very
+     * marginally over-count in that near-impossible race.
+     */
     socketsDelivered: number;
     /** Sockets visited, summed across every pass — the O(subscribers) iteration cost. */
     socketsIterated: number;
@@ -1439,13 +1446,9 @@ const summarizeFanoutTopics = (
     // Busiest first; ties broken by name so the order is stable across reads.
     topics.sort((a, b) => b.subscribers - a.subscribers || a.topic.localeCompare(b.topic));
 
-    let peakSubscribers = 0;
-
-    for (const topic of topics) {
-        if (topic.subscribers > peakSubscribers) {
-            peakSubscribers = topic.subscribers;
-        }
-    }
+    // The peak is the head of the busiest-first list — and it is the FULL list,
+    // so the global max survives the `slice(0, limit)` truncation below.
+    const peakSubscribers = topics[0]?.subscribers ?? 0;
 
     return { peakSubscribers, topics: topics.slice(0, limit), totalConnections: attachments.length };
 };
