@@ -5479,6 +5479,70 @@ abstract class ShardDO {
     }
 
     /**
+     * SECURITY BOUNDARY for cross-socket reactive dedup. A read is
+     * identity-INDEPENDENT only when its result cannot vary by the caller's
+     * verified identity — i.e. the admin/reserved introspection reads, which
+     * route to {@link executeAdminSubscription} and ignore the
+     * {@link SubscriptionIdentity} entirely.
+     *
+     * Everything else is identity-DEPENDENT and must NEVER be shared across
+     * sockets: a user query may be `rls()` / `ctx.auth`-scoped (different rows
+     * per identity), and a flag read ({@link FLAGS_FUNCTION_PREFIX}) evaluates
+     * the provider with the subscriber's identity (per-user targeting). Sharing
+     * one socket's result with another would leak one identity's rows/flags to a
+     * different identity, so this predicate gates {@link resolveReactiveOutcomeDeduped}
+     * shut for them.
+     */
+    // eslint-disable-next-line class-methods-use-this -- a pure predicate over the function path; a method so the security boundary lives in one named place (and tests can probe it)
+    protected isIdentityIndependent(functionPath: string): boolean {
+        return functionPath.startsWith(ADMIN_FUNCTION_PREFIX);
+    }
+
+    /**
+     * {@link resolveReactiveOutcome} with flush-local memoization across sockets.
+     * Within a single {@link refreshSubscriptions} pass, N sockets subscribed to
+     * the SAME identity-independent `(functionPath, args)` re-run the query N
+     * times today (see the Case-6 fan-out characterization). When the read is
+     * identity-independent (admin/reserved — see {@link isIdentityIndependent})
+     * its result is the same for every socket, so the first run is cached (by its
+     * in-flight Promise, since the bounded worker pool runs sockets in parallel)
+     * and shared with the rest — collapsing N runs to ONE.
+     *
+     * Identity-DEPENDENT reads are passed straight through, UNCACHED: each socket
+     * must evaluate under its own by-value identity (RLS / `ctx.auth` / per-user
+     * flags), so they never share a result. The `cache` is created fresh per
+     * flush by the caller, so a result is never reused across passes (it would go
+     * stale after the next write).
+     */
+    private resolveReactiveOutcomeDeduped(
+        functionPath: string,
+        args: Record<string, unknown>,
+        isAdmin: boolean,
+        identity: SubscriptionIdentity,
+        cache: Map<string, Promise<SubscriptionOutcome | null>>,
+    ): Promise<SubscriptionOutcome | null> {
+        if (!this.isIdentityIndependent(functionPath)) {
+            return this.resolveReactiveOutcome(functionPath, args, isAdmin, identity);
+        }
+
+        // Identity is irrelevant for these reads, so the null-identity key is
+        // identical across every sharing socket.
+        // eslint-disable-next-line unicorn/no-null -- reactiveCacheKey's identity arg is `null | string`; null = the identity-independent bucket
+        const key = reactiveCacheKey(functionPath, args, null);
+        const cached = cache.get(key);
+
+        if (cached !== undefined) {
+            return cached;
+        }
+
+        const pending = this.resolveReactiveOutcome(functionPath, args, isAdmin, identity);
+
+        cache.set(key, pending);
+
+        return pending;
+    }
+
+    /**
      * Constant-time bearer check against `env.LUNORA_ADMIN_TOKEN`. Returns
      * `false` (closed) when the token is unset so admin introspection is
      * opt-in rather than exposed by default.
@@ -5773,6 +5837,13 @@ abstract class ShardDO {
         const frameCursor = this.currentCdcCursor();
         const frameEpoch = this.currentCdcEpoch();
 
+        // Flush-local dedup of identity-INDEPENDENT reactive runs: N sockets on
+        // the same admin/reserved `(functionPath, args)` share ONE query run this
+        // pass instead of re-running it per socket. Created fresh per flush so a
+        // result is never reused across writes; identity-dependent reads bypass it
+        // entirely (see resolveReactiveOutcomeDeduped).
+        const reactiveRunCache = new Map<string, Promise<SubscriptionOutcome | null>>();
+
         const refreshOne = async (ws: WebSocket): Promise<void> => {
             // Enforce token-expiry on the OUTBOUND path: a lapsed socket must not
             // keep receiving its user's live (RLS/`ctx.auth`-scoped) data. This is
@@ -5813,10 +5884,13 @@ abstract class ShardDO {
                     // scoped live query would evaluate anonymous and return zero rows.
                     // (Admin + reserved flag reads ignore the identity payload.)
                     // eslint-disable-next-line no-await-in-loop -- subscriptions on a socket re-run sequentially; each shares the single SQLite handle
-                    const outcome = await this.resolveReactiveOutcome(functionPath, query.args ?? {}, isAdmin, {
-                        identity: attachment.identity,
-                        userId: attachment.userId,
-                    });
+                    const outcome = await this.resolveReactiveOutcomeDeduped(
+                        functionPath,
+                        query.args ?? {},
+                        isAdmin,
+                        { identity: attachment.identity, userId: attachment.userId },
+                        reactiveRunCache,
+                    );
 
                     if (!outcome) {
                         continue;
