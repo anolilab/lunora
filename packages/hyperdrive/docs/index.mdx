@@ -220,9 +220,43 @@ a cron) so each tenant's slice stays current.
 > into the source `WHERE` (as a parameter), or every tenant's DO would replicate the
 > whole table. **Deletes:** the empty-baseline call above is upsert-only; to
 > propagate upstream deletes, pass the table's current membership as the baseline so
-> `materializeExternalRows` can diff it. The declarative `.source()` table modifier
-> (planned) automates this whole loop — full-pull diff, tenant scoping, and a poll
-> cadence — so you won't hand-write the action/mutation/cron.
+> `materializeExternalRows` can diff it.
+
+### Or skip the boilerplate: the declarative `.source()` modifier
+
+The manual bridge above is the escape hatch. For the common case, declare the
+source on the table and Lunora runs the whole loop for you — full-pull diff, tenant
+scoping, and a poll cadence — on the DO's alarm (no action/mutation/cron to write):
+
+```ts
+// lunora/schema.ts
+export default defineSchema({
+    documents: defineTable({ title: v.string(), body: v.string(), orgId: v.string() })
+        .shardBy("orgId")
+        .source({
+            binding: "HYPERDRIVE_DOCS",
+            query: 'select id, title, body, org_id as "orgId" from documents where org_id = $1',
+            tenantBy: (shardKey) => [shardKey], // mandatory under .shardBy() — the tenant boundary
+        }),
+});
+
+export const tenantDocs = defineShape({ table: "documents", where: () => ({}) });
+```
+
+You provide the driver once, when constructing the shard DO — one resolver for every
+sourced binding (build the `SqlClient` exactly as above). Lunora memoizes it per
+binding and polls each tenant's slice on the alarm:
+
+```ts
+createShardDO({
+    sourceClient: (env, binding) => fromPostgresJs(postgres((env[binding] as { connectionString: string }).connectionString)),
+});
+```
+
+The `external_source_unscoped` advisor lint fails the build if a sourced + sharded
+table omits `tenantBy`, and `external_source_on_global` rejects combining `.source()`
+with `.global()`. Clients consume the slice with `useShape(api.shapes.tenantDocs)` —
+no client change, since it is an ordinary table to them.
 
 ## Reactive `.global()` over Hyperdrive
 

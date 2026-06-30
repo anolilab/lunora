@@ -31,6 +31,7 @@ Create a `TableBuilder`. Fluent methods:
 
 - `.global({ backend? })` — store in D1 (cross-shard) instead of a Durable Object
 - `.shardBy(field)` — partition by the named field
+- `.source({ binding, query, tenantBy?, idColumn?, map?, columns?, refresh?, mode? })` — materialize this table from an external Postgres/MySQL behind Cloudflare Hyperdrive: a system poll loop reads the (tenant-scoped) slice and lands it in the DO's SQLite, then `defineShape` carries it to clients. Implies `.externallyManaged()`; under `.shardBy()`, `tenantBy` is mandatory (the tenant-isolation boundary, enforced by the `external_source_unscoped` advisor lint)
 - `.index(name, fields, { unique? })` — secondary index
 - `.searchIndex(name, { field, filterFields? })` — full-text index
 - `.public()` — exempt this table from `.rls("required")` (when secure-by-default is on)
