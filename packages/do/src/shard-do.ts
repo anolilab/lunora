@@ -4346,9 +4346,14 @@ abstract class ShardDO {
             return jsonResponse({ error: { code: lunoraError.code ?? "INTERNAL", message: lunoraError.message ?? "internal error" } }, status);
         }
 
-        const message = error instanceof Error ? error.message : "unknown error";
+        // Do NOT echo arbitrary error.message values to clients — an unhandled
+        // throw may carry SQL fragments, file paths, or internal identifiers. Log
+        // the raw error server-side and return a generic message (mirrors
+        // `@lunora/runtime`'s `toErrorResponse`).
+        // eslint-disable-next-line no-console -- server-side diagnostic for an unhandled handler error
+        console.error("[@lunora/do] unhandled RPC error:", error);
 
-        return jsonResponse({ error: { code: "RPC_FAILED", message } }, 500);
+        return jsonResponse({ error: { code: "RPC_FAILED", message: "internal error" } }, 500);
     }
 
     /**
@@ -5564,11 +5569,23 @@ abstract class ShardDO {
             }
         } catch (error: unknown) {
             const { code } = error as { code?: string };
-            const message = error instanceof Error ? error.message : String(error);
+            // A structured error (one carrying its own `code`, e.g. a thrown
+            // `LunoraError`) keeps its intentional, developer-facing message. A
+            // bare/unexpected throw is the generic catch-all: log the raw error
+            // server-side and send a redacted message so SQL fragments, file
+            // paths, or internal identifiers never reach the client.
+            const isStructured = typeof code === "string";
+
+            if (!isStructured) {
+                // eslint-disable-next-line no-console -- server-side diagnostic for an unhandled stream error
+                console.error("[@lunora/do] unhandled stream error:", error);
+            }
+
+            const message = isStructured ? (error instanceof Error ? error.message : String(error)) : "internal error";
 
             ws.send(
                 JSON.stringify({
-                    error: { code: typeof code === "string" ? code : "INTERNAL_SERVER_ERROR", message },
+                    error: { code: isStructured ? code : "INTERNAL_SERVER_ERROR", message },
                     id,
                     type: "error",
                 }),
