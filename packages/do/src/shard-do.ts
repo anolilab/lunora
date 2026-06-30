@@ -1869,6 +1869,29 @@ abstract class ShardDO {
     private readonly relayShapeRegistry = new Map<string, { args: Record<string, unknown>; cursor: number; name: string }>();
 
     /**
+     * Owner-side registry of NON-uniform (identity-scoped) relay shapes, one entry
+     * per relay socket (plan 075 review MEDIUM-3). These can't be cohort-multicast —
+     * each subscriber's delta is identity-dependent — so the owner computes each
+     * one's diff under its own forwarded identity and delivers a targeted poke to
+     * that one socket (by `connectionId`). No fan-out scaling (it's per-socket either
+     * way), but the relay still offloads the connection and the socket gets live
+     * updates instead of a silently frozen shape. Keyed `relayIndex:connectionId:subId`.
+     */
+    private readonly relayShapeProxies = new Map<
+        string,
+        {
+            args: Record<string, unknown>;
+            connectionId: string;
+            cursor: number;
+            epoch?: string;
+            identity: SubscriptionIdentity;
+            name: string;
+            relayIndex: number;
+            subId: string;
+        }
+    >();
+
+    /**
      * Relay-side per-socket shape memo: `ws → subId → { cursor, epoch }`. The relay
      * delivers a multicast `relay_shape_poke` to a socket only when its memo for that
      * shape matches the poke's `fromCursor` AND `epoch`, then advances it — so a
@@ -6001,6 +6024,7 @@ abstract class ShardDO {
                     this.refreshSubscriptions(batch),
                     this.pokeShapeSubscribers(batch, frameCursor, frameEpoch),
                     this.multicastRelayShapePokes(batch, frameCursor ?? 0),
+                    this.proxyRelayShapePokes(batch, frameCursor ?? 0),
                 ]);
 
                 batch = this.pendingRefreshTables;
@@ -6432,18 +6456,20 @@ abstract class ShardDO {
             resolved,
         );
 
-        // Register a UNIFORM shape so the owner multicasts its future deltas to relays
-        // (slice B.2). A non-uniform shape is still seeded above (RLS-correct under the
-        // forwarded identity) but isn't registered — those sockets are served live by
-        // the per-socket relay proxy below, not the cohort multicast.
+        // A UNIFORM shape joins the cohort multicast (slice B.2): the relay must stamp
+        // the socket's memo at the registry FRONTIER (entry.cursor), NOT the global
+        // cursor the frames were computed at. The frontier only advances on a multicast
+        // poke, so an unrelated-table write that bumps the global cursor would otherwise
+        // leave a joiner's memo permanently ahead of every future `fromCursor` — silently
+        // frozen (plan 075 review HIGH-2). Seeding the full current membership while
+        // memoing at the (older) frontier is correct because a shape's membership is
+        // invariant between pokes.
         //
-        // The relay must stamp the socket's cohort memo at the registry FRONTIER
-        // (entry.cursor), NOT the global cursor the frames were computed at: the
-        // frontier only advances on a multicast poke, so an unrelated-table write that
-        // bumps the global cursor would otherwise leave a joiner's memo permanently
-        // ahead of every future `fromCursor` — silently frozen (plan 075 review HIGH-2).
-        // Seeding the full current membership while memoing at the (possibly older)
-        // frontier is correct because a shape's membership is invariant between pokes.
+        // A NON-uniform shape can't be cohort-multicast (its delta is identity-scoped),
+        // so it registers a per-socket proxy keyed by the forwarding relay + this socket
+        // — the owner computes its delta under the forwarded identity each flush and
+        // delivers a targeted poke (MEDIUM-3). Either way the socket's memo baseline is
+        // `cohortCursor` and live updates flow.
         let cohortCursor = cursor;
 
         if (this.isShapeRelayUniform(request.name, request.args)) {
@@ -6456,6 +6482,17 @@ abstract class ShardDO {
             }
 
             cohortCursor = entry.cursor;
+        } else if (request.relayIndex !== undefined && request.connectionId !== undefined) {
+            this.relayShapeProxies.set(`${String(request.relayIndex)}:${request.connectionId}:${request.subId}`, {
+                args: request.args,
+                connectionId: request.connectionId,
+                cursor,
+                epoch,
+                identity,
+                name: request.name,
+                relayIndex: request.relayIndex,
+                subId: request.subId,
+            });
         }
 
         this.pokeSequence += 1;
@@ -7698,8 +7735,10 @@ abstract class ShardDO {
 
         const request: RelayShapeSubscribe = {
             args: shape.args ?? {},
+            connectionId: this.readAttachment(ws).connectionId,
             identity: identity.identity,
             name: shape.name,
+            relayIndex: role.relayIndex,
             sinceEpoch: shape.sinceEpoch,
             sinceSeq: shape.sinceSeq,
             subId,
@@ -7821,6 +7860,65 @@ abstract class ShardDO {
     }
 
     /**
+     * Owner side (plan 075 review MEDIUM-3): for every NON-uniform relay-shape proxy
+     * whose table changed this flush, compute that one subscriber's membership diff
+     * over `(entry.cursor, frameCursor]` UNDER ITS OWN forwarded identity (RLS-correct)
+     * and deliver a `targetConnectionId`-addressed poke to just that socket's relay.
+     * Each entry tracks its own cursor (no cohort sharing — the diffs are
+     * identity-specific), advancing only on a delivered, non-empty diff. A no-op when
+     * the shard has no proxy subscribers; the per-flush cost is O(proxy subscribers),
+     * the same the owner would pay serving them directly.
+     */
+    private async proxyRelayShapePokes(changed: Set<string>, frameCursor: number): Promise<void> {
+        const ownerKey = this.state.id?.name;
+
+        if (ownerKey === undefined || this.relayShapeProxies.size === 0) {
+            return;
+        }
+
+        const sql = this.sql as SqlExec;
+        const epoch = this.currentCdcEpoch();
+        const sends: Promise<void>[] = [];
+
+        for (const entry of this.relayShapeProxies.values()) {
+            let resolved: ResolvedShape | undefined;
+
+            try {
+                resolved = this.resolveShape(entry.name, entry.args, entry.identity);
+            } catch {
+                continue;
+            }
+
+            if (resolved === undefined || resolved.global === true || !changed.has(resolved.table)) {
+                continue;
+            }
+
+            const fromCursor = entry.cursor;
+            const rowsPatch = this.buildShapeDiff(sql, resolved, fromCursor, frameCursor);
+
+            if (rowsPatch.length === 0) {
+                continue; // this subscriber's membership didn't change — leave its cursor put
+            }
+
+            entry.cursor = frameCursor;
+            const poke: RelayShapePoke = {
+                args: entry.args,
+                checkpoint: frameCursor,
+                epoch,
+                fromCursor,
+                name: entry.name,
+                rowsPatch,
+                targetConnectionId: entry.connectionId,
+                type: "relay_shape_poke",
+            };
+
+            sends.push(this.postRelayMessage(relayName(ownerKey, entry.relayIndex), poke));
+        }
+
+        await Promise.all(sends);
+    }
+
+    /**
      * Relay side (plan 075 Phase 3 slice B.2): deliver an owner-multicast shape
      * delta to this relay's cohort sockets. A socket receives it only while its memo
      * for the shape matches the poke's `fromCursor` AND `epoch` — so a socket that
@@ -7835,10 +7933,18 @@ abstract class ShardDO {
         let delivered = 0;
 
         for (const ws of this.state.getWebSockets()) {
-            const { shapes } = this.readAttachment(ws);
+            const attachment = this.readAttachment(ws);
+            const { shapes } = attachment;
             const memos = this.shapeRelayMemos.get(ws);
 
             if (shapes === undefined || memos === undefined) {
+                continue;
+            }
+
+            // A targeted (per-socket proxy) poke for a non-uniform shape goes ONLY to
+            // the one socket it was computed for; a cohort multicast (no target) goes
+            // to every matching socket (MEDIUM-3).
+            if (poke.targetConnectionId !== undefined && attachment.connectionId !== poke.targetConnectionId) {
                 continue;
             }
 
@@ -7982,6 +8088,14 @@ abstract class ShardDO {
         (this.sql as SqlExec).exec("DELETE FROM __lunora_relays WHERE idx = ?", index);
         const set = this.ownerRelaySet();
         set.delete(index);
+
+        // The drained relay's sockets are gone, so its per-socket proxy entries are
+        // dead — drop them so the owner stops computing diffs for them every flush.
+        for (const [key, entry] of this.relayShapeProxies) {
+            if (entry.relayIndex === index) {
+                this.relayShapeProxies.delete(key);
+            }
+        }
 
         // No relays left → no cohort can hold a relay subscriber, so the shape
         // registry and uniform cache are dead state. Clearing them on full drain

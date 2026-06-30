@@ -209,34 +209,32 @@ describe("relay shape seed (workerd e2e)", () => {
         expect(pokeOps(second)).toHaveLength(0);
     });
 
-    it("seeds a non-uniform (identity-scoped) relay shape but never live-multicasts it", async () => {
-        expect.assertions(2);
+    it("delivers live updates to a non-uniform relay shape via the per-socket owner proxy", async () => {
+        expect.assertions(3);
 
-        const owner = env.SYNC.get(env.SYNC.idFromName("nonuniform-room"));
-        const relay = env.SYNC.get(env.SYNC.idFromName("nonuniform-room::relay::0"));
+        const owner = env.SYNC.get(env.SYNC.idFromName("proxy-room"));
+        const relay = env.SYNC.get(env.SYNC.idFromName("proxy-room::relay::0"));
 
-        // `myInbox` resolves under the caller's identity, so the RLS-uniform gate
-        // keeps it out of the relay registry — it stays owner-served.
-        const scoped = await openRelaySocket(relay, "nonuniform-room-relay-0");
+        // `myInbox` resolves under the caller's identity (here anonymous → authorId
+        // "anon"), so the RLS-uniform gate keeps it off the cohort multicast. It must
+        // still get live updates — via the owner's per-socket proxy, not silently frozen.
+        const scoped = await openRelaySocket(relay, "proxy-room-relay-0");
         scoped.ws.send(JSON.stringify({ id: "s1", shape: { args: {}, name: "myInbox" }, type: "shape_subscribe" }));
         await waitFor(() => frameTypes(scoped).includes("ack"));
 
         const seedPokes = frameTypes(scoped).filter((type) => type === "pokeStart").length;
 
-        expect(seedPokes).toBe(1); // exactly the one-time seed, nothing live yet
+        expect(seedPokes).toBe(1); // the one-time seed (no "anon" rows yet)
 
-        // A uniform witness on the same room/relay IS multicast — waiting for ITS
-        // live poke is a deterministic barrier proving the flush + multicast cycle
-        // completed, by which point the non-uniform socket would have its poke too.
-        const witness = await openRelaySocket(relay, "nonuniform-room-relay-0");
-        witness.ws.send(JSON.stringify({ id: "w1", shape: { args: { channelId: "c1" }, name: "messagesByChannel" }, type: "shape_subscribe" }));
-        await waitFor(() => frameTypes(witness).includes("ack"));
+        // A write that lands in THIS socket's identity-scoped membership must arrive
+        // as a live targeted poke; an out-of-scope write (different author) must not.
+        await sendRpc(owner, "messages:send", { _id: "p1", authorId: "u1", channelId: "c1", text: "p1" });
+        await sendRpc(owner, "messages:send", { _id: "p2", authorId: "anon", channelId: "c1", text: "p2" });
+        await waitFor(() => pokeOps(scoped).some((op) => op.key === "p2"));
 
-        await sendRpc(owner, "messages:send", { _id: "n1", channelId: "c1", text: "n1" });
-        await waitFor(() => pokeOps(witness).some((op) => op.key === "n1"));
+        const keys = pokeOps(scoped).map((op) => op.key);
 
-        // The witness saw the live delta; the non-uniform socket's poke count never
-        // moved past its one-time seed — it received no relay multicast.
-        expect(frameTypes(scoped).filter((type) => type === "pokeStart")).toHaveLength(seedPokes);
+        expect(keys).toContain("p2"); // the in-scope write reached the proxied socket
+        expect(keys).not.toContain("p1"); // the out-of-scope (other author) write did not
     });
 });

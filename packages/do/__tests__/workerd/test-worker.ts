@@ -110,7 +110,7 @@ class ConcreteSyncShard extends ShardDO {
             case "messages:sendMutator": {
                 await writer.insert(
                     "messages",
-                    { _id: args["_id"], authorId: "u1", channelId: args["channelId"], text: args["text"] ?? "x" },
+                    { _id: args["_id"], authorId: args["authorId"] ?? "u1", channelId: args["channelId"], text: args["text"] ?? "x" },
                     { allowExplicitId: true },
                 );
 

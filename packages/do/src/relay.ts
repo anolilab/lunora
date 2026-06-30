@@ -131,8 +131,12 @@ interface RelayFrame {
  */
 interface RelayShapeSubscribe {
     args: Record<string, unknown>;
+    /** The relay socket's stable connection id — lets the owner address per-socket proxy pokes back to exactly this socket (non-uniform shapes). */
+    connectionId?: string;
     identity?: Record<string, unknown>;
     name: string;
+    /** The forwarding relay's index, so the owner knows which relay to send this socket's proxy pokes to. */
+    relayIndex?: number;
     sinceEpoch?: string;
     sinceSeq?: number;
     subId: string;
@@ -177,6 +181,14 @@ interface RelayShapePoke {
     fromCursor: number;
     name: string;
     rowsPatch: ShapeRowOp[];
+
+    /**
+     * When set, this is a PER-SOCKET proxy poke for a non-uniform (identity-scoped)
+     * shape, computed under that one socket's identity — the relay delivers it ONLY
+     * to the socket with this connection id, never the whole cohort. Absent for a
+     * uniform cohort multicast (delivered to every matching socket).
+     */
+    targetConnectionId?: string;
     type: "relay_shape_poke";
 }
 

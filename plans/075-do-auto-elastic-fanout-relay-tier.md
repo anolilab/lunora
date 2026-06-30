@@ -239,18 +239,22 @@ single DO's WS cap succeeds.
 
 ### Phase 3 — reactive-shape relay (RLS-uniform only) — **SHIPPED**
 
-Shipped as three slices on `feat/075-fanout-relay`: (A) the RLS-uniform gate
-(`isShapeRelayUniform` — a dual-identity `resolveShape` probe + mask check,
-codegen-free and fail-closed), (B) seed-through-owner + one-delta-per-flush
-cohort multicast (`buildShapeSeedFrames` / `multicastRelayShapePokes` /
-`deliverRelayShapePoke`, gated by a per-socket `fromCursor` memo so a mid-flush
-seeder never double-applies), and (C) the verification below. Resume rides the
-same `computeOpLogShapeSeed` core as the local seed, so the relay round-trip is
-byte-identical by construction. Non-uniform shapes are seeded RLS-correctly via
-the owner but never registered for multicast (a documented low-fan-out
-limitation; per-socket proxy is a Phase 4 follow-up). Proven in real workerd
-(`__tests__/workerd/relay-shape.workerd.test.ts`, 4 tests) + the gate unit test
-(`__tests__/relay-uniform-gate.test.ts`).
+Shipped as three slices on `feat/075-fanout-relay`, hardened by a thermo review
+pass: (A) the RLS-uniform gate (`isShapeRelayUniform` — a static `rlsMetadata()`
+read-policy guard plus a claim-diverse identity probe whose base IS the multicast
+identity + a mask check, codegen-free and fail-closed), (B) seed-through-owner +
+one-delta-per-flush cohort multicast (`buildShapeSeedFrames` /
+`multicastRelayShapePokes` / `deliverRelayShapePoke`, gated by a per-socket
+`fromCursor`+`epoch` memo stamped at the **cohort frontier** so a late joiner is
+never stranded and a mid-flush seeder never double-applies), and (C) the
+verification below. Resume rides the same `computeOpLogShapeSeed` core as the
+local seed, so the relay round-trip is byte-identical by construction. Non-uniform
+(identity-scoped) shapes can't be cohort-multicast, so each is served live by a
+per-socket **owner proxy** (`proxyRelayShapePokes`) that computes its delta under
+its own forwarded identity and delivers a `connectionId`-targeted poke — RLS-correct
+and never silently frozen. Proven in real workerd
+(`__tests__/workerd/relay-shape.workerd.test.ts`, 6 tests) + the gate unit test
+(`__tests__/relay-uniform-gate.test.ts`, 7 tests).
 
 Extend relay-scaling to **reactive query shapes that pass the RLS-uniform gate**
 (Decision 3). Owner computes the delta once (building on plan 072's shared
