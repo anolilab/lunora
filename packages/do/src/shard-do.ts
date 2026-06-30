@@ -3901,6 +3901,16 @@ abstract class ShardDO {
         return this.scheduleGlobalPoll();
     }
 
+    /** This DO's shard key (its DO name), or `__root__` for the single-DO default. The `tenantBy` mapper binds it into the source query. */
+    protected currentShardKey(): string {
+        return this.state.id?.name ?? ROOT_SHARD_NAME;
+    }
+
+    /** Record a contained external-source ingest failure (one sourced table's poll) into the log ring without aborting the others. */
+    protected recordExternalSourceError(table: string, error: unknown): void {
+        this.recordShapeError(`source:${table}`, error);
+    }
+
     /**
      * Look up a streaming-query function and return a thunk that produces the
      * `AsyncIterable&lt;unknown>` when handed an {@link AbortSignal}. The codegen
