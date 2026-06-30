@@ -77,34 +77,70 @@ const relayCountFor = (subscribers: number, perRelayCapacity: number, maxRelays:
     return Math.min(needed, Math.max(0, maxRelays));
 };
 
-/** A relay announces (on first attach) that it is serving a fan-out key for the owner. */
+/** The `::relay::` infix that marks a DO name as a relay for an owner shard. Reserved — a user shard key can't contain it (the runtime mints relay names). */
+const RELAY_NAME_INFIX = "::relay::";
+
+/** Build a relay DO name for `ownerKey`'s relay number `index` — the deterministic name any worker/DO can compute without shared state. */
+const relayName = (ownerKey: string, index: number): string => `${ownerKey}${RELAY_NAME_INFIX}${String(index)}`;
+
+/**
+ * Parse a DO name into its owner key + relay index, or `undefined` when the name
+ * is an owner (no `::relay::` infix). Lets a DO discover its own role from
+ * `state.id.name`: an owner serves its shard directly; a relay knows which owner
+ * to forward to and which relay slot it fills.
+ * @returns the owner key + relay index, or `undefined` for an owner-role name
+ */
+const parseRelayName = (name: string): undefined | { ownerKey: string; relayIndex: number } => {
+    const at = name.lastIndexOf(RELAY_NAME_INFIX);
+
+    if (at === -1) {
+        return undefined;
+    }
+
+    const ownerKey = name.slice(0, at);
+    const indexText = name.slice(at + RELAY_NAME_INFIX.length);
+    const relayIndex = Number(indexText);
+
+    if (ownerKey.length === 0 || !Number.isInteger(relayIndex) || relayIndex < 0 || String(relayIndex) !== indexText) {
+        return undefined;
+    }
+
+    return { ownerKey, relayIndex };
+};
+
+/** A relay announces (on its first attached subscriber) that it is serving a fan-out key, so the owner adds it to the relay set it forwards to. */
 interface RelayAttach {
-    relayId: string;
+    relayIndex: number;
     type: "relay_attach";
 }
 
-/** A relay announces it has drained to zero sockets and is detaching from the key. */
+/** A relay announces it has drained to zero sockets and is detaching, so the owner stops forwarding to it. */
 interface RelayDetach {
-    relayId: string;
+    relayIndex: number;
     type: "relay_detach";
 }
 
 /**
- * The owner forwards one **opaque, already-serialized** frame for a relay to
- * re-broadcast verbatim to its attached sockets. `frame` is the exact wire string
- * the owner would have sent its own sockets (a whisper frame in Phase 2); the relay
- * never parses or re-derives it. `cursor`/`epoch` accompany reactive-shape frames
- * (Phase 3) so a relay can stamp the checkpoint; absent for ephemeral whisper.
+ * One **opaque, already-serialized** frame to re-broadcast verbatim to a fan-out
+ * key's local subscribers. `frame` is the exact wire string the owner would have
+ * sent its own sockets (a whisper frame in Phase 2); the receiver never parses or
+ * re-derives it. `topic` names the fan-out key so the receiver delivers only to
+ * that key's members. `originRelay` is set when a relay forwarded a socket's
+ * whisper up to the owner, so the owner skips re-forwarding it back to that relay
+ * (no echo). `cursor`/`epoch` accompany reactive-shape frames (Phase 3); absent
+ * for ephemeral whisper.
  */
 interface RelayFrame {
     cursor?: number;
     epoch?: string;
     frame: string;
+    originRelay?: number;
+    topic: string;
     type: "relay_frame";
 }
 
-/** Internal owner↔relay control frames (plan 075). NOT the public client protocol — the app never sees these. */
+/** Internal owner↔relay control messages (plan 075). NOT the public client protocol — the app never sees these. */
 type OwnerRelayFrame = RelayAttach | RelayDetach | RelayFrame;
 
-export { DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, relayCountFor };
+export { DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, parseRelayName, RELAY_NAME_INFIX, relayCountFor, relayName };
 export type { OwnerRelayFrame, PromotionState, PromotionThresholds, RelayAttach, RelayDetach, RelayFrame };

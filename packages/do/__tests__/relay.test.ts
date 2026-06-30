@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, relayCountFor } from "../src/relay";
+import { DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, parseRelayName, relayCountFor, relayName } from "../src/relay";
 
 describe("relay promotion reducer", () => {
     const thresholds = { tDown: 4000, tUp: 8000 };
@@ -72,5 +72,36 @@ describe("relayCountFor", () => {
         expect.assertions(1);
 
         expect(relayCountFor(10_000, 0, 8)).toBe(0);
+    });
+});
+
+describe("relay name helpers", () => {
+    it("round-trips an owner key + relay index through the name", () => {
+        expect.assertions(2);
+
+        expect(relayName("room-1", 3)).toBe("room-1::relay::3");
+        expect(parseRelayName("room-1::relay::3")).toStrictEqual({ ownerKey: "room-1", relayIndex: 3 });
+    });
+
+    it("treats a plain owner name as not-a-relay", () => {
+        expect.assertions(2);
+
+        expect(parseRelayName("room-1")).toBeUndefined();
+        expect(parseRelayName("")).toBeUndefined();
+    });
+
+    it("keeps the owner key for an owner whose own key contains the infix once", () => {
+        expect.assertions(1);
+
+        // `lastIndexOf` splits on the FINAL infix, so a relay of a relay-shaped owner resolves to that owner.
+        expect(parseRelayName("a::relay::1::relay::2")).toStrictEqual({ ownerKey: "a::relay::1", relayIndex: 2 });
+    });
+
+    it("rejects a malformed or non-numeric relay index", () => {
+        expect.assertions(3);
+
+        expect(parseRelayName("room-1::relay::")).toBeUndefined();
+        expect(parseRelayName("room-1::relay::x")).toBeUndefined();
+        expect(parseRelayName("room-1::relay::-1")).toBeUndefined();
     });
 });

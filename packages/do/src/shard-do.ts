@@ -90,6 +90,8 @@ import { readQueryMetrics, recordQueryMetric } from "./query-metrics";
 import type { ShardRankPageResult } from "./rank";
 import type { ReactiveCacheOptions } from "./reactive-cache";
 import { ReactiveCache, reactiveCacheKey } from "./reactive-cache";
+import type { OwnerRelayFrame } from "./relay";
+import { parseRelayName, relayName } from "./relay";
 import type { AppendRequestLogEntry, ContextLogLevel, LogEventInput, RequestLogResult, RequestLogWriteOptions } from "./request-log";
 import { appendRequestLogEntry, emitLogEvent, emitRequestLogEvent, ensureRequestLogTable, readRequestLog, renderLogMessage } from "./request-log";
 import { buildSecurityAudit } from "./security-audit";
@@ -1448,6 +1450,29 @@ const constantTimeEqual = (a: string, b: string): boolean => {
     return diff === 0;
 };
 
+/** Minimal Durable Object stub shape the relay hub uses — just `fetch`. */
+interface RelayStub {
+    fetch: (input: string, init?: RequestInit) => Promise<Response>;
+}
+
+/** Minimal Durable Object namespace shape the relay hub resolves siblings through (`getByName` when present, else `idFromName` + `get`). */
+interface RelayNamespaceLike {
+    get: (id: unknown) => RelayStub;
+    getByName?: (name: string) => RelayStub;
+    idFromName: (name: string) => unknown;
+}
+
+/** Duck-type a namespace binding so a relay/owner can address its siblings, or `undefined` when the value isn't a DO namespace. */
+const asRelayNamespace = (value: unknown): RelayNamespaceLike | undefined => {
+    if (value === null || typeof value !== "object") {
+        return undefined;
+    }
+
+    const candidate = value as Partial<RelayNamespaceLike>;
+
+    return typeof candidate.idFromName === "function" && typeof candidate.get === "function" ? (candidate as RelayNamespaceLike) : undefined;
+};
+
 /**
  * Base class for shard Durable Objects.
  *
@@ -1784,6 +1809,27 @@ abstract class ShardDO {
     private readonly fanout = { shapePoke: createFanoutCounters(), whisper: createFanoutCounters() };
 
     /**
+     * The runtime's Durable Object namespace binding name (e.g. `"SHARD"`),
+     * forwarded as `x-lunora-shard-binding` on every request so a DO can address
+     * its siblings (`this.env[binding].getByName(...)`) for the relay hub. Absent
+     * in single-DO mode / the unit harness — when absent, the relay tier is inert
+     * and whispers stay shard-local (no behavior change). In-memory; re-learned per
+     * request.
+     */
+    private shardBinding: string | undefined;
+
+    /**
+     * Owner-side cache of the active relay indices for this shard (plan 075 Phase
+     * 2). Lazily hydrated from the reserved `__lunora_relays` SQLite table and kept
+     * in lockstep with it on attach/detach, so the hot whisper-forward path reads
+     * it synchronously without a storage round-trip.
+     */
+    private relaySetCache: Set<number> | undefined;
+
+    /** Relay-side guard: `true` once this relay has announced itself to its owner this wake, so a hot socket churn doesn't re-`relay_attach` on every subscribe. */
+    private relayAnnounced = false;
+
+    /**
      * Declared indexes (`table:index`) a query has exercised since this instance
      * woke, stamped by `getCtxDbIndexUseHook`. In-memory and reset on
      * hibernation/restart — drives the `unused_index` runtime advisory.
@@ -1892,8 +1938,17 @@ abstract class ShardDO {
     public async fetch(request: Request): Promise<Response> {
         const url = new URL(request.url);
 
-        if (request.headers.get("Upgrade") === "websocket") {
-            return this.handleWebSocketUpgrade(request);
+        // Learn the DO namespace binding the runtime routes through, so this DO can
+        // address its siblings for the relay hub (plan 075 Phase 2). Sent on every
+        // forwarded request; kept across requests once known.
+        this.shardBinding = request.headers.get("x-lunora-shard-binding") ?? this.shardBinding;
+
+        // The non-RPC routes (WS upgrade + the internal owner↔relay control channel)
+        // are handled up front; everything past here is the shard-local RPC endpoint.
+        const early = this.routeNonRpc(url, request);
+
+        if (early !== undefined) {
+            return early;
         }
 
         if (url.pathname !== "/rpc" || request.method !== "POST") {
@@ -2284,7 +2339,15 @@ abstract class ShardDO {
 
         if (envelope.type === "whisper_subscribe" || envelope.type === "whisper_unsubscribe") {
             if (typeof envelope.topic === "string" && envelope.topic.length > 0) {
-                this.setWhisperMembership(ws, envelope.topic, envelope.type === "whisper_subscribe");
+                const join = envelope.type === "whisper_subscribe";
+
+                this.setWhisperMembership(ws, envelope.topic, join);
+
+                // Relay tier (plan 075 Phase 2): once a relay holds a subscriber, it
+                // announces itself so the owner forwards whisper frames to it.
+                if (join) {
+                    await this.announceRelayIfNeeded();
+                }
             }
 
             return;
@@ -2292,7 +2355,7 @@ abstract class ShardDO {
 
         if (envelope.type === "whisper") {
             if (typeof envelope.topic === "string" && envelope.topic.length > 0) {
-                this.broadcastWhisper(ws, envelope.topic, envelope.data);
+                await this.broadcastWhisper(ws, envelope.topic, envelope.data);
             }
 
             return;
@@ -7072,6 +7135,26 @@ abstract class ShardDO {
         setter.call(this.state, new WebSocketRequestResponsePair(WS_KEEPALIVE_PING, WS_KEEPALIVE_PONG));
     }
 
+    /**
+     * Route the non-RPC requests `fetch` handles before the shard-local RPC
+     * endpoint: a WebSocket upgrade, and the internal `/_lunora/relay` owner↔relay
+     * control channel (never reachable by a client — the runtime forwards only
+     * worker-internal traffic there). Returns `undefined` for an RPC request, which
+     * `fetch` then dispatches.
+     * @returns the routed response, or `undefined` when this is an RPC request
+     */
+    private routeNonRpc(url: URL, request: Request): Promise<Response> | undefined {
+        if (url.pathname === "/_lunora/relay" && request.method === "POST") {
+            return this.handleRelayMessage(request);
+        }
+
+        if (request.headers.get("Upgrade") === "websocket") {
+            return Promise.resolve(this.handleWebSocketUpgrade(request));
+        }
+
+        return undefined;
+    }
+
     private handleWebSocketUpgrade(request: Request): Response {
         if (!this.isUpgradeAllowed(request)) {
             return new Response("Forbidden", { status: 403 });
@@ -7224,7 +7307,7 @@ abstract class ShardDO {
      * topic name. That matches the AnyCable model (and `from` is unforgeable),
      * but per-topic auth does not exist here; see `whisperSubscribe` on the client.
      */
-    private broadcastWhisper(sender: WebSocket, topic: string, data: unknown): void {
+    private async broadcastWhisper(sender: WebSocket, topic: string, data: unknown): Promise<void> {
         // Rate-limit first — cheapest rejection, and it bounds the O(connections)
         // fan-out cost a tight whisper loop would otherwise impose.
         if (!this.allowWhisper(sender)) {
@@ -7245,16 +7328,28 @@ abstract class ShardDO {
         const fromSuffix = from === undefined ? "" : `,"from":${JSON.stringify(from)}`;
         const frame = `{"type":"whisper","topic":${JSON.stringify(topic)},"data":${dataJson}${fromSuffix}}`;
 
-        // Observability (plan 075 Phase 1): tally the sockets scanned vs. actually
-        // delivered to so `getFanoutMetrics` shows the whisper fan-out width. Pure
-        // counting — it never changes who receives the whisper.
+        // Deliver to THIS DO's sockets (excluding the sender), then — when the shard
+        // is promoted (plan 075 Phase 2) — forward the opaque frame through the relay
+        // hub so it reaches the sockets on every other DO serving the shard.
+        this.deliverWhisperLocal(topic, frame, sender);
+        await this.forwardWhisperToHub(topic, frame);
+    }
+
+    /**
+     * Deliver an already-serialized whisper `frame` to every local socket joined to
+     * `topic`, excluding `exclude` (the sender, or `undefined` for a frame the relay
+     * hub forwarded in — its sender lives on another DO). Records the fan-out pass
+     * for `getFanoutMetrics` (plan 075 Phase 1). Pure delivery — no SQLite, no CDC.
+     * @returns the number of sockets the frame was sent to
+     */
+    private deliverWhisperLocal(topic: string, frame: string, exclude: undefined | WebSocket): number {
         let scanned = 0;
         let delivered = 0;
 
         for (const ws of this.state.getWebSockets()) {
             scanned += 1;
 
-            if (ws === sender || this.readAttachment(ws).whispers?.includes(topic) !== true) {
+            if (ws === exclude || this.readAttachment(ws).whispers?.includes(topic) !== true) {
                 continue;
             }
 
@@ -7263,9 +7358,188 @@ abstract class ShardDO {
             delivered += 1;
         }
 
-        // The broadcast is synchronous (no awaited I/O), so no wall-clock is
-        // captured (`0` ms); the scanned/delivered socket counts are exact.
         this.fanout.whisper = recordFanoutPass(this.fanout.whisper, scanned, delivered, 0);
+
+        return delivered;
+    }
+
+    /**
+     * Forward an opaque whisper frame through the relay hub (plan 075 Phase 2). A
+     * relay sends it UP to its owner (stamped with its own index so the owner won't
+     * echo it back); the owner sends it to every relay in its set. A no-op in
+     * single-DO mode (no binding) or when the owner has no relays — so the common,
+     * un-promoted path stays free.
+     */
+    private async forwardWhisperToHub(topic: string, frame: string): Promise<void> {
+        const role = this.relayRole();
+
+        if (role === undefined) {
+            return;
+        }
+
+        if (role.relayIndex !== undefined) {
+            await this.postRelayMessage(role.ownerKey, { frame, originRelay: role.relayIndex, topic, type: "relay_frame" });
+
+            return;
+        }
+
+        const relays = this.ownerRelaySet();
+
+        if (relays.size === 0) {
+            return;
+        }
+
+        await Promise.all([...relays].map((index) => this.postRelayMessage(relayName(role.ownerKey, index), { frame, topic, type: "relay_frame" })));
+    }
+
+    /**
+     * This DO's role in the relay hub, or `undefined` when it can't address siblings
+     * (no namespace binding learned, or no DO name) — i.e. single-DO mode, where the
+     * relay tier is inert. An owner returns its own key with no `relayIndex`; a relay
+     * returns its owner's key + its slot.
+     * @returns `{ ownerKey, relayIndex? }`, or `undefined` when relaying isn't possible
+     */
+    private relayRole(): undefined | { ownerKey: string; relayIndex?: number } {
+        const name = this.state.id?.name;
+
+        if (name === undefined || this.relayNamespace() === undefined) {
+            return undefined;
+        }
+
+        const parsed = parseRelayName(name);
+
+        return parsed === undefined ? { ownerKey: name } : { ownerKey: parsed.ownerKey, relayIndex: parsed.relayIndex };
+    }
+
+    /** Resolve this DO's own namespace binding (learned from `x-lunora-shard-binding`) so it can address sibling owners/relays, or `undefined` when unknown. */
+    private relayNamespace(): RelayNamespaceLike | undefined {
+        if (this.shardBinding === undefined) {
+            return undefined;
+        }
+
+        return asRelayNamespace((this.env as Record<string, unknown> | undefined)?.[this.shardBinding]);
+    }
+
+    /**
+     * POST an owner↔relay control message to a sibling DO by name. Best-effort: a
+     * transient cross-DO failure drops the frame (whisper is ephemeral — there is no
+     * resume) rather than throwing into the WS message handler. Carries the binding
+     * forward so the receiver can address its own siblings in turn.
+     */
+    private async postRelayMessage(targetName: string, message: OwnerRelayFrame): Promise<void> {
+        const namespace = this.relayNamespace();
+
+        if (namespace === undefined) {
+            return;
+        }
+
+        const stub = typeof namespace.getByName === "function" ? namespace.getByName(targetName) : namespace.get(namespace.idFromName(targetName));
+
+        try {
+            await stub.fetch("https://relay.internal/_lunora/relay", {
+                body: JSON.stringify(message),
+                headers: { "content-type": "application/json", "x-lunora-shard-binding": this.shardBinding ?? "" },
+                method: "POST",
+            });
+        } catch {
+            /* best-effort hub forwarding — a dropped ephemeral frame is tolerable */
+        }
+    }
+
+    /**
+     * Serve the internal `/_lunora/relay` control channel (plan 075 Phase 2). An
+     * `attach`/`detach` updates the owner's relay set; a `frame` is delivered to this
+     * DO's local members and — on the owner, for a frame a relay forwarded up —
+     * re-forwarded to every OTHER relay, so one whisper reaches the whole shard
+     * exactly once per socket.
+     */
+    private async handleRelayMessage(request: Request): Promise<Response> {
+        let message: OwnerRelayFrame;
+
+        try {
+            message = await request.json();
+        } catch {
+            return new Response("bad request", { status: 400 });
+        }
+
+        if (message.type === "relay_attach") {
+            this.addRelayToSet(message.relayIndex);
+
+            // eslint-disable-next-line unicorn/no-null -- 204 No Content has no body; null is the standard "no body" value
+            return new Response(null, { status: 204 });
+        }
+
+        if (message.type === "relay_detach") {
+            this.removeRelayFromSet(message.relayIndex);
+
+            // eslint-disable-next-line unicorn/no-null -- 204 No Content has no body
+            return new Response(null, { status: 204 });
+        }
+
+        this.deliverWhisperLocal(message.topic, message.frame, undefined);
+
+        const role = this.relayRole();
+
+        if (role !== undefined && role.relayIndex === undefined) {
+            // Owner re-distributes a relay-forwarded frame to the OTHER relays.
+            await Promise.all(
+                [...this.ownerRelaySet()]
+                    .filter((index) => index !== message.originRelay)
+                    .map((index) =>
+                        this.postRelayMessage(relayName(role.ownerKey, index), { frame: message.frame, topic: message.topic, type: "relay_frame" }),
+                    ),
+            );
+        }
+
+        // eslint-disable-next-line unicorn/no-null -- 204 No Content has no body
+        return new Response(null, { status: 204 });
+    }
+
+    /** Ensure the reserved owner-side relay-set table exists (auto-hidden from the data browser by the `__lunora` prefix). */
+    private ensureRelayTable(): void {
+        (this.sql as SqlExec).exec("CREATE TABLE IF NOT EXISTS __lunora_relays (idx INTEGER PRIMARY KEY)");
+    }
+
+    /** The owner's active relay indices, hydrated once from `__lunora_relays` and cached in-memory for the synchronous forward path. */
+    private ownerRelaySet(): Set<number> {
+        if (this.relaySetCache === undefined) {
+            this.ensureRelayTable();
+            const rows = (this.sql as SqlExec).exec<{ idx: bigint | number }>("SELECT idx FROM __lunora_relays").toArray();
+
+            this.relaySetCache = new Set(rows.map((row) => Number(row.idx)));
+        }
+
+        return this.relaySetCache;
+    }
+
+    /** Record a relay as active in the owner's set (idempotent), persisting it so the set survives the owner's hibernation. */
+    private addRelayToSet(index: number): void {
+        this.ensureRelayTable();
+        (this.sql as SqlExec).exec("INSERT OR IGNORE INTO __lunora_relays (idx) VALUES (?)", index);
+        this.ownerRelaySet().add(index);
+    }
+
+    /** Drop a drained relay from the owner's set so the owner stops forwarding to it. */
+    private removeRelayFromSet(index: number): void {
+        this.ensureRelayTable();
+        (this.sql as SqlExec).exec("DELETE FROM __lunora_relays WHERE idx = ?", index);
+        this.ownerRelaySet().delete(index);
+    }
+
+    /** A relay announces itself to its owner (once per wake) on its first subscriber, so the owner forwards whisper frames to it. No-op on an owner or in single-DO mode. */
+    private async announceRelayIfNeeded(): Promise<void> {
+        if (this.relayAnnounced) {
+            return;
+        }
+
+        const role = this.relayRole();
+
+        if (role?.relayIndex === undefined) {
+            return;
+        }
+
+        this.relayAnnounced = true;
+        await this.postRelayMessage(role.ownerKey, { relayIndex: role.relayIndex, type: "relay_attach" });
     }
 
     // eslint-disable-next-line class-methods-use-this -- cohesive DO instance method grouped with the hibernation/attachment helpers; reads only the socket
