@@ -63,10 +63,14 @@ That's the case a `try/catch` around `await send(...)` fundamentally cannot catc
 
 ```ts
 export const send = mutation.input({ text: v.string(), author: v.string() }).mutation(async ({ args: { text, author }, ctx }) => {
-    if (/\bfail\b/i.test(text)) {
-        throw new LunoraError("CONFLICT", `the server refused to save "${text}"`);
+    const trimmed = text.trim();
+    if (trimmed === "") {
+        throw new LunoraError("BAD_REQUEST", "message text cannot be empty");
     }
-    return ctx.db.insert("messages", { text, author, createdAt: Date.now() });
+    if (/\bfail\b/i.test(trimmed)) {
+        throw new LunoraError("CONFLICT", `the server refused to save "${trimmed}"`);
+    }
+    return ctx.db.insert("messages", { text: trimmed, author, createdAt: Date.now() });
 });
 ```
 

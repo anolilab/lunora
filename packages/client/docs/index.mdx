@@ -83,10 +83,22 @@ See [Offline-first](/docs/concepts/offline-first) for the full reads + writes st
 ## Optimistic updates
 
 `client.mutation(fn, args, { optimistic: (current) => next })` patches the
-matching subscription's cache immediately and rolls back if the server rejects
-the call. To patch several subscribed queries from one mutation, pass
-`optimisticUpdate` instead — it receives an `OptimisticLocalStore` over the
-live cache, and every write is rolled back atomically on failure.
+matching subscription's cache immediately, then reconciles it **gaplessly**: the
+patch is recorded as a rebaseable layer, so an unrelated server delta that lands
+while the write is still pending is re-folded _under_ it (your change never
+flickers away and back), and the layer is dropped the moment a server frame whose
+`cursor` reaches the write's committed cursor arrives — the server echoes that
+cursor on the mutation response, so the drop is keyed on confirmed server state,
+not RPC-response timing (which races the WebSocket broadcast). A coded rejection
+rolls the layer back.
+
+To patch several subscribed queries from one mutation, pass `optimisticUpdate`
+instead — it receives an `OptimisticLocalStore` over the live cache, and each
+`setQuery` registers a constant-value layer on the same engine, so the whole
+batch rebases and settles together (confirmed on the mutation's commit cursor, or
+rolled back atomically on failure). See
+[Offline-first](/docs/concepts/offline-first#the-reconciliation-model) for the
+full reconciliation model.
 
 ## Shape subscriptions
 
