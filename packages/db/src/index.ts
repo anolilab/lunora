@@ -12,7 +12,7 @@
  */
 export type { CheckpointRegistry, LunoraCollectionConfig, LunoraCollectionOptions } from "./collection-options";
 export { createCheckpointRegistry, lunoraCollectionOptions } from "./collection-options";
-export type { CollectionDef, InsertBinding, LunoraDb } from "./define-collections";
+export type { CollectionDef, DefineCollectionsOptions, InsertBinding, LunoraDb, WriteRejectedEvent } from "./define-collections";
 export { defineCollections } from "./define-collections";
 export type { BindMutatorsContext, BoundMutators, ClientMutatorContext, ClientMutatorDef } from "./define-mutators";
 export { bindMutators, defineMutator } from "./define-mutators";

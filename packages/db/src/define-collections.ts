@@ -71,6 +71,42 @@ type RowOf<C extends AnyDef> = C["list"] extends FunctionReference<infer _K, inf
 /** The action input type, inferred structurally from the def's optimistic insert. */
 type InputOf<C> = C extends { insert: { optimistic: (input: infer I, id: string) => unknown } } ? I : never;
 
+/** A queued write that the server permanently rejected, passed to {@link DefineCollectionsOptions.onWriteRejected}. */
+export interface WriteRejectedEvent {
+    /**
+     * The server's machine-readable reason (e.g. `CONFLICT`, `FORBIDDEN`), when
+     * present — mirrors the client's `MutationSettledEvent.code` so a consumer can
+     * branch on the verdict, not just the message.
+     */
+    code?: string;
+    /** The collection/table name the write targeted. */
+    collection: string;
+    /** The error the server returned (the message carried by the underlying `NonRetriableError`). */
+    error: Error;
+    /** The optimistic row being rolled back (the rollback follows the callback). */
+    row: Row;
+}
+
+/** Options for {@link defineCollections}. */
+export interface DefineCollectionsOptions {
+    /**
+     * Invoked as a queued write is permanently rejected by the server — a coded
+     * application error (validation, RLS denial, conflict) surfaced as a
+     * `NonRetriableError`. This is the aggregate, fire-and-forget-safe channel:
+     * unlike awaiting the per-action `transaction` returned by `actions[name](...)`,
+     * it fires even when the caller never retained that handle, so a UI can surface
+     * "couldn't save" instead of a silently vanishing row. Transient failures
+     * (offline, 5xx) are retried by the outbox, not reported here.
+     *
+     * Timing: the callback runs at the point of rejection; the executor's
+     * optimistic-row rollback follows immediately after. The event's `row` is the
+     * (about-to-be-removed) optimistic row, so don't depend on the collection
+     * already reflecting the removal from inside the handler — use `row`/`error`
+     * directly (e.g. for a toast).
+     */
+    onWriteRejected?: (event: WriteRejectedEvent) => void;
+}
+
 /** The wired data layer `defineCollections` returns. */
 // eslint-disable-next-line unicorn/prevent-abbreviations -- "Db" matches the package name `@lunora/db`
 export interface LunoraDb<D extends Record<string, AnyDef>> {
@@ -94,7 +130,7 @@ export interface LunoraDb<D extends Record<string, AnyDef>> {
  * This is the hand-written form; `@lunora/codegen` can emit a fully-typed call to
  * it from `schema.ts`, so an app writes nothing.
  */
-export const defineCollections = <D extends Record<string, AnyDef>>(client: LunoraClient, defs: D): LunoraDb<D> => {
+export const defineCollections = <D extends Record<string, AnyDef>>(client: LunoraClient, defs: D, options: DefineCollectionsOptions = {}): LunoraDb<D> => {
     const collections: Record<string, Collection<Row, string>> = {};
     const scope: Record<string, (args?: Record<string, unknown>) => void> = {};
     const mutationFns: OfflineConfig["mutationFns"] = {};
@@ -127,8 +163,21 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
                 for (const mutation of transaction.mutations) {
                     const row = mutation.modified as unknown as Row;
 
-                    // eslint-disable-next-line no-await-in-loop -- sequential keeps the outbox's FIFO ordering
-                    await runOutboxMutation(() => client.mutation(insert.mutation, insert.toArgs(row)));
+                    try {
+                        // eslint-disable-next-line no-await-in-loop -- sequential keeps the outbox's FIFO ordering
+                        await runOutboxMutation(() => client.mutation(insert.mutation, insert.toArgs(row)));
+                    } catch (error) {
+                        // A permanent (coded) rejection: the executor will roll the
+                        // optimistic row back. Report it on the aggregate channel so a
+                        // fire-and-forget caller still learns the write was dropped, then
+                        // rethrow so the rollback proceeds. Transient errors retry — only
+                        // the NonRetriableError verdict is terminal, so only it is reported.
+                        if (error instanceof NonRetriableError) {
+                            options.onWriteRejected?.({ code: (error as Error & { code?: string }).code, collection: name, error, row });
+                        }
+
+                        throw error;
+                    }
                 }
             };
         }
