@@ -90,7 +90,7 @@ import { readQueryMetrics, recordQueryMetric } from "./query-metrics";
 import type { ShardRankPageResult } from "./rank";
 import type { ReactiveCacheOptions } from "./reactive-cache";
 import { ReactiveCache, reactiveCacheKey, stableStringify } from "./reactive-cache";
-import type { OwnerRelayFrame, RelayShapePoke, RelayShapeSeed, RelayShapeSubscribe } from "./relay";
+import type { OwnerRelayFrame, RelayFrame, RelayShapePoke, RelayShapeSeed, RelayShapeSubscribe } from "./relay";
 import { DEFAULT_PROMOTION_THRESHOLDS, parseRelayName, relayName, shapeRoutingKey } from "./relay";
 import type { AppendRequestLogEntry, ContextLogLevel, LogEventInput, RequestLogResult, RequestLogWriteOptions } from "./request-log";
 import { appendRequestLogEntry, emitLogEvent, emitRequestLogEvent, ensureRequestLogTable, readRequestLog, renderLogMessage } from "./request-log";
@@ -503,6 +503,11 @@ const IDEMPOTENCY_GC_INTERVAL_MS = 3_600_000;
  * identity and the multicast identity can never drift apart.
  */
 const RELAY_MULTICAST_IDENTITY: SubscriptionIdentity = {};
+
+/** Exhaustiveness guard for the {@link OwnerRelayFrame} dispatch — an unhandled member is a compile error here, and an impossible runtime frame throws rather than silently mis-routing. */
+const assertNeverFrame = (frame: never): never => {
+    throw new Error(`unhandled relay frame: ${JSON.stringify(frame)}`);
+};
 
 const ROOT_SHARD_NAME = "__root__";
 
@@ -1864,12 +1869,13 @@ abstract class ShardDO {
     private readonly relayShapeRegistry = new Map<string, { args: Record<string, unknown>; cursor: number; name: string }>();
 
     /**
-     * Relay-side per-socket shape memo: `ws → subId → cursor`. The relay delivers a
-     * multicast `relay_shape_poke` to a socket only when its memo for that shape
-     * equals the poke's `fromCursor`, then advances it — so a socket that seeded at
-     * a different cursor never double-applies a delta (plan 075 Phase 3 slice B.2).
+     * Relay-side per-socket shape memo: `ws → subId → { cursor, epoch }`. The relay
+     * delivers a multicast `relay_shape_poke` to a socket only when its memo for that
+     * shape matches the poke's `fromCursor` AND `epoch`, then advances it — so a
+     * socket that seeded at a different cursor (or in a prior CDC epoch) never
+     * double-applies a delta (plan 075 Phase 3 slice B.2).
      */
-    private readonly shapeRelayMemos = new WeakMap<WebSocket, Map<string, number>>();
+    private readonly shapeRelayMemos = new WeakMap<WebSocket, Map<string, { cursor: number; epoch?: string }>>();
 
     /**
      * Declared indexes (`table:index`) a query has exercised since this instance
@@ -6428,14 +6434,28 @@ abstract class ShardDO {
 
         // Register a UNIFORM shape so the owner multicasts its future deltas to relays
         // (slice B.2). A non-uniform shape is still seeded above (RLS-correct under the
-        // forwarded identity) but isn't registered — it gets no live multicast (those
-        // sockets are inherently low-fan-out; a per-socket proxy is a follow-up).
+        // forwarded identity) but isn't registered — those sockets are served live by
+        // the per-socket relay proxy below, not the cohort multicast.
+        //
+        // The relay must stamp the socket's cohort memo at the registry FRONTIER
+        // (entry.cursor), NOT the global cursor the frames were computed at: the
+        // frontier only advances on a multicast poke, so an unrelated-table write that
+        // bumps the global cursor would otherwise leave a joiner's memo permanently
+        // ahead of every future `fromCursor` — silently frozen (plan 075 review HIGH-2).
+        // Seeding the full current membership while memoing at the (possibly older)
+        // frontier is correct because a shape's membership is invariant between pokes.
+        let cohortCursor = cursor;
+
         if (this.isShapeRelayUniform(request.name, request.args)) {
             const routingKey = shapeRoutingKey(request.name, request.args);
+            let entry = this.relayShapeRegistry.get(routingKey);
 
-            if (!this.relayShapeRegistry.has(routingKey)) {
-                this.relayShapeRegistry.set(routingKey, { args: request.args, cursor, name: request.name });
+            if (entry === undefined) {
+                entry = { args: request.args, cursor, name: request.name };
+                this.relayShapeRegistry.set(routingKey, entry);
             }
+
+            cohortCursor = entry.cursor;
         }
 
         this.pokeSequence += 1;
@@ -6447,7 +6467,7 @@ abstract class ShardDO {
             pokeId: `poke-${String(this.pokeSequence)}`,
         });
 
-        return { cursor, frames };
+        return { cursor: cohortCursor, epoch, frames };
     }
 
     /**
@@ -7717,22 +7737,22 @@ abstract class ShardDO {
 
         // Record this socket's cohort memo so the owner's multicast deltas land
         // exactly once (slice B.2): the next `relay_shape_poke` for this shape is
-        // delivered only while the memo still equals the poke's `fromCursor`.
-        this.recordRelayShapeMemo(ws, subId, seed.cursor ?? 0);
+        // delivered only while the memo still matches the poke's `fromCursor`+`epoch`.
+        this.recordRelayShapeMemo(ws, subId, seed.cursor ?? 0, seed.epoch);
 
         return "ok";
     }
 
-    /** Record a relay socket's cohort cursor for `subId` (creating the per-socket map lazily). */
-    private recordRelayShapeMemo(ws: WebSocket, subId: string, cursor: number): void {
+    /** Record a relay socket's cohort cursor + epoch for `subId` (creating the per-socket map lazily). */
+    private recordRelayShapeMemo(ws: WebSocket, subId: string, cursor: number, epoch: string | undefined): void {
         let memos = this.shapeRelayMemos.get(ws);
 
         if (memos === undefined) {
-            memos = new Map<string, number>();
+            memos = new Map<string, { cursor: number; epoch?: string }>();
             this.shapeRelayMemos.set(ws, memos);
         }
 
-        memos.set(subId, cursor);
+        memos.set(subId, { cursor, epoch });
     }
 
     /**
@@ -7803,14 +7823,16 @@ abstract class ShardDO {
     /**
      * Relay side (plan 075 Phase 3 slice B.2): deliver an owner-multicast shape
      * delta to this relay's cohort sockets. A socket receives it only while its memo
-     * for the shape equals the poke's `fromCursor` — so a socket that seeded at a
-     * different cursor is skipped and never double-applies — then advances to
-     * `checkpoint`. The `rowsPatch` is wrapped in poke frames per socket (each its
-     * own `subId`); `lastMutationId` is omitted (relayed sockets are owner-served
-     * for custom mutators).
+     * for the shape matches the poke's `fromCursor` AND `epoch` — so a socket that
+     * seeded at a different cursor (or in a prior CDC epoch) is skipped and never
+     * double-applies — then advances to `checkpoint`. The `rowsPatch` is wrapped in
+     * poke frames per socket (each its own `subId`); `lastMutationId` is omitted
+     * (relayed sockets are owner-served for custom mutators). Returns the number of
+     * sockets actually delivered to, for fan-out accounting.
      */
-    private deliverRelayShapePoke(poke: RelayShapePoke): void {
+    private deliverRelayShapePoke(poke: RelayShapePoke): number {
         const routingKey = shapeRoutingKey(poke.name, poke.args);
+        let delivered = 0;
 
         for (const ws of this.state.getWebSockets()) {
             const { shapes } = this.readAttachment(ws);
@@ -7821,7 +7843,9 @@ abstract class ShardDO {
             }
 
             for (const [subId, sub] of Object.entries(shapes)) {
-                if (memos.get(subId) !== poke.fromCursor || shapeRoutingKey(sub.name, sub.args) !== routingKey) {
+                const memo = memos.get(subId);
+
+                if (memo?.cursor !== poke.fromCursor || memo.epoch !== poke.epoch || shapeRoutingKey(sub.name, sub.args) !== routingKey) {
                     continue;
                 }
 
@@ -7838,9 +7862,12 @@ abstract class ShardDO {
                     trySendFrame(ws, frame);
                 }
 
-                memos.set(subId, poke.checkpoint);
+                memos.set(subId, { cursor: poke.checkpoint, epoch: poke.epoch });
+                delivered += 1;
             }
         }
+
+        return delivered;
     }
 
     /**
@@ -7859,34 +7886,53 @@ abstract class ShardDO {
             return new Response("bad request", { status: 400 });
         }
 
-        if (message.type === "relay_shape_subscribe") {
-            // Owner seeds a relay's shape under the forwarded identity and returns
-            // the serialized poke frames for the relay to deliver (plan 075 Phase 3).
-            return jsonResponse(this.buildShapeSeedFrames(message));
+        // eslint-disable-next-line unicorn/no-null -- 204 No Content has no body; null is the standard "no body" value
+        const noContent = (): Response => new Response(null, { status: 204 });
+
+        switch (message.type) {
+            case "relay_attach": {
+                this.addRelayToSet(message.relayIndex);
+
+                return noContent();
+            }
+            case "relay_detach": {
+                this.removeRelayFromSet(message.relayIndex);
+
+                return noContent();
+            }
+            case "relay_frame": {
+                return this.handleRelayWhisperFrame(message);
+            }
+            case "relay_shape_poke": {
+                // Owner-multicast shape delta → deliver to this relay's cohort sockets,
+                // recording the fan-out so a relay's metrics reflect the work it does.
+                const iterated = this.state.getWebSockets().length;
+                const startMs = Date.now();
+                const delivered = this.deliverRelayShapePoke(message);
+
+                this.fanout.shapePoke = recordFanoutPass(this.fanout.shapePoke, iterated, delivered, Date.now() - startMs);
+
+                return noContent();
+            }
+            case "relay_shape_subscribe": {
+                // Owner seeds a relay's shape under the forwarded identity and returns
+                // the serialized poke frames for the relay to deliver (plan 075 Phase 3).
+                return jsonResponse(this.buildShapeSeedFrames(message));
+            }
+            default: {
+                // Exhaustiveness guard: a new OwnerRelayFrame member added to `relay.ts`
+                // without a case here becomes a COMPILE error, not a runtime null-deref.
+                return assertNeverFrame(message);
+            }
         }
+    }
 
-        if (message.type === "relay_shape_poke") {
-            // Owner-multicast shape delta → deliver to this relay's cohort sockets.
-            this.deliverRelayShapePoke(message);
-
-            // eslint-disable-next-line unicorn/no-null -- 204 No Content
-            return new Response(null, { status: 204 });
-        }
-
-        if (message.type === "relay_attach") {
-            this.addRelayToSet(message.relayIndex);
-
-            // eslint-disable-next-line unicorn/no-null -- 204 No Content has no body; null is the standard "no body" value
-            return new Response(null, { status: 204 });
-        }
-
-        if (message.type === "relay_detach") {
-            this.removeRelayFromSet(message.relayIndex);
-
-            // eslint-disable-next-line unicorn/no-null -- 204 No Content has no body
-            return new Response(null, { status: 204 });
-        }
-
+    /**
+     * Deliver a whisper `relay_frame` to this DO's local members and — on the owner,
+     * for a frame a relay forwarded up — re-forward it to every OTHER relay, so one
+     * whisper reaches the whole shard exactly once per socket (plan 075 Phase 2).
+     */
+    private async handleRelayWhisperFrame(message: RelayFrame): Promise<Response> {
         this.deliverWhisperLocal(message.topic, message.frame, undefined);
 
         const role = this.relayRole();
@@ -7934,7 +7980,18 @@ abstract class ShardDO {
     private removeRelayFromSet(index: number): void {
         this.ensureRelayTable();
         (this.sql as SqlExec).exec("DELETE FROM __lunora_relays WHERE idx = ?", index);
-        this.ownerRelaySet().delete(index);
+        const set = this.ownerRelaySet();
+        set.delete(index);
+
+        // No relays left → no cohort can hold a relay subscriber, so the shape
+        // registry and uniform cache are dead state. Clearing them on full drain
+        // bounds their growth (otherwise every distinct (name, args) ever relayed
+        // would accumulate for the instance's life and be re-resolved each flush);
+        // they re-register lazily on the next relay subscribe (plan 075 review).
+        if (set.size === 0) {
+            this.relayShapeRegistry.clear();
+            this.shapeUniformCache.clear();
+        }
     }
 
     /** A relay announces itself to its owner (once per wake) on its first subscriber, so the owner forwards whisper frames to it. No-op on an owner or in single-DO mode. */
@@ -7996,21 +8053,23 @@ abstract class ShardDO {
     private probeShapeRelayUniform(name: string, args: Record<string, unknown>): boolean {
         // The multicast identity is the base; a populated probe per "side" varies
         // every common claim dimension so an identity-dependent resolve diverges.
-        const populate = (side: string): SubscriptionIdentity => {return {
-            identity: {
-                groups: [`g_${side}`],
-                org_id: `org_${side}`,
-                orgId: `org_${side}`,
-                role: side,
-                roles: [side],
-                sub: `__lunora_probe_${side}__`,
-                team: `team_${side}`,
-                teamId: `team_${side}`,
-                tenant: `tenant_${side}`,
-                tenantId: `tenant_${side}`,
-            },
-            userId: `__lunora_probe_${side}__`,
-        }};
+        const populate = (side: string): SubscriptionIdentity => {
+            return {
+                identity: {
+                    groups: [`g_${side}`],
+                    org_id: `org_${side}`,
+                    orgId: `org_${side}`,
+                    role: side,
+                    roles: [side],
+                    sub: `__lunora_probe_${side}__`,
+                    team: `team_${side}`,
+                    teamId: `team_${side}`,
+                    tenant: `tenant_${side}`,
+                    tenantId: `tenant_${side}`,
+                },
+                userId: `__lunora_probe_${side}__`,
+            };
+        };
         const probes: SubscriptionIdentity[] = [RELAY_MULTICAST_IDENTITY, populate("a"), populate("b")];
 
         let base: ResolvedShape | undefined;

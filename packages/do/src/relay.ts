@@ -143,12 +143,19 @@ interface RelayShapeSubscribe {
 /**
  * The owner's response to a {@link RelayShapeSubscribe}: the serialized poke
  * frames (pokeStart/pokePart…/pokeEnd) to send to the subscribing socket, plus
- * the cursor they were computed at (the cohort baseline). `error` is set instead
- * when the shape can't be resolved (unknown / RLS-denied), which the relay
- * surfaces as a `shape_subscribe` error.
+ * the **cohort frontier** the relay must stamp the socket's memo at. `cursor` is
+ * deliberately NOT the global CDC cursor the frames were computed at — it is the
+ * registry's cohort cursor (the point the owner has multicast this shape's deltas
+ * up to). A joiner enters the cohort there so the next `relay_shape_poke`'s
+ * `fromCursor` matches it; seeding the full current membership is still correct
+ * because a shape's membership is invariant between multicast pokes. `epoch` pairs
+ * with the cursor so a memo can't match a `fromCursor` from a different CDC epoch.
+ * `error` is set instead when the shape can't be resolved (unknown / RLS-denied),
+ * which the relay surfaces as a `shape_subscribe` error.
  */
 interface RelayShapeSeed {
     cursor?: number;
+    epoch?: string;
     error?: { code: string; message: string };
     frames?: string[];
 }

@@ -62,6 +62,16 @@ const pokeOps = (socket: OpenSocket): { key: string; op: string }[] =>
         .filter((frame) => frame.type === "pokePart")
         .flatMap((frame) => frame.rowsPatch ?? []);
 
+const keysOf = (socket: OpenSocket): string[] => pokeOps(socket).map((op) => op.key);
+
+/** Subscribe a socket to the `c1` `messagesByChannel` shape and wait for its (next) ack. */
+const subscribeToC1 = async (socket: OpenSocket): Promise<void> => {
+    const before = frameTypes(socket).filter((type) => type === "ack").length;
+
+    socket.ws.send(JSON.stringify({ id: "s1", shape: { args: { channelId: "c1" }, name: "messagesByChannel" }, type: "shape_subscribe" }));
+    await waitFor(() => frameTypes(socket).filter((type) => type === "ack").length > before);
+};
+
 describe("relay shape seed (workerd e2e)", () => {
     it("seeds a shape subscribed on a relay through the owner's data", async () => {
         expect.assertions(4);
@@ -96,20 +106,13 @@ describe("relay shape seed (workerd e2e)", () => {
         const owner = env.SYNC.get(env.SYNC.idFromName("cohort-room"));
         const relay = env.SYNC.get(env.SYNC.idFromName("cohort-room::relay::0"));
 
-        const keysOf = (socket: OpenSocket): string[] => pokeOps(socket).map((op) => op.key);
-        const subscribe = async (socket: OpenSocket): Promise<void> => {
-            const before = frameTypes(socket).filter((type) => type === "ack").length;
-            socket.ws.send(JSON.stringify({ id: "s1", shape: { args: { channelId: "c1" }, name: "messagesByChannel" }, type: "shape_subscribe" }));
-            await waitFor(() => frameTypes(socket).filter((type) => type === "ack").length > before);
-        };
-
         await sendRpc(owner, "messages:send", { _id: "m1", channelId: "c1", text: "t1" });
 
         // Two sockets join the cohort at the same cursor and seed with m1.
         const a = await openRelaySocket(relay, "cohort-room-relay-0");
         const b = await openRelaySocket(relay, "cohort-room-relay-0");
-        await subscribe(a);
-        await subscribe(b);
+        await subscribeToC1(a);
+        await subscribeToC1(b);
 
         // A write fans out ONE owner-computed delta to the whole cohort.
         await sendRpc(owner, "messages:send", { _id: "m2", channelId: "c1", text: "t2" });
@@ -117,7 +120,7 @@ describe("relay shape seed (workerd e2e)", () => {
 
         // A third socket seeds AFTER m2 — its seed already contains m1+m2.
         const c = await openRelaySocket(relay, "cohort-room-relay-0");
-        await subscribe(c);
+        await subscribeToC1(c);
 
         // The next write reaches the whole (merged) cohort exactly once.
         await sendRpc(owner, "messages:send", { _id: "m3", channelId: "c1", text: "t3" });
@@ -131,6 +134,36 @@ describe("relay shape seed (workerd e2e)", () => {
         // A got two live pokes (m2, m3); C, seeding after m2, got only one (m3).
         expect(frameTypes(a).filter((type) => type === "pokeStart")).toHaveLength(3);
         expect(frameTypes(c).filter((type) => type === "pokeStart")).toHaveLength(2);
+    });
+
+    it("keeps a late joiner in the cohort after an unrelated write moved the global cursor", async () => {
+        expect.assertions(2);
+
+        const owner = env.SYNC.get(env.SYNC.idFromName("drift-room"));
+        const relay = env.SYNC.get(env.SYNC.idFromName("drift-room::relay::0"));
+
+        await sendRpc(owner, "messages:send", { _id: "m1", channelId: "c1", text: "d1" });
+
+        // Early joiner anchors the cohort frontier at m1's cursor.
+        const a = await openRelaySocket(relay, "drift-room-relay-0");
+        await subscribeToC1(a);
+
+        // An unrelated-channel write advances the GLOBAL cursor but not the c1
+        // cohort frontier (c1's membership is unchanged) — this is the gap that
+        // used to strand a joiner whose memo was stamped at the global cursor.
+        await sendRpc(owner, "messages:send", { _id: "x1", channelId: "c2", text: "d2" });
+
+        // Late joiner subscribes while global cursor > cohort frontier.
+        const b = await openRelaySocket(relay, "drift-room-relay-0");
+        await subscribeToC1(b);
+
+        // A real c1 membership change must reach BOTH cohort members.
+        await sendRpc(owner, "messages:send", { _id: "m3", channelId: "c1", text: "d3" });
+        await waitFor(() => keysOf(a).includes("m3") && keysOf(b).includes("m3"));
+
+        // The late joiner is live, not silently frozen — it got the multicast delta.
+        expect(keysOf(b)).toContain("m3");
+        expect(keysOf(a)).toContain("m3");
     });
 
     it("resumes a still-current relay shape through the owner with no re-seed", async () => {
