@@ -6176,6 +6176,12 @@ abstract class ShardDO {
         const checkpoint = frameCursor ?? this.currentCdcCursor() ?? 0;
         const sql = this.sql as SqlExec;
 
+        // Flush-local op-range cache: every shape over the same `(table, sinceSeq,
+        // upTo)` reads the identical changelog slice, so they share ONE drain this
+        // flush instead of re-scanning the op-log per shape/socket. Created fresh
+        // per flush so a slice is never reused across writes (it would go stale).
+        const opRangeCache = new Map<string, Map<string, CdcChange>>();
+
         const pokeOne = async (ws: WebSocket): Promise<void> => {
             if (this.isSocketExpired(ws)) {
                 this.dropExpiredSocket(ws);
@@ -6191,7 +6197,7 @@ abstract class ShardDO {
             }
 
             const identity: SubscriptionIdentity = { identity: attachment.identity, userId: attachment.userId };
-            const { emptyAdvanced, partAdvanced, parts } = this.collectShapePokeParts(ws, shapes, identity, changed, checkpoint, sql);
+            const { emptyAdvanced, partAdvanced, parts } = this.collectShapePokeParts(ws, shapes, identity, changed, checkpoint, sql, opRangeCache);
 
             // Empty-diff shapes advance regardless (nothing to deliver for them),
             // so the next flush doesn't re-scan the same op range.
@@ -6252,6 +6258,7 @@ abstract class ShardDO {
         changed: Set<string>,
         checkpoint: number,
         sql: SqlExec,
+        opRangeCache: Map<string, Map<string, CdcChange>>,
     ): { emptyAdvanced: string[]; partAdvanced: string[]; parts: ShapePokePart[] } {
         const parts: ShapePokePart[] = [];
         const emptyAdvanced: string[] = [];
@@ -6266,7 +6273,7 @@ abstract class ShardDO {
                 }
 
                 const memoCursor = this.shapeMemos.get(ws)?.get(subId)?.cursor ?? 0;
-                const rowsPatch = this.buildShapeDiff(sql, resolved, memoCursor, checkpoint);
+                const rowsPatch = this.buildShapeDiff(sql, resolved, memoCursor, checkpoint, opRangeCache);
 
                 if (rowsPatch.length > 0) {
                     parts.push({ rowsPatch, shapeId: subId });
@@ -6283,23 +6290,30 @@ abstract class ShardDO {
     }
 
     /**
-     * Build the row-ops for a shape over the op range `(sinceSeq, upTo]`. Reads
-     * the changelog (drained across pages), collapses to the latest op per row,
-     * then runs ONE membership probe ({@link selectShapeMemberIds}) over the
-     * changed ids: a row still in the set → upsert with its post-image doc
-     * (projected to the shape's columns); a row that left the set, or any delete,
-     * → `delete(key)` (a delete carries no post-image, so membership is
-     * unknowable from the op alone — the client no-ops an unknown key).
+     * Drain the op-log range `(sinceSeq, upTo]` for `table` into the latest op per
+     * row id (collapsing multiple ops on the same row to the newest). Within one
+     * flush, every shape over the SAME `(table, sinceSeq, upTo)` reads the
+     * identical changelog slice, so the drained map is memoized in the
+     * caller-supplied `cache` (created fresh per flush) — N shapes on a table
+     * share ONE changelog drain instead of re-scanning it per shape. The
+     * per-shape membership probe still runs per shape (its predicate is
+     * identity/args-specific), so only the shared op read is collapsed.
      */
-    // eslint-disable-next-line class-methods-use-this -- a pure op-page→membership-diff transform that reads only its args; kept a private method to sit beside the shape-poke pipeline it belongs to.
-    private buildShapeDiff(sql: SqlExec, resolved: ResolvedShape, sinceSeq: number, upTo: number): ShapeRowOp[] {
+    private readShapeOpRange(sql: SqlExec, table: string, sinceSeq: number, upTo: number, cache?: Map<string, Map<string, CdcChange>>): Map<string, CdcChange> {
+        const key = `${table} ${String(sinceSeq)} ${String(upTo)}`;
+        const cached = cache?.get(key);
+
+        if (cached !== undefined) {
+            return cached;
+        }
+
         const latest = new Map<string, CdcChange>();
-        const tables = new Set([resolved.table]);
+        const tables = new Set([table]);
         let from = sinceSeq;
 
         // Drain the op range so a flush larger than one CDC page is fully covered.
         for (;;) {
-            const { changes, cursor } = readCdcChanges(sql, { sinceSeq: from, tables });
+            const { changes, cursor } = this.readShapeCdcPage(sql, from, tables);
 
             for (const change of changes) {
                 latest.set(change.id, change);
@@ -6311,6 +6325,41 @@ abstract class ShardDO {
 
             from = cursor;
         }
+
+        cache?.set(key, latest);
+
+        return latest;
+    }
+
+    /**
+     * Read one page of the `__cdc_log` for a shape diff (table-scoped). A thin
+     * protected seam over {@link readCdcChanges}: it isolates the single
+     * changelog read that {@link readShapeOpRange} memoizes per flush, and gives
+     * tests a point to count the reads the op-range cache collapses.
+     */
+    // eslint-disable-next-line class-methods-use-this -- thin pass-through seam over the module-level reader; a method so the op-range cache + tests share one read point
+    protected readShapeCdcPage(sql: SqlExec, sinceSeq: number, tables: ReadonlySet<string>): { changes: CdcChange[]; cursor: number } {
+        return readCdcChanges(sql, { sinceSeq, tables });
+    }
+
+    /**
+     * Build the row-ops for a shape over the op range `(sinceSeq, upTo]`. Reads
+     * the changelog (drained across pages via {@link readShapeOpRange}, shared
+     * across same-range shapes in a flush), collapses to the latest op per row,
+     * then runs ONE membership probe ({@link selectShapeMemberIds}) over the
+     * changed ids: a row still in the set → upsert with its post-image doc
+     * (projected to the shape's columns); a row that left the set, or any delete,
+     * → `delete(key)` (a delete carries no post-image, so membership is
+     * unknowable from the op alone — the client no-ops an unknown key).
+     */
+    private buildShapeDiff(
+        sql: SqlExec,
+        resolved: ResolvedShape,
+        sinceSeq: number,
+        upTo: number,
+        opRangeCache?: Map<string, Map<string, CdcChange>>,
+    ): ShapeRowOp[] {
+        const latest = this.readShapeOpRange(sql, resolved.table, sinceSeq, upTo, opRangeCache);
 
         if (latest.size === 0) {
             return [];
