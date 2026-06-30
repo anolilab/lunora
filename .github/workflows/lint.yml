@@ -85,13 +85,15 @@
 
     # tsc over the affected graph plus the registry typecheck, split from eslint
     # into its own required check. registry/ isn't a vis project; it imports
-    # @lunora/* and is typechecked against the full built dist. Both tsc
-    # invocations read the built dist without mutating it, so they run
-    # concurrently via the `parallel:` step group.
+    # @lunora/* and is typechecked against the full built dist.
     #
-    # NOTE: lint:affected:types is a `vis affected` invocation; lint:types:registry
-    # is a plain tsc. If the .vis/ cache lock ever surfaces as flaky errors, make
-    # these sequential steps instead of a parallel group.
+    # These run SEQUENTIALLY, not in a parallel group: `lint:types:registry`
+    # begins with `build:packages` (a full `vis run build`), which packem starts
+    # by *cleaning* each package's `dist/`. Run concurrently with `lint:affected:types`,
+    # that clean window races the affected typecheck's tsc as it reads a dependency's
+    # dist — intermittently dropping a freshly-removed declaration (e.g.
+    # `@lunora/auth/dist/plugins-client.d.ts`) and failing with TS2307 on an
+    # affected example. Serializing removes the concurrent reader during the rebuild.
     "types":
         "name": "Lint (types)"
         "if": "needs.files-changed.outputs.frontend_lintable == 'true'"
@@ -123,12 +125,13 @@
             - "name": "Build affected packages"
               "run": "pnpm run build:affected:packages"
 
-            - "parallel":
-                  - "name": "Typecheck"
-                    "run": "pnpm run lint:affected:types"
+            - "name": "Typecheck"
+              "run": "pnpm run lint:affected:types"
 
-                  - "name": "Typecheck registry items"
-                    "run": "pnpm run lint:types:registry"
+            # Sequential (not parallel) with the step above: its `build:packages`
+            # rebuild cleans each package's dist, which races a concurrent tsc read.
+            - "name": "Typecheck registry items"
+              "run": "pnpm run lint:types:registry"
 
     # fallow codebase-intelligence over the affected graph. `health` is a report
     # (prints each project's score, exits 0) — it surfaces dead code / dupes /
