@@ -2,7 +2,7 @@
 import type { FunctionReference, LunoraClient, SubscriptionError } from "@lunora/client";
 import type { Collection, Transaction } from "@tanstack/db";
 import { createCollection } from "@tanstack/db";
-import type { OfflineConfig, OfflineExecutor } from "@tanstack/offline-transactions";
+import type { OfflineConfig, OfflineExecutor, OfflineTransaction, StorageDiagnostic } from "@tanstack/offline-transactions";
 import { NonRetriableError, startOfflineExecutor } from "@tanstack/offline-transactions";
 
 import { lunoraCollectionOptions } from "./collection-options";
@@ -71,32 +71,57 @@ type RowOf<C extends AnyDef> = C["list"] extends FunctionReference<infer _K, inf
 /** The action input type, inferred structurally from the def's optimistic insert. */
 type InputOf<C> = C extends { insert: { optimistic: (input: infer I, id: string) => unknown } } ? I : never;
 
-/** A queued write that the server permanently rejected, passed to {@link DefineCollectionsOptions.onWriteRejected}. */
+/** A queued write that was permanently dropped, passed to {@link DefineCollectionsOptions.onWriteRejected}. */
 export interface WriteRejectedEvent {
     /**
-     * The server's machine-readable reason (e.g. `CONFLICT`, `FORBIDDEN`), when
-     * present — mirrors the client's `MutationSettledEvent.code` so a consumer can
-     * branch on the verdict, not just the message.
+     * The machine-readable reason — the server's error `code` (e.g. `CONFLICT`,
+     * `FORBIDDEN`), or `UNKNOWN_MUTATION_FN` when the write referenced a collection
+     * that no longer exists (removed in a deploy). Mirrors the client's
+     * `MutationSettledEvent.code` so a consumer can branch on the verdict.
      */
     code?: string;
     /** The collection/table name the write targeted. */
     collection: string;
-    /** The error the server returned (the message carried by the underlying `NonRetriableError`). */
+    /** The error that dropped the write (message carried by the underlying `NonRetriableError`). */
     error: Error;
-    /** The optimistic row being rolled back (the rollback follows the callback). */
-    row: Row;
+
+    /**
+     * The optimistic row being rolled back (the rollback follows the callback).
+     * Absent only if the dropped transaction carried no recoverable row (e.g. some
+     * `UNKNOWN_MUTATION_FN` cases).
+     */
+    row?: Row;
 }
 
 /** Options for {@link defineCollections}. */
 export interface DefineCollectionsOptions {
     /**
-     * Invoked as a queued write is permanently rejected by the server — a coded
-     * application error (validation, RLS denial, conflict) surfaced as a
-     * `NonRetriableError`. This is the aggregate, fire-and-forget-safe channel:
-     * unlike awaiting the per-action `transaction` returned by `actions[name](...)`,
-     * it fires even when the caller never retained that handle, so a UI can surface
-     * "couldn't save" instead of a silently vanishing row. Transient failures
-     * (offline, 5xx) are retried by the outbox, not reported here.
+     * Invoked when a leadership change occurs across tabs (only the leader tab
+     * drains the durable outbox). Informational — useful for diagnostics; the
+     * library handles the election itself.
+     */
+    onLeadershipChange?: (isLeader: boolean) => void;
+
+    /**
+     * Invoked when the durable outbox's storage layer fails — IndexedDB
+     * unavailable (private mode), blocked, or quota exceeded. The standalone
+     * client surfaces this via `offlineQueue.onPersistenceError`; this is the
+     * collection-layer counterpart. A storage failure means a write is NOT durable
+     * and won't survive a reload, so surface it (e.g. "your change may not be
+     * saved if you close this tab").
+     */
+    onStorageFailure?: (diagnostic: StorageDiagnostic) => void;
+
+    /**
+     * Invoked as a queued write is permanently dropped: a coded application error
+     * from the server (validation, RLS denial, conflict, surfaced as a
+     * `NonRetriableError`), OR a write whose target collection no longer exists —
+     * removed/renamed in a deploy (`code: "UNKNOWN_MUTATION_FN"`). This is the
+     * aggregate, fire-and-forget-safe channel: unlike awaiting the per-action
+     * `transaction` returned by `actions[name](...)`, it fires even when the caller
+     * never retained that handle, so a UI can surface "couldn't save" instead of a
+     * silently vanishing row. Transient failures (offline, 5xx) are retried by the
+     * outbox, not reported here.
      *
      * Timing: the callback runs at the point of rejection; the executor's
      * optimistic-row rollback follows immediately after. The event's `row` is the
@@ -213,6 +238,23 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
         collections,
         mutationFns,
         onlineDetector: createOptimisticOnlineDetector(),
+        ...(options.onLeadershipChange ? { onLeadershipChange: options.onLeadershipChange } : {}),
+        ...(options.onStorageFailure ? { onStorageFailure: options.onStorageFailure } : {}),
+        // A persisted write whose target collection was removed/renamed in a deploy
+        // hits an unregistered mutationFn. The executor drops it as a
+        // NonRetriableError *before* our per-collection `mutationFns` catch runs, so
+        // this hook is the only place to surface it on `onWriteRejected`.
+        onUnknownMutationFn: (name: string, tx: OfflineTransaction) => {
+            options.onWriteRejected?.({
+                code: "UNKNOWN_MUTATION_FN",
+                collection: name,
+                error: new Error(`offline write dropped: mutation "${name}" no longer exists (removed or renamed in a deploy?)`),
+                // Best-effort recovered row: the persisted `modified` shape isn't a
+                // validated `Row`, and a batched transaction surfaces only its first
+                // mutation's row. Enough to describe the dropped write to the user.
+                row: tx.mutations[0]?.modified as Row | undefined,
+            });
+        },
     });
 
     const actions: Record<string, (input: unknown) => { id: string; transaction: Transaction }> = {};

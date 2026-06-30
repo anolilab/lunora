@@ -234,7 +234,7 @@ describe(defineCollections, () => {
         const { client } = makeClient(async () => {
             throw coded;
         });
-        const onWriteRejected = vi.fn<(event: { collection: string; error: Error; row: { _id: string } }) => void>();
+        const onWriteRejected = vi.fn<(event: { code?: string; collection: string; error: Error; row?: { _id: string } }) => void>();
 
         const database = defineCollections(
             client,
@@ -273,7 +273,7 @@ describe(defineCollections, () => {
         const event = onWriteRejected.mock.calls[0]![0];
 
         expect(event.collection).toBe("messages");
-        expect(event.row._id).toBe(id);
+        expect(event.row?._id).toBe(id);
         expect(event.error.message).toContain("duplicate name");
 
         // The optimistic row was rolled back once the verdict landed.

@@ -182,8 +182,19 @@ const db = defineCollections(client, defs, {
         // rollback follows it, so read `row`/`error` here rather than the
         // collection's post-rollback state.
     },
+    // Optional: a write whose target collection was removed/renamed in a deploy
+    // arrives here too, with `code: "UNKNOWN_MUTATION_FN"`.
+    onStorageFailure: ({ code, message }) => {
+        // The durable outbox couldn't persist (IndexedDB blocked in private mode,
+        // quota exceeded, …) — the write won't survive a reload. Warn the user.
+        toast.warning(`Your change may not be saved offline (${code}).`);
+    },
 });
 ```
+
+`onStorageFailure` is the collection-layer counterpart to the standalone client's
+`offlineQueue.onPersistenceError`; `onLeadershipChange(isLeader)` is also
+available (informational — only the leader tab drains the outbox).
 
 This is the same durable-outbox and reconciliation model `@lunora/client`
 exposes directly — see [Offline-first](/docs/concepts/offline-first) for the
