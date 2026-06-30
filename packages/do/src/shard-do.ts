@@ -6453,6 +6453,14 @@ abstract class ShardDO {
             return { error: { code: "SHAPE_NOT_FOUND", message: `shape not relayable: ${request.name}` } };
         }
 
+        // Self-heal the relay set from the seed itself: any relay that seeds a shape
+        // through the owner provably has a subscriber, so register it here too. This
+        // makes forwarding robust to a dropped `relay_attach` (idempotent INSERT) —
+        // the owner can't silently fail to multicast/proxy to a live relay (LOW-4).
+        if (request.relayIndex !== undefined) {
+            this.addRelayToSet(request.relayIndex);
+        }
+
         const { baseCheckpoint, cursor, epoch, rowsPatch } = this.computeOpLogShapeSeed(
             { args: request.args, name: request.name, sinceEpoch: request.sinceEpoch, sinceSeq: request.sinceSeq },
             resolved,
@@ -8122,8 +8130,16 @@ abstract class ShardDO {
             return;
         }
 
+        // Latch optimistically so a burst of subscribes doesn't re-announce, but
+        // reset on a failed/unreachable attach so the NEXT subscriber retries: a
+        // dropped attach must not permanently strand this relay's sockets (the owner
+        // would never forward their live deltas — silent staleness, plan 075 review).
         this.relayAnnounced = true;
-        await this.postRelayMessage(role.ownerKey, { relayIndex: role.relayIndex, type: "relay_attach" });
+        const response = await this.requestRelayMessage(role.ownerKey, { relayIndex: role.relayIndex, type: "relay_attach" });
+
+        if (!response?.ok) {
+            this.relayAnnounced = false;
+        }
     }
 
     /**
