@@ -108,11 +108,42 @@ interface RelayFrame {
     type: "relay_frame";
 }
 
+/**
+ * A relay forwards a reactive `shape_subscribe` up to the owner so the owner —
+ * the only DO with the SQLite op-log — computes the seed under the socket's
+ * VERIFIED identity (RLS-correct) and returns the serialized poke frames for the
+ * relay to deliver (plan 075 Phase 3). Carries the socket's identity verbatim;
+ * `sinceSeq`/`sinceEpoch` enable the owner's resume fast-path.
+ */
+interface RelayShapeSubscribe {
+    args: Record<string, unknown>;
+    identity?: Record<string, unknown>;
+    name: string;
+    sinceEpoch?: string;
+    sinceSeq?: number;
+    subId: string;
+    type: "relay_shape_subscribe";
+    userId?: string;
+}
+
+/**
+ * The owner's response to a {@link RelayShapeSubscribe}: the serialized poke
+ * frames (pokeStart/pokePart…/pokeEnd) to send to the subscribing socket, plus
+ * the cursor they were computed at (the cohort baseline). `error` is set instead
+ * when the shape can't be resolved (unknown / RLS-denied), which the relay
+ * surfaces as a `shape_subscribe` error.
+ */
+interface RelayShapeSeed {
+    cursor?: number;
+    error?: { code: string; message: string };
+    frames?: string[];
+}
+
 /** Internal owner↔relay control messages (plan 075). NOT the public client protocol — the app never sees these. */
-type OwnerRelayFrame = RelayAttach | RelayDetach | RelayFrame;
+type OwnerRelayFrame = RelayAttach | RelayDetach | RelayFrame | RelayShapeSubscribe;
 
 export { DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, relayCountFor };
-export type { OwnerRelayFrame, PromotionState, PromotionThresholds, RelayAttach, RelayDetach, RelayFrame };
+export type { OwnerRelayFrame, PromotionState, PromotionThresholds, RelayAttach, RelayDetach, RelayFrame, RelayShapeSeed, RelayShapeSubscribe };
 // The DO-name contract lives in `shared/` so `@lunora/runtime` (which mints relay
 // names) and this package (which parses them) can't drift; re-exported so `./relay`
 // stays the single import surface for the relay tier inside `@lunora/do`.

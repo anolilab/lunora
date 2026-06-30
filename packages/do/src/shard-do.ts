@@ -90,7 +90,7 @@ import { readQueryMetrics, recordQueryMetric } from "./query-metrics";
 import type { ShardRankPageResult } from "./rank";
 import type { ReactiveCacheOptions } from "./reactive-cache";
 import { ReactiveCache, reactiveCacheKey, stableStringify } from "./reactive-cache";
-import type { OwnerRelayFrame } from "./relay";
+import type { OwnerRelayFrame, RelayShapeSeed, RelayShapeSubscribe } from "./relay";
 import { DEFAULT_PROMOTION_THRESHOLDS, parseRelayName, relayName } from "./relay";
 import type { AppendRequestLogEntry, ContextLogLevel, LogEventInput, RequestLogResult, RequestLogWriteOptions } from "./request-log";
 import { appendRequestLogEntry, emitLogEvent, emitRequestLogEvent, ensureRequestLogTable, readRequestLog, renderLogMessage } from "./request-log";
@@ -6258,6 +6258,14 @@ abstract class ShardDO {
         const attachment = this.readAttachment(ws);
         const identity: SubscriptionIdentity = { identity: attachment.identity, userId: attachment.userId };
 
+        // Relay tier (plan 075 Phase 3): a relay holds no op-log, so it forwards the
+        // seed to the owner — the only DO that can resolve the shape against real
+        // data, under this socket's verified identity (RLS-correct) — and delivers
+        // the owner-computed frames. The owner-served path is unchanged.
+        if (this.relayRole()?.relayIndex !== undefined) {
+            return this.seedShapeViaOwner(ws, subId, shape, identity);
+        }
+
         let resolved: ResolvedShape | undefined;
 
         try {
@@ -6311,16 +6319,37 @@ abstract class ShardDO {
      * it to a structured `shape_subscribe` error.
      */
     private async seedOpLogShape(ws: WebSocket, subId: string, shape: ShapeSubscriptionQuery, resolved: ResolvedShape): Promise<"ok"> {
+        const { baseCheckpoint, cursor, epoch, rowsPatch } = this.computeOpLogShapeSeed(shape, resolved);
+
+        // Await drain before the (potentially large) seed poke so a slow consumer
+        // can't grow this socket's outbound buffer without bound.
+        await awaitWsDrain(ws);
+
+        if (this.sendPoke(ws, [{ rowsPatch, shapeId: subId }], cursor, epoch, baseCheckpoint)) {
+            this.recordShapeMemo(ws, subId, cursor);
+        }
+
+        return "ok";
+    }
+
+    /**
+     * Compute an op-log shape seed (cursor, epoch, the resume base, and the
+     * membership `rowsPatch`) WITHOUT sending — the shared core of
+     * {@link ShardDO.seedOpLogShape} (sends to a local socket) and
+     * {@link ShardDO.buildShapeSeedFrames} (serializes the frames for a relay to
+     * deliver, plan 075 Phase 3). Resume only when CDC is on, the client is on this
+     * epoch, its checkpoint doesn't run ahead of ours, and the log still covers it;
+     * else a full re-seed. A fully-compacted log only proves "nothing missed" when
+     * the client is already at `cursor`.
+     * @returns the cursor/epoch, the resume base (`baseCheckpoint`), and the membership patch
+     */
+    private computeOpLogShapeSeed(
+        shape: ShapeSubscriptionQuery,
+        resolved: ResolvedShape,
+    ): { baseCheckpoint: number | undefined; cursor: number; epoch: string | undefined; rowsPatch: ShapeRowOp[] } {
         const sql = this.sql as SqlExec;
         const cursor = this.currentCdcCursor() ?? 0;
         const epoch = this.currentCdcEpoch();
-
-        // Resume only when CDC is on, the client is on this epoch, its checkpoint
-        // doesn't run ahead of ours, and the log still covers it (else a gap means
-        // we can't prove what it missed → full re-seed). A fully-compacted log
-        // (`floor === undefined`, no ops retained) only proves "nothing missed"
-        // when the client is already at `cursor`; if it lags, the changes between
-        // its checkpoint and now were compacted away, so it must re-seed.
         const floor = this.cdcEnabled() ? minCdcSeq(sql) : undefined;
         const canResume =
             this.cdcEnabled() &&
@@ -6332,15 +6361,48 @@ abstract class ShardDO {
         const rowsPatch =
             canResume && shape.sinceSeq !== undefined ? this.buildShapeDiff(sql, resolved, shape.sinceSeq, cursor) : this.buildShapeSeed(sql, resolved);
 
-        // Await drain before the (potentially large) seed poke so a slow consumer
-        // can't grow this socket's outbound buffer without bound.
-        await awaitWsDrain(ws);
+        return { baseCheckpoint: canResume ? shape.sinceSeq : undefined, cursor, epoch, rowsPatch };
+    }
 
-        if (this.sendPoke(ws, [{ rowsPatch, shapeId: subId }], cursor, epoch, canResume ? shape.sinceSeq : undefined)) {
-            this.recordShapeMemo(ws, subId, cursor);
+    /**
+     * Serialize a shape's seed poke frames for a relay to deliver verbatim (plan
+     * 075 Phase 3). The owner resolves the shape under the forwarded socket identity
+     * — so RLS applies exactly as for a local subscribe — and computes the seed,
+     * returning the frames instead of sending. `lastMutationId` is omitted: relayed
+     * sockets don't carry per-socket custom-mutator watermarks (those stay
+     * owner-served).
+     * @returns the serialized frames + the cursor they were computed at, or an error when the shape can't be resolved
+     */
+    private buildShapeSeedFrames(request: RelayShapeSubscribe): RelayShapeSeed {
+        const identity: SubscriptionIdentity = { identity: request.identity, userId: request.userId };
+
+        let resolved: ResolvedShape | undefined;
+
+        try {
+            resolved = this.resolveShape(request.name, request.args, identity);
+        } catch (error) {
+            return { error: { code: "SHAPE_RESOLVE_FAILED", message: error instanceof Error ? error.message : "shape resolve failed" } };
         }
 
-        return "ok";
+        if (resolved === undefined || resolved.global === true) {
+            return { error: { code: "SHAPE_NOT_FOUND", message: `shape not relayable: ${request.name}` } };
+        }
+
+        const { baseCheckpoint, cursor, epoch, rowsPatch } = this.computeOpLogShapeSeed(
+            { args: request.args, name: request.name, sinceEpoch: request.sinceEpoch, sinceSeq: request.sinceSeq },
+            resolved,
+        );
+
+        this.pokeSequence += 1;
+        const frames = buildPokeFrames([{ rowsPatch, shapeId: request.subId }], {
+            baseCheckpoint,
+            checkpoint: cursor,
+            epoch,
+            lastMutationId: undefined,
+            pokeId: `poke-${String(this.pokeSequence)}`,
+        });
+
+        return { cursor, frames };
     }
 
     /**
@@ -7515,23 +7577,96 @@ abstract class ShardDO {
      * forward so the receiver can address its own siblings in turn.
      */
     private async postRelayMessage(targetName: string, message: OwnerRelayFrame): Promise<void> {
+        await this.requestRelayMessage(targetName, message);
+    }
+
+    /**
+     * POST an owner↔relay control message to a sibling DO by name and return its
+     * response (the shape-seed path needs the owner's frames back; the fire-and-
+     * forget {@link ShardDO.postRelayMessage} ignores it). Best-effort: a transient
+     * cross-DO failure returns `undefined` rather than throwing into the handler.
+     * @returns the sibling's response, or `undefined` when it can't be reached
+     */
+    private async requestRelayMessage(targetName: string, message: OwnerRelayFrame): Promise<Response | undefined> {
         const namespace = this.relayNamespace();
 
         if (namespace === undefined) {
-            return;
+            return undefined;
         }
 
         const stub = typeof namespace.getByName === "function" ? namespace.getByName(targetName) : namespace.get(namespace.idFromName(targetName));
 
         try {
-            await stub.fetch("https://relay.internal/_lunora/relay", {
+            return await stub.fetch("https://relay.internal/_lunora/relay", {
                 body: JSON.stringify(message),
                 headers: { "content-type": "application/json", "x-lunora-shard-binding": this.shardBinding ?? "" },
                 method: "POST",
             });
         } catch {
-            /* best-effort hub forwarding — a dropped ephemeral frame is tolerable */
+            // Best-effort hub forwarding — a dropped ephemeral frame is tolerable.
+            return undefined;
         }
+    }
+
+    /**
+     * Seed a shape held by a socket on a relay by forwarding the request to the
+     * owner (plan 075 Phase 3): the owner resolves the shape under this socket's
+     * verified identity and computes the seed frames, which the relay delivers
+     * verbatim. Returns a structured error (surfaced as a `shape_subscribe` error)
+     * when the owner can't be reached or the shape can't be resolved.
+     */
+    private async seedShapeViaOwner(
+        ws: WebSocket,
+        subId: string,
+        shape: ShapeSubscriptionQuery,
+        identity: SubscriptionIdentity,
+    ): Promise<"ok" | { code: string; message: string }> {
+        const role = this.relayRole();
+
+        if (role?.relayIndex === undefined) {
+            return { code: "RELAY_MISCONFIGURED", message: "relay cannot address its owner" };
+        }
+
+        const request: RelayShapeSubscribe = {
+            args: shape.args ?? {},
+            identity: identity.identity,
+            name: shape.name,
+            sinceEpoch: shape.sinceEpoch,
+            sinceSeq: shape.sinceSeq,
+            subId,
+            type: "relay_shape_subscribe",
+            userId: identity.userId,
+        };
+
+        const response = await this.requestRelayMessage(role.ownerKey, request);
+
+        if (response === undefined) {
+            return { code: "RELAY_SEED_FAILED", message: "owner did not answer the shape seed" };
+        }
+
+        let seed: RelayShapeSeed;
+
+        try {
+            seed = await response.json();
+        } catch {
+            return { code: "RELAY_SEED_FAILED", message: "malformed shape seed from owner" };
+        }
+
+        if (seed.error !== undefined) {
+            return seed.error;
+        }
+
+        if (seed.frames === undefined) {
+            return { code: "RELAY_SEED_FAILED", message: "owner returned no shape frames" };
+        }
+
+        await awaitWsDrain(ws);
+
+        for (const frame of seed.frames) {
+            trySendFrame(ws, frame);
+        }
+
+        return "ok";
     }
 
     /**
@@ -7548,6 +7683,12 @@ abstract class ShardDO {
             message = await request.json();
         } catch {
             return new Response("bad request", { status: 400 });
+        }
+
+        if (message.type === "relay_shape_subscribe") {
+            // Owner seeds a relay's shape under the forwarded identity and returns
+            // the serialized poke frames for the relay to deliver (plan 075 Phase 3).
+            return jsonResponse(this.buildShapeSeedFrames(message));
         }
 
         if (message.type === "relay_attach") {
