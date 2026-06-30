@@ -199,6 +199,16 @@ room) is RLS-uniform but is _not_ admin-prefixed, so `isIdentityIndependent` ret
 - **Never** relay a shape lacking the bit, under any subscriber count. The gate is
   the safety boundary; when unsure, stay owner-served (today's path, byte-for-byte).
 
+> **Implemented as (Phase 3, review-hardened).** The shipped gate is **codegen-free**
+> — no `relayUniform` descriptor bit. `ShardDO.isShapeRelayUniform` decides at
+> runtime: a static `rlsMetadata()` read-policy guard (any `on:"read"` policy on the
+> table ⇒ not uniform), then resolves the shape under the anonymous **multicast**
+> identity plus two `Proxy`-backed identities that return a distinct value for **any**
+> accessed claim — so a `defineShape` `where` reading any identity claim (including a
+> custom one via `ctx.access`, outside `rls()`) diverges and is rejected — with a
+> wholesale-copy backstop (enumerating the claims fails closed) and the masked-column
+> check. Same safety boundary, evaluated dynamically and provably claim-exhaustive.
+
 `usePresence`'s `listPresent` is the canonical first reactive-shape target: it is
 typically room-public (passes the gate) and is the highest-fan-out reactive query
 in practice. It is **not** a whisper (it is a `heartbeat` mutation + a `listPresent`

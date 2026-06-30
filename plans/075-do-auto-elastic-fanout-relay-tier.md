@@ -241,8 +241,10 @@ single DO's WS cap succeeds.
 
 Shipped as three slices on `feat/075-fanout-relay`, hardened by a thermo review
 pass: (A) the RLS-uniform gate (`isShapeRelayUniform` — a static `rlsMetadata()`
-read-policy guard plus a claim-diverse identity probe whose base IS the multicast
-identity + a mask check, codegen-free and fail-closed), (B) seed-through-owner +
+read-policy guard plus a claim-exhaustive identity probe whose base IS the multicast
+identity, the populated probes proxy-backed so a resolver reading ANY claim — even
+a custom one outside `rls()` — diverges, with a wholesale-copy backstop and a mask
+check; codegen-free and fail-closed), (B) seed-through-owner +
 one-delta-per-flush cohort multicast (`buildShapeSeedFrames` /
 `multicastRelayShapePokes` / `deliverRelayShapePoke`, gated by a per-socket
 `fromCursor`+`epoch` memo stamped at the **cohort frontier** so a late joiner is

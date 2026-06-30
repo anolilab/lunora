@@ -3973,12 +3973,14 @@ abstract class ShardDO {
      * relay-multicast — i.e. one delta is correct for **every** subscriber. True
      * iff the shape's resolved query (table + `effectiveWhere` + `columns`) is
      * **identical regardless of the caller's identity** AND none of its projected
-     * columns are masked. Probed by resolving the shape under two distinct
-     * synthetic identities and comparing — airtight (the resolved `effectiveWhere`
-     * already composes the shape predicate AND the table's RLS read-where) and
-     * **fail-closed**: a resolve that throws, a per-identity `effectiveWhere`, a
-     * masked column, or a `.global()` table all yield `false`, keeping the shape
-     * owner-served. Cached per `(name, args)`, whose uniformity is stable.
+     * columns are masked. Decided by {@link ShardDO.probeShapeRelayUniform}: a
+     * static RLS read-policy guard, plus resolving under the anonymous multicast
+     * identity and two {@link Proxy}-backed identities that yield a distinct value
+     * for ANY accessed claim (so even a custom claim read outside `rls()` diverges),
+     * with a copy backstop. **Fail-closed**: a resolve that throws, a per-identity
+     * `effectiveWhere`, a masked column, an enumerated identity, or a `.global()`
+     * table all yield `false`, keeping the shape owner-served. Cached per
+     * `(name, args)`, whose uniformity is stable.
      */
     protected isShapeRelayUniform(name: string, args: Record<string, unknown>): boolean {
         const cacheKey = shapeRoutingKey(name, args);
@@ -8148,44 +8150,29 @@ abstract class ShardDO {
     /**
      * The one-shot computation behind {@link ShardDO.isShapeRelayUniform}, made
      * sound against the cross-identity row-leak the naive two-probe version allowed
-     * (plan 075 review). It is fail-closed on three independent grounds:
+     * (plan 075 review). It is fail-closed on four independent grounds:
      *
      * 1. **Static RLS guard.** If the resolved table has ANY declared RLS *read*
      * policy, reads are identity-scoped by construction — a single multicast delta
      * can never be correct for every subscriber — so the shape is never relayable,
-     * regardless of what the probes happen to resolve. This closes the leak where a
-     * policy keyed on a claim the probes don't vary (org/tenant/role) resolves
-     * identically for all of them and looks falsely uniform.
+     * regardless of what the probes resolve. This closes the leak where a policy
+     * keyed on a claim the probes don't vary resolves identically for all of them.
      * 2. **Multicast identity is in the probe set.** The first probe is the EXACT
      * identity the owner multicasts under ({@link RELAY_MULTICAST_IDENTITY}); every
      * other probe must match it. So the validated property is precisely the one the
      * multicast relies on — never a different sampled identity.
-     * 3. **Claim-diverse probes.** The populated probes differ on every common claim
-     * dimension (user/org/tenant/team/role/groups), so a resolver that narrows on
-     * any of them diverges from the anonymous base and is rejected.
+     * 3. **Claim-exhaustive probes.** The two populated probes back their claims with
+     * a {@link Proxy} that returns a DISTINCT value for ANY accessed key — not a
+     * hardcoded list — so a `defineShape` `where` that reads ANY identity claim
+     * (a custom one via `ctx.access`, not just `ctx.auth.userId`), bypassing
+     * `rls()`, diverges between the probes and is rejected. There are no unsampled
+     * claims: the value differs by construction for every key the resolver touches.
+     * 4. **Copy backstop.** A {@link Proxy} can differentiate per-key *reads* but not
+     * a wholesale *copy* (`{...claims}` / `Object.keys`) — a copied identity could
+     * smuggle an undetected claim into the where. So enumerating the claims trips
+     * `enumerated` and the gate fails closed.
      */
     private probeShapeRelayUniform(name: string, args: Record<string, unknown>): boolean {
-        // The multicast identity is the base; a populated probe per "side" varies
-        // every common claim dimension so an identity-dependent resolve diverges.
-        const populate = (side: string): SubscriptionIdentity => {
-            return {
-                identity: {
-                    groups: [`g_${side}`],
-                    org_id: `org_${side}`,
-                    orgId: `org_${side}`,
-                    role: side,
-                    roles: [side],
-                    sub: `__lunora_probe_${side}__`,
-                    team: `team_${side}`,
-                    teamId: `team_${side}`,
-                    tenant: `tenant_${side}`,
-                    tenantId: `tenant_${side}`,
-                },
-                userId: `__lunora_probe_${side}__`,
-            };
-        };
-        const probes: SubscriptionIdentity[] = [RELAY_MULTICAST_IDENTITY, populate("a"), populate("b")];
-
         let base: ResolvedShape | undefined;
 
         try {
@@ -8211,9 +8198,42 @@ abstract class ShardDO {
         const baseWhere = stableStringify(base.effectiveWhere);
         const baseColumns = stableStringify(base.columns);
 
+        // A populated probe whose claims yield a DISTINCT value per accessed key
+        // (so any claim the resolver reads diverges between sides) and trip the
+        // shared `enumerated` flag on a wholesale copy of the claims object.
+        let enumerated = false;
+        const populate = (side: string): SubscriptionIdentity => {
+            // Type-correct values for the common collection claims so an array op
+            // (`roles.includes`) doesn't throw and over-reject; a distinct string
+            // sentinel for every other (incl. custom/unknown) key.
+            const backing: Record<string, unknown> = { groups: [`grp_${side}`], roles: [side], sub: `__lunora_probe_${side}__` };
+            const claims = new Proxy(backing, {
+                get: (target, key) => {
+                    if (typeof key === "symbol" || key in target) {
+                        return Reflect.get(target, key) as unknown;
+                    }
+
+                    return `${side}:${key}`;
+                },
+                getOwnPropertyDescriptor: (target, key) => {
+                    enumerated = true;
+
+                    return Reflect.getOwnPropertyDescriptor(target, key);
+                },
+                has: (target, key) => (typeof key === "symbol" ? Reflect.has(target, key) : true),
+                ownKeys: (target) => {
+                    enumerated = true;
+
+                    return Reflect.ownKeys(target);
+                },
+            });
+
+            return { identity: claims, userId: `__lunora_probe_${side}__` };
+        };
+
         // Every probe (including the anonymous multicast identity) must resolve to
         // the identical table + where + columns, or the shape isn't uniform.
-        return probes.every((probe) => {
+        const matches = [RELAY_MULTICAST_IDENTITY, populate("a"), populate("b")].every((probe) => {
             let resolved: ResolvedShape | undefined;
 
             try {
@@ -8230,6 +8250,10 @@ abstract class ShardDO {
                 stableStringify(resolved.columns) === baseColumns
             );
         });
+
+        // A wholesale copy of the claims defeats per-key differentiation — can't
+        // prove uniformity, so fail closed.
+        return matches && !enumerated;
     }
 
     /** Whether any column the shape projects from `table` is masked — a masked value is identity-dependent, so the shape can't be relay-uniform. */

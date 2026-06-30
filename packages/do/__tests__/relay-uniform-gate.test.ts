@@ -8,8 +8,10 @@ import { ShardDO } from "../src/shard-do";
  * The RLS-uniform gate (plan 075 Phase 3): a reactive shape may be relay-multicast
  * ONLY if its resolved query is identical regardless of the caller's identity and
  * none of its projected columns are masked. The gate combines a static RLS
- * read-policy guard with a claim-diverse identity probe (whose base is the exact
- * anonymous identity the owner multicasts under) — fail-closed on every ground.
+ * read-policy guard with a claim-exhaustive identity probe — proxy-backed, so a
+ * resolver reading ANY claim (even a custom one) diverges — whose base is the exact
+ * anonymous identity the owner multicasts under, plus a copy backstop. Fail-closed
+ * on every ground.
  */
 interface Resolved {
     columns?: ReadonlyArray<string>;
@@ -56,6 +58,17 @@ class GateShard extends ShardDO {
             // two-authed-probe gate, but the anonymous multicast identity diverges.
             case "authNarrow": {
                 return identity?.userId === undefined ? { table: "messages" } : { effectiveWhere: { published: true }, table: "messages" };
+            }
+            // Reads a CUSTOM claim no hardcoded probe list would name — only the
+            // proxy-backed probe (distinct value per ANY accessed key) catches it.
+            case "customClaim": {
+                return { effectiveWhere: { region: identity?.identity?.["region_code_xyz"] }, table: "messages" };
+            }
+            // Output is identical per probe (same backing keys) but it ENUMERATES the
+            // claims — a wholesale copy the proxy can't differentiate, so the copy
+            // backstop must reject it.
+            case "enumeratesClaims": {
+                return { effectiveWhere: { keys: Object.keys(identity?.identity ?? {}) }, table: "messages" };
             }
             // A `.global()` table is never poke-relayable.
             case "globalFeed": {
@@ -124,6 +137,18 @@ describe("relay-uniform shape gate", () => {
         expect.assertions(1);
 
         expect(makeShard().uniform("orgScoped", {})).toBe(false);
+    });
+
+    it("rejects a where reading an arbitrary custom claim (no hardcoded list to miss it)", () => {
+        expect.assertions(1);
+
+        expect(makeShard().uniform("customClaim", {})).toBe(false);
+    });
+
+    it("rejects a where that enumerates/copies the identity claims (copy backstop)", () => {
+        expect.assertions(1);
+
+        expect(makeShard().uniform("enumeratesClaims", {})).toBe(false);
     });
 
     it("rejects a shape that narrows only for authenticated callers (anon multicast identity is probed)", () => {
