@@ -63,6 +63,8 @@ export { default as containerOversizedInstance } from "./lints/static/container-
 export { default as containerPublicInternet } from "./lints/static/container-public-internet";
 export { default as duplicateIndex } from "./lints/static/duplicate-index";
 export { default as emptyIndex } from "./lints/static/empty-index";
+export { default as externalSourceOnGlobal } from "./lints/static/external-source-on-global";
+export { default as externalSourceUnscoped } from "./lints/static/external-source-unscoped";
 export { default as filterWithoutIndex } from "./lints/static/filter-without-index";
 export { default as hardcodedSecret } from "./lints/static/hardcoded-secret";
 export { default as hyperdriveOutsideAction } from "./lints/static/hyperdrive-outside-action";
