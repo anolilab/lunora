@@ -3003,7 +3003,8 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
 
     const importLines = [
         `import type { ${doTypeImports.join(", ")} } from "${base.do}";`,
-        `import { applyCdcChanges, ${shapeGuardImport}createShardCtxDb, runDataMigration, ${hasSourcedTables ? "runExternalSourceTick, " : ""}runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
+        `import { applyCdcChanges, ${shapeGuardImport}createShardCtxDb, ${hasSourcedTables ? "isSourceDue, pullExternalSourceTick, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
+        ...(hasSourcedTables ? [`import type { ExternalSourceLike, SourceClientLike } from "${base.do}";`] : []),
         // `asBucketStorage` (the bucket-aware `ctx.storage` wrapper) and
         // `createSecrets` (the `ctx.secrets` core built-in) live in
         // `@lunora/server`, the single source — imported here rather than stamped
@@ -3281,26 +3282,30 @@ const vectorsStub: VectorSearchLike = {
             : "";
     /* eslint-enable no-secrets/no-secrets */
 
-    // External-source ingest (plan 077). Per-DO-instance memo of the resolved
-    // SqlClient keyed by binding, so the poll loop builds each connection once.
+    // External-source ingest (plan 077). Per-DO-instance memos: the resolved
+    // SqlClient keyed by binding (build each connection once), and the last-polled
+    // wall-clock per table (so `refresh.everyMs` throttles the per-tick poll).
     const sourceClientCacheConst = hasSourcedTables
         ? `
-const sourceClientCache = new WeakMap<object, Map<string, { query: <Row = Record<string, unknown>>(text: string, params?: readonly unknown[]) => Promise<Row[]> }>>();
+const sourceClientCache = new WeakMap<object, Map<string, SourceClientLike>>();
+const sourcePollAtCache = new WeakMap<object, Map<string, number>>();
 `
         : "";
 
-    // The DO subclass's poll override: each alarm tick, materialize every sourced
-    // table's tenant slice. Reads the runtime `.source(...)` config (binding/query/
-    // tenantBy/map/idColumn/columns) straight off the `schema` object — the functions
-    // are not serialized into code. The read is system-owned (alarm tier, no request
-    // identity), landing rows only through the validated CDC writer via
-    // `runExternalSourceTick` — so it never loosens `ctx.sql`'s action-only contract.
-
+    // The DO subclass's poll override: each alarm tick, materialize every due
+    // sourced table's tenant slice. Reads the runtime `.source(...)` config straight
+    // off the `schema` object (the functions are not serialized into code), resolves
+    // the host-supplied SqlClient, and delegates the per-table work to the tested
+    // `pullExternalSourceTick` in @lunora/do (query under `tenantBy(shardKey)` →
+    // id-lift → diff → apply through the validated CDC writer). System-owned (alarm
+    // tier, no request identity), so it never loosens `ctx.sql`'s action-only contract.
     const externalSourceOverride = hasSourcedTables
         ? `
         protected override async pollExternalSources(): Promise<number> {
             const env = (this.env ?? {}) as Record<string, unknown>;
-            const sourced = Object.entries((schema as unknown as SchemaLike).tables).filter(([, definition]) => (definition as { externalSource?: unknown }).externalSource !== undefined);
+            const sourced = Object.entries((schema as unknown as SchemaLike).tables)
+                .map(([table, definition]) => [table, (definition as { externalSource?: ExternalSourceLike }).externalSource] as const)
+                .filter((entry): entry is [string, ExternalSourceLike] => entry[1] !== undefined);
 
             if (sourced.length === 0) {
                 return 0;
@@ -3325,8 +3330,28 @@ const sourceClientCache = new WeakMap<object, Map<string, { query: <Row = Record
                 sourceClientCache.set(this, clients);
             }
 
-            for (const [table, definition] of sourced) {
-                const source = (definition as { externalSource: { binding: string; columns?: readonly string[]; idColumn?: string; map?: (row: Record<string, unknown>) => Record<string, unknown>; query: string; tenantBy?: (key: string) => readonly unknown[] } }).externalSource;
+            let polledAt = sourcePollAtCache.get(this);
+
+            if (polledAt === undefined) {
+                polledAt = new Map();
+                sourcePollAtCache.set(this, polledAt);
+            }
+
+            const now = Date.now();
+            // \`active\` counts non-manual sources: while > 0 the alarm re-arms; a
+            // manual-only schema returns 0 so the shared alarm goes idle.
+            let active = 0;
+
+            for (const [table, source] of sourced) {
+                if (source.refresh === "manual") {
+                    continue;
+                }
+
+                active += 1;
+
+                if (!isSourceDue(source.refresh, polledAt.get(table), now)) {
+                    continue;
+                }
 
                 try {
                     let client = clients.get(source.binding);
@@ -3343,36 +3368,38 @@ const sourceClientCache = new WeakMap<object, Map<string, { query: <Row = Record
                         continue;
                     }
 
-                    const parameters = source.tenantBy ? source.tenantBy(shardKey) : [];
-                    // eslint-disable-next-line no-await-in-loop -- one sourced table at a time; the slices are independent but small and sequential keeps the writer transaction simple
-                    const rows = await client.query<Record<string, unknown>>(source.query, parameters);
-                    const idColumn = source.idColumn ?? "id";
-                    const documents = rows.map((row) => {
-                        const body = source.map ? source.map(row) : Object.fromEntries(Object.entries(row).filter(([key]) => key !== idColumn));
-
-                        return { ...body, _id: String(row[idColumn]) };
-                    });
-
-                    // eslint-disable-next-line no-await-in-loop -- see above
-                    await runExternalSourceTick(this.sql as SqlExec, writer, documents, { columns: source.columns, table });
+                    // eslint-disable-next-line no-await-in-loop -- one sourced table at a time; slices are independent but small and sequential keeps the writer transaction simple
+                    await pullExternalSourceTick(this.sql as SqlExec, writer, client, table, source, shardKey);
+                    polledAt.set(table, now);
                 } catch (error) {
                     this.recordExternalSourceError(table, error);
                 }
             }
 
-            return sourced.length;
+            return active;
         }
 `
         : "";
 
-    // Arm the shared poll alarm on construction so a sourced DO starts ingesting; the
-    // alarm re-arms itself while `pollExternalSources` reports work. Emitted only when
-    // the schema has a sourced table (else the class stays constructor-free).
+    // Arm the shared poll alarm on construction so a sourced DO starts ingesting —
+    // but only when at least one source is non-manual (a \`refresh: "manual"\`-only
+    // schema must not spin the alarm). The alarm re-arms itself while
+    // `pollExternalSources` reports active sources. Emitted only when the schema has
+    // a sourced table (else the class stays constructor-free).
     const sourceConstructorOverride = hasSourcedTables
         ? `
         public constructor(state: ShardDOState, env: unknown) {
             super(state, env);
-            void this.scheduleSourcePoll();
+
+            const autoSourced = Object.values((schema as unknown as SchemaLike).tables).some((definition) => {
+                const source = (definition as { externalSource?: ExternalSourceLike }).externalSource;
+
+                return source !== undefined && source.refresh !== "manual";
+            });
+
+            if (autoSourced) {
+                void this.scheduleSourcePoll();
+            }
         }
 `
         : "";

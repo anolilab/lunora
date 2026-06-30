@@ -1,40 +1,42 @@
-import { defineSchema, defineTable } from "@lunora/server";
-import { v } from "@lunora/values";
 import { describe, expect, it } from "vitest";
 
-import { fromServerSchema } from "../src";
+import type { AdvisorSchema, AdvisorTable } from "../src";
 import externalSourceOnGlobal from "../src/lints/static/external-source-on-global";
 import externalSourceUnscoped from "../src/lints/static/external-source-unscoped";
 
 /**
- * Tenant-scope + tier-contradiction enforcement for `.source(...)` (plan 077),
- * driven through `fromServerSchema` so the runtime feeder mapping of
- * `externalSource` is exercised alongside the lints.
- *
- * - `scoped`     — sourced + sharded + `tenantBy` → safe.
- * - `unscoped`   — sourced + sharded, NO `tenantBy` → cross-tenant leak (ERROR).
- * - `rootSource` — sourced, NOT sharded → `tenantBy` optional, safe.
- * - `globalSrc`  — sourced + `.global()` → contradictory (ERROR).
- * - `plain`      — not sourced → never flagged.
+ * Tenant-scope + tier-contradiction lints for `.source(...)` (plan 077). The lints
+ * read the discovered `AdvisorSchema` (codegen feeder), so they are tested against
+ * `AdvisorTable` literals directly — `defineSchema` now *throws* on the unscoped /
+ * global cases at runtime (the hard fail-safe), so it can't construct the very
+ * inputs these build-time lints must flag from static analysis.
  */
-const schema = () =>
-    fromServerSchema(
-        defineSchema({
-            globalSrc: defineTable({ value: v.string() }).global().source({ binding: "HD", query: "select id, value from g" }),
-            plain: defineTable({ value: v.string() }),
-            rootSource: defineTable({ value: v.string() }).source({ binding: "HD", query: "select id, value from r" }),
-            scoped: defineTable({ orgId: v.string(), title: v.string() })
-                .shardBy("orgId")
-                .source({ binding: "HD", query: "select id, title, org_id from s where org_id = $1", tenantBy: (key) => [key] }),
-            unscoped: defineTable({ orgId: v.string(), title: v.string() }).shardBy("orgId").source({ binding: "HD", query: "select id, title from u" }),
-        }),
-    );
+
+const table = (overrides: Partial<AdvisorTable> & { name: string }): AdvisorTable => {
+    return {
+        fields: [],
+        indexes: [],
+        relations: [],
+        ...overrides,
+    };
+};
+
+const schema = (tables: AdvisorTable[]): AdvisorSchema => {
+    return { tables };
+};
 
 describe("external_source_unscoped", () => {
     it("flags a sourced + sharded table with no tenantBy, and nothing else", () => {
         expect.assertions(3);
 
-        const findings = externalSourceUnscoped.run({ schema: schema() });
+        const findings = externalSourceUnscoped.run({
+            schema: schema([
+                table({ externalSource: { hasTenantBy: false }, name: "unscoped", shardKind: "shardBy" }),
+                table({ externalSource: { hasTenantBy: true }, name: "scoped", shardKind: "shardBy" }),
+                table({ externalSource: { hasTenantBy: false }, name: "rootSource", shardKind: "root" }),
+                table({ name: "plain", shardKind: "shardBy" }),
+            ]),
+        });
 
         expect(findings).toHaveLength(1);
         expect(findings[0]).toMatchObject({
@@ -49,19 +51,15 @@ describe("external_source_unscoped", () => {
     it("does not flag a sourced root (non-sharded) table — tenantBy is optional there", () => {
         expect.assertions(1);
 
-        const findings = fromServerSchema(
-            defineSchema({ rootSource: defineTable({ value: v.string() }).source({ binding: "HD", query: "select id, value from r" }) }),
-        );
-
-        expect(externalSourceUnscoped.run({ schema: findings })).toHaveLength(0);
+        expect(
+            externalSourceUnscoped.run({ schema: schema([table({ externalSource: { hasTenantBy: false }, name: "rootSource", shardKind: "root" })]) }),
+        ).toHaveLength(0);
     });
 
     it("does not flag a non-sourced schema", () => {
         expect.assertions(1);
 
-        expect(
-            externalSourceUnscoped.run({ schema: fromServerSchema(defineSchema({ plain: defineTable({ value: v.string() }).shardBy("value") })) }),
-        ).toHaveLength(0);
+        expect(externalSourceUnscoped.run({ schema: schema([table({ name: "plain", shardKind: "shardBy" })]) })).toHaveLength(0);
     });
 });
 
@@ -69,7 +67,12 @@ describe("external_source_on_global", () => {
     it("flags a table that is both .source() and .global()", () => {
         expect.assertions(2);
 
-        const findings = externalSourceOnGlobal.run({ schema: schema() });
+        const findings = externalSourceOnGlobal.run({
+            schema: schema([
+                table({ externalSource: { hasTenantBy: false }, name: "globalSrc", shardKind: "global" }),
+                table({ externalSource: { hasTenantBy: true }, name: "scoped", shardKind: "shardBy" }),
+            ]),
+        });
 
         expect(findings).toHaveLength(1);
         expect(findings[0]).toMatchObject({
@@ -83,14 +86,8 @@ describe("external_source_on_global", () => {
     it("does not flag a sourced sharded table", () => {
         expect.assertions(1);
 
-        const findings = fromServerSchema(
-            defineSchema({
-                scoped: defineTable({ orgId: v.string() })
-                    .shardBy("orgId")
-                    .source({ binding: "HD", query: "select id, org_id from s where org_id = $1", tenantBy: (key) => [key] }),
-            }),
-        );
-
-        expect(externalSourceOnGlobal.run({ schema: findings })).toHaveLength(0);
+        expect(
+            externalSourceOnGlobal.run({ schema: schema([table({ externalSource: { hasTenantBy: true }, name: "scoped", shardKind: "shardBy" })]) }),
+        ).toHaveLength(0);
     });
 });

@@ -636,6 +636,41 @@ const attachStandaloneIndexes = (
     }
 };
 
+/**
+ * Hard-enforce the `.source(...)` invariants at schema-definition time (plan 077).
+ * Chain order is arbitrary, so the builder can't see the final `shardMode` when
+ * `.source()` runs — the checks live here, where every table is fully assembled.
+ * These **throw** (the schema won't load), so the tenant-isolation boundary is a
+ * runtime guarantee, not merely the advisor lint's build-time warning.
+ */
+const validateExternalSources = (tables: Record<string, TableDefinition>): void => {
+    for (const [name, table] of Object.entries(tables)) {
+        const source = table.externalSource;
+
+        if (!source) {
+            continue;
+        }
+
+        if (table.shardMode.kind === "global") {
+            throw new Error(
+                `defineSchema: table "${name}" cannot be both .source() and .global() — a sourced table materializes into a shard DO's SQLite, a global table lives in the external tier`,
+            );
+        }
+
+        if (table.shardMode.kind === "shardBy" && !source.tenantBy) {
+            throw new Error(
+                `defineSchema: sourced + .shardBy() table "${name}" needs a \`tenantBy\` mapper — without it every tenant's DO would run the same unscoped query and replicate the whole multitenant table (a cross-tenant leak). Add \`tenantBy: (shardKey) => [shardKey]\` binding the shard key into the query's parameters.`,
+            );
+        }
+
+        if (source.mode === "incremental") {
+            throw new Error(
+                `defineSchema: table "${name}" uses \`mode: "incremental"\`, which is not yet implemented — only "full-pull" (the default) is supported. Remove \`mode\` or set it to "full-pull".`,
+            );
+        }
+    }
+};
+
 const defineSchema = <T extends Record<string, TableDefinition>>(
     tables: T,
     vectorIndexes: Record<string, VectorIndexDefinition> = {},
@@ -644,6 +679,7 @@ const defineSchema = <T extends Record<string, TableDefinition>>(
 ): ExtendableSchema<T> => {
     fillIndexTableNames(tables);
     attachStandaloneIndexes(tables, aggregateIndexes, rankIndexes);
+    validateExternalSources(tables);
 
     return withExtend({ tables, vectorIndexes });
 };

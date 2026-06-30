@@ -16,6 +16,8 @@
  * blessed pattern that unblocks the use case today.
  */
 
+import { liftSourceId } from "@lunora/do";
+
 import type { SqlClient } from "./types";
 
 /** How an external row maps to a Lunora document. */
@@ -48,35 +50,12 @@ interface PullSourceOptions extends ProjectOptions {
  * `_id`, then either apply `map` or copy every other column verbatim. Throws when
  * the id column is missing/nullish so a misconfigured query fails loudly rather than
  * materializing rows under an `"undefined"` id.
+ *
+ * Delegates to `@lunora/do`'s `liftSourceId` — the single id-lift the declarative
+ * `.source()` poll loop also uses — so the manual bridge and the codegen path can
+ * never diverge in their missing-id handling.
  */
-const projectSourceRow = (row: Record<string, unknown>, options: ProjectOptions = {}): Record<string, unknown> => {
-    const { idColumn = "id", map } = options;
-    const idValue = row[idColumn];
-
-    if (idValue === undefined || idValue === null) {
-        throw new Error(`projectSourceRow: row is missing id column "${idColumn}"`);
-    }
-
-    if (typeof idValue !== "string" && typeof idValue !== "number" && typeof idValue !== "bigint") {
-        throw new TypeError(`projectSourceRow: id column "${idColumn}" must be a string or number`);
-    }
-
-    const id = String(idValue);
-
-    if (map) {
-        return { ...map(row), _id: id };
-    }
-
-    const body: Record<string, unknown> = {};
-
-    for (const [key, value] of Object.entries(row)) {
-        if (key !== idColumn) {
-            body[key] = value;
-        }
-    }
-
-    return { ...body, _id: id };
-};
+const projectSourceRow = (row: Record<string, unknown>, options: ProjectOptions = {}): Record<string, unknown> => liftSourceId(row, options);
 
 /**
  * Run a parameterised tenant query against Hyperdrive and project every row to a

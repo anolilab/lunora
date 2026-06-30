@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { defineTable, v } from "../src/index";
+import { defineSchema, defineTable, v } from "../src/index";
 
 /**
  * `.source(...)` — external-source ingest declaration (plan 077). Orthogonal to
  * `.shardBy()`/`.global()`, implies `.externallyManaged()`, and fails fast on the
  * order-independent guards (`binding`/`query`). The tenant-scope + global
- * contradiction checks live in the advisor lints (they need the final IR), so they
- * are not asserted here.
+ * contradiction + unimplemented-mode checks need the fully-assembled table, so they
+ * are enforced (and asserted) at `defineSchema` time, not on the builder.
  */
 
 describe("defineTable().source", () => {
@@ -82,5 +82,59 @@ describe("defineTable().source", () => {
         expect.assertions(1);
 
         expect(() => defineTable({ body: v.string() }).source({ binding: "HD", query: "" })).toThrow("`query` is required");
+    });
+});
+
+describe("defineSchema external-source validation", () => {
+    it("throws on a sourced + .shardBy() table with no tenantBy (the tenant-isolation boundary)", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            defineSchema({
+                documents: defineTable({ orgId: v.string(), title: v.string() })
+                    .shardBy("orgId")
+                    .source({ binding: "HD", query: "select id, title from documents" }),
+            }),
+        ).toThrow(/needs a `tenantBy` mapper/u);
+    });
+
+    it("accepts a sourced + .shardBy() table that has tenantBy", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            defineSchema({
+                documents: defineTable({ orgId: v.string(), title: v.string() })
+                    .shardBy("orgId")
+                    .source({ binding: "HD", query: "select id, title, org_id from documents where org_id = $1", tenantBy: (key) => [key] }),
+            }),
+        ).not.toThrow();
+    });
+
+    it("accepts a sourced root (non-sharded) table without tenantBy", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            defineSchema({ documents: defineTable({ title: v.string() }).source({ binding: "HD", query: "select id, title from documents" }) }),
+        ).not.toThrow();
+    });
+
+    it("throws on a sourced + .global() table (contradictory tiers)", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            defineSchema({
+                documents: defineTable({ title: v.string() }).global().source({ binding: "HD", query: "select id, title from documents" }),
+            }),
+        ).toThrow(/cannot be both \.source\(\) and \.global\(\)/u);
+    });
+
+    it("throws on mode: incremental (not yet implemented)", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            defineSchema({
+                documents: defineTable({ title: v.string() }).source({ binding: "HD", mode: "incremental", query: "select id, title from documents" }),
+            }),
+        ).toThrow(/mode: "incremental"/u);
     });
 });

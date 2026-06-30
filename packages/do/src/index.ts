@@ -96,6 +96,8 @@ export type { ExternalSourceDiffResult } from "./external-source-diff";
 export { diffExternalSource } from "./external-source-diff";
 export type { MaterializeResult } from "./external-source-materialize";
 export { materializeExternalRows, readExternalSourceBaseline, runExternalSourceTick } from "./external-source-materialize";
+export type { ExternalSourceLike, SourceClientLike, SourceRefresh } from "./external-source-pull";
+export { isSourceDue, liftSourceId, pullExternalSourceTick } from "./external-source-pull";
 export type { FunctionMetricBucket, FunctionMetricIndexHit, RecordFunctionMetricInput } from "./function-metrics";
 export {
     ensureFunctionMetricsTables,

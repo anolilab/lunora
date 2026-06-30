@@ -2408,6 +2408,14 @@ abstract class ShardDO {
             remaining += 1;
         }
 
+        // Drain the tables the ingest poll just wrote: a sourced table is local, so
+        // its `defineShape` subscribers are poked through the standard
+        // changed-table → `pokeShapeSubscribers` path (the same one a mutation
+        // uses), NOT the global-shape poke path. Without this, materialized rows land
+        // in SQLite but live subscribers never see the incremental update. A no-op
+        // when nothing was queued (non-sourced DOs, or a steady-state tick).
+        await this.flushChangedTables();
+
         if (remaining > 0) {
             await this.scheduleGlobalPoll();
         }
