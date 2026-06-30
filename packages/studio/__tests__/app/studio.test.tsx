@@ -3,7 +3,15 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { Studio } from "../../src/app/studio";
-import type { FlagEvaluation, FlagsResult, QueueMetadata, StudioFeaturesResult } from "../../src/lib/admin";
+import type {
+    FanoutMetricsResult,
+    FanoutPathCounters,
+    FanoutTopicStat,
+    FlagEvaluation,
+    FlagsResult,
+    QueueMetadata,
+    StudioFeaturesResult,
+} from "../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../src/lib/admin";
 import type { MockClientHooks } from "../mock-client";
 import { createMockClient } from "../mock-client";
@@ -99,6 +107,26 @@ const FLAG_EVALUATION_KEY_GUARD: KeysMatch<keyof FlagEvaluation, (typeof FLAG_EV
 const FLAGS_RESULT_KEYS = ["configured", "flags"] as const;
 
 const FLAGS_RESULT_KEY_GUARD: KeysMatch<keyof FlagsResult, (typeof FLAGS_RESULT_KEYS)[number]> = true;
+
+/**
+ * Canonical key sets of the `getFanoutMetrics` wire shapes (plan 075 Phase 1) —
+ * hand-mirrored from `@lunora/do` the same way as the types above, with the
+ * matching guards living in `@lunora/do`'s `shard-do.admin.test.ts`. The fan-out
+ * panel reads these fields off the wire, so a dropped field would surface as a
+ * silent `undefined` cell rather than a type error; these guards fail the build
+ * on drift.
+ */
+const FANOUT_TOPIC_STAT_KEYS = ["kind", "subscribers", "topic"] as const;
+
+const FANOUT_TOPIC_STAT_KEY_GUARD: KeysMatch<keyof FanoutTopicStat, (typeof FANOUT_TOPIC_STAT_KEYS)[number]> = true;
+
+const FANOUT_PATH_COUNTERS_KEYS = ["maxMs", "passes", "peakSocketsIterated", "socketsDelivered", "socketsIterated", "totalMs"] as const;
+
+const FANOUT_PATH_COUNTERS_KEY_GUARD: KeysMatch<keyof FanoutPathCounters, (typeof FANOUT_PATH_COUNTERS_KEYS)[number]> = true;
+
+const FANOUT_METRICS_RESULT_KEYS = ["peakSubscribers", "shapePoke", "sinceMs", "topics", "totalConnections", "whisper"] as const;
+
+const FANOUT_METRICS_RESULT_KEY_GUARD: KeysMatch<keyof FanoutMetricsResult, (typeof FANOUT_METRICS_RESULT_KEYS)[number]> = true;
 
 describe("studio", () => {
     it("renders every domain's sub-pages at once in the grouped sidebar", async () => {
@@ -228,5 +256,16 @@ describe("studio", () => {
         expect([...FLAG_EVALUATION_KEYS]).toStrictEqual(["errorCode", "key", "reason", "type", "value", "variant"]);
         expect(FLAGS_RESULT_KEY_GUARD).toBe(true);
         expect([...FLAGS_RESULT_KEYS]).toStrictEqual(["configured", "flags"]);
+    });
+
+    it("keeps the studio's getFanoutMetrics mirror in lockstep with @lunora/do's contract", () => {
+        expect.assertions(6);
+
+        expect(FANOUT_TOPIC_STAT_KEY_GUARD).toBe(true);
+        expect([...FANOUT_TOPIC_STAT_KEYS]).toStrictEqual(["kind", "subscribers", "topic"]);
+        expect(FANOUT_PATH_COUNTERS_KEY_GUARD).toBe(true);
+        expect([...FANOUT_PATH_COUNTERS_KEYS]).toStrictEqual(["maxMs", "passes", "peakSocketsIterated", "socketsDelivered", "socketsIterated", "totalMs"]);
+        expect(FANOUT_METRICS_RESULT_KEY_GUARD).toBe(true);
+        expect([...FANOUT_METRICS_RESULT_KEYS]).toStrictEqual(["peakSubscribers", "shapePoke", "sinceMs", "topics", "totalConnections", "whisper"]);
     });
 });

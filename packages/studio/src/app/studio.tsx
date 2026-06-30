@@ -66,6 +66,7 @@ import { PaymentsPanel } from "../features/payments/payments-panel";
 import { PermissionsPanel } from "../features/permissions/permissions-panel";
 import QueuesPanel from "../features/queues/queues-panel";
 import DashboardsPanel from "../features/reports/dashboards-panel";
+import FanoutPanel from "../features/reports/fanout-panel";
 import { HealthPanel } from "../features/reports/health-panel";
 import { MetricsPanel } from "../features/reports/metrics-panel";
 import { SchemaViewer } from "../features/schema/schema-viewer";
@@ -96,6 +97,7 @@ type StudioTab =
     | "data"
     | "drains"
     | "export"
+    | "fanout"
     | "files"
     | "flags"
     | "functions"
@@ -267,6 +269,9 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
         <path d="M5 6c0-1.4 3.1-2.5 7-2.5s7 1.1 7 2.5-3.1 2.5-7 2.5S5 7.4 5 6Zm0 0v12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V6M5 12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5" />
     ),
     export: <path d="M12 3v11m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />,
+    fanout: (
+        <path d="M12 5a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm-7 16a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm14 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM12 7v3.5M12 10.5 6 17m6-6.5 6 6.5" />
+    ),
     files: <path d="M4 7a2 2 0 0 1 2-2h3l2 2.5h7a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7Z" />,
     flags: <path d="M6 21V4m0 0h11l-2 3 2 3H6" />,
     functions: <path d="m9 8-4 4 4 4m6-8 4 4-4 4" />,
@@ -314,7 +319,7 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "functions", tabs: ["functions", "api", "workflows", "queues"] },
     { key: "auth", tabs: ["users", "organizations", "authSessions", "authConfig"] },
     { key: "storage", tabs: ["files", "storageRules"] },
-    { key: "observability", tabs: ["logs", "audit", "realtime", "metrics", "analytics", "health"] },
+    { key: "observability", tabs: ["logs", "audit", "realtime", "fanout", "metrics", "analytics", "health"] },
     { key: "advisors", tabs: ["security", "rls", "permissions", "insights"] },
     { key: "operations", tabs: ["schedule", "mail", "drains", "payments", "flags"] },
     { key: "settings", tabs: ["settings"] },
@@ -729,6 +734,7 @@ const StudioLayout = (): ReactElement => {
         data: t("Data"),
         drains: t("Log drains"),
         export: t("Export / Import"),
+        fanout: t("Fan-out"),
         files: t("Files"),
         flags: t("Flags"),
         functions: t("Functions"),
@@ -780,6 +786,7 @@ const StudioLayout = (): ReactElement => {
         data: t("Browse and edit rows across your shard and global tables."),
         drains: t("Forward logs to Logpush, Tail Workers, or a webhook collector."),
         export: t("Export a shard to NDJSON, or import rows from it."),
+        fanout: t("Realtime fan-out cost and per-topic subscriber counts for this shard."),
         files: t("Browse objects in your R2 storage buckets."),
         flags: t("Inspect feature flags and their live evaluation under a targeting context."),
         functions: t("Run registered queries, mutations, and actions."),
@@ -998,6 +1005,7 @@ const buildRouter = ({
         data: <TableEditor editable={dataEditable} initialShardKey={initialShardKey} />,
         drains: <LogDrainsPanel />,
         export: <ExportImportPanel initialShardKey={initialShardKey} />,
+        fanout: <FanoutPanel initialShardKey={initialShardKey} />,
         files: <FileBrowser />,
         flags: <FlagsPanel initialShardKey={initialShardKey} />,
         functions: (
