@@ -151,13 +151,27 @@ checkpoint)` (≈6111) drains the op range from the owner's SQLite and probes
 
 ## Phases
 
-### Phase 0 — Design doc + sign-off (no code)
+### Phase 0 — Design doc + sign-off (no code) — **WRITTEN, awaiting sign-off**
 
 Write the owner↔relay protocol, the promotion/collapse state machine, the
 resume-across-relays handoff, and answers to all six Decisions above into this
-file (or a sibling design doc). **Maintainer sign-off required before Phase 1.**
-Deliverable: a measured T_up from a fan-out micro-benchmark on `ShardDO`
-(subscribers vs per-flush CPU), not a guessed constant.
+file (or a sibling design doc). **Maintainer sign-off required before Phase 2**
+(Phase 1 — observability — already shipped, and is the production instrument the
+design uses to calibrate the threshold). Deliverable: a measured T_up from a
+fan-out micro-benchmark on `ShardDO` (subscribers vs per-flush CPU), not a guessed
+constant.
+
+> **Delivered:** [`075-phase0-relay-protocol-design.md`](075-phase0-relay-protocol-design.md)
+> — the owner↔relay frame protocol, the promotion/collapse state machine, the
+> resume handoff (owner stays checkpoint authority; relays forward resume), the
+> RLS-uniform gate (a fail-closed `relayUniform` codegen bit extending the
+> `isIdentityIndependent` signal), all six Decisions answered, and a measured
+> fan-out curve (linear, ~16 ns/socket Node floor) with a derived
+> `T_up = 8,000 / T_down = 4,000` starting default. The STOP condition on the
+> runtime resolver is cleared (`resolveShard` → `forwardToShard` is a single seam).
+> **One calibration is a Phase 2 prerequisite**: the absolute workerd per-socket
+> constant (the Node number is a lower bound) — measured via a load test reading
+> the Phase-1 `getFanoutMetrics`. See the sign-off checklist in § 10 of that doc.
 
 ### Phase 1 — Observability only (ship first, low risk) — **SHIPPED**
 
