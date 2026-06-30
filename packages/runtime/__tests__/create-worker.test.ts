@@ -1224,3 +1224,76 @@ describe("createWorker auth-metrics instrumentation (PLAN3 §2.3)", () => {
         expect(authHandler).toHaveBeenCalledTimes(1);
     });
 });
+
+describe("createWorker — relay-tier routing (plan 075 Phase 2)", () => {
+    interface Forward {
+        binding: null | string;
+        name: string;
+    }
+
+    const routingNamespace = (relayCount: number, forwards: Forward[]): ShardNamespaceLike => {
+        return {
+            get: (id) => {
+                const name = (id as { __name: string }).__name;
+
+                return {
+                    fetch: async (request: Request) => {
+                        if (new URL(request.url).pathname === "/_lunora/route") {
+                            return Response.json({ relayCount }, { headers: { "content-type": "application/json" } });
+                        }
+
+                        forwards.push({ binding: request.headers.get("x-lunora-shard-binding"), name });
+
+                        return new Response(null, { status: 101 });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+    };
+
+    const upgrade = (shardKey: string): Request => new Request(`https://app.example/_lunora/ws?shard=${shardKey}`, { headers: { Upgrade: "websocket" } });
+
+    it("routes a new WS connection on a promoted shard to one of its relays", async () => {
+        expect.assertions(3);
+
+        const forwards: Forward[] = [];
+        const namespace = routingNamespace(2, forwards);
+        const worker = createWorker({ shardDO: namespace });
+
+        await worker.fetch(upgrade("promoted-a"), { SHARD: namespace }, fakeContext);
+
+        expect(forwards).toHaveLength(1);
+        expect(forwards[0]?.name).toMatch(/^promoted-a::relay::[01]$/u); // routed to a relay
+        expect(forwards[0]?.binding).toBe("SHARD"); // told the DO its namespace binding
+    });
+
+    it("keeps a new WS connection on the owner when the shard is not promoted", async () => {
+        expect.assertions(2);
+
+        const forwards: Forward[] = [];
+        const namespace = routingNamespace(0, forwards);
+        const worker = createWorker({ shardDO: namespace });
+
+        await worker.fetch(upgrade("cold-b"), { SHARD: namespace }, fakeContext);
+
+        expect(forwards).toHaveLength(1);
+        expect(forwards[0]?.name).toBe("cold-b"); // owner-served
+    });
+
+    it("stays owner-served when the namespace binding can't be found (relay tier inert)", async () => {
+        expect.assertions(2);
+
+        const forwards: Forward[] = [];
+        const namespace = routingNamespace(2, forwards);
+        const worker = createWorker({ shardDO: namespace });
+
+        // `env` does not expose the namespace → no binding → no probe, no relay routing.
+        await worker.fetch(upgrade("cold-c"), {}, fakeContext);
+
+        expect(forwards[0]?.name).toBe("cold-c");
+        expect(forwards[0]?.binding).toBeNull();
+    });
+});

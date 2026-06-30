@@ -91,7 +91,7 @@ import type { ShardRankPageResult } from "./rank";
 import type { ReactiveCacheOptions } from "./reactive-cache";
 import { ReactiveCache, reactiveCacheKey } from "./reactive-cache";
 import type { OwnerRelayFrame } from "./relay";
-import { parseRelayName, relayName } from "./relay";
+import { DEFAULT_PROMOTION_THRESHOLDS, parseRelayName, relayName } from "./relay";
 import type { AppendRequestLogEntry, ContextLogLevel, LogEventInput, RequestLogResult, RequestLogWriteOptions } from "./request-log";
 import { appendRequestLogEntry, emitLogEvent, emitRequestLogEvent, ensureRequestLogTable, readRequestLog, renderLogMessage } from "./request-log";
 import { buildSecurityAudit } from "./security-audit";
@@ -1355,6 +1355,16 @@ const parsePositiveInt = (raw: string | undefined): number | undefined => {
 
     return Number.isFinite(value) && value > 0 ? value : undefined;
 };
+
+/** Default relay fan when a shard promotes (plan 075 Phase 2) — how many relays new connections spread across. Right-sizing per demand is a later phase; v1 uses a small fixed fan. */
+const DEFAULT_RELAY_FAN = 2;
+
+/** Default hard cap on relays per shard (the cost ceiling) so a viral shard can never silently spawn unbounded relay DOs. */
+const DEFAULT_MAX_RELAYS = 8;
+
+/** Read a positive-integer `LUNORA_*` env knob, falling back to `fallback` when unset or malformed. */
+const envPositiveInt = (env: unknown, key: string, fallback: number): number =>
+    parsePositiveInt((env as Record<string, unknown> | undefined)?.[key] as string | undefined) ?? fallback;
 
 /**
  * Resolve the per-dispatch console-stream toggle (`LUNORA_REQUEST_LOG_EMIT`).
@@ -7148,11 +7158,46 @@ abstract class ShardDO {
             return this.handleRelayMessage(request);
         }
 
+        // Promotion probe (plan 075 Phase 2): the runtime asks the owner how many
+        // relays to spread new connections across before a WS upgrade. Internal —
+        // reachable only via the runtime's worker-side forward, returns just a count.
+        if (url.pathname === "/_lunora/route" && request.method === "GET") {
+            return Promise.resolve(jsonResponse({ relayCount: this.computeRelayCount() }));
+        }
+
         if (request.headers.get("Upgrade") === "websocket") {
             return Promise.resolve(this.handleWebSocketUpgrade(request));
         }
 
         return undefined;
+    }
+
+    /**
+     * How many relays the runtime should spread new connections across for this
+     * shard (plan 075 Phase 2). `0` keeps every connection on the owner — the
+     * common, un-promoted path. A relay never promotes (flat single tier in v1).
+     * The owner promotes once its live socket count crosses `LUNORA_RELAY_THRESHOLD`
+     * (default {@link DEFAULT_PROMOTION_THRESHOLDS}`.tUp`), fanning to a fixed
+     * `LUNORA_RELAY_FAN` (capped by `LUNORA_MAX_RELAYS` — the cost ceiling). Demand
+     * right-sizing + collapse below `T_down` land in the next phase.
+     */
+    private computeRelayCount(): number {
+        const name = this.state.id?.name;
+
+        if (name !== undefined && parseRelayName(name) !== undefined) {
+            return 0;
+        }
+
+        const threshold = envPositiveInt(this.env, "LUNORA_RELAY_THRESHOLD", DEFAULT_PROMOTION_THRESHOLDS.tUp);
+
+        if (this.state.getWebSockets().length < threshold) {
+            return 0;
+        }
+
+        const maxRelays = envPositiveInt(this.env, "LUNORA_MAX_RELAYS", DEFAULT_MAX_RELAYS);
+        const fan = envPositiveInt(this.env, "LUNORA_RELAY_FAN", DEFAULT_RELAY_FAN);
+
+        return Math.min(maxRelays, Math.max(1, fan));
     }
 
     private handleWebSocketUpgrade(request: Request): Response {

@@ -1417,7 +1417,7 @@ const recordFanoutPass = (counters: FanoutPathCounters, iterated: number, delive
  */
 const summarizeFanoutTopics = (
     attachments: FanoutAttachmentLike[],
-    limit = DEFAULT_FANOUT_TOPIC_LIMIT,
+    limit: number = DEFAULT_FANOUT_TOPIC_LIMIT,
 ): { peakSubscribers: number; topics: FanoutTopicStat[]; totalConnections: number } => {
     const shapeCounts = new Map<string, number>();
     const whisperCounts = new Map<string, number>();

@@ -77,37 +77,6 @@ const relayCountFor = (subscribers: number, perRelayCapacity: number, maxRelays:
     return Math.min(needed, Math.max(0, maxRelays));
 };
 
-/** The `::relay::` infix that marks a DO name as a relay for an owner shard. Reserved — a user shard key can't contain it (the runtime mints relay names). */
-const RELAY_NAME_INFIX = "::relay::";
-
-/** Build a relay DO name for `ownerKey`'s relay number `index` — the deterministic name any worker/DO can compute without shared state. */
-const relayName = (ownerKey: string, index: number): string => `${ownerKey}${RELAY_NAME_INFIX}${String(index)}`;
-
-/**
- * Parse a DO name into its owner key + relay index, or `undefined` when the name
- * is an owner (no `::relay::` infix). Lets a DO discover its own role from
- * `state.id.name`: an owner serves its shard directly; a relay knows which owner
- * to forward to and which relay slot it fills.
- * @returns the owner key + relay index, or `undefined` for an owner-role name
- */
-const parseRelayName = (name: string): undefined | { ownerKey: string; relayIndex: number } => {
-    const at = name.lastIndexOf(RELAY_NAME_INFIX);
-
-    if (at === -1) {
-        return undefined;
-    }
-
-    const ownerKey = name.slice(0, at);
-    const indexText = name.slice(at + RELAY_NAME_INFIX.length);
-    const relayIndex = Number(indexText);
-
-    if (ownerKey.length === 0 || !Number.isInteger(relayIndex) || relayIndex < 0 || String(relayIndex) !== indexText) {
-        return undefined;
-    }
-
-    return { ownerKey, relayIndex };
-};
-
 /** A relay announces (on its first attached subscriber) that it is serving a fan-out key, so the owner adds it to the relay set it forwards to. */
 interface RelayAttach {
     relayIndex: number;
@@ -142,5 +111,9 @@ interface RelayFrame {
 /** Internal owner↔relay control messages (plan 075). NOT the public client protocol — the app never sees these. */
 type OwnerRelayFrame = RelayAttach | RelayDetach | RelayFrame;
 
-export { DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, parseRelayName, RELAY_NAME_INFIX, relayCountFor, relayName };
+export { DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, relayCountFor };
 export type { OwnerRelayFrame, PromotionState, PromotionThresholds, RelayAttach, RelayDetach, RelayFrame };
+// The DO-name contract lives in `shared/` so `@lunora/runtime` (which mints relay
+// names) and this package (which parses them) can't drift; re-exported so `./relay`
+// stays the single import surface for the relay tier inside `@lunora/do`.
+export { parseRelayName, RELAY_NAME_INFIX, relayName } from "../../../shared/relay-name";
