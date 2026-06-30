@@ -1,8 +1,9 @@
 # Plan 075 Phase 0 — Relay-tier protocol design (sign-off doc)
 
 > **Status**: DESIGN — awaiting maintainer sign-off. No production code in this
-> phase (the benchmark harness is throwaway; see § 7). Phases 2–4 do not start
-> until the Decisions in § 8 are accepted and the § 9 calibration is done.
+> phase (the benchmark harness is throwaway; see § 7). The fan-out cost is measured
+> in both Node and real workerd (§ 7). Phases 2–4 do not start until the Decisions
+> in § 8 are accepted.
 >
 > Companion to [`075-do-auto-elastic-fanout-relay-tier.md`](075-do-auto-elastic-fanout-relay-tier.md).
 > Phase 1 (observability) has shipped; this doc designs the transport that Phases
@@ -228,15 +229,63 @@ The cost is **linear in subscriber count** with a settled marginal cost of
 **~16 ns/socket**. There is no inflection "knee" — fan-out is a straight-line
 budget consumption, so `T_up` is a **budget crossing**, not a curve feature.
 
-### Caveat — this is a LOWER BOUND
+The Node number is a **lower bound**: `FakeSocket.deserializeAttachment()` returns
+the attachment by reference (no structured-clone) and `send()` is a no-op counter.
+Real workerd pays, per socket, a real `deserializeAttachment()` (structured-clone)
+and a real `ws.send()` (outbound enqueue + frame emit). So the Node floor
+establishes the _shape_ (linear), not the magnitude — measured next.
 
-`FakeSocket.deserializeAttachment()` returns the attachment **by reference** (no
-structured-clone) and `send()` is a no-op counter. Real workerd pays, **per
-socket**: a real `deserializeAttachment()` (structured-clone deserialize of the
-hibernation attachment) and a real `ws.send()` (outbound-buffer enqueue + frame
-emit). Those dominate and are plausibly **1–3 orders of magnitude** more than the
-16 ns floor. So the real per-flush cost at 32k could be tens of milliseconds — and
-it is paid on **every write** that touches the topic.
+### Measured curve (workerd, real hibernatable sockets)
+
+Calibrated against a **real `ShardDO`** in `@cloudflare/vitest-pool-workers`: N real
+hibernatable WebSockets opened on one DO, subscribed to a whisper topic, end-to-end
+fan-out (sender send → all N members received) timed from the test runner's clock.
+`performance.now()` is clamped to ~1 ms in workerd, so small N sits on the
+quantization floor; the signal is clean from a few hundred sockets up:
+
+| subscribers | ms / flush (median, e2e) | ns / socket |
+| ----------- | ------------------------ | ----------- |
+| 200         | 3                        | 15,000      |
+| 500         | 5                        | 10,000      |
+| 1,000       | 14                       | 14,000      |
+| 2,000       | 30                       | 15,000      |
+
+Real per-socket cost settles at **~10–15 µs/socket** — roughly **1,000× the 16 ns
+Node floor** — and the curve stays **linear** (2,000 subs → 30 ms). Extrapolated:
+~120 ms at 8,000 subscribers, ~480 ms at the 32k connection cap, **paid on every
+write** that touches the topic.
+
+**What this number includes (and the residual gap).** The e2e figure bundles the
+DO-isolate CPU (the `getWebSockets` loop + per-socket `deserializeAttachment` +
+`ws.send` enqueue) **with** Miniflare's local WS delivery to the test process. In
+production, delivery rides the real edge→client network, _off_ the isolate clock —
+so the isolate-CPU share of that ~10–15 µs is smaller, but the **order-of-magnitude
+jump from the Node floor is confirmed**, and the linear-in-N fan-out wall-time is
+real. The one figure still best read from production is the isolate-CPU-only
+per-flush cost — and Phase 1's `getFanoutMetrics` is exactly that instrument under
+real load.
+
+### T_up recommendation
+
+Two independent ceilings drive promotion; `T_up = min` of them:
+
+1. **Connection cap (hard, path-independent)**: a DO holds ~32k hibernatable
+   sockets. New connections must have somewhere to go _before_ the owner fills, so
+   promote at a fraction of the cap with headroom. **Connection-driven T_up ≈ 16k–24k**
+   (50–75% of 32k).
+2. **Per-flush CPU (soft, path- and write-rate-dependent)**: the measured curve
+   shows fan-out hitting **~120 ms at 8k / ~480 ms at the 32k cap** — so on a topic
+   with any real write rate, per-flush fan-out becomes the bottleneck **well within**
+   a single DO's connection capacity. CPU binds before the connection cap. The
+   shape-poke path (per-shape diffing + per-socket `sendPoke`) binds even sooner.
+
+**Recommendation for v1**: `T_up = 8,000` subscribers per topic, `T_down = 4,000`
+(½·T_up). The measured curve puts an 8k-subscriber flush at ~120 ms e2e (tens of ms
+of isolate CPU) — a sensible point to start offloading to relays — while staying
+comfortably under the connection cap so the owner keeps accepting while relays warm.
+**Both values are config, not hardcoded**, and Phase 1's `getFanoutMetrics` surfaces
+the real per-flush cost so each deployment can tune the default against its own
+isolate-CPU numbers under load.
 
 ### T_up recommendation (and the honest gap)
 
@@ -294,9 +343,11 @@ against real `getFanoutMetrics` data before the relay path is enabled by default
 
 ## 9. Open risks / must-calibrate before Phase 2
 
-- **Workerd per-socket constant is unmeasured (blocking).** Calibrate via a load
-  test reading `getFanoutMetrics`, or a `LUNORA_WORKERD_TESTS=1` bench, before the
-  relay path is enabled by default. The Node floor is a lower bound only.
+- **Workerd per-socket cost — measured (§ 7), no longer blocking.** ~10–15 µs/socket
+  end-to-end, linear, confirming per-flush fan-out binds within a single DO's
+  connection capacity. Residual: the e2e figure bundles Miniflare delivery, so the
+  **isolate-CPU-only** per-flush cost is best read from production `getFanoutMetrics`
+  under load — for per-deployment T_up tuning, not as a Phase-2 gate.
 - **Owner→relay link cost.** The owner now does one `relay_frame` send per relay
   per flush instead of N socket sends — the win is real only when fan-degree ≫
   relay count. Confirm the link send is cheap relative to the saved per-socket loop.
@@ -319,8 +370,8 @@ against real `getFanoutMetrics` data before the relay path is enabled by default
 - [ ] Resume (§ 5): agree owner = checkpoint authority, relays forward resume.
 - [ ] Gate (§ 6): agree the `relayUniform` codegen bit as the minimal, fail-closed
       extension to `isIdentityIndependent`.
-- [ ] T_up (§ 7): accept `8,000 / 4,000` as the **starting** default, with workerd
-      calibration (§ 9) as a Phase 2 prerequisite.
+- [ ] T_up (§ 7): accept `8,000 / 4,000` as the **starting** default (workerd
+      calibration done — ~10–15 µs/socket; per-deployment tuning via `getFanoutMetrics`).
 - [ ] Decisions (§ 8): accept all six.
 - [ ] Scope: confirm no public API / schema / client-protocol change in any phase
       (a required change is a design failure → STOP).

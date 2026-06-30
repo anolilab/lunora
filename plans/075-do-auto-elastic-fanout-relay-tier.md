@@ -165,13 +165,15 @@ constant.
 > — the owner↔relay frame protocol, the promotion/collapse state machine, the
 > resume handoff (owner stays checkpoint authority; relays forward resume), the
 > RLS-uniform gate (a fail-closed `relayUniform` codegen bit extending the
-> `isIdentityIndependent` signal), all six Decisions answered, and a measured
-> fan-out curve (linear, ~16 ns/socket Node floor) with a derived
-> `T_up = 8,000 / T_down = 4,000` starting default. The STOP condition on the
-> runtime resolver is cleared (`resolveShard` → `forwardToShard` is a single seam).
-> **One calibration is a Phase 2 prerequisite**: the absolute workerd per-socket
-> constant (the Node number is a lower bound) — measured via a load test reading
-> the Phase-1 `getFanoutMetrics`. See the sign-off checklist in § 10 of that doc.
+> `isIdentityIndependent` signal), all six Decisions answered, and a fan-out curve
+> measured in **both Node (~16 ns/socket floor) and real workerd (~10–15 µs/socket,
+> ~1000× higher, linear)** with a derived `T_up = 8,000 / T_down = 4,000` default —
+> the workerd numbers confirm per-flush fan-out binds within a single DO's
+> connection capacity. The STOP condition on the runtime resolver is cleared
+> (`resolveShard` → `forwardToShard` is a single seam). Remaining tuning (the
+> isolate-CPU-only per-flush cost, for per-deployment threshold tuning) is read from
+> the Phase-1 `getFanoutMetrics` under load — not a Phase-2 gate. See the sign-off
+> checklist in § 10 of that doc.
 
 ### Phase 1 — Observability only (ship first, low risk) — **SHIPPED**
 
