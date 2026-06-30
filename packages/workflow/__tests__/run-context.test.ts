@@ -45,6 +45,23 @@ describe("createWorkflowRunContext", () => {
         expect(typeof ctx.log.info).toBe("function");
     });
 
+    it("wires the fan-out primitives (ctx.parallel / ctx.spawn)", () => {
+        expect.assertions(2);
+
+        const ctx = createWorkflowRunContext({ env: {}, event: makeEvent(), exportName: "orderPipeline", step: makeStep() });
+
+        expect(typeof ctx.parallel).toBe("function");
+        expect(typeof ctx.spawn).toBe("function");
+    });
+
+    it("spawning a workflow with no matching WORKFLOW_* binding throws a helpful error", async () => {
+        expect.assertions(1);
+
+        const ctx = createWorkflowRunContext({ env: {}, event: makeEvent(), exportName: "orderPipeline", step: makeStep() });
+
+        await expect(ctx.spawn("imageTag")).rejects.toThrow('cannot spawn child workflow "imageTag"');
+    });
+
     it("wires ctx.run through the shared dispatch runner (POST + workflow label on error)", async () => {
         expect.assertions(3);
 

@@ -65,15 +65,17 @@ export const channelWelcome = defineWorkflow<
 The handler receives one argument bundling the durable-step API and a typed
 function caller:
 
-| Member            | What it is                                                                                          |
-| ----------------- | --------------------------------------------------------------------------------------------------- |
-| `context.params`  | The input passed to `.create({ params })`, typed as `Params`.                                       |
-| `context.step`    | The durable-step API — `do` / `sleep` / `sleepUntil` / `waitForEvent`.                              |
-| `context.run`     | Call a Lunora function (`api.*`) by typed reference; pass `{ shardKey }` to target a shard.         |
-| `context.runStep` | Run a reusable, schema-validated `defineStep` as a durable step (see below).                        |
-| `context.log`     | Structured logger (`debug`/`info`/`warn`/`error`), captured by `wrangler tail` and the Studio logs. |
-| `context.event`   | The raw triggering event (`id`, `payload`, timestamp).                                              |
-| `context.env`     | The Worker environment bindings.                                                                    |
+| Member             | What it is                                                                                          |
+| ------------------ | --------------------------------------------------------------------------------------------------- |
+| `context.params`   | The input passed to `.create({ params })`, typed as `Params`.                                       |
+| `context.step`     | The durable-step API — `do` / `sleep` / `sleepUntil` / `waitForEvent`.                              |
+| `context.run`      | Call a Lunora function (`api.*`) by typed reference; pass `{ shardKey }` to target a shard.         |
+| `context.runStep`  | Run a reusable, schema-validated `defineStep` as a durable step (see below).                        |
+| `context.parallel` | Fan out branches as isolated child workflow instances and await their outputs (see below).          |
+| `context.spawn`    | Fire-and-forget start of a declared child workflow (replay-safe; returns a live handle).            |
+| `context.log`      | Structured logger (`debug`/`info`/`warn`/`error`), captured by `wrangler tail` and the Studio logs. |
+| `context.event`    | The raw triggering event (`id`, `payload`, timestamp).                                              |
+| `context.env`      | The Worker environment bindings.                                                                    |
 
 ### Durable steps
 
@@ -156,6 +158,59 @@ The step handler context gives you `context.attempt` (1-based retry counter),
 `context.step` (`{ name, count }`). Pass
 `context.runStep(step, args, { config })` to override the step's durability
 config for a single call.
+
+### Fan-out with child-DO isolation (`ctx.parallel` / `ctx.spawn`)
+
+A workflow instance is one Durable Object: ~128 MB memory and a 5-minute CPU
+budget, shared across everything it runs. Fanning out heavy work with
+`Promise.all(branches.map((b) => ctx.runStep(b, …)))` therefore crowds every
+branch onto that **one** budget — one OOM or timeout takes the whole batch down.
+
+`ctx.parallel` runs each branch as its **own** child workflow instance — its own
+DO, its own memory / CPU / retry budget — and the parent hibernates (zero cost)
+until the branches report back. Branches reference declared child workflows by
+their `lunora/workflows.ts` export name; `branch<Output>(name, params)` carries
+the result type into the returned tuple, in declaration order:
+
+```ts
+import { branch, defineWorkflow } from "@lunora/workflow";
+
+export const mediaPipeline = defineWorkflow<{ key: string }>({
+    handler: async (ctx) => {
+        // Each branch is a separate declared workflow running in its own DO.
+        const [labels, thumb, transcript] = await ctx.parallel([
+            branch<{ tags: string[] }>("imageTag", { key: ctx.params.key }),
+            branch<{ url: string }>("thumbnail", { key: ctx.params.key }),
+            branch<{ text: string }>("transcribe", { key: ctx.params.key }),
+        ]);
+
+        return { labels, thumb, transcript };
+    },
+});
+```
+
+- **Isolated resources** — each branch gets a full DO budget; a heavy branch
+  can't starve its siblings.
+- **Hibernating join** — the parent consumes nothing while branches run; each
+  child signals its result back when it finishes.
+- **Fail-fast** — if any branch fails, `ctx.parallel` rejects with that branch's
+  error (non-retryable — retrying the join can't re-run an already-failed child).
+  Still-running siblings are left to finish (Cloudflare can't cleanly cancel a
+  running instance).
+- **Replay-safe** — child instance ids are derived deterministically from the
+  parent, so a parent replay re-attaches to the existing children instead of
+  double-spawning. There is a cap of `MAX_BRANCHES` (100) per call.
+
+For fire-and-forget (start a child pipeline without awaiting it), use
+`ctx.spawn(name, params)`, which returns a live instance handle:
+
+```ts
+await ctx.spawn("sendReceipt", { orderId: ctx.params.orderId });
+```
+
+Both reach child workflows through the standard `WORKFLOW_*` bindings codegen
+already wires — no extra configuration. A branch/spawn name with no matching
+declared workflow throws a helpful error.
 
 ### Rollback (saga compensation)
 
