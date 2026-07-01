@@ -141,6 +141,45 @@ describe("wireCodec round-trips", () => {
         expect(() => encodeWire({ re: /ab+c/g })).toThrow(TypeError);
     });
 
+    it("throws a RangeError past the nesting-depth cap instead of blowing the stack", () => {
+        expect.assertions(3);
+
+        // Build nesting well past the 64-level cap (both array and object forms).
+        let deepArray: unknown = 1;
+
+        for (let index = 0; index < 200; index += 1) {
+            deepArray = [deepArray];
+        }
+
+        let deepObject: unknown = { leaf: 1 };
+
+        for (let index = 0; index < 200; index += 1) {
+            deepObject = { nested: deepObject };
+        }
+
+        expect(() => encodeWire(deepArray)).toThrow(RangeError);
+        expect(() => encodeWire(deepObject)).toThrow(RangeError);
+
+        // Decode is guarded too: a hand-crafted deep JSON array (what an untrusted
+        // peer could send) is rejected rather than recursing unbounded on decode.
+        const deepJson = JSON.parse(`${"[".repeat(200)}1${"]".repeat(200)}`);
+
+        expect(() => decodeWire(deepJson)).toThrow(RangeError);
+    });
+
+    it("allows nesting up to the cap", () => {
+        expect.assertions(1);
+
+        // 60 levels — comfortably under the 64 cap — must still round-trip.
+        let value: unknown = 42n;
+
+        for (let index = 0; index < 60; index += 1) {
+            value = [value];
+        }
+
+        expect(wire(value)).toStrictEqual(value);
+    });
+
     it("handles deep nesting of mixed special and plain values", () => {
         expect.assertions(1);
 

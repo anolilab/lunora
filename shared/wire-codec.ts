@@ -28,7 +28,9 @@
  * own limits and to keep the codec/security surface small: cyclic graphs, class
  * instances, functions, capabilities. `Map`/`Set`/`RegExp` are **rejected with a
  * TypeError** (as Cap'n Web refuses them) rather than silently encoded to `{}`, so
- * an unsupported value fails loud at the send site.
+ * an unsupported value fails loud at the send site. Nesting deeper than
+ * {@link MAX_DEPTH} throws a `RangeError` (Cap'n Web's 64-level cap) so a hostile
+ * deeply-nested payload can't blow the recursion stack.
  *
  * `Error` is encoded (as Cap'n Web does) because its `name`/`message`/`stack` are
  * non-enumerable — the plain-object branch would drop them and yield a bare `{}`,
@@ -61,6 +63,15 @@
  * impossible while staying valid inside a JSON string.
  */
 const TAG = "$lunora.wire$";
+
+/**
+ * Max nesting depth the codec encodes/decodes, mirroring Cap'n Web's own 64-level
+ * cap. Without it a hostile or accidental deeply-nested payload blows the recursion
+ * stack — surfacing as a contextless `RangeError` on the *server* for inbound args.
+ * This throws a clean, bounded error at the offending level instead. Real payloads
+ * are far shallower than 64.
+ */
+const MAX_DEPTH = 64;
 
 /** Constructors for the typed-array views the codec round-trips (keyed by name). */
 const TYPED_ARRAY_CTORS: Record<string, { new (buffer: ArrayBuffer): ArrayBufferView }> = {
@@ -124,7 +135,11 @@ const fromBase64 = (base64: string): Uint8Array => {
  * Pure and recursive; no I/O. Trees only (no cycle detection — a cyclic input
  * throws via the recursion, same as `JSON.stringify`).
  */
-const encodeWire = (value: unknown): unknown => {
+const encodeWire = (value: unknown, depth = 0): unknown => {
+    if (depth > MAX_DEPTH) {
+        throw new RangeError(`wire-codec: value nesting exceeds the ${MAX_DEPTH}-level limit`);
+    }
+
     if (value === undefined) {
         // Callers encode object fields by iterating own keys and skipping
         // `undefined` (see below), so a bare `undefined` here is an array element
@@ -171,7 +186,7 @@ const encodeWire = (value: unknown): unknown => {
         // Date's `getTime()` is `NaN`, which raw JSON coerces to `null` (→ epoch 0);
         // route the epoch through the codec's own number handling so `NaN` survives
         // as a `["nan"]` tag and `decodeWire` rebuilds an invalid Date exactly.
-        return [TAG, "date", encodeWire((value as Date).getTime())];
+        return [TAG, "date", encodeWire((value as Date).getTime(), depth + 1)];
     }
 
     if (value instanceof Error) {
@@ -187,7 +202,7 @@ const encodeWire = (value: unknown): unknown => {
 
         for (const key of Object.keys(error)) {
             if (error[key] !== undefined) {
-                properties[key] = encodeWire(error[key]);
+                properties[key] = encodeWire(error[key], depth + 1);
             }
         }
 
@@ -209,7 +224,7 @@ const encodeWire = (value: unknown): unknown => {
     }
 
     if (Array.isArray(value)) {
-        const encoded = value.map((item) => encodeWire(item));
+        const encoded = value.map((item) => encodeWire(item, depth + 1));
 
         // Escape a user array that would otherwise be mistaken for a tagged value
         // (its first element is literally the sentinel string). Wrap it as an
@@ -236,7 +251,7 @@ const encodeWire = (value: unknown): unknown => {
         const field = source[key];
 
         if (field !== undefined) {
-            result[key] = encodeWire(field);
+            result[key] = encodeWire(field, depth + 1);
         }
     }
 
@@ -244,7 +259,11 @@ const encodeWire = (value: unknown): unknown => {
 };
 
 /** Inverse of {@link encodeWire}: revive tagged leaves back to their JS values. */
-const decodeWire = (value: unknown): unknown => {
+const decodeWire = (value: unknown, depth = 0): unknown => {
+    if (depth > MAX_DEPTH) {
+        throw new RangeError(`wire-codec: value nesting exceeds the ${MAX_DEPTH}-level limit`);
+    }
+
     if (value === null || typeof value !== "object") {
         return value;
     }
@@ -258,13 +277,13 @@ const decodeWire = (value: unknown): unknown => {
                     return -Infinity;
                 }
                 case "arr": {
-                    return (value[2] as unknown[]).map((item) => decodeWire(item));
+                    return (value[2] as unknown[]).map((item) => decodeWire(item, depth + 1));
                 }
                 case "bigint": {
                     return BigInt(value[2] as string);
                 }
                 case "date": {
-                    return new Date(decodeWire(value[2]) as number);
+                    return new Date(decodeWire(value[2], depth + 1) as number);
                 }
                 case "error": {
                     const name = value[2] as string;
@@ -281,7 +300,7 @@ const decodeWire = (value: unknown): unknown => {
                         Object.defineProperty(error, "name", { configurable: true, value: name, writable: true });
                     }
 
-                    Object.assign(error, decodeWire(value[4]) as Record<string, unknown>);
+                    Object.assign(error, decodeWire(value[4], depth + 1) as Record<string, unknown>);
 
                     return error;
                 }
@@ -316,19 +335,19 @@ const decodeWire = (value: unknown): unknown => {
                 }
                 default: {
                     // Unknown tag (forward-compat): treat as an ordinary array.
-                    return value.map((item) => decodeWire(item));
+                    return value.map((item) => decodeWire(item, depth + 1));
                 }
             }
         }
 
-        return value.map((item) => decodeWire(item));
+        return value.map((item) => decodeWire(item, depth + 1));
     }
 
     const source = value as Record<string, unknown>;
     const result: Record<string, unknown> = {};
 
     for (const key of Object.keys(source)) {
-        result[key] = decodeWire(source[key]);
+        result[key] = decodeWire(source[key], depth + 1);
     }
 
     return result;
