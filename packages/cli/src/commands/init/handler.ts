@@ -1383,6 +1383,17 @@ const scaffoldNewProject = async (
     const name = options.name ?? (await tuiText(COPY.name, { badge: BADGES.dir, default: suggestedName, placeholder: suggestedName }));
     const choice = await resolveScaffoldChoice(options);
 
+    // Guard against an empty / whitespace-only name: `options.name ?? …` only
+    // falls back on null/undefined, so an explicit `--name ""` (or a
+    // whitespace-only name) passes straight through. `resolve(cwd, "")`
+    // resolves to cwd itself, and `resolve(cwd, "   ")` creates a confusing
+    // whitespace-named directory — reject both up front.
+    if (name.trim().length === 0) {
+        options.logger.error(`init: refusing an empty project name — pass a directory name (e.g. \`lunora init my-app\`).`);
+
+        return { code: 1, files: [], target: "" };
+    }
+
     // Guard the project name against path traversal: it becomes a directory
     // under cwd, so a name containing separators or `..` could scaffold outside
     // the intended parent. Mirrors the `--source` `isSafeSource` gate.
