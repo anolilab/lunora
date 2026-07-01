@@ -15,6 +15,7 @@ import CodeView from "@/components/sections/code-view";
 import HatchSpacer from "@/components/sections/hatch-spacer";
 import { ClosingCta, SectionHead } from "@/components/sections/langbase";
 import Reveal from "@/components/sections/reveal";
+import Capabilities from "@/pages/home/sections/capabilities";
 import FrameworkStrip from "@/pages/home/sections/framework-strip";
 import Hero from "@/pages/home/sections/hero";
 import HowItWorks from "@/pages/home/sections/how-it-works";
@@ -141,6 +142,11 @@ const Home: FC = () => (
                 </div>
             </div>
         </Showcase>
+
+        <HatchSpacer />
+
+        {/* batteries-included add-on ecosystem */}
+        <Capabilities />
 
         <HatchSpacer />
 
