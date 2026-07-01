@@ -80,8 +80,8 @@ describe("wireCodec round-trips", () => {
     it("escapes a user array that literally starts with the sentinel string", () => {
         expect.assertions(1);
 
-        // The sentinel begins with a space; an app could still send it as data.
-        const hostile = [" lunora.wire", "bigint", "not-a-real-tag", 1n];
+        // The sentinel is a distinctive string; an app could still send it as data.
+        const hostile = ["$lunora.wire$", "bigint", "not-a-real-tag", 1n];
 
         expect(wire(hostile)).toStrictEqual(hostile);
     });
