@@ -157,6 +157,17 @@ const generateLabelerYaml = async (pairs) => {
 };
 
 const run = async () => {
+    // On CI the committed labeler-config.yml is the source of truth; the
+    // `--skip-ci` flag (passed from the root postinstall) short-circuits so a
+    // fresh install never rewrites it. Running the script directly always
+    // regenerates, so a CI sync-check (`pnpm generate:labeler && git diff`)
+    // still works.
+    if (process.argv.includes("--skip-ci") && process.env.CI) {
+        console.info("CI detected — skipping labeler config generation.");
+
+        return;
+    }
+
     console.info("Generating labeler config...");
 
     // Generate the pairs of package labels and their corresponding paths
