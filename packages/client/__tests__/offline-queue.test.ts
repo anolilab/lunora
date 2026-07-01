@@ -366,4 +366,22 @@ describe("offlineQueue — persistence error reporting", () => {
         expect(removeCalls).toHaveLength(1);
         expect(removeCalls[0]?.[0]?.error).toBe(removeError);
     });
+
+    it("hydrate load failure invokes handler with operation 'load' and rejects", async () => {
+        expect.assertions(4);
+
+        const loadError = new Error("indexeddb unavailable");
+        const faultyPersistence = {
+            ...createInMemoryPersistence(),
+            load: () => Promise.reject(loadError),
+        };
+        const handler = vi.fn<(context: PersistenceErrorContext) => void>();
+        const queue = new OfflineQueue({ onPersistenceError: handler }, { persistence: faultyPersistence });
+
+        await expect(queue.hydrate()).rejects.toBe(loadError);
+
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(handler.mock.calls[0]?.[0]?.operation).toBe("load");
+        expect(handler.mock.calls[0]?.[0]?.error).toBe(loadError);
+    });
 });
