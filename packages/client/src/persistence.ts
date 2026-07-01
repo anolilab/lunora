@@ -153,5 +153,39 @@ const createIndexedDbPersistence = (options: IndexedDbPersistenceOptions = {}): 
     };
 };
 
-export { createIndexedDbPersistence, createInMemoryPersistence };
+/**
+ * Resolve the effective offline-queue persistence from the user option,
+ * defaulting to a durable IndexedDB store when the environment supports one.
+ *
+ * An explicit adapter is used as-is; `false` opts out (the caller keeps an
+ * in-memory queue, lost on reload); `undefined` (the default) auto-probes
+ * IndexedDB when the global is present (browsers) and `autoProbe` is set,
+ * otherwise `undefined` — so SSR/Node/React-Native keep today's in-memory
+ * behaviour and only environments that can persist do.
+ *
+ * `autoProbe` is `false` when the `@lunora/db` outbox is wired: that sink is the
+ * single durable write path, so the built-in queue must stay in memory rather
+ * than persist a second, never-flushed copy. An explicit adapter is still
+ * honoured (the caller asked for it); only the implicit default is suppressed.
+ *
+ * The IndexedDB adapter opens its connection lazily, so constructing it here is
+ * cheap and never throws (the `indexedDB` global is verified present first).
+ */
+const resolvePersistenceAdapter = (option: false | PersistenceAdapter | undefined, autoProbe = true): PersistenceAdapter | undefined => {
+    if (option === false) {
+        return undefined;
+    }
+
+    if (option) {
+        return option;
+    }
+
+    if (!autoProbe || typeof indexedDB === "undefined") {
+        return undefined;
+    }
+
+    return createIndexedDbPersistence();
+};
+
+export { createIndexedDbPersistence, createInMemoryPersistence, resolvePersistenceAdapter };
 export type { IndexedDbPersistenceOptions };

@@ -222,5 +222,30 @@ const createIndexedDbQueryCache = (options: IndexedDbQueryCacheOptions = {}): Qu
     };
 };
 
-export { createIndexedDbQueryCache, createInMemoryQueryCache, queryCacheKey };
+/**
+ * Resolve the effective read-cache from the user option, defaulting to a durable
+ * IndexedDB store when the environment supports one. Same tri-state semantics as
+ * `resolvePersistenceAdapter` in `./persistence`:
+ *
+ * - an explicit adapter is used as-is;
+ * - `false` opts out — reads stay in memory only;
+ * - `undefined` (the default) auto-probes IndexedDB (browsers), else `undefined`.
+ */
+const resolveQueryCacheAdapter = (option: false | QueryCacheAdapter | undefined): QueryCacheAdapter | undefined => {
+    if (option === false) {
+        return undefined;
+    }
+
+    if (option) {
+        return option;
+    }
+
+    if (typeof indexedDB === "undefined") {
+        return undefined;
+    }
+
+    return createIndexedDbQueryCache();
+};
+
+export { createIndexedDbQueryCache, createInMemoryQueryCache, queryCacheKey, resolveQueryCacheAdapter };
 export type { IndexedDbQueryCacheOptions };
