@@ -15,6 +15,28 @@ import {
     planDevVariablesScaffold,
 } from "../src/scaffold-dev-variables";
 
+/**
+ * A hook fired from inside a mocked `statSync`, right before it returns —
+ * lets a test simulate a concurrent peer's write landing exactly between the
+ * source's pre-write read and its pre-rename re-check. `undefined` (the
+ * default) makes the mock behave exactly like the real `statSync`.
+ */
+let onStatSync: (() => void) | undefined;
+
+// eslint-disable-next-line vitest/prefer-import-in-mock -- `vi.mock(import("node:fs"), ...)` type-checks the mock's shape too strictly against `statSync`'s (Stats | BigIntStats | undefined) overloads
+vi.mock("node:fs", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("node:fs")>();
+
+    return {
+        ...actual,
+        statSync: (...args: Parameters<typeof actual.statSync>) => {
+            onStatSync?.();
+
+            return actual.statSync(...args);
+        },
+    };
+});
+
 /** Deterministic stand-in for `crypto.randomBytes(n).toString("hex")`. */
 const fixedHex = (bytes: number): string => "a".repeat(bytes * 2);
 
@@ -235,6 +257,46 @@ describe("ensureDevVariables", () => {
         // Existing value is preserved; missing secret keys are appended with fresh hex.
         expect(written).toContain('AUTH_SECRET="my-real-secret"');
         expect(written).toContain(`STORAGE_SECRET="${"a".repeat(64)}"`);
+    });
+
+    it("merges a concurrent peer's append instead of clobbering it (compare-and-swap retry)", async () => {
+        expect.assertions(4);
+
+        // Only AUTH_SECRET present locally; the example also wants AUTH_URL, STORAGE_SECRET, LUNORA_ADMIN_TOKEN.
+        writeFileSync(join(dir, ".dev.vars"), 'AUTH_SECRET="my-real-secret"\n', "utf8");
+        writeFileSync(join(dir, ".dev.vars.example"), EXAMPLE, "utf8");
+
+        // Simulate a peer process winning the race: right after our first
+        // pre-write fingerprint (the 1st statSync call), it lands its own
+        // append (adding AUTH_URL) before our pre-rename re-check (the 2nd
+        // statSync call) runs. The re-check must see a changed file — sending
+        // us back to re-read + re-plan (picking up the peer's AUTH_URL as
+        // already-present) — rather than overwriting the peer's file with our
+        // stale, pre-peer content.
+        let statCalls = 0;
+
+        onStatSync = () => {
+            statCalls += 1;
+
+            if (statCalls === 2) {
+                writeFileSync(join(dir, ".dev.vars"), 'AUTH_SECRET="my-real-secret"\nAUTH_URL="http://localhost:5173"\n', "utf8");
+            }
+        };
+
+        try {
+            const result = await ensureDevVariables({ confirm: async () => true, cwd: dir, info: () => undefined, randomHex: fixedHex });
+            const written = readFileSync(join(dir, ".dev.vars"), "utf8");
+
+            expect(result.status).toBe("augmented");
+            // Our attempt still added the remaining keys (STORAGE_SECRET, LUNORA_ADMIN_TOKEN) —
+            // AUTH_URL is no longer "missing" once re-planned against the peer's content.
+            expect(result.addedKeys).toStrictEqual(["STORAGE_SECRET", "LUNORA_ADMIN_TOKEN"]);
+            // Both the peer's key and our keys survive in the final file.
+            expect(written).toContain('AUTH_URL="http://localhost:5173"');
+            expect(written).toContain(`STORAGE_SECRET="${"a".repeat(64)}"`);
+        } finally {
+            onStatSync = undefined;
+        }
     });
 
     it("does not append when the user declines the missing-key prompt", async () => {
