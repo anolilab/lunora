@@ -1,3 +1,4 @@
+import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { stableStringify } from "../../../shared/stable-key";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import createInMemoryBookmarkStorage from "./bookmark";
@@ -4140,15 +4141,40 @@ class LunoraClient {
         }
 
         // A lone write rides the proven single-call path; two or more coalesce
-        // into ONE `/_lunora/rpc-batch` round trip (plan 088 follow-on) — the
-        // flaky-reconnect win (N queued writes → 1 RTT instead of N).
+        // into `/_lunora/rpc-batch` round trips (plan 088 follow-on) — the
+        // flaky-reconnect win (N queued writes → a handful of RTTs, not N).
         if (sendable.length === 1) {
             await this.replaySequential(sendable);
 
             return;
         }
 
-        await this.replayBatched(sendable);
+        // Chunk to the worker's per-batch cap: a flush larger than
+        // `MAX_BATCH_ENTRIES` would otherwise be one over-cap request the worker
+        // rejects wholesale (dropping every durable write). Chunks replay
+        // sequentially to preserve FIFO order across the flush; every write that
+        // didn't durably settle is re-queued once, in order, for the next reconnect.
+        const toRequeue: QueuedMutation[] = [];
+
+        for (let start = 0; start < sendable.length; start += MAX_BATCH_ENTRIES) {
+            const chunk = sendable.slice(start, start + MAX_BATCH_ENTRIES);
+            // eslint-disable-next-line no-await-in-loop -- chunks replay sequentially to preserve FIFO ordering across the flush
+            const outcome = await this.replayBatched(chunk);
+
+            toRequeue.push(...outcome.requeue);
+
+            if (outcome.stop) {
+                // A whole-batch transport failure — leave every not-yet-sent write
+                // queued (in order) for the next reconnect rather than sending on.
+                toRequeue.push(...sendable.slice(start + MAX_BATCH_ENTRIES));
+
+                break;
+            }
+        }
+
+        if (toRequeue.length > 0) {
+            this.offlineQueue.requeue(toRequeue);
+        }
     }
 
     /**
@@ -4260,12 +4286,15 @@ class LunoraClient {
      * transport failure re-queues for the next reconnect (never dropping a durable
      * write). A whole-batch coded rejection (bad request / authorization denial the
      * server reached a verdict on) is terminal for every entry.
+     *
+     * Returns the writes that must be re-queued and `stop` — `true` when the whole
+     * chunk failed at the transport level, so the caller leaves later chunks queued
+     * rather than sending on. The caller re-queues once, in order, so requeuing is
+     * NOT done here.
      */
-    private async replayBatched(items: QueuedMutation[]): Promise<void> {
+    private async replayBatched(items: QueuedMutation[]): Promise<{ requeue: QueuedMutation[]; stop: boolean }> {
         if (!this.fetchImpl) {
-            this.offlineQueue.requeue(items);
-
-            return;
+            return { requeue: items, stop: true };
         }
 
         let response: Response;
@@ -4290,9 +4319,7 @@ class LunoraClient {
             });
         } catch {
             // Transport failure (offline mid-flush) — nothing committed; retry all.
-            this.offlineQueue.requeue(items);
-
-            return;
+            return { requeue: items, stop: true };
         }
 
         const bookmark = response.headers.get("x-d1-bookmark");
@@ -4307,9 +4334,7 @@ class LunoraClient {
             body = await response.json();
         } catch {
             // Non-JSON body (an edge 5xx, say) — transient, don't lose the writes.
-            this.offlineQueue.requeue(items);
-
-            return;
+            return { requeue: items, stop: true };
         }
 
         // Whole-batch rejection with no per-slot results: a coded `{ error }` (bad
@@ -4322,14 +4347,14 @@ class LunoraClient {
                 for (const item of items) {
                     this.settleReplayTerminal(item, error);
                 }
-            } else {
-                this.offlineQueue.requeue(items);
+
+                return { requeue: [], stop: false };
             }
 
-            return;
+            return { requeue: items, stop: true };
         }
 
-        this.settleReplayBatchSlots(items, body.results);
+        return { requeue: this.settleReplayBatchSlots(items, body.results), stop: false };
     }
 
     /**
@@ -4338,10 +4363,10 @@ class LunoraClient {
      * {@link replaySequential} does: a success confirms the optimistic layer
      * against the echoed `commitCursor`; a coded application verdict is terminal;
      * a transient shard failure ({@link TRANSIENT_BATCH_ERROR_CODES}) or a slot the
-     * server never returned re-queues (re-queued entries are pushed back together
-     * so their relative FIFO order survives to the next reconnect).
+     * server never returned is returned for the caller to re-queue.
+     * @returns the writes that must be re-queued (transient slots), in input order
      */
-    private settleReplayBatchSlots(items: QueuedMutation[], results: { body?: RpcResponseBody; id?: number }[]): void {
+    private settleReplayBatchSlots(items: QueuedMutation[], results: { body?: RpcResponseBody; id?: number }[]): QueuedMutation[] {
         const bySlot = new Map<number, RpcResponseBody>();
 
         for (const entry of results) {
@@ -4370,9 +4395,7 @@ class LunoraClient {
             }
         }
 
-        if (requeue.length > 0) {
-            this.offlineQueue.requeue(requeue);
-        }
+        return requeue;
     }
 }
 

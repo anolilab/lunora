@@ -1,6 +1,7 @@
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import type { AsyncStorageLike } from "../src/async-storage-persistence";
 import { createAsyncStoragePersistence } from "../src/async-storage-persistence";
 import { isConflictError } from "../src/errors";
@@ -630,6 +631,65 @@ describe("offline lifecycle (e2e)", () => {
         expect(results).toEqual([{ id: "a" }, { id: "b" }, { id: "c" }]);
         // FIFO order preserved in the request.
         expect(sentCalls.map((call) => call.id)).toEqual([0, 1, 2]);
+
+        client.close();
+    });
+
+    it("11. chunks an over-cap outbox flush into multiple batch requests (no write dropped)", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers();
+
+        // More writes than fit in one batch — the flush must split into
+        // cap-sized requests, not send one over-cap batch the worker would reject
+        // wholesale (which would drop every durable write).
+        const total = MAX_BATCH_ENTRIES + 2;
+        const batchSizes: number[] = [];
+
+        const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+            if (!(input as string).endsWith("/_lunora/rpc-batch")) {
+                throw new Error(`unexpected single-call fetch to ${input as string}`);
+            }
+
+            const { calls } = JSON.parse((init as RequestInit).body as string) as { calls: { id: number }[] };
+
+            batchSizes.push(calls.length);
+
+            return jsonResponse({
+                results: calls.map((call) => {
+                    return { body: { result: { ok: true } }, id: call.id };
+                }),
+            });
+        });
+
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        const pending = Promise.all(Array.from({ length: total }, (_, index) => client.mutation(fnRef("posts:create"), { index })));
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.runAllTimersAsync();
+
+        const results = await pending;
+
+        // Split into ceil(total / cap) = 2 requests, none over the cap...
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(Math.max(...batchSizes)).toBeLessThanOrEqual(MAX_BATCH_ENTRIES);
+        // ...every write was sent exactly once (none dropped)...
+        expect(batchSizes.reduce((sum, size) => sum + size, 0)).toBe(total);
+        // ...and every caller's Promise resolved.
+        expect(results).toHaveLength(total);
 
         client.close();
     });
