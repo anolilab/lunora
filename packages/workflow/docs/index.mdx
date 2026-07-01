@@ -222,6 +222,27 @@ the step's `output` (if it completed), and `env` / `run` / `log`. Cloudflare
 owns rollback ordering and execution; `defineStep` just wires the handler and an
 optional `rollbackConfig`.
 
+That native rollback is **intra-instance** — it undoes steps _within one_
+workflow. To compensate across a `ctx.parallel(...)` **group** (each branch is its
+own instance), give a branch a `compensateWith` — the export name of a workflow to
+run if a **sibling** branch fails after this one already completed:
+
+```ts
+const [charge, reserve] = await ctx.parallel([
+    branch("chargeCard", { orderId }, { compensateWith: "refundCard" }),
+    branch("reserveStock", { orderId }, { compensateWith: "releaseStock" }),
+]);
+```
+
+If any branch fails, every already-completed sibling with a `compensateWith` is
+rolled back in **reverse declaration order**: its compensation workflow is spawned
+(durable, replay-safe) with `{ branch, error, index, output }` as its `ctx.params`
+— so `refundCard` receives what `chargeCard` returned plus the failing sibling's
+error, and can `ctx.runStep(...)` its own undo. A group where no branch sets
+`compensateWith` behaves exactly as a plain fail-fast fan-out — zero overhead until
+you opt in. The failing branch itself is not group-compensated (its own per-step
+`rollback`s already ran inside its instance).
+
 ### Failing without retries (`NonRetryableError`)
 
 Throw `NonRetryableError` from a step or the handler to fail the instance

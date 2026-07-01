@@ -145,6 +145,56 @@ describe("createParallel", () => {
         expect((error as Error).message).toContain("transcode blew up");
     });
 
+    it("group saga: rolls back completed siblings (reverse order) via compensateWith when a later branch fails", async () => {
+        expect.assertions(3);
+
+        // b0 ok, b1 ok, b2 fails → compensate b1 then b0 (reverse declaration order), both declared.
+        const step = makeStep([okOutcome({ a: 1 }), okOutcome({ b: 2 }), errorOutcome(new Error("boom"))]);
+        const { create, deps } = makeDeps(step);
+
+        const error = await createParallel(deps)([
+            branch("first", { x: 1 }, { compensateWith: "undoFirst" }),
+            branch("second", undefined, { compensateWith: "undoSecond" }),
+            branch("third"),
+        ]).catch((error_: unknown) => error_);
+
+        expect((error as Error).name).toBe("NonRetryableError");
+
+        const compensations = create.mock.calls.map((call) => call[0]).filter((options) => String(options?.id).endsWith(":compensate"));
+
+        // Reverse declaration order: c1 (second) is compensated before c0 (first).
+        expect(compensations.map((options) => options?.id)).toEqual(["parent-1-c1:compensate", "parent-1-c0:compensate"]);
+        // Compensation params carry the completed branch's output + the failing sibling's error.
+        expect(compensations[0]?.params).toStrictEqual({ branch: "second", error: { message: "boom", name: "Error" }, index: 1, output: { b: 2 } });
+    });
+
+    it("group saga: a group with no compensateWith fails fast with zero compensation spawns", async () => {
+        expect.assertions(2);
+
+        const step = makeStep([okOutcome({ a: 1 }), errorOutcome(new Error("boom"))]);
+        const { create, deps } = makeDeps(step);
+
+        const error = await createParallel(deps)([branch("first"), branch("second")]).catch((error_: unknown) => error_);
+
+        expect((error as Error).name).toBe("NonRetryableError");
+        expect(create.mock.calls.some((call) => String(call[0]?.id).endsWith(":compensate"))).toBe(false);
+    });
+
+    it("group saga: skips completed siblings that declared no compensateWith", async () => {
+        expect.assertions(2);
+
+        // b0 ok (no compensateWith), b1 ok (compensateWith), b2 fails → only b1 is compensated.
+        const step = makeStep([okOutcome({ a: 1 }), okOutcome({ b: 2 }), errorOutcome(new Error("boom"))]);
+        const { create, deps } = makeDeps(step);
+
+        await createParallel(deps)([branch("first"), branch("second", undefined, { compensateWith: "undoSecond" }), branch("third")]).catch(() => undefined);
+
+        const compensations = create.mock.calls.map((call) => call[0]).filter((options) => String(options?.id).endsWith(":compensate"));
+
+        expect(compensations).toHaveLength(1);
+        expect(compensations[0]?.id).toBe("parent-1-c1:compensate");
+    });
+
     it("honors an explicit branch id over the derived one", async () => {
         expect.assertions(1);
 
