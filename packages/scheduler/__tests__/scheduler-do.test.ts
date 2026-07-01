@@ -380,6 +380,40 @@ describe("schedulerDO — retry / dead-letter pipeline", () => {
         expect(dead.attempts).toBeGreaterThan(5);
     });
 
+    it("logs a warning when a job is parked in the dead-letter store", async () => {
+        expect.assertions(2);
+
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        try {
+            const state = createFakeState();
+            const scheduler = new FailingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" }, Number.POSITIVE_INFINITY);
+
+            const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: Date.now() - 1000 })));
+
+            // Fire the alarm enough times to exhaust MAX_RETRY_ATTEMPTS (5). Each
+            // fire we force the re-armed entry due again.
+            for (let index = 0; index < 7; index += 1) {
+                const indexKey = [...state.storageMap.keys()].find((key) => key.startsWith("t:"));
+
+                if (indexKey) {
+                    const recordId = state.storageMap.get(indexKey);
+
+                    state.storageMap.delete(indexKey);
+                    state.storageMap.set(`t:${"0".padStart(15, "0")}:${String(recordId)}`, recordId);
+                }
+
+                // eslint-disable-next-line no-await-in-loop -- sequential alarm fires
+                await scheduler.alarm();
+            }
+
+            expect(warnSpy).toHaveBeenCalledTimes(1);
+            expect(warnSpy.mock.calls[0]?.[0]).toContain(id);
+        } finally {
+            warnSpy.mockRestore();
+        }
+    });
+
     it("does not leave a dangling dispatched: marker (claim is index-only)", async () => {
         expect.assertions(2);
 

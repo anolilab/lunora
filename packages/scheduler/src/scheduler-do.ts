@@ -735,6 +735,9 @@ class SchedulerDO {
             // survive.
             await this.state.storage.delete([`${RETRY_PREFIX}${record.id}`, `${HEADER_PREFIX}${record.id}`]);
 
+            // eslint-disable-next-line no-console -- no logger is injected into SchedulerDO; emit via console so the host captures dead-letter parks
+            console.warn(`@lunora/scheduler: job "${record.id}" (${record.functionPath}) parked in dead-letter after ${String(attempts)} attempts`);
+
             return;
         }
 
