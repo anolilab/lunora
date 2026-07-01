@@ -21,12 +21,20 @@
  *
  * ## Scope (deliberately tiny)
  *
- * Encoded: `bigint`, `ArrayBuffer`, typed-array views (`Uint8Array`, `Float32Array`,
- * ...), `NaN`/`+-Infinity`, and `undefined` **in array positions** (where JSON would
- * coerce it to `null`, losing information). NOT encoded — parity with Cap'n Web's
- * own limits and to keep the codec/security surface small: `Map`, `Set`, `RegExp`,
- * cyclic graphs, class instances, functions, capabilities. `Date` is out of scope
- * because `v.date()`/`v.timestamp()` are already epoch-ms **numbers** on the wire.
+ * Encoded: `bigint`, `Date`, `ArrayBuffer`, typed-array views (`Uint8Array`,
+ * `Float32Array`, ...), `NaN`/`+-Infinity`, and `undefined` **in array positions**
+ * (where JSON would coerce it to `null`, losing information). NOT encoded — parity
+ * with Cap'n Web's own limits and to keep the codec/security surface small: cyclic
+ * graphs, class instances, functions, capabilities. `Map`/`Set`/`RegExp` are
+ * **rejected with a TypeError** (as Cap'n Web refuses them) rather than silently
+ * encoded to `{}`, so an unsupported value fails loud at the send site.
+ *
+ * `Date` is encoded (as Cap'n Web does) even though `v.date()`/`v.timestamp()` are
+ * already epoch-ms **numbers** on the wire: those cover only *schema-validated* args.
+ * A bare `Date` in an un-validated position (whisper `data`, an action's return, a
+ * stream arg) would otherwise recurse into the plain-object branch — a `Date` has no
+ * own enumerable keys, so it would silently encode to `{}` (total data loss, worse
+ * than `JSON.stringify`'s ISO string). Tagging it as epoch-ms round-trips it exactly.
  *
  * ## Fidelity / back-compat
  *
@@ -131,6 +139,14 @@ const encodeWire = (value: unknown): unknown => {
         return value;
     }
 
+    if (value instanceof Date) {
+        // Epoch-ms (matches `v.date()`/`v.timestamp()`'s own wire form). An invalid
+        // Date's `getTime()` is `NaN`, which raw JSON coerces to `null` (→ epoch 0);
+        // route the epoch through the codec's own number handling so `NaN` survives
+        // as a `["nan"]` tag and `decodeWire` rebuilds an invalid Date exactly.
+        return [TAG, "date", encodeWire((value as Date).getTime())];
+    }
+
     if (value instanceof ArrayBuffer) {
         return [TAG, "bytes", toBase64(new Uint8Array(value)), "ArrayBuffer"];
     }
@@ -152,6 +168,16 @@ const encodeWire = (value: unknown): unknown => {
         // (its first element is literally the sentinel string). Wrap it as an
         // `"arr"`-tagged payload so the decoder restores the original array.
         return encoded.length > 0 && encoded[0] === TAG ? [TAG, "arr", encoded] : encoded;
+    }
+
+    // Fail loud on the object types Cap'n Web also refuses (`Map`, `Set`, `RegExp`).
+    // They have no own enumerable keys, so the plain-object branch below would
+    // silently encode them to `{}` — corruption a caller can't detect. A thrown
+    // TypeError surfaces the unsupported value at the send site instead. (This
+    // does not catch arbitrary class instances: those keep JSON's own lossy
+    // behavior, matching the codec's "trees only" scope.)
+    if (value instanceof Map || value instanceof Set || value instanceof RegExp) {
+        throw new TypeError(`wire-codec: cannot encode a ${value.constructor.name} — unsupported over the Lunora wire (like Cap'n Web).`);
     }
 
     // Plain object — recurse over own enumerable string keys. Drop `undefined`
@@ -189,6 +215,9 @@ const decodeWire = (value: unknown): unknown => {
                 }
                 case "bigint": {
                     return BigInt(value[2] as string);
+                }
+                case "date": {
+                    return new Date(decodeWire(value[2]) as number);
                 }
                 case "bytes": {
                     const bytes = fromBase64(value[2] as string);

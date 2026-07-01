@@ -25,6 +25,22 @@ describe("wireCodec round-trips", () => {
         expect(wire({ n: 42n, big: 9_007_199_254_740_993n })).toStrictEqual({ n: 42n, big: 9_007_199_254_740_993n });
     });
 
+    it("round-trips Date (which the plain-object branch would drop to {})", () => {
+        expect.assertions(3);
+
+        const date = new Date("2026-07-02T12:34:56.789Z");
+
+        // A Date has no own enumerable keys, so without a dedicated tag the codec's
+        // plain-object branch would silently encode it to `{}` — total data loss.
+        const decoded = wire({ at: date }) as { at: Date };
+
+        expect(decoded.at).toBeInstanceOf(Date);
+        expect(decoded.at.getTime()).toBe(date.getTime());
+
+        // An invalid Date round-trips as an invalid Date (NaN epoch), not `{}`.
+        expect(Number.isNaN((wire(new Date("nope")) as Date).getTime())).toBe(true);
+    });
+
     it("round-trips ArrayBuffer (which JSON.stringify would drop to {})", () => {
         expect.assertions(2);
 
@@ -84,6 +100,16 @@ describe("wireCodec round-trips", () => {
         const hostile = ["$lunora.wire$", "bigint", "not-a-real-tag", 1n];
 
         expect(wire(hostile)).toStrictEqual(hostile);
+    });
+
+    it("fails loud on Map/Set/RegExp instead of silently encoding them to {}", () => {
+        expect.assertions(3);
+
+        // These have no own enumerable keys, so the plain-object branch would
+        // silently drop them to `{}` — a TypeError surfaces the unsupported value.
+        expect(() => encodeWire({ m: new Map([["a", 1]]) })).toThrow(TypeError);
+        expect(() => encodeWire(new Set([1, 2]))).toThrow(TypeError);
+        expect(() => encodeWire({ re: /ab+c/g })).toThrow(TypeError);
     });
 
     it("handles deep nesting of mixed special and plain values", () => {
