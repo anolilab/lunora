@@ -36,7 +36,7 @@ describe(createHttpAnalyticsReader, () => {
             fetch: async () => new Response("nope", { status: 500 }),
         });
 
-        // @lunora/analytics' SQL client throws AnalyticsSqlError on a non-2xx.
+        // @lunora/bindings' analytics SQL client throws AnalyticsSqlError on a non-2xx.
         await expect(reader.readRequestUsage(0)).rejects.toThrow();
     });
 });
