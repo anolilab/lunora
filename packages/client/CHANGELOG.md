@@ -1,3 +1,5 @@
+## @lunora/client [1.0.0-alpha.11](https://github.com/anolilab/lunora/compare/%40lunora%2Fclient%401.0.0-alpha.10...%40lunora%2Fclient%401.0.0-alpha.11) (2026-07-01)
+
 ## @lunora/client [1.0.0-alpha.10](https://github.com/anolilab/lunora/compare/%40lunora%2Fclient%401.0.0-alpha.9...%40lunora%2Fclient%401.0.0-alpha.10) (2026-06-30)
 
 ## @lunora/client [1.0.0-alpha.9](https://github.com/anolilab/lunora/compare/%40lunora%2Fclient%401.0.0-alpha.8...%40lunora%2Fclient%401.0.0-alpha.9) (2026-06-30)
