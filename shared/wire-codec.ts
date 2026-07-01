@@ -21,13 +21,22 @@
  *
  * ## Scope (deliberately tiny)
  *
- * Encoded: `bigint`, `Date`, `ArrayBuffer`, typed-array views (`Uint8Array`,
- * `Float32Array`, ...), `NaN`/`+-Infinity`, and `undefined` **in array positions**
- * (where JSON would coerce it to `null`, losing information). NOT encoded — parity
- * with Cap'n Web's own limits and to keep the codec/security surface small: cyclic
- * graphs, class instances, functions, capabilities. `Map`/`Set`/`RegExp` are
- * **rejected with a TypeError** (as Cap'n Web refuses them) rather than silently
- * encoded to `{}`, so an unsupported value fails loud at the send site.
+ * Encoded: `bigint`, `Date`, `Error` (name/message/own-props, no stack),
+ * `ArrayBuffer`, typed-array views (`Uint8Array`, `Float32Array`, ...),
+ * `NaN`/`+-Infinity`, and `undefined` **in array positions** (where JSON would
+ * coerce it to `null`, losing information). NOT encoded — parity with Cap'n Web's
+ * own limits and to keep the codec/security surface small: cyclic graphs, class
+ * instances, functions, capabilities. `Map`/`Set`/`RegExp` are **rejected with a
+ * TypeError** (as Cap'n Web refuses them) rather than silently encoded to `{}`, so
+ * an unsupported value fails loud at the send site.
+ *
+ * `Error` is encoded (as Cap'n Web does) because its `name`/`message`/`stack` are
+ * non-enumerable — the plain-object branch would drop them and yield a bare `{}`,
+ * silently losing the error. An `Error` embedded in a payload (an action's return,
+ * whisper `data`, or a `LunoraError`'s `data`) round-trips as a real Error with its
+ * name, message, and own props. `stack` is deliberately omitted (untrusted client;
+ * the RPC error path redacts stacks separately). This is distinct from the
+ * transport's top-level thrown-error envelope, which stays redacted.
  *
  * `Date` is encoded (as Cap'n Web does) even though `v.date()`/`v.timestamp()` are
  * already epoch-ms **numbers** on the wire: those cover only *schema-validated* args.
@@ -66,6 +75,24 @@ const TYPED_ARRAY_CTORS: Record<string, { new (buffer: ArrayBuffer): ArrayBuffer
     Uint8ClampedArray,
     Uint16Array,
     Uint32Array,
+};
+
+/**
+ * Standard `Error` constructors the codec rebuilds by name (all single-arg
+ * `(message)` shapes). An unknown name (a custom subclass like `LunoraError`)
+ * falls back to a plain `Error` with `.name` restored — the message and own
+ * props still survive, only the exact prototype is lost. `AggregateError` is
+ * omitted deliberately: its `(errors, message)` signature differs, so it takes
+ * the same generic-`Error` fallback rather than a mis-constructed instance.
+ */
+const ERROR_CTORS: Record<string, { new (message?: string): Error }> = {
+    Error,
+    EvalError,
+    RangeError,
+    ReferenceError,
+    SyntaxError,
+    TypeError,
+    URIError,
 };
 
 const toBase64 = (bytes: Uint8Array): string => {
@@ -147,6 +174,26 @@ const encodeWire = (value: unknown): unknown => {
         return [TAG, "date", encodeWire((value as Date).getTime())];
     }
 
+    if (value instanceof Error) {
+        // An Error's `name`/`message`/`stack` are non-enumerable, so the plain-object
+        // branch would drop them and yield a bare `{}` (or just the custom props) —
+        // the error identity silently lost. Encode name + message + own enumerable
+        // props (which carry app-set fields like a `LunoraError`'s `code`/`data`), as
+        // Cap'n Web does. `stack` is intentionally omitted: the client is untrusted,
+        // and a server stack in a payload would be an internal-detail leak (the RPC
+        // error path already redacts stacks separately).
+        const error = value as Error & Record<string, unknown>;
+        const properties: Record<string, unknown> = {};
+
+        for (const key of Object.keys(error)) {
+            if (error[key] !== undefined) {
+                properties[key] = encodeWire(error[key]);
+            }
+        }
+
+        return [TAG, "error", error.name, error.message, properties];
+    }
+
     if (value instanceof ArrayBuffer) {
         return [TAG, "bytes", toBase64(new Uint8Array(value)), "ArrayBuffer"];
     }
@@ -218,6 +265,25 @@ const decodeWire = (value: unknown): unknown => {
                 }
                 case "date": {
                     return new Date(decodeWire(value[2]) as number);
+                }
+                case "error": {
+                    const name = value[2] as string;
+                    const message = value[3] as string;
+                    // Allow-list lookup only (`Object.hasOwn`), never a bare bracket
+                    // index — a wire-supplied name must not walk the prototype chain
+                    // and dispatch `new` to an unexpected target.
+                    const Ctor = Object.hasOwn(ERROR_CTORS, name) ? ERROR_CTORS[name] : Error;
+                    const error = new Ctor(message) as Error & Record<string, unknown>;
+
+                    // Restore the original name for a custom subclass that fell back
+                    // to the generic `Error` ctor (e.g. `LunoraError`).
+                    if (error.name !== name) {
+                        Object.defineProperty(error, "name", { configurable: true, value: name, writable: true });
+                    }
+
+                    Object.assign(error, decodeWire(value[4]) as Record<string, unknown>);
+
+                    return error;
                 }
                 case "bytes": {
                     const bytes = fromBase64(value[2] as string);

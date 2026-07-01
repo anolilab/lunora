@@ -102,6 +102,35 @@ describe("wireCodec round-trips", () => {
         expect(wire(hostile)).toStrictEqual(hostile);
     });
 
+    it("round-trips Error (name/message/own props) which the object branch would drop to {}", () => {
+        expect.assertions(5);
+
+        // name, message and stack are all non-enumerable, so without a dedicated
+        // tag the codec would drop them and yield a bare {} (only custom props).
+        const source = Object.assign(new TypeError("boom"), { code: "E_BOOM", detail: 7n });
+        const decoded = wire({ err: source }) as { err: TypeError & { code?: string; detail?: bigint } };
+
+        expect(decoded.err).toBeInstanceOf(TypeError);
+        expect(decoded.err.message).toBe("boom");
+        expect(decoded.err.name).toBe("TypeError");
+        expect(decoded.err.code).toBe("E_BOOM");
+        // own props round-trip through the codec too (bigint survives).
+        expect(decoded.err.detail).toBe(7n);
+    });
+
+    it("restores a custom Error subclass name via the generic Error fallback", () => {
+        expect.assertions(3);
+
+        // A subclass whose ctor is not on the allow-list (e.g. a server LunoraError)
+        // rebuilds as a generic Error with its `.name` and `.message` preserved.
+        const source = Object.assign(new Error("nope"), { name: "LunoraError" });
+        const decoded = wire(source) as Error;
+
+        expect(decoded).toBeInstanceOf(Error);
+        expect(decoded.name).toBe("LunoraError");
+        expect(decoded.message).toBe("nope");
+    });
+
     it("fails loud on Map/Set/RegExp instead of silently encoding them to {}", () => {
         expect.assertions(3);
 
