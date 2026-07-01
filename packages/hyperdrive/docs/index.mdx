@@ -178,12 +178,11 @@ export const tenantDocs = defineShape({ table: "documents", where: () => ({}) })
 ```ts
 // The action pulls THIS tenant's slice (the shard key binds into the WHERE — the
 // tenant-isolation boundary), then a mutation materializes it.
-import { pullSourceRows } from "@lunora/hyperdrive";
+import { createHyperdrive, fromPostgresJs, pullSourceRows } from "@lunora/hyperdrive";
 import postgres from "postgres";
 
 import { api } from "@/lunora/_generated/api";
 import { action, mutation, v } from "@/lunora/_generated/server";
-import { fromPostgresJs } from "@lunora/hyperdrive";
 import { materializeExternalRows } from "@lunora/do";
 
 export const refreshTenant = action.input({ orgId: v.string() }).action(async ({ ctx, args: { orgId } }) => {

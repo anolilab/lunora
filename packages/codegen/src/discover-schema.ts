@@ -377,12 +377,19 @@ const stringArrayPropertyOf = (object: ObjectLiteralExpression, property: string
  * statically-knowable bits only. `map`/`tenantBy` are functions, so only their
  * presence is recorded (`hasTenantBy`/`hasReconcile`); `binding`/`query`/`idColumn`/
  * `mode`/`columns` are read when they are string (or string-array) literals.
+ *
+ * When the argument is **not** a static object literal (e.g. `.source(buildConfig())`),
+ * the fields can't be read — but the source still exists, so we return an
+ * `unanalyzable` sentinel rather than `undefined`. Returning `undefined` here would
+ * make a dynamic source indistinguishable from no `.source()` at all, silently
+ * dropping it from `hasSourcedTables` (no poll override emitted) and from the
+ * `external_source_unscoped` / `external_source_on_global` security lints.
  */
-const parseSourceCall = (args: ReadonlyArray<Node>): ExternalSourceIR | undefined => {
+const parseSourceCall = (args: ReadonlyArray<Node>): ExternalSourceIR => {
     const first = args[0];
 
     if (!first || !Node.isObjectLiteralExpression(first)) {
-        return undefined;
+        return { binding: "", hasTenantBy: false, unanalyzable: true };
     }
 
     return {

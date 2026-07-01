@@ -83,6 +83,29 @@ describe("discoverSchema", () => {
         expect(schema.tables.find((table) => table.name === "plain")?.externalSource).toBeUndefined();
     });
 
+    it("records an `unanalyzable` sentinel when `.source()` is passed a non-literal config", () => {
+        expect.assertions(2);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            const buildConfig = () => ({ binding: "HD", query: "select 1", tenantBy: (key) => [key] });
+
+            export const schema = defineSchema({
+                documents: defineTable({ orgId: v.string(), title: v.string() })
+                    .shardBy("orgId")
+                    .source(buildConfig()),
+            });
+        `);
+
+        const documents = discoverSchema(project, schemaPath).tables.find((table) => table.name === "documents");
+
+        // The source exists but can't be read statically — a sentinel, NOT `undefined`,
+        // so `hasSourcedTables` and the `external_source_*` lints still see a source.
+        expect(documents?.externalSource).toStrictEqual({ binding: "", hasTenantBy: false, unanalyzable: true });
+        expect(documents?.externallyManaged).toBe(true);
+    });
+
     it("captures `.softDelete()`, injecting the marker column so Doc carries it", () => {
         expect.assertions(4);
 

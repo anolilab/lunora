@@ -90,6 +90,13 @@ export interface AdvisorExternalSource {
     hasTenantBy: boolean;
     /** Delete-detection mode literal, when given (`"full-pull"` | `"incremental"`). */
     mode?: string;
+
+    /**
+     * `true` when `.source(...)` was declared but its config wasn't a static object
+     * literal, so `hasTenantBy` (and the rest) couldn't be read. Only the codegen
+     * feeder can hit this; the runtime feeder always holds the real config.
+     */
+    unanalyzable?: boolean;
 }
 
 /**

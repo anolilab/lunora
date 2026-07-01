@@ -133,6 +133,15 @@ export interface ExternalSourceIR {
     mode?: string;
     /** The membership query literal, when statically knowable. */
     query?: string;
+
+    /**
+     * `true` when `.source(...)` was present but its argument was **not** a static
+     * object literal (e.g. `.source(buildConfig())`), so none of the fields above
+     * could be read. The source still exists — this flag lets `hasSourcedTables`
+     * (codegen) and the `external_source_*` lints treat it as a source that can't be
+     * verified, instead of mistaking it for no `.source()` at all.
+     */
+    unanalyzable?: boolean;
 }
 
 export interface TableIR {

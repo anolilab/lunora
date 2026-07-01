@@ -3365,6 +3365,12 @@ const sourcePollAtCache = new WeakMap<object, Map<string, number>>();
                     }
 
                     if (client === undefined) {
+                        // No SqlClient resolved for this binding (host never wired
+                        // \`config.sourceClient\`, or wired it wrong). Surface it in the
+                        // Logs panel and stamp \`polledAt\` so a persistent misconfig backs
+                        // off to \`refresh.everyMs\` instead of retrying every alarm tick.
+                        this.recordExternalSourceError(table, new Error(\`external-source: no sourceClient resolved for binding "\${source.binding}"\`));
+                        polledAt.set(table, now);
                         continue;
                     }
 
@@ -3373,6 +3379,9 @@ const sourcePollAtCache = new WeakMap<object, Map<string, number>>();
                     polledAt.set(table, now);
                 } catch (error) {
                     this.recordExternalSourceError(table, error);
+                    // Stamp on failure too, so a persistently failing source throttles
+                    // to \`refresh.everyMs\` rather than being hammered every tick.
+                    polledAt.set(table, now);
                 }
             }
 

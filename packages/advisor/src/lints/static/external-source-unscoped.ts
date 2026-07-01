@@ -31,7 +31,28 @@ const externalSourceUnscoped: Lint = {
         const findings = [];
 
         for (const table of context.schema.tables) {
-            if (table.externalSource === undefined || table.shardKind !== "shardBy" || table.externalSource.hasTenantBy) {
+            if (table.externalSource === undefined || table.shardKind !== "shardBy") {
+                continue;
+            }
+
+            if (table.externalSource.unanalyzable) {
+                // `.source(buildConfig())` on a sharded table: the config isn't a
+                // static object literal, so we can't confirm `tenantBy` is present.
+                // We can't prove it's missing either, so this is a WARN (verify by
+                // hand) rather than the build-failing ERROR the confirmed case gets.
+                findings.push(
+                    emit(externalSourceUnscoped, {
+                        cacheKey: `external_source_unscoped:${table.name}`,
+                        detail: `Table \`${table.name}\` is \`.source(...)\` + \`.shardBy(...)\` but its source config is not a static object literal, so \`tenantBy\` can't be verified. Confirm \`tenantBy\` binds the shard key into the query, or inline the config so the linter can check it — an unscoped query leaks every tenant's rows into each DO.`,
+                        level: "WARN",
+                        metadata: { table: table.name },
+                    }),
+                );
+
+                continue;
+            }
+
+            if (table.externalSource.hasTenantBy) {
                 continue;
             }
 

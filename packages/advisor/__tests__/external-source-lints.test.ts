@@ -61,6 +61,23 @@ describe("external_source_unscoped", () => {
 
         expect(externalSourceUnscoped.run({ schema: schema([table({ name: "plain", shardKind: "shardBy" })]) })).toHaveLength(0);
     });
+
+    it("wARNs (not ERRORs) on a sourced + sharded table whose config is not statically analyzable", () => {
+        expect.assertions(3);
+
+        const findings = externalSourceUnscoped.run({
+            schema: schema([table({ externalSource: { hasTenantBy: false, unanalyzable: true }, name: "dynamic", shardKind: "shardBy" })]),
+        });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({
+            cacheKey: "external_source_unscoped:dynamic",
+            level: "WARN",
+            metadata: { table: "dynamic" },
+            name: "external_source_unscoped",
+        });
+        expect(findings[0]?.detail).toContain("not a static object literal");
+    });
 });
 
 describe("external_source_on_global", () => {
