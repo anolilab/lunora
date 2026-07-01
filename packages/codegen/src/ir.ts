@@ -112,6 +112,38 @@ export interface RelationIR {
     table: string;
 }
 
+/**
+ * Statically-discovered `.source(...)` config (plan 077). Only the bits the
+ * advisor lints + DO wiring need are captured; `map`/`tenantBy` are functions and
+ * cannot be serialized, so their presence is recorded as `hasTenantBy` rather than
+ * the function itself.
+ */
+export interface ExternalSourceIR {
+    /** The wrangler Hyperdrive binding name. */
+    binding: string;
+    /** Whether a `columns` projection allow-list was given. */
+    columns?: ReadonlyArray<string>;
+    /** `true` when a `reconcileEveryMs` was given (the incremental-mode delete-visibility companion). */
+    hasReconcile?: boolean;
+    /** `true` when a `tenantBy` mapper was given — the tenant-isolation boundary the `external_source_unscoped` lint checks. */
+    hasTenantBy: boolean;
+    /** The `idColumn` literal, when given (defaults to `"id"` at runtime). */
+    idColumn?: string;
+    /** Delete-detection mode literal, when given (`"full-pull"` | `"incremental"`). */
+    mode?: string;
+    /** The membership query literal, when statically knowable. */
+    query?: string;
+
+    /**
+     * `true` when `.source(...)` was present but its argument was **not** a static
+     * object literal (e.g. `.source(buildConfig())`), so none of the fields above
+     * could be read. The source still exists — this flag lets `hasSourcedTables`
+     * (codegen) and the `external_source_*` lints treat it as a source that can't be
+     * verified, instead of mistaking it for no `.source()` at all.
+     */
+    unanalyzable?: boolean;
+}
+
 export interface TableIR {
     /**
      * `true` when the table chain carried `.externallyManaged()` — its rows are
@@ -120,6 +152,14 @@ export interface TableIR {
      * IR and the runtime `fromServerSchema` path default it to `false`.
      */
     externallyManaged?: boolean;
+
+    /**
+     * Set when the chain carried `.source(...)` — the table is materialized from an
+     * external Hyperdrive-backed database by a system poll loop (plan 077). Carries
+     * the statically-knowable bits the advisor lints read; the functions (`map`,
+     * `tenantBy`) are not serialized, only their presence (`hasTenantBy`).
+     */
+    externalSource?: ExternalSourceIR;
 
     /**
      * Storage backend for a `.global()` table: `"d1"` (default) or

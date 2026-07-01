@@ -22,6 +22,15 @@ export interface AdvisorTable {
     externallyManaged?: boolean;
 
     /**
+     * Set when the table was declared with `.source(...)` (plan 077) —
+     * materialized from an external Hyperdrive-backed database. Read by the
+     * `external_source_*` lints to enforce the tenant-scope boundary (mandatory
+     * `tenantBy` under `.shardBy()`) and reject sourcing a `.global()` table.
+     * Optional — feeders that don't know about sourced tables omit it.
+     */
+    externalSource?: AdvisorExternalSource;
+
+    /**
      * Declared column names (the `defineTable({...})` keys). Excludes the
      * framework-managed system fields `_id` / `_creationTime`, which every table
      * has implicitly — lints that resolve a column treat those as always valid.
@@ -71,6 +80,23 @@ export interface AdvisorIndex {
     kind: "index" | "rank" | "search" | "vector";
     name: string;
     unique?: boolean;
+}
+
+/** The statically-knowable `.source(...)` bits the `external_source_*` lints read. */
+export interface AdvisorExternalSource {
+    /** `true` when a `reconcileEveryMs` was given (the incremental-mode delete-visibility companion). */
+    hasReconcile?: boolean;
+    /** `true` when a `tenantBy` mapper was given — the tenant-isolation boundary. */
+    hasTenantBy: boolean;
+    /** Delete-detection mode literal, when given (`"full-pull"` | `"incremental"`). */
+    mode?: string;
+
+    /**
+     * `true` when `.source(...)` was declared but its config wasn't a static object
+     * literal, so `hasTenantBy` (and the rest) couldn't be read. Only the codegen
+     * feeder can hit this; the runtime feeder always holds the real config.
+     */
+    unanalyzable?: boolean;
 }
 
 /**
@@ -137,6 +163,13 @@ export const fromServerSchema = (schema: Schema): AdvisorSchema => {
 
             return {
                 externallyManaged: table.isExternallyManaged ?? false,
+                externalSource: table.externalSource
+                    ? {
+                          hasReconcile: table.externalSource.reconcileEveryMs !== undefined,
+                          hasTenantBy: table.externalSource.tenantBy !== undefined,
+                          mode: table.externalSource.mode,
+                      }
+                    : undefined,
                 fields: Object.keys(table.shape),
                 indexes,
                 name,

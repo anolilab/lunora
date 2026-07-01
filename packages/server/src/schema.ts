@@ -7,6 +7,7 @@ import type {
     AggregateIndexDefinition,
     AggregateOp,
     DurableObjectJurisdiction,
+    ExternalSourceDefinition,
     GlobalBackend,
     IndexDefinition,
     OnDeleteAction,
@@ -149,6 +150,20 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
      * physically persists).
      */
     softDelete: (options?: { field?: string }) => TableBuilder<Shape>;
+
+    /**
+     * Materialize this table from an external Postgres/MySQL behind Cloudflare
+     * Hyperdrive (plan 077). A system-driven poll loop reads the tenant slice
+     * (`query`, with params bound from `tenantBy`) and lands it in the DO's SQLite,
+     * after which `defineShape` carries it to clients unchanged. Implies
+     * `.externallyManaged()` (rows come from the ingest loop, not user mutations).
+     *
+     * Orthogonal to `.shardBy()` — combine them for per-tenant DOs. **Under
+     * `.shardBy()` `tenantBy` is mandatory** (the tenant-isolation boundary); the
+     * `external_source_unscoped` advisor lint fails the build when it is absent, and
+     * `external_source_on_global` rejects combining `.source()` with `.global()`.
+     */
+    source: (definition: ExternalSourceDefinition) => TableBuilder<Shape>;
     /** Declare named lifecycle triggers fired inline within the write path. */
     triggers: (build: (t: TriggerBuilder<Shape>) => Record<string, TriggerDefinition>) => TableBuilder<Shape>;
     /** Declare a vector index over a single text field on this table. */
@@ -228,6 +243,7 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
     let isExternallyManaged = false;
     let isPublic = false;
     let softDelete: { field: string } | undefined;
+    let externalSource: ExternalSourceDefinition | undefined;
 
     const builder: TableBuilder<Shape> = {
         aggregateIndex(name, options) {
@@ -253,6 +269,9 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
         },
         get aggregateIndexes() {
             return aggregateIndexes;
+        },
+        get externalSource() {
+            return externalSource;
         },
         externallyManaged() {
             isExternallyManaged = true;
@@ -338,6 +357,28 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
         },
         get softDeleteMode() {
             return softDelete;
+        },
+        source(definition) {
+            // Order-independent guards only — `binding`/`query` are always required.
+            // The tenant-scope (`tenantBy` under `.shardBy()`) and the
+            // sourced-vs-`.global()` contradiction depend on the FINAL table state
+            // (the chain order is arbitrary), so they are enforced by the
+            // `external_source_unscoped` / `external_source_on_global` advisor lints
+            // over the discovered IR rather than here.
+            if (!definition.binding) {
+                throw new Error("source: `binding` is required (the wrangler Hyperdrive binding name)");
+            }
+
+            if (!definition.query) {
+                throw new Error("source: `query` is required (the tenant-membership SQL)");
+            }
+
+            externalSource = definition;
+            // A sourced table is written by the ingest loop, never a user mutation —
+            // exactly what `.externallyManaged()` marks, so imply it.
+            isExternallyManaged = true;
+
+            return builder;
         },
         softDelete(options) {
             const field = options?.field ?? "deletedAt";
@@ -595,6 +636,41 @@ const attachStandaloneIndexes = (
     }
 };
 
+/**
+ * Hard-enforce the `.source(...)` invariants at schema-definition time (plan 077).
+ * Chain order is arbitrary, so the builder can't see the final `shardMode` when
+ * `.source()` runs — the checks live here, where every table is fully assembled.
+ * These **throw** (the schema won't load), so the tenant-isolation boundary is a
+ * runtime guarantee, not merely the advisor lint's build-time warning.
+ */
+const validateExternalSources = (tables: Record<string, TableDefinition>): void => {
+    for (const [name, table] of Object.entries(tables)) {
+        const source = table.externalSource;
+
+        if (!source) {
+            continue;
+        }
+
+        if (table.shardMode.kind === "global") {
+            throw new Error(
+                `defineSchema: table "${name}" cannot be both .source() and .global() — a sourced table materializes into a shard DO's SQLite, a global table lives in the external tier`,
+            );
+        }
+
+        if (table.shardMode.kind === "shardBy" && !source.tenantBy) {
+            throw new Error(
+                `defineSchema: sourced + .shardBy() table "${name}" needs a \`tenantBy\` mapper — without it every tenant's DO would run the same unscoped query and replicate the whole multitenant table (a cross-tenant leak). Add \`tenantBy: (shardKey) => [shardKey]\` binding the shard key into the query's parameters.`,
+            );
+        }
+
+        if (source.mode === "incremental") {
+            throw new Error(
+                `defineSchema: table "${name}" uses \`mode: "incremental"\`, which is not yet implemented — only "full-pull" (the default) is supported. Remove \`mode\` or set it to "full-pull".`,
+            );
+        }
+    }
+};
+
 const defineSchema = <T extends Record<string, TableDefinition>>(
     tables: T,
     vectorIndexes: Record<string, VectorIndexDefinition> = {},
@@ -603,6 +679,7 @@ const defineSchema = <T extends Record<string, TableDefinition>>(
 ): ExtendableSchema<T> => {
     fillIndexTableNames(tables);
     attachStandaloneIndexes(tables, aggregateIndexes, rankIndexes);
+    validateExternalSources(tables);
 
     return withExtend({ tables, vectorIndexes });
 };

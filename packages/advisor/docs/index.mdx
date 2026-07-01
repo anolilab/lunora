@@ -48,20 +48,21 @@ counters; it appears in the same Advisors view once a deployment has traffic.
 
 ### Security
 
-| Lint                                     | Level   | Flags                                                      |
-| ---------------------------------------- | ------- | ---------------------------------------------------------- |
-| `hardcoded_secret`                       | `ERROR` | A secret literal committed in source                       |
-| `sql_injection_risk`                     | `ERROR` | Unsafe interpolation in a `ctx.sql` string                 |
-| `rls_uncovered_table`                    | `WARN`  | An RLS-gated table read without the `rls()` middleware     |
-| `mask_uncovered_pii_column`              | `WARN`  | A maskable column returned without the `mask()` middleware |
-| `admin_route_without_guard`              | `WARN`  | An admin route with no auth guard                          |
-| `auth_api_call_without_headers`          | `WARN`  | A privileged `ctx.authApi` call missing request headers    |
-| `policy_references_unknown_table`        | `WARN`  | An RLS policy bound to a table that doesn't exist          |
-| `public_arg_uses_any`                    | `WARN`  | A public argument typed `v.any()`                          |
-| `public_mutation_without_ratelimit`      | `WARN`  | A public write with no rate limit                          |
-| `user_creating_mutation_without_captcha` | `WARN`  | An account-creating / mail-sending write with no CAPTCHA   |
-| `container_public_internet`              | `INFO`  | A container with public egress enabled by default          |
-| `unbounded_string_arg`                   | `INFO`  | A public string argument with no length bound              |
+| Lint                                     | Level   | Flags                                                                                                               |
+| ---------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------- |
+| `hardcoded_secret`                       | `ERROR` | A secret literal committed in source                                                                                |
+| `sql_injection_risk`                     | `ERROR` | Unsafe interpolation in a `ctx.sql` string                                                                          |
+| `external_source_unscoped`               | `ERROR` | A `.source()` + `.shardBy()` table with no `tenantBy` — every tenant DO would replicate the whole multitenant table |
+| `rls_uncovered_table`                    | `WARN`  | An RLS-gated table read without the `rls()` middleware                                                              |
+| `mask_uncovered_pii_column`              | `WARN`  | A maskable column returned without the `mask()` middleware                                                          |
+| `admin_route_without_guard`              | `WARN`  | An admin route with no auth guard                                                                                   |
+| `auth_api_call_without_headers`          | `WARN`  | A privileged `ctx.authApi` call missing request headers                                                             |
+| `policy_references_unknown_table`        | `WARN`  | An RLS policy bound to a table that doesn't exist                                                                   |
+| `public_arg_uses_any`                    | `WARN`  | A public argument typed `v.any()`                                                                                   |
+| `public_mutation_without_ratelimit`      | `WARN`  | A public write with no rate limit                                                                                   |
+| `user_creating_mutation_without_captcha` | `WARN`  | An account-creating / mail-sending write with no CAPTCHA                                                            |
+| `container_public_internet`              | `INFO`  | A container with public egress enabled by default                                                                   |
+| `unbounded_string_arg`                   | `INFO`  | A public string argument with no length bound                                                                       |
 
 ### Performance
 
@@ -82,6 +83,7 @@ counters; it appears in the same Advisors view once a deployment has traffic.
 | `relation_references_unknown_table` | `ERROR` | A relation pointing at a table that doesn't exist                                                  |
 | `workflow_unknown_target`           | `ERROR` | A workflow call naming a workflow that doesn't exist                                               |
 | `workflow_duplicate_step_name`      | `ERROR` | A durable step name reused within one workflow (the second call returns the first's cached result) |
+| `external_source_on_global`         | `ERROR` | A table that is both `.source()` and `.global()` — contradictory tiers                             |
 | `circular_fk`                       | `WARN`  | A circular foreign-key dependency between tables                                                   |
 | `empty_index`                       | `WARN`  | An index declared with no fields                                                                   |
 | `nondeterministic_query_mutation`   | `WARN`  | `fetch` / `Date.now` / `Math.random` in a query or mutation                                        |

@@ -27,6 +27,60 @@ type DurableObjectJurisdiction = "eu" | "fedramp" | "us";
 /** How a table is routed at runtime. */
 type ShardMode = { backend?: GlobalBackend; kind: "global" } | { field: string; kind: "shardBy" } | { kind: "root" };
 
+/** Poll cadence for a sourced table — `"manual"` (pull only on an explicit trigger) or a fixed interval. */
+type ExternalSourceRefresh = "manual" | { everyMs: number };
+
+/**
+ * Delete-detection mode for external-source ingest. `"full-pull"` (default) reads
+ * the whole tenant membership each tick and diffs it, so it observes upstream
+ * deletes; `"incremental"` pulls only changed rows (cheap) and is blind to deletes
+ * unless paired with a soft-delete column or a `reconcileEveryMs` full-pull sweep.
+ */
+type ExternalSourceMode = "full-pull" | "incremental";
+
+/**
+ * Config for `.source(...)` (plan 077): declares a table as **materialized from an
+ * external Postgres/MySQL behind Cloudflare Hyperdrive**, not written by user
+ * mutations. A system-driven poll loop reads the tenant slice and lands it in the
+ * DO's SQLite (via the validated CDC writer), after which `defineShape` carries it
+ * to clients unchanged. Orthogonal to `shardMode` — a sourced table almost always
+ * also `.shardBy()`s, in which case `tenantBy` is the mandatory tenant-isolation
+ * boundary (enforced by the `external_source_unscoped` advisor lint).
+ */
+interface ExternalSourceDefinition {
+    /** The wrangler Hyperdrive binding name the poll loop reads from. */
+    binding: string;
+
+    /** Project the materialized rows to these columns (passed to the membership diff). Omit ⇒ the full mapped document. */
+    columns?: ReadonlyArray<string>;
+
+    /** Column whose value becomes the Lunora `_id`. Defaults to `"id"`. */
+    idColumn?: string;
+
+    /** Transform an external row into the stored document body. Omit ⇒ every selected column except `idColumn` is copied. */
+    map?: (row: Record<string, unknown>) => Record<string, unknown>;
+
+    /** Delete-detection mode. Defaults to `"full-pull"`. */
+    mode?: ExternalSourceMode;
+
+    /** The full tenant-membership query, with driver-native placeholders (`$1` / `?`). `tenantBy` binds its params. */
+    query: string;
+
+    /** `"incremental"` only: run a full-pull reconcile this often to garbage-collect tombstones the incremental path can't see. */
+    reconcileEveryMs?: number;
+
+    /** Poll cadence, or `"manual"`. Omit ⇒ the runtime's size-scaled default. */
+    refresh?: ExternalSourceRefresh;
+
+    /**
+     * **Mandatory under `.shardBy()`**: map this DO's shard key → the query's bound
+     * params, so a tenant DO can only ever pull its own rows. An unscoped sourced +
+     * sharded table replicates the whole multitenant table into every shard — the
+     * `external_source_unscoped` advisor lint fails the build when this is absent.
+     */
+    tenantBy?: (shardKey: string) => ReadonlyArray<unknown>;
+}
+
 interface IndexDefinition {
     fields: ReadonlyArray<string>;
     name: string;
@@ -153,6 +207,16 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
      * without scanning the underlying table.
      */
     aggregateIndexes: ReadonlyArray<AggregateIndexDefinition>;
+
+    /**
+     * Set by `.source(...)` (named `externalSource`, not `source`, so the data
+     * field doesn't collide with the fluent `.source()` builder method — same
+     * convention as `shardBy()`/`shardMode`). When present, the table is
+     * materialized from an external Hyperdrive-backed database by a system poll
+     * loop rather than user mutations. Implies `isExternallyManaged`.
+     */
+    externalSource?: ExternalSourceDefinition;
+
     indexes: ReadonlyArray<IndexDefinition>;
 
     /**
@@ -1269,6 +1333,9 @@ export type {
     DatabaseReader,
     DatabaseWriter,
     DurableObjectJurisdiction,
+    ExternalSourceDefinition,
+    ExternalSourceMode,
+    ExternalSourceRefresh,
     FunctionKind,
     FunctionVisibility,
     GlobalBackend,

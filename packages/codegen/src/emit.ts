@@ -2886,6 +2886,10 @@ const emitShard = ({
     // `globalDb` and the broadcast hook drives live queries.
     const hasHyperdriveGlobal = schema.tables.some((table) => table.shardMode === "global" && table.globalBackend === "hyperdrive");
     const hasD1Global = schema.tables.some((table) => table.shardMode === "global" && table.globalBackend !== "hyperdrive");
+    // External-source ingest (plan 077): `.source(...)` tables are materialized from
+    // Hyperdrive into this DO's SQLite by the poll alarm. Everything below is gated on
+    // this, so a schema with no sourced table emits a byte-identical `shard.ts`.
+    const hasSourcedTables = schema.tables.some((table) => table.externalSource !== undefined);
 
     if (hasD1Global && hasHyperdriveGlobal) {
         // Mixing backends needs a per-table routing writer (id-addressed ops must
@@ -2999,7 +3003,8 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
 
     const importLines = [
         `import type { ${doTypeImports.join(", ")} } from "${base.do}";`,
-        `import { applyCdcChanges, ${shapeGuardImport}createShardCtxDb, runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
+        `import { applyCdcChanges, ${shapeGuardImport}createShardCtxDb, ${hasSourcedTables ? "isSourceDue, pullExternalSourceTick, " : ""}runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "${base.do}";`,
+        ...(hasSourcedTables ? [`import type { ExternalSourceLike, SourceClientLike } from "${base.do}";`] : []),
         // `asBucketStorage` (the bucket-aware `ctx.storage` wrapper) and
         // `createSecrets` (the `ctx.secrets` core built-in) live in
         // `@lunora/server`, the single source — imported here rather than stamped
@@ -3065,6 +3070,15 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
     // writer factory from `@lunora/hyperdrive/global` over a Hyperdrive driver.
     const hyperdriveGlobalConfigField = hasHyperdriveGlobal
         ? `\n    hyperdriveGlobal?: (env: Record<string, unknown>, request?: { identity?: Record<string, unknown>; userId?: string }) => DatabaseWriterLike | undefined;`
+        : "";
+
+    // External-source ingest (plan 077): the host supplies one resolver that turns a
+    // wrangler Hyperdrive binding into a SqlClient (build it with `@lunora/hyperdrive`'s
+    // `createHyperdrive` + your driver adapter — the same one-liner as the docs recipe).
+    // Called once per binding per DO lifetime (the poll loop memoizes it), so it need
+    // not cache; identity-independent (it is just the tenant's connection).
+    const sourceClientConfigField = hasSourcedTables
+        ? `\n    sourceClient?: (env: Record<string, unknown>, binding: string) => { query: <Row = Record<string, unknown>>(text: string, params?: readonly unknown[]) => Promise<Row[]> } | undefined;`
         : "";
 
     const globalDatabaseStub = hasGlobalTables
@@ -3268,6 +3282,137 @@ const vectorsStub: VectorSearchLike = {
             : "";
     /* eslint-enable no-secrets/no-secrets */
 
+    // External-source ingest (plan 077). Per-DO-instance memos: the resolved
+    // SqlClient keyed by binding (build each connection once), and the last-polled
+    // wall-clock per table (so `refresh.everyMs` throttles the per-tick poll).
+    const sourceClientCacheConst = hasSourcedTables
+        ? `
+const sourceClientCache = new WeakMap<object, Map<string, SourceClientLike>>();
+const sourcePollAtCache = new WeakMap<object, Map<string, number>>();
+`
+        : "";
+
+    // The DO subclass's poll override: each alarm tick, materialize every due
+    // sourced table's tenant slice. Reads the runtime `.source(...)` config straight
+    // off the `schema` object (the functions are not serialized into code), resolves
+    // the host-supplied SqlClient, and delegates the per-table work to the tested
+    // `pullExternalSourceTick` in @lunora/do (query under `tenantBy(shardKey)` →
+    // id-lift → diff → apply through the validated CDC writer). System-owned (alarm
+    // tier, no request identity), so it never loosens `ctx.sql`'s action-only contract.
+    const externalSourceOverride = hasSourcedTables
+        ? `
+        protected override async pollExternalSources(): Promise<number> {
+            const env = (this.env ?? {}) as Record<string, unknown>;
+            const sourced = Object.entries((schema as unknown as SchemaLike).tables)
+                .map(([table, definition]) => [table, (definition as { externalSource?: ExternalSourceLike }).externalSource] as const)
+                .filter((entry): entry is [string, ExternalSourceLike] => entry[1] !== undefined);
+
+            if (sourced.length === 0) {
+                return 0;
+            }
+
+            const shardKey = this.currentShardKey();
+            const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
+            const writer = createShardCtxDb({
+                broadcast: (delta) => {
+                    this.recordChangedTable(delta.table);
+                },
+                cdc: config.cdc ?? false,
+                scheduler,
+                schema: schema as unknown as SchemaLike,
+                sql: this.sql as SqlExec,
+            });
+
+            let clients = sourceClientCache.get(this);
+
+            if (clients === undefined) {
+                clients = new Map();
+                sourceClientCache.set(this, clients);
+            }
+
+            let polledAt = sourcePollAtCache.get(this);
+
+            if (polledAt === undefined) {
+                polledAt = new Map();
+                sourcePollAtCache.set(this, polledAt);
+            }
+
+            const now = Date.now();
+            // \`active\` counts non-manual sources: while > 0 the alarm re-arms; a
+            // manual-only schema returns 0 so the shared alarm goes idle.
+            let active = 0;
+
+            for (const [table, source] of sourced) {
+                if (source.refresh === "manual") {
+                    continue;
+                }
+
+                active += 1;
+
+                if (!isSourceDue(source.refresh, polledAt.get(table), now)) {
+                    continue;
+                }
+
+                try {
+                    let client = clients.get(source.binding);
+
+                    if (client === undefined) {
+                        client = config.sourceClient?.(env, source.binding);
+
+                        if (client !== undefined) {
+                            clients.set(source.binding, client);
+                        }
+                    }
+
+                    if (client === undefined) {
+                        // No SqlClient resolved for this binding (host never wired
+                        // \`config.sourceClient\`, or wired it wrong). Surface it in the
+                        // Logs panel and stamp \`polledAt\` so a persistent misconfig backs
+                        // off to \`refresh.everyMs\` instead of retrying every alarm tick.
+                        this.recordExternalSourceError(table, new Error(\`external-source: no sourceClient resolved for binding "\${source.binding}"\`));
+                        polledAt.set(table, now);
+                        continue;
+                    }
+
+                    // eslint-disable-next-line no-await-in-loop -- one sourced table at a time; slices are independent but small and sequential keeps the writer transaction simple
+                    await pullExternalSourceTick(this.sql as SqlExec, writer, client, table, source, shardKey);
+                    polledAt.set(table, now);
+                } catch (error) {
+                    this.recordExternalSourceError(table, error);
+                    // Stamp on failure too, so a persistently failing source throttles
+                    // to \`refresh.everyMs\` rather than being hammered every tick.
+                    polledAt.set(table, now);
+                }
+            }
+
+            return active;
+        }
+`
+        : "";
+
+    // Arm the shared poll alarm on construction so a sourced DO starts ingesting —
+    // but only when at least one source is non-manual (a \`refresh: "manual"\`-only
+    // schema must not spin the alarm). The alarm re-arms itself while
+    // `pollExternalSources` reports active sources. Emitted only when the schema has
+    // a sourced table (else the class stays constructor-free).
+    const sourceConstructorOverride = hasSourcedTables
+        ? `
+        public constructor(state: ShardDOState, env: unknown) {
+            super(state, env);
+
+            const autoSourced = Object.values((schema as unknown as SchemaLike).tables).some((definition) => {
+                const source = (definition as { externalSource?: ExternalSourceLike }).externalSource;
+
+                return source !== undefined && source.refresh !== "manual";
+            });
+
+            if (autoSourced) {
+                void this.scheduleSourcePoll();
+            }
+        }
+`
+        : "";
+
     const facadeBlock = hasTables
         ? `\n            const facade = db as unknown as Record<string, ReturnType<typeof bindTableFacade>>;
 ${schema.tables
@@ -3364,7 +3509,7 @@ export interface ShardDOConfig {
     /** Optional telemetry sink. When supplied, each \`ctx.log.*\` call is forwarded to \`sink.onLog\`. Pass the SAME sink you give \`createWorker({ observability })\` (which drives \`onRpc\`) to route both RPC and log events. */
     observability?: (env: Record<string, unknown>) => LogSink | undefined;
     scheduler?: (env: Record<string, unknown>) => unknown;
-    storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}${aiConfigField}${kvFragments.configField}${flagsFragments.configField}${analyticsFragments.configField}${imagesFragments.configField}${hyperdriveFragments.configField}${browserFragments.configField}${r2sqlFragments.configField}${pipelinesFragments.configField}${paymentsConfigField}${d1ConfigField}${hyperdriveGlobalConfigField}
+    storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}${aiConfigField}${kvFragments.configField}${flagsFragments.configField}${analyticsFragments.configField}${imagesFragments.configField}${hyperdriveFragments.configField}${browserFragments.configField}${r2sqlFragments.configField}${pipelinesFragments.configField}${paymentsConfigField}${d1ConfigField}${hyperdriveGlobalConfigField}${sourceClientConfigField}
 }
 
 const schedulerStub = {
@@ -3402,7 +3547,7 @@ const storageStub = {
         throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
     },
 };
-${globalDatabaseStub}${vectorsStub}${aiStub}${kvFragments.stub}${flagsFragments.stub}${analyticsFragments.stub}${imagesFragments.stub}${hyperdriveFragments.stub}${browserFragments.stub}${r2sqlFragments.stub}${pipelinesFragments.stub}${paymentStub}${bindTableHelper}
+${globalDatabaseStub}${sourceClientCacheConst}${vectorsStub}${aiStub}${kvFragments.stub}${flagsFragments.stub}${analyticsFragments.stub}${imagesFragments.stub}${hyperdriveFragments.stub}${browserFragments.stub}${r2sqlFragments.stub}${pipelinesFragments.stub}${paymentStub}${bindTableHelper}
 // Bound in-process \`ctx.run*\` composition depth so a self- or cyclically-
 // referencing call fails loudly with a clear error instead of overflowing the
 // stack. Tracked across the awaited handler chain (one DO invocation is
@@ -3443,7 +3588,7 @@ const dispatchRun = async (expected: FunctionKind, functionPath: string, args: R
  * from the worker entry so wrangler binds it by name.
  */
 export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOState, env: unknown) => ShardDOBase =>
-    class extends ShardDOBase {
+    class extends ShardDOBase {${sourceConstructorOverride}
         private migrated = false;
 
         public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
@@ -3523,7 +3668,7 @@ ${relationFanout.override}
                 iterator: (signal) => (registered.handler as (context: unknown, args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>)(this.buildCtx({ functionPath }), args, signal),
             };
         }
-${customMutatorOverride}${shapeResolveOverride}${globalShapeReaderOverride}
+${customMutatorOverride}${shapeResolveOverride}${globalShapeReaderOverride}${externalSourceOverride}
         protected override lifecycleHookPaths(event: "connect" | "disconnect"): readonly string[] {
             return LUNORA_LIFECYCLE_HOOKS[event];
         }

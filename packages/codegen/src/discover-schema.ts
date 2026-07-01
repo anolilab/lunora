@@ -2,7 +2,7 @@ import type { CallExpression, Expression, Node as TsNode, ObjectLiteralExpressio
 import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "./diagnostics";
-import type { IndexIR, RankIndexIR, RankSortKeyIR, RelationIR, SchemaIR, SearchIndexIR, TableIR, ValidatorIR, VectorIndexIR } from "./ir";
+import type { ExternalSourceIR, IndexIR, RankIndexIR, RankSortKeyIR, RelationIR, SchemaIR, SearchIndexIR, TableIR, ValidatorIR, VectorIndexIR } from "./ir";
 import { parseObjectShape } from "./parse-validator";
 import { resolvePackageExtension } from "./resolve-package-extension";
 
@@ -309,6 +309,7 @@ const parseGlobalBackend = (args: ReadonlyArray<Node>): TableIR["globalBackend"]
 /** Accumulator the builder-chain walk mutates as it unwinds a `defineTable(...)` chain. */
 interface TableBuilderAccumulator {
     externallyManaged: boolean;
+    externalSource?: ExternalSourceIR;
     globalBackend?: TableIR["globalBackend"];
     indexes: IndexIR[];
     rankIndexes: RankIndexIR[];
@@ -334,6 +335,72 @@ const softDeleteFieldOf = (optionsArgument: Node | undefined): string => {
     }
 
     return "deletedAt";
+};
+
+/** Read a string-literal property off an object literal, or `undefined` when absent/non-literal. */
+const stringPropertyOf = (object: ObjectLiteralExpression, property: string): string | undefined => {
+    const node = object.getProperty(property);
+
+    if (node && Node.isPropertyAssignment(node)) {
+        const initializer = node.getInitializer();
+
+        if (initializer && Node.isStringLiteral(initializer)) {
+            return initializer.getLiteralText();
+        }
+    }
+
+    return undefined;
+};
+
+/** Read a string-array-literal property off an object literal, or `undefined`. */
+const stringArrayPropertyOf = (object: ObjectLiteralExpression, property: string): string[] | undefined => {
+    const node = object.getProperty(property);
+
+    if (node && Node.isPropertyAssignment(node)) {
+        const initializer = node.getInitializer();
+
+        if (initializer && Node.isArrayLiteralExpression(initializer)) {
+            const items = initializer
+                .getElements()
+                .filter((element) => Node.isStringLiteral(element))
+                .map((element) => element.getLiteralText());
+
+            return items.length > 0 ? items : undefined;
+        }
+    }
+
+    return undefined;
+};
+
+/**
+ * Parse a `.source({ ... })` call into {@link ExternalSourceIR} — the
+ * statically-knowable bits only. `map`/`tenantBy` are functions, so only their
+ * presence is recorded (`hasTenantBy`/`hasReconcile`); `binding`/`query`/`idColumn`/
+ * `mode`/`columns` are read when they are string (or string-array) literals.
+ *
+ * When the argument is **not** a static object literal (e.g. `.source(buildConfig())`),
+ * the fields can't be read — but the source still exists, so we return an
+ * `unanalyzable` sentinel rather than `undefined`. Returning `undefined` here would
+ * make a dynamic source indistinguishable from no `.source()` at all, silently
+ * dropping it from `hasSourcedTables` (no poll override emitted) and from the
+ * `external_source_unscoped` / `external_source_on_global` security lints.
+ */
+const parseSourceCall = (args: ReadonlyArray<Node>): ExternalSourceIR => {
+    const first = args[0];
+
+    if (!first || !Node.isObjectLiteralExpression(first)) {
+        return { binding: "", hasTenantBy: false, unanalyzable: true };
+    }
+
+    return {
+        binding: stringPropertyOf(first, "binding") ?? "",
+        columns: stringArrayPropertyOf(first, "columns"),
+        hasReconcile: first.getProperty("reconcileEveryMs") !== undefined,
+        hasTenantBy: first.getProperty("tenantBy") !== undefined,
+        idColumn: stringPropertyOf(first, "idColumn"),
+        mode: stringPropertyOf(first, "mode"),
+        query: stringPropertyOf(first, "query"),
+    };
 };
 
 /** Apply one chained method call (`.index`, `.shardBy`, …) to the accumulator. */
@@ -392,6 +459,16 @@ const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, 
             // `.softDelete()` or `.softDelete({ field: "removedAt" })` — read the
             // optional marker-column name off the options object (default `deletedAt`).
             accumulator.softDelete = { field: softDeleteFieldOf(args[0]) };
+
+            break;
+        }
+
+        case "source": {
+            // `.source({ ... })` — capture the statically-knowable config and, like
+            // the runtime builder, imply `.externallyManaged()` (rows come from the
+            // ingest loop, not a discoverable `ctx.db.insert`).
+            accumulator.externalSource = parseSourceCall(args);
+            accumulator.externallyManaged = true;
 
             break;
         }
@@ -457,6 +534,7 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
 
     return {
         externallyManaged: accumulator.externallyManaged,
+        externalSource: accumulator.externalSource,
         globalBackend: accumulator.shardMode === "global" ? (accumulator.globalBackend ?? "d1") : undefined,
         indexes: accumulator.indexes,
         name,
