@@ -291,7 +291,7 @@ const decodeWire = (value: unknown, depth = 0): unknown => {
                     // Allow-list lookup only (`Object.hasOwn`), never a bare bracket
                     // index — a wire-supplied name must not walk the prototype chain
                     // and dispatch `new` to an unexpected target.
-                    const Ctor = Object.hasOwn(ERROR_CTORS, name) ? ERROR_CTORS[name] : Error;
+                    const Ctor = (Object.hasOwn(ERROR_CTORS, name) ? ERROR_CTORS[name] : undefined) ?? Error;
                     const error = new Ctor(message) as Error & Record<string, unknown>;
 
                     // Restore the original name for a custom subclass that fell back
