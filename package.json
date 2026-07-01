@@ -33,6 +33,7 @@
         "fallow:audit": "vis run fallow:audit",
         "fallow:dead-code": "vis run fallow:dead-code",
         "fallow:health": "vis run fallow:health",
+        "generate:labeler": "node scripts/generate-labeler-config.js",
         "generate:og": "node scripts/generate-package-og-images.js",
         "generate:packages-list": "node scripts/list-packages.js && prettier --write README.md",
         "lint:affected:eslint": "vis affected lint:eslint --fail-fast",
