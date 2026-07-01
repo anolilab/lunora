@@ -60,9 +60,9 @@ describe("structured error propagation (087)", () => {
             ),
         );
 
-        const error = await client(fetchMock)
+        const error = (await client(fetchMock)
             .mutation(fnRef("docs:write"), {})
-            .catch((error_: unknown) => error_ as Error & { code?: string; data?: { quota: bigint; retryAfterMs: number } });
+            .catch((error_: unknown) => error_)) as { code?: string; data?: { quota: bigint; retryAfterMs: number } };
 
         expect(error.code).toBe("TOO_MANY_REQUESTS");
         expect(error.data).toStrictEqual({ retryAfterMs: 3000, quota: 100n });
@@ -73,9 +73,9 @@ describe("structured error propagation (087)", () => {
 
         const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ error: { code: "RPC_FAILED", message: "internal error" } }, { status: 500 }));
 
-        const error = await client(fetchMock)
+        const error = (await client(fetchMock)
             .query(fnRef("docs:get"), {})
-            .catch((error_: unknown) => error_ as Error & { code?: string; data?: unknown });
+            .catch((error_: unknown) => error_)) as { code?: string; data?: unknown };
 
         expect(error.code).toBe("RPC_FAILED");
         expect(error.data).toBeUndefined();
