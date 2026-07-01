@@ -253,10 +253,20 @@ createShardDO({
 });
 ```
 
-The `external_source_unscoped` advisor lint fails the build if a sourced + sharded
-table omits `tenantBy`, and `external_source_on_global` rejects combining `.source()`
-with `.global()`. Clients consume the slice with `useShape(api.shapes.tenantDocs)` —
-no client change, since it is an ordinary table to them.
+Tenant scoping is enforced two ways: `defineSchema` **throws** at load if a sourced
+
+- `.shardBy()` table omits `tenantBy` (the runtime fail-safe), and the
+  `external_source_unscoped` advisor lint flags it earlier, at build time, in your
+  terminal + Studio. `defineSchema` likewise rejects combining `.source()` with
+  `.global()` (contradictory tiers). Clients consume the slice with
+  `useShape(api.shapes.tenantDocs)` — no client change, since it is an ordinary table.
+
+**Refresh cadence.** Omit `refresh` to poll on every DO alarm tick (the floor), or
+pass `refresh: { everyMs }` to throttle a large slice to at most one pull per
+interval. `refresh: "manual"` tells Lunora **not** to auto-poll — use it when you
+drive the refresh yourself (the manual `pullSourceRows` → `materializeExternalRows`
+bridge above, on your own schedule). `mode: "incremental"` is reserved for a future
+release; `defineSchema` rejects it today (only the default full-pull is implemented).
 
 ## Reactive `.global()` over Hyperdrive
 
