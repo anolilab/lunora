@@ -1211,6 +1211,57 @@ const jsonResponse = (body: unknown, status = 200, bookmark?: string): Response 
     return Response.json(body, { headers, status });
 };
 
+/** Header names copied verbatim from a batch request onto each per-entry `/rpc` request — identity/bookmark/routing are shared by the whole batch (plan 088). */
+const SHARED_BATCH_HEADERS = [
+    "x-lunora-userid",
+    "x-lunora-identity",
+    "x-d1-bookmark",
+    "x-lunora-client-ip",
+    "x-lunora-system",
+    "x-lunora-shard-binding",
+] as const;
+
+/** One entry of a `/rpc-batch` request body. */
+interface BatchCall {
+    args?: Record<string, unknown>;
+    clientId?: string;
+    clientSeq?: number;
+    functionPath?: string;
+    id?: unknown;
+    mutationId?: string;
+}
+
+/** Build the synthetic single-call `/rpc` request for one batch entry: shared identity/bookmark headers off the batch request + this entry's own mutation/client-seq headers (plan 088). */
+const buildBatchEntryRequest = (batchRequest: Request, call: BatchCall): Request => {
+    const headers = new Headers({ "content-type": "application/json" });
+
+    for (const name of SHARED_BATCH_HEADERS) {
+        const value = batchRequest.headers.get(name);
+
+        if (value !== null) {
+            headers.set(name, value);
+        }
+    }
+
+    if (call.mutationId !== undefined) {
+        headers.set("x-lunora-mutation-id", call.mutationId);
+    }
+
+    if (call.clientId !== undefined) {
+        headers.set("x-lunora-client-id", call.clientId);
+    }
+
+    if (call.clientSeq !== undefined) {
+        headers.set("x-lunora-client-seq", String(call.clientSeq));
+    }
+
+    return new Request("https://shard.internal/rpc", {
+        body: JSON.stringify({ args: call.args ?? {}, functionPath: call.functionPath }),
+        headers,
+        method: "POST",
+    });
+};
+
 /**
  * Decode the JSON envelope shipped on the `x-lunora-identity` header.
  * Malformed payloads collapse to `undefined` rather than throwing — the
@@ -4506,6 +4557,56 @@ abstract class ShardDO {
     }
 
     /**
+     * Batch dispatch (plan 088). Applies each `calls[]` entry through the SAME
+     * single-call `/rpc` path (via a nested `this.fetch`), **sequentially**, so
+     * the per-`(identity, mutationId)` idempotency dedup and the per-client
+     * `__client_watermark` ordering are enforced entry-by-entry exactly as for an
+     * individual call — no duplication of the dispatch core, no reordering. The
+     * response is `{ results: [{ id, status, body }] }` in request order; each
+     * `body` is the untouched single-call envelope (its `result` already
+     * wire-encoded), so the client demuxes + decodes each exactly as one call.
+     */
+    private async handleBatchRpc(request: Request): Promise<Response> {
+        let payload: { calls?: unknown };
+
+        try {
+            payload = await request.json();
+        } catch {
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid JSON body" } }, 400);
+        }
+
+        if (!Array.isArray(payload.calls)) {
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: "batch `calls` must be an array" } }, 400);
+        }
+
+        const results: { body: unknown; id: unknown; status: number }[] = [];
+        let latestBookmark: string | undefined;
+
+        for (const raw of payload.calls) {
+            // eslint-disable-next-line no-await-in-loop -- sequential BY DESIGN: preserves per-client watermark ordering + idempotency across the batch (a "gap" entry must halt before later entries)
+            const outcome = await this.dispatchBatchEntry(request, raw as BatchCall);
+
+            if (outcome.bookmark !== undefined) {
+                latestBookmark = outcome.bookmark;
+            }
+
+            results.push({ body: outcome.body, id: outcome.id, status: outcome.status });
+        }
+
+        return jsonResponse({ results }, 200, latestBookmark);
+    }
+
+    /** Dispatch one batch entry through the single-call `/rpc` path and capture its envelope (plan 088). */
+    private async dispatchBatchEntry(
+        batchRequest: Request,
+        call: BatchCall,
+    ): Promise<{ body: unknown; bookmark: string | undefined; id: unknown; status: number }> {
+        const response = await this.fetch(buildBatchEntryRequest(batchRequest, call));
+
+        return { body: await response.json(), bookmark: response.headers.get("x-d1-bookmark") ?? undefined, id: call.id, status: response.status };
+    }
+
+    /**
      * Serve a reserved admin-introspection RPC (`__lunora_admin__:*`) for the
      * data browser. Gated by `env.LUNORA_ADMIN_TOKEN`: introspection is
      * **disabled unless the token is configured**, and when it is, the request
@@ -7224,6 +7325,13 @@ abstract class ShardDO {
         // reachable only via the runtime's worker-side forward, returns just a count.
         if (url.pathname === "/_lunora/route" && request.method === "GET") {
             return jsonResponse({ relayCount: this.relay?.relayCount() ?? 0 });
+        }
+
+        // Batch dispatch (plan 088): each entry replays through the single-call
+        // `/rpc` path (see `handleBatchRpc`), so idempotency + watermark ordering
+        // are preserved without duplicating the dispatch core.
+        if (url.pathname === "/rpc-batch" && request.method === "POST") {
+            return this.handleBatchRpc(request);
         }
 
         if (request.headers.get("Upgrade") === "websocket") {

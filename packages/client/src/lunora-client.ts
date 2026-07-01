@@ -69,6 +69,7 @@ import type {
 } from "./types";
 
 const RPC_PATH = "/_lunora/rpc";
+const RPC_BATCH_PATH = "/_lunora/rpc-batch";
 const WS_PATH = "/_lunora/ws";
 
 /** Build the `&amp;bucket=…` query fragment for a storage admin request, or `""` when no bucket is selected. */
@@ -451,6 +452,43 @@ interface PokeBuffer {
     lastMutationId: Map<string, number>;
     parts: Map<string, RowOp[]>;
 }
+
+/** One demuxed result slot of a {@link LunoraClient.batch} call (plan 088). */
+type BatchSlot = { error: Error & { code?: string; data?: unknown }; ok: false } | { ok: true; value: unknown };
+
+/**
+ * Demux a `/_lunora/rpc-batch` response into per-call slots in input order,
+ * wire-decoding each success value and reconstructing `.code`/`.data` on a
+ * failing call. A slot the server never returned surfaces as an error rather
+ * than a silent `undefined` success.
+ */
+const demuxBatchResults = (rawResults: { body?: unknown; id?: number }[], count: number): BatchSlot[] => {
+    const slots = Array.from<BatchSlot | undefined>({ length: count });
+
+    for (const entry of rawResults) {
+        if (typeof entry.id !== "number" || entry.id < 0 || entry.id >= count) {
+            continue;
+        }
+
+        const inner = entry.body as { error?: { code?: string; data?: unknown; message?: string }; result?: unknown } | undefined;
+
+        if (inner && "error" in inner && inner.error) {
+            const error = new Error(inner.error.message ?? "batch call failed") as Error & { code?: string; data?: unknown };
+
+            error.code = inner.error.code;
+
+            if (inner.error.data !== undefined) {
+                error.data = decodeWire(inner.error.data);
+            }
+
+            slots[entry.id] = { error, ok: false };
+        } else {
+            slots[entry.id] = { ok: true, value: decodeWire(inner?.result) };
+        }
+    }
+
+    return slots.map((slot) => slot ?? { error: new Error("batch call returned no result"), ok: false });
+};
 
 /**
  * Lunora browser/edge client. Talks RPC over HTTP and real-time deltas over
@@ -1194,6 +1232,60 @@ class LunoraClient {
         }
 
         return (await this.rpc(function_.__lunoraRef, args as Record<string, unknown>, options.shardKey, { attachBookmark: true })) as ReturnOf<F>;
+    }
+
+    /**
+     * Batch several independent calls into ONE round trip (plan 088). Each call is
+     * dispatched server-side exactly as an individual RPC — per-shard
+     * authorization, `(identity, mutationId)` idempotency, and custom-mutator
+     * watermark ordering are all preserved — and the worker splits the batch by
+     * shard so calls to different shards fan out to their own DOs. Results are
+     * demuxed back in input order; a failing call does NOT fail the batch (its
+     * slot carries `{ ok: false, error }`, with `.code`/`.data` reconstructed like
+     * a single call). Args/results ride the value codec (bytes/bigint survive).
+     *
+     * No promise pipelining and no capability passing — a call's args cannot
+     * reference another call's result (see plan 088 §fence; capabilities are
+     * incompatible with DO hibernation).
+     */
+    public async batch(calls: ReadonlyArray<{ args?: Record<string, unknown>; fn: FunctionReference; shardKey?: string }>): Promise<BatchSlot[]> {
+        if (this.closed) {
+            throw new Error("LunoraClient is closed");
+        }
+
+        if (!this.fetchImpl) {
+            throw new Error("LunoraClient: no `fetch` implementation available");
+        }
+
+        if (calls.length === 0) {
+            return [];
+        }
+
+        const response = await this.fetchImpl(joinUrl(this.url, RPC_BATCH_PATH), {
+            body: JSON.stringify({
+                calls: calls.map((call, index) => {
+                    return { args: encodeWire(call.args ?? {}), functionPath: call.fn.__lunoraRef, id: index, shardKey: call.shardKey };
+                }),
+            }),
+            headers: this.rpcRequestHeaders({ attachBookmark: true }),
+            method: "POST",
+        });
+
+        const bookmark = response.headers.get("x-d1-bookmark");
+
+        if (bookmark) {
+            this.bookmark.set(bookmark);
+        }
+
+        let body: { results?: { body?: unknown; id?: number }[] };
+
+        try {
+            body = await response.json();
+        } catch {
+            throw new Error(`LunoraClient: batch response was not JSON (status ${response.status.toString()})`);
+        }
+
+        return demuxBatchResults(body.results ?? [], calls.length);
     }
 
     /**
