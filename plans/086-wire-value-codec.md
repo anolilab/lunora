@@ -158,17 +158,19 @@ ship dark and be exercised only when a `bytes`/`bigint` value actually appears.
     - DO decode-args-for-handler / encode-result-once (idempotency-cache stores the
       wire form, so replays never double-encode). Pure-JSON payloads stay byte-identical.
       Unit + integration tests green; client/server/DO suites unregressed.
-- **Phase 2 — subscription/poke frames: TODO (benchmark-gated).** The reactive
-  delta path (`subscription-delivery.ts` `collectUpsertDeltas`) builds each frame by
-  **string-concatenating a single `JSON.stringify(nextRow)`** — the finding-#6 / #072
-  optimization. A `v.bytes()` row there still truncates to `{}` and a `v.bigint()`
-  row throws. Fixing it means either (a) a `containsWireSpecial(row)` guard + a second
-  `encodeWire` walk (regresses the hottest path for normal rows — the exact path prior
-  waves tuned) or (b) a `JSON.stringify(row, replacer)` that tags leaves in the single
-  walk (the `"arr"` escape is awkward inside a replacer). Both want a micro-benchmark
-  before landing, so this is deliberately a separate phase, not folded into Phase 1.
-  The client half is small (decode `data`/`delta`/`rowsPatch[].value`/chunk/whisper in
-  `handleServerMessage`) and is a safe no-op until the server encodes — add it with Phase 2.
+- **Phase 2 — subscription/poke frames: DONE.** Wire-encode row values on every
+  reactive push path — the list snapshot + delta baseline (`pushSubscriptionData`),
+  the keyed list-delta bodies (`collectUpsertDeltas`, encoding only the raw `next`
+  row since the baseline is already encoded), shape pokes (`buildPokeFrames` — the
+  single choke point for global/op-log/relay pokes — plus the `diffGlobalMembership`
+  fingerprint), stream chunks, and whispers. The client wire-decodes at each
+  consumption point (`resolveDataPayload`, `handlePokePart`, chunk, `dispatchWhisper`).
+  **Back-compat is exact:** for a pure-JSON row `JSON.stringify(encodeWire(x)) ===
+JSON.stringify(x)`, so every existing baseline/frame is byte-identical and the full
+  client (304) + DO (991) suites stayed green; only `bytes`/`bigint` rows change on the
+  wire. The feared double-walk regression didn't require a guard — the extra cost is one
+  `encodeWire` pass per pushed row (rows are small/paginated); a formal micro-benchmark
+  is still worth adding if a very-large-result subscription ever shows up hot.
 
 ## 8. Open decisions
 
