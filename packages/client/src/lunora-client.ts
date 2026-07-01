@@ -2952,9 +2952,16 @@ class LunoraClient {
         }
 
         if ("error" in body) {
-            const error = new Error(body.error.message);
+            const error = new Error(body.error.message) as Error & { code?: string; data?: unknown };
 
-            (error as Error & { code?: string }).code = body.error.code;
+            error.code = body.error.code;
+
+            // Surface an app error's structured payload (a thrown `LunoraError`'s
+            // `data`), wire-decoded so `bigint`/`bytes` inside it are restored.
+            if (body.error.data !== undefined) {
+                error.data = decodeWire(body.error.data);
+            }
+
             throw error;
         }
 

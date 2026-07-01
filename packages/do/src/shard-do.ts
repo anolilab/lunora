@@ -4478,10 +4478,21 @@ abstract class ShardDO {
         }
 
         if (error && typeof error === "object" && (error as { name?: string }).name === "LunoraError") {
-            const lunoraError = error as { code?: string; message?: string; status?: number };
+            const lunoraError = error as { code?: string; data?: unknown; message?: string; status?: number };
             const status = typeof lunoraError.status === "number" ? lunoraError.status : 500;
+            const body: { code: string; data?: unknown; message: string } = {
+                code: lunoraError.code ?? "INTERNAL",
+                message: lunoraError.message ?? "internal error",
+            };
 
-            return jsonResponse({ error: { code: lunoraError.code ?? "INTERNAL", message: lunoraError.message ?? "internal error" } }, status);
+            // Propagate an explicit app error's structured payload (wire-encoded so
+            // a `bigint`/`bytes` in `data` survives). Only this deliberate-error
+            // branch carries `data`; the generic fall-through below stays redacted.
+            if (lunoraError.data !== undefined) {
+                body.data = encodeWire(lunoraError.data);
+            }
+
+            return jsonResponse({ error: body }, status);
         }
 
         // Do NOT echo arbitrary error.message values to clients — an unhandled
