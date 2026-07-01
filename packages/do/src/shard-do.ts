@@ -2,6 +2,7 @@ import type { DurableObjectStorage } from "@cloudflare/workers-types";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { ExportRow, ImportShardResult } from "./admin-export-import";
 import { parseExportShardArgs, parseImportShardArgs } from "./admin-export-import";
 import { appendAuditEntry, ensureAuditTable, readAuditLog } from "./audit-log";
@@ -2000,7 +2001,11 @@ abstract class ShardDO {
                 return this.respondFromIdempotencyCache(payload.functionPath, dispatchStartedAt, mutatorClass, cached.value);
             }
 
-            const result = await this.handleRpc(payload.functionPath, payload.args ?? {});
+            // Decode the wire codec (`bytes`/`bigint`/typed-array/±Infinity leaves)
+            // ONLY for the handler, so `validateArgs` sees real `ArrayBuffer`/`bigint`
+            // values. `payload.args` stays in wire form for the request log/metrics
+            // below (JSON-safe — a raw `bigint` there would throw `JSON.stringify`).
+            const result = await this.handleRpc(payload.functionPath, decodeWire(payload.args ?? {}) as Record<string, unknown>);
 
             this.recordPostDispatchBookkeeping(result, mutatorClass);
 
@@ -2051,7 +2056,11 @@ abstract class ShardDO {
             // mutator echoes the applied `lastMutationId` so the client can drop
             // the pending optimistic overlay as soon as the ack lands (the poke
             // frame carries the same watermark for passive subscribers).
-            const response = this.buildDispatchResponse(mutatorClass, result);
+            // Encode the result to wire form exactly here (the fresh path). The
+            // idempotency cache also stores the encoded form (see
+            // `persistIdempotentResult`), so `respondFromIdempotencyCache` /
+            // `buildDispatchResponse` never re-encode — no double-encoding.
+            const response = this.buildDispatchResponse(mutatorClass, encodeWire(result));
 
             await this.flushChangedTables();
 
@@ -3323,12 +3332,14 @@ abstract class ShardDO {
         const now = Date.now();
 
         try {
-            // `JSON.stringify(undefined)` is `undefined`, not a string — a void
-            // mutation must still cache a non-null `result_json`, so fall back to
-            // the literal `"null"`. (`JSON.stringify` is typed `=> string`, hence
-            // the disable: the `??` is load-bearing at runtime despite the type.)
-            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- JSON.stringify(undefined) returns undefined at runtime
-            writeIdempotent(this.sql as SqlExec, this.currentRequestUserId ?? "", this.currentRequestMutationId, JSON.stringify(result) ?? "null", now);
+            // Store the WIRE-encoded result so the cache holds JSON-safe bytes (a
+            // raw `bigint` result would otherwise throw here) and a later replay
+            // returns byte-identical wire form without a second `encodeWire`.
+            // `encodeWire` maps a void mutation's `undefined` to a tagged array, so
+            // `JSON.stringify` always yields a string for real data — the old
+            // `?? "null"` floor is now dead (a non-data result would throw and the
+            // catch below swallows it, since this bookkeeping is best-effort).
+            writeIdempotent(this.sql as SqlExec, this.currentRequestUserId ?? "", this.currentRequestMutationId, JSON.stringify(encodeWire(result)), now);
 
             // Throttled GC: drop dedup rows past the retention window at most once
             // per interval per warm instance.

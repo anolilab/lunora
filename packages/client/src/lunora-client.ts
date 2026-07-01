@@ -1,4 +1,5 @@
 import { stableStringify } from "../../../shared/stable-key";
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import createInMemoryBookmarkStorage from "./bookmark";
 import { applyDelta, isMutationDelta } from "./delta-merge";
 import Listeners from "./listeners";
@@ -2924,7 +2925,10 @@ class LunoraClient {
         const headers = this.rpcRequestHeaders(flags);
 
         const response = await this.fetchImpl(joinUrl(this.url, RPC_PATH), {
-            body: JSON.stringify({ args, functionPath, shardKey }),
+            // `encodeWire` tags leaves plain JSON can't carry (`bigint`,
+            // `ArrayBuffer`/typed arrays, `NaN`/±Infinity); a pure-JSON `args`
+            // encodes byte-identically, so a pre-codec server still interops.
+            body: JSON.stringify({ args: encodeWire(args), functionPath, shardKey }),
             headers,
             method: "POST",
         });
@@ -2966,7 +2970,7 @@ class LunoraClient {
         flags.onMutationAck?.(body.lastMutationId);
         flags.onCommitCursor?.(body.commitCursor);
 
-        return body.result;
+        return decodeWire(body.result);
     }
 
     /**
