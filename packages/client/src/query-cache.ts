@@ -88,7 +88,7 @@ const TS_INDEX = "by_ts";
  * Schema version for the read-cache database. The query cache owns its own
  * database ({@link DEFAULT_DATABASE}) so its schema evolves independently of the
  * offline-mutation outbox — the two adapters are toggled independently and never
- * share a version namespace. (They previously shared the `lunora` database at
+ * share a version namespace. (They previously shared one `lunora` database at
  * mismatched versions — 1 for the outbox, 2 here — which threw
  * `VersionError: The requested version (1) is less than the existing version (2)`
  * once both were enabled: IndexedDB's version is a property of the database, not
@@ -114,7 +114,7 @@ const promisifyRequest = <T>(request: IDBRequest<T>): Promise<T> =>
  * reuse one connection.
  *
  * The store lives in its own `lunora-query-cache` database — deliberately
- * separate from the offline-mutation outbox's `lunora` database so the two
+ * separate from the offline-mutation outbox's `lunora-outbox` database so the two
  * independently-toggleable adapters never share (and drift on) a schema version.
  * Throws eagerly if no `IDBFactory` is available — callers in non-browser
  * environments should use {@link createInMemoryQueryCache}.

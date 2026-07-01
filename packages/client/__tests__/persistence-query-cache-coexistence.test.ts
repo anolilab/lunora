@@ -11,7 +11,7 @@ const mutation = (id: string): PersistedMutation => {
 
 /**
  * Regression: the offline outbox and the read cache must open DISTINCT IndexedDB
- * databases. They used to share the `lunora` database at mismatched schema
+ * databases. They used to share one `lunora` database at mismatched schema
  * versions (outbox v1, query-cache v2); IndexedDB's version is a property of the
  * database, not the store, so once both were enabled by default the lower-version
  * open threw `VersionError: The requested version (1) is less than the existing
@@ -29,7 +29,7 @@ describe("offline outbox + query cache coexistence (shared IDBFactory)", () => {
 
         // Open the query cache FIRST so its database reaches its own version before
         // the outbox opens — the exact ordering that tripped `VersionError` when the
-        // two shared the `lunora` database.
+        // two shared one `lunora` database.
         const queryCache = createIndexedDbQueryCache({ indexedDB });
 
         await queryCache.put(queryCacheKey("messages:list", "{}"), { identity: "u1", ts: 1, value: { count: 1 } });
@@ -72,7 +72,7 @@ describe("offline outbox + query cache coexistence (shared IDBFactory)", () => {
         const databases = await indexedDB.databases();
         const names = databases.map((database) => database.name);
 
-        expect(names).toContain("lunora");
+        expect(names).toContain("lunora-outbox");
         expect(names).toContain("lunora-query-cache");
         expect(names).toHaveLength(2);
     });
