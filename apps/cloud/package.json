@@ -19,8 +19,8 @@
         "test": "vitest run"
     },
     "dependencies": {
-        "@lunora/analytics": "workspace:*",
         "@lunora/auth": "workspace:*",
+        "@lunora/bindings": "workspace:*",
         "@lunora/client": "workspace:*",
         "@lunora/d1": "workspace:*",
         "@lunora/do": "workspace:*",
@@ -31,6 +31,7 @@
         "@lunora/runtime": "workspace:*",
         "@lunora/scheduler": "workspace:*",
         "@lunora/server": "workspace:*",
+        "@lunora/values": "workspace:*",
         "better-auth": "catalog:auth",
         "react": "catalog:frontend",
         "react-dom": "catalog:frontend",
