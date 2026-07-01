@@ -152,6 +152,24 @@ concentrates in (a) the escaping rule and (b) getting encode/decode on the
 codegen change. Fully back-compatible on pure-JSON payloads (§6.4), so it can
 ship dark and be exercised only when a `bytes`/`bigint` value actually appears.
 
+## 7a. Phase status (branch `feat/capnweb-wire-fidelity`)
+
+- **Phase 1 — RPC path: DONE.** `shared/wire-codec.ts` + client encode-args/decode-result
+    - DO decode-args-for-handler / encode-result-once (idempotency-cache stores the
+      wire form, so replays never double-encode). Pure-JSON payloads stay byte-identical.
+      Unit + integration tests green; client/server/DO suites unregressed.
+- **Phase 2 — subscription/poke frames: TODO (benchmark-gated).** The reactive
+  delta path (`subscription-delivery.ts` `collectUpsertDeltas`) builds each frame by
+  **string-concatenating a single `JSON.stringify(nextRow)`** — the finding-#6 / #072
+  optimization. A `v.bytes()` row there still truncates to `{}` and a `v.bigint()`
+  row throws. Fixing it means either (a) a `containsWireSpecial(row)` guard + a second
+  `encodeWire` walk (regresses the hottest path for normal rows — the exact path prior
+  waves tuned) or (b) a `JSON.stringify(row, replacer)` that tags leaves in the single
+  walk (the `"arr"` escape is awkward inside a replacer). Both want a micro-benchmark
+  before landing, so this is deliberately a separate phase, not folded into Phase 1.
+  The client half is small (decode `data`/`delta`/`rowsPatch[].value`/chunk/whisper in
+  `handleServerMessage`) and is a safe no-op until the server encodes — add it with Phase 2.
+
 ## 8. Open decisions
 
 1. **Roll-out ordering vs 078** — recommend 086 first (078's binary scalars

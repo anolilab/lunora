@@ -1,5 +1,12 @@
 # Plan 088 — [Spike] Client RPC batch transport (Cap'n Web HTTP-batch, no capabilities)
 
+> **Status (branch `feat/capnweb-wire-fidelity`): NOT STARTED.** 086 (RPC value
+> codec) and 087 (structured errors) landed on this branch; 088 remains the
+> guarded spike below. It is XL — a new `/_lunora/rpc-batch` endpoint, worker-side
+> shard-split, and DO per-entry idempotency + custom-mutator watermark ordering —
+> and its own §3 STOP conditions apply. Scope it as a standalone phase (design +
+> workerd proof first, like 075/077), not a quick follow-on to 086/087.
+
 > **Source:** Wave 9 Cap'n Web analysis. Cap'n Web's `newHttpBatchRpcSession`
 > bundles many calls into one HTTP round trip (and pipelines dependent calls).
 > Lunora issues **one `POST /_lunora/rpc` per call** — confirmed at
