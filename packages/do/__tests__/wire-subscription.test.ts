@@ -41,9 +41,9 @@ describe("shape pokes carry bytes/bigint", () => {
 
         // frames = [pokeStart, pokePart, pokeEnd]
         const part = decodeFrame(frames[1] as string);
-        const rows = part.rowsPatch as { value: Record<string, unknown> }[];
+        const [first] = part.rowsPatch as { value: Record<string, unknown> }[];
 
-        expect(rows[0].value).toStrictEqual({ _id: "t1", size: 42n });
+        expect(first?.value).toStrictEqual({ _id: "t1", size: 42n });
     });
 });
 
