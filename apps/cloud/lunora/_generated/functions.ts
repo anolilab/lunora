@@ -14,6 +14,7 @@ import * as lunora_projects_9 from "../projects.js";
 import * as lunora_secrets_10 from "../secrets.js";
 import * as lunora_usage_11 from "../usage.js";
 
+import { DEFER_VALIDATION as DEFER, installCompiledValidatorMap } from "@lunora/values";
 import type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";
 import type { Id } from "./dataModel.js";
 
@@ -83,6 +84,251 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "usage:rollup": lunora_usage_11.rollup as unknown as RegisteredLunoraFunction,
     "usage:summary": lunora_usage_11.summary as unknown as RegisteredLunoraFunction,
 };
+
+/**
+ * AOT-compiled argument validators (Worker-safe, no `eval`). Each is installed
+ * onto its function's live `.args` object and consulted by the interpreted
+ * parser as a zero-allocation fast path; anything it can't model is deferred.
+ */
+installCompiledValidatorMap(lunora_audit_log_0.list.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_audit_log_0.record.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["action"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+let __has1 = false;
+let __val1;
+if (source["target"] !== undefined) {
+if (typeof source["target"] !== "string") return DEFER;
+__val1 = source["target"];
+__has1 = true;
+}
+return { "action": source["action"], "organizationId": source["organizationId"], ...(__has1 ? { "target": __val1 } : {}) };
+});
+installCompiledValidatorMap(lunora_billing_1.checkout.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["cancelUrl"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+if (typeof source["priceId"] !== "string") return DEFER;
+if (typeof source["successUrl"] !== "string") return DEFER;
+return { "cancelUrl": source["cancelUrl"], "organizationId": source["organizationId"], "priceId": source["priceId"], "successUrl": source["successUrl"] };
+});
+installCompiledValidatorMap(lunora_billing_1.entitlements.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_billing_1.portal.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+if (typeof source["returnUrl"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"], "returnUrl": source["returnUrl"] };
+});
+installCompiledValidatorMap(lunora_billing_1.processWebhook.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["body"] !== "string") return DEFER;
+if (typeof source["signature"] !== "string") return DEFER;
+return { "body": source["body"], "signature": source["signature"] };
+});
+installCompiledValidatorMap(lunora_billing_1.subscription.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_cells_2.register.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["cloudflareAccountId"] !== "string") return DEFER;
+if (typeof source["dispatchNamespacePrefix"] !== "string") return DEFER;
+let __has1 = false;
+let __val1;
+if (source["jurisdiction"] !== undefined) {
+if (typeof source["jurisdiction"] !== "string") return DEFER;
+__val1 = source["jurisdiction"];
+__has1 = true;
+}
+if (typeof source["name"] !== "string") return DEFER;
+return { "cloudflareAccountId": source["cloudflareAccountId"], "dispatchNamespacePrefix": source["dispatchNamespacePrefix"], ...(__has1 ? { "jurisdiction": __val1 } : {}), "name": source["name"] };
+});
+installCompiledValidatorMap(lunora_deploy_keys_3.list.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_deploy_keys_3.revoke.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["id"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "id": source["id"], "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_deploy_keys_3.verify.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["key"] !== "string") return DEFER;
+return { "key": source["key"] };
+});
+installCompiledValidatorMap(lunora_deployments_4.adminTarget.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["deploymentId"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "deploymentId": source["deploymentId"], "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_deployments_4.listByProject.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+if (typeof source["projectId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"], "projectId": source["projectId"] };
+});
+installCompiledValidatorMap(lunora_deployments_4.planForScript.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["scriptName"] !== "string") return DEFER;
+return { "scriptName": source["scriptName"] };
+});
+installCompiledValidatorMap(lunora_invitations_6.accept.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["token"] !== "string") return DEFER;
+return { "token": source["token"] };
+});
+installCompiledValidatorMap(lunora_invitations_6.invite.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["email"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "email": source["email"], "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_invitations_6.list.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_invitations_6.revoke.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["id"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "id": source["id"], "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_members_7.add.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+if (typeof source["userId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"], "userId": source["userId"] };
+});
+installCompiledValidatorMap(lunora_members_7.list.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_members_7.remove.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["id"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "id": source["id"], "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_organizations_8.getBySlug.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["slug"] !== "string") return DEFER;
+return { "slug": source["slug"] };
+});
+installCompiledValidatorMap(lunora_projects_9.byGithubRepo.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["repository"] !== "string") return DEFER;
+return { "repository": source["repository"] };
+});
+installCompiledValidatorMap(lunora_projects_9.create.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+let __has1 = false;
+let __val1;
+if (source["framework"] !== undefined) {
+if (typeof source["framework"] !== "string") return DEFER;
+__val1 = source["framework"];
+__has1 = true;
+}
+let __has2 = false;
+let __val2;
+if (source["githubRepo"] !== undefined) {
+if (typeof source["githubRepo"] !== "string") return DEFER;
+__val2 = source["githubRepo"];
+__has2 = true;
+}
+if (typeof source["name"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+if (typeof source["slug"] !== "string") return DEFER;
+return { ...(__has1 ? { "framework": __val1 } : {}), ...(__has2 ? { "githubRepo": __val2 } : {}), "name": source["name"], "organizationId": source["organizationId"], "slug": source["slug"] };
+});
+installCompiledValidatorMap(lunora_projects_9.listByOrg.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_secrets_10.list.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+if (typeof source["projectId"] !== "string") return DEFER;
+return { "organizationId": source["organizationId"], "projectId": source["projectId"] };
+});
+installCompiledValidatorMap(lunora_secrets_10.listEncrypted.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+let __has1 = false;
+let __val1;
+if (source["deployKey"] !== undefined) {
+if (typeof source["deployKey"] !== "string") return DEFER;
+__val1 = source["deployKey"];
+__has1 = true;
+}
+if (typeof source["organizationId"] !== "string") return DEFER;
+if (typeof source["projectId"] !== "string") return DEFER;
+return { ...(__has1 ? { "deployKey": __val1 } : {}), "organizationId": source["organizationId"], "projectId": source["projectId"] };
+});
+installCompiledValidatorMap(lunora_secrets_10.remove.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["id"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "id": source["id"], "organizationId": source["organizationId"] };
+});
+installCompiledValidatorMap(lunora_secrets_10.store.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["ciphertext"] !== "string") return DEFER;
+if (typeof source["iv"] !== "string") return DEFER;
+if (typeof source["name"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+if (typeof source["projectId"] !== "string") return DEFER;
+return { "ciphertext": source["ciphertext"], "iv": source["iv"], "name": source["name"], "organizationId": source["organizationId"], "projectId": source["projectId"] };
+});
+installCompiledValidatorMap(lunora_usage_11.ingest.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["deployKey"] !== "string") return DEFER;
+let __has1 = false;
+let __val1;
+if (source["deploymentId"] !== undefined) {
+if (typeof source["deploymentId"] !== "string") return DEFER;
+__val1 = source["deploymentId"];
+__has1 = true;
+}
+if (typeof source["organizationId"] !== "string") return DEFER;
+if (typeof source["periodStart"] !== "number" || !Number.isFinite(source["periodStart"])) return DEFER;
+if (typeof source["quantity"] !== "number" || !Number.isFinite(source["quantity"])) return DEFER;
+return { "deployKey": source["deployKey"], ...(__has1 ? { "deploymentId": __val1 } : {}), "organizationId": source["organizationId"], "periodStart": source["periodStart"], "quantity": source["quantity"] };
+});
+installCompiledValidatorMap(lunora_usage_11.record.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+let __has1 = false;
+let __val1;
+if (source["deploymentId"] !== undefined) {
+if (typeof source["deploymentId"] !== "string") return DEFER;
+__val1 = source["deploymentId"];
+__has1 = true;
+}
+if (typeof source["organizationId"] !== "string") return DEFER;
+if (typeof source["periodStart"] !== "number" || !Number.isFinite(source["periodStart"])) return DEFER;
+if (typeof source["quantity"] !== "number" || !Number.isFinite(source["quantity"])) return DEFER;
+return { ...(__has1 ? { "deploymentId": __val1 } : {}), "organizationId": source["organizationId"], "periodStart": source["periodStart"], "quantity": source["quantity"] };
+});
+installCompiledValidatorMap(lunora_usage_11.summary.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+if (typeof source["periodStart"] !== "number" || !Number.isFinite(source["periodStart"])) return DEFER;
+return { "organizationId": source["organizationId"], "periodStart": source["periodStart"] };
+});
 
 /**
  * Connection-lifecycle manifest: the function paths the generated ShardDO

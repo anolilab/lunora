@@ -3,7 +3,7 @@
 
 import type { AdvisoryFinding, DatabaseWriterLike, DataMigrationLike, LogSink, MaskPoliciesResult, MigrationRunResult, RunShardApplyCdcArgs, RunShardMigrationArgs, RlsPoliciesResult, RunShardRankBeforeArgs, RunShardRankPageArgs, RunShardWriteArgs, RunShardWriteResult, SchedulerLike, SchemaLike, ShardDOState, ShardRankPageResult, SqlExec, StorageRulesResult, StudioFeaturesResult, SystemReaderStorageLike } from "@lunora/do";
 import { applyCdcChanges, createShardCtxDb, runDataMigration, runShardMigrations, serveRelationFanout, ShardDO as ShardDOBase } from "@lunora/do";
-import { asBucketStorage } from "@lunora/server";
+import { asBucketStorage, createSecrets } from "@lunora/server";
 import { bindOrm, bindTableFacade } from "@lunora/server";
 import type { LunoraDatabaseLike as LunoraPaymentDbLike, LunoraPayment, PaymentsFromContextOptions } from "@lunora/payment";
 import { paymentsFromContext } from "@lunora/payment";
@@ -1131,12 +1131,12 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "title": "Table has no insert path"
     },
     {
-        "cacheKey": "nondeterministic_query_mutation:audit-log:25:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:audit-log:27:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
-        "detail": "`Date.now(…)` in record (audit-log:25) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "detail": "`Date.now(…)` in record (audit-log:27) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
         "facing": "EXTERNAL",
         "level": "WARN",
         "metadata": {
@@ -1144,19 +1144,19 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "record",
             "file": "audit-log",
             "kind": "mutation",
-            "line": 25
+            "line": 27
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
         "title": "Non-deterministic call in query/mutation handler"
     },
     {
-        "cacheKey": "nondeterministic_query_mutation:cells:50:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:cells:52:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
-        "detail": "`Date.now(…)` in register (cells:50) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "detail": "`Date.now(…)` in register (cells:52) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
         "facing": "EXTERNAL",
         "level": "WARN",
         "metadata": {
@@ -1164,19 +1164,19 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "register",
             "file": "cells",
             "kind": "mutation",
-            "line": 50
+            "line": 52
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
         "title": "Non-deterministic call in query/mutation handler"
     },
     {
-        "cacheKey": "nondeterministic_query_mutation:deploy-keys:67:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:deploy-keys:71:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
-        "detail": "`Date.now(…)` in issue (deploy-keys:67) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "detail": "`Date.now(…)` in issue (deploy-keys:71) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
         "facing": "EXTERNAL",
         "level": "WARN",
         "metadata": {
@@ -1184,19 +1184,19 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "issue",
             "file": "deploy-keys",
             "kind": "mutation",
-            "line": 67
+            "line": 71
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
         "title": "Non-deterministic call in query/mutation handler"
     },
     {
-        "cacheKey": "nondeterministic_query_mutation:deploy-keys:83:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:deploy-keys:89:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
-        "detail": "`Date.now(…)` in revoke (deploy-keys:83) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "detail": "`Date.now(…)` in revoke (deploy-keys:89) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
         "facing": "EXTERNAL",
         "level": "WARN",
         "metadata": {
@@ -1204,19 +1204,19 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "revoke",
             "file": "deploy-keys",
             "kind": "mutation",
-            "line": 83
+            "line": 89
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
         "title": "Non-deterministic call in query/mutation handler"
     },
     {
-        "cacheKey": "nondeterministic_query_mutation:deploy-keys:117:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:deploy-keys:127:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
-        "detail": "`Date.now(…)` in verify (deploy-keys:117) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "detail": "`Date.now(…)` in verify (deploy-keys:127) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
         "facing": "EXTERNAL",
         "level": "WARN",
         "metadata": {
@@ -1224,19 +1224,19 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "verify",
             "file": "deploy-keys",
             "kind": "mutation",
-            "line": 117
+            "line": 127
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
         "title": "Non-deterministic call in query/mutation handler"
     },
     {
-        "cacheKey": "nondeterministic_query_mutation:deployments:115:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:deployments:121:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
-        "detail": "`Date.now(…)` in create (deployments:115) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "detail": "`Date.now(…)` in create (deployments:121) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
         "facing": "EXTERNAL",
         "level": "WARN",
         "metadata": {
@@ -1244,19 +1244,19 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "create",
             "file": "deployments",
             "kind": "mutation",
-            "line": 115
+            "line": 121
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
         "title": "Non-deterministic call in query/mutation handler"
     },
     {
-        "cacheKey": "nondeterministic_query_mutation:deployments:142:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:deployments:148:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
-        "detail": "`Date.now(…)` in cleanupExpiredPreviews (deployments:142) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "detail": "`Date.now(…)` in cleanupExpiredPreviews (deployments:148) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
         "facing": "EXTERNAL",
         "level": "WARN",
         "metadata": {
@@ -1264,19 +1264,19 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "cleanupExpiredPreviews",
             "file": "deployments",
             "kind": "mutation",
-            "line": 142
+            "line": 148
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
         "title": "Non-deterministic call in query/mutation handler"
     },
     {
-        "cacheKey": "nondeterministic_query_mutation:deployments:190:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:deployments:198:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
-        "detail": "`Date.now(…)` in updateStatus (deployments:190) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "detail": "`Date.now(…)` in updateStatus (deployments:198) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
         "facing": "EXTERNAL",
         "level": "WARN",
         "metadata": {
@@ -1284,19 +1284,19 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "updateStatus",
             "file": "deployments",
             "kind": "mutation",
-            "line": 190
+            "line": 198
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
         "title": "Non-deterministic call in query/mutation handler"
     },
     {
-        "cacheKey": "nondeterministic_query_mutation:invitations:49:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:invitations:53:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
-        "detail": "`Date.now(…)` in invite (invitations:49) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "detail": "`Date.now(…)` in invite (invitations:53) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
         "facing": "EXTERNAL",
         "level": "WARN",
         "metadata": {
@@ -1304,27 +1304,7 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "invite",
             "file": "invitations",
             "kind": "mutation",
-            "line": 49
-        },
-        "name": "nondeterministic_query_mutation",
-        "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
-        "title": "Non-deterministic call in query/mutation handler"
-    },
-    {
-        "cacheKey": "nondeterministic_query_mutation:invitations:90:Date.now",
-        "categories": [
-            "SCHEMA"
-        ],
-        "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
-        "detail": "`Date.now(…)` in accept (invitations:90) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
-        "facing": "EXTERNAL",
-        "level": "WARN",
-        "metadata": {
-            "callee": "Date.now",
-            "exportName": "accept",
-            "file": "invitations",
-            "kind": "mutation",
-            "line": 90
+            "line": 53
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
@@ -1351,12 +1331,32 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "title": "Non-deterministic call in query/mutation handler"
     },
     {
-        "cacheKey": "nondeterministic_query_mutation:members:48:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:invitations:106:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
-        "detail": "`Date.now(…)` in add (members:48) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "detail": "`Date.now(…)` in accept (invitations:106) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "facing": "EXTERNAL",
+        "level": "WARN",
+        "metadata": {
+            "callee": "Date.now",
+            "exportName": "accept",
+            "file": "invitations",
+            "kind": "mutation",
+            "line": 106
+        },
+        "name": "nondeterministic_query_mutation",
+        "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
+        "title": "Non-deterministic call in query/mutation handler"
+    },
+    {
+        "cacheKey": "nondeterministic_query_mutation:members:50:Date.now",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
+        "detail": "`Date.now(…)` in add (members:50) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
         "facing": "EXTERNAL",
         "level": "WARN",
         "metadata": {
@@ -1364,19 +1364,19 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "add",
             "file": "members",
             "kind": "mutation",
-            "line": 48
+            "line": 50
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
         "title": "Non-deterministic call in query/mutation handler"
     },
     {
-        "cacheKey": "nondeterministic_query_mutation:organizations:53:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:organizations:55:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
-        "detail": "`Date.now(…)` in create (organizations:53) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "detail": "`Date.now(…)` in create (organizations:55) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
         "facing": "EXTERNAL",
         "level": "WARN",
         "metadata": {
@@ -1384,19 +1384,19 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "create",
             "file": "organizations",
             "kind": "mutation",
-            "line": 53
+            "line": 55
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
         "title": "Non-deterministic call in query/mutation handler"
     },
     {
-        "cacheKey": "nondeterministic_query_mutation:projects:53:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:projects:59:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
-        "detail": "`Date.now(…)` in create (projects:53) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "detail": "`Date.now(…)` in create (projects:59) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
         "facing": "EXTERNAL",
         "level": "WARN",
         "metadata": {
@@ -1404,19 +1404,19 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "create",
             "file": "projects",
             "kind": "mutation",
-            "line": 53
+            "line": 59
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
         "title": "Non-deterministic call in query/mutation handler"
     },
     {
-        "cacheKey": "nondeterministic_query_mutation:secrets:36:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:secrets:38:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
-        "detail": "`Date.now(…)` in store (secrets:36) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "detail": "`Date.now(…)` in store (secrets:38) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
         "facing": "EXTERNAL",
         "level": "WARN",
         "metadata": {
@@ -1424,19 +1424,19 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "store",
             "file": "secrets",
             "kind": "mutation",
-            "line": 36
+            "line": 38
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
         "title": "Non-deterministic call in query/mutation handler"
     },
     {
-        "cacheKey": "nondeterministic_query_mutation:usage:24:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:usage:28:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
-        "detail": "`Date.now(…)` in record (usage:24) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "detail": "`Date.now(…)` in record (usage:28) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
         "facing": "EXTERNAL",
         "level": "WARN",
         "metadata": {
@@ -1444,19 +1444,19 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "record",
             "file": "usage",
             "kind": "mutation",
-            "line": 24
+            "line": 28
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
         "title": "Non-deterministic call in query/mutation handler"
     },
     {
-        "cacheKey": "nondeterministic_query_mutation:usage:49:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:usage:56:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
-        "detail": "`Date.now(…)` in ingest (usage:49) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "detail": "`Date.now(…)` in ingest (usage:56) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
         "facing": "EXTERNAL",
         "level": "WARN",
         "metadata": {
@@ -1464,7 +1464,7 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "ingest",
             "file": "usage",
             "kind": "mutation",
-            "line": 49
+            "line": 56
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",
@@ -2011,14 +2011,14 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `returnUrl` of public procedure `portal` (billing:58) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `returnUrl` of public procedure `portal` (billing:60) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "returnUrl",
             "exportName": "portal",
             "file": "billing",
-            "line": 58
+            "line": 60
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -2030,14 +2030,14 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `body` of public procedure `processWebhook` (billing:98) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `body` of public procedure `processWebhook` (billing:114) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "body",
             "exportName": "processWebhook",
             "file": "billing",
-            "line": 98
+            "line": 114
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -2049,14 +2049,14 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `signature` of public procedure `processWebhook` (billing:98) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `signature` of public procedure `processWebhook` (billing:114) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "signature",
             "exportName": "processWebhook",
             "file": "billing",
-            "line": 98
+            "line": 114
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -2144,14 +2144,14 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `name` of public procedure `issue` (deploy-keys:50) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `name` of public procedure `issue` (deploy-keys:52) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "name",
             "exportName": "issue",
             "file": "deploy-keys",
-            "line": 50
+            "line": 52
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -2163,14 +2163,14 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `key` of public procedure `verify` (deploy-keys:99) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `key` of public procedure `verify` (deploy-keys:105) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "key",
             "exportName": "verify",
             "file": "deploy-keys",
-            "line": 99
+            "line": 105
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -2182,14 +2182,14 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `scriptName` of public procedure `planForScript` (deployments:54) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `scriptName` of public procedure `planForScript` (deployments:56) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "scriptName",
             "exportName": "planForScript",
             "file": "deployments",
-            "line": 54
+            "line": 56
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -2201,14 +2201,14 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `adminToken` of public procedure `create` (deployments:83) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `adminToken` of public procedure `create` (deployments:87) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "adminToken",
             "exportName": "create",
             "file": "deployments",
-            "line": 83
+            "line": 87
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -2220,14 +2220,14 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `branch` of public procedure `create` (deployments:83) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `branch` of public procedure `create` (deployments:87) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "branch",
             "exportName": "create",
             "file": "deployments",
-            "line": 83
+            "line": 87
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -2239,14 +2239,14 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `cronSpecs` of public procedure `create` (deployments:83) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `cronSpecs` of public procedure `create` (deployments:87) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "cronSpecs",
             "exportName": "create",
             "file": "deployments",
-            "line": 83
+            "line": 87
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -2258,14 +2258,14 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `deployKey` of public procedure `create` (deployments:83) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `deployKey` of public procedure `create` (deployments:87) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "deployKey",
             "exportName": "create",
             "file": "deployments",
-            "line": 83
+            "line": 87
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -2277,14 +2277,14 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `scriptName` of public procedure `create` (deployments:83) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `scriptName` of public procedure `create` (deployments:87) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "scriptName",
             "exportName": "create",
             "file": "deployments",
-            "line": 83
+            "line": 87
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -2296,14 +2296,14 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `bundleHash` of public procedure `updateStatus` (deployments:169) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `bundleHash` of public procedure `updateStatus` (deployments:175) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "bundleHash",
             "exportName": "updateStatus",
             "file": "deployments",
-            "line": 169
+            "line": 175
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -2315,14 +2315,14 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `deployKey` of public procedure `updateStatus` (deployments:169) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `deployKey` of public procedure `updateStatus` (deployments:175) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "deployKey",
             "exportName": "updateStatus",
             "file": "deployments",
-            "line": 169
+            "line": 175
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -2334,14 +2334,14 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `url` of public procedure `updateStatus` (deployments:169) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `url` of public procedure `updateStatus` (deployments:175) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "url",
             "exportName": "updateStatus",
             "file": "deployments",
-            "line": 169
+            "line": 175
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -2353,14 +2353,14 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `email` of public procedure `invite` (invitations:47) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `email` of public procedure `invite` (invitations:49) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "email",
             "exportName": "invite",
             "file": "invitations",
-            "line": 47
+            "line": 49
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -2372,14 +2372,14 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `token` of public procedure `accept` (invitations:79) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `token` of public procedure `accept` (invitations:85) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "token",
             "exportName": "accept",
             "file": "invitations",
-            "line": 79
+            "line": 85
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -2467,14 +2467,14 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `repository` of public procedure `byGithubRepo` (projects:26) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `repository` of public procedure `byGithubRepo` (projects:28) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "repository",
             "exportName": "byGithubRepo",
             "file": "projects",
-            "line": 26
+            "line": 28
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -2486,14 +2486,14 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `framework` of public procedure `create` (projects:39) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `framework` of public procedure `create` (projects:43) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "framework",
             "exportName": "create",
             "file": "projects",
-            "line": 39
+            "line": 43
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -2505,14 +2505,14 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `githubRepo` of public procedure `create` (projects:39) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `githubRepo` of public procedure `create` (projects:43) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "githubRepo",
             "exportName": "create",
             "file": "projects",
-            "line": 39
+            "line": 43
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -2524,14 +2524,14 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `name` of public procedure `create` (projects:39) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `name` of public procedure `create` (projects:43) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "name",
             "exportName": "create",
             "file": "projects",
-            "line": 39
+            "line": 43
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -2543,14 +2543,14 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `slug` of public procedure `create` (projects:39) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `slug` of public procedure `create` (projects:43) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "slug",
             "exportName": "create",
             "file": "projects",
-            "line": 39
+            "line": 43
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -2619,14 +2619,14 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `deployKey` of public procedure `listEncrypted` (secrets:71) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `deployKey` of public procedure `listEncrypted` (secrets:77) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "deployKey",
             "exportName": "listEncrypted",
             "file": "secrets",
-            "line": 71
+            "line": 77
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -2638,14 +2638,14 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "SECURITY"
         ],
         "description": "A public `v.string()` argument has no maximum-length bound. An unbounded string lets a client submit arbitrarily large input — abusing storage and CPU on every request that processes it.",
-        "detail": "Arg `deployKey` of public procedure `ingest` (usage:38) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
+        "detail": "Arg `deployKey` of public procedure `ingest` (usage:43) is an unbounded `v.string()`. Add a max-length bound to cap payload size.",
         "facing": "EXTERNAL",
         "level": "INFO",
         "metadata": {
             "argument": "deployKey",
             "exportName": "ingest",
             "file": "usage",
-            "line": 38
+            "line": 43
         },
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
@@ -2671,8 +2671,10 @@ const LUNORA_STORAGE_RULES: StorageRulesResult = {
 
 /** Which optional package-backed features this app wires up (discovered from imports / `ctx.*` reads / schema signals) served via `__lunora_admin__:studioFeatures` so the studio hides nav pages whose package isn't enabled. */
 const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {
+    "flags": false,
     "mail": true,
     "payments": true,
+    "queues": false,
     "scheduler": true,
     "storage": false,
     "vectors": false,
@@ -2728,49 +2730,49 @@ const storageStub = {
 
 const globalDbStub: DatabaseWriterLike = {
     aggregate: async () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     count: async () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     delete: async () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     findFirst: async () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     findFirstOrThrow: async () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     findMany: async () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     get: async () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     groupBy: async () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     insert: async () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     normalizeId: () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     patch: async () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     query: () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     rank: async () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     rankPage: async () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
     replace: async () => {
-        throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
+        throw new Error("ctx.db.<globalTable>: no global backend configured. Pass `d1` or `hyperdriveGlobal` to createShardDO().");
     },
 };
 
@@ -2864,7 +2866,32 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             this.ensureMigrated();
 
-            return registered.handler(this.buildCtx({ functionPath }), args);
+            const ctx = this.buildCtx({ functionPath });
+
+            // A mutation's writes must commit all-or-nothing: wrap its dispatch in
+            // the DO's BEGIN/COMMIT span so any throw (a validator, an RLS denial,
+            // an OCC conflict, a failed row mid-`insertMany`/`patchMany`) rolls
+            // back every write the mutation made. Queries are read-only and actions
+            // do external I/O that can't be rolled back, so both dispatch directly.
+            // `ctx.run*` composition runs inside this span (it never re-enters
+            // handleRpc); runInTransaction's own guard rejects accidental nesting.
+            //
+            // The replay bookkeeping (idempotency dedup row + custom-mutator
+            // watermark advance) commits INSIDE this span via
+            // `commitMutationBookkeeping`, so the writes, the dedup row, and the
+            // watermark are atomic — a crash can't leave the writes durable without
+            // the replay guard.
+            if (registered.kind === "mutation") {
+                return this.runInTransaction(async () => {
+                    const result = await registered.handler(ctx, args);
+
+                    this.commitMutationBookkeeping(result);
+
+                    return result;
+                });
+            }
+
+            return registered.handler(ctx, args);
         }
 
         protected override async runRelationFanoutRead(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
@@ -3178,6 +3205,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const userId = options.identity ? options.identity.userId : this.getCurrentUserId();
             const identity = options.identity ? options.identity.identity : this.getCurrentIdentity();
 
+            const secrets = createSecrets(env);
+
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             // Build the storage adapter once and share it between `ctx.storage`
             // and `ctx.db.system._storage` so both read the same R2 binding. The
@@ -3236,6 +3265,14 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 warn: (...args: unknown[]) => { this.recordUserLog(logFunctionPath, "warn", args, observability); },
             };
 
+            // `ctx.now`: the wall-clock instant (epoch ms) this function began,
+            // captured ONCE so the whole handler body sees a single stable value.
+            // Query/mutation handlers must be deterministic (they may be re-run on
+            // OCC retry / subscription re-eval), so they must read time through
+            // `ctx.now` instead of `Date.now()` — the `nondeterministic_query_mutation`
+            // advisor flags the latter. Actions may still use ambient `Date.now()`.
+            const now = Date.now();
+
             const ctx: Record<string, unknown> = {
                 auth: {
                     getIdentity: async () => identity ?? null,
@@ -3245,9 +3282,11 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 fetch: globalThis.fetch.bind(globalThis),
                 ip: this.getCurrentIp(),
                 log,
+                now,
                 orm: bindOrm(facade),
                 scheduler,
                 storage,
+                secrets,
                 payments,
             };
 
