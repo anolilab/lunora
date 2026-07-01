@@ -435,6 +435,23 @@ describe("lunora init", () => {
             expect(existsSync(join(workdir, "   "))).toBe(false);
         });
 
+        it("trims a whitespace-padded name so the target dir is not whitespace-padded", async () => {
+            expect.assertions(3);
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: silentLogger(),
+                name: "  padded-app  ",
+                templateType: "tanstack-start-react",
+            });
+
+            expect(result.code).toBe(0);
+            // The trimmed name is used for the target dir — no whitespace-padded folder.
+            expect(existsSync(join(workdir, "padded-app", "package.json"))).toBe(true);
+            expect(existsSync(join(workdir, "  padded-app  "))).toBe(false);
+        });
+
         it("--from with missing template reports a helpful error", async () => {
             expect.assertions(2);
 

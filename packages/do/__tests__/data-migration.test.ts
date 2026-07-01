@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
@@ -234,11 +234,15 @@ describe("runDataMigration", () => {
         });
 
         it("a maxBatches pause still returns in_progress even when releaseClaim's UPDATE throws", async () => {
-            expect.assertions(3);
+            expect.assertions(4);
 
             const writer = setupWriter();
 
             await seed(writer);
+
+            // The swallowed failure is logged so repeated release failures are
+            // observable rather than silently delaying every resume.
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
             // Wrap the real SqlExec so only the release-claim statement (the
             // `updated_at = 0` back-date, distinct from the heartbeat's
@@ -264,6 +268,10 @@ describe("runDataMigration", () => {
             // with a fresh (non-zero) updated_at — the stale-claim timeout is
             // the fallback path a later invocation relies on.
             expect(stateRow("bump-version")).toMatchObject({ status: "in_progress" });
+
+            expect(warn).toHaveBeenCalledWith(expect.stringContaining('data migration "bump-version": releaseClaim failed'), expect.any(Error));
+
+            warn.mockRestore();
         });
 
         it("re-running a completed migration is a no-op that returns the stored counts", async () => {

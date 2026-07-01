@@ -299,6 +299,44 @@ describe("ensureDevVariables", () => {
         }
     });
 
+    it("reports `exists` (no info line) when a peer lands every missing key before our write", async () => {
+        expect.assertions(3);
+
+        // Only AUTH_SECRET present locally; the example also wants AUTH_URL, STORAGE_SECRET, LUNORA_ADMIN_TOKEN.
+        writeFileSync(join(dir, ".dev.vars"), 'AUTH_SECRET="my-real-secret"\n', "utf8");
+        writeFileSync(join(dir, ".dev.vars.example"), EXAMPLE, "utf8");
+
+        // Peer wins the whole race: between our fingerprint and our re-check it
+        // lands *all* the missing keys. Our re-plan then finds nothing to add, so
+        // the append writes zero lines — that must surface as an unchanged file
+        // (`exists`), not a dangling `Updated .dev.vars — added .` log.
+        let statCalls = 0;
+
+        onStatSync = () => {
+            statCalls += 1;
+
+            if (statCalls === 2) {
+                writeFileSync(
+                    join(dir, ".dev.vars"),
+                    'AUTH_SECRET="my-real-secret"\nAUTH_URL="http://localhost:5173"\nSTORAGE_SECRET="peer"\nLUNORA_ADMIN_TOKEN="peer"\n',
+                    "utf8",
+                );
+            }
+        };
+
+        const info = vi.fn<(message: string) => void>();
+
+        try {
+            const result = await ensureDevVariables({ confirm: async () => true, cwd: dir, info, randomHex: fixedHex });
+
+            expect(result.status).toBe("exists");
+            expect(result.addedKeys).toStrictEqual([]);
+            expect(info).not.toHaveBeenCalled();
+        } finally {
+            onStatSync = undefined;
+        }
+    });
+
     it("does not append when the user declines the missing-key prompt", async () => {
         expect.assertions(2);
 

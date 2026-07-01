@@ -542,8 +542,11 @@ const runDataMigration = async (options: RunDataMigrationOptions): Promise<Migra
         // invocation reclaim after STALE_CLAIM_TIMEOUT_MS.
         try {
             releaseClaim(sql, migration.id);
-        } catch {
-            /* claim release is best-effort; the stale-claim timeout is the fallback */
+        } catch (error) {
+            // Claim release is best-effort; the stale-claim timeout is the fallback. Log so
+            // repeated failures are observable rather than silently delaying every resume.
+            // eslint-disable-next-line no-console -- no logger is injected here; emit via console so the host captures the swallowed release failure
+            console.warn(`data migration "${migration.id}": releaseClaim failed`, error);
         }
     }
 

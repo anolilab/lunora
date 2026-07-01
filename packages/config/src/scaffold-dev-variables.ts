@@ -477,6 +477,14 @@ const ensureDevVariables = async (deps: EnsureDevVariablesDeps): Promise<EnsureD
         (currentContent) => planDevVariablesAugment({ existingContent: currentContent, exampleContent, randomHex: deps.randomHex }).additions,
     );
     const writtenKeys = written.map((line) => splitDevVariableLine(line)?.key).filter((key): key is string => key !== undefined);
+
+    // A concurrent writer may have landed every missing key between our plan and
+    // the CAS append, leaving nothing for us to write. Report that as an
+    // unchanged file rather than logging a dangling "added ." line.
+    if (writtenKeys.length === 0) {
+        return { addedKeys: [], generatedKeys: [], status: "exists" };
+    }
+
     const writtenGeneratedKeys = augment.generatedKeys.filter((key) => writtenKeys.includes(key));
 
     deps.info(`Updated ${DEV_VARS_FILE} — added ${writtenKeys.join(", ")}${generatedSuffix(writtenGeneratedKeys)}.`);
