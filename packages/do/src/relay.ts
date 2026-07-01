@@ -73,6 +73,25 @@ const nextPromotionState = (current: PromotionState, subscribers: number, thresh
 };
 
 /**
+ * Sanitize a raw (typically env-configured) collapse threshold into a valid
+ * hysteresis band for {@link nextPromotionState}, which throws when `tDown >= tUp`.
+ * A `tDownRaw` already strictly below `tUp` is kept as-is; otherwise (a
+ * misconfiguration) it degrades to half of `tUp`, hard-floored strictly below
+ * `tUp` — so a bad `LUNORA_RELAY_COLLAPSE_THRESHOLD` never throws on the routing
+ * hot path. For the degenerate `tUp = 1`, `tDown` lands at `0` (collapse simply
+ * never triggers, which is the sensible behavior at that ceiling). Keeping this
+ * next to the reducer means the `tDown < tUp` invariant is defended where it is
+ * declared, not re-derived by every caller.
+ */
+const clampPromotionThresholds = (tUp: number, tDownRaw: number): PromotionThresholds => {
+    if (tDownRaw < tUp) {
+        return { tDown: tDownRaw, tUp };
+    }
+
+    return { tDown: Math.min(Math.max(1, Math.floor(tUp / 2)), tUp - 1), tUp };
+};
+
+/**
  * How many relays a promoted key needs to serve `subscribers` connections, given
  * each relay's capacity, capped at `maxRelays` (the cost ceiling — a viral key can
  * never silently spawn unbounded DOs; the runtime surfaces the cap in Studio when
@@ -195,7 +214,7 @@ interface RelayShapePoke {
 /** Internal owner↔relay control messages (plan 075). NOT the public client protocol — the app never sees these. */
 type OwnerRelayFrame = RelayAttach | RelayDetach | RelayFrame | RelayShapePoke | RelayShapeSubscribe;
 
-export { DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, relayCountFor, shapeRoutingKey };
+export { clampPromotionThresholds, DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, relayCountFor, shapeRoutingKey };
 export type { OwnerRelayFrame, PromotionState, PromotionThresholds, RelayAttach, RelayDetach, RelayFrame, RelayShapePoke, RelayShapeSeed, RelayShapeSubscribe };
 // The DO-name contract lives in `shared/` so `@lunora/runtime` (which mints relay
 // names) and this package (which parses them) can't drift; re-exported so `./relay`

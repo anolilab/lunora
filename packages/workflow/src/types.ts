@@ -330,6 +330,8 @@ export interface WorkflowBranch<Output = unknown> {
  * ordinary declared workflow, so it can `ctx.runStep(...)` its own undo logic.
  */
 export interface BranchCompensationParams {
+    /** Index signature: this is a workflow `params` bag, so it is a valid `Record&lt;string, unknown>` payload. */
+    [key: string]: unknown;
     /** The export name of the completed branch being compensated. */
     branch: string;
     /** The serialised error of the sibling branch whose failure triggered the group rollback. */

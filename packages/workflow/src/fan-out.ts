@@ -119,6 +119,53 @@ const errorOutcome = (error: unknown): BranchOutcome => {
     return { error: serializeError(error), status: "error" };
 };
 
+/** A branch after id/event-type allocation — the parent's per-branch join bookkeeping. */
+interface PlannedBranch {
+    childId: string;
+    eventType: string;
+    index: number;
+    item: WorkflowBranch;
+}
+
+/**
+ * Group-saga rollback (plan 075 Phase 3): on a branch failure, spawn each
+ * already-completed sibling's declared `compensateWith` workflow in reverse
+ * declaration order. Each spawn is a durable, replay-safe idempotent create
+ * (keyed by the completed child's id via `step.do` memoization), so a parent
+ * replay re-attaches instead of double-compensating. Completed branches with no
+ * `compensateWith` are skipped; the failing branch itself is never compensated
+ * (its own per-step rollbacks already ran inside its instance).
+ */
+const compensateCompleted = async (
+    deps: FanOutDeps,
+    completed: ReadonlyArray<{ output: unknown; plan: PlannedBranch }>,
+    error: { message: string; name: string },
+): Promise<void> => {
+    for (let cursor = completed.length - 1; cursor >= 0; cursor -= 1) {
+        const done = completed[cursor];
+        const compensateWith = done?.plan.item.compensateWith;
+
+        if (done === undefined || compensateWith === undefined) {
+            continue;
+        }
+
+        // eslint-disable-next-line no-await-in-loop -- reverse-order group-saga compensation, one durable spawn per completed branch
+        await deps.step.do(`${COMPENSATE_STEP_PREFIX}${done.plan.childId}`, async (): Promise<string> => {
+            const compensateId = `${done.plan.childId}:compensate`;
+            const compensationParams: BranchCompensationParams = {
+                branch: done.plan.item.workflow,
+                error,
+                index: done.plan.index,
+                output: done.output,
+            };
+
+            await deps.resolveBinding(compensateWith).create({ id: compensateId, params: compensationParams });
+
+            return compensateId;
+        });
+    }
+};
+
 /**
  * Build `ctx.parallel` for one workflow invocation. Spawns each branch as an
  * isolated child instance, hibernates on a per-branch `waitForEvent`, and returns
@@ -149,7 +196,7 @@ const createParallel = (deps: FanOutDeps): WorkflowParallelFunction => {
         // Assign deterministic ids + event types synchronously, in declaration
         // order, BEFORE any await — so a parent replay reproduces the exact same
         // ids and re-attaches to the existing children rather than spawning new ones.
-        const planned = branches.map((item, index) => {
+        const planned: PlannedBranch[] = branches.map((item, index) => {
             const childId = deps.nextChildId(item.id);
 
             return { childId, eventType: `${BRANCH_EVENT_PREFIX}${childId}`, index, item };
@@ -174,7 +221,7 @@ const createParallel = (deps: FanOutDeps): WorkflowParallelFunction => {
         //    declaration order — events are buffered by type, so the wall-clock is
         //    max(branch durations), not the sum, and the result order is stable.
         const results: unknown[] = [];
-        const completed: { output: unknown; plan: (typeof planned)[number] }[] = [];
+        const completed: { output: unknown; plan: PlannedBranch }[] = [];
 
         for (const plan of planned) {
             // eslint-disable-next-line no-await-in-loop -- sequential, ordered join; per-type event buffering keeps wall-clock at max(branch), not the sum
@@ -185,39 +232,9 @@ const createParallel = (deps: FanOutDeps): WorkflowParallelFunction => {
             const outcome = event.payload;
 
             if (outcome.status === "error") {
-                // Group saga (plan 075 Phase 3): before failing the group, roll back
-                // every SIBLING that already completed — in reverse declaration order —
-                // by spawning its declared `compensateWith` workflow. Each spawn is a
-                // durable, replay-safe idempotent create keyed by the completed child's
-                // id, so a parent replay re-attaches instead of double-compensating. A
-                // completed branch without `compensateWith` is skipped; the failing
-                // branch itself is not compensated (its own per-step rollbacks already
-                // ran inside its instance).
-                for (let cursor = completed.length - 1; cursor >= 0; cursor -= 1) {
-                    const done = completed[cursor];
-                    const compensateWith = done?.plan.item.compensateWith;
-
-                    if (done === undefined || compensateWith === undefined) {
-                        continue;
-                    }
-
-                    // eslint-disable-next-line no-await-in-loop -- reverse-order group-saga compensation, one durable spawn per completed branch
-                    await deps.step.do(`${COMPENSATE_STEP_PREFIX}${done.plan.childId}`, async (): Promise<string> => {
-                        const compensateId = `${done.plan.childId}:compensate`;
-                        const compensationParams: BranchCompensationParams = {
-                            branch: done.plan.item.workflow,
-                            error: outcome.error,
-                            index: done.plan.index,
-                            output: done.output,
-                        };
-
-                        await deps
-                            .resolveBinding(compensateWith)
-                            .create({ id: compensateId, params: compensationParams as unknown as Record<string, unknown> });
-
-                        return compensateId;
-                    });
-                }
+                // Group saga: roll back completed siblings before failing the group.
+                // eslint-disable-next-line no-await-in-loop -- compensation must finish before the group's terminal throw
+                await compensateCompleted(deps, completed, outcome.error);
 
                 throw new NonRetryableError(`ctx.parallel: branch "${plan.item.workflow}" (#${String(plan.index)}) failed: ${outcome.error.message}`);
             }

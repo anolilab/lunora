@@ -5516,8 +5516,12 @@ abstract class ShardDO {
      * subscriber counts are folded live from each socket's attachment via
      * {@link summarizeFanoutTopics}; the running per-path cost counters are the
      * in-memory {@link ShardDO.fanout} tallies, sharing `metrics.sinceMs` as the
-     * "since this instance woke" epoch. Read-only: touches no SQLite and mutates
-     * no socket state.
+     * "since this instance woke" epoch. Touches no SQLite and mutates no socket
+     * state; it does call `relay.relayCount()`, which advances the promotion
+     * latch — safe here because that transition is a pure, monotonic function of
+     * the live socket count (DOs are single-threaded), so a metrics poll only ever
+     * drives the latch to the same state the routing path would compute for the
+     * same count, never a divergent one.
      */
     private collectFanoutMetrics(): FanoutMetricsResult {
         const summary = summarizeFanoutTopics(this.state.getWebSockets().map((ws) => this.readAttachment(ws)));
