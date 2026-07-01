@@ -146,6 +146,38 @@ describe("createFlags", () => {
         expect(provider.counts["dark-mode"]).toBe(2);
     });
 
+    it("returns the same in-flight promise for identical calls (memo hit, not just equal values)", async () => {
+        const provider = makeProvider({ "dark-mode": true });
+        const flags = createFlags({ provider: () => provider });
+
+        const [first, second] = [flags.details.boolean("dark-mode", false), flags.details.boolean("dark-mode", false)];
+
+        expect(first).toBe(second);
+
+        await Promise.all([first, second]);
+
+        expect(provider.counts["dark-mode"]).toBe(1);
+    });
+
+    it("does not share memo across different flag keys with an empty context (no false cache hits)", async () => {
+        const provider = makeProvider({ "dark-mode": true, "beta-mode": true });
+        const flags = createFlags({ provider: () => provider });
+
+        await Promise.all([flags.boolean("dark-mode", false), flags.boolean("beta-mode", false)]);
+
+        expect(provider.counts["dark-mode"]).toBe(1);
+        expect(provider.counts["beta-mode"]).toBe(1);
+    });
+
+    it("does not share memo across different default values for the same flag key", async () => {
+        const provider = makeProvider({});
+        const flags = createFlags({ provider: () => provider });
+
+        await Promise.all([flags.string("welcome", "a"), flags.string("welcome", "b")]);
+
+        expect(provider.counts.welcome).toBe(2);
+    });
+
     it("never throws when the provider errors — resolves the default with an errorCode", async () => {
         const provider = makeProvider({ "dark-mode": true }, { resolveThrows: true });
         const flags = createFlags({ provider: () => provider });
