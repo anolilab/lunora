@@ -220,6 +220,68 @@ describe("merge strategies", () => {
         expect(result.data).toEqual([{ x: 1 }, { x: 2 }]);
     });
 
+    it("topK — orders rows with missing/non-numeric `by` field deterministically (no NaN comparator)", async () => {
+        expect.assertions(2);
+
+        const registry = createStaticShardRegistry({ messages: ["a", "b", "c"] });
+        const coordinator = createQueryCoordinator({ registry });
+
+        const rows: Record<string, unknown[]> = {
+            a: [{ id: "a1" }, { id: "a2", score: 0.9 }],
+            b: [
+                { id: "b1", score: "not-a-number" },
+                { id: "b2", score: 0.7 },
+            ],
+            c: [{ id: "c1", score: null }, { id: "c2", score: 0.8 }, { id: "c3" }],
+        };
+
+        const spy = createShardSpy((shardKey) => json(rows[shardKey] ?? []));
+
+        const runOnce = () =>
+            coordinator.fanOut(
+                spy.namespace,
+                buildRequest({
+                    fanOut: { merge: { by: "score", k: 3, kind: "topK" }, table: "messages" },
+                }),
+            );
+
+        const first = await runOnce();
+        const second = await runOnce();
+
+        expect(first.data).toEqual([
+            { id: "a2", score: 0.9 },
+            { id: "c2", score: 0.8 },
+            { id: "b2", score: 0.7 },
+        ]);
+        expect(second.data).toEqual(first.data);
+    });
+
+    it("topK — sorts close finite values without throwing, highest first in desc", async () => {
+        expect.assertions(1);
+
+        const registry = createStaticShardRegistry({ messages: ["a"] });
+        const coordinator = createQueryCoordinator({ registry });
+
+        const spy = createShardSpy(() =>
+            json([
+                { id: "sum", score: 0.1 + 0.2 },
+                { id: "exact", score: 0.3 },
+            ]),
+        );
+
+        const result = await coordinator.fanOut(
+            spy.namespace,
+            buildRequest({
+                fanOut: { merge: { by: "score", k: 2, kind: "topK" }, table: "messages" },
+            }),
+        );
+
+        expect(result.data).toEqual([
+            { id: "sum", score: 0.1 + 0.2 },
+            { id: "exact", score: 0.3 },
+        ]);
+    });
+
     it("first — returns the first successful shard's value", async () => {
         expect.assertions(1);
 

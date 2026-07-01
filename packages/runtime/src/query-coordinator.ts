@@ -1488,8 +1488,19 @@ const mergeTopK = (values: ReadonlyArray<unknown>, strategy: { by: string; direc
     }
 
     const direction = strategy.direction ?? "desc";
+    const ascending = (x: number, y: number): number => {
+        if (x < y) {
+            return -1;
+        }
 
-    collected.sort((a, b) => (direction === "asc" ? a.score - b.score : b.score - a.score));
+        if (x > y) {
+            return 1;
+        }
+
+        return 0;
+    };
+
+    collected.sort((a, b) => (direction === "asc" ? ascending(a.score, b.score) : ascending(b.score, a.score)));
 
     return collected.slice(0, strategy.k).map((entry) => entry.row);
 };
