@@ -1,16 +1,16 @@
 /**
  * Platform metering source (CLOUD-PLAN.md §4) — a thin domain layer over
- * `@lunora/analytics`. The dispatcher emits one request data point per tenant
+ * `@lunora/bindings/analytics`. The dispatcher emits one request data point per tenant
  * request to a Cloudflare Analytics Engine dataset (the cheap, fire-and-forget
  * request-path source); a control-plane rollup reads it back through the AE SQL
  * API and folds it into the `platformUsage` ledger. The write helper no-ops when
  * the binding is absent; the reader is a port with an HTTP impl (built on
  * `createAnalyticsSqlClient`) so the rollup is unit-testable with a fake fetch.
  */
-import type { AnalyticsEngineDatasetLike } from "@lunora/analytics";
-import { createAnalytics, createAnalyticsSqlClient } from "@lunora/analytics";
+import type { AnalyticsEngineDatasetLike } from "@lunora/bindings/analytics";
+import { createAnalytics, createAnalyticsSqlClient } from "@lunora/bindings/analytics";
 
-export type { AnalyticsEngineDatasetLike } from "@lunora/analytics";
+export type { AnalyticsEngineDatasetLike } from "@lunora/bindings/analytics";
 
 /** Emit one request data point: `blob1=script`, `blob2=plan`, `double1=count`. */
 export const recordRequestUsage = (dataset: AnalyticsEngineDatasetLike | undefined, input: { plan: string; scriptName: string }): void => {
@@ -42,7 +42,7 @@ interface AnalyticsReaderOptions {
 
 /**
  * HTTP `AnalyticsUsageReader` over the Analytics Engine SQL API (via
- * `@lunora/analytics`'s read client). Runs at the edge (needs the account API
+ * `@lunora/bindings/analytics`'s read client). Runs at the edge (needs the account API
  * token); the SQL groups request counts per script over the window.
  */
 export const createHttpAnalyticsReader = (options: AnalyticsReaderOptions): AnalyticsUsageReader => {
