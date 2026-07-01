@@ -10,6 +10,7 @@
  * is sent as. `shard-do.ts` consumes both.
  */
 
+import { encodeWire } from "../../../shared/wire-codec";
 import type { ShapeRow } from "./ctx-db-shapes";
 
 /** Wire form of a single shape row change (the DO-side mirror of `@lunora/client`'s `RowOp`; kept local so `@lunora/do` takes no client dependency). */
@@ -85,7 +86,9 @@ const diffGlobalMembership = (
 
     for (const { doc, id } of rows) {
         const value = projectColumns(doc, columns);
-        const json = JSON.stringify(value);
+        // Encode before fingerprinting so a `bytes`/`bigint` column doesn't throw
+        // / truncate; pure-JSON values encode byte-identically (baseline unchanged).
+        const json = JSON.stringify(encodeWire(value));
 
         next.set(id, json);
 
@@ -118,10 +121,15 @@ const buildPokeFrames = (parts: ReadonlyArray<ShapePokePart>, meta: PokeFrameMet
     const frames: string[] = [JSON.stringify({ baseCheckpoint, epoch, pokeId, type: "pokeStart" })];
 
     for (const part of parts) {
+        // Wire-encode each row-op's post-image (the single choke point for every
+        // poke path: global, op-log, relay). `delete` ops carry no value; a
+        // pure-JSON value encodes byte-identically so the frame is unchanged.
+        const rowsPatch = part.rowsPatch.map((op) => (op.value === undefined ? op : { ...op, value: encodeWire(op.value) }));
+
         frames.push(
             JSON.stringify({
                 pokeId,
-                rowsPatch: part.rowsPatch,
+                rowsPatch,
                 shapeId: part.shapeId,
                 type: "pokePart",
                 ...(lastMutationId === undefined ? {} : { lastMutationId }),

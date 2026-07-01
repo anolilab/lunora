@@ -3451,7 +3451,7 @@ class LunoraClient {
                 const { data, id } = message;
                 const stream = this.streams.get(id);
 
-                stream?.handle.push(data);
+                stream?.handle.push(decodeWire(data));
 
                 return;
             }
@@ -3587,7 +3587,9 @@ class LunoraClient {
 
         const existing = buffer.parts.get(message.shapeId) ?? [];
 
-        existing.push(...message.rowsPatch);
+        // Wire-decode each row-op's post-image (no-op on a pure-JSON value), so a
+        // shape carrying a `bytes`/`bigint` column applies real values locally.
+        existing.push(...message.rowsPatch.map((op) => (op.value === undefined ? op : { ...op, value: decodeWire(op.value) as Record<string, unknown> })));
         buffer.parts.set(message.shapeId, existing);
 
         if (message.lastMutationId !== undefined) {
@@ -3805,10 +3807,12 @@ class LunoraClient {
     // eslint-disable-next-line class-methods-use-this -- instance method for symmetry with the other message handlers; reads no shared client state
     private resolveDataPayload(message: ServerDataMessage, state: SubscriptionState): unknown {
         if ("data" in message && message.data !== undefined) {
-            return message.data;
+            // Wire-decode the snapshot so a `bytes`/`bigint` column arrives as a
+            // real ArrayBuffer/bigint (no-op on a pure-JSON payload).
+            return decodeWire(message.data);
         }
 
-        const { delta } = message;
+        const delta = decodeWire(message.delta);
 
         // Merge into the authoritative `serverBase`, NOT the displayed `lastValue`
         // (which may carry an optimistic overlay) — a delta describes a change to
@@ -3836,9 +3840,11 @@ class LunoraClient {
             return;
         }
 
+        const data = decodeWire(message.data);
+
         for (const handler of handlers) {
             try {
-                handler(message.data, message.from);
+                handler(data, message.from);
             } catch {
                 /* user callback threw — ignore */
             }

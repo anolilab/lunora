@@ -5805,7 +5805,7 @@ abstract class ShardDO {
                 // while we keep pumping `ws.send` calls.
                 await awaitWsDrain(ws);
 
-                ws.send(JSON.stringify({ data: chunk, id, type: "chunk" }));
+                ws.send(JSON.stringify({ data: encodeWire(chunk), id, type: "chunk" }));
             }
 
             if (!controller.signal.aborted) {
@@ -6998,7 +6998,7 @@ abstract class ShardDO {
         }
 
         // eslint-disable-next-line unicorn/no-null -- mirrors pushSubscriptionData: an undefined result serializes to JSON null so the baseline matches the wire form
-        memos.set(subId, { lastJson: JSON.stringify(outcome.result ?? null), tables: outcome.tables });
+        memos.set(subId, { lastJson: JSON.stringify(encodeWire(outcome.result ?? null)), tables: outcome.tables });
     }
 
     /**
@@ -7029,8 +7029,13 @@ abstract class ShardDO {
 
         const cursorSuffix = cdcSuffix(cursor, epoch);
 
+        // Wire-encode the result so a `bytes`/`bigint` column survives the frame
+        // (raw `JSON.stringify` drops a buffer to `{}` / throws on a bigint). A
+        // pure-JSON result encodes byte-identically, so this baseline + `data`
+        // frame stay unchanged for the common case, and the delta path (which
+        // encodes its next rows too) diffs against a consistently-encoded baseline.
         // eslint-disable-next-line unicorn/no-null -- WS frame payload: an undefined result serializes to JSON null so the delta frame carries an explicit value
-        const json = JSON.stringify(outcome.result ?? null);
+        const json = JSON.stringify(encodeWire(outcome.result ?? null));
         const existing = memos.get(subId);
 
         if (existing?.lastJson === json) {
@@ -7388,7 +7393,7 @@ abstract class ShardDO {
         }
 
         // eslint-disable-next-line unicorn/no-null -- JSON payload: an undefined whisper body serializes to null so the frame carries an explicit value
-        const dataJson = JSON.stringify(data ?? null);
+        const dataJson = JSON.stringify(encodeWire(data ?? null));
 
         if (dataJson.length > ShardDO.MAX_WHISPER_BYTES) {
             return;
