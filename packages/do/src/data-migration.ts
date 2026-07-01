@@ -537,8 +537,14 @@ const runDataMigration = async (options: RunDataMigrationOptions): Promise<Migra
     if (!dryRun && !isDone) {
         // Paused on the `maxBatches` limit, not finished. Drop our claim so the
         // next invocation can resume immediately rather than waiting out the
-        // stale-claim timeout (see releaseClaim).
-        releaseClaim(sql, migration.id);
+        // stale-claim timeout (see releaseClaim). A failure here is non-fatal:
+        // the batch succeeded, and the stale-claim timeout still lets a later
+        // invocation reclaim after STALE_CLAIM_TIMEOUT_MS.
+        try {
+            releaseClaim(sql, migration.id);
+        } catch {
+            /* claim release is best-effort; the stale-claim timeout is the fallback */
+        }
     }
 
     // eslint-disable-next-line unicorn/no-null -- MigrationRunResult.cursor: null on completion (no resume point), matching the wire shape
