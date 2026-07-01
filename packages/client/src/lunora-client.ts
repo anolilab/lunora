@@ -496,6 +496,17 @@ const demuxBatchResults = (rawResults: { body?: unknown; id?: number }[], count:
 };
 
 /**
+ * Per-slot error codes the worker injects for a **transient** shard/transport
+ * failure rather than an application verdict: a whole sub-batch that couldn't
+ * reach its shard (`SHARD_UNAVAILABLE`) or whose shard response was unusable /
+ * partial (`SHARD_ERROR`). For a single-shard outbox flush these fail every entry
+ * uniformly, so a durable-outbox replay **re-queues** them for the next reconnect
+ * instead of dropping the write — mirroring the single-call path's "codeless =
+ * transient" rule. Every other coded error is a server verdict (terminal).
+ */
+const TRANSIENT_BATCH_ERROR_CODES = new Set(["SHARD_ERROR", "SHARD_UNAVAILABLE"]);
+
+/**
  * Lunora browser/edge client. Talks RPC over HTTP and real-time deltas over
  * a single multiplexed WebSocket.
  *
@@ -4104,65 +4115,116 @@ class LunoraClient {
         const key = connectionKey(shardKey);
         const drained = this.offlineQueue.drain((item) => connectionKey(item.shardKey) === key);
 
-        // Sequential replay — parallel `.then()` chains would race and break
-        // the FIFO ordering callers rely on, particularly when replayed
-        // mutations depend on each other.
-        for (let index = 0; index < drained.length; index += 1) {
-            const item = drained[index];
+        if (drained.length === 0) {
+            return;
+        }
+
+        // Gate every drained write against ONE identity snapshot. A batch is a
+        // single authenticated request, so all its entries necessarily run under
+        // one identity; the single-write path likewise has no between-item `await`
+        // where a `setAuthToken` / token rotation could slip in, so an up-front
+        // snapshot re-gates exactly what the old per-item read did. Mismatches are
+        // rejected (not silently dropped) so awaiting callers see a deterministic
+        // failure; the rest keep their FIFO order.
+        const currentIdentity = this.identityFingerprint();
+        const sendable: QueuedMutation[] = [];
+
+        for (const item of drained) {
+            if (this.passesReplayIdentityGate(item, currentIdentity)) {
+                sendable.push(item);
+            }
+        }
+
+        if (sendable.length === 0) {
+            return;
+        }
+
+        // A lone write rides the proven single-call path; two or more coalesce
+        // into ONE `/_lunora/rpc-batch` round trip (plan 088 follow-on) — the
+        // flaky-reconnect win (N queued writes → 1 RTT instead of N).
+        if (sendable.length === 1) {
+            await this.replaySequential(sendable);
+
+            return;
+        }
+
+        await this.replayBatched(sendable);
+    }
+
+    /**
+     * Identity guard for one queued write about to replay: a write stamped under
+     * one identity must never replay under another. The live `queuedIdentities`
+     * map is the source of truth for the current session; a hydrated write whose
+     * id isn't in the map falls back to the stamp persisted with the record
+     * (`item.identity`), so a reload can't replay another user's queued writes.
+     * Only legacy records (persisted before stamps were durable —
+     * `item.identity === undefined`) replay under whatever identity is current.
+     *
+     * `Map.get` returns `undefined` for unstamped/hydrated ids and `item.identity`
+     * is `undefined` for legacy records; a persisted `null` (queued while signed
+     * out) is a real value that must not collapse into `undefined` — hence the
+     * explicit `=== undefined` check rather than `??`. Returns `true` when the
+     * write may replay; otherwise settles it `OFFLINE_IDENTITY_CHANGED` and returns
+     * `false`. Either way the live stamp is consumed.
+     */
+    private passesReplayIdentityGate(item: QueuedMutation, currentIdentity: string | null): boolean {
+        const liveStamp = item.id === undefined ? undefined : this.queuedIdentities.get(item.id);
+        const stamped = liveStamp === undefined ? item.identity : liveStamp;
+
+        if (stamped !== undefined && stamped !== currentIdentity) {
+            this.queuedIdentities.delete(item.id ?? "");
+            this.unpersist(item.id);
+
+            const error = new Error("offline mutation skipped: auth identity changed before replay");
+
+            (error as Error & { code?: string }).code = "OFFLINE_IDENTITY_CHANGED";
+            item.reject(error);
+            this.emitItemSettled(item, "rejected", error);
+
+            return false;
+        }
+
+        this.queuedIdentities.delete(item.id ?? "");
+
+        return true;
+    }
+
+    /** Settle a write that replayed successfully: confirm its optimistic layer against the echoed commit cursor BEFORE resolving, so the gapless drop is in place when the awaiter (and any confirming frame) observes the settle. */
+    private settleReplaySuccess(item: QueuedMutation, value: unknown, commitCursor: number | undefined): void {
+        this.unpersist(item.id);
+        item.onCommit?.(commitCursor);
+        item.resolve(value);
+        this.emitItemSettled(item, "committed");
+    }
+
+    /** Settle a write the server reached a coded verdict on: replaying would re-trigger the same failure (a poison-message loop), so drop it. */
+    private settleReplayTerminal(item: QueuedMutation, error: unknown): void {
+        this.unpersist(item.id);
+        item.reject(error);
+        this.emitItemSettled(item, "rejected", error);
+    }
+
+    /**
+     * Replay already-identity-gated writes one at a time on the single-call `/rpc`
+     * path, preserving FIFO order (parallel `.then()` chains would race the
+     * ordering callers depend on). Each replays under its stable `mutationId` so
+     * the server dedups a write it already committed (exactly-once). A coded error
+     * is a server verdict (drop it); a codeless (transport/transient) failure stops
+     * the flush and re-queues this write and every unreplayed one for the next
+     * reconnect — their callers stay pending, and the identity guard re-applies on
+     * retry via each record's persisted stamp.
+     */
+    private async replaySequential(items: QueuedMutation[]): Promise<void> {
+        for (let index = 0; index < items.length; index += 1) {
+            const item = items[index];
 
             if (!item) {
                 continue;
             }
 
-            // Re-read the live identity *per item*, at the point of sending,
-            // rather than once at flush start. A `setAuthToken` / token rotation
-            // during the `await this.rpc(...)` below changes the identity
-            // mid-flush; items already drained into `drained` have left the queue
-            // and so escape the eager `rejectQueuedForIdentityChange` drain — so
-            // the only place left to re-gate them is here. Capturing once would
-            // let a write enqueued under user A replay against the loop's
-            // start-of-flush identity even after the session rotated to user B.
-            const currentIdentity = this.identityFingerprint();
-            // Identity guard: a write stamped under one identity must never
-            // replay under another. The live `queuedIdentities` map is the
-            // source of truth for the current session; a hydrated write whose id
-            // isn't in the map falls back to the stamp persisted with the record
-            // (`item.identity`), so a reload can no longer replay another user's
-            // queued writes. Only legacy records (persisted before stamps were
-            // durable — `item.identity === undefined`) replay under whatever
-            // identity is current, matching the prior ambient behaviour.
-            // Mismatches are rejected, not silently dropped, so awaiting callers
-            // see a deterministic failure.
-            //
-            // `Map.get` returns `undefined` for unstamped/hydrated ids and
-            // `item.identity` is `undefined` for legacy records; a persisted
-            // `null` (queued while signed out) is a real value that must not be
-            // collapsed into `undefined` — hence the explicit `=== undefined`
-            // check rather than `??`.
-            const liveStamp = item.id === undefined ? undefined : this.queuedIdentities.get(item.id);
-            const stamped = liveStamp === undefined ? item.identity : liveStamp;
-
-            if (stamped !== undefined && stamped !== currentIdentity) {
-                this.queuedIdentities.delete(item.id ?? "");
-                this.unpersist(item.id);
-
-                const error = new Error("offline mutation skipped: auth identity changed before replay");
-
-                (error as Error & { code?: string }).code = "OFFLINE_IDENTITY_CHANGED";
-                item.reject(error);
-                this.emitItemSettled(item, "rejected", error);
-
-                continue;
-            }
-
-            this.queuedIdentities.delete(item.id ?? "");
-
             try {
-                // Replay under the write's stable id so the server dedups a
-                // mutation it already committed (e.g. the response was lost on the
-                // first send) — exactly-once rather than at-least-once.
                 let commitCursor: number | undefined;
-                // eslint-disable-next-line no-await-in-loop -- sequential replay preserves the FIFO order callers depend on (see above)
+                // eslint-disable-next-line no-await-in-loop -- sequential replay preserves the FIFO order callers depend on
                 const value = await this.rpc(item.functionPath, item.args, item.shardKey, {
                     captureBookmark: true,
                     mutationId: item.id,
@@ -4171,36 +4233,145 @@ class LunoraClient {
                     },
                 });
 
-                this.unpersist(item.id);
-                // Confirm the optimistic layer against the replay's commit cursor
-                // BEFORE resolving, so the gapless drop is in place when the awaiter
-                // (and any confirming frame) observes the settle.
-                item.onCommit?.(commitCursor);
-                item.resolve(value);
-                this.emitItemSettled(item, "committed");
+                this.settleReplaySuccess(item, value, commitCursor);
             } catch (error) {
-                // Only a *coded* error means the server reached a verdict on a
-                // mutation it received: replaying would re-trigger the same
-                // failure (a poison-message loop), so drop it. Transport/transient
-                // failures — offline mid-replay, a 5xx, a non-JSON body — carry no
-                // code and may mean the write never committed; dropping one here
-                // would silently lose a durable write the queue exists to protect.
                 if ((error as { code?: string }).code !== undefined) {
-                    this.unpersist(item.id);
-                    item.reject(error);
-                    this.emitItemSettled(item, "rejected", error);
+                    this.settleReplayTerminal(item, error);
 
                     continue;
                 }
 
-                // Stop the flush and re-queue this write and every unreplayed one
-                // (still in durable storage) in FIFO order. Their callers stay
-                // pending; the next reconnect retries them. The identity guard
-                // still applies on retry via each record's persisted stamp.
-                this.offlineQueue.requeue(drained.slice(index));
+                this.offlineQueue.requeue(items.slice(index));
 
                 return;
             }
+        }
+    }
+
+    /**
+     * Coalesce already-identity-gated writes for a single shard into ONE
+     * `/_lunora/rpc-batch` round trip (plan 088 follow-on). The worker forwards
+     * them to the shard DO, which replays each through its single-call dispatch, so
+     * per-entry `mutationId` idempotency and in-order application are inherited from
+     * the proven path. Per-slot demux mirrors {@link replaySequential}'s
+     * classification: success confirms the optimistic layer against the echoed
+     * `commitCursor`; a coded application verdict is terminal; a transient shard
+     * failure (`SHARD_UNAVAILABLE`/`SHARD_ERROR`), a missing slot, or a whole-batch
+     * transport failure re-queues for the next reconnect (never dropping a durable
+     * write). A whole-batch coded rejection (bad request / authorization denial the
+     * server reached a verdict on) is terminal for every entry.
+     */
+    private async replayBatched(items: QueuedMutation[]): Promise<void> {
+        if (!this.fetchImpl) {
+            this.offlineQueue.requeue(items);
+
+            return;
+        }
+
+        let response: Response;
+
+        try {
+            response = await this.fetchImpl(joinUrl(this.url, RPC_BATCH_PATH), {
+                body: JSON.stringify({
+                    calls: items.map((item, index) => {
+                        return {
+                            args: encodeWire(item.args),
+                            functionPath: item.functionPath,
+                            id: index,
+                            // Stable per-write key so the DO dedups a write it already
+                            // committed (exactly-once), exactly as the single-call replay.
+                            mutationId: item.id,
+                            shardKey: item.shardKey,
+                        };
+                    }),
+                }),
+                headers: this.rpcRequestHeaders({ attachBookmark: true }),
+                method: "POST",
+            });
+        } catch {
+            // Transport failure (offline mid-flush) — nothing committed; retry all.
+            this.offlineQueue.requeue(items);
+
+            return;
+        }
+
+        const bookmark = response.headers.get("x-d1-bookmark");
+
+        if (bookmark) {
+            this.bookmark.set(bookmark);
+        }
+
+        let body: { error?: { code?: string; data?: unknown; message?: string }; results?: { body?: RpcResponseBody; id?: number }[] };
+
+        try {
+            body = await response.json();
+        } catch {
+            // Non-JSON body (an edge 5xx, say) — transient, don't lose the writes.
+            this.offlineQueue.requeue(items);
+
+            return;
+        }
+
+        // Whole-batch rejection with no per-slot results: a coded `{ error }` (bad
+        // request / authorization denial) is a verdict on every entry — terminal;
+        // a non-2xx WITHOUT a coded envelope is a transient transport error.
+        if (!body.results) {
+            if (body.error) {
+                const error = reconstructError(body.error);
+
+                for (const item of items) {
+                    this.settleReplayTerminal(item, error);
+                }
+            } else {
+                this.offlineQueue.requeue(items);
+            }
+
+            return;
+        }
+
+        this.settleReplayBatchSlots(items, body.results);
+    }
+
+    /**
+     * Demux a `/_lunora/rpc-batch` reply back onto the queued writes it replayed,
+     * in input order. Each slot's envelope classifies its write the same way
+     * {@link replaySequential} does: a success confirms the optimistic layer
+     * against the echoed `commitCursor`; a coded application verdict is terminal;
+     * a transient shard failure ({@link TRANSIENT_BATCH_ERROR_CODES}) or a slot the
+     * server never returned re-queues (re-queued entries are pushed back together
+     * so their relative FIFO order survives to the next reconnect).
+     */
+    private settleReplayBatchSlots(items: QueuedMutation[], results: { body?: RpcResponseBody; id?: number }[]): void {
+        const bySlot = new Map<number, RpcResponseBody>();
+
+        for (const entry of results) {
+            if (typeof entry.id === "number" && entry.body !== undefined) {
+                bySlot.set(entry.id, entry.body);
+            }
+        }
+
+        const requeue: QueuedMutation[] = [];
+
+        for (const [index, item] of items.entries()) {
+            const inner = bySlot.get(index);
+
+            if (inner === undefined) {
+                // The server never returned this slot — it may or may not have
+                // committed; retry under the same `mutationId` (idempotent).
+                requeue.push(item);
+            } else if ("error" in inner) {
+                if (TRANSIENT_BATCH_ERROR_CODES.has(inner.error.code)) {
+                    requeue.push(item);
+                } else {
+                    this.settleReplayTerminal(item, reconstructError(inner.error));
+                }
+            } else {
+                this.settleReplaySuccess(item, decodeWire(inner.result), inner.commitCursor);
+            }
+        }
+
+        if (requeue.length > 0) {
+            this.offlineQueue.requeue(requeue);
         }
     }
 }

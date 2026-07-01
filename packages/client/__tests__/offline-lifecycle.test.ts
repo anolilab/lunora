@@ -565,6 +565,75 @@ describe("offline lifecycle (e2e)", () => {
         client.close();
     });
 
+    it("10. coalesces a multi-write outbox flush into ONE rpc-batch round trip (plan 088 follow-on)", async () => {
+        expect.assertions(6);
+
+        vi.useFakeTimers();
+
+        const fetchMock = vi.fn<typeof fetch>(async (input) => {
+            const url = input as string;
+
+            // The whole point: the flush of N same-shard writes hits the batch
+            // endpoint once, not the single-call endpoint N times.
+            if (url.endsWith("/_lunora/rpc-batch")) {
+                return jsonResponse({
+                    results: [
+                        { body: { commitCursor: 101, result: { id: "a" } }, id: 0 },
+                        { body: { commitCursor: 102, result: { id: "b" } }, id: 1 },
+                        { body: { commitCursor: 103, result: { id: "c" } }, id: 2 },
+                    ],
+                });
+            }
+
+            throw new Error(`unexpected single-call fetch to ${url}`);
+        });
+
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        // Connect once (so writes queue rather than throw), then drop offline.
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        // Three writes to the same (default) shard queue up while offline.
+        const pending = Promise.all([
+            client.mutation(fnRef("posts:create"), { title: "a" }),
+            client.mutation(fnRef("posts:create"), { title: "b" }),
+            client.mutation(fnRef("posts:create"), { title: "c" }),
+        ]);
+
+        await vi.advanceTimersByTimeAsync(0);
+
+        // Reconnect → flush.
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.runAllTimersAsync();
+
+        const results = await pending;
+
+        // ONE request, to the batch endpoint, carrying all three writes...
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect((fetchMock.mock.calls[0]![0] as string).endsWith("/_lunora/rpc-batch")).toBe(true);
+
+        const sentCalls = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string).calls as { functionPath: string; id: number; mutationId?: string }[];
+
+        expect(sentCalls).toHaveLength(3);
+        // ...each carrying a stable per-write idempotency key (id)...
+        expect(sentCalls.every((call) => typeof call.mutationId === "string" && call.mutationId.length > 0)).toBe(true);
+        // ...and every caller's Promise resolves with its own demuxed result.
+        expect(results).toEqual([{ id: "a" }, { id: "b" }, { id: "c" }]);
+        // FIFO order preserved in the request.
+        expect(sentCalls.map((call) => call.id)).toEqual([0, 1, 2]);
+
+        client.close();
+    });
+
     it("9. drops and purges a persisted write whose schema version no longer matches", async () => {
         expect.assertions(2);
 

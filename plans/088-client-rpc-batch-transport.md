@@ -12,9 +12,16 @@
 > fail-fast) and rides the 086 codec. Capabilities/pipelining stayed OUT (§2 fence).
 > Tests: `packages/do/__tests__/shard-do.batch.test.ts` (per-id order, decoded
 > args, shared identity, failing-entry isolation) + `packages/client/__tests__/batch.test.ts`
-> (request shape, demux, dropped-slot). **Deferred:** auto-coalescing the offline
-> outbox flush onto `.batch()` (the primitive is in place; wiring the queue replay
-> to it is the follow-on that realizes the flaky-reconnect latency win).
+> (request shape, demux, dropped-slot). **Follow-on DONE:** the offline outbox flush
+> now auto-coalesces — `flushOfflineQueue` gates the drained same-shard writes against
+> one identity snapshot, then a lone write rides the single-call path while two-or-more
+> collapse into ONE `/_lunora/rpc-batch` round trip (`replayBatched`), inheriting
+> per-write `mutationId` idempotency + in-order apply from the DO's single-call
+> dispatch; per-slot demux drives the optimistic-layer drop (`commitCursor`) and
+> classifies terminal (coded verdict) vs. transient (`SHARD_UNAVAILABLE`/`SHARD_ERROR`,
+> missing slot, transport failure → re-queue) so a shard blip never drops a durable
+> write. Tests in `packages/client/__tests__/offline-lifecycle.test.ts` (multi-write →
+> one batch round trip) + `lunora-client.test.ts` (atomic-under-one-identity replay).
 
 > **Source:** Wave 9 Cap'n Web analysis. Cap'n Web's `newHttpBatchRpcSession`
 > bundles many calls into one HTTP round trip (and pipelines dependent calls).

@@ -1392,30 +1392,35 @@ describe("lunoraClient", () => {
             client.close();
         });
 
-        it("re-gates the remaining queued items when the identity rotates mid-flush", async () => {
+        it("replays a coalesced multi-write flush atomically under the queued identity", async () => {
             expect.assertions(4);
 
-            // Two writes queue under identity A. The flush replays them
-            // sequentially; while the FIRST replay's RPC is in flight we rotate
-            // the auth token (identity B). Because the per-item identity guard is
-            // re-read at the point of sending (not captured once at flush start),
-            // the SECOND item must be re-gated against the new identity and
-            // rejected rather than replaying as user B.
+            // Two writes queue under identity A. On reconnect they coalesce into
+            // ONE rpc-batch replay (plan 088 follow-on). A token rotation to
+            // identity B that races the in-flight batch must NOT split it or leak a
+            // write under B: the batch carries A's auth header (captured before the
+            // rotation), so both writes replay under the identity they were queued
+            // with — a write stamped under one identity never goes out under another.
             vi.useFakeTimers();
 
-            const seen: string[] = [];
+            const authSeen: (string | undefined)[] = [];
             let rotate: (() => void) | undefined;
 
             const fetchMock = vi.fn<typeof fetch>(async (_url, init) => {
-                const body = JSON.parse((init as RequestInit).body as string) as { args: { title: string } };
+                const headers = ((init as RequestInit).headers ?? {}) as Record<string, string>;
 
-                seen.push(body.args.title);
+                authSeen.push(headers["authorization"]);
 
-                // On the first replay, swap identity before the next item sends.
+                // Race a rotation to identity B against the in-flight batch.
                 rotate?.();
                 rotate = undefined;
 
-                return jsonResponse({ result: { ok: true } });
+                return jsonResponse({
+                    results: [
+                        { body: { result: { ok: true } }, id: 0 },
+                        { body: { result: { ok: true } }, id: 1 },
+                    ],
+                });
             });
 
             const client = new LunoraClient({
@@ -1437,10 +1442,7 @@ describe("lunoraClient", () => {
             const first = client.mutation(fnRef("posts:create"), { title: "first" });
             const second = client.mutation(fnRef("posts:create"), { title: "second" });
 
-            // Suppress unhandled-rejection noise; we assert on `second` below.
-            second.catch(() => undefined);
-
-            // Rotate identity once the first replay is in flight.
+            // Rotate identity once the batch replay is in flight.
             rotate = () => {
                 client.setAuthToken("user-b-token");
             };
@@ -1450,12 +1452,12 @@ describe("lunoraClient", () => {
             latestSocket().open();
             await vi.runAllTimersAsync();
 
-            // First write replayed under identity A; second was re-gated and
-            // rejected because the identity changed mid-flush.
+            // Both writes replayed — in ONE batch, under identity A's auth header
+            // (never user-b, even though the token rotated mid-flight).
             await expect(first).resolves.toEqual({ ok: true });
-            await expect(second).rejects.toMatchObject({ code: "OFFLINE_IDENTITY_CHANGED" });
-            expect(seen).toEqual(["first"]);
+            await expect(second).resolves.toEqual({ ok: true });
             expect(fetchMock).toHaveBeenCalledTimes(1);
+            expect(authSeen).toEqual(["Bearer user-a-token"]);
 
             client.close();
         });
@@ -1543,7 +1545,20 @@ describe("lunoraClient", () => {
 
             vi.useFakeTimers();
 
-            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
+            // Two same-shard writes coalesce into one rpc-batch on flush; the mock
+            // answers the batch endpoint with a per-slot result envelope.
+            const fetchMock = vi.fn<typeof fetch>(async (input) => {
+                if ((input as string).endsWith("/_lunora/rpc-batch")) {
+                    return jsonResponse({
+                        results: [
+                            { body: { result: { ok: true } }, id: 0 },
+                            { body: { result: { ok: true } }, id: 1 },
+                        ],
+                    });
+                }
+
+                return jsonResponse({ result: { ok: true } });
+            });
             const client = new LunoraClient({
                 fetch: fetchMock,
                 heartbeatIntervalMs: 0,
