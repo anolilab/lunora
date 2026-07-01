@@ -348,3 +348,18 @@ Stop and report back if:
 - Coordinate with the `@lunora/collab` (CRDT) track: that track may also want
   large-room fan-out for Yjs awareness, and Phase 2's whisper relay is the shared
   substrate. Sequence so collab reuses the relay, not a parallel copy.
+- **Phase 4(c) (the static "shape `X` is relay-scalable" advisor lint) is
+  intentionally deferred, not dropped.** The correctness boundary for
+  relay-scalability is `OwnerRelay.probeShapeRelayUniform` (`relay-hub.ts`), a
+  **runtime-only** gate: it enumerates a resolved query's actual claims via a
+  Proxy over the identity object and detects mask-column narrowing, both of
+  which depend on live query execution and the concrete identity shape at
+  request time. A static, codegen-time advisor lint over `defineSchema` and
+  discovered query reads (the pattern the other 8 `@lunora/advisor` rules
+  follow) cannot see either signal — it would have to either re-implement the
+  runtime probe statically (infeasible without evaluating the query body) or
+  guess, and a guess here is worse than no lint: a false "relay-scalable" hint
+  would encourage relying on promotion for a shape the runtime gate would
+  actually reject, and a false negative would just be noise on every uniform
+  shape. Revisit only if a future signal (e.g. a schema-level RLS-uniformity
+  annotation) makes the property statically decidable.
