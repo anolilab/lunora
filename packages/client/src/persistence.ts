@@ -48,6 +48,11 @@ interface IndexedDbPersistenceOptions {
     storeName?: string;
 }
 
+// The offline outbox owns the `lunora` database outright (schema v1). The read
+// cache lives in its OWN `lunora-query-cache` database — do NOT co-locate the two
+// stores here: IndexedDB's version is per-database, so sharing one DB forces the
+// two independently-toggleable adapters to keep a single version constant in sync
+// (they didn't, which threw `VersionError` once both were enabled by default).
 const DEFAULT_DATABASE = "lunora";
 const DEFAULT_STORE = "offline-mutations";
 /** Secondary index on the mutation id — the store's primary key is an autoincrement seq that preserves FIFO order. */
