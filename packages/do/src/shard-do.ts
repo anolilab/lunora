@@ -47,6 +47,7 @@ import type {
     AuditLogResult,
     ColumnMeta,
     CreateWorkflowInstanceResult,
+    FanoutMetricsResult,
     FilterClause,
     FilterOperator,
     FlagsResult,
@@ -66,14 +67,17 @@ import type {
 import {
     ADMIN_FUNCTION_PREFIX,
     ADMIN_FUNCTIONS,
+    createFanoutCounters,
     facetColumn,
     findStorageReferences,
     FLAGS_FUNCTION_PREFIX,
     listTables,
     MAX_PAGE_SIZE,
     readTablePage,
+    recordFanoutPass,
     RELATION_FUNCTION_PREFIX,
     selectMatchingIds,
+    summarizeFanoutTopics,
     summarizeSubscriptions,
 } from "./introspect";
 import type { LogEntry } from "./log-buffer";
@@ -86,6 +90,8 @@ import { readQueryMetrics, recordQueryMetric } from "./query-metrics";
 import type { ShardRankPageResult } from "./rank";
 import type { ReactiveCacheOptions } from "./reactive-cache";
 import { ReactiveCache, reactiveCacheKey } from "./reactive-cache";
+import type { OwnerRelay, RelayHost, RelayMember } from "./relay-hub";
+import { createRelayLink, DEFAULT_MAX_RELAYS } from "./relay-hub";
 import type { AppendRequestLogEntry, ContextLogLevel, LogEventInput, RequestLogResult, RequestLogWriteOptions } from "./request-log";
 import { appendRequestLogEntry, emitLogEvent, emitRequestLogEvent, ensureRequestLogTable, readRequestLog, renderLogMessage } from "./request-log";
 import { buildSecurityAudit } from "./security-audit";
@@ -95,20 +101,21 @@ import { buildPokeFrames, diffGlobalMembership, projectColumns } from "./shape-g
 import { runSocketPool } from "./socket-pool";
 import { runReadonlySql } from "./sql-console";
 import { findDanglingReferences } from "./storage-correlation";
-import { sendDeltaFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
+import { awaitWsDrain, sendDeltaFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
 import type { TransactionSqlLike } from "./transaction";
 import { ConflictError } from "./transaction";
 import type {
     LifecycleDispatchInfo,
     LifecycleEvent,
     MutationDelta,
+    ResolvedShape,
     RpcRequest,
     ShapeSubscriptionQuery,
     SocketAttachment,
     SubscriptionEnvelope,
+    SubscriptionIdentity,
     SubscriptionQuery,
 } from "./types";
-import type { WhereInput } from "./where-types";
 
 /**
  * Client→server text frame the runtime answers with {@link WS_KEEPALIVE_PONG}
@@ -242,23 +249,6 @@ interface SubscriptionOutcome {
  * `columns`, when present, projects each row-op's `value` to that subset (the
  * shape's declared column allow-list); absent ⇒ the full document is shipped.
  */
-interface ResolvedShape {
-    columns?: ReadonlyArray<string>;
-    effectiveWhere?: WhereInput;
-
-    /**
-     * `true` when the shape's table is `.global()` (lives in D1, not this DO's
-     * SQLite). A global shape has **no per-DO op-log** to diff, so it is served
-     * by the **latency-tiered poll path** ({@link ShardDO.seedGlobalShape} +
-     * {@link ShardDO.refreshGlobalShape}) instead of the CDC poke path — seeded
-     * from {@link ShardDO.readGlobalShapeRows} and refreshed on an alarm tick.
-     * The codegen subclass sets it from the schema's `shardMode`; absent ⇒ a
-     * shard-local (poke-live) shape.
-     */
-    global?: boolean;
-    table: string;
-}
-
 /** Per-socket, per-shape poke baseline: the `__cdc_log` cursor this shape's view has been poked through. */
 interface ShapeMemo {
     cursor: number;
@@ -271,36 +261,6 @@ interface ShapeMemo {
  * out-of-order arrival (`"gap"`).
  */
 type ClientMutationClass = { expected: number; kind: "already" | "gap" | "next" };
-
-/**
- * Identity a subscription query is executed under, threaded EXPLICITLY into
- * `executeSubscription` → `buildCtx` rather than read from the shared,
- * per-request `currentRequestUserId`/`currentRequestIdentity` instance fields.
- *
- * The value passed is the socket's OWN verified identity, captured at the WS
- * upgrade from the runtime-forwarded, server-minted `x-lunora-userid` /
- * `x-lunora-identity` headers (the client cannot forge them — the runtime
- * strips any client-supplied copies) and stamped on the {@link SocketAttachment}.
- * `seedSubscription` and `refreshSubscriptions` read it off the attachment and
- * pass it here BY VALUE — never by reading the mutable per-request
- * `currentRequestUserId`/`currentRequestIdentity` instance fields, which a
- * deferred (`waitUntil`) refresh or a concurrently-interleaved RPC could be
- * mutating. That value-passing is what keeps a subscription re-run from
- * observing or clobbering an in-flight RPC's identity.
- *
- * Developer-facing consequence: a query that authorizes or filters on the
- * caller's identity — via `.use(rls(...))` or by reading `ctx.auth.userId` —
- * evaluates over the live channel under the CONNECTING user, so its seed and
- * every write-driven refresh return that user's rows, matching the one-shot
- * `fetch` RPC. An anonymous socket (no identity resolved at upgrade) leaves
- * both fields `undefined`, so such a query fails closed (empty/denied) rather
- * than leaking another user's data. See the lunora-realtime skill
- * ("Authorization & live queries").
- */
-interface SubscriptionIdentity {
-    identity?: Record<string, unknown>;
-    userId?: string;
-}
 
 /**
  * Optional shard-level configuration passed through `super(state, env, …)`.
@@ -486,6 +446,7 @@ const IDEMPOTENCY_GC_INTERVAL_MS = 3_600_000;
  * Reserved shard name for the fallback Durable Object that hosts every
  * table without an explicit `.shardBy()` or `.global()` modifier.
  */
+
 const ROOT_SHARD_NAME = "__root__";
 
 /**
@@ -496,33 +457,6 @@ const ROOT_SHARD_NAME = "__root__";
  * a memo carrying it as "re-run on every write-flush".
  */
 const ADMIN_WILDCARD = "*";
-
-/**
- * Defensive WS backpressure helper. When the runtime exposes
- * `bufferedAmount` on the socket, pause iteration whenever the outbound
- * buffer is past 1 MiB; otherwise treat the socket as drained. Capped at
- * 100 sleeps of 20 ms (≈ 2 s total) so a permanently-stuck buffer can't
- * pin the iterator forever — past that we drop through and let the next
- * `ws.send` surface the failure.
- */
-const awaitWsDrain = async (ws: WebSocket): Promise<void> => {
-    let attempts = 0;
-
-    while (attempts < 100) {
-        attempts += 1;
-
-        const buffered = (ws as { bufferedAmount?: unknown }).bufferedAmount;
-
-        if (typeof buffered !== "number" || buffered < 1_048_576) {
-            return;
-        }
-
-        // eslint-disable-next-line no-await-in-loop -- intentional backpressure poll: sleep, then re-check the drained buffer on the next iteration
-        await new Promise((resolve) => {
-            setTimeout(resolve, 20);
-        });
-    }
-};
 
 /**
  * The trailing `,"cursor":&lt;n>,"epoch":"&lt;e>"` fragment appended to a
@@ -1767,6 +1701,38 @@ abstract class ShardDO {
     private readonly metrics = { errors: 0, requests: 0, sinceMs: Date.now() };
 
     /**
+     * Running fan-out cost counters surfaced by the
+     * `__lunora_admin__:getFanoutMetrics` RPC — one tally for the reactive
+     * shape-poke path (`pokeShapeSubscribers`) and one for the whisper broadcast
+     * path (`broadcastWhisper`). Each pass records the sockets it iterated (the
+     * O(subscribers) cost) and delivered to. In-memory and reset on
+     * hibernation/restart, sharing `metrics.sinceMs` as the "since this instance
+     * woke" epoch. This is the observability half of plan 075's auto-elastic
+     * relay tier (Phase 1): measure the per-flush fan-out cost so the promotion
+     * threshold is grounded in real numbers, with no behavior change.
+     */
+    private readonly fanout = { shapePoke: createFanoutCounters(), whisper: createFanoutCounters() };
+
+    /**
+     * The runtime's Durable Object namespace binding name (e.g. `"SHARD"`),
+     * forwarded as `x-lunora-shard-binding` on every request so a DO can address
+     * its siblings (`this.env[binding].getByName(...)`) for the relay hub. Absent
+     * in single-DO mode / the unit harness — when absent, the relay tier is inert
+     * and whispers stay shard-local (no behavior change). In-memory; re-learned per
+     * request.
+     */
+    private shardBinding: string | undefined;
+
+    /**
+     * The auto-elastic fan-out relay collaborator (plan 075) — an {@link OwnerRelay}
+     * or {@link RelayMember} chosen ONCE from this DO's name, or `undefined` for an
+     * unnamed (single-DO) DO where the relay tier is inert. All relay state +
+     * transport lives on it, reached back through the {@link RelayHost} adapter, so
+     * owner-only state can never sit next to relay-only state on this class.
+     */
+    private readonly relay: OwnerRelay | RelayMember | undefined;
+
+    /**
      * Declared indexes (`table:index`) a query has exercised since this instance
      * woke, stamped by `getCtxDbIndexUseHook`. In-memory and reset on
      * hibernation/restart — drives the `unused_index` runtime advisory.
@@ -1863,6 +1829,34 @@ abstract class ShardDO {
             this.reactiveCache = new ReactiveCache(options.reactiveCache);
         }
 
+        // The relay tier reaches this DO back through a narrow adapter; the role-typed
+        // collaborator (owner vs relay) is fixed once from the DO name (plan 075).
+        const host: RelayHost = {
+            buildShapeDiff: (resolved, fromCursor, toCursor) => this.buildShapeDiff(this.sql as SqlExec, resolved, fromCursor, toCursor),
+            computeOpLogShapeSeed: (shape, resolved) => this.computeOpLogShapeSeed(shape, resolved),
+            currentCdcEpoch: () => this.currentCdcEpoch(),
+            deliverWhisperLocal: (topic, frame, exclude) => this.deliverWhisperLocal(topic, frame, exclude),
+            doName: () => this.state.id?.name,
+            env: () => this.env,
+            getWebSockets: () => this.state.getWebSockets(),
+            maskMetadata: () => this.maskMetadata(),
+            nextPokeId: () => {
+                this.pokeSequence += 1;
+
+                return `poke-${String(this.pokeSequence)}`;
+            },
+            readAttachment: (ws) => this.readAttachment(ws),
+            recordShapePokeFanout: (iterated, delivered, elapsedMs) => {
+                this.fanout.shapePoke = recordFanoutPass(this.fanout.shapePoke, iterated, delivered, elapsedMs);
+            },
+            resolveShape: (name, args, identity) => this.resolveShape(name, args, identity),
+            rlsMetadata: () => this.rlsMetadata(),
+            shardBinding: () => this.shardBinding,
+            sql: () => this.sql as SqlExec,
+        };
+
+        this.relay = createRelayLink(host);
+
         this.armWebSocketKeepalive();
     }
 
@@ -1875,8 +1869,17 @@ abstract class ShardDO {
     public async fetch(request: Request): Promise<Response> {
         const url = new URL(request.url);
 
-        if (request.headers.get("Upgrade") === "websocket") {
-            return this.handleWebSocketUpgrade(request);
+        // Learn the DO namespace binding the runtime routes through, so this DO can
+        // address its siblings for the relay hub (plan 075 Phase 2). Sent on every
+        // forwarded request; kept across requests once known.
+        this.shardBinding = request.headers.get("x-lunora-shard-binding") ?? this.shardBinding;
+
+        // The non-RPC routes (WS upgrade + the internal owner↔relay control channel)
+        // are handled up front; everything past here is the shard-local RPC endpoint.
+        const early = await this.routeNonRpc(url, request);
+
+        if (early !== undefined) {
+            return early;
         }
 
         if (url.pathname !== "/rpc" || request.method !== "POST") {
@@ -2267,7 +2270,15 @@ abstract class ShardDO {
 
         if (envelope.type === "whisper_subscribe" || envelope.type === "whisper_unsubscribe") {
             if (typeof envelope.topic === "string" && envelope.topic.length > 0) {
-                this.setWhisperMembership(ws, envelope.topic, envelope.type === "whisper_subscribe");
+                const join = envelope.type === "whisper_subscribe";
+
+                this.setWhisperMembership(ws, envelope.topic, join);
+
+                // Relay tier (plan 075 Phase 2): once a relay holds a subscriber, it
+                // announces itself so the owner forwards whisper frames to it.
+                if (join) {
+                    await this.relay?.announce();
+                }
             }
 
             return;
@@ -2275,7 +2286,7 @@ abstract class ShardDO {
 
         if (envelope.type === "whisper") {
             if (typeof envelope.topic === "string" && envelope.topic.length > 0) {
-                this.broadcastWhisper(ws, envelope.topic, envelope.data);
+                await this.broadcastWhisper(ws, envelope.topic, envelope.data);
             }
 
             return;
@@ -2349,6 +2360,10 @@ abstract class ShardDO {
 
         // Clear the attachment so a future reconnection starts clean.
         (ws as HibernatableWebSocket).serializeAttachment?.(undefined);
+
+        // Relay tier collapse (plan 075 Phase 2): a relay that just lost its last
+        // socket detaches from its owner, so the owner stops forwarding to it.
+        await this.relay?.announceDrain(ws);
     }
 
     /** Hibernation API: invoked on socket error. */
@@ -3814,6 +3829,17 @@ abstract class ShardDO {
     }
 
     /**
+     * The RLS-uniform gate (plan 075 Phase 3): whether a reactive shape may be
+     * relay-multicast — i.e. one delta is correct for **every** subscriber. The owner
+     * decides it (see {@link OwnerRelay.isShapeRelayUniform} — a static RLS read-policy
+     * guard plus claim-exhaustive `Proxy` probes, fail-closed); this thin delegation
+     * is the seam the gate test exercises. A non-owner DO is never relay-uniform.
+     */
+    protected isShapeRelayUniform(name: string, args: Record<string, unknown>): boolean {
+        return this.relay?.isShapeRelayUniform(name, args) ?? false;
+    }
+
+    /**
      * Read the FULL current membership of a `.global()`-table shape from its D1
      * (or Hyperdrive) backend — the seed/poll source for the latency-tiered
      * global shape path. A `.global()` table lives in another store with no
@@ -5231,6 +5257,13 @@ abstract class ShardDO {
             return this.collectSubscriptions();
         }
 
+        if (functionPath === ADMIN_FUNCTIONS.getFanoutMetrics) {
+            // Per-topic subscriber counts + running fan-out cost counters (plan
+            // 075 Phase 1 observability). Deployment-wide live state, so it carries
+            // the wildcard like the other read-only admin reads.
+            return this.collectFanoutMetrics();
+        }
+
         if (functionPath === ADMIN_FUNCTIONS.getLogs) {
             return { entries: this.logs.entries() };
         }
@@ -5311,6 +5344,30 @@ abstract class ShardDO {
      */
     private collectSubscriptions(): SubscriptionsResult {
         return summarizeSubscriptions(this.state.getWebSockets().map((ws) => this.readAttachment(ws)));
+    }
+
+    /**
+     * Assemble the `__lunora_admin__:getFanoutMetrics` payload for the Studio
+     * fan-out observability panel (plan 075 Phase 1). The point-in-time topic
+     * subscriber counts are folded live from each socket's attachment via
+     * {@link summarizeFanoutTopics}; the running per-path cost counters are the
+     * in-memory {@link ShardDO.fanout} tallies, sharing `metrics.sinceMs` as the
+     * "since this instance woke" epoch. Read-only: touches no SQLite and mutates
+     * no socket state.
+     */
+    private collectFanoutMetrics(): FanoutMetricsResult {
+        const summary = summarizeFanoutTopics(this.state.getWebSockets().map((ws) => this.readAttachment(ws)));
+        const relayCount = this.relay?.relayCount() ?? 0;
+
+        return {
+            ...summary,
+            maxRelays: this.relay?.maxRelays() ?? DEFAULT_MAX_RELAYS,
+            promoted: relayCount > 0,
+            relayCount,
+            shapePoke: this.fanout.shapePoke,
+            sinceMs: this.metrics.sinceMs,
+            whisper: this.fanout.whisper,
+        };
     }
 
     /** Resolve a `getAuditLog` admin read, parsing the optional `limit`/`sinceSeq` cursor args and ensuring the reserved table first. */
@@ -5807,7 +5864,11 @@ abstract class ShardDO {
                 const frameEpoch = this.currentCdcEpoch();
 
                 // eslint-disable-next-line no-await-in-loop -- passes are intentionally sequential: each observes the prior pass's committed state and the tables merged while it ran
-                await Promise.all([this.refreshSubscriptions(batch), this.pokeShapeSubscribers(batch, frameCursor, frameEpoch)]);
+                await Promise.all([
+                    this.refreshSubscriptions(batch),
+                    this.pokeShapeSubscribers(batch, frameCursor, frameEpoch),
+                    this.relay?.onFlush(batch, frameCursor ?? 0),
+                ]);
 
                 batch = this.pendingRefreshTables;
             }
@@ -6103,6 +6164,17 @@ abstract class ShardDO {
         const attachment = this.readAttachment(ws);
         const identity: SubscriptionIdentity = { identity: attachment.identity, userId: attachment.userId };
 
+        // Relay tier (plan 075 Phase 3): a relay holds no op-log, so it forwards the
+        // seed to the owner — the only DO that can resolve the shape against real
+        // data, under this socket's verified identity (RLS-correct) — and delivers
+        // the owner-computed frames. A non-relay DO returns `undefined` here, falling
+        // through to the owner-served path (unchanged).
+        const relayed = await this.relay?.seedRelayShape(ws, subId, shape, identity);
+
+        if (relayed !== undefined) {
+            return relayed;
+        }
+
         let resolved: ResolvedShape | undefined;
 
         try {
@@ -6156,16 +6228,37 @@ abstract class ShardDO {
      * it to a structured `shape_subscribe` error.
      */
     private async seedOpLogShape(ws: WebSocket, subId: string, shape: ShapeSubscriptionQuery, resolved: ResolvedShape): Promise<"ok"> {
+        const { baseCheckpoint, cursor, epoch, rowsPatch } = this.computeOpLogShapeSeed(shape, resolved);
+
+        // Await drain before the (potentially large) seed poke so a slow consumer
+        // can't grow this socket's outbound buffer without bound.
+        await awaitWsDrain(ws);
+
+        if (this.sendPoke(ws, [{ rowsPatch, shapeId: subId }], cursor, epoch, baseCheckpoint)) {
+            this.recordShapeMemo(ws, subId, cursor);
+        }
+
+        return "ok";
+    }
+
+    /**
+     * Compute an op-log shape seed (cursor, epoch, the resume base, and the
+     * membership `rowsPatch`) WITHOUT sending — the shared core of
+     * {@link ShardDO.seedOpLogShape} (sends to a local socket) and the owner relay's
+     * `buildShapeSeedFrames` (serializes the frames for a relay to deliver, plan 075
+     * Phase 3, via the {@link RelayHost} seam). Resume only when CDC is on, the client is on this
+     * epoch, its checkpoint doesn't run ahead of ours, and the log still covers it;
+     * else a full re-seed. A fully-compacted log only proves "nothing missed" when
+     * the client is already at `cursor`.
+     * @returns the cursor/epoch, the resume base (`baseCheckpoint`), and the membership patch
+     */
+    private computeOpLogShapeSeed(
+        shape: ShapeSubscriptionQuery,
+        resolved: ResolvedShape,
+    ): { baseCheckpoint: number | undefined; cursor: number; epoch: string | undefined; rowsPatch: ShapeRowOp[] } {
         const sql = this.sql as SqlExec;
         const cursor = this.currentCdcCursor() ?? 0;
         const epoch = this.currentCdcEpoch();
-
-        // Resume only when CDC is on, the client is on this epoch, its checkpoint
-        // doesn't run ahead of ours, and the log still covers it (else a gap means
-        // we can't prove what it missed → full re-seed). A fully-compacted log
-        // (`floor === undefined`, no ops retained) only proves "nothing missed"
-        // when the client is already at `cursor`; if it lags, the changes between
-        // its checkpoint and now were compacted away, so it must re-seed.
         const floor = this.cdcEnabled() ? minCdcSeq(sql) : undefined;
         const canResume =
             this.cdcEnabled() &&
@@ -6177,15 +6270,7 @@ abstract class ShardDO {
         const rowsPatch =
             canResume && shape.sinceSeq !== undefined ? this.buildShapeDiff(sql, resolved, shape.sinceSeq, cursor) : this.buildShapeSeed(sql, resolved);
 
-        // Await drain before the (potentially large) seed poke so a slow consumer
-        // can't grow this socket's outbound buffer without bound.
-        await awaitWsDrain(ws);
-
-        if (this.sendPoke(ws, [{ rowsPatch, shapeId: subId }], cursor, epoch, canResume ? shape.sinceSeq : undefined)) {
-            this.recordShapeMemo(ws, subId, cursor);
-        }
-
-        return "ok";
+        return { baseCheckpoint: canResume ? shape.sinceSeq : undefined, cursor, epoch, rowsPatch };
     }
 
     /**
@@ -6208,6 +6293,11 @@ abstract class ShardDO {
         // flush instead of re-scanning the op-log per shape/socket. Created fresh
         // per flush so a slice is never reused across writes (it would go stale).
         const opRangeCache = new Map<string, Map<string, CdcChange>>();
+
+        // Observability (plan 075 Phase 1): count sockets this flush actually
+        // poked so `getFanoutMetrics` can report the delivered-vs-iterated split.
+        // Pure measurement — it never alters which sockets are poked.
+        let delivered = 0;
 
         const pokeOne = async (ws: WebSocket): Promise<void> => {
             if (this.isSocketExpired(ws)) {
@@ -6242,6 +6332,8 @@ abstract class ShardDO {
                     await awaitWsDrain(ws);
 
                     if (this.sendPoke(ws, parts, checkpoint, frameEpoch, undefined)) {
+                        delivered += 1;
+
                         for (const subId of partAdvanced) {
                             this.recordShapeMemo(ws, subId, checkpoint);
                         }
@@ -6260,7 +6352,16 @@ abstract class ShardDO {
         // Bounded fan-out matching `refreshSubscriptions`: each worker drains its
         // sockets one at a time so the per-send `awaitWsDrain` gate above applies
         // backpressure on a slow consumer. See {@link runSocketPool}.
+        const startMs = Date.now();
+
         await runSocketPool(sockets, pokeOne);
+
+        // Record the fan-out cost of this flush (plan 075 Phase 1). `startMs` wraps
+        // the whole pool, so the elapsed time captures the awaited drain/send I/O
+        // across every socket; it is coarse (a DO clock advances only on I/O) but
+        // the socket counts are exact. Recorded even for a zero-delivery flush so
+        // the iterated-vs-delivered ratio reflects wasted work honestly.
+        this.fanout.shapePoke = recordFanoutPass(this.fanout.shapePoke, sockets.length, delivered, Date.now() - startMs);
     }
 
     /**
@@ -7017,6 +7118,35 @@ abstract class ShardDO {
         setter.call(this.state, new WebSocketRequestResponsePair(WS_KEEPALIVE_PING, WS_KEEPALIVE_PONG));
     }
 
+    /**
+     * Route the non-RPC requests `fetch` handles before the shard-local RPC
+     * endpoint: a WebSocket upgrade, and the internal `/_lunora/relay` owner↔relay
+     * control channel (never reachable by a client — the runtime forwards only
+     * worker-internal traffic there). Returns `undefined` for an RPC request, which
+     * `fetch` then dispatches.
+     * @returns the routed response, or `undefined` when this is an RPC request
+     */
+    private async routeNonRpc(url: URL, request: Request): Promise<Response | undefined> {
+        if (url.pathname === "/_lunora/relay" && request.method === "POST") {
+            // The relay tier is inert on an unnamed (single-DO) DO — nothing forwards
+            // control frames there, so a 404 is the honest answer.
+            return this.relay ? await this.relay.handleControl(request) : new Response("relay tier inactive", { status: 404 });
+        }
+
+        // Promotion probe (plan 075 Phase 2): the runtime asks the owner how many
+        // relays to spread new connections across before a WS upgrade. Internal —
+        // reachable only via the runtime's worker-side forward, returns just a count.
+        if (url.pathname === "/_lunora/route" && request.method === "GET") {
+            return jsonResponse({ relayCount: this.relay?.relayCount() ?? 0 });
+        }
+
+        if (request.headers.get("Upgrade") === "websocket") {
+            return this.handleWebSocketUpgrade(request);
+        }
+
+        return undefined;
+    }
+
     private handleWebSocketUpgrade(request: Request): Response {
         if (!this.isUpgradeAllowed(request)) {
             return new Response("Forbidden", { status: 403 });
@@ -7169,7 +7299,7 @@ abstract class ShardDO {
      * topic name. That matches the AnyCable model (and `from` is unforgeable),
      * but per-topic auth does not exist here; see `whisperSubscribe` on the client.
      */
-    private broadcastWhisper(sender: WebSocket, topic: string, data: unknown): void {
+    private async broadcastWhisper(sender: WebSocket, topic: string, data: unknown): Promise<void> {
         // Rate-limit first — cheapest rejection, and it bounds the O(connections)
         // fan-out cost a tight whisper loop would otherwise impose.
         if (!this.allowWhisper(sender)) {
@@ -7190,14 +7320,39 @@ abstract class ShardDO {
         const fromSuffix = from === undefined ? "" : `,"from":${JSON.stringify(from)}`;
         const frame = `{"type":"whisper","topic":${JSON.stringify(topic)},"data":${dataJson}${fromSuffix}}`;
 
+        // Deliver to THIS DO's sockets (excluding the sender), then — when the shard
+        // is promoted (plan 075 Phase 2) — forward the opaque frame through the relay
+        // hub so it reaches the sockets on every other DO serving the shard.
+        this.deliverWhisperLocal(topic, frame, sender);
+        await this.relay?.forwardWhisper(topic, frame);
+    }
+
+    /**
+     * Deliver an already-serialized whisper `frame` to every local socket joined to
+     * `topic`, excluding `exclude` (the sender, or `undefined` for a frame the relay
+     * hub forwarded in — its sender lives on another DO). Records the fan-out pass
+     * for `getFanoutMetrics` (plan 075 Phase 1). Pure delivery — no SQLite, no CDC.
+     * @returns the number of sockets the frame was sent to
+     */
+    private deliverWhisperLocal(topic: string, frame: string, exclude: undefined | WebSocket): number {
+        let scanned = 0;
+        let delivered = 0;
+
         for (const ws of this.state.getWebSockets()) {
-            if (ws === sender || this.readAttachment(ws).whispers?.includes(topic) !== true) {
+            scanned += 1;
+
+            if (ws === exclude || this.readAttachment(ws).whispers?.includes(topic) !== true) {
                 continue;
             }
 
             // Best-effort fan-out; a closed socket is simply skipped.
             trySendFrame(ws, frame);
+            delivered += 1;
         }
+
+        this.fanout.whisper = recordFanoutPass(this.fanout.whisper, scanned, delivered, 0);
+
+        return delivered;
     }
 
     // eslint-disable-next-line class-methods-use-this -- cohesive DO instance method grouped with the hibernation/attachment helpers; reads only the socket

@@ -130,8 +130,11 @@ checkpoint)` (≈6111) drains the op range from the owner's SQLite and probes
 3. **RLS-uniform gate signal.** Reuse plan 073's identity-independence
    determination as the _necessary_ condition for promoting a **reactive shape**.
    Confirm: is 073's signal available at the granularity this needs (per shape,
-   at runtime)? If not, what is the minimal extension? whisper/presence are
-   uniform by construction and need no per-shape proof.
+   at runtime)? If not, what is the minimal extension? `whisper` topics are
+   uniform by construction (opaque payload, no per-identity result) and need no
+   per-shape proof; presence (`usePresence`) is **not** uniform-by-construction —
+   it is a reactive query (`listPresent`) and goes through this gate like any
+   shape.
 4. **Resume across a shifting topology.** How does a client that reconnects onto a
    _different_ relay resume correctly from its `(sinceSeq, sinceEpoch)`? Proposal:
    relays are stateless re-broadcasters; the **owner remains the checkpoint
@@ -148,15 +151,31 @@ checkpoint)` (≈6111) drains the op range from the owner's SQLite and probes
 
 ## Phases
 
-### Phase 0 — Design doc + sign-off (no code)
+### Phase 0 — Design doc + sign-off (no code) — **WRITTEN, awaiting sign-off**
 
 Write the owner↔relay protocol, the promotion/collapse state machine, the
 resume-across-relays handoff, and answers to all six Decisions above into this
-file (or a sibling design doc). **Maintainer sign-off required before Phase 1.**
-Deliverable: a measured T_up from a fan-out micro-benchmark on `ShardDO`
-(subscribers vs per-flush CPU), not a guessed constant.
+file (or a sibling design doc). **Maintainer sign-off required before Phase 2**
+(Phase 1 — observability — already shipped, and is the production instrument the
+design uses to calibrate the threshold). Deliverable: a measured T_up from a
+fan-out micro-benchmark on `ShardDO` (subscribers vs per-flush CPU), not a guessed
+constant.
 
-### Phase 1 — Observability only (ship first, low risk)
+> **Delivered:** [`075-phase0-relay-protocol-design.md`](075-phase0-relay-protocol-design.md)
+> — the owner↔relay frame protocol, the promotion/collapse state machine, the
+> resume handoff (owner stays checkpoint authority; relays forward resume), the
+> RLS-uniform gate (a fail-closed `relayUniform` codegen bit extending the
+> `isIdentityIndependent` signal), all six Decisions answered, and a fan-out curve
+> measured in **both Node (~16 ns/socket floor) and real workerd (~10–15 µs/socket,
+> ~1000× higher, linear)** with a derived `T_up = 8,000 / T_down = 4,000` default —
+> the workerd numbers confirm per-flush fan-out binds within a single DO's
+> connection capacity. The STOP condition on the runtime resolver is cleared
+> (`resolveShard` → `forwardToShard` is a single seam). Remaining tuning (the
+> isolate-CPU-only per-flush cost, for per-deployment threshold tuning) is read from
+> the Phase-1 `getFanoutMetrics` under load — not a Phase-2 gate. See the sign-off
+> checklist in § 10 of that doc.
+
+### Phase 1 — Observability only (ship first, low risk) — **SHIPPED**
 
 Instrument the owner: per-topic/shape **subscriber count + per-flush fan-out
 cost**, surfaced in Studio (Advisors/metrics). No behavior change. This proves
@@ -166,27 +185,90 @@ the DX before any topology change exists. Gate behind a flag if needed.
 **Verify**: metrics appear in Studio for a synthetic high-subscriber topic;
 `pnpm --filter "@lunora/do" run test` green; no change to poke output.
 
-### Phase 2 — whisper/presence relay (the natural first adopter)
+> **Shipped.** `ShardDO.pokeShapeSubscribers` + `broadcastWhisper` record
+> per-pass fan-out counters (in-memory, hibernation-reset, shared `sinceMs`);
+> the `__lunora_admin__:getFanoutMetrics` read folds live per-topic subscriber
+> counts via `summarizeFanoutTopics`; a Studio "Fan-out" page (Observability)
+> renders hot topics + per-path cost. Pure measurement — no change to which
+> sockets are poked or who receives a whisper. Counting is always-on (integer
+> increments are negligible); no env flag was needed. Coarse `totalMs`/`maxMs`
+> are captured for the async poke path only (a DO clock advances only on I/O)
+> and omitted for the synchronous whisper path; socket-count width is the exact,
+> reliable cost signal. The full `@lunora/do` suite is green and the wire shapes
+> carry key drift-guards on both the `@lunora/do` and `@lunora/studio` sides.
 
-Relay-scale **whisper topics** (and `usePresence`, which rides whisper-like
-ephemeral fan-out) only — payloads are already opaque and topic-uniform, so no
-owner/relay _data_ split is required, and there is no RLS-uniform proof to
-compute. Owner multicasts the opaque whisper frame to relays; relays fan out to
-their attached sockets. New connections to a hot topic route to a relay via the
-runtime hop.
+### Phase 2 — whisper relay (the natural first adopter) — **SHIPPED**
+
+Relay-scale **whisper topics** only — their payload is already opaque and
+topic-uniform, so no owner/relay _data_ split is required and there is no
+RLS-uniform proof to compute. Owner multicasts the opaque whisper frame to
+relays; relays fan out to their attached sockets. New connections to a hot topic
+route to a relay via the runtime hop.
+
+> **Shipped (slices 1–4).** The owner↔relay whisper hub (`shard-do.ts`:
+> `broadcastWhisper` → `forwardWhisperToHub`, the `/_lunora/relay` control
+> channel, the `__lunora_relays` set), the runtime upgrade-hop routing
+> (`create-worker.ts`: a `/_lunora/route` promotion probe + `x-lunora-shard-binding`
+>
+> - relay selection), and demand-driven collapse (`relay_detach` on drain). The
+>   relay-name contract lives in `shared/relay-name.ts` so the minting (runtime)
+>   and parsing (DO) sides can't drift. Proven against real Durable Objects in
+>   workerd (up-path, down-path, multi-relay origin-exclusion, no echo).
+>
+> **Granularity refinement vs § 2 of the design doc.** The design assumed the
+> upgrade hop routes by _topic_. For whisper that can't hold — a socket connects
+> first, then joins a topic via `whisper_subscribe`, so the topic is unknown at
+> upgrade. v1 therefore relays at **shard granularity** (the upgrade already keys
+> on `?shard=`; "one giant public room = one shard" is the canonical case).
+> Per-topic relay is a later refinement. Right-sizing the relay fan to live demand
+> (vs the fixed `LUNORA_RELAY_FAN`) also remains a follow-up — the owner can't see
+> total demand from its own socket count once promoted; relays heartbeating their
+> counts would close that gap.
+
+> **`usePresence` is _not_ in this phase.** Despite being "ephemeral awareness",
+> presence is implemented as a `heartbeat` **mutation** + a `listPresent`
+> **reactive query** over a presence table (`definePresence`,
+> `packages/server/src/presence.ts` — "Live queries (subscriptions) drive
+> `listPresent`"). It flows through the reactive-shape path, **not** `whisper`,
+> so it is handled in Phase 3 as an RLS-uniform reactive shape, not here.
 
 **Verify**: a topic above T_up serves identical whisper delivery to subscribers
 whether they land on the owner or a relay; sender still never receives its own
 whisper; reconnection re-attaches correctly. Load test: subscriber count beyond a
 single DO's WS cap succeeds.
 
-### Phase 3 — reactive-shape relay (RLS-uniform only)
+### Phase 3 — reactive-shape relay (RLS-uniform only) — **SHIPPED**
+
+Shipped as three slices on `feat/075-fanout-relay`, hardened by a thermo review
+pass: (A) the RLS-uniform gate (`isShapeRelayUniform` — a static `rlsMetadata()`
+read-policy guard plus a claim-exhaustive identity probe whose base IS the multicast
+identity, the populated probes proxy-backed so a resolver reading ANY claim — even
+a custom one outside `rls()` — diverges, with a wholesale-copy backstop and a mask
+check; codegen-free and fail-closed), (B) seed-through-owner +
+one-delta-per-flush cohort multicast (`buildShapeSeedFrames` /
+`multicastRelayShapePokes` / `deliverRelayShapePoke`, gated by a per-socket
+`fromCursor`+`epoch` memo stamped at the **cohort frontier** so a late joiner is
+never stranded and a mid-flush seeder never double-applies), and (C) the
+verification below. Resume rides the same `computeOpLogShapeSeed` core as the
+local seed, so the relay round-trip is byte-identical by construction. Non-uniform
+(identity-scoped) shapes can't be cohort-multicast, so each is served live by a
+per-socket **owner proxy** (`proxyRelayShapePokes`) that computes its delta under
+its own forwarded identity and delivers a `connectionId`-targeted poke — RLS-correct
+and never silently frozen. Proven in real workerd
+(`__tests__/workerd/relay-shape.workerd.test.ts`, 6 tests) + the gate unit test
+(`__tests__/relay-uniform-gate.test.ts`, 7 tests).
 
 Extend relay-scaling to **reactive query shapes that pass the RLS-uniform gate**
 (Decision 3). Owner computes the delta once (building on plan 072's shared
 op-range), then multicasts the opaque delta frame to relays. Resume goes through
 the owner per Decision 4. Non-uniform shapes are **never** promoted and keep
 today's owner-served path byte-for-byte.
+
+`usePresence`'s `listPresent` is the canonical first target here: it is typically
+room-public (so it passes the RLS-uniform gate) and is the highest-fan-out
+reactive query in practice — every member of a large room subscribes to the same
+present-list. Treating it as a reactive shape (not an opaque whisper) is what
+makes its delta correct for every subscriber.
 
 **Verify**: an RLS-uniform public shape with subscribers across owner+relays
 produces byte-identical deltas to today's single-DO path (reuse plan 070's
@@ -251,8 +333,9 @@ Stop and report back if:
 
 - **The RLS-uniform gate is the correctness boundary.** A reactive shape is
   promotable ONLY if its poke is identity-independent (plan 073's signal). Never
-  multicast one delta across an identity boundary. whisper/presence are uniform
-  by construction; reactive shapes must prove it.
+  multicast one delta across an identity boundary. Only `whisper` topics are
+  uniform by construction; every reactive shape — including presence's
+  `listPresent` — must pass the gate.
 - **The owner stays the checkpoint authority.** Relays are stateless
   re-broadcasters. All resume/ordering truth lives at the owner so a client can
   reconnect onto any relay and still resume from its checkpoint.

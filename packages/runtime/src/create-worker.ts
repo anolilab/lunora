@@ -1,5 +1,6 @@
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
+import { relayName } from "../../../shared/relay-name";
 import type { AuthAdmin, AuthIntrospector } from "./auth-admin-routes";
 import { buildAuthAdminRoutes } from "./auth-admin-routes";
 import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit } from "./body-readers";
@@ -1246,6 +1247,73 @@ const forwardToShard = async (namespace: ShardNamespaceLike, shardKey: string, r
     return stub.fetch(request);
 };
 
+/** Per-isolate cache of a shard's relay count (the promotion probe), TTL-bounded so a promoted shard doesn't add a round-trip to every WS upgrade. */
+interface RelayProbeEntry {
+    expiresMs: number;
+    relayCount: number;
+}
+
+const relayProbeCache = new Map<string, RelayProbeEntry>();
+
+/** How long a relay-count probe is cached per isolate before the runtime re-asks the owner. */
+const RELAY_PROBE_TTL_MS = 5000;
+
+/**
+ * Ask the owner how many relays to spread new connections across for `shardKey`
+ * (plan 075 Phase 2), cached per isolate so a promoted shard doesn't add a
+ * round-trip to every WS upgrade. Fails closed to `0` (owner-served) on any error,
+ * so a relay-probe hiccup can never break a connection.
+ */
+const probeRelayCount = async (namespace: ShardNamespaceLike, shardKey: string): Promise<number> => {
+    const now = Date.now();
+    const cached = relayProbeCache.get(shardKey);
+
+    if (cached !== undefined && cached.expiresMs > now) {
+        return cached.relayCount;
+    }
+
+    let relayCount = 0;
+
+    try {
+        const response = await resolveShard(namespace, shardKey).fetch(new Request("https://shard.internal/_lunora/route"));
+
+        if (response.ok) {
+            const body: unknown = await response.json();
+            const reported = (body as { relayCount?: unknown }).relayCount;
+
+            if (typeof reported === "number" && reported > 0) {
+                relayCount = Math.floor(reported);
+            }
+        }
+    } catch {
+        relayCount = 0;
+    }
+
+    relayProbeCache.set(shardKey, { expiresMs: now + RELAY_PROBE_TTL_MS, relayCount });
+
+    return relayCount;
+};
+
+/**
+ * Find the env binding name holding the shard DO namespace, so the runtime can tell
+ * each DO how to address its siblings for the relay hub (`x-lunora-shard-binding`).
+ * Matched by identity against the un-jurisdictioned `options.shardDO`.
+ * @returns the binding key (e.g. `"SHARD"`), or `undefined` when it can't be found (relay tier stays inert)
+ */
+const resolveShardBindingName = (env: unknown, namespace: ShardNamespaceLike): string | undefined => {
+    if (env === null || typeof env !== "object") {
+        return undefined;
+    }
+
+    for (const [key, value] of Object.entries(env)) {
+        if (value === namespace) {
+            return key;
+        }
+    }
+
+    return undefined;
+};
+
 /**
  * Constant-time-ish bearer check used by the admin endpoints. We accept the
  * token as a verbatim string match because the worker's existing
@@ -2019,6 +2087,25 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         if (forwardedExp !== undefined) {
             upgradeHeaders.set("x-lunora-identity-exp", forwardedExp);
+        }
+
+        // Relay tier (plan 075 Phase 2): when the shard is promoted, route this NEW
+        // connection to one of its relays so the owner sheds connection + fan-out
+        // load — invisible to the client (same socket, same whispers). Tell the DO
+        // its namespace binding so it can address siblings for the hub.
+        const binding = resolveShardBindingName(env, options.shardDO);
+
+        if (binding !== undefined) {
+            upgradeHeaders.set("x-lunora-shard-binding", binding);
+
+            const relayCount = await probeRelayCount(shardDO, shardKey);
+
+            if (relayCount > 0) {
+                // eslint-disable-next-line sonarjs/pseudo-random -- load distribution across relays, not a security-sensitive value
+                const target = relayName(shardKey, Math.floor(Math.random() * relayCount));
+
+                return forwardToShard(shardDO, target, new Request(request, { headers: upgradeHeaders }));
+            }
         }
 
         return forwardToShard(shardDO, shardKey, new Request(request, { headers: upgradeHeaders }));

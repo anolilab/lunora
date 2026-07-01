@@ -257,4 +257,30 @@ const sendDeltaFrames = (ws: WebSocket, subId: string, deltaFrames: ReadonlyArra
     return delivered;
 };
 
-export { sendDeltaFrames, subscriptionListDeltas, trySendFrame };
+/**
+ * Defensive WS backpressure helper. When the runtime exposes `bufferedAmount`
+ * on the socket, pause iteration whenever the outbound buffer is past 1 MiB;
+ * otherwise treat the socket as drained. Capped at 100 sleeps of 20 ms (≈ 2 s
+ * total) so a permanently-stuck buffer can't pin the iterator forever — past
+ * that we drop through and let the next `ws.send` surface the failure.
+ */
+const awaitWsDrain = async (ws: WebSocket): Promise<void> => {
+    let attempts = 0;
+
+    while (attempts < 100) {
+        attempts += 1;
+
+        const buffered = (ws as { bufferedAmount?: unknown }).bufferedAmount;
+
+        if (typeof buffered !== "number" || buffered < 1_048_576) {
+            return;
+        }
+
+        // eslint-disable-next-line no-await-in-loop -- intentional backpressure poll: sleep, then re-check the drained buffer on the next iteration
+        await new Promise((resolve) => {
+            setTimeout(resolve, 20);
+        });
+    }
+};
+
+export { awaitWsDrain, sendDeltaFrames, subscriptionListDeltas, trySendFrame };

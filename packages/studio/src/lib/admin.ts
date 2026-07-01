@@ -39,6 +39,7 @@ export const ADMIN_FUNCTIONS = {
     getAuditLog: "__lunora_admin__:getAuditLog",
     getAuthMetrics: "__lunora_admin__:getAuthMetrics",
     getCapturedMail: "__lunora_admin__:getCapturedMail",
+    getFanoutMetrics: "__lunora_admin__:getFanoutMetrics",
     getFunctionStats: "__lunora_admin__:getFunctionStats",
     listFlags: "__lunora_admin__:listFlags",
     listQueues: "__lunora_admin__:listQueues",
@@ -682,6 +683,56 @@ export interface SubscriptionsResult {
     connections: SubscriptionConnection[];
     totalConnections: number;
     totalSubscriptions: number;
+}
+
+/**
+ * One topic or shape with its current subscriber count, returned by
+ * `__lunora_admin__:getFanoutMetrics` and mirroring `@lunora/do`'s
+ * `FanoutTopicStat`. `subscribers` is the fan-out width one poke/broadcast incurs
+ * for this topic — the signal the auto-elastic relay tier (plan 075) watches.
+ */
+export interface FanoutTopicStat {
+    /** `"shape"` = a reactive-query shape; `"whisper"` = an ephemeral whisper topic. */
+    kind: "shape" | "whisper";
+    /** Connected sockets currently subscribed — the fan-out width for this topic. */
+    subscribers: number;
+    /** The shape name or the whisper topic string. */
+    topic: string;
+}
+
+/**
+ * Running fan-out counters for one delivery path since the DO instance woke,
+ * mirroring `@lunora/do`'s `FanoutPathCounters`. `socketsIterated` is the
+ * O(subscribers) loop cost; `socketsDelivered` is how many of those received a
+ * frame. `totalMs`/`maxMs` are **coarse** (a DO clock advances only on I/O) and
+ * populated only for the asynchronous shape-poke path — they stay `0` for the
+ * synchronous whisper broadcast.
+ */
+export interface FanoutPathCounters {
+    maxMs: number;
+    passes: number;
+    peakSocketsIterated: number;
+    socketsDelivered: number;
+    socketsIterated: number;
+    totalMs: number;
+}
+
+/**
+ * Payload of a `__lunora_admin__:getFanoutMetrics` call, mirroring `@lunora/do`'s
+ * `FanoutMetricsResult`: the current per-topic subscriber counts (derived live
+ * from the shard's sockets) plus the running per-path fan-out cost counters
+ * (in-memory, reset on hibernation). Feeds the Studio fan-out observability panel.
+ */
+export interface FanoutMetricsResult {
+    maxRelays: number;
+    peakSubscribers: number;
+    promoted: boolean;
+    relayCount: number;
+    shapePoke: FanoutPathCounters;
+    sinceMs: number;
+    topics: FanoutTopicStat[];
+    totalConnections: number;
+    whisper: FanoutPathCounters;
 }
 
 /** Outcome of one dispatch in the request log, mirroring `@lunora/do`'s `RequestOutcome`. */

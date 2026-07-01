@@ -1,3 +1,5 @@
+import type { WhereInput } from "./where-types";
+
 export interface SubscriptionQuery {
     args?: Record<string, unknown>;
 
@@ -280,4 +282,36 @@ export interface SocketAttachment {
      * survives hibernation; absent until the socket joins a topic.
      */
     whispers?: string[];
+}
+
+/**
+ * A `shape_subscribe`'s resolved query: which `table` to replicate, the
+ * identity-scoped `effectiveWhere` (the shape predicate AND-merged with the
+ * table's RLS read base-where), the optional projected `columns` allow-list,
+ * and whether the table is `.global()` (served by the latency-tiered poll path
+ * rather than the CDC poke path). The codegen subclass's `resolveShape` builds
+ * it under the socket's verified identity, so the membership query the poke
+ * protocol runs is RLS-correct by construction.
+ */
+export interface ResolvedShape {
+    columns?: ReadonlyArray<string>;
+    effectiveWhere?: WhereInput;
+    /** `true` when the shape's table is `.global()` (lives in D1, not this DO's SQLite) — no per-DO op-log to diff, so served by the poll path. */
+    global?: boolean;
+    table: string;
+}
+
+/**
+ * Identity a subscription/shape query is executed under, threaded EXPLICITLY
+ * into the codegen `resolveShape`/`buildCtx` rather than read from the shared,
+ * per-request identity fields. The value passed is the socket's OWN verified
+ * identity (stamped on the {@link SocketAttachment} at the WS upgrade from the
+ * runtime-minted `x-lunora-userid`/`x-lunora-identity` headers the client can't
+ * forge), passed BY VALUE so a deferred refresh or interleaved RPC can't clobber
+ * it. An anonymous socket leaves both fields `undefined`, so an RLS/`ctx.auth`
+ * query fails closed (empty/denied) rather than leaking another user's data.
+ */
+export interface SubscriptionIdentity {
+    identity?: Record<string, unknown>;
+    userId?: string;
 }

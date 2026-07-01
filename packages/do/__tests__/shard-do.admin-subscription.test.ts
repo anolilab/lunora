@@ -147,6 +147,40 @@ describe("shardDO admin subscriptions", () => {
         expect(dataEnvelopes(ws).at(-1)?.data).toMatchObject({ requests: 0, shard: "shard-a" });
     });
 
+    it("seeds getFanoutMetrics with per-topic subscriber counts folded from every socket", async () => {
+        expect.assertions(4);
+
+        const shard = new AdminSubShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const admin = createFakeWebSocket();
+        const member1 = createFakeWebSocket();
+        const member2 = createFakeWebSocket();
+
+        // Two members share a shape and a whisper topic; the admin socket watches
+        // neither, so it contributes to the connection count but no topic.
+        shard.registerSocket(admin, { admin: true, subs: {} });
+        shard.registerSocket(member1, { shapes: { s1: { name: "roomMessages" } }, subs: {}, whispers: ["cursor:room"] });
+        shard.registerSocket(member2, { shapes: { s2: { name: "roomMessages" } }, subs: {}, whispers: ["cursor:room"] });
+
+        await shard.driveMessage(admin, adminSub("sub-1", ADMIN_FUNCTIONS.getFanoutMetrics));
+
+        const seeded = dataEnvelopes(admin).at(-1)?.data as {
+            peakSubscribers: number;
+            shapePoke: { passes: number };
+            topics: { kind: string; subscribers: number; topic: string }[];
+            totalConnections: number;
+        };
+
+        expect(seeded.totalConnections).toBe(3);
+        expect(seeded.peakSubscribers).toBe(2);
+        // Both topics have 2 subscribers; ties break by topic name (cursor:room < roomMessages).
+        expect(seeded.topics).toEqual([
+            { kind: "whisper", subscribers: 2, topic: "cursor:room" },
+            { kind: "shape", subscribers: 2, topic: "roomMessages" },
+        ]);
+        // No poke/broadcast has run in this test, so the running counters are zero.
+        expect(seeded.shapePoke.passes).toBe(0);
+    });
+
     it("re-runs a readTablePage subscription only when its own table is written", async () => {
         expect.assertions(3);
 

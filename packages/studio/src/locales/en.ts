@@ -995,6 +995,24 @@ const MESSAGE_IDS = [
     "Light theme",
     "System theme",
     "Integrity",
+    // Fan-out observability panel (plan 075 Phase 1).
+    "Fan-out",
+    "auto-scaled: {relayCount}/{maxRelays} relays",
+    "Realtime fan-out cost and per-topic subscriber counts for this shard.",
+    "No fan-out activity yet.",
+    "peak {count} subscribers",
+    "Hot topics",
+    "Topic",
+    "Kind",
+    "Subscribers",
+    "Fan-out cost since this instance woke",
+    "Shape pokes",
+    "Whisper broadcasts",
+    "Passes",
+    "Sockets iterated",
+    "Delivered",
+    "Peak width",
+    "Max time",
 ] as const;
 
 /** A known studio message id — one of the entries in {@link MESSAGE_IDS}. */
