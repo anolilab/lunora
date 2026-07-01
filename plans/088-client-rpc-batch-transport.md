@@ -1,11 +1,20 @@
 # Plan 088 — [Spike] Client RPC batch transport (Cap'n Web HTTP-batch, no capabilities)
 
-> **Status (branch `feat/capnweb-wire-fidelity`): NOT STARTED.** 086 (RPC value
-> codec) and 087 (structured errors) landed on this branch; 088 remains the
-> guarded spike below. It is XL — a new `/_lunora/rpc-batch` endpoint, worker-side
-> shard-split, and DO per-entry idempotency + custom-mutator watermark ordering —
-> and its own §3 STOP conditions apply. Scope it as a standalone phase (design +
-> workerd proof first, like 075/077), not a quick follow-on to 086/087.
+> **Status (branch `feat/capnweb-wire-fidelity`): IMPLEMENTED — cross-shard v1.**
+> Shipped without hitting a STOP condition. The key move that de-risked it: rather
+> than refactor the DO's dispatch core, the DO `/rpc-batch` handler **replays each
+> entry through the existing single-call `/rpc` path** (nested `this.fetch`,
+> sequential), so per-`(identity, mutationId)` idempotency and per-client
+> `__client_watermark` ordering are inherited verbatim from the battle-tested path.
+> The worker `/_lunora/rpc-batch` resolves identity once, runs `authorizeShard` on
+> every entry, groups by `shardKey`, and fans one sub-batch per shard DO (true
+> cross-shard split). Client `.batch()` demuxes per-slot (fail-per-slot, not
+> fail-fast) and rides the 086 codec. Capabilities/pipelining stayed OUT (§2 fence).
+> Tests: `packages/do/__tests__/shard-do.batch.test.ts` (per-id order, decoded
+> args, shared identity, failing-entry isolation) + `packages/client/__tests__/batch.test.ts`
+> (request shape, demux, dropped-slot). **Deferred:** auto-coalescing the offline
+> outbox flush onto `.batch()` (the primitive is in place; wiring the queue replay
+> to it is the follow-on that realizes the flaky-reconnect latency win).
 
 > **Source:** Wave 9 Cap'n Web analysis. Cap'n Web's `newHttpBatchRpcSession`
 > bundles many calls into one HTTP round trip (and pipelines dependent calls).
