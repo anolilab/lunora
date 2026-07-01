@@ -89,9 +89,9 @@ import type { QueryStatEntry } from "./query-metrics";
 import { readQueryMetrics, recordQueryMetric } from "./query-metrics";
 import type { ShardRankPageResult } from "./rank";
 import type { ReactiveCacheOptions } from "./reactive-cache";
-import { ReactiveCache, reactiveCacheKey, stableStringify } from "./reactive-cache";
-import type { OwnerRelayFrame, RelayFrame, RelayShapePoke, RelayShapeSeed, RelayShapeSubscribe } from "./relay";
-import { DEFAULT_PROMOTION_THRESHOLDS, parseRelayName, relayName, shapeRoutingKey } from "./relay";
+import { ReactiveCache, reactiveCacheKey } from "./reactive-cache";
+import type { OwnerRelay, RelayHost, RelayMember } from "./relay-hub";
+import { createRelayLink, DEFAULT_MAX_RELAYS } from "./relay-hub";
 import type { AppendRequestLogEntry, ContextLogLevel, LogEventInput, RequestLogResult, RequestLogWriteOptions } from "./request-log";
 import { appendRequestLogEntry, emitLogEvent, emitRequestLogEvent, ensureRequestLogTable, readRequestLog, renderLogMessage } from "./request-log";
 import { buildSecurityAudit } from "./security-audit";
@@ -101,20 +101,21 @@ import { buildPokeFrames, diffGlobalMembership, projectColumns } from "./shape-g
 import { runSocketPool } from "./socket-pool";
 import { runReadonlySql } from "./sql-console";
 import { findDanglingReferences } from "./storage-correlation";
-import { sendDeltaFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
+import { awaitWsDrain, sendDeltaFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
 import type { TransactionSqlLike } from "./transaction";
 import { ConflictError } from "./transaction";
 import type {
     LifecycleDispatchInfo,
     LifecycleEvent,
     MutationDelta,
+    ResolvedShape,
     RpcRequest,
     ShapeSubscriptionQuery,
     SocketAttachment,
     SubscriptionEnvelope,
+    SubscriptionIdentity,
     SubscriptionQuery,
 } from "./types";
-import type { WhereInput } from "./where-types";
 
 /**
  * Client→server text frame the runtime answers with {@link WS_KEEPALIVE_PONG}
@@ -248,23 +249,6 @@ interface SubscriptionOutcome {
  * `columns`, when present, projects each row-op's `value` to that subset (the
  * shape's declared column allow-list); absent ⇒ the full document is shipped.
  */
-interface ResolvedShape {
-    columns?: ReadonlyArray<string>;
-    effectiveWhere?: WhereInput;
-
-    /**
-     * `true` when the shape's table is `.global()` (lives in D1, not this DO's
-     * SQLite). A global shape has **no per-DO op-log** to diff, so it is served
-     * by the **latency-tiered poll path** ({@link ShardDO.seedGlobalShape} +
-     * {@link ShardDO.refreshGlobalShape}) instead of the CDC poke path — seeded
-     * from {@link ShardDO.readGlobalShapeRows} and refreshed on an alarm tick.
-     * The codegen subclass sets it from the schema's `shardMode`; absent ⇒ a
-     * shard-local (poke-live) shape.
-     */
-    global?: boolean;
-    table: string;
-}
-
 /** Per-socket, per-shape poke baseline: the `__cdc_log` cursor this shape's view has been poked through. */
 interface ShapeMemo {
     cursor: number;
@@ -277,36 +261,6 @@ interface ShapeMemo {
  * out-of-order arrival (`"gap"`).
  */
 type ClientMutationClass = { expected: number; kind: "already" | "gap" | "next" };
-
-/**
- * Identity a subscription query is executed under, threaded EXPLICITLY into
- * `executeSubscription` → `buildCtx` rather than read from the shared,
- * per-request `currentRequestUserId`/`currentRequestIdentity` instance fields.
- *
- * The value passed is the socket's OWN verified identity, captured at the WS
- * upgrade from the runtime-forwarded, server-minted `x-lunora-userid` /
- * `x-lunora-identity` headers (the client cannot forge them — the runtime
- * strips any client-supplied copies) and stamped on the {@link SocketAttachment}.
- * `seedSubscription` and `refreshSubscriptions` read it off the attachment and
- * pass it here BY VALUE — never by reading the mutable per-request
- * `currentRequestUserId`/`currentRequestIdentity` instance fields, which a
- * deferred (`waitUntil`) refresh or a concurrently-interleaved RPC could be
- * mutating. That value-passing is what keeps a subscription re-run from
- * observing or clobbering an in-flight RPC's identity.
- *
- * Developer-facing consequence: a query that authorizes or filters on the
- * caller's identity — via `.use(rls(...))` or by reading `ctx.auth.userId` —
- * evaluates over the live channel under the CONNECTING user, so its seed and
- * every write-driven refresh return that user's rows, matching the one-shot
- * `fetch` RPC. An anonymous socket (no identity resolved at upgrade) leaves
- * both fields `undefined`, so such a query fails closed (empty/denied) rather
- * than leaking another user's data. See the lunora-realtime skill
- * ("Authorization & live queries").
- */
-interface SubscriptionIdentity {
-    identity?: Record<string, unknown>;
-    userId?: string;
-}
 
 /**
  * Optional shard-level configuration passed through `super(state, env, …)`.
@@ -493,22 +447,6 @@ const IDEMPOTENCY_GC_INTERVAL_MS = 3_600_000;
  * table without an explicit `.shardBy()` or `.global()` modifier.
  */
 
-/**
- * The identity the owner computes a relay-multicast shape delta under (plan 075
- * Phase 3). It is the empty (anonymous) identity, and it is **load-bearing for
- * RLS**: a shape may only be relay-multicast if the uniform gate has PROVEN its
- * resolved query is identical for this exact identity and every other — so the
- * one delta computed here is correct for every cohort subscriber. The gate
- * probes this same constant (see `probeShapeRelayUniform`), so the validated
- * identity and the multicast identity can never drift apart.
- */
-const RELAY_MULTICAST_IDENTITY: SubscriptionIdentity = {};
-
-/** Exhaustiveness guard for the {@link OwnerRelayFrame} dispatch — an unhandled member is a compile error here, and an impossible runtime frame throws rather than silently mis-routing. */
-const assertNeverFrame = (frame: never): never => {
-    throw new Error(`unhandled relay frame: ${JSON.stringify(frame)}`);
-};
-
 const ROOT_SHARD_NAME = "__root__";
 
 /**
@@ -519,33 +457,6 @@ const ROOT_SHARD_NAME = "__root__";
  * a memo carrying it as "re-run on every write-flush".
  */
 const ADMIN_WILDCARD = "*";
-
-/**
- * Defensive WS backpressure helper. When the runtime exposes
- * `bufferedAmount` on the socket, pause iteration whenever the outbound
- * buffer is past 1 MiB; otherwise treat the socket as drained. Capped at
- * 100 sleeps of 20 ms (≈ 2 s total) so a permanently-stuck buffer can't
- * pin the iterator forever — past that we drop through and let the next
- * `ws.send` surface the failure.
- */
-const awaitWsDrain = async (ws: WebSocket): Promise<void> => {
-    let attempts = 0;
-
-    while (attempts < 100) {
-        attempts += 1;
-
-        const buffered = (ws as { bufferedAmount?: unknown }).bufferedAmount;
-
-        if (typeof buffered !== "number" || buffered < 1_048_576) {
-            return;
-        }
-
-        // eslint-disable-next-line no-await-in-loop -- intentional backpressure poll: sleep, then re-check the drained buffer on the next iteration
-        await new Promise((resolve) => {
-            setTimeout(resolve, 20);
-        });
-    }
-};
 
 /**
  * The trailing `,"cursor":&lt;n>,"epoch":"&lt;e>"` fragment appended to a
@@ -1373,16 +1284,6 @@ const parsePositiveInt = (raw: string | undefined): number | undefined => {
     return Number.isFinite(value) && value > 0 ? value : undefined;
 };
 
-/** Default relay fan when a shard promotes (plan 075 Phase 2) — how many relays new connections spread across. Right-sizing per demand is a later phase; v1 uses a small fixed fan. */
-const DEFAULT_RELAY_FAN = 2;
-
-/** Default hard cap on relays per shard (the cost ceiling) so a viral shard can never silently spawn unbounded relay DOs. */
-const DEFAULT_MAX_RELAYS = 8;
-
-/** Read a positive-integer `LUNORA_*` env knob, falling back to `fallback` when unset or malformed. */
-const envPositiveInt = (env: unknown, key: string, fallback: number): number =>
-    parsePositiveInt((env as Record<string, unknown> | undefined)?.[key] as string | undefined) ?? fallback;
-
 /**
  * Resolve the per-dispatch console-stream toggle (`LUNORA_REQUEST_LOG_EMIT`).
  * An explicit `"1"`/`"true"` forces it on and `"0"`/`"false"` forces it off
@@ -1475,29 +1376,6 @@ const constantTimeEqual = (a: string, b: string): boolean => {
     }
 
     return diff === 0;
-};
-
-/** Minimal Durable Object stub shape the relay hub uses — just `fetch`. */
-interface RelayStub {
-    fetch: (input: string, init?: RequestInit) => Promise<Response>;
-}
-
-/** Minimal Durable Object namespace shape the relay hub resolves siblings through (`getByName` when present, else `idFromName` + `get`). */
-interface RelayNamespaceLike {
-    get: (id: unknown) => RelayStub;
-    getByName?: (name: string) => RelayStub;
-    idFromName: (name: string) => unknown;
-}
-
-/** Duck-type a namespace binding so a relay/owner can address its siblings, or `undefined` when the value isn't a DO namespace. */
-const asRelayNamespace = (value: unknown): RelayNamespaceLike | undefined => {
-    if (value === null || typeof value !== "object") {
-        return undefined;
-    }
-
-    const candidate = value as Partial<RelayNamespaceLike>;
-
-    return typeof candidate.idFromName === "function" && typeof candidate.get === "function" ? (candidate as RelayNamespaceLike) : undefined;
 };
 
 /**
@@ -1846,59 +1724,13 @@ abstract class ShardDO {
     private shardBinding: string | undefined;
 
     /**
-     * Owner-side cache of the active relay indices for this shard (plan 075 Phase
-     * 2). Lazily hydrated from the reserved `__lunora_relays` SQLite table and kept
-     * in lockstep with it on attach/detach, so the hot whisper-forward path reads
-     * it synchronously without a storage round-trip.
+     * The auto-elastic fan-out relay collaborator (plan 075) — an {@link OwnerRelay}
+     * or {@link RelayMember} chosen ONCE from this DO's name, or `undefined` for an
+     * unnamed (single-DO) DO where the relay tier is inert. All relay state +
+     * transport lives on it, reached back through the {@link RelayHost} adapter, so
+     * owner-only state can never sit next to relay-only state on this class.
      */
-    private relaySetCache: Set<number> | undefined;
-
-    /** Relay-side guard: `true` once this relay has announced itself to its owner this wake, so a hot socket churn doesn't re-`relay_attach` on every subscribe. */
-    private relayAnnounced = false;
-
-    /** Memoized RLS-uniform verdict per `(name, args)` shape — uniformity is a stable property, so the gate probe runs at most once per distinct shape (plan 075 Phase 3). */
-    private readonly shapeUniformCache = new Map<string, boolean>();
-
-    /**
-     * Owner-side registry of relay-uniform shapes that a relay has subscribers for
-     * (plan 075 Phase 3 slice B.2), keyed by `(name, args)`. `cursor` is the cohort
-     * frontier — the cursor up to which the owner has multicast this shape's deltas.
-     * On each flush the owner diffs `(cursor, frameCursor]` ONCE and multicasts it to
-     * its relays, then advances `cursor`.
-     */
-    private readonly relayShapeRegistry = new Map<string, { args: Record<string, unknown>; cursor: number; name: string }>();
-
-    /**
-     * Owner-side registry of NON-uniform (identity-scoped) relay shapes, one entry
-     * per relay socket (plan 075 review MEDIUM-3). These can't be cohort-multicast —
-     * each subscriber's delta is identity-dependent — so the owner computes each
-     * one's diff under its own forwarded identity and delivers a targeted poke to
-     * that one socket (by `connectionId`). No fan-out scaling (it's per-socket either
-     * way), but the relay still offloads the connection and the socket gets live
-     * updates instead of a silently frozen shape. Keyed `relayIndex:connectionId:subId`.
-     */
-    private readonly relayShapeProxies = new Map<
-        string,
-        {
-            args: Record<string, unknown>;
-            connectionId: string;
-            cursor: number;
-            epoch?: string;
-            identity: SubscriptionIdentity;
-            name: string;
-            relayIndex: number;
-            subId: string;
-        }
-    >();
-
-    /**
-     * Relay-side per-socket shape memo: `ws → subId → { cursor, epoch }`. The relay
-     * delivers a multicast `relay_shape_poke` to a socket only when its memo for that
-     * shape matches the poke's `fromCursor` AND `epoch`, then advances it — so a
-     * socket that seeded at a different cursor (or in a prior CDC epoch) never
-     * double-applies a delta (plan 075 Phase 3 slice B.2).
-     */
-    private readonly shapeRelayMemos = new WeakMap<WebSocket, Map<string, { cursor: number; epoch?: string }>>();
+    private readonly relay: OwnerRelay | RelayMember | undefined;
 
     /**
      * Declared indexes (`table:index`) a query has exercised since this instance
@@ -1996,6 +1828,34 @@ abstract class ShardDO {
         if (options.reactiveCache) {
             this.reactiveCache = new ReactiveCache(options.reactiveCache);
         }
+
+        // The relay tier reaches this DO back through a narrow adapter; the role-typed
+        // collaborator (owner vs relay) is fixed once from the DO name (plan 075).
+        const host: RelayHost = {
+            buildShapeDiff: (resolved, fromCursor, toCursor) => this.buildShapeDiff(this.sql as SqlExec, resolved, fromCursor, toCursor),
+            computeOpLogShapeSeed: (shape, resolved) => this.computeOpLogShapeSeed(shape, resolved),
+            currentCdcEpoch: () => this.currentCdcEpoch(),
+            deliverWhisperLocal: (topic, frame, exclude) => this.deliverWhisperLocal(topic, frame, exclude),
+            doName: () => this.state.id?.name,
+            env: () => this.env,
+            getWebSockets: () => this.state.getWebSockets(),
+            maskMetadata: () => this.maskMetadata(),
+            nextPokeId: () => {
+                this.pokeSequence += 1;
+
+                return `poke-${String(this.pokeSequence)}`;
+            },
+            readAttachment: (ws) => this.readAttachment(ws),
+            recordShapePokeFanout: (iterated, delivered, elapsedMs) => {
+                this.fanout.shapePoke = recordFanoutPass(this.fanout.shapePoke, iterated, delivered, elapsedMs);
+            },
+            resolveShape: (name, args, identity) => this.resolveShape(name, args, identity),
+            rlsMetadata: () => this.rlsMetadata(),
+            shardBinding: () => this.shardBinding,
+            sql: () => this.sql as SqlExec,
+        };
+
+        this.relay = createRelayLink(host);
 
         this.armWebSocketKeepalive();
     }
@@ -2417,7 +2277,7 @@ abstract class ShardDO {
                 // Relay tier (plan 075 Phase 2): once a relay holds a subscriber, it
                 // announces itself so the owner forwards whisper frames to it.
                 if (join) {
-                    await this.announceRelayIfNeeded();
+                    await this.relay?.announce();
                 }
             }
 
@@ -2503,7 +2363,7 @@ abstract class ShardDO {
 
         // Relay tier collapse (plan 075 Phase 2): a relay that just lost its last
         // socket detaches from its owner, so the owner stops forwarding to it.
-        await this.announceRelayDrainIfNeeded(ws);
+        await this.relay?.announceDrain(ws);
     }
 
     /** Hibernation API: invoked on socket error. */
@@ -3970,31 +3830,13 @@ abstract class ShardDO {
 
     /**
      * The RLS-uniform gate (plan 075 Phase 3): whether a reactive shape may be
-     * relay-multicast — i.e. one delta is correct for **every** subscriber. True
-     * iff the shape's resolved query (table + `effectiveWhere` + `columns`) is
-     * **identical regardless of the caller's identity** AND none of its projected
-     * columns are masked. Decided by {@link ShardDO.probeShapeRelayUniform}: a
-     * static RLS read-policy guard, plus resolving under the anonymous multicast
-     * identity and two {@link Proxy}-backed identities that yield a distinct value
-     * for ANY accessed claim (so even a custom claim read outside `rls()` diverges),
-     * with a copy backstop. **Fail-closed**: a resolve that throws, a per-identity
-     * `effectiveWhere`, a masked column, an enumerated identity, or a `.global()`
-     * table all yield `false`, keeping the shape owner-served. Cached per
-     * `(name, args)`, whose uniformity is stable.
+     * relay-multicast — i.e. one delta is correct for **every** subscriber. The owner
+     * decides it (see {@link OwnerRelay.isShapeRelayUniform} — a static RLS read-policy
+     * guard plus claim-exhaustive `Proxy` probes, fail-closed); this thin delegation
+     * is the seam the gate test exercises. A non-owner DO is never relay-uniform.
      */
     protected isShapeRelayUniform(name: string, args: Record<string, unknown>): boolean {
-        const cacheKey = shapeRoutingKey(name, args);
-        const cached = this.shapeUniformCache.get(cacheKey);
-
-        if (cached !== undefined) {
-            return cached;
-        }
-
-        const uniform = this.probeShapeRelayUniform(name, args);
-
-        this.shapeUniformCache.set(cacheKey, uniform);
-
-        return uniform;
+        return this.relay?.isShapeRelayUniform(name, args) ?? false;
     }
 
     /**
@@ -5515,11 +5357,11 @@ abstract class ShardDO {
      */
     private collectFanoutMetrics(): FanoutMetricsResult {
         const summary = summarizeFanoutTopics(this.state.getWebSockets().map((ws) => this.readAttachment(ws)));
-        const relayCount = this.computeRelayCount();
+        const relayCount = this.relay?.relayCount() ?? 0;
 
         return {
             ...summary,
-            maxRelays: envPositiveInt(this.env, "LUNORA_MAX_RELAYS", DEFAULT_MAX_RELAYS),
+            maxRelays: this.relay?.maxRelays() ?? DEFAULT_MAX_RELAYS,
             promoted: relayCount > 0,
             relayCount,
             shapePoke: this.fanout.shapePoke,
@@ -6025,8 +5867,7 @@ abstract class ShardDO {
                 await Promise.all([
                     this.refreshSubscriptions(batch),
                     this.pokeShapeSubscribers(batch, frameCursor, frameEpoch),
-                    this.multicastRelayShapePokes(batch, frameCursor ?? 0),
-                    this.proxyRelayShapePokes(batch, frameCursor ?? 0),
+                    this.relay?.onFlush(batch, frameCursor ?? 0),
                 ]);
 
                 batch = this.pendingRefreshTables;
@@ -6326,9 +6167,12 @@ abstract class ShardDO {
         // Relay tier (plan 075 Phase 3): a relay holds no op-log, so it forwards the
         // seed to the owner — the only DO that can resolve the shape against real
         // data, under this socket's verified identity (RLS-correct) — and delivers
-        // the owner-computed frames. The owner-served path is unchanged.
-        if (this.relayRole()?.relayIndex !== undefined) {
-            return this.seedShapeViaOwner(ws, subId, shape, identity);
+        // the owner-computed frames. A non-relay DO returns `undefined` here, falling
+        // through to the owner-served path (unchanged).
+        const relayed = await this.relay?.seedRelayShape(ws, subId, shape, identity);
+
+        if (relayed !== undefined) {
+            return relayed;
         }
 
         let resolved: ResolvedShape | undefined;
@@ -6400,9 +6244,9 @@ abstract class ShardDO {
     /**
      * Compute an op-log shape seed (cursor, epoch, the resume base, and the
      * membership `rowsPatch`) WITHOUT sending — the shared core of
-     * {@link ShardDO.seedOpLogShape} (sends to a local socket) and
-     * {@link ShardDO.buildShapeSeedFrames} (serializes the frames for a relay to
-     * deliver, plan 075 Phase 3). Resume only when CDC is on, the client is on this
+     * {@link ShardDO.seedOpLogShape} (sends to a local socket) and the owner relay's
+     * `buildShapeSeedFrames` (serializes the frames for a relay to deliver, plan 075
+     * Phase 3, via the {@link RelayHost} seam). Resume only when CDC is on, the client is on this
      * epoch, its checkpoint doesn't run ahead of ours, and the log still covers it;
      * else a full re-seed. A fully-compacted log only proves "nothing missed" when
      * the client is already at `cursor`.
@@ -6427,94 +6271,6 @@ abstract class ShardDO {
             canResume && shape.sinceSeq !== undefined ? this.buildShapeDiff(sql, resolved, shape.sinceSeq, cursor) : this.buildShapeSeed(sql, resolved);
 
         return { baseCheckpoint: canResume ? shape.sinceSeq : undefined, cursor, epoch, rowsPatch };
-    }
-
-    /**
-     * Serialize a shape's seed poke frames for a relay to deliver verbatim (plan
-     * 075 Phase 3). The owner resolves the shape under the forwarded socket identity
-     * — so RLS applies exactly as for a local subscribe — and computes the seed,
-     * returning the frames instead of sending. `lastMutationId` is omitted: relayed
-     * sockets don't carry per-socket custom-mutator watermarks (those stay
-     * owner-served).
-     * @returns the serialized frames + the cursor they were computed at, or an error when the shape can't be resolved
-     */
-    private buildShapeSeedFrames(request: RelayShapeSubscribe): RelayShapeSeed {
-        const identity: SubscriptionIdentity = { identity: request.identity, userId: request.userId };
-
-        let resolved: ResolvedShape | undefined;
-
-        try {
-            resolved = this.resolveShape(request.name, request.args, identity);
-        } catch (error) {
-            return { error: { code: "SHAPE_RESOLVE_FAILED", message: error instanceof Error ? error.message : "shape resolve failed" } };
-        }
-
-        if (resolved === undefined || resolved.global === true) {
-            return { error: { code: "SHAPE_NOT_FOUND", message: `shape not relayable: ${request.name}` } };
-        }
-
-        // Self-heal the relay set from the seed itself: any relay that seeds a shape
-        // through the owner provably has a subscriber, so register it here too. This
-        // makes forwarding robust to a dropped `relay_attach` (idempotent INSERT) —
-        // the owner can't silently fail to multicast/proxy to a live relay (LOW-4).
-        if (request.relayIndex !== undefined) {
-            this.addRelayToSet(request.relayIndex);
-        }
-
-        const { baseCheckpoint, cursor, epoch, rowsPatch } = this.computeOpLogShapeSeed(
-            { args: request.args, name: request.name, sinceEpoch: request.sinceEpoch, sinceSeq: request.sinceSeq },
-            resolved,
-        );
-
-        // A UNIFORM shape joins the cohort multicast (slice B.2): the relay must stamp
-        // the socket's memo at the registry FRONTIER (entry.cursor), NOT the global
-        // cursor the frames were computed at. The frontier only advances on a multicast
-        // poke, so an unrelated-table write that bumps the global cursor would otherwise
-        // leave a joiner's memo permanently ahead of every future `fromCursor` — silently
-        // frozen (plan 075 review HIGH-2). Seeding the full current membership while
-        // memoing at the (older) frontier is correct because a shape's membership is
-        // invariant between pokes.
-        //
-        // A NON-uniform shape can't be cohort-multicast (its delta is identity-scoped),
-        // so it registers a per-socket proxy keyed by the forwarding relay + this socket
-        // — the owner computes its delta under the forwarded identity each flush and
-        // delivers a targeted poke (MEDIUM-3). Either way the socket's memo baseline is
-        // `cohortCursor` and live updates flow.
-        let cohortCursor = cursor;
-
-        if (this.isShapeRelayUniform(request.name, request.args)) {
-            const routingKey = shapeRoutingKey(request.name, request.args);
-            let entry = this.relayShapeRegistry.get(routingKey);
-
-            if (entry === undefined) {
-                entry = { args: request.args, cursor, name: request.name };
-                this.relayShapeRegistry.set(routingKey, entry);
-            }
-
-            cohortCursor = entry.cursor;
-        } else if (request.relayIndex !== undefined && request.connectionId !== undefined) {
-            this.relayShapeProxies.set(`${String(request.relayIndex)}:${request.connectionId}:${request.subId}`, {
-                args: request.args,
-                connectionId: request.connectionId,
-                cursor,
-                epoch,
-                identity,
-                name: request.name,
-                relayIndex: request.relayIndex,
-                subId: request.subId,
-            });
-        }
-
-        this.pokeSequence += 1;
-        const frames = buildPokeFrames([{ rowsPatch, shapeId: request.subId }], {
-            baseCheckpoint,
-            checkpoint: cursor,
-            epoch,
-            lastMutationId: undefined,
-            pokeId: `poke-${String(this.pokeSequence)}`,
-        });
-
-        return { cursor: cohortCursor, epoch, frames };
     }
 
     /**
@@ -7372,14 +7128,16 @@ abstract class ShardDO {
      */
     private routeNonRpc(url: URL, request: Request): Promise<Response> | undefined {
         if (url.pathname === "/_lunora/relay" && request.method === "POST") {
-            return this.handleRelayMessage(request);
+            // The relay tier is inert on an unnamed (single-DO) DO — nothing forwards
+            // control frames there, so a 404 is the honest answer.
+            return this.relay?.handleControl(request) ?? Promise.resolve(new Response("relay tier inactive", { status: 404 }));
         }
 
         // Promotion probe (plan 075 Phase 2): the runtime asks the owner how many
         // relays to spread new connections across before a WS upgrade. Internal —
         // reachable only via the runtime's worker-side forward, returns just a count.
         if (url.pathname === "/_lunora/route" && request.method === "GET") {
-            return Promise.resolve(jsonResponse({ relayCount: this.computeRelayCount() }));
+            return Promise.resolve(jsonResponse({ relayCount: this.relay?.relayCount() ?? 0 }));
         }
 
         if (request.headers.get("Upgrade") === "websocket") {
@@ -7387,34 +7145,6 @@ abstract class ShardDO {
         }
 
         return undefined;
-    }
-
-    /**
-     * How many relays the runtime should spread new connections across for this
-     * shard (plan 075 Phase 2). `0` keeps every connection on the owner — the
-     * common, un-promoted path. A relay never promotes (flat single tier in v1).
-     * The owner promotes once its live socket count crosses `LUNORA_RELAY_THRESHOLD`
-     * (default {@link DEFAULT_PROMOTION_THRESHOLDS}`.tUp`), fanning to a fixed
-     * `LUNORA_RELAY_FAN` (capped by `LUNORA_MAX_RELAYS` — the cost ceiling). Demand
-     * right-sizing + collapse below `T_down` land in the next phase.
-     */
-    private computeRelayCount(): number {
-        const name = this.state.id?.name;
-
-        if (name !== undefined && parseRelayName(name) !== undefined) {
-            return 0;
-        }
-
-        const threshold = envPositiveInt(this.env, "LUNORA_RELAY_THRESHOLD", DEFAULT_PROMOTION_THRESHOLDS.tUp);
-
-        if (this.state.getWebSockets().length < threshold) {
-            return 0;
-        }
-
-        const maxRelays = envPositiveInt(this.env, "LUNORA_MAX_RELAYS", DEFAULT_MAX_RELAYS);
-        const fan = envPositiveInt(this.env, "LUNORA_RELAY_FAN", DEFAULT_RELAY_FAN);
-
-        return Math.min(maxRelays, Math.max(1, fan));
     }
 
     private handleWebSocketUpgrade(request: Request): Response {
@@ -7594,7 +7324,7 @@ abstract class ShardDO {
         // is promoted (plan 075 Phase 2) — forward the opaque frame through the relay
         // hub so it reaches the sockets on every other DO serving the shard.
         this.deliverWhisperLocal(topic, frame, sender);
-        await this.forwardWhisperToHub(topic, frame);
+        await this.relay?.forwardWhisper(topic, frame);
     }
 
     /**
@@ -7623,670 +7353,6 @@ abstract class ShardDO {
         this.fanout.whisper = recordFanoutPass(this.fanout.whisper, scanned, delivered, 0);
 
         return delivered;
-    }
-
-    /**
-     * Forward an opaque whisper frame through the relay hub (plan 075 Phase 2). A
-     * relay sends it UP to its owner (stamped with its own index so the owner won't
-     * echo it back); the owner sends it to every relay in its set. A no-op in
-     * single-DO mode (no binding) or when the owner has no relays — so the common,
-     * un-promoted path stays free.
-     */
-    private async forwardWhisperToHub(topic: string, frame: string): Promise<void> {
-        const role = this.relayRole();
-
-        if (role === undefined) {
-            return;
-        }
-
-        if (role.relayIndex !== undefined) {
-            await this.postRelayMessage(role.ownerKey, { frame, originRelay: role.relayIndex, topic, type: "relay_frame" });
-
-            return;
-        }
-
-        const relays = this.ownerRelaySet();
-
-        if (relays.size === 0) {
-            return;
-        }
-
-        await Promise.all([...relays].map((index) => this.postRelayMessage(relayName(role.ownerKey, index), { frame, topic, type: "relay_frame" })));
-    }
-
-    /**
-     * This DO's role in the relay hub, or `undefined` when it can't address siblings
-     * (no namespace binding learned, or no DO name) — i.e. single-DO mode, where the
-     * relay tier is inert. An owner returns its own key with no `relayIndex`; a relay
-     * returns its owner's key + its slot.
-     * @returns `{ ownerKey, relayIndex? }`, or `undefined` when relaying isn't possible
-     */
-    private relayRole(): undefined | { ownerKey: string; relayIndex?: number } {
-        const name = this.state.id?.name;
-
-        if (name === undefined || this.relayNamespace() === undefined) {
-            return undefined;
-        }
-
-        const parsed = parseRelayName(name);
-
-        return parsed === undefined ? { ownerKey: name } : { ownerKey: parsed.ownerKey, relayIndex: parsed.relayIndex };
-    }
-
-    /** Resolve this DO's own namespace binding (learned from `x-lunora-shard-binding`) so it can address sibling owners/relays, or `undefined` when unknown. */
-    private relayNamespace(): RelayNamespaceLike | undefined {
-        if (this.shardBinding === undefined) {
-            return undefined;
-        }
-
-        return asRelayNamespace((this.env as Record<string, unknown> | undefined)?.[this.shardBinding]);
-    }
-
-    /**
-     * POST an owner↔relay control message to a sibling DO by name. Best-effort: a
-     * transient cross-DO failure drops the frame (whisper is ephemeral — there is no
-     * resume) rather than throwing into the WS message handler. Carries the binding
-     * forward so the receiver can address its own siblings in turn.
-     */
-    private async postRelayMessage(targetName: string, message: OwnerRelayFrame): Promise<void> {
-        await this.requestRelayMessage(targetName, message);
-    }
-
-    /**
-     * POST an owner↔relay control message to a sibling DO by name and return its
-     * response (the shape-seed path needs the owner's frames back; the fire-and-
-     * forget {@link ShardDO.postRelayMessage} ignores it). Best-effort: a transient
-     * cross-DO failure returns `undefined` rather than throwing into the handler.
-     * @returns the sibling's response, or `undefined` when it can't be reached
-     */
-    private async requestRelayMessage(targetName: string, message: OwnerRelayFrame): Promise<Response | undefined> {
-        const namespace = this.relayNamespace();
-
-        if (namespace === undefined) {
-            return undefined;
-        }
-
-        const stub = typeof namespace.getByName === "function" ? namespace.getByName(targetName) : namespace.get(namespace.idFromName(targetName));
-
-        try {
-            return await stub.fetch("https://relay.internal/_lunora/relay", {
-                body: JSON.stringify(message),
-                headers: { "content-type": "application/json", "x-lunora-shard-binding": this.shardBinding ?? "" },
-                method: "POST",
-            });
-        } catch {
-            // Best-effort hub forwarding — a dropped ephemeral frame is tolerable.
-            return undefined;
-        }
-    }
-
-    /**
-     * Seed a shape held by a socket on a relay by forwarding the request to the
-     * owner (plan 075 Phase 3): the owner resolves the shape under this socket's
-     * verified identity and computes the seed frames, which the relay delivers
-     * verbatim. Returns a structured error (surfaced as a `shape_subscribe` error)
-     * when the owner can't be reached or the shape can't be resolved.
-     */
-    private async seedShapeViaOwner(
-        ws: WebSocket,
-        subId: string,
-        shape: ShapeSubscriptionQuery,
-        identity: SubscriptionIdentity,
-    ): Promise<"ok" | { code: string; message: string }> {
-        const role = this.relayRole();
-
-        if (role?.relayIndex === undefined) {
-            return { code: "RELAY_MISCONFIGURED", message: "relay cannot address its owner" };
-        }
-
-        // Announce to the owner so it adds this relay to the set it multicasts shape
-        // deltas to (slice B.2) — shape subscribers attach the relay just like whisper.
-        await this.announceRelayIfNeeded();
-
-        const request: RelayShapeSubscribe = {
-            args: shape.args ?? {},
-            connectionId: this.readAttachment(ws).connectionId,
-            identity: identity.identity,
-            name: shape.name,
-            relayIndex: role.relayIndex,
-            sinceEpoch: shape.sinceEpoch,
-            sinceSeq: shape.sinceSeq,
-            subId,
-            type: "relay_shape_subscribe",
-            userId: identity.userId,
-        };
-
-        const response = await this.requestRelayMessage(role.ownerKey, request);
-
-        if (response === undefined) {
-            return { code: "RELAY_SEED_FAILED", message: "owner did not answer the shape seed" };
-        }
-
-        let seed: RelayShapeSeed;
-
-        try {
-            seed = await response.json();
-        } catch {
-            return { code: "RELAY_SEED_FAILED", message: "malformed shape seed from owner" };
-        }
-
-        if (seed.error !== undefined) {
-            return seed.error;
-        }
-
-        if (seed.frames === undefined) {
-            return { code: "RELAY_SEED_FAILED", message: "owner returned no shape frames" };
-        }
-
-        await awaitWsDrain(ws);
-
-        for (const frame of seed.frames) {
-            trySendFrame(ws, frame);
-        }
-
-        // Record this socket's cohort memo so the owner's multicast deltas land
-        // exactly once (slice B.2): the next `relay_shape_poke` for this shape is
-        // delivered only while the memo still matches the poke's `fromCursor`+`epoch`.
-        this.recordRelayShapeMemo(ws, subId, seed.cursor ?? 0, seed.epoch);
-
-        return "ok";
-    }
-
-    /** Record a relay socket's cohort cursor + epoch for `subId` (creating the per-socket map lazily). */
-    private recordRelayShapeMemo(ws: WebSocket, subId: string, cursor: number, epoch: string | undefined): void {
-        let memos = this.shapeRelayMemos.get(ws);
-
-        if (memos === undefined) {
-            memos = new Map<string, { cursor: number; epoch?: string }>();
-            this.shapeRelayMemos.set(ws, memos);
-        }
-
-        memos.set(subId, { cursor, epoch });
-    }
-
-    /**
-     * Owner side (plan 075 Phase 3 slice B.2): for every registered relay-uniform
-     * shape whose table changed this flush, compute the membership diff ONCE over
-     * `(cohort cursor, frameCursor]` and multicast the `rowsPatch` to every relay.
-     * Advances the cohort cursor synchronously (before any await) so a seed that
-     * interleaves during the multicast registers at `frameCursor` and is skipped by
-     * this in-flight poke. The owner's per-socket poke path is untouched — this is
-     * pure additive relay fan-out, a no-op when the shard has no relays.
-     */
-    private async multicastRelayShapePokes(changed: Set<string>, frameCursor: number): Promise<void> {
-        const ownerKey = this.state.id?.name;
-
-        if (ownerKey === undefined || this.relayShapeRegistry.size === 0) {
-            return;
-        }
-
-        const relays = this.ownerRelaySet();
-
-        if (relays.size === 0) {
-            return;
-        }
-
-        const sql = this.sql as SqlExec;
-        const epoch = this.currentCdcEpoch();
-        const sends: Promise<void>[] = [];
-
-        for (const entry of this.relayShapeRegistry.values()) {
-            let resolved: ResolvedShape | undefined;
-
-            try {
-                resolved = this.resolveShape(entry.name, entry.args, RELAY_MULTICAST_IDENTITY);
-            } catch {
-                continue;
-            }
-
-            if (resolved === undefined || resolved.global === true || !changed.has(resolved.table)) {
-                continue;
-            }
-
-            const fromCursor = entry.cursor;
-            const rowsPatch = this.buildShapeDiff(sql, resolved, fromCursor, frameCursor);
-
-            if (rowsPatch.length === 0) {
-                continue; // the shape's membership didn't change — leave the cohort cursor put
-            }
-
-            entry.cursor = frameCursor;
-            const poke: RelayShapePoke = {
-                args: entry.args,
-                checkpoint: frameCursor,
-                epoch,
-                fromCursor,
-                name: entry.name,
-                rowsPatch,
-                type: "relay_shape_poke",
-            };
-
-            for (const index of relays) {
-                sends.push(this.postRelayMessage(relayName(ownerKey, index), poke));
-            }
-        }
-
-        await Promise.all(sends);
-    }
-
-    /**
-     * Owner side (plan 075 review MEDIUM-3): for every NON-uniform relay-shape proxy
-     * whose table changed this flush, compute that one subscriber's membership diff
-     * over `(entry.cursor, frameCursor]` UNDER ITS OWN forwarded identity (RLS-correct)
-     * and deliver a `targetConnectionId`-addressed poke to just that socket's relay.
-     * Each entry tracks its own cursor (no cohort sharing — the diffs are
-     * identity-specific), advancing only on a delivered, non-empty diff. A no-op when
-     * the shard has no proxy subscribers; the per-flush cost is O(proxy subscribers),
-     * the same the owner would pay serving them directly.
-     */
-    private async proxyRelayShapePokes(changed: Set<string>, frameCursor: number): Promise<void> {
-        const ownerKey = this.state.id?.name;
-
-        if (ownerKey === undefined || this.relayShapeProxies.size === 0) {
-            return;
-        }
-
-        const sql = this.sql as SqlExec;
-        const epoch = this.currentCdcEpoch();
-        const sends: Promise<void>[] = [];
-
-        for (const entry of this.relayShapeProxies.values()) {
-            let resolved: ResolvedShape | undefined;
-
-            try {
-                resolved = this.resolveShape(entry.name, entry.args, entry.identity);
-            } catch {
-                continue;
-            }
-
-            if (resolved === undefined || resolved.global === true || !changed.has(resolved.table)) {
-                continue;
-            }
-
-            const fromCursor = entry.cursor;
-            const rowsPatch = this.buildShapeDiff(sql, resolved, fromCursor, frameCursor);
-
-            if (rowsPatch.length === 0) {
-                continue; // this subscriber's membership didn't change — leave its cursor put
-            }
-
-            entry.cursor = frameCursor;
-            const poke: RelayShapePoke = {
-                args: entry.args,
-                checkpoint: frameCursor,
-                epoch,
-                fromCursor,
-                name: entry.name,
-                rowsPatch,
-                targetConnectionId: entry.connectionId,
-                type: "relay_shape_poke",
-            };
-
-            sends.push(this.postRelayMessage(relayName(ownerKey, entry.relayIndex), poke));
-        }
-
-        await Promise.all(sends);
-    }
-
-    /**
-     * Relay side (plan 075 Phase 3 slice B.2): deliver an owner-multicast shape
-     * delta to this relay's cohort sockets. A socket receives it only while its memo
-     * for the shape matches the poke's `fromCursor` AND `epoch` — so a socket that
-     * seeded at a different cursor (or in a prior CDC epoch) is skipped and never
-     * double-applies — then advances to `checkpoint`. The `rowsPatch` is wrapped in
-     * poke frames per socket (each its own `subId`); `lastMutationId` is omitted
-     * (relayed sockets are owner-served for custom mutators). Returns the number of
-     * sockets actually delivered to, for fan-out accounting.
-     */
-    private deliverRelayShapePoke(poke: RelayShapePoke): number {
-        const routingKey = shapeRoutingKey(poke.name, poke.args);
-        let delivered = 0;
-
-        for (const ws of this.state.getWebSockets()) {
-            const attachment = this.readAttachment(ws);
-            const { shapes } = attachment;
-            const memos = this.shapeRelayMemos.get(ws);
-
-            if (shapes === undefined || memos === undefined) {
-                continue;
-            }
-
-            // A targeted (per-socket proxy) poke for a non-uniform shape goes ONLY to
-            // the one socket it was computed for; a cohort multicast (no target) goes
-            // to every matching socket (MEDIUM-3).
-            if (poke.targetConnectionId !== undefined && attachment.connectionId !== poke.targetConnectionId) {
-                continue;
-            }
-
-            for (const [subId, sub] of Object.entries(shapes)) {
-                const memo = memos.get(subId);
-
-                if (memo?.cursor !== poke.fromCursor || memo.epoch !== poke.epoch || shapeRoutingKey(sub.name, sub.args) !== routingKey) {
-                    continue;
-                }
-
-                this.pokeSequence += 1;
-                const frames = buildPokeFrames([{ rowsPatch: poke.rowsPatch, shapeId: subId }], {
-                    baseCheckpoint: undefined,
-                    checkpoint: poke.checkpoint,
-                    epoch: poke.epoch,
-                    lastMutationId: undefined,
-                    pokeId: `poke-${String(this.pokeSequence)}`,
-                });
-
-                for (const frame of frames) {
-                    trySendFrame(ws, frame);
-                }
-
-                memos.set(subId, { cursor: poke.checkpoint, epoch: poke.epoch });
-                delivered += 1;
-            }
-        }
-
-        return delivered;
-    }
-
-    /**
-     * Serve the internal `/_lunora/relay` control channel (plan 075 Phase 2). An
-     * `attach`/`detach` updates the owner's relay set; a `frame` is delivered to this
-     * DO's local members and — on the owner, for a frame a relay forwarded up —
-     * re-forwarded to every OTHER relay, so one whisper reaches the whole shard
-     * exactly once per socket.
-     */
-    private async handleRelayMessage(request: Request): Promise<Response> {
-        let message: OwnerRelayFrame;
-
-        try {
-            message = await request.json();
-        } catch {
-            return new Response("bad request", { status: 400 });
-        }
-
-        // eslint-disable-next-line unicorn/no-null -- 204 No Content has no body; null is the standard "no body" value
-        const noContent = (): Response => new Response(null, { status: 204 });
-
-        switch (message.type) {
-            case "relay_attach": {
-                this.addRelayToSet(message.relayIndex);
-
-                return noContent();
-            }
-            case "relay_detach": {
-                this.removeRelayFromSet(message.relayIndex);
-
-                return noContent();
-            }
-            case "relay_frame": {
-                return this.handleRelayWhisperFrame(message);
-            }
-            case "relay_shape_poke": {
-                // Owner-multicast shape delta → deliver to this relay's cohort sockets,
-                // recording the fan-out so a relay's metrics reflect the work it does.
-                const iterated = this.state.getWebSockets().length;
-                const startMs = Date.now();
-                const delivered = this.deliverRelayShapePoke(message);
-
-                this.fanout.shapePoke = recordFanoutPass(this.fanout.shapePoke, iterated, delivered, Date.now() - startMs);
-
-                return noContent();
-            }
-            case "relay_shape_subscribe": {
-                // Owner seeds a relay's shape under the forwarded identity and returns
-                // the serialized poke frames for the relay to deliver (plan 075 Phase 3).
-                return jsonResponse(this.buildShapeSeedFrames(message));
-            }
-            default: {
-                // Exhaustiveness guard: a new OwnerRelayFrame member added to `relay.ts`
-                // without a case here becomes a COMPILE error, not a runtime null-deref.
-                return assertNeverFrame(message);
-            }
-        }
-    }
-
-    /**
-     * Deliver a whisper `relay_frame` to this DO's local members and — on the owner,
-     * for a frame a relay forwarded up — re-forward it to every OTHER relay, so one
-     * whisper reaches the whole shard exactly once per socket (plan 075 Phase 2).
-     */
-    private async handleRelayWhisperFrame(message: RelayFrame): Promise<Response> {
-        this.deliverWhisperLocal(message.topic, message.frame, undefined);
-
-        const role = this.relayRole();
-
-        if (role !== undefined && role.relayIndex === undefined) {
-            // Owner re-distributes a relay-forwarded frame to the OTHER relays.
-            await Promise.all(
-                [...this.ownerRelaySet()]
-                    .filter((index) => index !== message.originRelay)
-                    .map((index) =>
-                        this.postRelayMessage(relayName(role.ownerKey, index), { frame: message.frame, topic: message.topic, type: "relay_frame" }),
-                    ),
-            );
-        }
-
-        // eslint-disable-next-line unicorn/no-null -- 204 No Content has no body
-        return new Response(null, { status: 204 });
-    }
-
-    /** Ensure the reserved owner-side relay-set table exists (auto-hidden from the data browser by the `__lunora` prefix). */
-    private ensureRelayTable(): void {
-        (this.sql as SqlExec).exec("CREATE TABLE IF NOT EXISTS __lunora_relays (idx INTEGER PRIMARY KEY)");
-    }
-
-    /** The owner's active relay indices, hydrated once from `__lunora_relays` and cached in-memory for the synchronous forward path. */
-    private ownerRelaySet(): Set<number> {
-        if (this.relaySetCache === undefined) {
-            this.ensureRelayTable();
-            const rows = (this.sql as SqlExec).exec<{ idx: bigint | number }>("SELECT idx FROM __lunora_relays").toArray();
-
-            this.relaySetCache = new Set(rows.map((row) => Number(row.idx)));
-        }
-
-        return this.relaySetCache;
-    }
-
-    /** Record a relay as active in the owner's set (idempotent), persisting it so the set survives the owner's hibernation. */
-    private addRelayToSet(index: number): void {
-        this.ensureRelayTable();
-        (this.sql as SqlExec).exec("INSERT OR IGNORE INTO __lunora_relays (idx) VALUES (?)", index);
-        this.ownerRelaySet().add(index);
-    }
-
-    /** Drop a drained relay from the owner's set so the owner stops forwarding to it. */
-    private removeRelayFromSet(index: number): void {
-        this.ensureRelayTable();
-        (this.sql as SqlExec).exec("DELETE FROM __lunora_relays WHERE idx = ?", index);
-        const set = this.ownerRelaySet();
-        set.delete(index);
-
-        // The drained relay's sockets are gone, so its per-socket proxy entries are
-        // dead — drop them so the owner stops computing diffs for them every flush.
-        for (const [key, entry] of this.relayShapeProxies) {
-            if (entry.relayIndex === index) {
-                this.relayShapeProxies.delete(key);
-            }
-        }
-
-        // No relays left → no cohort can hold a relay subscriber, so the shape
-        // registry and uniform cache are dead state. Clearing them on full drain
-        // bounds their growth (otherwise every distinct (name, args) ever relayed
-        // would accumulate for the instance's life and be re-resolved each flush);
-        // they re-register lazily on the next relay subscribe (plan 075 review).
-        if (set.size === 0) {
-            this.relayShapeRegistry.clear();
-            this.shapeUniformCache.clear();
-        }
-    }
-
-    /** A relay announces itself to its owner (once per wake) on its first subscriber, so the owner forwards whisper frames to it. No-op on an owner or in single-DO mode. */
-    private async announceRelayIfNeeded(): Promise<void> {
-        if (this.relayAnnounced) {
-            return;
-        }
-
-        const role = this.relayRole();
-
-        if (role?.relayIndex === undefined) {
-            return;
-        }
-
-        // Latch optimistically so a burst of subscribes doesn't re-announce, but
-        // reset on a failed/unreachable attach so the NEXT subscriber retries: a
-        // dropped attach must not permanently strand this relay's sockets (the owner
-        // would never forward their live deltas — silent staleness, plan 075 review).
-        this.relayAnnounced = true;
-        const response = await this.requestRelayMessage(role.ownerKey, { relayIndex: role.relayIndex, type: "relay_attach" });
-
-        if (!response?.ok) {
-            this.relayAnnounced = false;
-        }
-    }
-
-    /**
-     * A relay that just lost its last socket (the `closing` one excluded) detaches
-     * from its owner so the owner stops forwarding frames to it, and re-arms its
-     * announce flag so it re-attaches if a new socket joins later. No-op on an owner
-     * or in single-DO mode, or while the relay still serves sockets.
-     */
-    private async announceRelayDrainIfNeeded(closing: WebSocket): Promise<void> {
-        const role = this.relayRole();
-
-        if (role?.relayIndex === undefined) {
-            return;
-        }
-
-        if (this.state.getWebSockets().some((ws) => ws !== closing)) {
-            return;
-        }
-
-        this.relayAnnounced = false;
-        await this.postRelayMessage(role.ownerKey, { relayIndex: role.relayIndex, type: "relay_detach" });
-    }
-
-    /**
-     * The one-shot computation behind {@link ShardDO.isShapeRelayUniform}, made
-     * sound against the cross-identity row-leak the naive two-probe version allowed
-     * (plan 075 review). It is fail-closed on four independent grounds:
-     *
-     * 1. **Static RLS guard.** If the resolved table has ANY declared RLS *read*
-     * policy, reads are identity-scoped by construction — a single multicast delta
-     * can never be correct for every subscriber — so the shape is never relayable,
-     * regardless of what the probes resolve. This closes the leak where a policy
-     * keyed on a claim the probes don't vary resolves identically for all of them.
-     * 2. **Multicast identity is in the probe set.** The first probe is the EXACT
-     * identity the owner multicasts under ({@link RELAY_MULTICAST_IDENTITY}); every
-     * other probe must match it. So the validated property is precisely the one the
-     * multicast relies on — never a different sampled identity.
-     * 3. **Claim-exhaustive probes.** The two populated probes back their claims with
-     * a {@link Proxy} that returns a DISTINCT value for ANY accessed key — not a
-     * hardcoded list — so a `defineShape` `where` that reads ANY identity claim
-     * (a custom one via `ctx.access`, not just `ctx.auth.userId`), bypassing
-     * `rls()`, diverges between the probes and is rejected. There are no unsampled
-     * claims: the value differs by construction for every key the resolver touches.
-     * 4. **Copy backstop.** A {@link Proxy} can differentiate per-key *reads* but not
-     * a wholesale *copy* (`{...claims}` / `Object.keys`) — a copied identity could
-     * smuggle an undetected claim into the where. So enumerating the claims trips
-     * `enumerated` and the gate fails closed.
-     */
-    private probeShapeRelayUniform(name: string, args: Record<string, unknown>): boolean {
-        let base: ResolvedShape | undefined;
-
-        try {
-            base = this.resolveShape(name, args, RELAY_MULTICAST_IDENTITY);
-        } catch {
-            // An identity-gated resolve threw for the base probe → not uniform (fail-closed).
-            return false;
-        }
-
-        if (base === undefined || base.global === true) {
-            return false;
-        }
-
-        // Static RLS guard: an identity-scoped table is never relay-uniform.
-        if (this.rlsMetadata().policies.some((policy) => policy.on === "read" && policy.table === base.table)) {
-            return false;
-        }
-
-        if (this.shapeColumnsMasked(base.table, base.columns)) {
-            return false;
-        }
-
-        const baseWhere = stableStringify(base.effectiveWhere);
-        const baseColumns = stableStringify(base.columns);
-
-        // A populated probe whose claims yield a DISTINCT value per accessed key
-        // (so any claim the resolver reads diverges between sides) and trip the
-        // shared `enumerated` flag on a wholesale copy of the claims object.
-        let enumerated = false;
-        const populate = (side: string): SubscriptionIdentity => {
-            // Type-correct values for the common collection claims so an array op
-            // (`roles.includes`) doesn't throw and over-reject; a distinct string
-            // sentinel for every other (incl. custom/unknown) key.
-            const backing: Record<string, unknown> = { groups: [`grp_${side}`], roles: [side], sub: `__lunora_probe_${side}__` };
-            const claims = new Proxy(backing, {
-                get: (target, key) => {
-                    if (typeof key === "symbol" || key in target) {
-                        return Reflect.get(target, key) as unknown;
-                    }
-
-                    return `${side}:${key}`;
-                },
-                getOwnPropertyDescriptor: (target, key) => {
-                    enumerated = true;
-
-                    return Reflect.getOwnPropertyDescriptor(target, key);
-                },
-                has: (target, key) => (typeof key === "symbol" ? Reflect.has(target, key) : true),
-                ownKeys: (target) => {
-                    enumerated = true;
-
-                    return Reflect.ownKeys(target);
-                },
-            });
-
-            return { identity: claims, userId: `__lunora_probe_${side}__` };
-        };
-
-        // Every probe (including the anonymous multicast identity) must resolve to
-        // the identical table + where + columns, or the shape isn't uniform.
-        const matches = [RELAY_MULTICAST_IDENTITY, populate("a"), populate("b")].every((probe) => {
-            let resolved: ResolvedShape | undefined;
-
-            try {
-                resolved = this.resolveShape(name, args, probe);
-            } catch {
-                return false;
-            }
-
-            return (
-                resolved !== undefined &&
-                resolved.global !== true &&
-                resolved.table === base.table &&
-                stableStringify(resolved.effectiveWhere) === baseWhere &&
-                stableStringify(resolved.columns) === baseColumns
-            );
-        });
-
-        // A wholesale copy of the claims defeats per-key differentiation — can't
-        // prove uniformity, so fail closed.
-        return matches && !enumerated;
-    }
-
-    /** Whether any column the shape projects from `table` is masked — a masked value is identity-dependent, so the shape can't be relay-uniform. */
-    private shapeColumnsMasked(table: string, columns: ReadonlyArray<string> | undefined): boolean {
-        const masked = this.maskMetadata().columns.filter((entry) => entry.table === table);
-
-        if (masked.length === 0) {
-            return false;
-        }
-
-        if (columns === undefined) {
-            return true; // projects every column → any mask on the table makes it non-uniform
-        }
-
-        const projected = new Set(columns);
-
-        return masked.some((entry) => projected.has(entry.column));
     }
 
     // eslint-disable-next-line class-methods-use-this -- cohesive DO instance method grouped with the hibernation/attachment helpers; reads only the socket
