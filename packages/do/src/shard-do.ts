@@ -1876,7 +1876,7 @@ abstract class ShardDO {
 
         // The non-RPC routes (WS upgrade + the internal owner↔relay control channel)
         // are handled up front; everything past here is the shard-local RPC endpoint.
-        const early = this.routeNonRpc(url, request);
+        const early = await this.routeNonRpc(url, request);
 
         if (early !== undefined) {
             return early;
@@ -7126,22 +7126,22 @@ abstract class ShardDO {
      * `fetch` then dispatches.
      * @returns the routed response, or `undefined` when this is an RPC request
      */
-    private routeNonRpc(url: URL, request: Request): Promise<Response> | undefined {
+    private async routeNonRpc(url: URL, request: Request): Promise<Response | undefined> {
         if (url.pathname === "/_lunora/relay" && request.method === "POST") {
             // The relay tier is inert on an unnamed (single-DO) DO — nothing forwards
             // control frames there, so a 404 is the honest answer.
-            return this.relay?.handleControl(request) ?? Promise.resolve(new Response("relay tier inactive", { status: 404 }));
+            return this.relay ? await this.relay.handleControl(request) : new Response("relay tier inactive", { status: 404 });
         }
 
         // Promotion probe (plan 075 Phase 2): the runtime asks the owner how many
         // relays to spread new connections across before a WS upgrade. Internal —
         // reachable only via the runtime's worker-side forward, returns just a count.
         if (url.pathname === "/_lunora/route" && request.method === "GET") {
-            return Promise.resolve(jsonResponse({ relayCount: this.relay?.relayCount() ?? 0 }));
+            return jsonResponse({ relayCount: this.relay?.relayCount() ?? 0 });
         }
 
         if (request.headers.get("Upgrade") === "websocket") {
-            return Promise.resolve(this.handleWebSocketUpgrade(request));
+            return this.handleWebSocketUpgrade(request);
         }
 
         return undefined;
