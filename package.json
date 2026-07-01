@@ -45,7 +45,7 @@
         "lint:types": "vis run lint:types && pnpm run lint:types:registry",
         "lint:types:registry": "pnpm run build:packages && tsc -p registry/tsconfig.json",
         "multi-semantic-release": "multi-semantic-release",
-        "postinstall": "node scripts/generate-package-og-images.js && node scripts/generate-labeler-config.js",
+        "postinstall": "node scripts/generate-package-og-images.js && node scripts/generate-labeler-config.js --skip-ci",
         "prepare": "vis hook install",
         "test": "vis run test --query \"project!=lunora-e2e&&project!=studio&&project!=d1&&project!=lunora-playground\"",
         "test:affected": "vis affected test --fail-fast --query \"project!=lunora-e2e&&project!=studio&&project!=d1&&project!=lunora-playground\"",
