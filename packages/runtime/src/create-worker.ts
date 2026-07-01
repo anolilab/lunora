@@ -3,6 +3,7 @@ import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
 import { relayName } from "../../../shared/relay-name";
 import type { AuthAdmin, AuthIntrospector } from "./auth-admin-routes";
 import { buildAuthAdminRoutes } from "./auth-admin-routes";
+import { groupBatchCallsByShard } from "./batch";
 import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit } from "./body-readers";
 import { buildDataMovementAdminRoutes } from "./data-movement-admin-routes";
 import type { FunctionArgumentDescriptor } from "./describe-args";
@@ -1242,61 +1243,6 @@ const parseEnvelope = async (request: Request): Promise<RpcEnvelope> => {
     };
 };
 
-/** One normalized `/_lunora/rpc-batch` entry forwarded to a shard DO (plan 088). */
-interface WorkerBatchEntry {
-    args: Record<string, unknown>;
-    clientId?: string;
-    clientSeq?: number;
-    functionPath: string;
-    id: unknown;
-    mutationId?: string;
-}
-
-/**
- * Validate the `calls[]` of a batch and group them by target shard. Throws a
- * `BAD_REQUEST`/`FORBIDDEN` {@link LunoraError} on a malformed or reserved entry
- * (a batch can only carry single-shard user calls — no fan-out/admin prefixes).
- */
-const groupBatchCallsByShard = (calls: unknown[], defaultShard: string): Map<string, WorkerBatchEntry[]> => {
-    const groups = new Map<string, WorkerBatchEntry[]>();
-
-    for (const raw of calls) {
-        const call = raw as {
-            args?: unknown;
-            clientId?: unknown;
-            clientSeq?: unknown;
-            functionPath?: unknown;
-            id?: unknown;
-            mutationId?: unknown;
-            shardKey?: unknown;
-        };
-
-        if (typeof call.functionPath !== "string") {
-            throw new LunoraError("each batch call needs a string `functionPath`", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        if (call.functionPath.startsWith("__lunora_relation__:") || call.functionPath.startsWith("__lunora_admin__")) {
-            throw new LunoraError("reserved function path cannot be batched", { code: "FORBIDDEN", status: 403 });
-        }
-
-        const shardKey = typeof call.shardKey === "string" ? call.shardKey : defaultShard;
-        const group = groups.get(shardKey) ?? [];
-
-        group.push({
-            args: call.args === undefined ? {} : (call.args as Record<string, unknown>),
-            clientId: typeof call.clientId === "string" ? call.clientId : undefined,
-            clientSeq: typeof call.clientSeq === "number" ? call.clientSeq : undefined,
-            functionPath: call.functionPath,
-            id: call.id,
-            mutationId: typeof call.mutationId === "string" ? call.mutationId : undefined,
-        });
-
-        groups.set(shardKey, group);
-    }
-
-    return groups;
-};
-
 const forwardToShard = async (namespace: ShardNamespaceLike, shardKey: string, request: Request): Promise<Response> => {
     const stub = resolveShard(namespace, shardKey);
 
@@ -2433,7 +2379,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * single-call envelope. Capabilities/pipelining are explicitly NOT supported
      * (see plan 088 §fence — incompatible with DO hibernation).
      */
-    const handleBatchRpc = async (request: Request, env: unknown): Promise<Response> => {
+    const handleBatchRpc = async (request: Request, env: unknown, context?: ExecutionContextLike): Promise<Response> => {
         if (request.method !== "POST") {
             throw new LunoraError("RPC batch endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
@@ -2457,7 +2403,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // per-shard gate below still runs for every entry, exactly as `handleRpc`.
         const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, options.resolveIdentity);
 
-        // Validate + group by target shard (throws on a malformed/reserved entry).
+        // Validate + group by target shard (throws on a malformed/reserved/oversized batch).
         const groups = groupBatchCallsByShard(calls, defaultShard);
 
         // Per-shard authorization for every entry — same gate as the single-call
@@ -2467,6 +2413,15 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 entries.map((entry) => authorizeRpcEnvelope({ args: entry.args, functionPath: entry.functionPath, shardKey }, identity)),
             ),
         );
+
+        const { observability } = options;
+        const sinkContext: ObservabilitySinkContext | undefined = context
+            ? {
+                  waitUntil: (promise) => {
+                      context.waitUntil?.(promise);
+                  },
+              }
+            : undefined;
 
         const results: unknown[] = [];
         let latestBookmark: string | undefined;
@@ -2480,14 +2435,53 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 headers.set("content-type", "application/json");
 
                 const subRequest = new Request("https://shard.internal/rpc-batch", { body: JSON.stringify({ calls: entries }), headers, method: "POST" });
-                const response = await forwardToShard(shardDO, shardKey, subRequest);
+                const subStartedAt = Date.now();
+                let response: Response;
+
+                try {
+                    response = await forwardToShard(shardDO, shardKey, subRequest);
+                } catch (error) {
+                    // The whole sub-batch failed to reach the shard — attribute the
+                    // failure to every entry it carried so batched calls aren't
+                    // invisible to the observability sink.
+                    const durationMs = Date.now() - subStartedAt;
+
+                    for (const entry of entries) {
+                        emitRpcEvent(observability, buildErrorEvent(entry.functionPath, durationMs, error, { shardKey }), sinkContext);
+                    }
+
+                    throw error;
+                }
+
+                const durationMs = Date.now() - subStartedAt;
                 const bookmark = response.headers.get("x-d1-bookmark");
 
                 if (bookmark) {
                     latestBookmark = bookmark;
                 }
 
-                const parsed: { results?: unknown[] } = await response.json();
+                const parsed: { results?: { body?: unknown; id?: number; status?: number }[] } = await response.json();
+                const statusById = new Map((parsed.results ?? []).map((entry) => [entry.id, entry.status ?? response.status]));
+
+                // Emit one observability event per entry (single-call parity). The
+                // sub-batch wall-clock is shared across its entries — they ride one
+                // DO round-trip — so per-entry `durationMs` is an honest approximation.
+                for (const entry of entries) {
+                    const status = statusById.get(entry.id) ?? response.status;
+                    const ok = status < 400;
+
+                    emitRpcEvent(
+                        observability,
+                        {
+                            durationMs,
+                            functionPath: entry.functionPath,
+                            ok,
+                            shardKey,
+                            ...(ok ? {} : { error: { code: "SHARD_ERROR", message: `batched call returned ${String(status)}`, status } }),
+                        },
+                        sinkContext,
+                    );
+                }
 
                 if (Array.isArray(parsed.results)) {
                     results.push(...parsed.results);
@@ -2849,7 +2843,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const internalRoutes: Record<string, InternalRoute> = {
         [WS_PATH]: (request, env, url) => handleWebSocketUpgrade(request, env, url),
         [RPC_PATH]: (request, env, _url, context) => handleRpc(request, env, context),
-        [RPC_BATCH_PATH]: (request, env) => handleBatchRpc(request, env),
+        [RPC_BATCH_PATH]: (request, env, _url, context) => handleBatchRpc(request, env, context),
         [SCHEDULER_DISPATCH_PATH]: (request, env) => handleSchedulerDispatch(request, env),
         [CRON_JOBS_RUN_PATH]: (request, env) => handleRunCronJob(request, env),
         // Extracted handler clusters built above, merged in (mirroring the auth

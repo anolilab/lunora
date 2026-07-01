@@ -75,4 +75,20 @@ describe("client batch transport (088)", () => {
         expect(slots[0]).toStrictEqual({ ok: true, value: null });
         expect(slots[1]?.ok).toBe(false);
     });
+
+    it("rejects the whole batch (not per-slot) when the worker returns a batch-level error", async () => {
+        expect.assertions(2);
+
+        // A per-entry authorization denial fails the batch closed before dispatch:
+        // non-2xx + { error }, no results. The caller must see the real code, not
+        // an opaque "no result" on every slot.
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ error: { code: "FORBIDDEN", message: "denied" } }, { status: 403 }));
+
+        const error = (await client(fetchMock)
+            .batch([{ fn: fnRef("docs:a") }])
+            .catch((error_: unknown) => error_)) as { code?: string };
+
+        expect(error).toBeInstanceOf(Error);
+        expect(error.code).toBe("FORBIDDEN");
+    });
 });

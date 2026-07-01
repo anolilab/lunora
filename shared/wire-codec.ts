@@ -84,8 +84,6 @@ const fromBase64 = (base64: string): Uint8Array => {
     return bytes;
 };
 
-const isPlainArray = (value: unknown): value is unknown[] => Array.isArray(value);
-
 /**
  * Encode `value` into a JSON-safe tree, tagging the leaves JSON cannot represent.
  * Pure and recursive; no I/O. Trees only (no cycle detection — a cyclic input
@@ -147,7 +145,7 @@ const encodeWire = (value: unknown): unknown => {
         return ctorName === "Uint8Array" ? [TAG, "bytes", toBase64(bytes)] : [TAG, "bytes", toBase64(bytes), ctorName];
     }
 
-    if (isPlainArray(value)) {
+    if (Array.isArray(value)) {
         const encoded = value.map((item) => encodeWire(item));
 
         // Escape a user array that would otherwise be mistaken for a tagged value
@@ -178,7 +176,7 @@ const decodeWire = (value: unknown): unknown => {
         return value;
     }
 
-    if (isPlainArray(value)) {
+    if (Array.isArray(value)) {
         if (value[0] === TAG) {
             const tag = value[1] as string;
 

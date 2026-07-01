@@ -453,8 +453,24 @@ interface PokeBuffer {
     parts: Map<string, RowOp[]>;
 }
 
+/** An `Error` carrying the server's machine-readable `code` and (for a `LunoraError`) structured `data`. The client's public error contract for RPC/batch failures. */
+type LunoraClientError = Error & { code?: string; data?: unknown };
+
+/** Rebuild a thrown `Error` from a server `{ code, message, data? }` envelope, wire-decoding `data` so `bigint`/`bytes` inside it survive. */
+const reconstructError = (errorBody: { code?: string; data?: unknown; message?: string }): LunoraClientError => {
+    const error = new Error(errorBody.message ?? "request failed") as LunoraClientError;
+
+    error.code = errorBody.code;
+
+    if (errorBody.data !== undefined) {
+        error.data = decodeWire(errorBody.data);
+    }
+
+    return error;
+};
+
 /** One demuxed result slot of a {@link LunoraClient.batch} call (plan 088). */
-type BatchSlot = { error: Error & { code?: string; data?: unknown }; ok: false } | { ok: true; value: unknown };
+type BatchSlot = { error: LunoraClientError; ok: false } | { ok: true; value: unknown };
 
 /**
  * Demux a `/_lunora/rpc-batch` response into per-call slots in input order,
@@ -472,19 +488,8 @@ const demuxBatchResults = (rawResults: { body?: unknown; id?: number }[], count:
 
         const inner = entry.body as { error?: { code?: string; data?: unknown; message?: string }; result?: unknown } | undefined;
 
-        if (inner && "error" in inner && inner.error) {
-            const error = new Error(inner.error.message ?? "batch call failed") as Error & { code?: string; data?: unknown };
-
-            error.code = inner.error.code;
-
-            if (inner.error.data !== undefined) {
-                error.data = decodeWire(inner.error.data);
-            }
-
-            slots[entry.id] = { error, ok: false };
-        } else {
-            slots[entry.id] = { ok: true, value: decodeWire(inner?.result) };
-        }
+        slots[entry.id] =
+            inner && "error" in inner && inner.error ? { error: reconstructError(inner.error), ok: false } : { ok: true, value: decodeWire(inner?.result) };
     }
 
     return slots.map((slot) => slot ?? { error: new Error("batch call returned no result"), ok: false });
@@ -1277,12 +1282,24 @@ class LunoraClient {
             this.bookmark.set(bookmark);
         }
 
-        let body: { results?: { body?: unknown; id?: number }[] };
+        let body: { error?: { code?: string; data?: unknown; message?: string }; results?: { body?: unknown; id?: number }[] };
 
         try {
             body = await response.json();
         } catch {
             throw new Error(`LunoraClient: batch response was not JSON (status ${response.status.toString()})`);
+        }
+
+        // A whole-batch rejection (bad request, method, or a per-entry authorization
+        // denial that fails the batch closed BEFORE any dispatch) comes back as a
+        // non-2xx `{ error }` with no `results` — surface it like a single call
+        // rather than reporting every slot as an opaque "no result".
+        if (!response.ok || (body.error && !body.results)) {
+            if (body.error) {
+                throw reconstructError(body.error);
+            }
+
+            throw new Error(`LunoraClient: batch request failed (status ${response.status.toString()})`);
         }
 
         return demuxBatchResults(body.results ?? [], calls.length);
@@ -3044,17 +3061,9 @@ class LunoraClient {
         }
 
         if ("error" in body) {
-            const error = new Error(body.error.message) as Error & { code?: string; data?: unknown };
-
-            error.code = body.error.code;
-
-            // Surface an app error's structured payload (a thrown `LunoraError`'s
-            // `data`), wire-decoded so `bigint`/`bytes` inside it are restored.
-            if (body.error.data !== undefined) {
-                error.data = decodeWire(body.error.data);
-            }
-
-            throw error;
+            // Reconstruct the thrown error with its `.code` and (for an app
+            // `LunoraError`) wire-decoded `.data`.
+            throw reconstructError(body.error);
         }
 
         // A non-2xx response whose body parsed as JSON but carried no `error`

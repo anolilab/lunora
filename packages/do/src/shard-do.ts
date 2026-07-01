@@ -2,12 +2,15 @@ import type { DurableObjectStorage } from "@cloudflare/workers-types";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
+import type { BatchEntry } from "../../../shared/batch-wire";
+import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { ExportRow, ImportShardResult } from "./admin-export-import";
 import { parseExportShardArgs, parseImportShardArgs } from "./admin-export-import";
 import { appendAuditEntry, ensureAuditTable, readAuditLog } from "./audit-log";
 import type { AuthMetrics } from "./auth-metrics";
 import { readAuthMetrics, recordAuthEvent } from "./auth-metrics";
+import { buildBatchEntryRequest } from "./batch";
 import type { CdcChange, SqlExec } from "./ctx-db";
 import {
     advanceClientWatermark,
@@ -1209,57 +1212,6 @@ const jsonResponse = (body: unknown, status = 200, bookmark?: string): Response 
     }
 
     return Response.json(body, { headers, status });
-};
-
-/** Header names copied verbatim from a batch request onto each per-entry `/rpc` request — identity/bookmark/routing are shared by the whole batch (plan 088). */
-const SHARED_BATCH_HEADERS = [
-    "x-lunora-userid",
-    "x-lunora-identity",
-    "x-d1-bookmark",
-    "x-lunora-client-ip",
-    "x-lunora-system",
-    "x-lunora-shard-binding",
-] as const;
-
-/** One entry of a `/rpc-batch` request body. */
-interface BatchCall {
-    args?: Record<string, unknown>;
-    clientId?: string;
-    clientSeq?: number;
-    functionPath?: string;
-    id?: unknown;
-    mutationId?: string;
-}
-
-/** Build the synthetic single-call `/rpc` request for one batch entry: shared identity/bookmark headers off the batch request + this entry's own mutation/client-seq headers (plan 088). */
-const buildBatchEntryRequest = (batchRequest: Request, call: BatchCall): Request => {
-    const headers = new Headers({ "content-type": "application/json" });
-
-    for (const name of SHARED_BATCH_HEADERS) {
-        const value = batchRequest.headers.get(name);
-
-        if (value !== null) {
-            headers.set(name, value);
-        }
-    }
-
-    if (call.mutationId !== undefined) {
-        headers.set("x-lunora-mutation-id", call.mutationId);
-    }
-
-    if (call.clientId !== undefined) {
-        headers.set("x-lunora-client-id", call.clientId);
-    }
-
-    if (call.clientSeq !== undefined) {
-        headers.set("x-lunora-client-seq", String(call.clientSeq));
-    }
-
-    return new Request("https://shard.internal/rpc", {
-        body: JSON.stringify({ args: call.args ?? {}, functionPath: call.functionPath }),
-        headers,
-        method: "POST",
-    });
 };
 
 /**
@@ -4561,10 +4513,17 @@ abstract class ShardDO {
      * single-call `/rpc` path (via a nested `this.fetch`), **sequentially**, so
      * the per-`(identity, mutationId)` idempotency dedup and the per-client
      * `__client_watermark` ordering are enforced entry-by-entry exactly as for an
-     * individual call — no duplication of the dispatch core, no reordering. The
-     * response is `{ results: [{ id, status, body }] }` in request order; each
-     * `body` is the untouched single-call envelope (its `result` already
-     * wire-encoded), so the client demuxes + decodes each exactly as one call.
+     * individual call — no duplication of the dispatch core, no reordering.
+     *
+     * Failures are **per-slot, not fail-fast**: an entry that throws (or a
+     * custom-mutator `OUT_OF_ORDER` gap) is captured in its own result slot and
+     * later entries still run. Ordering is still safe — a later same-client
+     * mutator after a gap re-classifies as a gap too (the watermark never
+     * advanced), so it cannot apply out of order; unrelated entries/queries are
+     * independent. The response is `{ results: [{ id, status, body }] }` in
+     * request order; each `body` is the untouched single-call envelope (its
+     * `result` already wire-encoded), so the client demuxes + decodes each
+     * exactly as one call.
      */
     private async handleBatchRpc(request: Request): Promise<Response> {
         let payload: { calls?: unknown };
@@ -4579,12 +4538,18 @@ abstract class ShardDO {
             return jsonResponse({ error: { code: "BAD_REQUEST", message: "batch `calls` must be an array" } }, 400);
         }
 
+        // Defense-in-depth against a single request pinning this single-threaded
+        // DO with a huge sequential loop (the worker caps this too).
+        if (payload.calls.length > MAX_BATCH_ENTRIES) {
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: `batch exceeds the ${String(MAX_BATCH_ENTRIES)}-call limit` } }, 400);
+        }
+
         const results: { body: unknown; id: unknown; status: number }[] = [];
         let latestBookmark: string | undefined;
 
         for (const raw of payload.calls) {
-            // eslint-disable-next-line no-await-in-loop -- sequential BY DESIGN: preserves per-client watermark ordering + idempotency across the batch (a "gap" entry must halt before later entries)
-            const outcome = await this.dispatchBatchEntry(request, raw as BatchCall);
+            // eslint-disable-next-line no-await-in-loop -- sequential BY DESIGN: preserves per-client watermark ordering + idempotency across the batch
+            const outcome = await this.dispatchBatchEntry(request, raw as BatchEntry);
 
             if (outcome.bookmark !== undefined) {
                 latestBookmark = outcome.bookmark;
@@ -4599,11 +4564,11 @@ abstract class ShardDO {
     /** Dispatch one batch entry through the single-call `/rpc` path and capture its envelope (plan 088). */
     private async dispatchBatchEntry(
         batchRequest: Request,
-        call: BatchCall,
+        entry: BatchEntry,
     ): Promise<{ body: unknown; bookmark: string | undefined; id: unknown; status: number }> {
-        const response = await this.fetch(buildBatchEntryRequest(batchRequest, call));
+        const response = await this.fetch(buildBatchEntryRequest(batchRequest, entry));
 
-        return { body: await response.json(), bookmark: response.headers.get("x-d1-bookmark") ?? undefined, id: call.id, status: response.status };
+        return { body: await response.json(), bookmark: response.headers.get("x-d1-bookmark") ?? undefined, id: entry.id, status: response.status };
     }
 
     /**
