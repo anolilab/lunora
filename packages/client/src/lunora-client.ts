@@ -1151,7 +1151,14 @@ class LunoraClient {
         const conn = this.getConnection(options.shardKey);
 
         if (conn) {
-            sendOn(conn, { data, topic, type: "whisper" });
+            // Wire-encode before send so `bigint`/bytes payloads survive (raw
+            // `JSON.stringify` would throw on a bigint). The shard relays the
+            // encoded value verbatim and the receiving client `decodeWire`s it —
+            // `encodeWire` is identity for JSON-safe data, so this stays
+            // backward-compatible with older shards/clients. Omitted `data`
+            // becomes an explicit `null` (the documented receiver contract).
+            // eslint-disable-next-line unicorn/no-null -- an omitted whisper body is delivered as an explicit JSON `null`, never `undefined`
+            sendOn(conn, { data: encodeWire(data ?? null), topic, type: "whisper" });
         }
     }
 
@@ -2404,7 +2411,10 @@ class LunoraClient {
         const conn = this.getConnection(shardKey);
         const message: ClientMessage = {
             id,
-            query: { args: argsRecord, functionPath: function_.__lunoraRef, shardKey },
+            // Wire-encode the stream args so `bigint`/bytes survive the send (raw
+            // `JSON.stringify` throws on a bigint); the shard `decodeWire`s them
+            // before invoking the stream handler.
+            query: { args: encodeWire(argsRecord) as Record<string, unknown>, functionPath: function_.__lunoraRef, shardKey },
             type: "stream",
         };
 
@@ -3690,7 +3700,11 @@ class LunoraClient {
 
         // Wire-decode each row-op's post-image (no-op on a pure-JSON value), so a
         // shape carrying a `bytes`/`bigint` column applies real values locally.
-        existing.push(...message.rowsPatch.map((op) => (op.value === undefined ? op : { ...op, value: decodeWire(op.value) as Record<string, unknown> })));
+        // Loop rather than `push(...map())` — a large `rowsPatch` would otherwise
+        // allocate an intermediate array and risk the JS argument-count ceiling.
+        for (const op of message.rowsPatch) {
+            existing.push(op.value === undefined ? op : { ...op, value: decodeWire(op.value) as Record<string, unknown> });
+        }
         buffer.parts.set(message.shapeId, existing);
 
         if (message.lastMutationId !== undefined) {
@@ -4192,4 +4206,4 @@ class LunoraClient {
 }
 
 export { LunoraClient };
-export type { ConnectionStatus, MutationCallOptions, MutationSettledEvent, SyncWatermark };
+export type { BatchSlot, ConnectionStatus, LunoraClientError, MutationCallOptions, MutationSettledEvent, SyncWatermark };

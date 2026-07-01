@@ -58,4 +58,13 @@ describe("groupBatchCallsByShard", () => {
 
         expect(() => groupBatchCallsByShard(tooMany, "__root__")).toThrow(expect.objectContaining({ code: "BAD_REQUEST", status: 400 }));
     });
+
+    it("rejects a null / non-object call entry with BAD_REQUEST instead of a TypeError", () => {
+        expect.assertions(3);
+
+        // A JSON `null` in `calls[]` must surface as a clean 400, not a 500 TypeError.
+        expect(() => groupBatchCallsByShard([null], "__root__")).toThrow(expect.objectContaining({ code: "BAD_REQUEST", status: 400 }));
+        expect(() => groupBatchCallsByShard(["not-an-object"], "__root__")).toThrow(expect.objectContaining({ code: "BAD_REQUEST", status: 400 }));
+        expect(() => groupBatchCallsByShard([[{ functionPath: "docs:x" }]], "__root__")).toThrow(expect.objectContaining({ code: "BAD_REQUEST", status: 400 }));
+    });
 });

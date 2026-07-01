@@ -2273,7 +2273,9 @@ abstract class ShardDO {
             // catch only guards the rare pre-try throw path (e.g. ws.send on a
             // socket the runtime already tore down) so a dead socket can't
             // surface as an unhandled rejection.
-            this.handleStream(ws, envelope.id, envelope.query.functionPath, envelope.query.args ?? {}).catch(() => {
+            // Decode the wire-encoded stream args (bigint/bytes survive the WS hop)
+            // before handing them to the stream handler — mirrors the `/rpc` path.
+            this.handleStream(ws, envelope.id, envelope.query.functionPath, decodeWire(envelope.query.args ?? {}) as Record<string, unknown>).catch(() => {
                 /* socket already gone; nothing to report */
             });
 
@@ -4566,9 +4568,24 @@ abstract class ShardDO {
         batchRequest: Request,
         entry: BatchEntry,
     ): Promise<{ body: unknown; bookmark: string | undefined; id: unknown; status: number }> {
-        const response = await this.fetch(buildBatchEntryRequest(batchRequest, entry));
+        try {
+            const response = await this.fetch(buildBatchEntryRequest(batchRequest, entry));
 
-        return { body: await response.json(), bookmark: response.headers.get("x-d1-bookmark") ?? undefined, id: entry.id, status: response.status };
+            return { body: await response.json(), bookmark: response.headers.get("x-d1-bookmark") ?? undefined, id: entry.id, status: response.status };
+        } catch (error: unknown) {
+            // A malformed entry (non-object, or missing `functionPath`) makes the
+            // per-entry request builder / the nested `/rpc` dispatch throw *before*
+            // the single-call path's own try/catch. Contain it to this slot so one
+            // bad entry can't 500 the whole batch (per-slot isolation is the contract).
+            const message = error instanceof Error ? error.message : String(error);
+
+            return {
+                body: { error: { code: "BATCH_ENTRY_FAILED", message } },
+                bookmark: undefined,
+                id: (entry as BatchEntry | null | undefined)?.id,
+                status: 500,
+            };
+        }
     }
 
     /**
@@ -7465,8 +7482,13 @@ abstract class ShardDO {
             return;
         }
 
+        // The client already wire-encoded `data` before sending, and the receiving
+        // client `decodeWire`s it — so relay the encoded value verbatim rather than
+        // re-encoding it (a second `encodeWire` pass would double-tag it). An older
+        // client that sent raw JSON-safe data is unaffected: `encodeWire` was
+        // identity for that data, so the passthrough form is byte-identical.
         // eslint-disable-next-line unicorn/no-null -- JSON payload: an undefined whisper body serializes to null so the frame carries an explicit value
-        const dataJson = JSON.stringify(encodeWire(data ?? null));
+        const dataJson = JSON.stringify(data ?? null);
 
         if (dataJson.length > ShardDO.MAX_WHISPER_BYTES) {
             return;

@@ -1,3 +1,4 @@
+import type { BatchEntry } from "../../../shared/batch-wire";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
 import { relayName } from "../../../shared/relay-name";
@@ -2393,6 +2394,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             throw new LunoraError("RPC batch body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
         }
 
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+            throw new LunoraError("RPC batch body must be an object", { code: "BAD_REQUEST", status: 400 });
+        }
+
         const { calls } = body as { calls?: unknown };
 
         if (!Array.isArray(calls)) {
@@ -2426,6 +2431,60 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const results: unknown[] = [];
         let latestBookmark: string | undefined;
 
+        // A slot-level error envelope for an entry whose shard sub-batch never
+        // produced a per-call result (forward failure, non-JSON, non-2xx, or an
+        // omitted id). Containing it to the entry's own slot keeps a single
+        // unhealthy shard from discarding the results of the healthy shards that
+        // rode the same batch — the demux contract is "every slot gets a body".
+        const slotError = (entry: BatchEntry, status: number, code: string, message: string): { body: unknown; id: unknown; status: number } => {
+            return { body: { error: { code, message } }, id: entry.id, status };
+        };
+
+        // Fail a whole sub-batch to its own slots: emit one observability event per
+        // entry (built by `eventFor` so the forward vs. non-JSON paths keep their
+        // own error mapping) and push a slot-level error for each, so an unhealthy
+        // shard never throws away the results of the healthy shards in the batch.
+        const failSubBatch = (
+            entries: BatchEntry[],
+            status: number,
+            code: string,
+            message: string,
+            eventFor: (entry: BatchEntry) => ObservabilityEvent,
+        ): void => {
+            for (const entry of entries) {
+                emitRpcEvent(observability, eventFor(entry), sinkContext);
+                results.push(slotError(entry, status, code, message));
+            }
+        };
+
+        // Single-call parity: emit one observability event per delivered entry. The
+        // sub-batch wall-clock is shared across its entries (one DO round-trip), so
+        // the per-entry `durationMs` is an honest approximation.
+        const emitEntryEvents = (
+            entries: BatchEntry[],
+            shardKey: string,
+            durationMs: number,
+            statusById: Map<unknown, number>,
+            fallbackStatus: number,
+        ): void => {
+            for (const entry of entries) {
+                const status = statusById.get(entry.id) ?? fallbackStatus;
+                const ok = status < 400;
+
+                emitRpcEvent(
+                    observability,
+                    {
+                        durationMs,
+                        functionPath: entry.functionPath,
+                        ok,
+                        shardKey,
+                        ...(ok ? {} : { error: { code: "SHARD_ERROR", message: `batched call returned ${String(status)}`, status } }),
+                    },
+                    sinkContext,
+                );
+            }
+        };
+
         // Fan the per-shard sub-batches out in parallel (different DOs, independent
         // watermarks); entries WITHIN a shard stay ordered by the DO's sequential loop.
         await Promise.all(
@@ -2441,16 +2500,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 try {
                     response = await forwardToShard(shardDO, shardKey, subRequest);
                 } catch (error) {
-                    // The whole sub-batch failed to reach the shard — attribute the
-                    // failure to every entry it carried so batched calls aren't
-                    // invisible to the observability sink.
+                    // The whole sub-batch failed to reach the shard — slot-error every
+                    // entry it carried instead of throwing the batch.
                     const durationMs = Date.now() - subStartedAt;
+                    const message = error instanceof Error ? error.message : String(error);
 
-                    for (const entry of entries) {
-                        emitRpcEvent(observability, buildErrorEvent(entry.functionPath, durationMs, error, { shardKey }), sinkContext);
-                    }
+                    failSubBatch(entries, 502, "SHARD_UNAVAILABLE", message, (entry) => buildErrorEvent(entry.functionPath, durationMs, error, { shardKey }));
 
-                    throw error;
+                    return;
                 }
 
                 const durationMs = Date.now() - subStartedAt;
@@ -2460,31 +2517,41 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                     latestBookmark = bookmark;
                 }
 
-                const parsed: { results?: { body?: unknown; id?: number; status?: number }[] } = await response.json();
-                const statusById = new Map((parsed.results ?? []).map((entry) => [entry.id, entry.status ?? response.status]));
+                let parsed: { results?: { body?: unknown; id?: number; status?: number }[] };
 
-                // Emit one observability event per entry (single-call parity). The
-                // sub-batch wall-clock is shared across its entries — they ride one
-                // DO round-trip — so per-entry `durationMs` is an honest approximation.
-                for (const entry of entries) {
-                    const status = statusById.get(entry.id) ?? response.status;
-                    const ok = status < 400;
+                try {
+                    parsed = await response.json();
+                } catch {
+                    // Malformed shard response — fail every entry to its own slot
+                    // rather than dropping them silently into "no result".
+                    const message = `shard batch returned a non-JSON response (${String(response.status)})`;
 
-                    emitRpcEvent(
-                        observability,
-                        {
+                    failSubBatch(entries, response.status, "SHARD_ERROR", message, (entry) => {
+                        return {
                             durationMs,
+                            error: { code: "SHARD_ERROR", message, status: response.status },
                             functionPath: entry.functionPath,
-                            ok,
+                            ok: false,
                             shardKey,
-                            ...(ok ? {} : { error: { code: "SHARD_ERROR", message: `batched call returned ${String(status)}`, status } }),
-                        },
-                        sinkContext,
-                    );
+                        };
+                    });
+
+                    return;
                 }
 
-                if (Array.isArray(parsed.results)) {
-                    results.push(...parsed.results);
+                const entryResults = Array.isArray(parsed.results) ? parsed.results : [];
+                const statusById = new Map(entryResults.map((entry) => [entry.id, entry.status ?? response.status]));
+                const seenIds = new Set(entryResults.map((entry) => entry.id));
+
+                emitEntryEvents(entries, shardKey, durationMs, statusById, response.status);
+                results.push(...entryResults);
+
+                // Any entry the shard omitted (short/partial response) gets an
+                // explicit slot error rather than a silent "no result" client-side.
+                for (const entry of entries) {
+                    if (!seenIds.has(entry.id)) {
+                        results.push(slotError(entry, response.status, "SHARD_ERROR", `shard batch omitted result for call ${String(entry.id)}`));
+                    }
                 }
             }),
         );

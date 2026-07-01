@@ -17,6 +17,10 @@ import { LunoraError } from "./errors";
  * carries only single-shard user calls). `id` falls back to the array index.
  */
 const normalizeBatchCall = (raw: unknown, index: number, defaultShard: string): { entry: BatchEntry; shardKey: string } => {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+        throw new LunoraError("each batch call must be an object", { code: "BAD_REQUEST", status: 400 });
+    }
+
     const call = raw as {
         args?: unknown;
         clientId?: unknown;

@@ -200,7 +200,12 @@ const decodeWire = (value: unknown): unknown => {
                         return bytes.buffer.byteLength === bytes.byteLength ? bytes.buffer : bytes.slice().buffer;
                     }
 
-                    const Ctor = TYPED_ARRAY_CTORS[ctorName];
+                    // Resolve ONLY against the allow-list's own keys — a bracket
+                    // lookup with an attacker-controlled name would otherwise walk the
+                    // prototype chain (`"constructor"`, `"toString"`, …) and dispatch
+                    // `new` to an unexpected target. `Object.hasOwn` pins it to the
+                    // known typed-array constructors.
+                    const Ctor = Object.hasOwn(TYPED_ARRAY_CTORS, ctorName) ? TYPED_ARRAY_CTORS[ctorName] : undefined;
 
                     // Unknown view constructor (forward-compat) — hand back the raw bytes.
                     return Ctor ? new Ctor(bytes.slice().buffer) : bytes;
