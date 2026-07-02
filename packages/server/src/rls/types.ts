@@ -67,10 +67,10 @@ export type PolicyDecisionOf<DM, REL extends Record<keyof DM, object>, T extends
  * unknown table, a stray column, or a relation predicate naming a relation the
  * table does not declare is a compile error rather than a silent runtime deny.
  */
-export interface TypedDefinePolicyInput<DM, REL extends Record<keyof DM, object>, T extends keyof DM, Context = unknown> {
+export interface TypedDefinePolicyInput<DM, REL extends Record<keyof DM, object>, T extends keyof DM, Context = unknown, Identity = Record<string, unknown>> {
     on: PolicyOperation;
     table: T;
-    when: (context: PolicyContext<Context>) => PolicyDecisionOf<DM, REL, T>;
+    when: (context: PolicyContext<Context, Identity>) => PolicyDecisionOf<DM, REL, T>;
 }
 
 /**
@@ -82,7 +82,7 @@ export interface TypedDefinePolicyInput<DM, REL extends Record<keyof DM, object>
  * pre-write row; for `insert` it is the candidate document. `ctx` is the full
  * procedure context the middleware closed over.
  */
-export interface PolicyContext<Context = unknown> {
+export interface PolicyContext<Context = unknown, Identity = Record<string, unknown>> {
     readonly auth: {
         /**
          * `true` when any of the request's `roles` grants `permission` (passed
@@ -91,7 +91,14 @@ export interface PolicyContext<Context = unknown> {
          * when none of the request's roles lists the permission.
          */
         readonly can: (permission: Permission | string) => boolean;
-        readonly identity?: Record<string, unknown> | null;
+
+        /**
+         * The resolved identity, typed to the `Identity` type parameter bound on
+         * `createPolicyDsl` — e.g. the app's `defineIdentity(...)` claim type via
+         * the `InferIdentity` helper; otherwise the untyped claim bag.
+         * `undefined`/`null` when the request is anonymous.
+         */
+        readonly identity?: Identity | null;
         readonly roles: ReadonlyArray<string>;
         readonly userId: null | string;
     };

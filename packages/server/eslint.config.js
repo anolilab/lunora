@@ -68,6 +68,7 @@ export default createConfig(
                         "__doc__",
                         "__name",
                         "__lunoraRef",
+                        "__lunoraIdentity",
                         "__lunoraVisibility",
                         "__lunoraProcedure",
                         "__lunoraCtx",

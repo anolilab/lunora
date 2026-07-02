@@ -4,7 +4,7 @@ import { getAuthTables } from "better-auth/db";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { lunoraAuthAdapter } from "../src/adapter";
-import { createAuth } from "../src/create-auth";
+import { createAuth, resolveAuthOptions } from "../src/create-auth";
 import { handleAuthRequest } from "../src/handler";
 import type { SqlExecutor } from "../src/sql-store";
 import { createSqlAuthStore } from "../src/sql-store";
@@ -83,7 +83,10 @@ describe("auth — /api/auth/forget-password HTTP route", () => {
 
     beforeEach(() => {
         database = new DatabaseSync(":memory:");
-        materialiseSchema(database, baseOptions);
+        // Materialise the schema from the SAME resolved options `createAuth` runs
+        // with (and `compileMigrationsSql` migrates from), so `getAuthTables` emits
+        // the `rateLimit` table better-auth's default-on durable limiter writes to.
+        materialiseSchema(database, resolveAuthOptions(baseOptions));
     });
 
     afterEach(() => {

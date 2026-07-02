@@ -162,6 +162,25 @@ export interface AuthStore {
     count: (model: string, where: ReadonlyArray<AuthWhereClause>) => Promise<number>;
     /** Insert `data` into `model`; return the stored row (the adapter pre-fills `id`). */
     create: (model: string, data: AuthRow) => Promise<AuthRow>;
+
+    /**
+     * Atomically apply signed numeric deltas to **at most one** row in `model`
+     * matching `where`, then return the updated row (or `undefined` if the guard
+     * matched none). For each `increment` entry it applies `field = field + delta`
+     * (a negative delta decrements); the optional `set` map assigns absolute
+     * values in the same step. The `where` clause is both selector **and** guard
+     * — comparison operators are honoured, so a guard like
+     * `{ field: "count", operator: "lt", value: max }` only mutates the row while
+     * it still satisfies the predicate.
+     *
+     * Backs better-auth's durable (`storage: "database"`) rate limiter, whose
+     * counter rides these tables. Implementing it natively — one statement that
+     * guards, increments, and returns — gives the **one-winner-across-isolates**
+     * guarantee the read-then-update fallback cannot: on Workers two concurrent
+     * requests would otherwise both read `count=4` and both write `5`, letting a
+     * `max` of 5 pass 6+. Same race-closing rationale as {@link AuthStore.consumeOne}.
+     */
+    incrementOne: (model: string, where: ReadonlyArray<AuthWhereClause>, increment: Record<string, number>, set?: AuthRow) => Promise<AuthRow | undefined>;
     /** Read rows from `model` honouring the filter/sort/window in `query`. */
     read: (model: string, query: AuthQuery) => Promise<AuthRow[]>;
     /** Delete rows in `model` matching `where`; return how many were removed. */
@@ -235,6 +254,28 @@ export const createMemoryAuthStore = (): AuthStore => {
             const row = { ...data };
 
             tableOf(model).push(row);
+
+            return Promise.resolve({ ...row });
+        },
+        incrementOne: (model, where, increment, set) => {
+            const row = tableOf(model).find((candidate) => matchesWhere(candidate, where));
+
+            if (!row) {
+                return Promise.resolve(undefined);
+            }
+
+            // Synchronous guarded read-modify-write: no `await` interleaves
+            // between the guard match and the mutation, so this is atomic even
+            // under concurrent callers — the in-memory analogue of the SQL
+            // `UPDATE … RETURNING`. `increment` and `set` target disjoint columns
+            // in better-auth's usage; deltas add onto the current value.
+            for (const [field, delta] of Object.entries(increment)) {
+                row[field] = (typeof row[field] === "number" ? row[field] : 0) + delta;
+            }
+
+            if (set) {
+                Object.assign(row, set);
+            }
 
             return Promise.resolve({ ...row });
         },

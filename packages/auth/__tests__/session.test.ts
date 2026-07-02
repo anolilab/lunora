@@ -25,6 +25,21 @@ describe("sessionPresets", () => {
         expect(sessionPresets.strict.expiresIn).toBeLessThan(sessionPresets.rolling.expiresIn ?? 0);
         expect(sessionPresets.rolling.expiresIn).toBeLessThan(sessionPresets.longLived.expiresIn ?? 0);
     });
+
+    it("enables a 60s cookie cache on `rolling` and `longLived`", () => {
+        expect.assertions(4);
+
+        expect(sessionPresets.rolling.cookieCache?.enabled).toBe(true);
+        expect(sessionPresets.rolling.cookieCache?.maxAge).toBe(60);
+        expect(sessionPresets.longLived.cookieCache?.enabled).toBe(true);
+        expect(sessionPresets.longLived.cookieCache?.maxAge).toBe(60);
+    });
+
+    it("disables the cookie cache on `strict` (fast revocation)", () => {
+        expect.assertions(1);
+
+        expect(sessionPresets.strict.cookieCache?.enabled).toBe(false);
+    });
 });
 
 describe("validateSessionPolicy", () => {

@@ -146,9 +146,102 @@ export type LunoraAuthOptions = BetterAuthOptions;
 export type LunoraAuth = ReturnType<typeof betterAuth>;
 
 /**
+ * Resolve the caller's options into the exact shape `createAuth` hands to
+ * `betterAuth` — the hardened, default-filled options the running worker uses.
+ * Exported (and pure) so the migration path can compile the schema from the
+ * same resolved options: `compileMigrationsSql` routes through here, so the
+ * `rateLimit` table the worker's durable limiter writes to is included in the
+ * migration rather than silently omitted (it would be, if migrations saw the
+ * raw options while the worker ran the resolved ones).
+ *
+ * ## What it fills (each gated independently on caller silence)
+ *
+ * Secure-by-default cookies + secret-strength warning via {@link hardenAuthOptions},
+ * applied first so all hardening composes onto one options object.
+ *
+ * Rate limiting is ON by default for `/api/auth/*`.
+ *
+ * better-auth's own default is `rateLimit.enabled ?? isProduction`, and its
+ * `isProduction` is `process.env.NODE_ENV === "production"` resolved at
+ * module-load time. On Cloudflare Workers that check is unreliable: the
+ * runtime has no Node `process.env` (absent entirely without
+ * `nodejs_compat`, and even with it `NODE_ENV` is rarely `"production"` at
+ * request time). So better-auth would silently leave auth endpoints
+ * _unthrottled_ on a real deployment — the surprise we refuse to ship.
+ *
+ * We therefore default `enabled: true` whenever the caller hasn't made an
+ * explicit choice. We only fill the `enabled` flag and otherwise forward
+ * the caller's `rateLimit` verbatim, so better-auth's `window` (10s) / `max`
+ * (100) defaults and any custom rules still apply. Callers who genuinely
+ * want it off can pass `rateLimit: { enabled: false }` (e.g. when fronting
+ * auth with their own limiter), and any explicit `enabled` value wins.
+ *
+ * We also default `storage: "database"` — but only when rate limiting is not
+ * explicitly disabled (`enabled !== false`). Filling storage under a disabled
+ * limiter is harmless at runtime but makes `getAuthTables` emit an unused
+ * `rateLimit` table, so we skip it there.
+ *
+ * better-auth's own default is `storage: "memory"` — a per-isolate,
+ * non-durable counter. On Cloudflare Workers that means each isolate keeps
+ * its own tally, counters vanish on isolate recycle, and traffic spread
+ * across isolates never sums to the configured `max` — a limiter that
+ * reports "enabled" while never enforcing a global limit (the exact
+ * brute-force / credential-stuffing protection on `/sign-in`, OTP, and
+ * password-reset it is meant to buy). `storage: "database"` rides the counter
+ * through the configured `database` adapter — Lunora's store over the D1 auth
+ * tables — so the limit is durable *and* atomic (the store's native
+ * `incrementOne` gives a one-winner guarantee across isolates). Callers with
+ * their own durable store can pass an explicit `rateLimit: { storage: … }`
+ * (or `customStorage`), and any explicit value wins.
+ *
+ * Session cookie cache is ON by default too.
+ *
+ * Every authenticated call resolves identity through better-auth's
+ * `getSession`, which — without a cache — is a DB (D1) read on the hot path
+ * of every query/mutation/action that reads `ctx.auth` and of the WebSocket
+ * upgrade. better-auth's `session.cookieCache` carries the session payload in
+ * a short-lived signed cookie so `getSession` can answer without hitting the
+ * database until the cache window elapses. We default it on with a
+ * deliberately short 60s `maxAge` (better-auth's own default is 300s): long
+ * enough to erase the per-request read for a burst of calls, short enough
+ * that a revoked or role-changed session self-corrects within a minute.
+ * The one tradeoff — a revoked session stays valid until the cache expires —
+ * is bounded by that TTL; callers who need immediate revocation opt out with
+ * `session: { cookieCache: { enabled: false } }` (or the `strict` preset).
+ *
+ * Every explicit caller value is forwarded verbatim. The two `rateLimit` fills
+ * merge into a single `rateLimit` object so neither clobbers the other.
+ */
+export const resolveAuthOptions = (options: LunoraAuthOptions): LunoraAuthOptions => {
+    const hardened = hardenAuthOptions(options);
+
+    const needsRateLimitEnabled = hardened.rateLimit?.enabled === undefined;
+    // Only fill `storage` when the caller hasn't disabled rate limiting — a
+    // disabled limiter with a `"database"` storage otherwise pushes an unused
+    // `rateLimit` table into `getAuthTables` / the compiled migration.
+    const needsRateLimitStorage = hardened.rateLimit?.storage === undefined && hardened.rateLimit?.enabled !== false;
+
+    return {
+        ...hardened,
+        ...(needsRateLimitEnabled || needsRateLimitStorage
+            ? {
+                  rateLimit: {
+                      ...hardened.rateLimit,
+                      ...(needsRateLimitEnabled ? { enabled: true } : {}),
+                      ...(needsRateLimitStorage ? { storage: "database" as const } : {}),
+                  },
+              }
+            : {}),
+        ...(hardened.session?.cookieCache === undefined ? { session: { ...hardened.session, cookieCache: { enabled: true, maxAge: 60 } } } : {}),
+    };
+};
+
+/**
  * Create the auth instance. Thin wrapper around `betterAuth` that enforces
  * the `secret` requirement at construction time so misconfigured deployments
- * fail loudly at the first fetch rather than the first sign-in attempt.
+ * fail loudly at the first fetch rather than the first sign-in attempt, then
+ * hands {@link resolveAuthOptions}'s hardened, default-filled options to
+ * better-auth.
  */
 export const createAuth = (options: LunoraAuthOptions): LunoraAuth => {
     // Reject missing *and* whitespace-only secrets — a value like `" "` is
@@ -171,28 +264,5 @@ export const createAuth = (options: LunoraAuthOptions): LunoraAuth => {
         validateSessionPolicy(options.session);
     }
 
-    // Secure-by-default cookies + secret-strength warning, applied before the
-    // rate-limit default so all hardening composes onto one options object.
-    const hardened = hardenAuthOptions(options);
-
-    // Rate limiting is ON by default for `/api/auth/*`.
-    //
-    // better-auth's own default is `rateLimit.enabled ?? isProduction`, and its
-    // `isProduction` is `process.env.NODE_ENV === "production"` resolved at
-    // module-load time. On Cloudflare Workers that check is unreliable: the
-    // runtime has no Node `process.env` (absent entirely without
-    // `nodejs_compat`, and even with it `NODE_ENV` is rarely `"production"` at
-    // request time). So better-auth would silently leave auth endpoints
-    // *unthrottled* on a real deployment — the surprise we refuse to ship.
-    //
-    // We therefore default `enabled: true` whenever the caller hasn't made an
-    // explicit choice. We only fill the `enabled` flag and otherwise forward
-    // the caller's `rateLimit` verbatim, so better-auth's `window` (10s) / `max`
-    // (100) defaults and any custom rules still apply. Callers who genuinely
-    // want it off can pass `rateLimit: { enabled: false }` (e.g. when fronting
-    // auth with their own limiter), and any explicit `enabled` value wins.
-    const resolvedOptions: LunoraAuthOptions =
-        hardened.rateLimit?.enabled === undefined ? { ...hardened, rateLimit: { ...hardened.rateLimit, enabled: true } } : hardened;
-
-    return betterAuth(resolvedOptions);
+    return betterAuth(resolveAuthOptions(options));
 };

@@ -297,3 +297,133 @@ describe("memory and SQL stores agree on the clause matrix", () => {
         db.close();
     });
 });
+
+describe("incrementOne — atomic guarded counter (both stores)", () => {
+    // The rate-limit counter shape better-auth's `storage: "database"` limiter
+    // rides: one row per `key`, an integer `count`, and a `lastRequest` stamp.
+    const RATE_LIMIT_DDL = `CREATE TABLE "rateLimit" ("key" TEXT PRIMARY KEY, "count" REAL, "lastRequest" REAL)`;
+
+    interface StoreHandle {
+        close: () => void;
+        store: AuthStore;
+    }
+
+    const stores: { make: () => StoreHandle; name: string }[] = [
+        {
+            make: () => {
+                return { close: () => undefined, store: createMemoryAuthStore() };
+            },
+            name: "memory",
+        },
+        {
+            make: () => {
+                const db = new DatabaseSync(":memory:");
+                db.exec(RATE_LIMIT_DDL);
+
+                return {
+                    close: () => {
+                        db.close();
+                    },
+                    store: createSqlAuthStore(executorFor(db)),
+                };
+            },
+            name: "sql",
+        },
+    ];
+
+    it.each(stores)("$name: applies the delta + set and returns the post-increment row", async ({ make }) => {
+        expect.assertions(2);
+
+        const { close, store } = make();
+
+        try {
+            await store.create("rateLimit", { count: 1, key: "k", lastRequest: 0 });
+
+            const updated = await store.incrementOne("rateLimit", [clause("key", "k")], { count: 1 }, { lastRequest: 5 });
+
+            expect(updated?.count).toBe(2);
+            expect(updated?.lastRequest).toBe(5);
+        } finally {
+            close();
+        }
+    });
+
+    it.each(stores)("$name: increments a NULL counter from 0 (delta, not NULL)", async ({ make }) => {
+        expect.assertions(1);
+
+        const { close, store } = make();
+
+        try {
+            // A row whose counter column is NULL: SQLite's `count = count + ?` would
+            // leave it NULL (`NULL + N = NULL`), diverging from the memory store which
+            // treats a non-numeric/absent counter as 0. `COALESCE(count, 0) + ?` keeps
+            // both backends advancing identically.
+            await store.create("rateLimit", { count: null, key: "k", lastRequest: 0 });
+
+            const updated = await store.incrementOne("rateLimit", [clause("key", "k")], { count: 1 });
+
+            expect(updated?.count).toBe(1);
+        } finally {
+            close();
+        }
+    });
+
+    it.each(stores)("$name: returns undefined when the guard predicate excludes the row", async ({ make }) => {
+        expect.assertions(2);
+
+        const { close, store } = make();
+
+        try {
+            await store.create("rateLimit", { count: 5, key: "k", lastRequest: 0 });
+
+            // Guard `count < 5` fails (count is 5) → no mutation, undefined result.
+            const blocked = await store.incrementOne("rateLimit", [clause("key", "k"), clause("count", 5, "lt")], { count: 1 });
+
+            expect(blocked).toBeUndefined();
+
+            const [row] = await store.read("rateLimit", { where: [clause("key", "k")] });
+
+            // The guard blocked the write, so `count` is unchanged.
+            expect(row?.count).toBe(5);
+        } finally {
+            close();
+        }
+    });
+
+    it.each(stores)("$name: returns undefined for a key that does not exist", async ({ make }) => {
+        expect.assertions(1);
+
+        const { close, store } = make();
+
+        try {
+            await expect(store.incrementOne("rateLimit", [clause("key", "absent")], { count: 1 })).resolves.toBeUndefined();
+        } finally {
+            close();
+        }
+    });
+
+    it.each(stores)("$name: N concurrent increments on one key sum to N (no lost updates)", async ({ make }) => {
+        expect.assertions(2);
+
+        const { close, store } = make();
+        const CONCURRENCY = 50;
+
+        try {
+            await store.create("rateLimit", { count: 0, key: "k", lastRequest: 0 });
+
+            // Fire all increments at once. A read-then-write implementation would
+            // let racers observe the same `count` and clobber each other (final <
+            // N); the single-statement guarded increment cannot, so the tally is
+            // exact — the regression that proves atomicity.
+            const results = await Promise.all(Array.from({ length: CONCURRENCY }, () => store.incrementOne("rateLimit", [clause("key", "k")], { count: 1 })));
+
+            const [row] = await store.read("rateLimit", { where: [clause("key", "k")] });
+
+            expect(row?.count).toBe(CONCURRENCY);
+            // Every call matched the (unconditional) guard, so none returned undefined.
+            expect(results.every((result) => result !== undefined)).toBe(true);
+        } finally {
+            close();
+        }
+    });
+});

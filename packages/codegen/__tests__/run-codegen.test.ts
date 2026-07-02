@@ -271,6 +271,108 @@ export const sendMessage = defineMutator({
             });
         });
 
+        describe("typed identity layer (defineIdentity)", () => {
+            const writeIdentity = (): void => {
+                writeFileSync(
+                    join(workdir, "lunora", "identity.ts"),
+                    `import { defineIdentity, v } from "@lunora/server";
+export const identity = defineIdentity({
+    userId: v.string(),
+    tenantId: v.optional(v.string()),
+    scopes: v.optional(v.array(v.string())),
+});
+`,
+                    "utf8",
+                );
+            };
+
+            it("leaves server.ts byte-identical when no defineIdentity is declared", () => {
+                expect.assertions(6);
+
+                const { server } = runCodegen({ lint: false, projectRoot: workdir }).generated;
+
+                // No contract ⇒ none of the narrowing fragments are emitted, so the
+                // output is the untyped-identity baseline (the guardrail the item
+                // was deferred to protect).
+                expect(server).not.toContain("InferIdentity");
+                expect(server).not.toContain("lunoraIdentityContract");
+                expect(server).not.toContain("export type Identity");
+                expect(server).not.toContain("NarrowedAuth");
+                // The RLS DSL keeps the untyped-identity default binding.
+                expect(server).toContain("export const definePolicy = createPolicyDsl<DataModel, Relations>();");
+                // ctx.auth is inherited from the base (never re-declared / omitted).
+                expect(server).not.toContain('"db" | "storage" | "auth"');
+            });
+
+            it("narrows ctx.auth.getIdentity() + the RLS policy identity to the declared contract", () => {
+                expect.assertions(9);
+
+                writeIdentity();
+
+                const { server } = runCodegen({ lint: false, projectRoot: workdir }).generated;
+
+                // The claim type is recovered from the declaration itself (reused
+                // `InferIdentity` machinery, `typeof` the imported contract) — no
+                // parallel type system, no runtime import.
+                expect(server).toContain('import type { InferIdentity } from "@lunora/server";');
+                expect(server).toContain('import type * as lunoraIdentityContract from "../identity.js";');
+                expect(server).toContain("export type Identity = InferIdentity<typeof lunoraIdentityContract.identity>;");
+                // `getIdentity()` narrows to `Identity | null` via a NarrowedAuth override.
+                expect(server).toContain('type NarrowedAuth = Omit<QueryCtxBase["auth"], "getIdentity"> & { getIdentity: () => Promise<Identity | null> };');
+                expect(server).toContain("readonly auth: NarrowedAuth;");
+                // Each ctx omits the base `auth` so the narrowed one replaces it.
+                expect(ctxInterface(server, "QueryCtx")).toContain("readonly auth: NarrowedAuth;");
+                expect(ctxInterface(server, "ActionCtx")).toContain("readonly auth: NarrowedAuth;");
+                expect(server).toContain('export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage" | "auth">');
+                // The RLS DSL is bound to the declared identity so a policy's
+                // `ctx.auth.identity` narrows to it.
+                expect(server).toContain("export const definePolicy = createPolicyDsl<DataModel, Relations, Identity>();");
+            });
+
+            it("leaves app.ts free of identity wiring when no defineIdentity is declared", () => {
+                expect.assertions(2);
+
+                const { app } = runCodegen({ lint: false, projectRoot: workdir }).generated;
+
+                // No contract ⇒ no import and no `options.identity` wiring, so the
+                // runtime trust boundary is a no-op. (An unrelated `identity:` may
+                // appear inside the D1 global-db factory, so we assert on the
+                // contract-specific fragments rather than the bare substring.)
+                expect(app).not.toContain("lunoraIdentityContract");
+                expect(app).not.toContain(`from "../identity.js"`);
+            });
+
+            it("wires options.identity into app.ts so the trust boundary validates in the generated worker", () => {
+                expect.assertions(3);
+
+                writeIdentity();
+
+                const { app } = runCodegen({ lint: false, projectRoot: workdir }).generated;
+
+                // Imported as a VALUE (not `import type`) — the contract must exist
+                // at runtime for the worker's contract gate to run.
+                expect(app).toContain('import * as lunoraIdentityContract from "../identity.js";');
+                expect(app).not.toContain("import type * as lunoraIdentityContract");
+                // Wired onto the worker options the runtime validates against.
+                expect(app).toContain("identity: lunoraIdentityContract.identity,");
+            });
+
+            it("errors when more than one defineIdentity is declared", () => {
+                expect.assertions(1);
+
+                writeFileSync(
+                    join(workdir, "lunora", "identity.ts"),
+                    `import { defineIdentity, v } from "@lunora/server";
+export const identity = defineIdentity({ userId: v.string() });
+export const other = defineIdentity({ userId: v.string() });
+`,
+                    "utf8",
+                );
+
+                expect(() => runCodegen({ lint: false, projectRoot: workdir })).toThrow(/exactly one is allowed/u);
+            });
+        });
+
         it("wires ctx.ai end-to-end when a function reads ctx.ai", () => {
             expect.assertions(3);
 

@@ -14,6 +14,7 @@ import type {
     ContainerIR,
     CronJobIR,
     FunctionIR,
+    IdentityIR,
     IndexIR,
     JurisdictionIR,
     MaskMetadataIR,
@@ -1033,6 +1034,16 @@ interface EmitServerOptions {
     hasPipelines?: boolean;
     /** A `lunora/` source uses `@lunora/bindings/r2sql` / `ctx.r2sql` — wires `ctx.r2sql` onto ActionCtx only. */
     hasR2sql?: boolean;
+
+    /**
+     * The single `defineIdentity(...)` claim contract declared in
+     * `lunora/identity.ts` (Plan 080). When present, `ctx.auth.getIdentity()`,
+     * the RLS policy `ctx.auth.identity`, and the shard-authorization hooks
+     * narrow to the declared shape (recovered via `InferIdentity` over the
+     * contract's `typeof`). `undefined` keeps the identity an untyped bag —
+     * byte-identical to today.
+     */
+    identity?: IdentityIR;
     /** Queues declared via `defineQueue` exports — wires the typed `ctx.queues` producers onto Mutation/Action contexts. */
     queues?: ReadonlyArray<QueueIR>;
     schema?: SchemaIR;
@@ -1056,6 +1067,7 @@ const emitServer = ({
     hasPayments = false,
     hasPipelines = false,
     hasR2sql = false,
+    identity,
     queues = [],
     schema,
     storageRuleBuckets = [],
@@ -1245,6 +1257,36 @@ ${queues.map((queue) => `    readonly ${queue.exportName}: QueueProducer<QueueBo
         : "";
     const queuesContextField = hasQueues ? `\n    readonly queues: LunoraQueues;` : "";
 
+    // Typed identity layer (Plan 080). When the project declares the single
+    // `defineIdentity(...)` contract in `lunora/identity.ts`, the generated
+    // server recovers the claim *type* from the declaration itself (via
+    // `InferIdentity<typeof …>` — the same machinery the workflows/queues blocks
+    // use to read a declaration by `typeof`, so no parallel type system) and
+    // narrows `ctx.auth.getIdentity()`, the RLS policy `ctx.auth.identity`, and
+    // the `authorizeShard`/`authorizeFanOut` identity to it. Every fragment is
+    // gated on the contract existing, so with no `defineIdentity` the emitted
+    // server.ts is byte-identical to before this feature.
+    const identityTypeImport = identity
+        ? `import type { InferIdentity } from "${base.server}";\nimport type * as lunoraIdentityContract from "../identity.js";\n`
+        : "";
+    const identityTypeBlock = identity
+        ? `
+
+/** This app's declared identity claim contract (\`defineIdentity\` in \`lunora/identity.ts\`) — the typed shape of \`ctx.auth.getIdentity()\`, the RLS policy \`ctx.auth.identity\`, and the \`authorizeShard\`/\`authorizeFanOut\` identity argument. */
+export type Identity = InferIdentity<typeof lunoraIdentityContract.${identity.exportName}>;
+
+/** \`ctx.auth\` narrowed so \`getIdentity()\` resolves the declared {@link Identity} contract instead of the untyped claim bag. */
+type NarrowedAuth = Omit<QueryCtxBase["auth"], "getIdentity"> & { getIdentity: () => Promise<Identity | null> };`
+        : "";
+    // Appended to each ctx's `Omit<…Base, …>` key union and body so the narrowed
+    // `auth` replaces the base `AuthState`; empty when no contract is declared.
+    const authOmit = identity ? ` | "auth"` : "";
+    const authContextField = identity ? `\n    readonly auth: NarrowedAuth;` : "";
+    // Threads the declared claim type into the relation-aware RLS DSL, so a
+    // policy's `ctx.auth.identity` narrows to {@link Identity}. Empty ⇒ the
+    // untyped `Record<string, unknown>` default in `createPolicyDsl`.
+    const policyIdentityArgument = identity ? ", Identity" : "";
+
     const server = `${GENERATED_HEADER}import { createPolicyDsl, initLunora, v as vBase } from "${base.server}";
 import type {
     ActionBuilder,
@@ -1266,11 +1308,11 @@ import type {
 } from "${base.server}";
 
 import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, Relations, TableName } from "./dataModel.js";
-${aiTypeImport}${paymentsTypeImport}${containersTypeImport}${workflowsTypeImport}${queuesTypeImport}
+${aiTypeImport}${paymentsTypeImport}${containersTypeImport}${workflowsTypeImport}${queuesTypeImport}${identityTypeImport}
 export type { DataModel, Doc, Id, TableName } from "./dataModel.js";
 
 /** Storage buckets this schema declares (\`v.storage("name")\`), narrowing \`ctx.storage.bucket(name)\`. */
-export type StorageBucketName = ${storageBucketUnion};${envBlock}${workflowsTypeBlock}${queuesTypeBlock}
+export type StorageBucketName = ${storageBucketUnion};${envBlock}${workflowsTypeBlock}${queuesTypeBlock}${identityTypeBlock}
 
 /**
  * Project-typed contexts. The base contexts from \`@lunora/server\` are
@@ -1299,22 +1341,22 @@ type TypedTableQuery = (<T extends TableName>(table: T) => TableReader<Doc<T>>) 
  */
 type TypedTableGet = <T extends TableName>(id: IdOfTable<T>) => Promise<Doc<T> | null>;
 
-export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"> {
+export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"${authOmit}> {
     readonly db: Omit<DatabaseReader, "query" | "get"> & DatabaseReaderFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmReader;
-    readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${analyticsContextField}
+    readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${analyticsContextField}${authContextField}
 }
 
-export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${workflowsOmit}> {
+export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${workflowsOmit}${authOmit}> {
     readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${analyticsContextField}${workflowsContextField}${queuesContextField}
+    readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${analyticsContextField}${workflowsContextField}${queuesContextField}${authContextField}
 }
 
-export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${workflowsOmit}> {
+export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${workflowsOmit}${authOmit}> {
     readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: StorageBase<StorageBucketName>;${accessContextField}${aiActionField}${paymentsActionField}${containersActionField}${kvContextField}${flagsContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${workflowsContextField}${queuesContextField}
+    readonly storage: StorageBase<StorageBucketName>;${accessContextField}${aiActionField}${paymentsActionField}${containersActionField}${kvContextField}${flagsContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${workflowsContextField}${queuesContextField}${authContextField}
 }
 
 /**
@@ -1354,7 +1396,7 @@ export const internalAction = lunoraBuilders.internalAction as unknown as Intern
  * Runtime-identical to \`@lunora/server\`'s \`definePolicy\`; only the types narrow,
  * so the \`rls()\` chain discovers a policy authored either way the same.
  */
-export const definePolicy = createPolicyDsl<DataModel, Relations>();
+export const definePolicy = createPolicyDsl<DataModel, Relations${policyIdentityArgument}>();
 
 /**
  * The validator builder \`v\`, with \`v.id(...)\` constrained to THIS schema's

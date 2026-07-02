@@ -1,6 +1,6 @@
 /* eslint-disable no-secrets/no-secrets -- emitted builder source: the string fragments are framework API type names (e.g. "SchedulerDeclaration<Env>"), not credentials. */
 import { GENERATED_HEADER } from "./emit";
-import type { JurisdictionIR } from "./ir";
+import type { IdentityIR, JurisdictionIR } from "./ir";
 
 /** Which capability methods the generated `defineApp` builder exposes — one flag per package-backed feature the app actually uses. */
 interface EmitAppOptions {
@@ -40,6 +40,8 @@ interface EmitAppOptions {
     hasVectors: boolean;
     /** App declares Cloudflare Workflows (`defineWorkflow`) → wire `options.workflowsClient` so the studio's workflow-instance proxy can reach the CF REST API. */
     hasWorkflow: boolean;
+    /** The single `defineIdentity(...)` contract in `lunora/identity.ts` (Plan 080) → import it as a VALUE and wire `options.identity`, so the runtime trust boundary validates every resolved identity before it becomes `ctx.auth`. `undefined` ⇒ no wiring, byte-identical output. */
+    identity?: IdentityIR;
     /** Schema declares `.jurisdiction("…")` → pin every DO the worker reaches (shards, fan-out, scheduler, containers) to the Cloudflare data-residency jurisdiction. */
     jurisdiction?: JurisdictionIR;
     /** Project depends on the unscoped `lunorash` umbrella → import the runtime via `lunorash/runtime` instead of `@lunora/runtime`. */
@@ -83,6 +85,14 @@ const LONG_TAIL: ReadonlyArray<readonly [keyof EmitAppOptions, string, string, s
 
 /** Whether any long-tail (`shardExtras`-backed) capability method is emitted. */
 const hasAnyLongTail = (options: EmitAppOptions): boolean => LONG_TAIL.some(([flag]) => options[flag]);
+
+/**
+ * The `defineIdentity(...)` contract import — a VALUE (not `import type`) so it
+ * can be wired onto `options.identity` and actually validate at the runtime
+ * trust boundary. Namespace form mirrors `server.ts` so an arbitrary export name
+ * can never collide with a builder import. Empty when no contract is declared.
+ */
+const buildIdentityImports = (identity: IdentityIR | undefined): string[] => (identity ? [`import * as lunoraIdentityContract from "../identity.js";`] : []);
 
 /** `@lunora/cloudflare-access` imports — `composeResolvers` only when `@lunora/auth` also wires a resolver to fall back to. */
 const buildAccessImports = (hasAccess: boolean, hasAuth: boolean): string[] =>
@@ -158,6 +168,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
         `import type { ${[...runtimeTypeImports].toSorted((a, b) => a.localeCompare(b)).join(", ")} } from "${runtimeModule}";`,
         `import { ${runtimeValueImports} } from "${runtimeModule}";`,
         ``,
+        ...buildIdentityImports(options.identity),
         ...(hasGlobal || hasHyperdriveGlobal ? [`import schema from "../schema.js";`] : []),
         `import { LUNORA_CRONS } from "./crons.js";`,
         `import { LUNORA_FUNCTIONS } from "./functions.js";`,
@@ -532,6 +543,11 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
 const buildBaseWorkerOptions = (options: EmitAppOptions): string[] => [
     `            cronJobs: LUNORA_CRONS,`,
     `            functions: LUNORA_FUNCTIONS,`,
+    // The declared `defineIdentity(...)` contract — wires the runtime trust
+    // boundary so `wrapResolverWithContract` validates every resolved identity
+    // against it before it becomes `ctx.auth`. Emitted only when the app declares
+    // a contract, so apps without one keep unchanged output.
+    ...(options.identity ? [`            identity: lunoraIdentityContract.${options.identity.exportName},`] : []),
     // Schema `.jurisdiction("…")` pins every DO the worker reaches to the
     // Cloudflare data-residency region. Emitted only when declared, so apps
     // without it keep the un-pinned global namespace (and unchanged output).

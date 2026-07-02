@@ -15,6 +15,7 @@ import { buildStudioFeatures, discoverFeatureUsage } from "./discover-feature-us
 import { discoverFlagKeys } from "./discover-flags";
 import { discoverFunctions, listLunoraSourceFiles } from "./discover-functions";
 import discoverHttpRoutes from "./discover-http-routes";
+import { discoverIdentity } from "./discover-identity";
 import discoverInserts from "./discover-inserts";
 import discoverMaskProcedures, { discoverMaskMetadata } from "./discover-mask-procedures";
 import discoverMigrations from "./discover-migrations";
@@ -267,6 +268,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const shapes = discoverShapes(project, lunoraDirectory);
     const mutators = discoverMutators(project, lunoraDirectory);
 
+    // Typed identity layer (Plan 080): the single `defineIdentity(...)` claim
+    // contract declared in `lunora/identity.ts`. When present, `emitServer`
+    // narrows `ctx.auth.getIdentity()`, the RLS policy `ctx.auth.identity`, and
+    // the shard-authorization hooks to the declared shape. `undefined` when the
+    // file is absent, so a project without one emits byte-identical server.ts.
+    const identity = discoverIdentity(project, lunoraDirectory);
+
     // Workflows declared via `defineWorkflow` exports in `lunora/workflows.ts`.
     // Discovered before crons so a `cronJobs()` registration can target a
     // workflow by its export name (the cron then starts a durable instance per
@@ -419,6 +427,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasPayments,
         hasPipelines,
         hasR2sql,
+        identity,
         queues,
         schema,
         storageRuleBuckets: storageRulesMetadata.rules.map((rule) => rule.bucket),
@@ -503,6 +512,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasStorage: studioFeatures.storage,
         hasVectors: schema.vectorIndexes.length > 0,
         hasWorkflow: workflows.length > 0,
+        // The single `defineIdentity(...)` contract (Plan 080). Wires
+        // `options.identity` so the runtime trust boundary validates every
+        // resolved identity before it becomes `ctx.auth`; `undefined` keeps the
+        // emitted app.ts byte-identical to before this feature.
+        identity,
         // Schema `.jurisdiction("…")` → pin the generated worker's DOs to the region.
         jurisdiction: schema.jurisdiction,
         useUmbrella,

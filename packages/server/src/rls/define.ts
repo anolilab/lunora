@@ -23,9 +23,12 @@ export const definePolicy = <Context = unknown>(input: DefinePolicyInput<Context
  * discovered identically by the `rls()` chain.
  */
 export const createPolicyDsl =
-    <DM, REL extends Record<keyof DM, object>>() =>
-    <T extends keyof DM, Context = unknown>(input: TypedDefinePolicyInput<DM, REL, T, Context>): Policy<Context> => {
-        return { on: input.on, table: input.table as string, when: input.when };
+    <DM, REL extends Record<keyof DM, object>, Identity = Record<string, unknown>>() =>
+    <T extends keyof DM, Context = unknown>(input: TypedDefinePolicyInput<DM, REL, T, Context, Identity>): Policy<Context> => {
+        // `when`'s identity param is erased at the stored-policy boundary (the
+        // middleware builds `PolicyContext` from the request); the narrowed
+        // `Identity` is a compile-time-only authoring aid, like `table as string`.
+        return { on: input.on, table: input.table as string, when: input.when as Policy<Context>["when"] };
     };
 
 /**

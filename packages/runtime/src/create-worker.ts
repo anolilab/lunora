@@ -11,6 +11,8 @@ import type { FunctionArgumentDescriptor } from "./describe-args";
 import { isStructuralConflictError, isStructuralLunoraError, LunoraError, toErrorResponse } from "./errors";
 import type { ExportRow } from "./export-stream";
 import { collectKnownTables, streamExportRows } from "./export-stream";
+import type { IdentityContractLike, ResolvedIdentity } from "./identity-resolvers";
+import { wrapResolverWithContract } from "./identity-resolvers";
 import { streamingImport } from "./import-stream";
 import { buildIntrospectionAdminRoutes } from "./introspection-admin-routes";
 import type { ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext } from "./observability";
@@ -82,39 +84,6 @@ interface HttpRouterLike {
     // structurally here; an arrow property would reject it under strict variance.
     // eslint-disable-next-line @typescript-eslint/method-signature-style -- bivariant params are load-bearing for hono compatibility
     fetch(request: Request, env?: unknown, context?: ExecutionContextLike): Promise<Response> | Response;
-}
-
-/**
- * Identity resolved from the inbound request by {@link WorkerOptions.resolveIdentity}.
- *
- * The `userId` field is special — it becomes `ctx.auth.userId` inside the
- * Durable Object. Any other keys (`email`, `name`, custom roles, etc.) are
- * forwarded verbatim as `ctx.auth.getIdentity()`'s return value.
- *
- * Return `null` to signal that the request is anonymous; the runtime will
- * skip both `x-lunora-userid` and `x-lunora-identity` headers, and
- * `ctx.auth.userId` will be `undefined` on the shard side.
- */
-interface ResolvedIdentity {
-    /** Arbitrary additional claims. Must be JSON-serialisable. */
-    [key: string]: unknown;
-
-    /**
-     * JWT-standard expiry in epoch SECONDS. When present (and `expiresAtMs` is
-     * absent), the runtime forwards it as the socket's credential expiry — the
-     * DO drops the socket once it lapses. Used only on the WebSocket path.
-     */
-    exp?: number;
-
-    /**
-     * Credential expiry in epoch MILLISECONDS. Preferred over `exp` when
-     * both are present. Forwarded as the socket's expiry on the WebSocket path
-     * so the DO drops the socket once it lapses; omit for non-expiring sessions.
-     */
-    expiresAtMs?: number;
-
-    /** Stable user identifier (e.g. `"user_2k3..."` or `"u_42"`). */
-    userId: string;
 }
 
 /**
@@ -677,6 +646,18 @@ interface WorkerOptions {
      * own 404 (a path-match with the wrong verb is a 404, not a 405).
      */
     httpRouter?: HttpRouterLike;
+
+    /**
+     * The declared identity claim contract (`defineIdentity(...)` from
+     * `@lunora/server`), passed by the generated worker entry. When present, the
+     * worker validates every `resolveIdentity` result against it at the trust
+     * boundary (on the public data paths — RPC / WebSocket / HTTP-action /
+     * server-query, never the admin path) *before* the claims become `ctx.auth`.
+     * A resolver output that violates the contract is downgraded to anonymous or
+     * rejected with a `401`, per the contract's `onInvalid`. Omitted → no
+     * validation, and the identity stays the historical untyped claim bag.
+     */
+    identity?: IdentityContractLike;
 
     /**
      * Insert `.global()` rows for the admin import endpoint. When omitted,
@@ -1461,6 +1442,14 @@ interface LunoraWorker {
 const createWorker = (options: WorkerOptions): LunoraWorker => {
     const defaultShard = options.defaultShardKey ?? "__root__";
 
+    // The trust-boundary identity gate: only the PUBLIC data paths (RPC /
+    // WebSocket / HTTP-action / server-query) use this wrapped resolver, which
+    // validates every resolved identity against the `defineIdentity(...)` contract
+    // (when configured) before it becomes `ctx.auth`. The admin forward path keeps
+    // the raw `options.resolveIdentity` — admin is gated by the bearer / Access,
+    // not the app's identity contract. See `wrapResolverWithContract`.
+    const publicResolveIdentity: WorkerOptions["resolveIdentity"] = wrapResolverWithContract(options.resolveIdentity, options.identity);
+
     // Pin every DO this worker reaches to the configured jurisdiction exactly
     // once, here at the boundary. Downstream routing (`forwardToShard`,
     // `coordinator.fanOut`, the scheduler stubs) reads these derived namespaces
@@ -1957,7 +1946,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     });
 
     const buildHttpActionContext = async (request: Request, env: unknown): Promise<HttpActionContext> => {
-        const { claims, headers, userId } = await resolveForwardContext(request, env, options.resolveIdentity);
+        const { claims, headers, userId } = await resolveForwardContext(request, env, publicResolveIdentity);
 
         const run = async <R>(reference: unknown, args: Record<string, unknown> = {}): Promise<R> => {
             const functionPath = (reference as { __lunoraRef?: unknown }).__lunoraRef;
@@ -2049,7 +2038,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // forwarded to the DO so the socket carries a verified userId (the basis
         // for trusted `onConnect`/`onDisconnect` lifecycle hooks). Mirrors the
         // RPC path's `resolveForwardContext` → `authorize*` ordering.
-        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, options.resolveIdentity);
+        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity);
 
         if (options.authorizeShard) {
             const allowed = await options.authorizeShard(identity, shardKey);
@@ -2292,7 +2281,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         // Forward selected headers from the inbound request so the DO can
         // honour auth, sessions, and D1 read-your-writes consistency.
-        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, options.resolveIdentity);
+        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity);
 
         await authorizeRpcEnvelope(envelope, identity);
 
@@ -2581,8 +2570,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * EXACT same security steps as {@link handleRpc}, in the same order, off the
      * SAME inbound `request`:
      *
-     * 1. `resolveForwardContext(request, env, options.resolveIdentity)` — the
-     * identical identity resolution (`resolveIdentity`, cookie / authorization /
+     * 1. `resolveForwardContext(request, env, publicResolveIdentity)` — the
+     * identical identity resolution (`resolveIdentity` behind the same
+     * contract-validation gate as the HTTP path, cookie / authorization /
      * `x-d1-bookmark` forwarding, `x-lunora-userid` / `x-lunora-identity` header
      * derivation). Same per-request auth context, byte-for-byte.
      * 2. `authorizeRpcEnvelope({ functionPath, shardKey }, identity)` — the
@@ -2625,7 +2615,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // Resolve identity off the SAME inbound request the HTTP path uses, so
             // cookies / bearer / bookmark and the derived `x-lunora-*` headers are
             // byte-identical to `handleRpc`'s.
-            const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, options.resolveIdentity);
+            const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity);
 
             // Run the IDENTICAL per-shard authorization gate. A `shardKey` of
             // `undefined` resolves to `defaultShard` for both the gate and the
@@ -3287,6 +3277,17 @@ const createLunoraHandler =
 const defineRpcEnvelope = (envelope: RpcEnvelope): RpcEnvelope => envelope;
 
 export { composeWorker, createLunoraHandler, createWorker, defineRpcEnvelope, resolveLunoraOptions, withFrameworkWorker };
+export { type ExecutionContextLike, NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
+export type {
+    AuthAdmin,
+    AuthCapabilities,
+    AuthImpersonation,
+    AuthIntrospector,
+    AuthPage,
+    AuthSession,
+    AuthUser,
+    ListAuthUsersOptions,
+} from "./auth-admin-routes";
 export type {
     AdminTableResolver,
     BackupManifest,
@@ -3313,7 +3314,6 @@ export type {
     LunoraHandlerOptions,
     LunoraWorker,
     QueueConsumerHandler,
-    ResolvedIdentity,
     Route,
     RpcContext,
     RpcEnvelope,
@@ -3330,14 +3330,14 @@ export type {
     WorkerOptions,
 };
 
-export { type ExecutionContextLike, NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
+// Identity-resolver layer lives in its own module; re-export the public names
+// here so `@lunora/runtime`'s import surface is unchanged.
 export type {
-    AuthAdmin,
-    AuthCapabilities,
-    AuthImpersonation,
-    AuthIntrospector,
-    AuthPage,
-    AuthSession,
-    AuthUser,
-    ListAuthUsersOptions,
-} from "./auth-admin-routes";
+    ComposeIdentityResolversErrorMode,
+    ComposeIdentityResolversOptions,
+    IdentityContractLike,
+    IdentityResolver,
+    IdentityValidation,
+    ResolvedIdentity,
+} from "./identity-resolvers";
+export { composeIdentityResolvers, routeIdentityResolvers } from "./identity-resolvers";

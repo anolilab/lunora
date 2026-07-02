@@ -216,6 +216,42 @@ export const createSqlAuthStore = (executor: SqlExecutor): AuthStore => {
 
             return { ...data };
         },
+        incrementOne: async (model, where, increment, set) => {
+            const table = quoteId(model);
+            const incrementColumns = Object.keys(increment);
+            const setColumns = set ? Object.keys(set) : [];
+            const fragment = compileWhere(where);
+
+            // An empty increment+set can't form a valid `SET`. better-auth never
+            // calls it that way, but mirror `update`'s empty-patch handling: treat
+            // it as a pure guard read of the single matching row.
+            if (incrementColumns.length === 0 && setColumns.length === 0) {
+                const [row] = await executor.all(`SELECT * FROM ${table}${whereSuffix(fragment)} LIMIT 1`, fragment.params);
+
+                return row;
+            }
+
+            const assignments = [
+                // COALESCE(col, 0) so a NULL counter advances from 0 rather than staying
+                // NULL (`NULL + ? = NULL` in SQLite/D1) — matches the memory store, which
+                // treats a non-numeric/absent counter as 0.
+                ...incrementColumns.map((column) => `${quoteId(column)} = COALESCE(${quoteId(column)}, 0) + ?`),
+                ...setColumns.map((column) => `${quoteId(column)} = ?`),
+            ].join(", ");
+
+            // Guarded read-modify-write in one statement: the subquery pins a
+            // single `rowid` the guard still matches (SQLite/D1 lack `UPDATE …
+            // LIMIT`), the UPDATE applies `col = col + delta` / `col = value`
+            // atomically, and RETURNING hands back the post-update row. One winner
+            // across isolates — no read-then-update race the memory/`findMany +
+            // updateMany` fallback would leave open on Workers.
+            const [row] = await executor.all(
+                `UPDATE ${table} SET ${assignments} WHERE rowid IN (SELECT rowid FROM ${table}${whereSuffix(fragment)} LIMIT 1) RETURNING *`,
+                [...incrementColumns.map((column) => increment[column]), ...setColumns.map((column) => (set as AuthRow)[column]), ...fragment.params],
+            );
+
+            return row;
+        },
         read: async (model, query) => {
             const fragment = compileWhere(query.where);
             const parameters = [...fragment.params];
