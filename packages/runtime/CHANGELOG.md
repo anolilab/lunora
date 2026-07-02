@@ -1,3 +1,5 @@
+## @lunora/runtime [1.0.0-alpha.13](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.12...%40lunora%2Fruntime%401.0.0-alpha.13) (2026-07-02)
+
 ## @lunora/runtime [1.0.0-alpha.12](https://github.com/anolilab/lunora/compare/%40lunora%2Fruntime%401.0.0-alpha.11...%40lunora%2Fruntime%401.0.0-alpha.12) (2026-07-02)
 
 
