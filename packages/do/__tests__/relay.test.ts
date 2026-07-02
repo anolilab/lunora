@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, parseRelayName, relayCountFor, relayName } from "../src/relay";
+import { clampPromotionThresholds, DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, parseRelayName, relayCountFor, relayName } from "../src/relay";
 
 describe("relay promotion reducer", () => {
     const thresholds = { tDown: 4000, tUp: 8000 };
@@ -42,6 +42,35 @@ describe("relay promotion reducer", () => {
 
         expect(() => nextPromotionState("owned", 1, { tDown: 8000, tUp: 8000 })).toThrow(/tDown/);
         expect(() => nextPromotionState("owned", 1, { tDown: 9000, tUp: 8000 })).toThrow(/must be < tUp/);
+    });
+});
+
+describe("clampPromotionThresholds", () => {
+    it("keeps a collapse threshold already strictly below tUp", () => {
+        expect.assertions(1);
+
+        expect(clampPromotionThresholds(8000, 4000)).toStrictEqual({ tDown: 4000, tUp: 8000 });
+    });
+
+    it("clamps an inverted/too-close collapse threshold to half of tUp (strictly below tUp)", () => {
+        expect.assertions(2);
+
+        // tDownRaw >= tUp would make nextPromotionState throw; clamp falls back to floor(tUp/2).
+        expect(clampPromotionThresholds(8000, 8000)).toStrictEqual({ tDown: 4000, tUp: 8000 });
+        expect(clampPromotionThresholds(8, 10)).toStrictEqual({ tDown: 4, tUp: 8 });
+    });
+
+    it("never produces an invalid band, even at low tUp (the reducer never throws on the hot path)", () => {
+        expect.assertions(3);
+
+        // tUp=1 → tDown=0 (< 1, valid; collapse simply never triggers).
+        expect(clampPromotionThresholds(1, 5)).toStrictEqual({ tDown: 0, tUp: 1 });
+        expect(clampPromotionThresholds(2, 2)).toStrictEqual({ tDown: 1, tUp: 2 });
+
+        // The clamped band is always accepted by the reducer.
+        const { tDown, tUp } = clampPromotionThresholds(1, 5);
+
+        expect(() => nextPromotionState("owned", 0, { tDown, tUp })).not.toThrow();
     });
 });
 

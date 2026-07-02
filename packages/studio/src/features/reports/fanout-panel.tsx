@@ -109,8 +109,13 @@ const FanoutPanel = ({ initialShardKey }: FanoutPanelProps): ReactElement => {
                 {result !== undefined && (
                     <div className="ml-auto flex items-center gap-2 text-sm text-muted-foreground" data-testid="fanout-count">
                         {result.promoted && (
-                            <Badge data-testid="fanout-promoted" variant="default">
-                                {t("auto-scaled: {relayCount}/{maxRelays} relays", { maxRelays: result.maxRelays, relayCount: result.relayCount })}
+                            <Badge data-testid="fanout-promoted" variant={result.relayCount >= result.maxRelays ? "destructive" : "default"}>
+                                {result.relayCount >= result.maxRelays
+                                    ? t("auto-scaled: {relayCount}/{maxRelays} relays (at ceiling)", {
+                                          maxRelays: result.maxRelays,
+                                          relayCount: result.relayCount,
+                                      })
+                                    : t("auto-scaled: {relayCount}/{maxRelays} relays", { maxRelays: result.maxRelays, relayCount: result.relayCount })}
                             </Badge>
                         )}
                         <Badge variant="secondary">{t("{count} connections", { count: result.totalConnections })}</Badge>

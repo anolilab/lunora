@@ -131,6 +131,106 @@ describe("owner promotion probe (/_lunora/route)", () => {
     });
 });
 
+describe("owner promotion hysteresis (plan 075 Phase 4)", () => {
+    let database: ReturnType<typeof createSqliteExec>;
+
+    beforeEach(() => {
+        database = createSqliteExec();
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
+    /**
+     * A single owner instance (its `OwnerRelay` collaborator, and thus its
+     * `promotionState`, is created once) probed repeatedly with a mutable live
+     * socket count — this is the integration surface `nextPromotionState`'s own
+     * unit tests (`relay.test.ts`) can't cover, since hysteresis only shows up
+     * across successive `relayCount()` calls on the SAME stateful owner.
+     */
+    const makeProbe = (env: Record<string, string>): { probe: () => Promise<number>; setSocketCount: (count: number) => void } => {
+        let socketCount = 0;
+        const state = {
+            acceptWebSocket() {},
+            getWebSockets: () => Array.from({ length: socketCount }, () => ({}) as WebSocket),
+            id: { name: "room-1" },
+            storage: { sql: database.sql as unknown as ShardDOState["storage"]["sql"] },
+        } as unknown as ShardDOState;
+        const shard = new RelaySetShard(state, env);
+
+        return {
+            probe: async () => {
+                const response = await shard.fetch(new Request("https://shard.internal/_lunora/route", { method: "GET" }));
+                const body: { relayCount: number } = await response.json();
+
+                return body.relayCount;
+            },
+            setSocketCount: (count: number) => {
+                socketCount = count;
+            },
+        };
+    };
+
+    const ENV = { LUNORA_MAX_RELAYS: "8", LUNORA_RELAY_COLLAPSE_THRESHOLD: "4", LUNORA_RELAY_FAN: "2", LUNORA_RELAY_THRESHOLD: "8" };
+
+    it("stays owner-served below tUp, promotes at/above tUp, holds through the anti-flap band, and only collapses below tDown", async () => {
+        expect.assertions(6);
+
+        const { probe, setSocketCount } = makeProbe(ENV);
+
+        setSocketCount(5);
+
+        await expect(probe()).resolves.toBe(0); // below tUp (8) → owner-served
+
+        setSocketCount(8);
+
+        await expect(probe()).resolves.toBe(2); // reaches tUp → promotes, fan of 2
+
+        // Anti-flap: subscribers drop back into the (tDown, tUp) band, but the
+        // shard must STAY promoted rather than flapping back to owner-served.
+        setSocketCount(6);
+
+        await expect(probe()).resolves.toBe(2);
+
+        setSocketCount(5);
+
+        await expect(probe()).resolves.toBe(2);
+
+        // Still in-band at exactly tDown (collapse is strictly BELOW tDown).
+        setSocketCount(4);
+
+        await expect(probe()).resolves.toBe(2);
+
+        // Drops below tDown (4) → collapses back to owner-served.
+        setSocketCount(3);
+
+        await expect(probe()).resolves.toBe(0);
+    });
+
+    it("clamps an inverted/too-close collapse threshold instead of throwing on the hot path", async () => {
+        expect.assertions(2);
+
+        // LUNORA_RELAY_COLLAPSE_THRESHOLD >= LUNORA_RELAY_THRESHOLD would make an
+        // invalid (empty/inverted) hysteresis band; relayCount() must clamp tDown
+        // rather than let the reducer throw on every routing probe.
+        const { probe, setSocketCount } = makeProbe({
+            LUNORA_MAX_RELAYS: "8",
+            LUNORA_RELAY_COLLAPSE_THRESHOLD: "10",
+            LUNORA_RELAY_FAN: "2",
+            LUNORA_RELAY_THRESHOLD: "8",
+        });
+
+        setSocketCount(8);
+
+        await expect(probe()).resolves.toBe(2); // promotes at tUp despite the bogus collapse threshold
+
+        setSocketCount(3); // below the clamped tDown (floor(8/2) = 4)
+
+        await expect(probe()).resolves.toBe(0);
+    });
+});
+
 describe("relay collapse (detach on drain)", () => {
     let database: ReturnType<typeof createSqliteExec>;
 

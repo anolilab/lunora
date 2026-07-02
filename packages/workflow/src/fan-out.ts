@@ -23,7 +23,14 @@
  * changes; only the base class learns to call home.
  */
 import { NonRetryableError } from "./errors";
-import type { WorkflowBranch, WorkflowInstanceLike, WorkflowParallelFunction, WorkflowSpawnFunction, WorkflowStepLike } from "./types";
+import type {
+    BranchCompensationParams,
+    WorkflowBranch,
+    WorkflowInstanceLike,
+    WorkflowParallelFunction,
+    WorkflowSpawnFunction,
+    WorkflowStepLike,
+} from "./types";
 
 /** Hard cap on branches per `ctx.parallel` call — auto-scale, never silently spawn unbounded DOs. */
 const MAX_BRANCHES = 100;
@@ -37,6 +44,8 @@ const SPAWN_STEP_PREFIX = "lunora:spawn:";
 const AWAIT_STEP_PREFIX = "lunora:await:";
 /** Durable-step name prefix for the child's completion signal back to the parent. */
 const SIGNAL_STEP_PREFIX = "lunora:signal:";
+/** Durable-step name prefix for a completed branch's group-saga compensation spawn. */
+const COMPENSATE_STEP_PREFIX = "lunora:compensate:";
 /** Event-type prefix the parent waits on and the child sends. */
 const BRANCH_EVENT_PREFIX = "lunora:branch:";
 
@@ -86,9 +95,9 @@ interface FanOutDeps {
 const branch = <Output = unknown>(
     workflow: string,
     params?: Record<string, unknown>,
-    options?: { id?: string; timeout?: number | string },
+    options?: { compensateWith?: string; id?: string; timeout?: number | string },
 ): WorkflowBranch<Output> => {
-    return { id: options?.id, params, timeout: options?.timeout, workflow };
+    return { compensateWith: options?.compensateWith, id: options?.id, params, timeout: options?.timeout, workflow };
 };
 
 /** Reduce an unknown thrown value to the serialisable `{ message, name }` a branch event carries. */
@@ -110,6 +119,53 @@ const errorOutcome = (error: unknown): BranchOutcome => {
     return { error: serializeError(error), status: "error" };
 };
 
+/** A branch after id/event-type allocation — the parent's per-branch join bookkeeping. */
+interface PlannedBranch {
+    childId: string;
+    eventType: string;
+    index: number;
+    item: WorkflowBranch;
+}
+
+/**
+ * Group-saga rollback (plan 075 Phase 3): on a branch failure, spawn each
+ * already-completed sibling's declared `compensateWith` workflow in reverse
+ * declaration order. Each spawn is a durable, replay-safe idempotent create
+ * (keyed by the completed child's id via `step.do` memoization), so a parent
+ * replay re-attaches instead of double-compensating. Completed branches with no
+ * `compensateWith` are skipped; the failing branch itself is never compensated
+ * (its own per-step rollbacks already ran inside its instance).
+ */
+const compensateCompleted = async (
+    deps: FanOutDeps,
+    completed: ReadonlyArray<{ output: unknown; plan: PlannedBranch }>,
+    error: { message: string; name: string },
+): Promise<void> => {
+    for (let cursor = completed.length - 1; cursor >= 0; cursor -= 1) {
+        const done = completed[cursor];
+        const compensateWith = done?.plan.item.compensateWith;
+
+        if (done === undefined || compensateWith === undefined) {
+            continue;
+        }
+
+        // eslint-disable-next-line no-await-in-loop -- reverse-order group-saga compensation, one durable spawn per completed branch
+        await deps.step.do(`${COMPENSATE_STEP_PREFIX}${done.plan.childId}`, async (): Promise<string> => {
+            const compensateId = `${done.plan.childId}:compensate`;
+            const compensationParams: BranchCompensationParams = {
+                branch: done.plan.item.workflow,
+                error,
+                index: done.plan.index,
+                output: done.output,
+            };
+
+            await deps.resolveBinding(compensateWith).create({ id: compensateId, params: compensationParams });
+
+            return compensateId;
+        });
+    }
+};
+
 /**
  * Build `ctx.parallel` for one workflow invocation. Spawns each branch as an
  * isolated child instance, hibernates on a per-branch `waitForEvent`, and returns
@@ -117,6 +173,13 @@ const errorOutcome = (error: unknown): BranchOutcome => {
  * join cannot re-run an already-failed child) on the first branch that reports an
  * error; still-running siblings are left to finish (Cloudflare cannot cleanly
  * cancel a running instance).
+ *
+ * **Group saga (plan 075 Phase 3):** when a branch fails, every *already-completed*
+ * sibling that declared a `compensateWith` workflow is rolled back — its
+ * compensation workflow is spawned (durable, replay-safe, in reverse declaration
+ * order) with {@link BranchCompensationParams} — before the group failure is
+ * thrown. A group where no branch sets `compensateWith` behaves exactly as a plain
+ * fail-fast fan-out, so the feature is zero-overhead until opted into.
  */
 const createParallel = (deps: FanOutDeps): WorkflowParallelFunction => {
     const run = async (branches: ReadonlyArray<WorkflowBranch>): Promise<unknown[]> => {
@@ -133,7 +196,7 @@ const createParallel = (deps: FanOutDeps): WorkflowParallelFunction => {
         // Assign deterministic ids + event types synchronously, in declaration
         // order, BEFORE any await — so a parent replay reproduces the exact same
         // ids and re-attaches to the existing children rather than spawning new ones.
-        const planned = branches.map((item, index) => {
+        const planned: PlannedBranch[] = branches.map((item, index) => {
             const childId = deps.nextChildId(item.id);
 
             return { childId, eventType: `${BRANCH_EVENT_PREFIX}${childId}`, index, item };
@@ -158,6 +221,7 @@ const createParallel = (deps: FanOutDeps): WorkflowParallelFunction => {
         //    declaration order — events are buffered by type, so the wall-clock is
         //    max(branch durations), not the sum, and the result order is stable.
         const results: unknown[] = [];
+        const completed: { output: unknown; plan: PlannedBranch }[] = [];
 
         for (const plan of planned) {
             // eslint-disable-next-line no-await-in-loop -- sequential, ordered join; per-type event buffering keeps wall-clock at max(branch), not the sum
@@ -168,9 +232,14 @@ const createParallel = (deps: FanOutDeps): WorkflowParallelFunction => {
             const outcome = event.payload;
 
             if (outcome.status === "error") {
+                // Group saga: roll back completed siblings before failing the group.
+                // eslint-disable-next-line no-await-in-loop -- compensation must finish before the group's terminal throw
+                await compensateCompleted(deps, completed, outcome.error);
+
                 throw new NonRetryableError(`ctx.parallel: branch "${plan.item.workflow}" (#${String(plan.index)}) failed: ${outcome.error.message}`);
             }
 
+            completed.push({ output: outcome.value, plan });
             results.push(outcome.value);
         }
 
