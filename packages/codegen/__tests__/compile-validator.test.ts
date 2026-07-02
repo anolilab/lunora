@@ -94,12 +94,10 @@ describe("compileArgsValidator — differential parity vs interpreted oracle", (
         "{ name: v.string(), nested: v.object({ x: v.number() }), tags: v.array(v.number()) }",
     ];
 
-    for (const snippet of SNIPPETS) {
-        // eslint-disable-next-line vitest/expect-expect -- assertions live in the shared assertParity() helper (compiled-vs-oracle parity)
-        it(`matches the oracle for ${snippet}`, () => {
-            assertParity(snippet);
-        });
-    }
+    // eslint-disable-next-line vitest/expect-expect, vitest/prefer-expect-assertions -- assertions live in the shared assertParity() helper; some snippets legitimately defer to the interpreted path with zero assertions
+    it.each(SNIPPETS)("matches the oracle for %s", (snippet) => {
+        assertParity(snippet);
+    });
 });
 
 describe("compileArgsValidator — modelled behaviour", () => {

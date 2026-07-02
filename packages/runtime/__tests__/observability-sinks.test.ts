@@ -306,7 +306,7 @@ describe("observability-sinks", () => {
             const a = vi.fn<(event: ObservabilityEvent, context?: { waitUntil?: (promise: Promise<unknown>) => void }) => void>();
             const b = vi.fn<(event: ObservabilityEvent, context?: { waitUntil?: (promise: Promise<unknown>) => void }) => void>();
             const sink = combineSinks({ onRpc: a }, { onRpc: b });
-            const context = { waitUntil: vi.fn() };
+            const context = { waitUntil: vi.fn<(promise: Promise<unknown>) => void>() };
 
             sink.onRpc!(okEvent, context);
 

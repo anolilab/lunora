@@ -125,7 +125,7 @@ export const WorkflowInstanceHistory = ({ loadDetail, loadInstances, readOnly, r
     };
 
     useEffect(() => {
-        // eslint-disable-next-line react-x/set-state-in-effect -- intentionally close any open detail when the workflow/filter changes
+        // eslint-disable-next-line react-x/set-state-in-effect, react-you-might-not-need-an-effect/no-chain-state-updates, react-you-might-not-need-an-effect/no-adjust-state-on-prop-change -- the effect drives an async reload; closing any open detail is coupled to that fetch (no render-derivable value, and a key-reset would remount and drop the status filter)
         setDetail(null);
         fireAndForget(load());
         // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when the workflow or status filter changes

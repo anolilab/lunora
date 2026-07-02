@@ -1,16 +1,16 @@
 import type { CryptoKey } from "jose";
 import { generateKeyPair, SignJWT } from "jose";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { accessAdminGate } from "../src/admin";
+import type { AccessClaims } from "../src/types";
 
 const TEAM = "acme";
 const ISSUER = "https://acme.cloudflareaccess.com";
 const AUD = "admin-aud-tag";
 
-let publicKey: CryptoKey;
-let privateKey: CryptoKey;
-let wrongKey: CryptoKey;
+const { privateKey, publicKey } = await generateKeyPair("RS256");
+const { privateKey: wrongKey } = await generateKeyPair("RS256");
 
 const sign = async (claims: Record<string, unknown>, key: CryptoKey = privateKey): Promise<string> =>
     new SignJWT(claims).setProtectedHeader({ alg: "RS256" }).setIssuedAt().setIssuer(ISSUER).setAudience(AUD).setExpirationTime("2h").sign(key);
@@ -18,11 +18,6 @@ const sign = async (claims: Record<string, unknown>, key: CryptoKey = privateKey
 /** A request carrying the Access JWT in the default header. */
 const requestWithHeader = (token: string): Request =>
     new Request("https://app.test/_lunora/admin/functions", { headers: { "cf-access-jwt-assertion": token } });
-
-beforeAll(async () => {
-    ({ privateKey, publicKey } = await generateKeyPair("RS256"));
-    ({ privateKey: wrongKey } = await generateKeyPair("RS256"));
-});
 
 describe("accessAdminGate", () => {
     it("grants when the token verifies and isAdmin returns true", async () => {
@@ -55,7 +50,7 @@ describe("accessAdminGate", () => {
     it("denies (without calling isAdmin) when no token is present", async () => {
         expect.assertions(2);
 
-        const isAdmin = vi.fn(() => true);
+        const isAdmin = vi.fn<(claims: AccessClaims) => boolean>(() => true);
         const gate = accessAdminGate({ aud: AUD, isAdmin, keySet: publicKey, teamDomain: TEAM });
 
         await expect(gate(new Request("https://app.test/_lunora/admin/functions"))).resolves.toBe(false);
@@ -65,7 +60,7 @@ describe("accessAdminGate", () => {
     it("denies and reports onError when the token fails verification", async () => {
         expect.assertions(2);
 
-        const onError = vi.fn();
+        const onError = vi.fn<(error: unknown, request: Request) => void>();
         const gate = accessAdminGate({ aud: AUD, isAdmin: () => true, keySet: publicKey, onError, teamDomain: TEAM });
         const forged = await sign({ sub: "user-4" }, wrongKey);
 

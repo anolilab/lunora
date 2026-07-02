@@ -4,6 +4,8 @@ import { resolveCloudflare } from "../src/runtime/cloudflare";
 
 describe("resolveCloudflare", () => {
     it("reads the legacy event.context.cloudflare shape (nitro-cloudflare-dev)", () => {
+        expect.assertions(1);
+
         const env = { SHARD: {} };
         const context = { waitUntil: () => {} };
 
@@ -11,6 +13,8 @@ describe("resolveCloudflare", () => {
     });
 
     it("reads the newer event.req.runtime.cloudflare shape (Nitro 2.10+)", () => {
+        expect.assertions(1);
+
         const env = { SHARD: {} };
         const ctx = { waitUntil: () => {} };
 
@@ -18,6 +22,8 @@ describe("resolveCloudflare", () => {
     });
 
     it("prefers the context shape and falls back across the ctx/context alias", () => {
+        expect.assertions(1);
+
         const env = { SHARD: {} };
         const ctx = { waitUntil: () => {} };
 
@@ -26,6 +32,8 @@ describe("resolveCloudflare", () => {
     });
 
     it("returns an empty result when no Cloudflare runtime is attached", () => {
+        expect.assertions(2);
+
         expect(resolveCloudflare({})).toEqual({});
         expect(resolveCloudflare({ context: { cloudflare: {} } })).toEqual({});
     });

@@ -45,13 +45,15 @@ const makeProvider = (values: Record<string, JsonValue>, options: { initFails?: 
     };
 };
 
-afterEach(async () => {
-    await resetFlags();
-    vi.restoreAllMocks();
-});
-
 describe("createFlags", () => {
+    afterEach(async () => {
+        await resetFlags();
+        vi.restoreAllMocks();
+    });
+
     it("resolves each flag type through the provider", async () => {
+        expect.assertions(4);
+
         const provider = makeProvider({
             "max-uploads": 25,
             "ui-config": { theme: "dark" },
@@ -67,6 +69,8 @@ describe("createFlags", () => {
     });
 
     it("returns the default value for an unknown flag", async () => {
+        expect.assertions(2);
+
         const provider = makeProvider({});
         const flags = createFlags({ provider: () => provider });
 
@@ -75,6 +79,8 @@ describe("createFlags", () => {
     });
 
     it("exposes full evaluation details via details.*", async () => {
+        expect.assertions(4);
+
         const provider = makeProvider({ "dark-mode": true });
         const flags = createFlags({ provider: () => provider });
 
@@ -87,6 +93,8 @@ describe("createFlags", () => {
     });
 
     it("merges the default targetingKey under per-call context", async () => {
+        expect.assertions(1);
+
         const provider = makeProvider({ "dark-mode": true });
         const flags = createFlags({ provider: () => provider, targetingKey: "user-123" });
 
@@ -96,6 +104,8 @@ describe("createFlags", () => {
     });
 
     it("lets a per-call targetingKey override the default", async () => {
+        expect.assertions(1);
+
         const provider = makeProvider({ "dark-mode": true });
         const flags = createFlags({ provider: () => provider, targetingKey: "user-123" });
 
@@ -105,6 +115,8 @@ describe("createFlags", () => {
     });
 
     it("resolves a targetingKey thunk (codegen passes one wrapping identify)", async () => {
+        expect.assertions(1);
+
         const provider = makeProvider({ "dark-mode": true });
         const flags = createFlags({ provider: () => provider, targetingKey: () => "user-123" });
 
@@ -114,6 +126,8 @@ describe("createFlags", () => {
     });
 
     it("fails open to no targetingKey when the thunk throws (a buggy identify)", async () => {
+        expect.assertions(2);
+
         const provider = makeProvider({ "dark-mode": true });
         const flags = createFlags({
             provider: () => provider,
@@ -128,6 +142,8 @@ describe("createFlags", () => {
     });
 
     it("memoizes identical evaluations within a request (one provider call)", async () => {
+        expect.assertions(1);
+
         const provider = makeProvider({ "dark-mode": true });
         const flags = createFlags({ provider: () => provider });
 
@@ -137,6 +153,8 @@ describe("createFlags", () => {
     });
 
     it("does not share memo across different contexts", async () => {
+        expect.assertions(1);
+
         const provider = makeProvider({ "dark-mode": true });
         const flags = createFlags({ provider: () => provider });
 
@@ -147,6 +165,8 @@ describe("createFlags", () => {
     });
 
     it("returns the same in-flight promise for identical calls (memo hit, not just equal values)", async () => {
+        expect.assertions(2);
+
         const provider = makeProvider({ "dark-mode": true });
         const flags = createFlags({ provider: () => provider });
 
@@ -160,6 +180,8 @@ describe("createFlags", () => {
     });
 
     it("does not share memo across different flag keys with an empty context (no false cache hits)", async () => {
+        expect.assertions(2);
+
         const provider = makeProvider({ "dark-mode": true, "beta-mode": true });
         const flags = createFlags({ provider: () => provider });
 
@@ -170,6 +192,8 @@ describe("createFlags", () => {
     });
 
     it("does not share memo across different default values for the same flag key", async () => {
+        expect.assertions(1);
+
         const provider = makeProvider({});
         const flags = createFlags({ provider: () => provider });
 
@@ -179,6 +203,8 @@ describe("createFlags", () => {
     });
 
     it("never throws when the provider errors — resolves the default with an errorCode", async () => {
+        expect.assertions(4);
+
         const provider = makeProvider({ "dark-mode": true }, { resolveThrows: true });
         const flags = createFlags({ provider: () => provider });
 
@@ -192,6 +218,8 @@ describe("createFlags", () => {
     });
 
     it("fails closed to the default when provider construction throws", async () => {
+        expect.assertions(1);
+
         const flags = createFlags({
             provider: () => {
                 throw new Error("no binding");
@@ -202,6 +230,8 @@ describe("createFlags", () => {
     });
 
     it("retries the bind on a later request after a failed construction", async () => {
+        expect.assertions(3);
+
         // The per-isolate binding is cleared on a failed bind, so a *subsequent*
         // request (a fresh createFlags + memo) re-attempts construction.
         let attempts = 0;

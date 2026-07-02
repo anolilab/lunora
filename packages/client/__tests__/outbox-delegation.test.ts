@@ -92,6 +92,8 @@ describe("lunoraClient outbox delegation", () => {
     });
 
     it("delegates an offline write to the outbox sink, stamped with clientId + monotonic mutationId", async () => {
+        expect.assertions(3);
+
         const { enqueued, sink } = recordingSink();
         const client = makeClient(sink, "client-fixed");
 
@@ -113,6 +115,8 @@ describe("lunoraClient outbox delegation", () => {
     });
 
     it("surfaces an overflow rejection to the caller instead of swallowing it", async () => {
+        expect.assertions(1);
+
         const { sink } = recordingSink(true);
         const client = makeClient(sink, "client-fixed");
 

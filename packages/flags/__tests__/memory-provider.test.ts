@@ -4,11 +4,6 @@ import { createFlags, resetFlags } from "../src/flags";
 import type { MemoryFlagValue } from "../src/providers/memory";
 import { memoryProvider } from "../src/providers/memory";
 
-afterEach(async () => {
-    await resetFlags();
-    vi.restoreAllMocks();
-});
-
 // `memoryProvider` is a `FlagsProviderFactory` ((env) => Provider); codegen wraps it
 // as `() => factory(env)`. Memory flags ignore env, so bind with an empty one.
 const flagsFor = (map: Record<string, MemoryFlagValue>) => {
@@ -18,7 +13,14 @@ const flagsFor = (map: Record<string, MemoryFlagValue>) => {
 };
 
 describe("memoryProvider", () => {
+    afterEach(async () => {
+        await resetFlags();
+        vi.restoreAllMocks();
+    });
+
     it("resolves each flag type from the static map", async () => {
+        expect.assertions(4);
+
         const flags = flagsFor({
             "dark-mode": true,
             "page-size": 25,
@@ -33,6 +35,8 @@ describe("memoryProvider", () => {
     });
 
     it("reports a STATIC reason for a configured flag", async () => {
+        expect.assertions(2);
+
         const flags = flagsFor({ "dark-mode": true });
 
         const details = await flags.details.boolean("dark-mode", false);
@@ -42,6 +46,8 @@ describe("memoryProvider", () => {
     });
 
     it("falls back to the call default for an unknown flag", async () => {
+        expect.assertions(2);
+
         const flags = flagsFor({ "dark-mode": true });
 
         await expect(flags.boolean("missing", false)).resolves.toBe(false);
@@ -49,12 +55,16 @@ describe("memoryProvider", () => {
     });
 
     it("fails open to the default on a type mismatch (number read as boolean)", async () => {
+        expect.assertions(1);
+
         const flags = flagsFor({ "page-size": 25 });
 
         await expect(flags.boolean("page-size", false)).resolves.toBe(false);
     });
 
     it("reuses one provider instance across env-less factory calls", () => {
+        expect.assertions(1);
+
         const factory = memoryProvider({ "dark-mode": true });
 
         expect(factory({})).toBe(factory({ SOMETHING: "else" }));

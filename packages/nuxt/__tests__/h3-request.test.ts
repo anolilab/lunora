@@ -11,8 +11,10 @@ import { resolveWebRequest } from "../src/runtime/h3-request";
 // installed h3 version could not reach the branch that no real fixture hits.
 describe("resolveWebRequest across the h3 v1 → v2 seam", () => {
     it("calls toWebRequest(event) under h3 v1", () => {
+        expect.assertions(2);
+
         const request = new Request("https://app.test/_lunora/rpc", { method: "POST" });
-        const toWebRequest = vi.fn(() => request);
+        const toWebRequest = vi.fn<() => Request>(() => request);
         const event = { context: {} };
 
         expect(resolveWebRequest({ toWebRequest }, event)).toBe(request);
@@ -20,6 +22,8 @@ describe("resolveWebRequest across the h3 v1 → v2 seam", () => {
     });
 
     it("reads event.req when h3 v2 dropped toWebRequest", () => {
+        expect.assertions(1);
+
         const request = new Request("https://app.test/_lunora/ws");
 
         // v2: `toWebRequest` is absent, so the namespace reads back `undefined`

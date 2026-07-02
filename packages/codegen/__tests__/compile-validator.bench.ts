@@ -44,14 +44,17 @@ const CASES: ReadonlyArray<{ input: Record<string, unknown>; name: string; snipp
     },
 ];
 
+// eslint-disable-next-line vitest/prefer-each -- benchmark iteration, not a parametrized test
 for (const testCase of CASES) {
     const { compiled, live } = build(testCase.snippet);
 
     describe(testCase.name, () => {
+        // eslint-disable-next-line vitest/prefer-expect-assertions -- benchmark, not a test with assertions
         bench("interpreted (parseValidatorMap)", () => {
             parseValidatorMap(live, testCase.input, "args");
         });
 
+        // eslint-disable-next-line vitest/prefer-expect-assertions -- benchmark, not a test with assertions
         bench("compiled (AOT fast path)", () => {
             compiled(testCase.input);
         });
