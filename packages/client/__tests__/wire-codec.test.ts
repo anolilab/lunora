@@ -131,14 +131,53 @@ describe("wireCodec round-trips", () => {
         expect(decoded.message).toBe("nope");
     });
 
-    it("fails loud on Map/Set/RegExp instead of silently encoding them to {}", () => {
+    it("round-trips an Error `cause` chain (non-enumerable, positional slot)", () => {
         expect.assertions(3);
 
-        // These have no own enumerable keys, so the plain-object branch would
-        // silently drop them to `{}` — a TypeError surfaces the unsupported value.
-        expect(() => encodeWire({ m: new Map([["a", 1]]) })).toThrow(TypeError);
-        expect(() => encodeWire(new Set([1, 2]))).toThrow(TypeError);
+        const source = new Error("outer", { cause: Object.assign(new RangeError("inner"), { code: "E_INNER" }) });
+        const decoded = wire(source) as Error & { cause?: RangeError & { code?: string } };
+
+        expect(decoded.message).toBe("outer");
+        expect(decoded.cause).toBeInstanceOf(RangeError);
+        expect(decoded.cause?.code).toBe("E_INNER");
+    });
+
+    it("round-trips Map and Set (contents recurse, so bigint/bytes survive)", () => {
+        expect.assertions(4);
+
+        const map = wire(
+            new Map<string, unknown>([
+                ["b", new Uint8Array([1, 2])],
+                ["n", 42n],
+            ]),
+        ) as Map<string, unknown>;
+
+        expect(map).toBeInstanceOf(Map);
+        expect(map.get("n")).toBe(42n);
+
+        const set = wire(new Set([1n, "x"])) as Set<unknown>;
+
+        expect(set).toBeInstanceOf(Set);
+        expect(set.has(1n)).toBe(true);
+    });
+
+    it("round-trips a URL", () => {
+        expect.assertions(2);
+
+        const decoded = wire(new URL("https://lunora.sh/docs?q=1#top")) as URL;
+
+        expect(decoded).toBeInstanceOf(URL);
+        expect(decoded.href).toBe("https://lunora.sh/docs?q=1#top");
+    });
+
+    it("fails loud on other non-plain objects (RegExp / Headers / WeakMap) instead of silent {}", () => {
+        expect.assertions(3);
+
+        // Non-plain objects with no own enumerable keys would collapse to `{}`; the
+        // prototype-based guard rejects them at the send site.
         expect(() => encodeWire({ re: /ab+c/g })).toThrow(TypeError);
+        expect(() => encodeWire(new Headers({ "x-a": "1" }))).toThrow(TypeError);
+        expect(() => encodeWire(new WeakMap())).toThrow(TypeError);
     });
 
     it("throws a RangeError past the nesting-depth cap instead of blowing the stack", () => {

@@ -21,16 +21,16 @@
  *
  * ## Scope (deliberately tiny)
  *
- * Encoded: `bigint`, `Date`, `Error` (name/message/own-props, no stack),
- * `ArrayBuffer`, typed-array views (`Uint8Array`, `Float32Array`, ...),
- * `NaN`/`+-Infinity`, and `undefined` **in array positions** (where JSON would
- * coerce it to `null`, losing information). NOT encoded — parity with Cap'n Web's
- * own limits and to keep the codec/security surface small: cyclic graphs, class
- * instances, functions, capabilities. `Map`/`Set`/`RegExp` are **rejected with a
- * TypeError** (as Cap'n Web refuses them) rather than silently encoded to `{}`, so
- * an unsupported value fails loud at the send site. Nesting deeper than
- * {@link MAX_DEPTH} throws a `RangeError` (Cap'n Web's 64-level cap) so a hostile
- * deeply-nested payload can't blow the recursion stack.
+ * Encoded: `bigint`, `Date`, `Error` (name/message/own-props/`cause`, no stack),
+ * `URL`, `Map`, `Set`, `ArrayBuffer`, typed-array views (`Uint8Array`,
+ * `Float32Array`, ...), `NaN`/`+-Infinity`, and `undefined` **in array positions**
+ * (where JSON would coerce it to `null`, losing information). NOT encoded: cyclic
+ * graphs, functions, capabilities, and any other non-plain object (`RegExp`,
+ * `Headers`, a class instance, …) — these have no own enumerable keys, so rather
+ * than silently encode to `{}` they are **rejected with a TypeError** (only plain
+ * objects and arrays fall through). Nesting deeper than {@link MAX_DEPTH} throws a
+ * `RangeError` (Cap'n Web's 64-level cap) so a hostile deeply-nested payload can't
+ * blow the recursion stack.
  *
  * `Error` is encoded (as Cap'n Web does) because its `name`/`message`/`stack` are
  * non-enumerable — the plain-object branch would drop them and yield a bare `{}`,
@@ -218,7 +218,30 @@ const encodeWire = (value: unknown, depth = 0): unknown => {
             }
         }
 
-        return [TAG, "error", error.name, error.message, properties];
+        const encodedError: unknown[] = [TAG, "error", error.name, error.message, properties];
+
+        // `cause` (from `new Error(msg, { cause })`) is a non-enumerable own prop, so
+        // the `Object.keys` loop above misses it — carry it in a positional slot so an
+        // error chain survives. Absent when no cause was set (keeps the 5-element form).
+        if (error.cause !== undefined) {
+            encodedError.push(encodeWire(error.cause, depth + 1));
+        }
+
+        return encodedError;
+    }
+
+    if (value instanceof URL) {
+        return [TAG, "url", value.href];
+    }
+
+    if (value instanceof Map) {
+        // Entries recurse (keys and values), so bigint/bytes/nested structures in a
+        // Map round-trip. `decodeWire` rebuilds a real `Map`.
+        return [TAG, "map", [...(value as Map<unknown, unknown>).entries()].map(([k, v]) => [encodeWire(k, depth + 1), encodeWire(v, depth + 1)])];
+    }
+
+    if (value instanceof Set) {
+        return [TAG, "set", [...(value as Set<unknown>)].map((item) => encodeWire(item, depth + 1))];
     }
 
     if (value instanceof ArrayBuffer) {
@@ -244,14 +267,19 @@ const encodeWire = (value: unknown, depth = 0): unknown => {
         return encoded.length > 0 && encoded[0] === TAG ? [TAG, "arr", encoded] : encoded;
     }
 
-    // Fail loud on the object types Cap'n Web also refuses (`Map`, `Set`, `RegExp`).
-    // They have no own enumerable keys, so the plain-object branch below would
-    // silently encode them to `{}` — corruption a caller can't detect. A thrown
-    // TypeError surfaces the unsupported value at the send site instead. (This
-    // does not catch arbitrary class instances: those keep JSON's own lossy
-    // behavior, matching the codec's "trees only" scope.)
-    if (value instanceof Map || value instanceof Set || value instanceof RegExp) {
-        throw new TypeError(`wire-codec: cannot encode a ${value.constructor.name} — unsupported over the Lunora wire (like Cap'n Web).`);
+    // Fail loud on any remaining non-plain object (`RegExp`, `Headers`, a class
+    // instance, …). These have no own enumerable string keys, so the plain-object
+    // branch below would silently encode them to `{}` — corruption a caller can't
+    // detect. Only plain objects (`Object.prototype` or a null prototype) fall
+    // through. A thrown TypeError surfaces the unsupported value at the send site.
+    const proto = Object.getPrototypeOf(value) as object | null;
+
+    if (proto !== null && proto !== Object.prototype) {
+        const name = (value as { constructor?: { name?: string } }).constructor?.name ?? "value";
+
+        throw new TypeError(
+            `wire-codec: cannot encode a ${name} over the Lunora wire — only plain objects, arrays, and the supported built-ins (Date, Error, URL, Map, Set, ArrayBuffer/typed arrays, bigint) round-trip`,
+        );
     }
 
     // Plain object — recurse over own enumerable string keys. Drop `undefined`
@@ -306,6 +334,15 @@ const decodeWire = (value: unknown, depth = 0): unknown => {
                 case "date": {
                     return new Date(decodeWire(value[2], depth + 1) as number);
                 }
+                case "map": {
+                    return new Map((value[2] as [unknown, unknown][]).map(([k, v]) => [decodeWire(k, depth + 1), decodeWire(v, depth + 1)]));
+                }
+                case "set": {
+                    return new Set((value[2] as unknown[]).map((item) => decodeWire(item, depth + 1)));
+                }
+                case "url": {
+                    return new URL(value[2] as string);
+                }
                 case "error": {
                     const name = value[2] as string;
                     const message = value[3] as string;
@@ -322,6 +359,12 @@ const decodeWire = (value: unknown, depth = 0): unknown => {
                     }
 
                     Object.assign(error, decodeWire(value[4], depth + 1) as Record<string, unknown>);
+
+                    // Restore a positional `cause` (6th slot) as a non-enumerable own
+                    // property, matching a native `Error`'s `cause` descriptor.
+                    if (value.length > 5) {
+                        Object.defineProperty(error, "cause", { configurable: true, value: decodeWire(value[5], depth + 1), writable: true });
+                    }
 
                     return error;
                 }
