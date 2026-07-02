@@ -7,7 +7,7 @@
     "sideEffects": false,
     "scripts": {
         "build": "vite build",
-        "codegen": "node node_modules/lunora/dist/bin.mjs codegen",
+        "codegen": "node node_modules/lunorash/dist/bin.mjs codegen",
         "deploy": "wrangler deploy",
         "dev": "vite",
         "lint:types": "tsc --noEmit"
