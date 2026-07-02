@@ -138,15 +138,35 @@ const SOURCE_REPO = "anolilab/lunora";
 /** A 40-hex git commit SHA — already immutable, so it is never re-resolved. */
 const COMMIT_SHA = /^[0-9a-f]{40}$/iu;
 
-/** A leading-`v` or bare SemVer version tag (`v1.2.3`, `1.2.3`, `1.0.0-alpha.1`) — points at a fixed commit. */
-const LEADING_VERSION_TAG = /^v?\d+\.\d+\.\d+/u;
+/**
+ * The SemVer version body the release tooling emits: `MAJOR.MINOR.PATCH` plus an
+ * optional dotted `channel.counter` pre-release (`-alpha.1`, `-next.5`) and
+ * optional build metadata. The pre-release requires the dotted form the tooling
+ * produces, so a bare single-identifier suffix like `-latest` (a MOVING alias,
+ * never a fixed tag) is deliberately NOT matched.
+ */
+const SEMVER_BODY = String.raw`\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)+)?(?:\+[0-9A-Za-z.-]+)?`;
 
-/** The release tooling's per-package tag form (`@lunora/cli@1.2.3`) — also a fixed commit. */
-const PACKAGE_VERSION_TAG = /@\d+\.\d+\.\d+/u;
+/**
+ * A leading-`v` or bare SemVer version tag (`v1.2.3`, `1.0.0-alpha.1`) — points at
+ * a fixed commit. Anchored to the WHOLE ref so a moving branch that merely begins
+ * with a version (`v1.2.3-latest`) is not mistaken for an immutable tag.
+ */
+const LEADING_VERSION_TAG = new RegExp(String.raw`^v?${SEMVER_BODY}$`, "u");
+
+/**
+ * The release tooling's per-package tag form (`@lunora/cli@1.2.3`,
+ * `lunorash@1.0.0-alpha.1`) — also a fixed commit. Anchored to the WHOLE ref
+ * (an optional `@scope/`, a package name, `@`, then the version) so a branch that
+ * merely embeds a `@x.y.z` span (`feature/@1.2.3/foo`) is not treated as immutable.
+ */
+const PACKAGE_VERSION_TAG = new RegExp(String.raw`^(?:@[\w.-]+\/)?[\w.-]+@${SEMVER_BODY}$`, "u");
 
 /**
  * True when `ref` is already immutable — a full commit SHA or a version tag — so
- * it never needs to be re-resolved to a commit.
+ * it never needs to be re-resolved to a commit. The version-tag patterns are
+ * full-string anchored, so a moving branch that only starts with / embeds a
+ * version (e.g. `v1.2.3-latest`, `feature/@1.2.3/foo`) is still pinned to a SHA.
  */
 const isImmutableRef = (ref: string): boolean => COMMIT_SHA.test(ref) || LEADING_VERSION_TAG.test(ref) || PACKAGE_VERSION_TAG.test(ref);
 
@@ -169,7 +189,10 @@ const githubAuthHeaders = (): Record<string, string> => {
  */
 const fetchBranchSha = async (branch: string): Promise<string | undefined> => {
     try {
-        const response = await fetch(`https://api.github.com/repos/${SOURCE_REPO}/commits/${branch}`, {
+        // Encode the ref as a single path segment. GitHub's `GET /repos/{o}/{r}/commits/{ref}`
+        // accepts a slash-containing ref percent-encoded (`feat/x` → `feat%2Fx`), and encoding
+        // keeps a ref with other special characters from breaking out of the URL path.
+        const response = await fetch(`https://api.github.com/repos/${SOURCE_REPO}/commits/${encodeURIComponent(branch)}`, {
             headers: { accept: "application/vnd.github+json", "user-agent": "lunora-cli", ...githubAuthHeaders() },
             signal: AbortSignal.timeout(10_000),
         });

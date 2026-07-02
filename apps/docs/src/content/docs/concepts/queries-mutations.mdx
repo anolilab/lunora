@@ -29,6 +29,15 @@ export const send = mutation.input({ channelId: v.id("channels"), text: v.string
 });
 ```
 
+The example above filters **within one shard** — server-side `ctx.db` reads run
+inside the Durable Object the request already resolved to. On a **sharded** schema
+(`.shardBy(...)`), the _client_ chooses which shard a query runs against, and Lunora
+**default-denies** a client-named non-default shard: the request is rejected with
+`403 FORBIDDEN_SHARD` until the worker configures `authorizeShard` (or opts into open
+access with `allowUnauthenticatedShardAccess`). So a query that works in tests can
+still be denied at the edge if shard access isn't configured. See
+[Securing shard access](/docs/concepts/sharding#securing-shard-access).
+
 ## `ctx.db`
 
 Inside a `query` you get a read-only `DatabaseReader`. Inside a `mutation`
@@ -99,4 +108,5 @@ enqueues a deferred call against the SchedulerDO.
 ## See also
 
 - [Real-time](/docs/concepts/realtime)
+- [Sharding](/docs/concepts/sharding) — securing client-named shard access
 - [API: @lunora/server](/docs/packages/server)

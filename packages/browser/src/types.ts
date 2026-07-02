@@ -16,6 +16,21 @@ export interface BrowserBindingLike {
 }
 
 /**
+ * Minimal projection of a Playwright `Route` (the argument the `page.route`
+ * handler receives). Only the members the SSRF redirect guard drives are
+ * declared: inspect the intercepted request's URL / navigation-ness, then either
+ * let it proceed ({@link RouteLike.continue}) or reject it ({@link RouteLike.abort}).
+ */
+export interface RouteLike {
+    /** Reject the intercepted request (fail-closed); `errorCode` is a Playwright abort reason. */
+    abort: (errorCode?: string) => Promise<void>;
+    /** Allow the intercepted request to proceed. */
+    continue: () => Promise<void>;
+    /** The intercepted request: its URL and (when available) whether it is a top-level navigation. */
+    request: () => { isNavigationRequest?: () => boolean; url: () => string };
+}
+
+/**
  * Minimal projection of a Playwright `Page` — just the methods the helpers drive.
  * Declared structurally so a test can inject a plain stub instead of a real
  * headless page (which needs workerd + the Browser Rendering binding).
@@ -30,6 +45,14 @@ export interface PageLike {
     goto: (url: string, options?: { timeout?: number; waitUntil?: string }) => Promise<unknown>;
     /** Render the page to a PDF buffer. */
     pdf: (options?: Record<string, unknown>) => Promise<Uint8Array>;
+
+    /**
+     * Register a request interceptor (Playwright `page.route`). Optional: a fake
+     * or older page double without it still works — the SSRF redirect guard only
+     * activates when interception is available, and the initial-URL guard applies
+     * regardless. `pattern` follows Playwright's glob/URL matcher.
+     */
+    route?: (pattern: string, handler: (route: RouteLike) => unknown) => Promise<void>;
     /** Render the page to a PNG/JPEG buffer. */
     screenshot: (options?: Record<string, unknown>) => Promise<Uint8Array>;
     /** Constrain the page viewport (a hard cap so a hostile page can't pin the worker). */

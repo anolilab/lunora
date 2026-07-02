@@ -1,4 +1,14 @@
-import type { Browser, BrowserLaunchLike, BrowserLike, LunoraBrowserOptions, NavigateOptions, PageLike, PdfOptions, ScreenshotOptions } from "./types";
+import type {
+    Browser,
+    BrowserLaunchLike,
+    BrowserLike,
+    LunoraBrowserOptions,
+    NavigateOptions,
+    PageLike,
+    PdfOptions,
+    RouteLike,
+    ScreenshotOptions,
+} from "./types";
 
 /** Default navigation timeout when neither the call nor the factory sets one. */
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -164,6 +174,14 @@ const isPrivateIpv6 = (host: string): boolean => {
 /** Cloudflare DoH JSON endpoint used for the opt-in `resolveDns` rebinding re-check. */
 const DOH_ENDPOINT = "https://cloudflare-dns.com/dns-query";
 
+/**
+ * Hard ceiling on a single DoH lookup. Without it the `fetch` could stall
+ * indefinitely and pin the worker before the browser even launches — a hung
+ * resolver would defeat the whole point of paying for the pre-launch re-check.
+ * The caller reuses the (smaller of the) navigation timeout budget, capped here.
+ */
+const DOH_TIMEOUT_MS = 5000;
+
 /** DoH `Answer.type` codes we inspect: 1 = A (IPv4), 28 = AAAA (IPv6). */
 const DNS_TYPE_A = 1;
 const DNS_TYPE_AAAA = 28;
@@ -193,10 +211,14 @@ const isPrivateResolvedIp = (data: string, type: number): boolean => {
  * `undefined` if the lookup itself failed (network error / non-200 / unparseable
  * body) so the caller can fall back to the string guard rather than fail-open.
  */
-const dohLookup = async (hostname: string, type: number): Promise<{ data: string; type: number }[] | undefined> => {
+const dohLookup = async (hostname: string, type: number, timeoutMs: number = DOH_TIMEOUT_MS): Promise<{ data: string; type: number }[] | undefined> => {
     try {
         const response = await fetch(`${DOH_ENDPOINT}?name=${encodeURIComponent(hostname)}&type=${String(type)}`, {
             headers: { accept: "application/dns-json" },
+            // Bound the lookup so a stalled resolver can't hang the worker; an
+            // abort surfaces as a rejection caught below → `undefined` → the
+            // caller falls back to the (already-passed) string guard.
+            signal: AbortSignal.timeout(timeoutMs),
         });
 
         if (!response.ok) {
@@ -219,7 +241,7 @@ const dohLookup = async (hostname: string, type: number): Promise<{ data: string
  * lean on the string guard — we only ever refuse on an address that actually
  * resolved to a private range, never fail-open on one that did.
  */
-const assertResolvedHostIsPublic = async (target: string): Promise<void> => {
+const assertResolvedHostIsPublic = async (target: string, timeoutMs: number = DOH_TIMEOUT_MS): Promise<void> => {
     const host = normalizeHost(new URL(target).hostname);
 
     // IP literals can't rebind through DNS and were already classified by the
@@ -228,7 +250,7 @@ const assertResolvedHostIsPublic = async (target: string): Promise<void> => {
         return;
     }
 
-    const [aRecords, aaaaRecords] = await Promise.all([dohLookup(host, DNS_TYPE_A), dohLookup(host, DNS_TYPE_AAAA)]);
+    const [aRecords, aaaaRecords] = await Promise.all([dohLookup(host, DNS_TYPE_A, timeoutMs), dohLookup(host, DNS_TYPE_AAAA, timeoutMs)]);
 
     // Both lookups failed — fall back to the string guard (which already passed)
     // rather than fail-open. If either resolved, inspect what came back.
@@ -297,6 +319,13 @@ const isPrivateTarget = (parsed: URL): boolean => {
  * (classic DNS rebinding, out of scope here). Any app that passes client-controlled URLs
  * to the browser should set `allowedHosts` (hard guarantee) or enable `resolveDns`
  * (best-effort re-check); otherwise keep caller-supplied URLs trusted.
+ *
+ * This validates the INITIAL navigation target. A 3xx redirect can point the
+ * headless browser at a different (possibly private) host, so `withPage`
+ * additionally re-runs these same checks on every main-frame navigation request
+ * via `page.route` interception (when the injected page supports it) — closing
+ * the redirect-to-private-target SSRF gap that a one-shot initial-URL check left
+ * open.
  */
 const validateUrl = (url: string, allowPrivateTargets: boolean, allowedHosts?: ReadonlyArray<string>): string => {
     if (typeof url !== "string" || url.length === 0) {
@@ -419,16 +448,64 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
         const allowPrivateTargets = options.allowPrivateTargets ?? false;
         const target = validateUrl(url, allowPrivateTargets, options.allowedHosts);
         const timeout = resolveTimeout(navigate.timeoutMs, options.timeoutMs);
+        const resolveDns = options.resolveDns ?? false;
+        // Reuse the navigation timeout budget for the DoH re-check, but never let a
+        // single lookup exceed the DoH ceiling — a stalled resolver mustn't burn
+        // the full (up to 120s) navigation budget before the browser even launches.
+        const dohTimeout = Math.min(timeout, DOH_TIMEOUT_MS);
 
         // Opt-in DNS-rebinding re-check: resolve the host and reject if it maps to
         // a private address, before we pay for a browser launch + `page.goto`.
-        if (!allowPrivateTargets && (options.resolveDns ?? false)) {
-            await assertResolvedHostIsPublic(target);
+        if (!allowPrivateTargets && resolveDns) {
+            await assertResolvedHostIsPublic(target, dohTimeout);
         }
+
+        /**
+         * Re-run the initial-URL guards against a request URL the browser is about
+         * to navigate to (a redirect target). Throws on a private/off-allowlist
+         * host so the caller can fail the request closed.
+         */
+        const assertNavigationAllowed = async (requestUrl: string): Promise<void> => {
+            validateUrl(requestUrl, allowPrivateTargets, options.allowedHosts);
+
+            if (resolveDns) {
+                await assertResolvedHostIsPublic(requestUrl, dohTimeout);
+            }
+        };
 
         return withBrowser(async (browser) => {
             const context = await browser.newContext();
             const page = await context.newPage();
+
+            // Guard the redirect chain: `page.goto` follows 3xx redirects, so a
+            // public initial URL can bounce the browser to a private/metadata host.
+            // Validate EVERY main-frame navigation request (the redirect targets)
+            // with the same checks the initial URL passed, aborting fail-closed on
+            // a private/off-allowlist host. Sub-resources are let through (only the
+            // navigation vector is an SSRF concern here). If the injected page lacks
+            // `route` (an older/fake page), the initial-URL guard still stands.
+            if (!allowPrivateTargets && page.route) {
+                await page.route("**/*", async (route: RouteLike) => {
+                    const request = route.request();
+                    const isNavigation = request.isNavigationRequest?.() ?? true;
+
+                    if (!isNavigation) {
+                        await route.continue();
+
+                        return;
+                    }
+
+                    try {
+                        await assertNavigationAllowed(request.url());
+                    } catch {
+                        await route.abort("blockedbyclient");
+
+                        return;
+                    }
+
+                    await route.continue();
+                });
+            }
 
             if (viewport && page.setViewportSize) {
                 await page.setViewportSize(clampViewport(viewport));

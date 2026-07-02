@@ -90,13 +90,13 @@ deliberately to cookie-bearing browser requests, the only vector a cross-site
 forgery can ride. Bearer-token and server-to-server traffic (no `Cookie` header)
 is exempt, as are safe methods (`GET`/`HEAD`/`OPTIONS`).
 
-````ts
+```ts
 createWorker({
     security: {
         csrf: { trustedOrigins: ["https://admin.example.com"] }, // or `false` to disable
     },
 });
-    ```
+```
 
 The `/_lunora/ws` WebSocket upgrade is gated the same way: a cross-origin,
 cookie-bearing handshake is rejected before the socket opens, closing the
@@ -145,7 +145,7 @@ export const signUp = mutation
     .mutation(async ({ ctx, args }) => {
         /* ... */
     });
-````
+```
 
 The rate limit runs first (the cheapest gate, shedding obvious floods before the
 Turnstile round-trip). Omitted fields are skipped; an empty bundle passes

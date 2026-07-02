@@ -92,9 +92,10 @@ describe("resolveSourceRef", () => {
 
 describe("isImmutableRef", () => {
     it("treats a full commit SHA and version tags as immutable", () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         expect(isImmutableRef(SHA)).toBe(true);
+        expect(isImmutableRef("v1.2.3")).toBe(true);
         expect(isImmutableRef("v2.0.0")).toBe(true);
         expect(isImmutableRef("1.0.0-alpha.1")).toBe(true);
         expect(isImmutableRef("@lunora/cli@1.2.3")).toBe(true);
@@ -107,6 +108,19 @@ describe("isImmutableRef", () => {
         expect(isImmutableRef("main")).toBe(false);
         // A 7-char short SHA isn't a guaranteed-stable pin — resolve it too.
         expect(isImmutableRef("a1b2c3d")).toBe(false);
+    });
+
+    it("does NOT treat a moving branch that merely starts with / embeds a version as immutable", () => {
+        expect.assertions(4);
+
+        // A branch that only *starts* with a SemVer must still be SHA-pinned — the
+        // patterns are anchored to the WHOLE ref, not a prefix.
+        expect(isImmutableRef("v1.2.3-latest")).toBe(false);
+        // A `-latest` bare-identifier suffix is a moving alias, not a tooling tag.
+        expect(isImmutableRef("1.2.3-latest")).toBe(false);
+        // A branch that merely embeds a `@x.y.z` span is not the per-package tag form.
+        expect(isImmutableRef("feature/@1.2.3/foo")).toBe(false);
+        expect(isImmutableRef("release/v1.2.3")).toBe(false);
     });
 });
 

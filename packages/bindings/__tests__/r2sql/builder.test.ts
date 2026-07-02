@@ -90,6 +90,22 @@ describe("select builder SQL", () => {
     it("order by + limit, inlining the limit", () => {
         expect(from("s.orders").orderBy(desc("total")).limit(50).toSQL()).toBe("SELECT * FROM s.orders ORDER BY total DESC LIMIT 50");
     });
+
+    it("rejects an unsafe table identifier spliced into FROM (no injection)", () => {
+        expect.assertions(2);
+
+        // R2 SQL has no parameter binding, so the table name is spliced into the
+        // statement — a non-identifier must be refused at construction, not rendered.
+        expect(() => from("s.orders; DROP TABLE users")).toThrow(/invalid table reference/u);
+        expect(() => from("s.orders WHERE 1=1")).toThrow(/invalid table reference/u);
+    });
+
+    it("rejects an unsafe join identifier (no injection through JOIN)", () => {
+        expect.assertions(2);
+
+        expect(() => from("s.orders").innerJoin("evil; DROP TABLE users", "a = b")).toThrow(/invalid table reference/u);
+        expect(() => from("s.orders").crossJoin("a) UNION SELECT secret FROM x --")).toThrow(/invalid table reference/u);
+    });
 });
 
 describe("set operations", () => {

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createBrowser } from "../create-browser";
-import type { BrowserBindingLike, BrowserContextLike, BrowserLaunchLike, BrowserLike, PageLike } from "../types";
+import type { BrowserBindingLike, BrowserContextLike, BrowserLaunchLike, BrowserLike, PageLike, RouteLike } from "../types";
 
 /** A throwaway binding marker — the helpers never touch it directly; Playwright consumes it. */
 const fakeBinding = (): BrowserBindingLike => {
@@ -395,6 +395,29 @@ describe("createBrowser", () => {
             expect(launch.browsers).toHaveLength(1);
         });
 
+        it("bounds the DoH lookup with an abort signal and falls back when it aborts (no hang)", async () => {
+            expect.hasAssertions();
+
+            // Simulate a stalled resolver: the lookup is cut short by the abort
+            // signal the factory now threads in. A time-bounded lookup must always
+            // pass an AbortSignal, and an abort surfaces as a rejection → the guard
+            // falls back to the (already-passed) string guard instead of hanging.
+            const fetchMock = vi.fn<(input: string, init: { signal?: AbortSignal }) => Promise<Response>>(async (_input, init) => {
+                expect(init.signal).toBeInstanceOf(AbortSignal);
+
+                throw new DOMException("The operation was aborted", "AbortError");
+            });
+
+            vi.stubGlobal("fetch", fetchMock);
+
+            const launch = fakeLaunch();
+            const browser = createBrowser({ binding: fakeBinding(), launch, resolveDns: true });
+
+            await browser.content("https://example.com");
+
+            expect(launch.browsers).toHaveLength(1);
+        });
+
         it("skips the DoH round-trip for an IP-literal host", async () => {
             expect.assertions(2);
 
@@ -409,6 +432,85 @@ describe("createBrowser", () => {
         });
     });
     /* eslint-enable sonarjs/no-hardcoded-ip */
+
+    /* eslint-disable sonarjs/no-clear-text-protocols -- intentional test fixtures: the redirect target is an http metadata URL asserting the interception guard aborts it; no real connection is made */
+    describe("redirect-chain SSRF guard (page.route)", () => {
+        interface RedirectSpy {
+            aborted: string[];
+            continued: string[];
+        }
+
+        /** A fake Playwright `Route` for a simulated main-frame redirect to `redirectTo`, recording abort/continue on `events`. */
+        const buildRoute = (redirectTo: string, events: RedirectSpy): RouteLike => {
+            return {
+                abort: async () => {
+                    events.aborted.push(redirectTo);
+                },
+                continue: async () => {
+                    events.continued.push(redirectTo);
+                },
+                request: () => {
+                    return { isNavigationRequest: () => true, url: () => redirectTo };
+                },
+            };
+        };
+
+        /**
+         * A launch whose page captures the `page.route` handler and, on `goto`,
+         * fires it once with a simulated main-frame redirect to `redirectTo` — so
+         * the interception guard can be exercised without a real browser. Records
+         * whether the intercepted redirect was aborted or continued.
+         */
+        const redirectingLaunch = (redirectTo: string): BrowserLaunchLike & { events: RedirectSpy } => {
+            const events: RedirectSpy = { aborted: [], continued: [] };
+            let routeHandler: ((route: RouteLike) => unknown) | undefined;
+
+            const page: PageLike = {
+                content: async () => "<html>ok</html>",
+                evaluate: async () => undefined as never,
+                // Simulate the browser following a 3xx: replay the redirect target through the registered interceptor.
+                goto: async () => routeHandler?.(buildRoute(redirectTo, events)),
+                pdf: async () => new Uint8Array(),
+                route: async (_pattern, handler) => {
+                    routeHandler = handler;
+                },
+                screenshot: async () => new Uint8Array(),
+            };
+
+            const context: BrowserContextLike = { newPage: async () => page };
+            const browser: BrowserLike = { close: async () => {}, newContext: async () => context };
+            const launch = (async (_binding: BrowserBindingLike) => browser) as BrowserLaunchLike & { events: RedirectSpy };
+
+            launch.events = events;
+
+            return launch;
+        };
+
+        it("aborts a redirect to a private/metadata host", async () => {
+            expect.assertions(2);
+
+            const launch = redirectingLaunch("http://169.254.169.254/latest/meta-data/");
+            const browser = createBrowser({ binding: fakeBinding(), launch });
+
+            await browser.content("https://public.example.com");
+
+            expect(launch.events.aborted).toStrictEqual(["http://169.254.169.254/latest/meta-data/"]);
+            expect(launch.events.continued).toHaveLength(0);
+        });
+
+        it("allows a redirect to another public host", async () => {
+            expect.assertions(2);
+
+            const launch = redirectingLaunch("https://cdn.example.net/final");
+            const browser = createBrowser({ binding: fakeBinding(), launch });
+
+            await browser.content("https://public.example.com");
+
+            expect(launch.events.continued).toStrictEqual(["https://cdn.example.net/final"]);
+            expect(launch.events.aborted).toHaveLength(0);
+        });
+    });
+    /* eslint-enable sonarjs/no-clear-text-protocols */
 
     describe("pdf / content / scrape", () => {
         it("pdf returns the buffer and closes the session", async () => {
