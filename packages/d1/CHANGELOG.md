@@ -1,3 +1,11 @@
+## @lunora/d1 [1.0.0-alpha.16](https://github.com/anolilab/lunora/compare/%40lunora%2Fd1%401.0.0-alpha.15...%40lunora%2Fd1%401.0.0-alpha.16) (2026-07-02)
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.16
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.16
+
 ## @lunora/d1 [1.0.0-alpha.15](https://github.com/anolilab/lunora/compare/%40lunora%2Fd1%401.0.0-alpha.14...%40lunora%2Fd1%401.0.0-alpha.15) (2026-07-02)
 
 
