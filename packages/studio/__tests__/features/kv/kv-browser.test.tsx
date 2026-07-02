@@ -113,6 +113,21 @@ describe("kvBrowser", () => {
         expect(editor.value).toBe('{\n  "user": 1\n}');
     });
 
+    it("pretty-prints metadata JSON with its Format button", async () => {
+        expect.assertions(1);
+
+        render(renderBrowser(mock));
+
+        fireEvent.click(await screen.findByTestId("kv-key-row-session:abc"));
+
+        const meta = await screen.findByTestId<HTMLTextAreaElement>("kv-metadata-editor");
+
+        fireEvent.change(meta, { target: { value: '{"a":1}' } });
+        fireEvent.click(screen.getByTestId("kv-metadata-editor-format"));
+
+        expect(meta.value).toBe('{\n  "a": 1\n}');
+    });
+
     it("blocks saving when metadata is not valid JSON", async () => {
         expect.assertions(1);
 

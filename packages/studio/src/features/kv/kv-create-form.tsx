@@ -105,9 +105,7 @@ export const KvCreateForm = ({
             <MetadataField
                 id="kv-create-metadata"
                 invalidTestId="kv-create-metadata-invalid"
-                onChange={(event) => {
-                    setMetadata(event.target.value);
-                }}
+                onChange={setMetadata}
                 testId="kv-create-metadata"
                 valid={metadataValid}
                 value={metadata}

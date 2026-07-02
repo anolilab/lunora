@@ -1,13 +1,14 @@
 import type { ReactElement } from "react";
 import { useState } from "react";
 
+import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { Textarea } from "../../components/ui/textarea";
 import { useT } from "../../i18n/i18n-context";
 import type { TtlUnit } from "./kv-fields";
-import { TTL_UNITS, ttlToSeconds } from "./kv-fields";
+import { tryFormatJson, TTL_UNITS, ttlToSeconds } from "./kv-fields";
 
 /**
  * Shared "Expires after" field for the value editor and create form: an amount
@@ -93,8 +94,10 @@ export const TtlField = ({
 };
 
 /**
- * Shared "Metadata (JSON)" field for the value editor and create form. Renders
- * the invalid-JSON hint under `invalidTestId` when `valid` is false.
+ * Shared "Metadata (JSON)" field for the value editor and create form. Reports
+ * edits (and the "Format JSON" pretty-print) as a string via `onChange`. Renders
+ * the invalid-JSON hint under `invalidTestId` when `valid` is false; the Format
+ * button is enabled only when the current value parses as JSON.
  */
 export const MetadataField = ({
     id,
@@ -106,19 +109,45 @@ export const MetadataField = ({
 }: {
     readonly id: string;
     readonly invalidTestId: string;
-    readonly onChange: (event: React.ChangeEvent<HTMLTextAreaElement>) => void;
+    readonly onChange: (value: string) => void;
     readonly testId: string;
     readonly valid: boolean;
     readonly value: string;
 }): ReactElement => {
     const t = useT();
 
+    const formatted = tryFormatJson(value);
+
     return (
         <div className="mb-3 grid gap-1">
-            <Label className="text-xs" htmlFor={id}>
-                {t("Metadata (JSON)")}
-            </Label>
-            <Textarea aria-invalid={!valid} className="min-h-[4rem] font-mono text-xs" data-testid={testId} id={id} onChange={onChange} value={value} />
+            <div className="flex items-center justify-between gap-2">
+                <Label className="text-xs" htmlFor={id}>
+                    {t("Metadata (JSON)")}
+                </Label>
+                <Button
+                    data-testid={`${testId}-format`}
+                    disabled={formatted === undefined}
+                    onClick={() => {
+                        if (formatted !== undefined) {
+                            onChange(formatted);
+                        }
+                    }}
+                    size="sm"
+                    variant="outline"
+                >
+                    {t("Format JSON")}
+                </Button>
+            </div>
+            <Textarea
+                aria-invalid={!valid}
+                className="min-h-[4rem] font-mono text-xs"
+                data-testid={testId}
+                id={id}
+                onChange={(event) => {
+                    onChange(event.target.value);
+                }}
+                value={value}
+            />
             {!valid && (
                 <p className="text-xs text-destructive" data-testid={invalidTestId}>
                     {t("Metadata must be valid JSON.")}

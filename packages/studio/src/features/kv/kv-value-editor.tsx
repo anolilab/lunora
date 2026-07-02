@@ -133,8 +133,8 @@ export const KvValueEditor = ({
         dispatch({ type: "editValue", value: event.target.value });
     };
 
-    const onEditedMetadataChange = (event: React.ChangeEvent<HTMLTextAreaElement>): void => {
-        dispatch({ type: "editMetadata", value: event.target.value });
+    const onEditedMetadataChange = (metadata: string): void => {
+        dispatch({ type: "editMetadata", value: metadata });
     };
 
     const formattedValue = tryFormatJson(state.editedValue);
