@@ -358,7 +358,22 @@ const decodeWire = (value: unknown, depth = 0): unknown => {
                         Object.defineProperty(error, "name", { configurable: true, value: name, writable: true });
                     }
 
-                    Object.assign(error, decodeWire(value[4], depth + 1) as Record<string, unknown>);
+                    // Merge the decoded props key-wise rather than via `Object.assign`.
+                    // `decodeWire` may return an object carrying `__proto__` as an OWN
+                    // enumerable data property (see the object branch below); a bare
+                    // `Object.assign(error, props)` would copy it with `[[Set]]`
+                    // semantics and fire the prototype setter, swapping this Error's
+                    // prototype. Mirror the object branch's `UNSAFE_KEY` guard so the
+                    // value lands as an own data property instead (Cap'n Web #190).
+                    const props = decodeWire(value[4], depth + 1) as Record<string, unknown>;
+
+                    for (const key of Object.keys(props)) {
+                        if (key === UNSAFE_KEY) {
+                            Object.defineProperty(error, key, { configurable: true, enumerable: true, value: props[key], writable: true });
+                        } else {
+                            error[key] = props[key];
+                        }
+                    }
 
                     // Restore a positional `cause` (6th slot) as a non-enumerable own
                     // property, matching a native `Error`'s `cause` descriptor.

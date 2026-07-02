@@ -142,6 +142,30 @@ describe("wireCodec round-trips", () => {
         expect(decoded.cause?.code).toBe("E_INNER");
     });
 
+    it("does not let a wire __proto__ key in an error's props swap the reconstructed error's prototype", () => {
+        expect.assertions(4);
+
+        // The error decode branch merges the wire props object onto the freshly
+        // constructed Error. `JSON.parse` makes `__proto__` an OWN key, so a bare
+        // `Object.assign(error, props)` would fire the prototype setter and swap
+        // the Error's prototype (Cap'n Web #190, error-branch variant).
+        const tag = (encodeWire(1n) as string[])[0];
+        // Build the wire tuple [TAG, "error", name, message, propsObject]; the props
+        // object carries `__proto__` as an OWN key (JSON.parse), routed through the
+        // real JSON transport the codec exists to survive.
+        // eslint-disable-next-line unicorn/prefer-structured-clone -- must exercise the real JSON transport, which is what the codec decodes
+        const wireError = JSON.parse(JSON.stringify([tag, "error", "Error", "boom", JSON.parse('{"__proto__":{"polluted":true},"code":"E_BOOM"}')]));
+        const decoded = decodeWire(wireError) as Error & { code?: string };
+
+        // Prototype untouched — the reconstructed value is still a real Error.
+        expect(Object.getPrototypeOf(decoded)).toBe(Error.prototype);
+        expect(decoded).toBeInstanceOf(Error);
+        // The `__proto__` value round-trips as an own data prop, not a prototype swap.
+        expect(Object.getOwnPropertyDescriptor(decoded, "__proto__")?.value).toStrictEqual({ polluted: true });
+        // Ordinary custom props still merge onto the error (regression).
+        expect(decoded.code).toBe("E_BOOM");
+    });
+
     it("round-trips Map and Set (contents recurse, so bigint/bytes survive)", () => {
         expect.assertions(4);
 
