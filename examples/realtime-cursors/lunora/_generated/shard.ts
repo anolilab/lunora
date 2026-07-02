@@ -341,7 +341,10 @@ const LUNORA_STORAGE_RULES: StorageRulesResult = {
 
 /** Which optional package-backed features this app wires up (discovered from imports / `ctx.*` reads / schema signals) served via `__lunora_admin__:studioFeatures` so the studio hides nav pages whose package isn't enabled. */
 const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {
+    "analytics": false,
+    "auth": false,
     "flags": false,
+    "kv": false,
     "mail": false,
     "payments": false,
     "queues": false,
@@ -465,8 +468,20 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // do external I/O that can't be rolled back, so both dispatch directly.
             // `ctx.run*` composition runs inside this span (it never re-enters
             // handleRpc); runInTransaction's own guard rejects accidental nesting.
+            //
+            // The replay bookkeeping (idempotency dedup row + custom-mutator
+            // watermark advance) commits INSIDE this span via
+            // `commitMutationBookkeeping`, so the writes, the dedup row, and the
+            // watermark are atomic — a crash can't leave the writes durable without
+            // the replay guard.
             if (registered.kind === "mutation") {
-                return this.runInTransaction(() => registered.handler(ctx, args));
+                return this.runInTransaction(async () => {
+                    const result = await registered.handler(ctx, args);
+
+                    this.commitMutationBookkeeping(result);
+
+                    return result;
+                });
             }
 
             return registered.handler(ctx, args);

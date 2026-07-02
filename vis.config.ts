@@ -80,7 +80,11 @@ export default defineConfig({
         },
         "lint:types": {
             cache: true,
-            dependsOn: ["^build", "default", "^public"],
+            // Apps' `tsc` type-checks source that imports each app's generated dir
+            // (`lunora/_generated`, `.source`) — same as `lint:eslint`, so `codegen`
+            // must run first (through dependsOn) or the committed generated files go
+            // stale against a codegen change and tsc fails to resolve/​match them.
+            dependsOn: ["codegen", "^build", "default", "^public"],
         },
         test: {
             cache: true,
