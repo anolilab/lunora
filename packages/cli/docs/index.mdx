@@ -105,12 +105,39 @@ Flags: `--provider <auth\|clerk\|auth0>`, `--yes`, `--from <dir>` (local registr
 
 Starts three concurrent processes: `wrangler dev` (Worker), the embedded
 Lunora studio, and codegen in watch mode. All three reload on file changes.
+In a project on `@lunora/vite` it spawns `vite dev` instead — the Vite plugin
+already runs the worker, studio, and codegen inside the Vite dev server.
 
 ```bash
 lunora dev                # default ports: studio 6173, worker 8787
 lunora dev --port 7000    # custom studio port
 lunora dev --no-studio    # Worker + codegen only
 ```
+
+#### Background mode (AI agents)
+
+`--background` starts the dev server as a managed detached process: the
+command blocks until the server accepts requests, prints the URL + PID, then
+returns. A state record at `.lunora/dev.json` acts as a lockfile — starting
+again while a server runs reports the existing instance instead of spawning a
+conflict, and `stop` / `status` / `logs` resolve the running instance from it.
+Every subcommand is idempotent: stopping when nothing runs succeeds silently.
+
+```bash
+lunora dev --background   # detach; blocks until ready, prints URL + PID
+lunora dev status         # URL, PID, uptime (add --json for a machine-readable doc)
+lunora dev logs           # captured output of a background run (--lines n, 0 = all)
+lunora dev stop           # SIGTERM, SIGKILL escalation after 10s; clears the record
+```
+
+When an AI coding agent is detected (Claude Code, Cursor, Codex, Gemini CLI,
+Cline, …) background mode and JSON logging turn on automatically — no flags
+needed in agent workflows. Set `LUNORA_AGENT_MODE=0` to opt out (or `=1` to
+force it). Agents can also poll `GET /_lunora/status` on the running worker —
+a public, secret-free health probe answering `{"ok":true}`.
+
+JSON log lines are available to everyone via `lunora dev --json` or
+`LUNORA_LOG_JSON=1`.
 
 ### `lunora deploy`
 

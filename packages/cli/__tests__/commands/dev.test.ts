@@ -2,10 +2,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { readDevServerState, writeDevServerState } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DevCommandOptions } from "../../src/commands/dev/handler";
-import { planDevCommand, runDevCommand } from "../../src/commands/dev/handler";
+import { detectDevFlavor, planDevCommand, runDevCommand } from "../../src/commands/dev/handler";
 import type { Logger } from "../../src/util/logger";
 
 const silentLogger = (): Logger => {
@@ -156,6 +157,75 @@ describe("lunora dev", () => {
             expect(plan.remote.enabled).toBe(true);
             expect(plan.remote.reason).toContain("no remote-eligible bindings");
             expect(plan.wrangler.args).not.toContain("--config");
+        });
+
+        it("plans `vite dev` for a project on @lunora/vite (flavor: vite)", () => {
+            expect.assertions(6);
+
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ devDependencies: { "@lunora/vite": "workspace:*" }, name: "app" }), "utf8");
+
+            expect(detectDevFlavor(workdir)).toBe("vite");
+
+            const plan = planDevCommand({ cwd: workdir, logger: silentLogger() });
+
+            expect(plan.flavor).toBe("vite");
+            expect(plan.wrangler.tag).toBe("vite");
+            expect(plan.wrangler.args.join(" ")).toContain("vite dev");
+            // The Vite plugin already runs studio + codegen inside the dev server.
+            expect(plan.studioEnabled).toBe(false);
+            expect(plan.codegenEnabled).toBe(false);
+        });
+
+        it("runs the project's dev script for the vite flavor (meta-framework CLIs)", () => {
+            expect.assertions(3);
+
+            // An Astro project: bare `vite dev` cannot boot it — the dev script
+            // (`astro dev`) is the source of truth for the dev server command.
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({
+                    devDependencies: { "@lunora/vite": "workspace:*" },
+                    name: "app",
+                    packageManager: "pnpm@11.0.0",
+                    scripts: { dev: "astro dev" },
+                }),
+                "utf8",
+            );
+
+            const plan = planDevCommand({ cwd: workdir, logger: silentLogger() });
+
+            expect(plan.wrangler.tag).toBe("vite");
+            expect(plan.wrangler.command).toBe("pnpm");
+            expect(plan.wrangler.args).toStrictEqual(["run", "dev"]);
+        });
+
+        it("falls back to `vite dev` when the dev script would re-enter lunora", () => {
+            expect.assertions(1);
+
+            // `scripts.dev: "lunora dev"` + the vite flavor would spawn this CLI
+            // forever — the guard falls back to the direct vite exec instead.
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({
+                    devDependencies: { "@lunora/vite": "workspace:*" },
+                    name: "app",
+                    scripts: { dev: "lunora dev" },
+                }),
+                "utf8",
+            );
+
+            const plan = planDevCommand({ cwd: workdir, logger: silentLogger() });
+
+            expect(plan.wrangler.args.join(" ")).toContain("vite dev");
+        });
+
+        it("forwards remote mode to the vite child as LUNORA_REMOTE env", () => {
+            expect.assertions(2);
+
+            const plan = planDevCommand({ cwd: workdir, flavor: "vite", logger: silentLogger(), remote: true });
+
+            expect(plan.wrangler.env).toStrictEqual({ LUNORA_REMOTE: "1" });
+            expect(plan.remote.enabled).toBe(true);
         });
 
         it("threads the materializer's cleanup disposer onto the remote plan", () => {
@@ -348,6 +418,76 @@ describe("lunora dev", () => {
 
             // The `finally` teardown ran the disposer despite the throw.
             expect(cleaned).toBe(true);
+        });
+
+        it("records the running server in .lunora/dev.json and clears it on exit", async () => {
+            expect.assertions(4);
+
+            let resolveExit: (code: number) => void = () => {};
+            const exited = new Promise<number>((resolve) => {
+                resolveExit = resolve;
+            });
+
+            const runPromise = runDevCommand({
+                cwd: workdir,
+                logger: silentLogger(),
+                startCodegen: () => {
+                    return { close: () => {}, watchAvailable: true };
+                },
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                startWorker: () => {
+                    return { exited, kill: () => {} };
+                },
+            });
+
+            // Let startup complete (scaffold offer + spawn + state write).
+            await new Promise((resolve) => {
+                setTimeout(resolve, 25);
+            });
+
+            const state = readDevServerState(workdir);
+
+            expect(state?.pid).toBe(process.pid);
+            expect(state?.url).toBe("http://localhost:8787");
+            expect(state?.mode).toBe("cli");
+
+            resolveExit(0);
+            await runPromise;
+
+            // The record is cleared on shutdown.
+            expect(readDevServerState(workdir)).toBeUndefined();
+        });
+
+        it("reports an already-running dev server instead of double-starting (lockfile)", async () => {
+            expect.assertions(3);
+
+            // A live record owned by another process (the test runner's parent).
+            writeDevServerState(workdir, { mode: "cli", pid: process.ppid, url: "http://localhost:8787" });
+
+            let spawned = false;
+            const warns: string[] = [];
+            const logger: Logger = {
+                error: () => {},
+                info: () => {},
+                success: () => {},
+                warn: (message) => warns.push(message),
+            };
+
+            const result = await runDevCommand({
+                cwd: workdir,
+                logger,
+                startWorker: () => {
+                    spawned = true;
+
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+            });
+
+            expect(result.code).toBe(0);
+            expect(spawned).toBe(false);
+            expect(warns.some((line) => line.includes("already running"))).toBe(true);
         });
 
         it("logs an actionable .dev.vars hint when the scaffolder is declined non-interactively", async () => {

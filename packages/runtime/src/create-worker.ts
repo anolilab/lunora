@@ -917,6 +917,15 @@ const ADMIN_PATH_PREFIX = "/_lunora/admin/";
 /** The lone cross-shard admin route that sits outside {@link ADMIN_PATH_PREFIX}. */
 const MIGRATE_PATH = "/_lunora/migrate";
 
+/**
+ * Public, unauthenticated health probe (`GET /_lunora/status`). Dev tooling and
+ * AI agents poll it to confirm the worker is up and routing (the CLI's
+ * `lunora dev --background` blocks on it before detaching). Deliberately
+ * static and secret-free: it discloses nothing beyond "a Lunora worker answers
+ * here", which the 404 shape of every other route already reveals.
+ */
+const STATUS_PATH = "/_lunora/status";
+
 /** True for the admin routes the async `adminGate` may authorize — everything under `/_lunora/admin/` plus `/_lunora/migrate`. */
 const isAdminPath = (pathname: string): boolean => pathname.startsWith(ADMIN_PATH_PREFIX) || pathname === MIGRATE_PATH;
 // The cross-shard orchestration (`migrate` / `rank` / `rankpage` / `shard-traffic`)
@@ -3013,6 +3022,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const customRoutes = options.routes !== undefined && Object.keys(options.routes).length > 0 ? options.routes : undefined;
 
     const internalRoutes: Record<string, InternalRoute> = {
+        [STATUS_PATH]: () =>
+            Response.json({ ok: true, service: "lunora", status: "ok" }, {
+                headers: { "cache-control": "no-store", "content-type": "application/json" },
+            }),
         [WS_PATH]: (request, env, url) => handleWebSocketUpgrade(request, env, url),
         [RPC_PATH]: (request, env, _url, context) => handleRpc(request, env, context),
         [RPC_BATCH_PATH]: (request, env, _url, context) => handleBatchRpc(request, env, context),

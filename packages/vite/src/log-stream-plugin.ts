@@ -1,4 +1,4 @@
-import { formatLunoraEvent, LUNORA_EVENT_SOURCE } from "@lunora/config";
+import { detectAiAgent, formatLunoraEvent, LUNORA_EVENT_SOURCE } from "@lunora/config";
 import type { Plugin } from "vite";
 
 /**
@@ -110,6 +110,27 @@ const patchStream = (stream: WritableLike): (() => void) => {
  * Patches `process.stdout`/`process.stderr` once the dev server is configured
  * and restores them when it closes.
  */
+
+/**
+ * True when the worker's structured JSON events should pass through RAW
+ * instead of being pretty-printed: an explicit `LUNORA_LOG_JSON=1|true`, or an
+ * AI agent driving the process (agents parse JSON; the decorated line only
+ * costs them tokens). `LUNORA_LOG_JSON=0` still opts out under an agent.
+ */
+const wantRawJsonLogs = (): boolean => {
+    const flag = process.env.LUNORA_LOG_JSON;
+
+    if (flag === "1" || flag === "true") {
+        return true;
+    }
+
+    if (flag === "0" || flag === "false") {
+        return false;
+    }
+
+    return detectAiAgent() !== undefined;
+};
+
 const logStreamPlugin = (): Plugin => {
     let restore: (() => void) | undefined;
 
@@ -117,6 +138,13 @@ const logStreamPlugin = (): Plugin => {
         apply: "serve",
         configureServer(server) {
             if (restore) {
+                return;
+            }
+
+            // JSON mode: leave the streams untouched — the runtime's structured
+            // events are already single-line JSON, which is exactly what a
+            // machine consumer wants on stdout.
+            if (wantRawJsonLogs()) {
                 return;
             }
 

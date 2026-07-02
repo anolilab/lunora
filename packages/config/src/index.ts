@@ -1,3 +1,5 @@
+export type { AgentDetection } from "./agent-env";
+export { AGENT_MODE_ENV, detectAiAgent } from "./agent-env";
 export type { AgentRulesStatus } from "./agent-rules";
 export {
     AGENT_RULES_DIR,
@@ -20,7 +22,21 @@ export type {
 } from "./container-logs";
 export { streamContainerLogs } from "./container-logs";
 export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./detect-framework";
-export { detectFramework } from "./detect-framework";
+export { detectFramework, readProjectDependencyNames } from "./detect-framework";
+export type { DevServerMode, DevServerState } from "./dev-server-state";
+export {
+    clearDevServerState,
+    DEV_DAEMON_ENV,
+    DEV_LOG_FILE,
+    DEV_LOG_FILE_ENV,
+    DEV_STATE_DIR,
+    DEV_STATE_FILE,
+    isProcessAlive,
+    readDevServerState,
+    readLiveDevServerState,
+    updateDevServerState,
+    writeDevServerState,
+} from "./dev-server-state";
 export { DEV_VARS_EXAMPLE_FILE, DEV_VARS_FILE, DEV_VARS_KEY_PATTERN, parseDevVariableEntries } from "./dev-variables-format";
 export type { InferOptions, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
 export { inferLunoraBindings, packageNamesFromBindings } from "./infer-bindings";
