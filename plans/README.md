@@ -390,6 +390,59 @@ Vetted against live code and dropped — recorded so they aren't re-audited:
   codegen namespace-collision test for case-insensitive filesystems
   (`packages/codegen`), advisor static-lint edge-case predicate dedup
   (`packages/advisor`).
+## Wave 9 — auth hot-path hardening + typed identity layer (baseline `c490bad`, 2026-07-01)
+
+Three `@lunora/auth` / identity findings, landed together off `alpha`. Two harden
+the authenticated hot path (091/093): the session read hits D1 on every call (no
+cookie cache), and rate limiting reports "enabled" while not enforcing a global
+limit on Workers (per-isolate memory store, no atomic increment). The third (092)
+types identity generically — whatever `resolveIdentity` returns becomes `ctx.auth`,
+but beyond `userId` the claims were untyped and composition was DIY, so 092 makes
+the claim contract **declared** (codegen reads it as reliably as `defineSchema`)
+and gives first-class resolver composition. 091 and 093 both touch `create-auth.ts`'s
+`resolvedOptions` caller-silence fill, so they landed in order (091 then 093 on top).
+
+| Plan | Title                                        | Category        | Pri | Effort | Risk | Status                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ---- | -------------------------------------------- | --------------- | --- | ------ | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 091  | Default a short-lived session cookie cache   | perf            | P2  | S      | LOW  | DONE — `session.cookieCache { enabled, maxAge=60s }` filled on caller silence in `create-auth.ts`; `rolling`/`longLived` presets enable it, `strict` opts out; tests green.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 092  | Generic typed identity layer                 | dx/codegen/auth | P2  | L      | MED  | DONE — `defineIdentity` (`@lunora/server`), the `wrapResolverWithContract` validation boundary + `composeIdentityResolvers`/`routeIdentityResolvers` (extracted to `@lunora/runtime`'s `identity-resolvers.ts`), `createPolicyDsl`'s identity type param, AND codegen auto-emission of the narrowed `ctx.auth.getIdentity()` into `_generated/server.ts` — codegen discovers the single `defineIdentity(...)` in `lunora/identity.ts` (like `defineSchema`), recovers the claim type via `InferIdentity<typeof …>`, and narrows `getIdentity()` + the RLS policy `ctx.auth.identity`. The boundary now fires end-to-end in generated apps: `_generated/app.ts` imports the contract as a value and wires `options.identity`, so `wrapResolverWithContract` actually validates a resolver's claims (previously the type narrowed but the runtime gate stayed inert). Byte-identical when no contract is declared. Phase 3 (better-auth plugin inference) + the 094 follow-on lint remain deferred. |
+| 094  | `auth_session_read_without_cache` lint       | advisor/perf    | P2  | S      | LOW  | DEFERRED — lives as the "Follow-on 094" section inside `092-typed-identity-layer.md`; gated on 091 (landed) and builds its own `createAuth`-config reader.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 093  | Durable, atomic rate limiting (incrementOne) | fix             | P1  | M      | MED  | DONE — native atomic `incrementOne` on `AuthStore` (memory + SQL) + `adapter.ts`; durable `rateLimit.storage: "database"` default (caller-silence-gated); concurrency no-lost-update test for both stores. Companion known-limitations docs deferred (out of code scope).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+
+### Notes
+
+- **091** verified better-auth `1.6.22`: `session.cookieCache` takes `{ enabled,
+maxAge }` (seconds; better-auth default `maxAge` is 300s, lowered to 60s here).
+  The default is gated on `session?.cookieCache === undefined`, mirroring the
+  `rateLimit.enabled === undefined` fill, and composed into the same
+  `resolvedOptions` object so **093** can add its `rateLimit.storage` fill alongside.
+- **092** never introspects `createAuth` — Phase 1+2 read a `defineIdentity(...)`
+  declaration statically (like `defineSchema`), which dissolves the introspection
+  cliff the earlier framing carried. `defineIdentity` builds on the `@lunora/values`
+  validator machinery (`parseValidatorMap`), **not** the replication `defineShape`
+  API (a table+predicate, not a claim record) — matching the plan's first STOP
+  condition's own remediation ("its own light type rather than reusing `defineShape`
+  wholesale"). `composeIdentityResolvers`/`routeIdentityResolvers` (renamed from the plan's
+  `composeResolvers`/`routeResolvers` to avoid clashing with `@lunora/cloudflare-access`'s
+  existing variadic `composeResolvers`) live in `@lunora/runtime`
+  (co-located with `ResolvedIdentity`/`resolveIdentity`, structurally free of
+  `@lunora/server`), not `@lunora/auth`, so the generic primitives stay decoupled
+  from better-auth — the whole point of a generic identity layer.
+- **093** verified better-auth `1.6.22`: `incrementOne` exists as an **optional**
+  `CustomAdapter` method — a guarded `UPDATE … SET col = col + delta … RETURNING`
+  (the plan's `INSERT … ON CONFLICT` upsert was wrong; better-auth `create`s the
+  row separately and calls `incrementOne` only as a guarded counter bump). Default
+  `rateLimit.storage` is `"memory"` (per-isolate, non-durable); `"database"` routes
+  through the configured DB adapter (Lunora's store). Defaulting storage to
+  `"database"` surfaced STOP-condition 3 as a **test-fixture gap** — the durable
+  limiter needs a `rateLimit` table that `getAuthTables` emits only when
+  `storage === "database"`; `forget-password-route.test.ts` now materialises the
+  schema from that resolved storage, mirroring what a real Lunora migrator does.
+- The codegen auto-narrowing reuses the workflows/queues precedent: it imports the
+  app's contract by type (`import type * as … from "../identity.js"`) and reads it
+  via `typeof` + `InferIdentity` — no parallel type system, no runtime import, and
+  every fragment is gated on the contract existing, so the no-`defineIdentity`
+  golden stays byte-identical.
 
 ## Notes for executors (carried from prior waves)
 

@@ -1,6 +1,7 @@
 import { getMigrations } from "better-auth/db/migration";
 
 import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
+import { resolveAuthOptions } from "./create-auth";
 
 /**
  * Single-flight cache of in-flight (and completed) migration runs, keyed by the
@@ -67,9 +68,15 @@ export const ensureMigrated = async (auth: LunoraAuth | { options: LunoraAuthOpt
  * Compile better-auth's migrations to a single SQL string. Useful for
  * `wrangler d1 execute --file -` in CI so the deploy step applies the schema
  * before the first user request.
+ *
+ * Compiles from the SAME resolved options `createAuth` runs with (via
+ * `resolveAuthOptions`), not the raw caller options — so the schema includes the
+ * `rateLimit` table the worker's default-on durable limiter writes to. Compiling
+ * from the raw options would omit it, and the running worker would then write to
+ * a table the migration never created.
  */
 export const compileMigrationsSql = async (options: LunoraAuthOptions): Promise<string> => {
-    const { compileMigrations } = await getMigrations(options);
+    const { compileMigrations } = await getMigrations(resolveAuthOptions(options));
 
     return compileMigrations();
 };

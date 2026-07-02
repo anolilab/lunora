@@ -68,7 +68,7 @@ describe("ensureMigrated", () => {
 });
 
 describe("compileMigrationsSql", () => {
-    it("forwards options to getMigrations and returns compileMigrations()'s result", async () => {
+    it("compiles from the resolved options (so the rateLimit table is included) and returns compileMigrations()'s result", async () => {
         expect.assertions(3);
 
         const compileMigrations = vi.fn<() => Promise<string>>(async () => "CREATE TABLE user (...)");
@@ -80,7 +80,10 @@ describe("compileMigrationsSql", () => {
 
         const sql = await compileMigrationsSql(options as never);
 
-        expect(mockGetMigrations).toHaveBeenCalledWith(options);
+        // Routed through `resolveAuthOptions`, so migrations are compiled from the
+        // SAME resolved shape the worker runs with — the default-on durable rate
+        // limiter's `rateLimit` table is therefore present in the migration.
+        expect(mockGetMigrations).toHaveBeenCalledWith(expect.objectContaining({ rateLimit: expect.objectContaining({ enabled: true, storage: "database" }) }));
         expect(compileMigrations).toHaveBeenCalledTimes(1);
         expect(sql).toBe("CREATE TABLE user (...)");
     });

@@ -11,6 +11,8 @@ export type {
     AuthUser,
     BackupManifest,
     BackupStore,
+    ComposeIdentityResolversErrorMode,
+    ComposeIdentityResolversOptions,
     CronHandler,
     CronJobDispatch,
     CronJobInfo,
@@ -29,6 +31,9 @@ export type {
     HttpActionContext,
     HttpActionLike,
     HttpRouterLike,
+    IdentityContractLike,
+    IdentityResolver,
+    IdentityValidation,
     ListAuthUsersOptions,
     LunoraHandlerOptions,
     LunoraWorker,
@@ -45,12 +50,14 @@ export type {
     WorkerOptions,
 } from "./create-worker";
 export {
+    composeIdentityResolvers,
     composeWorker,
     createLunoraHandler,
     createWorker,
     defineRpcEnvelope,
     NOOP_EXECUTION_CONTEXT,
     resolveLunoraOptions,
+    routeIdentityResolvers,
     withFrameworkWorker,
 } from "./create-worker";
 export type { CrossShardCounter, CrossShardReader, CrossShardRelationCapabilities, CrossShardRelationOptions } from "./cross-shard-relations";

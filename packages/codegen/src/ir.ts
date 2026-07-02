@@ -270,6 +270,20 @@ export interface ShapeIR {
 }
 
 /**
+ * The single `defineIdentity({...})` claim contract discovered in
+ * `lunora/identity.ts`. Discovery is **marker-driven** (the `__lunoraIdentity`
+ * brand, exactly like {@link ShapeIR}) — no claim metadata is lifted here
+ * because the emitted `_generated/server.ts` recovers the claim *type* from the
+ * declaration itself (`InferIdentity` over the contract's `typeof`), and the
+ * runtime object (`validate`/`onInvalid`) carries the authority at the boundary.
+ * Exactly one per app; absent ⇒ generated output is byte-identical to today.
+ */
+export interface IdentityIR {
+    /** Export binding name — the namespace member `_generated/server.ts` reads via `typeof`. */
+    exportName: string;
+}
+
+/**
  * A `defineMutator({...})` declaration discovered in `lunora/mutators.ts`
  * (local-first sync engine, Phase 7). The emitted registry registers the
  * authoritative `server` impl into the DO's `LUNORA_FUNCTIONS` table (so

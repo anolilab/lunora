@@ -57,6 +57,7 @@ const lunoraAuthAdapter = (store: AuthStore): ReturnType<typeof createAdapterFac
 
                     return asRowOrNull(row);
                 },
+                incrementOne: async ({ increment, model, set, where }) => asRowOrNull(await store.incrementOne(model, where, increment, set)),
                 update: async ({ model, update, where }) => {
                     const [row] = await store.update(model, where, update as AuthRow);
 

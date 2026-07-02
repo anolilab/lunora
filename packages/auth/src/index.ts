@@ -17,7 +17,7 @@ export type {
 } from "./admin";
 export { createAuthAdmin, LunoraAuthAdminError } from "./admin";
 export type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
-export { createAuth } from "./create-auth";
+export { createAuth, resolveAuthOptions } from "./create-auth";
 export { DEFAULT_AUTH_BASE_PATH, handleAuthRequest } from "./handler";
 export type { LunoraAuthApiContext, WithAuthPluginsMiddleware, WithAuthPluginsOptions } from "./middleware";
 export { LunoraAuthHeadersError, withAuthPlugins } from "./middleware";
