@@ -192,4 +192,34 @@ describe("wireCodec round-trips", () => {
 
         expect(wire(value)).toStrictEqual(value);
     });
+
+    it("does not let a wire __proto__ key pollute the decoded object (Cap'n Web #190)", () => {
+        expect.assertions(4);
+
+        // What an untrusted peer could send — `JSON.parse` makes `__proto__` an OWN
+        // key, so a naive assign would fire the prototype setter and pollute.
+        const hostile: unknown = JSON.parse('{"__proto__":{"polluted":true},"a":1}');
+        const decoded = decodeWire(hostile) as Record<string, unknown>;
+
+        // Prototype untouched — no pollution of the decoded object or the global.
+        expect(Object.getPrototypeOf(decoded)).toBe(Object.prototype);
+        expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+        // Real data survives; the `__proto__` value round-trips as an own data prop.
+        expect(decoded.a).toBe(1);
+        expect(Object.hasOwn(decoded, "__proto__")).toBe(true);
+    });
+
+    it("rejects an over-long or non-numeric wire bigint (DoS-safe decode, Cap'n Web #185)", () => {
+        expect.assertions(4);
+
+        // `BigInt()`'s decimal parse is superlinear — a huge digit string would
+        // block the event loop, so decode bounds + validates it first.
+        const tag = (encodeWire(1n) as string[])[0];
+
+        expect(() => decodeWire([tag, "bigint", "9".repeat(2000)])).toThrow(RangeError);
+        expect(() => decodeWire([tag, "bigint", "12x34"])).toThrow(RangeError);
+        expect(() => decodeWire([tag, "bigint", 123])).toThrow(RangeError);
+        // A normal bigint still round-trips.
+        expect(wire(-42n)).toBe(-42n);
+    });
 });

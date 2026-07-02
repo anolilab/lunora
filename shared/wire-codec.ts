@@ -73,6 +73,18 @@ const TAG = "$lunora.wire$";
  */
 const MAX_DEPTH = 64;
 
+/**
+ * Max decimal digits accepted for a wire `bigint` on decode. `BigInt()` decimal
+ * parsing is superlinear, so a multi-megabyte digit string from an untrusted peer
+ * would block the event loop (Cap'n Web #184/#185). A real `v.bigint()` is a
+ * handful of digits; 1024 (a ~3400-bit integer) is far beyond any legitimate use
+ * yet nowhere near the DoS range. Applied only on decode (the untrusted path).
+ */
+const MAX_BIGINT_DIGITS = 1024;
+
+/** Object keys that must never be written by assignment on decode — `__proto__` invokes the prototype setter, polluting the decoded object (Cap'n Web #190). */
+const UNSAFE_KEY = "__proto__";
+
 /** Constructors for the typed-array views the codec round-trips (keyed by name). */
 const TYPED_ARRAY_CTORS: Record<string, { new (buffer: ArrayBuffer): ArrayBufferView }> = {
     BigInt64Array,
@@ -280,7 +292,16 @@ const decodeWire = (value: unknown, depth = 0): unknown => {
                     return (value[2] as unknown[]).map((item) => decodeWire(item, depth + 1));
                 }
                 case "bigint": {
-                    return BigInt(value[2] as string);
+                    // Bound + validate before `BigInt()`: its decimal parse is
+                    // superlinear, so an over-long or non-numeric digit string from
+                    // an untrusted peer would block the event loop. `\d` is ASCII-only.
+                    const raw = value[2];
+
+                    if (typeof raw !== "string" || raw.length > MAX_BIGINT_DIGITS || !/^-?\d+$/.test(raw)) {
+                        throw new RangeError(`wire-codec: invalid or over-long bigint (max ${MAX_BIGINT_DIGITS} digits)`);
+                    }
+
+                    return BigInt(raw);
                 }
                 case "date": {
                     return new Date(decodeWire(value[2], depth + 1) as number);
@@ -347,7 +368,17 @@ const decodeWire = (value: unknown, depth = 0): unknown => {
     const result: Record<string, unknown> = {};
 
     for (const key of Object.keys(source)) {
-        result[key] = decodeWire(source[key], depth + 1);
+        const decoded = decodeWire(source[key], depth + 1);
+
+        // `JSON.parse` puts a wire `"__proto__"` key as an OWN property, but
+        // assigning it here would invoke the prototype setter and pollute `result`
+        // (and its prototype chain). Define it as a plain own data property instead
+        // so the value round-trips faithfully without any pollution (Cap'n Web #190).
+        if (key === UNSAFE_KEY) {
+            Object.defineProperty(result, key, { configurable: true, enumerable: true, value: decoded, writable: true });
+        } else {
+            result[key] = decoded;
+        }
     }
 
     return result;
