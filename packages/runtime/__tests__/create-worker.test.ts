@@ -693,6 +693,43 @@ describe("createWorker", () => {
         expect(shard.calls).toHaveLength(0);
     });
 
+    it("exempts a reserved `__lunora_admin__:*` RPC from authorizeShard (the DO's admin-bearer gate authorizes it)", async () => {
+        expect.assertions(4);
+
+        // Even with a fail-closed `authorizeShard`, a token-gated admin RPC must
+        // reach the shard DO (the real admin authority) instead of being 403'd by
+        // the per-tenant gate — an admin request carries an admin bearer, not an
+        // end-user identity, so `authorizeShard(null, …)` would default-deny it.
+        // Regression: this broke E2E mail-capture once the playground configured
+        // `authorizeShard`.
+        const authorizeShard = vi.fn<() => boolean>(() => false);
+        const worker = createWorker({
+            authorizeShard,
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(
+            new Request("https://app.example/_lunora/rpc", {
+                // A real admin bearer rides the `authorization` header; this
+                // worker-level test only proves the tenant gate is skipped, so the
+                // mock shard (standing in for the DO's `isAdminAuthorized`) accepts
+                // it unconditionally.
+                body: JSON.stringify({ args: { limit: 50 }, functionPath: "__lunora_admin__:getCapturedMail" }),
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(res.status).toBe(200);
+        // The per-tenant gate must NOT be consulted for a reserved admin op…
+        expect(authorizeShard).not.toHaveBeenCalled();
+        // …and the request must be forwarded to the (default __root__) shard,
+        // whose `isAdminAuthorized` bearer check is the real gate.
+        expect(shard.calls).toHaveLength(1);
+        expect(shard.calls[0]!.shardKey).toBe("__root__");
+    });
+
     it.each([
         ["unknown merge kind", { merge: { kind: "bogus" }, table: "messages" }],
         ["negative topK.k", { merge: { by: "score", k: -1, kind: "topK" }, table: "messages" }],

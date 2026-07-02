@@ -2177,52 +2177,80 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * privileged op: when `authorizeShard` is set but `authorizeFanOut` is not,
      * fan-out is default-denied rather than silently allowed.
      */
-    const authorizeRpcEnvelope = async (envelope: RpcEnvelope, identity: ResolvedIdentity | null): Promise<void> => {
-        // Per-shard authorization runs after identity resolution and before
-        // the request is forwarded. Fan-out envelopes target every
-        // live shard for the table (no client-named shardKey), so the
-        // per-shard gate cannot authorize them — `authorizeFanOut`
-        // gates fan-out at the table level. Single-shard dispatch
-        // goes through `authorizeShard`.
-        if (envelope.fanOut) {
-            if (options.authorizeFanOut) {
-                const allowed = await options.authorizeFanOut(identity, envelope.fanOut.table, envelope.functionPath);
+    // Fan-out authorization, extracted from `authorizeRpcEnvelope` to keep that
+    // function's cognitive complexity within budget. Fan-out envelopes target
+    // every live shard for the table (no client-named shardKey), so the per-shard
+    // gate cannot authorize them — `authorizeFanOut` gates fan-out at the table
+    // level, and the reserved `__lunora_relation__:*` read is always default-denied
+    // without it.
+    const authorizeFanOutEnvelope = async (
+        fanOut: NonNullable<RpcEnvelope["fanOut"]>,
+        functionPath: string,
+        identity: ResolvedIdentity | null,
+    ): Promise<void> => {
+        if (options.authorizeFanOut) {
+            const allowed = await options.authorizeFanOut(identity, fanOut.table, functionPath);
 
-                if (!allowed) {
-                    throw new LunoraError("Forbidden fan-out", { code: "FORBIDDEN_FANOUT", status: 403 });
-                }
-            } else if (envelope.functionPath.startsWith("__lunora_relation__:")) {
-                // SECURITY: the reserved `__lunora_relation__:*` fan-out reads RAW,
-                // RLS-blind rows from every shard (reverse cross-backend relations)
-                // and — unlike `__lunora_admin__:*` — carries no DO-level token
-                // backstop. So it must NEVER fall into the warn-and-allow
-                // open-posture branch below: that would hand any caller a
-                // function-less full-table dump across all shards. Default-deny it
-                // whenever `authorizeFanOut` is absent, independent of
-                // `authorizeShard` (enabling reverse cross-backend relations
-                // REQUIRES configuring `authorizeFanOut`).
-                throw new LunoraError(
-                    "reverse cross-backend relation reads (`__lunora_relation__:*`) require `authorizeFanOut` to be configured on the worker",
-                    {
-                        code: "FORBIDDEN_FANOUT",
-                        status: 403,
-                    },
-                );
-            } else if (options.authorizeShard) {
-                // `authorizeShard` is configured but `authorizeFanOut`
-                // is not. Fan-out is a privileged op (it bypasses the
-                // per-shard gate by design), so default-deny instead
-                // of silently letting any authenticated caller
-                // enumerate every shard for the table.
-                throw new LunoraError("Fan-out requires `authorizeFanOut` to be configured on the worker when `authorizeShard` is set", {
-                    code: "FORBIDDEN_FANOUT",
-                    status: 403,
-                });
-            } else {
-                // Neither callback configured: fan-out is default-denied unless
-                // the operator explicitly opted into unauthenticated access.
-                guardUnauthenticatedShardAccess("fan-out");
+            if (!allowed) {
+                throw new LunoraError("Forbidden fan-out", { code: "FORBIDDEN_FANOUT", status: 403 });
             }
+
+            return;
+        }
+
+        if (functionPath.startsWith("__lunora_relation__:")) {
+            // SECURITY: the reserved `__lunora_relation__:*` fan-out reads RAW,
+            // RLS-blind rows from every shard (reverse cross-backend relations)
+            // and — unlike `__lunora_admin__:*` — carries no DO-level token
+            // backstop. So it must NEVER fall into the warn-and-allow open-posture
+            // branch below: that would hand any caller a function-less full-table
+            // dump across all shards. Default-deny it whenever `authorizeFanOut` is
+            // absent, independent of `authorizeShard` (enabling reverse
+            // cross-backend relations REQUIRES configuring `authorizeFanOut`).
+            throw new LunoraError("reverse cross-backend relation reads (`__lunora_relation__:*`) require `authorizeFanOut` to be configured on the worker", {
+                code: "FORBIDDEN_FANOUT",
+                status: 403,
+            });
+        }
+
+        if (options.authorizeShard) {
+            // `authorizeShard` is configured but `authorizeFanOut` is not. Fan-out
+            // is a privileged op (it bypasses the per-shard gate by design), so
+            // default-deny instead of silently letting any authenticated caller
+            // enumerate every shard for the table.
+            throw new LunoraError("Fan-out requires `authorizeFanOut` to be configured on the worker when `authorizeShard` is set", {
+                code: "FORBIDDEN_FANOUT",
+                status: 403,
+            });
+        }
+
+        // Neither callback configured: fan-out is default-denied unless the
+        // operator explicitly opted into unauthenticated access.
+        guardUnauthenticatedShardAccess("fan-out");
+    };
+
+    const authorizeRpcEnvelope = async (envelope: RpcEnvelope, identity: ResolvedIdentity | null): Promise<void> => {
+        // Reserved admin RPCs (`__lunora_admin__:*`, single-shard) are privileged
+        // operator calls authorized by the shard DO's admin-bearer gate
+        // (`isAdminAuthorized`), NOT by the per-tenant `authorizeShard` callback —
+        // an admin request carries an admin bearer, not an end-user session, so it
+        // resolves to a `null` identity and `authorizeShard(null, …)` would
+        // default-deny it. Skip the tenant gate so the request reaches the DO,
+        // which is the real authority (and rejects a bad/absent bearer with its
+        // own 403). Without this, ANY app that configures `authorizeShard` (the
+        // recommended secure posture) would 403 every admin RPC — mail-capture,
+        // recordAuthEvent, and the whole Studio admin surface — before it ever
+        // reached the DO. A fan-out envelope with this prefix is NOT exempted: it
+        // falls through to the fan-out branch below and is default-denied.
+        if (!envelope.fanOut && envelope.functionPath.startsWith("__lunora_admin__:")) {
+            return;
+        }
+
+        // Per-shard authorization runs after identity resolution and before the
+        // request is forwarded. Fan-out routes through the table-level gate;
+        // single-shard dispatch goes through `authorizeShard`.
+        if (envelope.fanOut) {
+            await authorizeFanOutEnvelope(envelope.fanOut, envelope.functionPath, identity);
 
             return;
         }
