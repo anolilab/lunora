@@ -312,9 +312,31 @@ const useDataBrowser = ({
             offset,
             orderBy: toOrderBy(sorting),
             search,
+            // The page read skips the COUNT — the total rides a separate
+            // predicate-keyed query (`countArgs`) that page navigation never
+            // re-keys, so paging no longer re-runs the full-table COUNT.
+            skipCount: true,
             table: selectedTable ?? "",
         };
     }, [filters, pageSize, offset, sorting, search, selectedTable]);
+
+    // The row count, split off the page read and keyed on the PREDICATE alone
+    // (table / filters / search) — no `offset`, `pageSize`, or `orderBy`, since a
+    // COUNT is unaffected by paging or ordering. Paging (an offset-only change)
+    // therefore leaves this key untouched, so it reuses the cached total instead
+    // of re-running the COUNT per page. A predicate change (table / filters /
+    // search) re-keys it → a fresh count; a live write into a matching row re-runs
+    // it on the same key (it shares the page read's table dependency), so the
+    // displayed total stays correct. `limit: 1` keeps the (ignored) row fetch
+    // minimal — only `.total` is read.
+    const countArgs = useMemo<Record<string, unknown>>(() => {
+        return {
+            filters: toFilterClauses(filters),
+            limit: 1,
+            search,
+            table: selectedTable ?? "",
+        };
+    }, [filters, search, selectedTable]);
 
     // `keepPreviousData` is off: the placeholder isn't identity-aware, so holding
     // the last page across a `selectedTable` / `debouncedShard` change would render
@@ -329,6 +351,14 @@ const useDataBrowser = ({
     const page = pageQuery.data ?? null;
     const pageError = pageQuery.error;
     const { liveError } = pageQuery;
+
+    // Live count on the predicate key. Same table dependency as the page read, so
+    // a write pushes a re-run and the total updates; paging doesn't touch its key.
+    const countQuery = useAdminQuery<TablePage>(ADMIN_FUNCTIONS.readTablePage, countArgs, {
+        enabled: selectedTable !== null,
+        live: true,
+        shardKey: debouncedShard,
+    });
 
     // Record the browsed shard into recent-shards history once its tables resolve.
     useEffect(() => {
@@ -697,7 +727,12 @@ const useDataBrowser = ({
         table: selectedTable ?? undefined,
     };
 
-    const total = page?.total ?? 0;
+    // Total comes from the predicate-keyed count query. While it first loads
+    // (before its count lands) fall back to a lower bound from the current page —
+    // `offset + rows shown` — so a page with rows never briefly reads "0 of 0".
+    // The count resolves alongside the page on first load and stays cached across
+    // paging, so this fallback is a brief first-load transient only.
+    const total = countQuery.data?.total ?? (page === null ? 0 : offset + page.rows.length);
     const hasPrevious = offset > 0;
     const hasNext = page !== null && offset + page.rows.length < total;
     const rangeStart = page === null || page.rows.length === 0 ? 0 : offset + 1;

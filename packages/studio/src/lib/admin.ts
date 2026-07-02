@@ -921,7 +921,13 @@ export interface TablePage {
     /** Foreign-key columns (column → target table) for `v.id("target")` fields, so the UI can link those cells. */
     refs?: Record<string, string>;
     rows: Record<string, unknown>[];
-    total: number;
+
+    /**
+     * Total rows matching the predicate. Absent when the read passed
+     * `skipCount: true` — the data browser sources the count from a separate,
+     * predicate-keyed read so paging never re-runs the COUNT.
+     */
+    total?: number;
 }
 
 /**
