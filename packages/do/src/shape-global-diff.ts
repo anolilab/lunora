@@ -111,20 +111,38 @@ const diffGlobalMembership = (
 };
 
 /**
+ * Wire-encode each row-op's post-image in a `rowsPatch`. `delete` ops carry no
+ * value; a pure-JSON value encodes byte-identically. Exposed so a caller can make
+ * a `rowsPatch` `JSON.stringify`-safe for a hop that happens BEFORE
+ * {@link buildPokeFrames} runs — notably the owner→relay poke forward, where the
+ * raw structured poke crosses the hub and a `bytes`/`bigint` column would
+ * otherwise throw (`bigint`) or truncate to `{}` (`ArrayBuffer`).
+ */
+const encodeRowsPatch = (rowsPatch: ReadonlyArray<ShapeRowOp>): ShapeRowOp[] =>
+    rowsPatch.map((op) => (op.value === undefined ? op : { ...op, value: encodeWire(op.value) as Record<string, unknown> }));
+
+/**
  * Build the ordered wire frames of one poke: a `pokeStart`, one `pokePart` per
  * shape slice, then a `pokeEnd`. All parts apply atomically at `pokeEnd`.
  * Returned as serialized JSON strings ready to hand to `ws.send`, so the caller
  * owns only the send loop and its error containment.
+ *
+ * `options.preEncoded` is set by callers whose `rowsPatch` values were ALREADY
+ * wire-encoded upstream (the relay-deliver path — the owner encodes them before
+ * forwarding the poke across the hub, since the structured poke crosses a
+ * `JSON.stringify` there). `encodeWire` is not idempotent, so a second pass would
+ * double-tag; those callers pass `preEncoded: true`. Everyone else passes raw
+ * values and lets this function do the single encode.
  */
-const buildPokeFrames = (parts: ReadonlyArray<ShapePokePart>, meta: PokeFrameMeta): string[] => {
+const buildPokeFrames = (parts: ReadonlyArray<ShapePokePart>, meta: PokeFrameMeta, options: { preEncoded?: boolean } = {}): string[] => {
     const { baseCheckpoint, checkpoint, epoch, lastMutationId, pokeId } = meta;
     const frames: string[] = [JSON.stringify({ baseCheckpoint, epoch, pokeId, type: "pokeStart" })];
 
     for (const part of parts) {
-        // Wire-encode each row-op's post-image (the single choke point for every
-        // poke path: global, op-log, relay). `delete` ops carry no value; a
-        // pure-JSON value encodes byte-identically so the frame is unchanged.
-        const rowsPatch = part.rowsPatch.map((op) => (op.value === undefined ? op : { ...op, value: encodeWire(op.value) }));
+        // The single wire-encode choke point for the direct (global / op-log)
+        // poke paths. The relay-deliver path already encoded upstream (see
+        // `preEncoded`), so it skips the second pass.
+        const rowsPatch = options.preEncoded ? part.rowsPatch : encodeRowsPatch(part.rowsPatch);
 
         frames.push(
             JSON.stringify({
@@ -143,4 +161,4 @@ const buildPokeFrames = (parts: ReadonlyArray<ShapePokePart>, meta: PokeFrameMet
 };
 
 export type { PokeFrameMeta, ShapePokePart, ShapeRowOp };
-export { buildPokeFrames, diffGlobalMembership, projectColumns };
+export { buildPokeFrames, diffGlobalMembership, encodeRowsPatch, projectColumns };
