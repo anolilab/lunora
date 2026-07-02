@@ -142,7 +142,9 @@ const app = defineApp<Env>()
     // (This is a coarse gate — a real multi-tenant app should check the caller
     // OWNS the shard, e.g. `identity?.userId === ownerOf(shardKey)`, and add
     // per-row RLS as defense-in-depth.)
-    .extend(() => ({ authorizeShard: (identity) => identity?.userId !== undefined }))
+    .extend(() => {
+        return { authorizeShard: (identity) => identity?.userId !== undefined };
+    })
     .build();
 
 export const { ShardDO } = app;

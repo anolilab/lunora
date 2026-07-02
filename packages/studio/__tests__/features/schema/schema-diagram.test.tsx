@@ -305,6 +305,7 @@ describe("exportDiagramAsJson (JSON serialiser)", () => {
             await new Promise((resolve) => {
                 setTimeout(resolve, 0);
             });
+
             expect(revokeObjectURL).toHaveBeenCalledWith(fakeUrl);
         } finally {
             createObjectURL.mockRestore();

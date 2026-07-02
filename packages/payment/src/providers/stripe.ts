@@ -222,8 +222,11 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 // entitlements — emit a non-entitling `subscription.updated` (a
                 // metadata patch that no-ops without an existing row); the
                 // authoritative active state still arrives via `customer.subscription.*`.
+                // Only promote to ACTIVE when Stripe EXPLICITLY confirms payment.
+                // An `unpaid` session (async payment still processing) — or a
+                // missing/unknown `payment_status` — must NOT entitle; fail closed.
                 const paymentStatus = readString(object, "payment_status");
-                const paid = paymentStatus === undefined || paymentStatus === "paid" || paymentStatus === "no_payment_required";
+                const paid = paymentStatus === "paid" || paymentStatus === "no_payment_required";
 
                 return {
                     ...base,
