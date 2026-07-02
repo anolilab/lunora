@@ -8,7 +8,7 @@ import { Label } from "../../components/ui/label";
 import { useT } from "../../i18n/i18n-context";
 import { copyToClipboard, errorMessage, fireAndForget, formatBytes } from "../../lib/internal";
 import { buildKvPutOptions, byteLength, isJsonOrEmpty, isTtlValid, tryFormatJson } from "./kv-fields";
-import { KvCloseButton, MetadataField, TtlField } from "./kv-form-fields";
+import { MetadataField, TtlField } from "./kv-form-fields";
 
 // --- value editor: one reducer for the read → edit → write lifecycle so a
 // single logical transition (e.g. "loaded") is one render, not five. ---
@@ -93,13 +93,11 @@ export const KvValueEditor = ({
     expiration,
     keyName,
     namespace,
-    onClose,
     onDeleted,
 }: {
     readonly expiration?: number;
     readonly keyName: string;
     readonly namespace: string;
-    readonly onClose: () => void;
     readonly onDeleted: (name: string) => void;
 }): ReactElement => {
     const client = useLunora();
@@ -191,11 +189,8 @@ export const KvValueEditor = ({
     };
 
     return (
-        <section className="border border-border bg-card p-3" data-testid="kv-value-section">
-            <div className="mb-2 flex items-center gap-2">
-                <p className="flex-1 truncate font-mono text-xs text-muted-foreground" data-testid="kv-selected-key">
-                    {keyName}
-                </p>
+        <div className="px-4 pb-4" data-testid="kv-value-section">
+            <div className="mb-2 flex justify-end">
                 <Button
                     data-testid="kv-copy-key-btn"
                     onClick={() => {
@@ -206,7 +201,6 @@ export const KvValueEditor = ({
                 >
                     {t("Copy key")}
                 </Button>
-                <KvCloseButton onClick={onClose} testId="kv-close-editor" />
             </div>
 
             {state.loadError !== null && (
@@ -299,6 +293,6 @@ export const KvValueEditor = ({
                     {t("Key is absent or has no value.")}
                 </p>
             )}
-        </section>
+        </div>
     );
 };

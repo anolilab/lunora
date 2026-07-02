@@ -9,10 +9,10 @@ import { Textarea } from "../../components/ui/textarea";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget } from "../../lib/internal";
 import { buildKvPutOptions, isJsonOrEmpty, isTtlValid } from "./kv-fields";
-import { KvCloseButton, MetadataField, TtlField } from "./kv-form-fields";
+import { MetadataField, TtlField } from "./kv-form-fields";
 
 /**
- * Self-contained, collapsible "new key" form. Owns its own field state; on
+ * Renders the new-key form inside the side sheet. Owns its own field state; on
  * success it calls `onCreated` so the parent list reloads. Shares the value/TTL/
  * metadata fields + the `putKvValue` payload contract with the value editor.
  */
@@ -61,79 +61,72 @@ export const KvCreateForm = ({
     };
 
     return (
-        <section className="border border-border bg-card p-3" data-testid="kv-create-form">
-            <div className="grid gap-3">
-                <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-foreground">{t("New key")}</span>
-                    <KvCloseButton onClick={onCancel} testId="kv-close-create" />
-                </div>
-
-                <div className="grid gap-1">
-                    <Label className="text-xs" htmlFor="kv-create-name">
-                        {t("Key name")}
-                    </Label>
-                    <Input
-                        autoFocus
-                        data-testid="kv-create-name"
-                        id="kv-create-name"
-                        onChange={(event) => {
-                            setName(event.target.value);
-                        }}
-                        placeholder={t("Key name")}
-                        value={name}
-                    />
-                </div>
-
-                <div className="grid gap-1">
-                    <Label className="text-xs" htmlFor="kv-create-value">
-                        {t("Value")}
-                    </Label>
-                    <Textarea
-                        className="min-h-[6rem] font-mono text-xs"
-                        data-testid="kv-create-value"
-                        id="kv-create-value"
-                        onChange={(event) => {
-                            setValue(event.target.value);
-                        }}
-                        value={value}
-                    />
-                </div>
-
-                <TtlField
-                    id="kv-create-ttl"
-                    invalid={!ttlValid}
-                    onChange={(seconds) => {
-                        setTtl(seconds);
-                    }}
-                    testId="kv-create-ttl"
-                />
-
-                <MetadataField
-                    id="kv-create-metadata"
-                    invalidTestId="kv-create-metadata-invalid"
+        <div className="grid gap-3 px-4 pb-4" data-testid="kv-create-form">
+            <div className="grid gap-1">
+                <Label className="text-xs" htmlFor="kv-create-name">
+                    {t("Key name")}
+                </Label>
+                <Input
+                    autoFocus
+                    data-testid="kv-create-name"
+                    id="kv-create-name"
                     onChange={(event) => {
-                        setMetadata(event.target.value);
+                        setName(event.target.value);
                     }}
-                    testId="kv-create-metadata"
-                    valid={metadataValid}
-                    value={metadata}
+                    placeholder={t("Key name")}
+                    value={name}
                 />
-
-                <div className="flex flex-wrap gap-2">
-                    <Button data-testid="kv-create-submit" disabled={!canSubmit} onClick={onSubmit}>
-                        {busy ? t("Creating…") : t("Create key")}
-                    </Button>
-                    <Button data-testid="kv-create-cancel" disabled={busy} onClick={onCancel} variant="outline">
-                        {t("Cancel")}
-                    </Button>
-                </div>
-
-                {error !== null && (
-                    <p className="text-sm text-destructive" data-testid="kv-create-error" role="alert">
-                        {error}
-                    </p>
-                )}
             </div>
-        </section>
+
+            <div className="grid gap-1">
+                <Label className="text-xs" htmlFor="kv-create-value">
+                    {t("Value")}
+                </Label>
+                <Textarea
+                    className="min-h-[6rem] font-mono text-xs"
+                    data-testid="kv-create-value"
+                    id="kv-create-value"
+                    onChange={(event) => {
+                        setValue(event.target.value);
+                    }}
+                    value={value}
+                />
+            </div>
+
+            <TtlField
+                id="kv-create-ttl"
+                invalid={!ttlValid}
+                onChange={(seconds) => {
+                    setTtl(seconds);
+                }}
+                testId="kv-create-ttl"
+            />
+
+            <MetadataField
+                id="kv-create-metadata"
+                invalidTestId="kv-create-metadata-invalid"
+                onChange={(event) => {
+                    setMetadata(event.target.value);
+                }}
+                testId="kv-create-metadata"
+                valid={metadataValid}
+                value={metadata}
+            />
+
+            <div className="flex flex-wrap gap-2">
+                <Button data-testid="kv-create-submit" disabled={!canSubmit} onClick={onSubmit}>
+                    {busy ? t("Creating…") : t("Create key")}
+                </Button>
+                <Button data-testid="kv-create-cancel" disabled={busy} onClick={onCancel} variant="outline">
+                    {t("Cancel")}
+                </Button>
+            </div>
+
+            {error !== null && (
+                <p className="text-sm text-destructive" data-testid="kv-create-error" role="alert">
+                    {error}
+                </p>
+            )}
+        </div>
     );
 };

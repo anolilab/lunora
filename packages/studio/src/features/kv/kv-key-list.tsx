@@ -7,6 +7,7 @@ import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import { Checkbox } from "../../components/ui/checkbox";
 import { Input } from "../../components/ui/input";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../../components/ui/sheet";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget } from "../../lib/internal";
@@ -362,28 +363,51 @@ export const KvKeyList = ({ namespace }: { readonly namespace: string }): ReactE
                 )}
             </section>
 
-            {showCreate && (
-                <KvCreateForm
-                    namespace={namespace}
-                    onCancel={() => {
+            <Sheet
+                onOpenChange={(open) => {
+                    if (!open) {
                         setShowCreate(false);
-                    }}
-                    onCreated={onCreated}
-                />
-            )}
+                    }
+                }}
+                open={showCreate}
+            >
+                <SheetContent className="w-full gap-0 overflow-y-auto sm:max-w-md" data-testid="kv-create-sheet" side="right">
+                    <SheetHeader>
+                        <SheetTitle>{t("New key")}</SheetTitle>
+                    </SheetHeader>
+                    <KvCreateForm
+                        namespace={namespace}
+                        onCancel={() => {
+                            setShowCreate(false);
+                        }}
+                        onCreated={onCreated}
+                    />
+                </SheetContent>
+            </Sheet>
 
-            {selectedKey !== null && (
-                <KvValueEditor
-                    expiration={keys?.find((entry) => entry.name === selectedKey)?.expiration}
-                    key={`${namespace}:${selectedKey}`}
-                    keyName={selectedKey}
-                    namespace={namespace}
-                    onClose={() => {
+            <Sheet
+                onOpenChange={(open) => {
+                    if (!open) {
                         dispatch({ name: null, type: "selectKey" });
-                    }}
-                    onDeleted={onKeyDeleted}
-                />
-            )}
+                    }
+                }}
+                open={selectedKey !== null}
+            >
+                <SheetContent className="w-full gap-0 overflow-y-auto sm:max-w-md" data-testid="kv-editor-sheet" side="right">
+                    <SheetHeader>
+                        <SheetTitle className="truncate font-mono text-xs">{selectedKey}</SheetTitle>
+                    </SheetHeader>
+                    {selectedKey !== null && (
+                        <KvValueEditor
+                            expiration={keys?.find((entry) => entry.name === selectedKey)?.expiration}
+                            key={`${namespace}:${selectedKey}`}
+                            keyName={selectedKey}
+                            namespace={namespace}
+                            onDeleted={onKeyDeleted}
+                        />
+                    )}
+                </SheetContent>
+            </Sheet>
         </>
     );
 };

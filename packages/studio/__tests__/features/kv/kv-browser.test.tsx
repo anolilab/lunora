@@ -166,32 +166,25 @@ describe("kvBrowser", () => {
         expect(isDisabled("kv-save-btn")).toBe(true);
     });
 
-    it("closes the value editor when its close button is clicked", async () => {
-        expect.assertions(2);
+    it("opens the value editor in a side sheet when a key row is clicked", async () => {
+        expect.assertions(1);
 
         render(renderBrowser(mock));
 
         fireEvent.click(await screen.findByTestId("kv-key-row-session:abc"));
-        await screen.findByTestId("kv-value-section");
 
-        fireEvent.click(screen.getByTestId("kv-close-editor"));
-
-        expect(screen.queryByTestId("kv-value-section")).toBeNull();
-        // The key row survives — closing only deselects.
-        expect(screen.getByTestId("kv-key-row-session:abc")).toBeDefined();
+        // The editor renders inside the side sheet.
+        await expect(screen.findByTestId("kv-editor-sheet")).resolves.toBeDefined();
     });
 
-    it("dismisses the create form via its close button", async () => {
+    it("opens the create form in a side sheet from the New key button", async () => {
         expect.assertions(1);
 
         render(renderBrowser(mock));
 
         fireEvent.click(await screen.findByTestId("kv-new-key-btn"));
-        await screen.findByTestId("kv-create-form");
 
-        fireEvent.click(screen.getByTestId("kv-close-create"));
-
-        expect(screen.queryByTestId("kv-create-form")).toBeNull();
+        await expect(screen.findByTestId("kv-create-sheet")).resolves.toBeDefined();
     });
 
     it("shows an empty state when no namespaces are configured", async () => {
