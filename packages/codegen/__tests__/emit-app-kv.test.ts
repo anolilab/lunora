@@ -28,23 +28,22 @@ const baseOptions = {
 };
 
 describe("emitApp — KV introspector wiring", () => {
-    it("wires the studio KV browser off `env.KV` when `ctx.kv` is used", () => {
-        expect.assertions(4);
+    it("wires the studio KV browser by scanning `env` for every KV namespace when `ctx.kv` is used", () => {
+        expect.assertions(2);
 
         const output = emitApp({ ...baseOptions, hasKv: true });
 
-        expect(output).toContain('import { createKvIntrospector } from "@lunora/bindings/kv";');
-        expect(output).toContain('import type { KVNamespaceLike } from "@lunora/bindings/kv";');
-        expect(output).toContain("const kvNamespace = (env as Record<string, unknown>).KV;");
-        expect(output).toContain("options.kvIntrospector = createKvIntrospector({ namespaces: { KV: kvNamespace as KVNamespaceLike } });");
+        expect(output).toContain('import { createKvIntrospectorFromEnv } from "@lunora/bindings/kv";');
+        expect(output).toContain("options.kvIntrospector = createKvIntrospectorFromEnv(env);");
     });
 
-    it("guards the wiring on binding presence so a KV-less deployment does not crash", () => {
-        expect.assertions(1);
+    it("does not hardcode a single `env.KV` binding — namespaces of any name light up", () => {
+        expect.assertions(2);
 
         const output = emitApp({ ...baseOptions, hasKv: true });
 
-        expect(output).toContain("if (kvNamespace) {");
+        expect(output).not.toContain("(env as Record<string, unknown>).KV");
+        expect(output).not.toContain("namespaces: { KV:");
     });
 
     it("emits nothing KV-related when `ctx.kv` is not used", () => {

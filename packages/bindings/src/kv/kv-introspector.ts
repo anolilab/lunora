@@ -155,5 +155,60 @@ const createKvIntrospector = (options: CreateKvIntrospectorOptions): KvIntrospec
     };
 };
 
-export { createKvIntrospector };
+/**
+ * Duck-type guard: `true` when `value` exposes the Workers KV namespace surface
+ * the studio browser drives (`getWithMetadata` + `list` + `put` + `delete`). This
+ * set uniquely identifies a `KVNamespace` among the other Cloudflare bindings on
+ * `env` — R2 buckets have no `getWithMetadata`, Durable Object namespaces / queues
+ * / service bindings have none of `list`+`put`+`delete` together.
+ */
+const isKvNamespace = (value: unknown): value is KVNamespaceLike => {
+    if (typeof value !== "object" || value === null) {
+        return false;
+    }
+
+    const candidate = value as Record<string, unknown>;
+
+    return (
+        typeof candidate.getWithMetadata === "function" &&
+        typeof candidate.list === "function" &&
+        typeof candidate.put === "function" &&
+        typeof candidate.delete === "function"
+    );
+};
+
+/**
+ * Zero-config KV introspector: scan a worker `env` for every bound Workers KV
+ * namespace and register each under its binding name. Every `kv_namespaces` entry
+ * in `wrangler.jsonc` then appears in the studio's KV browser automatically — no
+ * hand-written `createKvIntrospector({ namespaces: … })` call, and any binding
+ * name (not just `KV`) and any number of namespaces light up. Non-KV bindings
+ * (R2, Durable Objects, queues, secrets, …) are skipped via {@link isKvNamespace}.
+ *
+ * Returns an introspector even when `env` holds no KV namespaces — its
+ * `listNamespaces()` resolves to `[]`, so the studio renders an empty state
+ * rather than a "not configured" error.
+ * @example
+ * ```ts
+ * createWorker({
+ *   // …
+ *   kvIntrospector: createKvIntrospectorFromEnv(env),
+ * });
+ * ```
+ */
+const createKvIntrospectorFromEnv = (env: unknown): KvIntrospectorLike => {
+    const namespaces: Record<string, KVNamespaceLike> = {};
+
+    if (typeof env === "object" && env !== null) {
+        for (const [binding, value] of Object.entries(env)) {
+            if (isKvNamespace(value)) {
+                namespaces[binding] = value;
+            }
+        }
+    }
+
+    return createKvIntrospector({ namespaces });
+};
+
+export { createKvIntrospector, createKvIntrospectorFromEnv };
 export type { CreateKvIntrospectorOptions, KvIntrospectorLike };
