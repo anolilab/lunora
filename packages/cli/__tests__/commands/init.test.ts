@@ -398,6 +398,60 @@ describe("lunora init", () => {
             expect(errors.join("\n")).toContain("not empty");
         });
 
+        it("refuses an empty project name", async () => {
+            expect.assertions(3);
+
+            const errors: string[] = [];
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: { ...silentLogger(), error: (message) => errors.push(message) },
+                name: "",
+                templateType: "tanstack-start-react",
+            });
+
+            expect(result.code).toBe(1);
+            expect(errors.join("\n")).toContain("refusing an empty project name");
+            // cwd itself must not have been scaffolded into (e.g. no package.json dropped in workdir)
+            expect(existsSync(join(workdir, "package.json"))).toBe(false);
+        });
+
+        it("refuses a whitespace-only project name", async () => {
+            expect.assertions(3);
+
+            const errors: string[] = [];
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: { ...silentLogger(), error: (message) => errors.push(message) },
+                name: "   ",
+                templateType: "tanstack-start-react",
+            });
+
+            expect(result.code).toBe(1);
+            expect(errors.join("\n")).toContain("refusing an empty project name");
+            expect(existsSync(join(workdir, "   "))).toBe(false);
+        });
+
+        it("trims a whitespace-padded name so the target dir is not whitespace-padded", async () => {
+            expect.assertions(3);
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: silentLogger(),
+                name: "  padded-app  ",
+                templateType: "tanstack-start-react",
+            });
+
+            expect(result.code).toBe(0);
+            // The trimmed name is used for the target dir — no whitespace-padded folder.
+            expect(existsSync(join(workdir, "padded-app", "package.json"))).toBe(true);
+            expect(existsSync(join(workdir, "  padded-app  "))).toBe(false);
+        });
+
         it("--from with missing template reports a helpful error", async () => {
             expect.assertions(2);
 

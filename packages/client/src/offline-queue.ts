@@ -1,5 +1,5 @@
 import isStaleVersion from "./persisted-version";
-import type { OfflineQueueOptions, PersistenceAdapter, PersistenceErrorContext, PersistenceOperation } from "./types";
+import type { OfflineQueueOptions, PersistedMutation, PersistenceAdapter, PersistenceErrorContext, PersistenceOperation } from "./types";
 
 interface QueuedMutation<T = unknown> {
     readonly args: Record<string, unknown>;
@@ -203,7 +203,15 @@ class OfflineQueue {
             return [];
         }
 
-        const persisted = await this.persistence.load();
+        let persisted: PersistedMutation[];
+
+        try {
+            persisted = await this.persistence.load();
+        } catch (error) {
+            reportPersistenceError(this.onPersistenceError, "load", error);
+            throw error;
+        }
+
         const shardKeys = new Set<string | undefined>();
 
         for (const mutation of persisted) {

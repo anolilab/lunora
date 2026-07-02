@@ -40,7 +40,7 @@ const createInMemoryPersistence = (): PersistenceAdapter => {
 
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public exported type name; renaming breaks @lunora/client consumers
 interface IndexedDbPersistenceOptions {
-    /** Database name; defaults to `"lunora"`. */
+    /** Database name; defaults to `"lunora-outbox"` (its own DB, separate from the read cache). */
     databaseName?: string;
     /** Injectable `IDBFactory` (e.g. `fake-indexeddb` in tests); defaults to the global `indexedDB`. */
     indexedDB?: IDBFactory;
@@ -48,7 +48,13 @@ interface IndexedDbPersistenceOptions {
     storeName?: string;
 }
 
-const DEFAULT_DATABASE = "lunora";
+// The offline outbox owns the `lunora-outbox` database outright (schema v1). The
+// read cache lives in its OWN `lunora-query-cache` database — do NOT co-locate the
+// two stores in one DB: IndexedDB's version is per-database, so sharing one DB
+// forces the two independently-toggleable adapters to keep a single version
+// constant in sync (they didn't, which threw `VersionError` once both were enabled
+// by default).
+const DEFAULT_DATABASE = "lunora-outbox";
 const DEFAULT_STORE = "offline-mutations";
 /** Secondary index on the mutation id — the store's primary key is an autoincrement seq that preserves FIFO order. */
 const ID_INDEX = "by_id";

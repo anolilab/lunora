@@ -1380,8 +1380,21 @@ const scaffoldNewProject = async (
     // generated per run so an empty submit lands on something nicer than a static
     // placeholder (create-astro does the same).
     const suggestedName = generateProjectName();
-    const name = options.name ?? (await tuiText(COPY.name, { badge: BADGES.dir, default: suggestedName, placeholder: suggestedName }));
+    const rawName = options.name ?? (await tuiText(COPY.name, { badge: BADGES.dir, default: suggestedName, placeholder: suggestedName }));
     const choice = await resolveScaffoldChoice(options);
+
+    // Guard against an empty / whitespace-only name: `options.name ?? …` only
+    // falls back on null/undefined, so an explicit `--name ""` (or a
+    // whitespace-only name) passes straight through. `resolve(cwd, "")`
+    // resolves to cwd itself, and `resolve(cwd, "   ")` creates a confusing
+    // whitespace-named directory — reject both up front.
+    const name = rawName.trim();
+
+    if (name.length === 0) {
+        options.logger.error(`init: refusing an empty project name — pass a directory name (e.g. \`lunora init my-app\`).`);
+
+        return { code: 1, files: [], target: "" };
+    }
 
     // Guard the project name against path traversal: it becomes a directory
     // under cwd, so a name containing separators or `..` could scaffold outside

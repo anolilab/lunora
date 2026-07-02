@@ -69,7 +69,7 @@ const createInMemoryQueryCache = (options: { maxEntries?: number } = {}): QueryC
 
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public exported type name; renaming breaks @lunora/client consumers
 interface IndexedDbQueryCacheOptions {
-    /** Database name; defaults to `"lunora"` (shared with the offline-mutation store). */
+    /** Database name; defaults to `"lunora-query-cache"` (its own DB, separate from the offline outbox). */
     databaseName?: string;
     /** Injectable `IDBFactory` (e.g. `fake-indexeddb` in tests); defaults to the global `indexedDB`. */
     indexedDB?: IDBFactory;
@@ -79,16 +79,22 @@ interface IndexedDbQueryCacheOptions {
     storeName?: string;
 }
 
-const DEFAULT_DATABASE = "lunora";
+const DEFAULT_DATABASE = "lunora-query-cache";
 const DEFAULT_STORE = "query-cache";
 /** Secondary index on `ts` so LRU eviction can walk oldest-first without loading every row. */
 const TS_INDEX = "by_ts";
 
 /**
- * Schema version. v2 adds the `query-cache` store alongside the v1
- * `offline-mutations` store, so both adapters can share one `lunora` database.
+ * Schema version for the read-cache database. The query cache owns its own
+ * database ({@link DEFAULT_DATABASE}) so its schema evolves independently of the
+ * offline-mutation outbox — the two adapters are toggled independently and never
+ * share a version namespace. (They previously shared one `lunora` database at
+ * mismatched versions — 1 for the outbox, 2 here — which threw
+ * `VersionError: The requested version (1) is less than the existing version (2)`
+ * once both were enabled: IndexedDB's version is a property of the database, not
+ * the store, so every opener must request the same version.)
  */
-const DATABASE_VERSION = 2;
+const DATABASE_VERSION = 1;
 
 /** Promisify an `IDBRequest`. */
 const promisifyRequest = <T>(request: IDBRequest<T>): Promise<T> =>
@@ -107,11 +113,11 @@ const promisifyRequest = <T>(request: IDBRequest<T>): Promise<T> =>
  * LRU eviction. The store handle is opened lazily and cached, so repeated ops
  * reuse one connection.
  *
- * The store lives in the same `lunora` database as the offline-mutation queue
- * (bumped to schema v2). Opening it upgrades a v1 database in place, adding the
- * `query-cache` store without touching `offline-mutations`. Throws eagerly if no
- * `IDBFactory` is available — callers in non-browser environments should use
- * {@link createInMemoryQueryCache}.
+ * The store lives in its own `lunora-query-cache` database — deliberately
+ * separate from the offline-mutation outbox's `lunora-outbox` database so the two
+ * independently-toggleable adapters never share (and drift on) a schema version.
+ * Throws eagerly if no `IDBFactory` is available — callers in non-browser
+ * environments should use {@link createInMemoryQueryCache}.
  */
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public exported function name; renaming breaks @lunora/client consumers
 const createIndexedDbQueryCache = (options: IndexedDbQueryCacheOptions = {}): QueryCacheAdapter => {

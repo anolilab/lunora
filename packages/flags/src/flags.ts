@@ -82,13 +82,29 @@ interface CreateFlagsOptions {
 
 type FlagType = "boolean" | "number" | "object" | "string";
 
-/** Stable memo key over the evaluation's type, key, default, and context. */
+/**
+ * Stable memo key over the evaluation's type, key, default, and context.
+ *
+ * The `[type, flagKey, defaultValue]` prefix is cheap and always computed. The
+ * context portion is the expensive part — sorting and serializing its entries
+ * — so the common case of an empty/absent context (no per-call context and no
+ * default `targetingKey`) short-circuits to a constant suffix instead of doing
+ * that work, since `Object.keys(context)` is then `[]` and would otherwise
+ * just serialize to the same constant `"[]"`. A non-empty context still goes
+ * through the same sort+stringify as before, so the key stays stable and
+ * collision-free.
+ */
 const memoKey = (type: FlagType, flagKey: string, defaultValue: FlagValue, context: EvaluationContext): string => {
-    const entries = Object.keys(context)
-        .toSorted((a, b) => a.localeCompare(b))
-        .map((name) => [name, context[name]]);
+    const contextKeys = Object.keys(context);
+    const prefix = JSON.stringify([type, flagKey, defaultValue]);
 
-    return JSON.stringify([type, flagKey, defaultValue, entries]);
+    if (contextKeys.length === 0) {
+        return `${prefix}:[]`;
+    }
+
+    const entries = contextKeys.toSorted((a, b) => a.localeCompare(b)).map((name) => [name, context[name]]);
+
+    return `${prefix}:${JSON.stringify(entries)}`;
 };
 
 /** Dispatch one evaluation to the matching typed OpenFeature client method. */
