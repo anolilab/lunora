@@ -32,6 +32,28 @@ const unsubscribe = client.subscribe(api.messages.list, { channelId: "general" }
   frames; the server pushes `delta` (and `resume`) frames back, each tagged
   with the originating subscription `id`.
 
+### Supported value types
+
+The wire is JSON, but a tagged codec carries the value kinds JSON can't — so args
+and results round-trip losslessly across RPC, streams, whispers, and batches:
+
+- `bigint`, `ArrayBuffer` + typed-array views (`v.bytes()`), `Date`,
+  `NaN`/`±Infinity`, and `undefined` in array positions.
+- `Map`, `Set`, `URL`, and `Error` (including its `cause` chain) — reachable via a
+  `v.any()` field, whisper data, an action's return, or a `LunoraError`'s `data`.
+
+A pure-JSON payload encodes byte-identically, so this is transparent and
+back-compatible. A value a stable form can't represent is **rejected with a clear
+`TypeError` at the send site** (never silently corrupted) — `RegExp`, `Headers`, a
+class instance, an over-long `bigint`, or anything nested deeper than 64 levels.
+
+> **Cache-keyed args are the exception.** A subscription / `useQuery` / shape arg
+> doubles as the reactive **cache key**, which must be a stable string — so
+> `bigint`, bytes, and `Date` **can't** appear there yet (you get a `TypeError`
+> telling you to pass a string / number / epoch-ms instead). Mutation and action
+> args, and all results, have no such limit. (Full support is a tracked reactive-
+> engine change — see `plans/090-subscription-arg-wire-fidelity.md`.)
+
 ## Reconnect & bookmarks
 
 Reconnect uses decorrelated-jitter backoff (`reconnect` option). The client
@@ -49,8 +71,11 @@ Mutations issued while disconnected land in `OfflineQueue` — a bounded FIFO
 overflow). They replay in submission order once the socket reconnects. Each
 mutation carries a stable idempotency id, so a write that committed before the
 client lost the ack is deduplicated by the server on replay rather than
-applied twice. The queue lives in memory by default; for durability across a
-reload pass a `persistence` adapter:
+applied twice. On reconnect the replay **coalesces** the queued writes for a shard
+into batched round trips (one `/_lunora/rpc-batch` per ≤500-write chunk) instead of
+one request per write — a flaky reconnect with a full outbox flushes in a handful
+of round trips, not hundreds. The queue lives in memory by default; for durability
+across a reload pass a `persistence` adapter:
 
 ```ts
 import { LunoraClient, createIndexedDbPersistence, createAsyncStoragePersistence } from "lunorash/client";
