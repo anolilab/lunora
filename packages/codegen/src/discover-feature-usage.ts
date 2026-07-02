@@ -115,35 +115,47 @@ interface StudioFeatureSignals {
 }
 
 /**
- * True when the source reaches the given `ctx` helper — either a direct
+ * The set of `ctx` helper names the source reaches — either a direct
  * `ctx.PROPERTY` access, or a destructuring of the property off the `ctx`
  * identifier (a `const ... = ctx` binding pattern). Parameter-position
  * destructuring (a destructured handler parameter) is still not matched (there is
  * no `ctx` identifier to anchor on, and matching a bare destructured param would
  * false-positive on unrelated functions) — but the import probe and, for studio
  * nav, the package-dependency signal cover that case.
+ *
+ * Collected in a single per-file pass (two descendant walks total) instead of the
+ * former per-feature double-walk: each context-bearing `PROBES` entry then just
+ * tests membership in this set, so detection is O(files × nodes) rather than
+ * O(files × features × nodes).
  */
-const readsContextProperty = (sourceFile: SourceFile, property: string): boolean => {
+const contextPropertiesRead = (sourceFile: SourceFile): Set<string> => {
     const reachesContext = (receiver: Node): boolean => Node.isIdentifier(receiver) && receiver.getText() === "ctx";
+    const names = new Set<string>();
 
-    const directAccess = sourceFile
-        .getDescendantsOfKind(SyntaxKind.PropertyAccessExpression)
-        .some((access) => access.getName() === property && reachesContext(access.getExpression()));
-
-    if (directAccess) {
-        return true;
+    for (const access of sourceFile.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression)) {
+        if (reachesContext(access.getExpression())) {
+            names.add(access.getName());
+        }
     }
 
-    return sourceFile.getDescendantsOfKind(SyntaxKind.VariableDeclaration).some((declaration) => {
+    for (const declaration of sourceFile.getDescendantsOfKind(SyntaxKind.VariableDeclaration)) {
         const initializer = declaration.getInitializer();
         const nameNode = declaration.getNameNode();
 
         if (initializer === undefined || !reachesContext(initializer) || !Node.isObjectBindingPattern(nameNode)) {
-            return false;
+            continue;
         }
 
-        return nameNode.getElements().some((element) => element.getPropertyNameNode()?.getText() === property || element.getName() === property);
-    });
+        for (const element of nameNode.getElements()) {
+            const name = element.getPropertyNameNode()?.getText() ?? element.getName();
+
+            if (name) {
+                names.add(name);
+            }
+        }
+    }
+
+    return names;
 };
 
 /**
@@ -175,6 +187,7 @@ const discoverFeatureUsage = (project: Project, lunoraDirectory: string): Featur
     for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
         const importSpecifiers = new Set(sourceFile.getImportDeclarations().map((declaration) => declaration.getModuleSpecifierValue()));
+        const contextProperties = contextPropertiesRead(sourceFile);
 
         for (const key of keys) {
             if (usage[key]) {
@@ -189,7 +202,7 @@ const discoverFeatureUsage = (project: Project, lunoraDirectory: string): Featur
                 continue;
             }
 
-            if (probe.contextProperty !== undefined && readsContextProperty(sourceFile, probe.contextProperty)) {
+            if (probe.contextProperty !== undefined && contextProperties.has(probe.contextProperty)) {
                 usage[key] = true;
             }
         }

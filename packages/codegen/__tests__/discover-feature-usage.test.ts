@@ -193,6 +193,17 @@ describe("discover-feature-usage", () => {
         expect(discoverFeatureUsage(newProject(), workdir).storage).toBe(true);
     });
 
+    it("detects a `ctx.*` helper destructured under a local alias (matches the source property, not the alias)", () => {
+        expect.assertions(1);
+
+        // The source property (`storage`) is what identifies the feature, even when
+        // bound to a differently-named local (`bucket`) — the probe keys off the
+        // property name, not the binding.
+        writeSource("upload.ts", `export const put = async (ctx) => {\n  const { storage: bucket } = ctx;\n  return bucket.put("k", new Blob());\n};`);
+
+        expect(discoverFeatureUsage(newProject(), workdir).storage).toBe(true);
+    });
+
     it("detects scheduler via either the package import or `ctx.scheduler`", () => {
         expect.assertions(2);
 
