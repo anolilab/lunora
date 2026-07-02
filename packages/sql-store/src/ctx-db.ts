@@ -345,6 +345,28 @@ const tableColumns = (definition: TableDefinitionLike): [string, ColumnMetaLike]
 };
 
 /**
+ * The `field → effective column kind` mapping for a table, derived once per
+ * (immutable) definition and memoized. `effectiveColumnKind` is pure over the
+ * validator and the shape never mutates after `defineSchema`, so the mapping is
+ * static per definition — precomputing it removes the per-row
+ * `Object.entries(definition.shape)` + `effectiveColumnKind` recomputation on the
+ * decode hot path (a page/global read decodes R rows × M columns). Keyed on the
+ * definition object identity (stable: definitions come from `defineSchema`).
+ */
+const columnKindCache = new WeakMap<TableDefinitionLike, [string, string | undefined][]>();
+
+const columnKinds = (definition: TableDefinitionLike): [string, string | undefined][] => {
+    let kinds = columnKindCache.get(definition);
+
+    if (kinds === undefined) {
+        kinds = Object.entries(definition.shape).map(([field, validator]) => [field, effectiveColumnKind(validator)] as [string, string | undefined]);
+        columnKindCache.set(definition, kinds);
+    }
+
+    return kinds;
+};
+
+/**
  * Decode a SELECTed row back into a document: `id` → `_id`, `_creationTime`
  * preserved, and every column run through the shared {@link sqliteDecode} so the
  * stored form is reversed back into its JS shape. Exported so the data-browser
@@ -359,14 +381,14 @@ const tableColumns = (definition: TableDefinitionLike): [string, ColumnMetaLike]
 const decodeGlobalRow = (definition: TableDefinitionLike, row: Record<string, unknown>): Record<string, unknown> => {
     const decoded: Record<string, unknown> = {};
 
-    for (const [field, validator] of Object.entries(definition.shape)) {
+    for (const [field, kind] of columnKinds(definition)) {
         const raw = row[field];
 
         if (raw === undefined) {
             continue;
         }
 
-        decoded[field] = sqliteDecode(raw, effectiveColumnKind(validator));
+        decoded[field] = sqliteDecode(raw, kind);
     }
 
     decoded["_id"] = row["id"];
