@@ -124,16 +124,18 @@ const readBodyBytesWithLimit = async (request: Request, limit: number = MAX_BODY
 };
 
 /**
- * Read a JSON request body under the authoritative {@link MAX_BODY_BYTES} cap.
+ * Read a JSON request body under a byte cap (defaults to the authoritative
+ * {@link MAX_BODY_BYTES}). Pass a larger `limit` for endpoints whose payloads
+ * legitimately exceed 1 MiB (e.g. KV values, which Cloudflare caps at 25 MiB).
  *
  * Mirrors `parseExportBody`/`parseMigrateRequest`: drains the body through the
  * byte-budgeted reader (so a chunked / Content-Length-stripped payload can't
  * slip past the cap) and maps a 413 through unchanged while turning any other
  * parse failure into a 400. Returns `{}` for an empty body.
  */
-const readJsonBodyWithLimit = async (request: Request): Promise<Record<string, unknown>> => {
+const readJsonBodyWithLimit = async (request: Request, limit: number = MAX_BODY_BYTES): Promise<Record<string, unknown>> => {
     try {
-        const text = await readBodyTextWithLimit(request);
+        const text = await readBodyTextWithLimit(request, limit);
 
         return text === "" ? {} : (JSON.parse(text) as Record<string, unknown>);
     } catch (error) {

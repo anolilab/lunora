@@ -12,6 +12,16 @@ const KV_NAMESPACES_PATH = "/_lunora/admin/kv/namespaces";
 const KV_KEYS_PATH = "/_lunora/admin/kv/keys";
 const KV_VALUE_PATH = "/_lunora/admin/kv/value";
 
+/**
+ * Body cap for KV value writes. Cloudflare KV allows values up to 25 MiB, so the
+ * shared 1 MiB JSON limit would reject valid writes; allow 32 MiB to cover a
+ * 25 MiB value plus the JSON envelope (key/metadata) and string escaping.
+ */
+const KV_VALUE_MAX_BODY_BYTES = 32 * 1_048_576;
+
+/** Minimum seconds a KV `expiration`/`expirationTtl` must span — Cloudflare rejects anything under 60. */
+const KV_MIN_EXPIRATION_SECONDS = 60;
+
 /** One KV namespace as the studio's KV browser surfaces it. */
 interface KvNamespaceSummary {
     /** The wrangler/env binding name, e.g. `"MY_KV"`. */
@@ -68,8 +78,8 @@ interface KvIntrospector {
 interface KvAdminRouteDeps {
     /** The KV introspector off `WorkerOptions`. */
     kvIntrospector?: KvIntrospector;
-    /** Read + parse the JSON request body under the runtime's size limit. */
-    readJsonBody: (request: Request) => Promise<Record<string, unknown>>;
+    /** Read + parse the JSON request body under a byte cap (defaults to the runtime's 1 MiB limit; pass a larger cap for KV values). */
+    readJsonBody: (request: Request, limit?: number) => Promise<Record<string, unknown>>;
     /** Admin-gate + require a configured option, else throw the `*_NOT_CONFIGURED` error. */
     requireAdminOption: <T>(request: Request, value: T | undefined, notConfigured: { code: string; message: string }) => T;
 }
@@ -103,6 +113,20 @@ const buildKvAdminRoutes = (deps: KvAdminRouteDeps): Record<string, (request: Re
         }
 
         return { key, namespace };
+    };
+
+    /**
+     * Verify `namespace` is a registered binding before operating on it. The
+     * introspector's own `resolveNamespace` throws a plain `Error` for an unknown
+     * binding (`@lunora/bindings` can't import `LunoraError`), which would surface
+     * as an opaque 500; validating here turns it into a clean 404.
+     */
+    const requireKnownNamespace = async (introspector: KvIntrospector, namespace: string): Promise<void> => {
+        const namespaces = await introspector.listNamespaces();
+
+        if (!namespaces.some((entry) => entry.binding === namespace)) {
+            throw new LunoraError(`Unknown KV namespace binding \`${namespace}\``, { code: "NOT_FOUND", status: 404 });
+        }
     };
 
     const handleKvNamespaces = async (request: Request): Promise<Response> => {
@@ -139,18 +163,24 @@ const buildKvAdminRoutes = (deps: KvAdminRouteDeps): Record<string, (request: Re
         // returns a (bounded) page rather than surfacing a raw binding error.
         const limit = parsedLimit === undefined ? undefined : Math.min(parsedLimit, 1000);
 
+        await requireKnownNamespace(introspector, namespace);
+
         return ok(await introspector.listKeys({ cursor, limit, namespace, prefix }));
     };
 
     const handleKvValueGet = async (request: Request): Promise<Response> => {
         const introspector = gate(request);
+        const params = requireNamespaceAndKey(request, "GET");
 
-        return ok(await introspector.getValue(requireNamespaceAndKey(request, "GET")));
+        await requireKnownNamespace(introspector, params.namespace);
+
+        return ok(await introspector.getValue(params));
     };
 
     const handleKvValuePut = async (request: Request): Promise<Response> => {
         const introspector = gate(request);
-        const candidate = (await readJsonBody(request)) as {
+        // KV values go up to 25 MiB — read under the KV-specific cap, not the 1 MiB default.
+        const candidate = (await readJsonBody(request, KV_VALUE_MAX_BODY_BYTES)) as {
             expiration?: unknown;
             expirationTtl?: unknown;
             key?: unknown;
@@ -173,19 +203,29 @@ const buildKvAdminRoutes = (deps: KvAdminRouteDeps): Record<string, (request: Re
 
         if (
             candidate.expirationTtl !== undefined &&
-            (typeof candidate.expirationTtl !== "number" || !Number.isInteger(candidate.expirationTtl) || candidate.expirationTtl < 60)
+            (typeof candidate.expirationTtl !== "number" || !Number.isInteger(candidate.expirationTtl) || candidate.expirationTtl < KV_MIN_EXPIRATION_SECONDS)
         ) {
             throw new LunoraError("KV-value PUT `expirationTtl` must be an integer ≥ 60", { code: "BAD_REQUEST", status: 400 });
         }
 
         // Absolute expiration (Unix seconds) — the studio round-trips a key's
         // existing TTL here so editing a value preserves rather than clears it.
+        // Cloudflare requires the target to be ≥ 60s in the future, so validate
+        // that here (a "now or soon" value would otherwise throw uncaught in
+        // `ns.put()` and surface as an opaque error).
+        const minExpiration = Math.floor(Date.now() / 1000) + KV_MIN_EXPIRATION_SECONDS;
+
         if (
             candidate.expiration !== undefined &&
-            (typeof candidate.expiration !== "number" || !Number.isInteger(candidate.expiration) || candidate.expiration < 0)
+            (typeof candidate.expiration !== "number" || !Number.isInteger(candidate.expiration) || candidate.expiration < minExpiration)
         ) {
-            throw new LunoraError("KV-value PUT `expiration` must be a non-negative integer (Unix seconds)", { code: "BAD_REQUEST", status: 400 });
+            throw new LunoraError("KV-value PUT `expiration` must be a Unix-seconds timestamp at least 60 seconds in the future", {
+                code: "BAD_REQUEST",
+                status: 400,
+            });
         }
+
+        await requireKnownNamespace(introspector, candidate.namespace);
 
         await introspector.putValue({
             expiration: candidate.expiration,
@@ -201,8 +241,10 @@ const buildKvAdminRoutes = (deps: KvAdminRouteDeps): Record<string, (request: Re
 
     const handleKvValueDelete = async (request: Request): Promise<Response> => {
         const introspector = gate(request);
+        const params = requireNamespaceAndKey(request, "DELETE");
 
-        await introspector.deleteKey(requireNamespaceAndKey(request, "DELETE"));
+        await requireKnownNamespace(introspector, params.namespace);
+        await introspector.deleteKey(params);
 
         return ok({ deleted: true });
     };

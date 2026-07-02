@@ -69,7 +69,9 @@ const keyListReducer = (state: KeyListState, action: KeyListAction): KeyListStat
             return { ...state, cursor: action.cursor, keys: [...(state.keys ?? []), ...action.keys], listComplete: action.listComplete, loading: false };
         }
         case "applyFilter": {
-            return { ...state, appliedPrefix: state.prefixInput, bulk: [], bulkError: null, selectedKey: null };
+            // Clear the current page too — otherwise the previous prefix's rows stay
+            // rendered as if authoritative until the new page resolves.
+            return { ...state, appliedPrefix: state.prefixInput, bulk: [], bulkError: null, cursor: null, keys: null, listComplete: false, selectedKey: null };
         }
         case "bulkDeleted": {
             // Prune only the keys that actually deleted; any that failed stay
