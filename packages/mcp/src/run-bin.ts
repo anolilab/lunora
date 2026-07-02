@@ -6,12 +6,19 @@ import { connectStdio } from "./server";
  * a plain bag so the entry logic is testable without mutating `process.env`.
  *
  * - `LUNORA_URL` (required) — base URL of the deployed Worker.
- * - `LUNORA_ADMIN_TOKEN` (optional) — bearer token sent on every RPC.
+ * - `LUNORA_ADMIN_TOKEN` (optional) — bearer token sent on every RPC. Prefer a least-privilege token, not the admin token — it bounds everything the agent can do.
+ * - `LUNORA_MCP_ALLOW_WRITES` (optional) — set to `1`/`true`/`yes`/`on` to expose the mutation/action tools. Default: read-only (writes disabled).
  */
 interface BinEnvironment {
     LUNORA_ADMIN_TOKEN?: string;
+    LUNORA_MCP_ALLOW_WRITES?: string;
     LUNORA_URL?: string;
 }
+
+/** Truthy env values that enable a boolean flag. */
+const ENABLED_ENV_VALUES = new Set(["1", "on", "true", "yes"]);
+
+const isEnvEnabled = (value: string | undefined): boolean => value !== undefined && ENABLED_ENV_VALUES.has(value.trim().toLowerCase());
 
 interface RunBinDependencies {
     /** Connects the MCP server over stdio; injectable for tests. Defaults to `connectStdio`. */
@@ -60,7 +67,7 @@ const runBin = async (environment: BinEnvironment, dependencies: RunBinDependenc
     }
 
     try {
-        await connect({ token: environment.LUNORA_ADMIN_TOKEN, url });
+        await connect({ allowWrites: isEnvEnabled(environment.LUNORA_MCP_ALLOW_WRITES), token: environment.LUNORA_ADMIN_TOKEN, url });
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 

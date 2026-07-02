@@ -145,7 +145,7 @@ describe("serverQuery — in-process fast-path (PLAN4 §2.2 / §5.3)", () => {
     it("threads shardKey identically on both paths", async () => {
         expect.assertions(3);
 
-        const worker = createWorker({ shardDO: shard.namespace });
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: shard.namespace });
 
         const httpRes = await worker.fetch(rpcRequest({ args: {}, functionPath: "messages:list", shardKey: "channel-7" }), {}, fakeContext);
         const httpBody = await httpRes.text();

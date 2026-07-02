@@ -48,7 +48,8 @@ const FUNCTION_PATH_INPUT_SCHEMA: ToolInputSchema = {
     type: "object",
 };
 
-const TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
+/** The read-only tool surface: introspection + query. Always exposed. */
+const READ_ONLY_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
     {
         description: "List the deployment's public functions (queries, mutations, actions) with their kinds.",
         inputSchema: NO_INPUT_SCHEMA,
@@ -70,6 +71,10 @@ const TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
         inputSchema: RUN_INPUT_SCHEMA,
         name: "lunora_run_query",
     },
+];
+
+/** The write tool surface (mutations + actions). Exposed ONLY when writes are enabled. */
+const WRITE_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
     {
         description: "Run a mutation and return its result. Writes data — use with care.",
         inputSchema: RUN_INPUT_SCHEMA,
@@ -81,6 +86,21 @@ const TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
         name: "lunora_run_action",
     },
 ];
+
+/** Names of the write tools — used to gate them out of a read-only server. */
+const WRITE_TOOL_NAMES: ReadonlySet<string> = new Set(WRITE_TOOL_DEFINITIONS.map((tool) => tool.name));
+
+/**
+ * The tools this server advertises. When `allowWrites` is false (the default),
+ * only the read-only surface is exposed — the mutation/action tools are omitted
+ * from `ListTools` entirely, so an AI agent can't invoke a write it can't see.
+ */
+const toolDefinitions = (allowWrites: boolean): ReadonlyArray<ToolDefinition> =>
+    // Fail closed: only the boolean `true` opts in. These are exported helpers, so
+    // an env-plumbed/JS caller could pass a truthy string like `"false"`/`"0"` —
+    // the explicit `=== true` guards that despite the declared `boolean` type.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-boolean-literal-compare -- intentional runtime guard at an exported API boundary against non-boolean callers
+    allowWrites === true ? [...READ_ONLY_TOOL_DEFINITIONS, ...WRITE_TOOL_DEFINITIONS] : READ_ONLY_TOOL_DEFINITIONS;
 
 /** Extract and validate `functionPath` from an MCP `arguments` bag. */
 const readFunctionPath = (input: Record<string, unknown>): string => {
@@ -126,12 +146,46 @@ const ok = (value: unknown): ToolResult => {
 };
 
 /**
+ * Resolve `functionPath` against the deployment's DISCOVERED public functions and
+ * assert it exists and matches the expected kind. This is the allowlist: a run
+ * tool can only invoke a path `lunora_list_functions` would surface, so an agent
+ * can't reach internal/non-public function paths it invented, and can't run a
+ * mutation/action through the query tool (or vice-versa). Throws on any mismatch.
+ */
+const assertRunnable = async (client: LunoraClient, functionPath: string, expectedKind: "action" | "mutation" | "query"): Promise<void> => {
+    const functions = await client.listFunctions();
+    const descriptor: FunctionDescriptor | undefined = functions.find((function_) => function_.path === functionPath);
+
+    if (descriptor === undefined) {
+        throw new Error(`function not found or not public: ${functionPath}`);
+    }
+
+    if (descriptor.kind !== expectedKind) {
+        throw new Error(`function ${functionPath} is a ${descriptor.kind}, not a ${expectedKind}`);
+    }
+};
+
+/**
  * Dispatch a tool call against `client`. Unknown tools and thrown errors are
  * returned as `isError` results (rather than rejections) so the calling model
  * sees the failure as tool output, per the MCP convention.
+ *
+ * `allowWrites` gates the mutation/action tools: when false (the default) a call
+ * to a write tool is refused even if the client somehow names it, so the
+ * read-only guarantee holds at dispatch, not just in the advertised tool list.
  */
-const callTool = async (client: LunoraClient, name: string, input: Record<string, unknown>): Promise<ToolResult> => {
+const callTool = async (client: LunoraClient, name: string, input: Record<string, unknown>, allowWrites = false): Promise<ToolResult> => {
     try {
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-boolean-literal-compare -- intentional runtime guard at an exported API boundary against non-boolean callers
+        if (allowWrites !== true && WRITE_TOOL_NAMES.has(name)) {
+            return {
+                content: [
+                    { text: `tool "${name}" is disabled: this MCP server is read-only. Enable writes with the LUNORA_MCP_ALLOW_WRITES env var.`, type: "text" },
+                ],
+                isError: true,
+            };
+        }
+
         switch (name) {
             case "lunora_get_function_schema": {
                 const functionPath = readFunctionPath(input);
@@ -153,15 +207,21 @@ const callTool = async (client: LunoraClient, name: string, input: Record<string
             case "lunora_run_action": {
                 const { args, functionPath, shardKey } = readRunArguments(input);
 
+                await assertRunnable(client, functionPath, "action");
+
                 return ok(await client.action(reference(functionPath), args, { shardKey }));
             }
             case "lunora_run_mutation": {
                 const { args, functionPath, shardKey } = readRunArguments(input);
 
+                await assertRunnable(client, functionPath, "mutation");
+
                 return ok(await client.mutation(reference(functionPath), args, { shardKey }));
             }
             case "lunora_run_query": {
                 const { args, functionPath, shardKey } = readRunArguments(input);
+
+                await assertRunnable(client, functionPath, "query");
 
                 return ok(await client.query(reference(functionPath), args, { shardKey }));
             }
@@ -177,4 +237,4 @@ const callTool = async (client: LunoraClient, name: string, input: Record<string
 };
 
 export type { ToolDefinition, ToolInputSchema, ToolResult };
-export { callTool, TOOL_DEFINITIONS };
+export { callTool, READ_ONLY_TOOL_DEFINITIONS, toolDefinitions, WRITE_TOOL_DEFINITIONS };

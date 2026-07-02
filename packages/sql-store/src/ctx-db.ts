@@ -149,6 +149,7 @@ const queryAll = (exec: SqlCtxExec, dialect: SqlDialect, query: SQL): Promise<Re
 };
 
 /** Write twin of {@link queryAll}: render a drizzle {@link SQL} for the engine and run it. */
+// eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- `void` is intentional: mirrors SqlExec.run, whose union accepts a void-returning exec (no affected-rows count)
 const queryRun = (exec: SqlCtxExec, dialect: SqlDialect, query: SQL): Promise<SqlRunResult | void> => {
     const { params, sql: text } = renderSql(dialect.name, query);
 
@@ -194,6 +195,7 @@ interface SqlCtxExec {
     // `SqlRunResult` ({ rowsAffected }) for engines whose OCC needs the affected
     // count (MySQL, which has no `RETURNING`). The union lets a PlanetScale
     // `SqlExec` satisfy this without forcing the D1 execs to report a count.
+    // eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- `void` is intentional: accepts a void-returning exec (one that reports no affected-rows count)
     run: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<SqlRunResult | void>;
 }
 
@@ -1339,7 +1341,8 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         fieldRef: columnRefSql,
         serialize: serializeColumnValue,
         // MySQL has no `||` string concat; the rest use the portable form compileWhereSql defaults to.
-        ...(dialect.name === "mysql" ? { likeContains: (reference, term) => sql`${reference} LIKE CONCAT('%', ${term}, '%')` } : {}),
+        // The term is wildcard-escaped by compileContains, so pair it with `ESCAPE '\'` for literal matching.
+        ...(dialect.name === "mysql" ? { likeContains: (reference, term) => sql`${reference} LIKE CONCAT('%', ${term}, '%') ESCAPE '\\'` } : {}),
     };
 
     /** NULL-safe equality for the OCC guard, bound to this ctx-db's engine (see the module-level {@link nullSafeEqualsSql}). */

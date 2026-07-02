@@ -1,7 +1,7 @@
 import type { FunctionDescriptor, LunoraClient } from "@lunora/client";
 import { describe, expect, it, vi } from "vitest";
 
-import { callTool, TOOL_DEFINITIONS } from "../src/tools";
+import { callTool, READ_ONLY_TOOL_DEFINITIONS, toolDefinitions, WRITE_TOOL_DEFINITIONS } from "../src/tools";
 
 const MOCK_FUNCTIONS: FunctionDescriptor[] = [
     {
@@ -19,6 +19,11 @@ const MOCK_FUNCTIONS: FunctionDescriptor[] = [
         ],
         kind: "mutation",
         path: "messages:send",
+    },
+    {
+        args: [],
+        kind: "action",
+        path: "sync:stripe",
     },
 ];
 
@@ -48,11 +53,20 @@ const mockClient = (): {
     return { action, asClient: client, listFunctions, listGlobalTables, mutation, query };
 };
 
-describe("tOOL_DEFINITIONS", () => {
-    it("exposes the six expected tools, each with an object input schema", () => {
+describe("toolDefinitions", () => {
+    it("exposes only the four read-only tools by default (writes disabled)", () => {
         expect.assertions(2);
 
-        const names = TOOL_DEFINITIONS.map((tool) => tool.name);
+        const names = toolDefinitions(false).map((tool) => tool.name);
+
+        expect(names).toStrictEqual(["lunora_list_functions", "lunora_list_tables", "lunora_get_function_schema", "lunora_run_query"]);
+        expect(toolDefinitions(false).every((tool) => tool.inputSchema.type === "object")).toBe(true);
+    });
+
+    it("adds the mutation/action tools when writes are enabled", () => {
+        expect.assertions(2);
+
+        const names = toolDefinitions(true).map((tool) => tool.name);
 
         expect(names).toStrictEqual([
             "lunora_list_functions",
@@ -62,7 +76,7 @@ describe("tOOL_DEFINITIONS", () => {
             "lunora_run_mutation",
             "lunora_run_action",
         ]);
-        expect(TOOL_DEFINITIONS.every((tool) => tool.inputSchema.type === "object")).toBe(true);
+        expect(names).toHaveLength(READ_ONLY_TOOL_DEFINITIONS.length + WRITE_TOOL_DEFINITIONS.length);
     });
 });
 
@@ -145,7 +159,7 @@ describe("callTool", () => {
 
         const mock = mockClient();
 
-        await callTool(mock.asClient, "lunora_run_mutation", { functionPath: "messages:send" });
+        await callTool(mock.asClient, "lunora_run_mutation", { functionPath: "messages:send" }, true);
 
         expect(mock.mutation).toHaveBeenCalledWith({ __lunoraRef: "messages:send" }, {}, { shardKey: undefined });
     });
@@ -197,7 +211,7 @@ describe("callTool", () => {
         // A mutation/action that returns nothing resolves to `undefined`.
         mock.mutation.mockResolvedValueOnce(undefined);
 
-        const result = await callTool(mock.asClient, "lunora_run_mutation", { functionPath: "messages:send" });
+        const result = await callTool(mock.asClient, "lunora_run_mutation", { functionPath: "messages:send" }, true);
 
         expect(result.isError).toBeUndefined();
         // `text` must always be a string per the MCP TextContent contract;
@@ -213,9 +227,40 @@ describe("callTool", () => {
 
         mock.action.mockRejectedValueOnce(new Error("boom"));
 
-        const result = await callTool(mock.asClient, "lunora_run_action", { functionPath: "x:y" });
+        const result = await callTool(mock.asClient, "lunora_run_action", { functionPath: "sync:stripe" }, true);
 
         expect(result.isError).toBe(true);
         expect(result.content[0]!.text).toContain("boom");
+    });
+
+    it("refuses a write tool when writes are disabled (read-only default), without touching the client", async () => {
+        expect.assertions(3);
+
+        const mock = mockClient();
+        const result = await callTool(mock.asClient, "lunora_run_mutation", { functionPath: "messages:send" });
+
+        expect(result.isError).toBe(true);
+        expect(result.content[0]!.text).toContain("read-only");
+        expect(mock.mutation).not.toHaveBeenCalled();
+    });
+
+    it("rejects a run whose functionPath is not a discovered public function", async () => {
+        expect.assertions(2);
+
+        const mock = mockClient();
+        const result = await callTool(mock.asClient, "lunora_run_query", { functionPath: "internal:secret" });
+
+        expect(result.isError).toBe(true);
+        expect(mock.query).not.toHaveBeenCalled();
+    });
+
+    it("rejects running a mutation through the query tool (kind mismatch)", async () => {
+        expect.assertions(2);
+
+        const mock = mockClient();
+        const result = await callTool(mock.asClient, "lunora_run_query", { functionPath: "messages:send" });
+
+        expect(result.isError).toBe(true);
+        expect(mock.query).not.toHaveBeenCalled();
     });
 });

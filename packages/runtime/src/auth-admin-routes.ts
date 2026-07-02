@@ -420,10 +420,11 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
 
 /**
  * Build the `/_lunora/admin/auth/*` route map merged into the worker's internal
- * route table. Every route shares one driver: admin-token gate → resolve the
- * auth plane → assert the method exists (`AUTH_OP_NOT_SUPPORTED` if the host
- * didn't wire it) → method guard → build input → run, mapping a thrown
- * `authAdmin` error onto a coded `LunoraError`.
+ * route table. Every route shares one driver: admin-token gate (FIRST, so an
+ * unauthenticated probe can't fingerprint routes) → HTTP method guard → resolve
+ * the auth plane → assert the method exists (`AUTH_OP_NOT_SUPPORTED` if the host
+ * didn't wire it) → build input → run, mapping a thrown `authAdmin` error onto a
+ * coded `LunoraError` with a generic (non-leaking) message.
  */
 const buildAuthAdminRoutes = (deps: AuthAdminRouteDeps): Record<string, (request: Request) => Promise<Response>> => {
     const runAuthOp = async <R>(op: () => Promise<R>): Promise<R> => {
@@ -436,18 +437,28 @@ const buildAuthAdminRoutes = (deps: AuthAdminRouteDeps): Record<string, (request
 
             const candidate = error as { code?: unknown; message?: unknown };
             const code = typeof candidate.code === "string" ? candidate.code : "AUTH_ADMIN_ERROR";
-            const message = typeof candidate.message === "string" ? candidate.message : "auth admin operation failed";
 
-            throw new LunoraError(message, { code, status: AUTH_ADMIN_ERROR_STATUS[code] ?? 400 });
+            // Do NOT surface the backend/DB error message to the client (even an
+            // authenticated admin) — it can leak schema/driver internals. Log the
+            // detail server-side and return a generic, code-tagged message, matching
+            // the core `toErrorResponse` posture for unknown errors.
+            // eslint-disable-next-line no-console -- server-side diagnostic for a swallowed backend error
+            console.error("[lunora] auth admin operation failed:", error);
+
+            throw new LunoraError("auth admin operation failed", { code, status: AUTH_ADMIN_ERROR_STATUS[code] ?? 400 });
         }
     };
 
     const handle = async (request: Request, descriptor: AuthRouteDescriptor): Promise<Response> => {
+        // Assert admin BEFORE any method/existence check so an unauthenticated
+        // caller can't distinguish real admin routes (would-be 405) from
+        // non-existent paths — every admin path answers 403 without a token,
+        // leaking no route topology.
+        deps.assertAdmin(request);
+
         if (request.method !== descriptor.http) {
             throw new LunoraError(`Auth admin endpoint requires ${descriptor.http}`, { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
-
-        deps.assertAdmin(request);
 
         const admin = deps.getAuthAdmin();
 

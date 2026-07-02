@@ -21,9 +21,13 @@
 interface SecurityHeadersOptions {
     /**
      * `Content-Security-Policy`. Omitted (`undefined`) applies a restrictive
-     * default to **non-HTML** responses only, so an SSR page is never broken by
-     * a policy it didn't opt into. Pass a string to apply that policy to every
-     * response (HTML included); `false` to never send one.
+     * `default-src 'none'` policy to **non-HTML** responses, and a conservative
+     * hardening policy to **HTML** responses (`base-uri 'none'; frame-ancestors
+     * 'self'; object-src 'none'`) — this does NOT set `default-src`/`script-src`,
+     * so it never blocks an SSR page's own scripts/styles/images/fetches, it only
+     * locks down the `base` element, framing (mirroring the `SAMEORIGIN`
+     * X-Frame-Options default), and legacy plugins. Pass a string to apply that
+     * exact policy to every response (HTML included); `false` to never send one.
      */
     csp?: string | false;
     /** `X-Frame-Options` (clickjacking). Defaults to `SAMEORIGIN`. `false` omits it. */
@@ -71,7 +75,7 @@ interface SecurityOptions {
 
 interface ResolvedHeaders {
     coop: string | undefined;
-    csp: { htmlToo: boolean; value: string } | undefined;
+    csp: { htmlValue: string | undefined; value: string } | undefined;
     enabled: boolean;
     frameOptions: string | undefined;
     hsts: string | undefined;
@@ -112,6 +116,31 @@ interface ResolvedSecurity {
 
 const DEFAULT_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 
+/**
+ * Conservative default CSP for HTML responses, derived from the resolved
+ * `frameOptions` so the two framing controls agree — a static `frame-ancestors
+ * 'self'` would otherwise *weaken* an `X-Frame-Options: DENY` policy, since
+ * modern browsers prefer CSP `frame-ancestors` over the legacy header.
+ * Deliberately omits `default-src`/`script-src`/`style-src`/`connect-src`/
+ * `form-action` so it never breaks an SSR page's own resources or cross-origin
+ * form posts (e.g. OAuth redirects); it only locks the `base` element's href,
+ * forbids legacy plugins, and mirrors the framing policy: `DENY` → `'none'`,
+ * `SAMEORIGIN` → `'self'`, disabled (`frameOptions: false`) → no
+ * `frame-ancestors` (framing left unrestricted, matching the absent header).
+ * Operators wanting a strict HTML policy pass an explicit `csp` string.
+ */
+const htmlCspFor = (frameOptions: string | undefined): string => {
+    const parts = ["base-uri 'none'", "object-src 'none'"];
+
+    if (frameOptions === "DENY") {
+        parts.push("frame-ancestors 'none'");
+    } else if (frameOptions === "SAMEORIGIN") {
+        parts.push("frame-ancestors 'self'");
+    }
+
+    return parts.join("; ");
+};
+
 const DEFAULT_PERMISSIONS_POLICY =
     "accelerometer=(), autoplay=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()";
 
@@ -142,16 +171,16 @@ const resolveHstsHeader = (hsts: SecurityHeadersOptions["hsts"]): string | undef
 /**
  * @returns the resolved CSP config object, or `undefined` when CSP is disabled.
  */
-const resolveCspHeader = (csp: SecurityHeadersOptions["csp"]): ResolvedHeaders["csp"] => {
+const resolveCspHeader = (csp: SecurityHeadersOptions["csp"], htmlDefault: string): ResolvedHeaders["csp"] => {
     if (csp === false) {
         return undefined;
     }
 
     if (typeof csp === "string") {
-        return { htmlToo: true, value: csp };
+        return { htmlValue: csp, value: csp };
     }
 
-    return { htmlToo: false, value: DEFAULT_CSP };
+    return { htmlValue: htmlDefault, value: DEFAULT_CSP };
 };
 
 const resolveHeaders = (input: boolean | SecurityHeadersOptions | undefined): ResolvedHeaders => {
@@ -168,12 +197,14 @@ const resolveHeaders = (input: boolean | SecurityHeadersOptions | undefined): Re
     }
 
     const options: SecurityHeadersOptions = input === undefined || input === true ? {} : input;
+    // Resolve framing first so the default HTML CSP's `frame-ancestors` tracks it.
+    const frameOptions = options.frameOptions === false ? undefined : (options.frameOptions ?? "SAMEORIGIN");
 
     return {
         coop: "same-origin",
-        csp: resolveCspHeader(options.csp),
+        csp: resolveCspHeader(options.csp, htmlCspFor(frameOptions)),
         enabled: true,
-        frameOptions: options.frameOptions === false ? undefined : (options.frameOptions ?? "SAMEORIGIN"),
+        frameOptions,
         hsts: resolveHstsHeader(options.hsts),
         permissionsPolicy: options.permissionsPolicy === false ? undefined : (options.permissionsPolicy ?? DEFAULT_PERMISSIONS_POLICY),
         referrerPolicy: options.referrerPolicy === false ? undefined : (options.referrerPolicy ?? "strict-origin-when-cross-origin"),
@@ -206,6 +237,21 @@ const resolveCors = (input: CorsOptions | false | undefined): ResolvedCors => {
         // trust in both directions.
         isAllowed = origins;
         isExplicitlyAllowed = origins;
+
+        // A predicate bypasses the array path's wildcard+credentials guard: if the
+        // predicate is over-broad (e.g. `() => true`, or a loose `endsWith`), it
+        // reflects any Origin *with* credentials — the exact "any site can read
+        // authed responses / forge state changes" combo the array path forbids at
+        // construction. We can't statically prove a predicate is safe, so warn
+        // loudly so an accidental `() => true` + credentials doesn't ship silently.
+        if (allowCredentials) {
+            // eslint-disable-next-line no-console -- surface a dangerous CORS combination at construction
+            console.warn(
+                "@lunora/runtime: security.cors combines a custom `allowedOrigins` predicate with `allowCredentials: true`. " +
+                    "Ensure the predicate matches ONLY trusted origins by exact equality — an over-broad predicate (e.g. `() => true`, " +
+                    "or `endsWith`/`includes` checks) reflects any origin with credentials, defeating the allowlist and the CSRF guard.",
+            );
+        }
     } else {
         const originsList = origins;
 
@@ -384,6 +430,41 @@ const enforceOrigin = (request: Request, resolved: ResolvedSecurity): Response |
     );
 };
 
+/**
+ * CSRF defense for the WebSocket upgrade (Cross-Site WebSocket Hijacking).
+ *
+ * A WS handshake is an HTTP `GET`, so {@link enforceOrigin}'s safe-method
+ * exemption never fires for it — yet the browser auto-attaches the session
+ * cookie to the handshake and WebSocket connections are NOT governed by
+ * CORS/SOP. Without an explicit `Origin` check any page can open
+ * `wss://app/_lunora/ws`, authenticate as the logged-in victim, and read the
+ * victim's live queries + issue mutations as them. This guard closes that hole.
+ *
+ * Scoped to cookie-bearing upgrades — the only vector CSWSH can ride (a browser
+ * attaches cookies but never a bearer token). Bearer/token/server-to-server
+ * upgrades (no `Cookie`) are exempt. A browser ALWAYS sends `Origin` on a WS
+ * handshake, so a missing/untrusted `Origin` on a cookie-bearing upgrade fails
+ * closed (mirrors {@link enforceOrigin}).
+ * @returns a `403` Response when the upgrade origin is untrusted, or `undefined` when it is allowed.
+ */
+const enforceWebSocketOrigin = (request: Request, resolved: ResolvedSecurity): Response | undefined => {
+    if (!resolved.csrf.enabled || !request.headers.get("cookie")) {
+        return undefined;
+    }
+
+    const selfOrigin = new URL(request.url).origin;
+    const source = originOf(request.headers.get("origin"));
+
+    if (source !== undefined && isTrustedOrigin(source, selfOrigin, resolved)) {
+        return undefined;
+    }
+
+    return Response.json(
+        { error: { code: "FORBIDDEN_ORIGIN", message: "cross-origin websocket upgrade rejected" } },
+        { headers: { "content-type": "application/json" }, status: 403 },
+    );
+};
+
 /** Build the `Access-Control-Allow-*` headers for an allowed cross-origin request. */
 const corsResponseHeaders = (origin: string, cors: ResolvedCors): Headers => {
     const headers = new Headers();
@@ -462,8 +543,15 @@ const applyBaselineHeaders = (headers: Headers, request: Request, response: Resp
         setIfAbsent(headers, "cross-origin-opener-policy", config.coop);
     }
 
-    if (config.csp !== undefined && (config.csp.htmlToo || !isHtmlResponse(response))) {
-        setIfAbsent(headers, "content-security-policy", config.csp.value);
+    if (config.csp !== undefined) {
+        // HTML responses get the (possibly conservative) HTML policy; everything
+        // else gets the strict policy. `htmlValue` may be undefined only in
+        // future configs that opt HTML out entirely.
+        const cspValue = isHtmlResponse(response) ? config.csp.htmlValue : config.csp.value;
+
+        if (cspValue !== undefined) {
+            setIfAbsent(headers, "content-security-policy", cspValue);
+        }
     }
 };
 
@@ -514,4 +602,4 @@ const decorateResponse = (response: Response, request: Request, resolved: Resolv
 };
 
 export type { CorsOptions, CsrfOptions, ResolvedSecurity, SecurityHeadersOptions, SecurityOptions };
-export { decorateResponse, enforceOrigin, handleCorsPreflight, resolveSecurity };
+export { decorateResponse, enforceOrigin, enforceWebSocketOrigin, handleCorsPreflight, resolveSecurity };

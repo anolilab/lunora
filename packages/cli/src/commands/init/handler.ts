@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 import { BADGES, isInteractive } from "@lunora/config";
@@ -357,6 +357,14 @@ const collectFiles = (directory: string): ReadonlyArray<string> => {
     const out: string[] = [];
 
     for (const entry of walkSync(directory, { includeDirs: false, includeFiles: true })) {
+        // Skip symlinks: a hostile `--source`/`--from` template could ship a
+        // symlink to e.g. `~/.ssh/id_rsa`, and reading THROUGH it would copy the
+        // victim's private file into the scaffolded project. We only ever copy
+        // real regular files from a template.
+        if (lstatSync(entry.path).isSymbolicLink()) {
+            continue;
+        }
+
         out.push(entry.path);
     }
 

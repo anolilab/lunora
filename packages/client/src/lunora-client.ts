@@ -4067,19 +4067,30 @@ class LunoraClient {
             return null;
         }
 
-        let hash = 0x81_1c_9d_c5;
+        // Two independent 32-bit passes (FNV-1a + djb2) give a ~64-bit digest, so
+        // two distinct equal-length tokens are astronomically unlikely to share a
+        // fingerprint. A single 32-bit hash collides ~1-in-4e9 per equal-length
+        // pair — enough that, on a shared device, user B could hydrate A's cached
+        // reads. Different algorithms (not the same FNV with a different seed, which
+        // would be affine-related) keep the two passes genuinely independent.
+        // Still synchronous (no crypto) and stable across surrogate pairs.
+        let fnv = 0x81_1c_9d_c5;
+        let djb2 = 5381;
 
         for (let index = 0; index < token.length; index += 1) {
-            // FNV-1a hash: bitwise XOR and the final `>>> 0` to a uint32 are the
-            // algorithm; charCodeAt (not codePointAt) keeps the digest stable for
-            // surrogate pairs, so the fingerprint never changes shape.
-            // eslint-disable-next-line no-bitwise, unicorn/prefer-code-point -- FNV-1a hash requires charCode XOR
-            hash ^= token.charCodeAt(index);
-            hash = Math.imul(hash, 0x01_00_01_93);
+            // eslint-disable-next-line unicorn/prefer-code-point -- charCode keeps the digest stable across surrogate pairs
+            const code = token.charCodeAt(index);
+
+            // eslint-disable-next-line no-bitwise -- FNV-1a XOR step
+            fnv ^= code;
+            fnv = Math.imul(fnv, 0x01_00_01_93);
+            djb2 = Math.imul(djb2, 33) + code;
         }
 
-        // eslint-disable-next-line no-bitwise -- coerce the FNV-1a accumulator to an unsigned 32-bit integer
-        return `${token.length.toString(36)}:${(hash >>> 0).toString(36)}`;
+        // Delimit the two base36 digests so distinct (fnv, djb2) pairs can't
+        // encode to the same string via variable-width concatenation.
+        // eslint-disable-next-line no-bitwise -- coerce both accumulators to unsigned 32-bit integers
+        return `${token.length.toString(36)}:${(fnv >>> 0).toString(36)}:${(djb2 >>> 0).toString(36)}`;
     }
 
     /**

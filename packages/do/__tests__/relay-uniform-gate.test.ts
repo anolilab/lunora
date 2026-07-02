@@ -7,7 +7,8 @@ import { ShardDO } from "../src/shard-do";
 /**
  * The RLS-uniform gate (plan 075 Phase 3): a reactive shape may be relay-multicast
  * ONLY if its resolved query is identical regardless of the caller's identity and
- * none of its projected columns are masked. The gate combines a static RLS
+ * its table declares no mask at all (L7: conservative — any table-level mask
+ * disqualifies, whether or not the shape projects the masked column). The gate combines a static RLS
  * read-policy guard with a claim-exhaustive identity probe — proxy-backed, so a
  * resolver reading ANY claim (even a custom one) diverges — whose base is the exact
  * anonymous identity the owner multicasts under, plus a copy backstop. Fail-closed
@@ -91,7 +92,8 @@ class GateShard extends ShardDO {
             case "peopleCard": {
                 return { columns: ["name", "ssn"], effectiveWhere: { teamId: args["teamId"] }, table: "people" };
             }
-            // Masked column exists on the table but isn't projected → still uniform.
+            // Masked column exists on the table but isn't projected → the L7
+            // conservative gate still rejects it (any table-level mask disqualifies).
             case "peopleNames": {
                 return { columns: ["name"], effectiveWhere: { teamId: args["teamId"] }, table: "people" };
             }
@@ -163,13 +165,17 @@ describe("relay-uniform shape gate", () => {
         expect(makeShard().uniform("securedRoom", { roomId: "r1" })).toBe(false);
     });
 
-    it("rejects a shape that projects a masked column, but allows one that doesn't", () => {
+    it("rejects any shape on a table that declares a mask, even when the masked column isn't projected (L7 conservative gate)", () => {
         expect.assertions(2);
 
         const shard = makeShard();
 
+        // Projects the masked `ssn` column → non-uniform.
         expect(shard.uniform("peopleCard", { teamId: "t1" })).toBe(false);
-        expect(shard.uniform("peopleNames", { teamId: "t1" })).toBe(true);
+        // Does NOT project `ssn`, but the `people` table declares a mask, so the
+        // gate is conservative and still rejects it — a later `select` change (or
+        // added column) can't silently widen a cohort to an identity-dependent value.
+        expect(shard.uniform("peopleNames", { teamId: "t1" })).toBe(false);
     });
 
     it("rejects a global-table shape, an unknown shape, and a resolve that throws (fail-closed)", () => {

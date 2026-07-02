@@ -390,6 +390,7 @@ Vetted against live code and dropped — recorded so they aren't re-audited:
   codegen namespace-collision test for case-insensitive filesystems
   (`packages/codegen`), advisor static-lint edge-case predicate dedup
   (`packages/advisor`).
+
 ## Wave 9 — auth hot-path hardening + typed identity layer (baseline `c490bad`, 2026-07-01)
 
 Three `@lunora/auth` / identity findings, landed together off `alpha`. Two harden

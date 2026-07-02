@@ -51,7 +51,11 @@ const fromBase64Url = (input: string): Uint8Array => {
 // The signing secret is effectively constant per process, so the imported
 // (non-extractable) CryptoKey is memoized by secret value: this removes one
 // `crypto.subtle.importKey` from the verify hot path on every request. Caching
-// the Promise (not the resolved key) also coalesces concurrent imports.
+// the Promise (not the resolved key) also coalesces concurrent imports. The
+// cache is bounded (FIFO eviction) so a multi-tenant app cycling through many
+// per-tenant secrets can't accumulate unbounded memory — aligns with the image
+// signed-URL cache. 64 distinct secrets/isolate is well above any realistic use.
+const KEY_CACHE_MAX = 64;
 const keyCache = new Map<string, Promise<CryptoKey>>();
 
 const importHmacKey = async (secret: string): Promise<CryptoKey> => {
@@ -59,6 +63,15 @@ const importHmacKey = async (secret: string): Promise<CryptoKey> => {
 
     if (cached) {
         return cached;
+    }
+
+    // Evict the oldest entry when the cache is full (insertion-ordered Map keys → FIFO).
+    if (keyCache.size >= KEY_CACHE_MAX) {
+        const oldest = keyCache.keys().next().value;
+
+        if (oldest !== undefined) {
+            keyCache.delete(oldest);
+        }
     }
 
     const keyPromise = crypto.subtle.importKey("raw", textEncoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign", "verify"]);

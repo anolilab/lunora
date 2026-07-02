@@ -74,10 +74,24 @@ describe("resolveClient", () => {
 });
 
 describe("createLunoraMcpServer request handlers", () => {
-    it("listTools returns the full tool definition set", async () => {
+    it("listTools returns only the read-only tools by default", async () => {
         expect.assertions(1);
 
         const server = createLunoraMcpServer({ client: mockClient().asClient });
+        const result = (await handlerFor(server, ListToolsRequestSchema.shape.method.value)({})) as ListToolsResult;
+
+        expect(result.tools.map((tool) => tool.name)).toStrictEqual([
+            "lunora_list_functions",
+            "lunora_list_tables",
+            "lunora_get_function_schema",
+            "lunora_run_query",
+        ]);
+    });
+
+    it("listTools includes the write tools when allowWrites is set", async () => {
+        expect.assertions(1);
+
+        const server = createLunoraMcpServer({ allowWrites: true, client: mockClient().asClient });
         const result = (await handlerFor(server, ListToolsRequestSchema.shape.method.value)({})) as ListToolsResult;
 
         expect(result.tools.map((tool) => tool.name)).toStrictEqual([

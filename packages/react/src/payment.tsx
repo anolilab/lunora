@@ -40,6 +40,24 @@ interface UseCheckoutResult {
 }
 
 /**
+ * Resolve a redirect target to a safe href, throwing on a non-http(s) scheme.
+ * The `url` is expected to be a provider-hosted checkout/portal URL from the
+ * app's own action, but a compromised/misconfigured server could return a
+ * `javascript:`/`data:` URL — this keeps such a value out of `location.assign`.
+ * Kept at module scope (not an inline `throw`) so `useCheckout` stays
+ * React-Compiler-optimizable.
+ */
+const safeRedirectHref = (url: string): string => {
+    const parsed = new URL(url, globalThis.location.href);
+
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+        throw new Error(`refusing to redirect to a non-http(s) URL: ${parsed.protocol}`);
+    }
+
+    return parsed.href;
+};
+
+/**
  * Decoupled redirect-on-resolve primitive shared by `CheckoutButton` and
  * `CustomerPortalButton`. The app passes a `trigger` thunk that calls its own
  * Lunora action (the one wrapping `LunoraPayment.createCheckout` /
@@ -61,9 +79,13 @@ const useCheckout = (trigger: RedirectTrigger): UseCheckoutResult => {
 
         try {
             const target = await trigger();
-            const { url } = target;
 
-            globalThis.location.assign(url);
+            // Validate the scheme via a module-level helper (not an inline
+            // `throw`) — a literal ThrowStatement inside try/catch defeats the
+            // React Compiler's memoization of this hook, whereas a throwing call
+            // is fine. `safeRedirectHref` rejects non-http(s) URLs so a
+            // compromised action can't drive `location.assign` to `javascript:`.
+            globalThis.location.assign(safeRedirectHref(target.url));
         } catch (error_: unknown) {
             const normalized = error_ instanceof Error ? error_ : new Error(String(error_));
 

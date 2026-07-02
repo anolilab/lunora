@@ -180,7 +180,7 @@ describe("observabilitySink", () => {
             expect.assertions(1);
 
             const { events, sink } = collectEvents();
-            const worker = createWorker({ observability: sink, shardDO: shard.namespace });
+            const worker = createWorker({ allowUnauthenticatedShardAccess: true, observability: sink, shardDO: shard.namespace });
 
             await worker.fetch(
                 new Request("https://app.example/_lunora/rpc", {
@@ -280,7 +280,12 @@ describe("observabilitySink", () => {
                     return { data: 42, errors: [], failed: 0, ok: 3 };
                 },
             } as unknown as QueryCoordinator;
-            const worker = createWorker({ observability: sink, queryCoordinator: coordinator, shardDO: shard.namespace });
+            const worker = createWorker({
+                allowUnauthenticatedShardAccess: true,
+                observability: sink,
+                queryCoordinator: coordinator,
+                shardDO: shard.namespace,
+            });
 
             const response = await worker.fetch(
                 new Request("https://app.example/_lunora/rpc", {

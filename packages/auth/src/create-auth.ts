@@ -46,6 +46,37 @@ const isHttpsBaseUrl = (baseURL: BetterAuthOptions["baseURL"]): boolean => {
 };
 
 /**
+ * Whether the deployment's `baseURL` is *explicitly* insecure `http://` (a local
+ * dev origin). Used to decide the `useSecureCookies` DEFAULT: anything NOT proven
+ * to be plain `http://` is treated as secure, because Cloudflare Workers serve
+ * over HTTPS in production and `baseURL` is very commonly unset (better-auth then
+ * infers it per-request). This inverts the previous "only secure when a positively
+ * HTTPS baseURL is set" logic, which left an unset-baseURL production deploy
+ * shipping session cookies without the `Secure` flag (better-auth's own fallback
+ * keys off the unreliable `NODE_ENV` on Workers). Returns a plain boolean to stay
+ * clear of `sonarjs/function-return-type`.
+ */
+const isExplicitHttpBaseUrl = (baseURL: BetterAuthOptions["baseURL"]): boolean => {
+    if (typeof baseURL === "string") {
+        return baseURL.startsWith("http://");
+    }
+
+    if (baseURL && typeof baseURL === "object") {
+        if (baseURL.protocol === "http") {
+            return true;
+        }
+
+        if (baseURL.protocol === "https") {
+            return false;
+        }
+
+        return typeof baseURL.fallback === "string" && baseURL.fallback.startsWith("http://");
+    }
+
+    return false;
+};
+
+/**
  * Apply Lunora's secure-by-default auth posture on top of the caller's options
  * without ever overriding an explicit choice.
  *
@@ -54,11 +85,14 @@ const isHttpsBaseUrl = (baseURL: BetterAuthOptions["baseURL"]): boolean => {
  * posture is explicit and self-reportable rather than relying on better-auth
  * internals. `secure` is intentionally left to `useSecureCookies`.
  *
- * Secure cookies: force `useSecureCookies` on for an HTTPS `baseURL`.
- * better-auth's own default is "secure in production", but it detects production
- * via `process.env.NODE_ENV`, which is unreliable on Workers (the same reason
- * rate limiting is force-enabled below), so an HTTPS deploy could otherwise ship
- * session cookies without the `Secure` flag.
+ * Secure cookies: default `useSecureCookies` ON unless `baseURL` is *explicitly*
+ * plain `http://` (a local dev origin). better-auth's own default is "secure in
+ * production", but it detects production via `process.env.NODE_ENV`, which is
+ * unreliable on Workers (the same reason rate limiting is force-enabled below),
+ * so a common unset-`baseURL` production deploy could otherwise ship session
+ * cookies without the `Secure` flag. Workers serve HTTPS in production, so the
+ * safe default is secure-unless-proven-http. An explicit caller
+ * `advanced.useSecureCookies` always wins.
  *
  * CSRF/origin validation and `baseURL`-trusted-origins are already on by default
  * in better-auth, so we don't re-implement them here.
@@ -88,7 +122,7 @@ const hardenAuthOptions = (options: BetterAuthOptions): BetterAuthOptions => {
         advanced: {
             ...advanced,
             defaultCookieAttributes: advanced.defaultCookieAttributes ?? { httpOnly: true, path: "/", sameSite: "lax" },
-            ...(advanced.useSecureCookies === undefined && isHttpsBaseUrl(options.baseURL) ? { useSecureCookies: true } : {}),
+            ...(advanced.useSecureCookies === undefined ? { useSecureCookies: !isExplicitHttpBaseUrl(options.baseURL) } : {}),
         },
     };
 };
