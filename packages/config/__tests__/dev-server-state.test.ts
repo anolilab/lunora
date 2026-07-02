@@ -5,10 +5,12 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+    claimDevServerState,
     clearDevServerState,
     DEV_STATE_DIR,
     DEV_STATE_FILE,
     isProcessAlive,
+    isRecordedProcessCurrent,
     readDevServerState,
     readLiveDevServerState,
     updateDevServerState,
@@ -126,5 +128,50 @@ describe("dev-server-state", () => {
         expect(readLiveDevServerState(workdir)).toBeUndefined();
         // The stale record was removed on the spot.
         expect(readDevServerState(workdir)).toBeUndefined();
+    });
+
+    it("treats a recycled PID as stale (record predates the process's start)", () => {
+        expect.assertions(2);
+
+        // A record claiming this very process started before 1970-01-02 can
+        // only be a recycled PID: this process verifiably started later. The
+        // start-time guard only runs where /proc exposes it (Linux) — on other
+        // platforms liveness alone decides, so assert conditionally.
+        const impossiblyOld = { mode: "cli" as const, pid: process.pid, startedAt: "1970-01-02T00:00:00.000Z", url: "http://localhost:8787" };
+        const expectStale = process.platform === "linux";
+
+        expect(isRecordedProcessCurrent(impossiblyOld)).toBe(!expectStale);
+
+        writeDevServerState(workdir, impossiblyOld);
+
+        expect(readLiveDevServerState(workdir)?.pid).toBe(expectStale ? undefined : process.pid);
+    });
+
+    it("claimDevServerState creates exclusively and reports a live incumbent", () => {
+        expect.assertions(5);
+
+        const first = claimDevServerState(workdir, { mode: "cli", pid: process.pid, url: "http://localhost:8787" });
+
+        expect(first.ok).toBe(true);
+        expect(readDevServerState(workdir)?.pid).toBe(process.pid);
+
+        // A second claimant loses to the live incumbent and gets its record.
+        const second = claimDevServerState(workdir, { mode: "vite", pid: DEAD_PID, url: "http://localhost:5173" });
+
+        expect(second.ok).toBe(false);
+        expect(second.existing?.pid).toBe(process.pid);
+        // The incumbent's record is untouched.
+        expect(readDevServerState(workdir)?.mode).toBe("cli");
+    });
+
+    it("claimDevServerState clears a stale incumbent and claims over it", () => {
+        expect.assertions(2);
+
+        writeDevServerState(workdir, { mode: "cli", pid: DEAD_PID, url: "http://localhost:8787" });
+
+        const claim = claimDevServerState(workdir, { mode: "vite", pid: process.pid, url: "http://localhost:5173" });
+
+        expect(claim.ok).toBe(true);
+        expect(readDevServerState(workdir)?.pid).toBe(process.pid);
     });
 });

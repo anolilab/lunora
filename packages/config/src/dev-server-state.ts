@@ -72,9 +72,14 @@ const stringField = (record: Record<string, unknown>, key: string): string | und
 };
 
 /**
- * True when a process with `pid` is currently alive. Signal `0` performs the
- * existence check without delivering anything; `EPERM` means "alive but not
- * ours", so it still counts as running.
+ * True when a process with `pid` is currently alive AND signalable by this
+ * user. Signal `0` performs the existence check without delivering anything.
+ *
+ * `EPERM` ("alive but another user's process") deliberately counts as NOT
+ * alive here: every dev server this module tracks was spawned by the current
+ * user, so a PID we cannot signal is by definition a recycled PID — treating
+ * it as running would wedge the lockfile permanently and aim `dev stop`'s
+ * kill escalation at an innocent process.
  */
 const isProcessAlive = (pid: number): boolean => {
     if (!Number.isInteger(pid) || pid <= 0) {
@@ -85,9 +90,76 @@ const isProcessAlive = (pid: number): boolean => {
         process.kill(pid, 0);
 
         return true;
-    } catch (error: unknown) {
-        return (error as NodeJS.ErrnoException).code === "EPERM";
+    } catch {
+        return false;
     }
+};
+
+/** Tolerated skew between a process's start time and the record it wrote (spawn → listen → write can take seconds). */
+const START_TIME_SKEW_MS = 10_000;
+
+/**
+ * Kernel clock-tick rate backing `/proc/&lt;pid>/stat`'s `starttime` field.
+ * Linux fixes `USER_HZ` at 100 for userspace on every mainstream platform,
+ * independent of the kernel's internal HZ.
+ */
+const LINUX_CLOCK_TICKS_PER_SECOND = 100;
+
+/**
+ * Wall-clock start time of `pid` in epoch ms, or `undefined` where the
+ * platform doesn't expose it cheaply (non-Linux) or the read fails. Combines
+ * `/proc/&lt;pid>/stat` field 22 (`starttime`, in clock ticks since boot) with
+ * `/proc/stat`'s `btime` (boot time, epoch seconds).
+ */
+const processStartTimeMs = (pid: number): number | undefined => {
+    if (process.platform !== "linux") {
+        return undefined;
+    }
+
+    try {
+        const stat = readFileSync(`/proc/${String(pid)}/stat`, "utf8");
+        // The comm field is parenthesized and may itself contain spaces or
+        // parens — split after the LAST `)`, then `starttime` (field 22
+        // overall) is the 20th of the remaining space-separated fields.
+        const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+        const startTicks = Number(fields[19]);
+        const bootLine = readFileSync("/proc/stat", "utf8")
+            .split("\n")
+            .find((line) => line.startsWith("btime "));
+        const bootSeconds = Number(bootLine?.slice("btime ".length));
+
+        if (!Number.isFinite(startTicks) || !Number.isFinite(bootSeconds)) {
+            return undefined;
+        }
+
+        return bootSeconds * 1000 + (startTicks / LINUX_CLOCK_TICKS_PER_SECOND) * 1000;
+    } catch {
+        return undefined;
+    }
+};
+
+/**
+ * True when the record's PID verifiably still refers to the dev server that
+ * wrote the record — not merely "some process exists with that number".
+ * Guards against PID reuse: a server process necessarily starts BEFORE its
+ * record is written, so a process that started after `startedAt` (+ skew) is
+ * a recycled PID wearing the corpse's number. The start-time check runs only
+ * where the platform exposes it (Linux); elsewhere liveness alone decides.
+ */
+const isRecordedProcessCurrent = (state: DevServerState): boolean => {
+    if (!isProcessAlive(state.pid)) {
+        return false;
+    }
+
+    const recordedAtMs = state.startedAt === undefined ? Number.NaN : Date.parse(state.startedAt);
+
+    if (Number.isNaN(recordedAtMs)) {
+        return true;
+    }
+
+    const actualStartMs = processStartTimeMs(state.pid);
+
+    return actualStartMs === undefined || actualStartMs <= recordedAtMs + START_TIME_SKEW_MS;
 };
 
 /**
@@ -193,8 +265,9 @@ const clearDevServerState = (projectRoot: string, expectedPid?: number): void =>
 
 /**
  * The state record of a dev server that is verifiably running right now, or
- * `undefined`. A record whose PID is dead is stale: it is cleared on the spot
- * so subsequent starts don't keep re-reading a corpse.
+ * `undefined`. A record whose PID is dead — or recycled onto a different
+ * process (see {@link isRecordedProcessCurrent}) — is stale: it is cleared on
+ * the spot so subsequent starts don't keep re-reading a corpse.
  */
 const readLiveDevServerState = (projectRoot: string): DevServerState | undefined => {
     const state = readDevServerState(projectRoot);
@@ -203,7 +276,7 @@ const readLiveDevServerState = (projectRoot: string): DevServerState | undefined
         return undefined;
     }
 
-    if (isProcessAlive(state.pid)) {
+    if (isRecordedProcessCurrent(state)) {
         return state;
     }
 
@@ -212,8 +285,62 @@ const readLiveDevServerState = (projectRoot: string): DevServerState | undefined
     return undefined;
 };
 
-export type { DevServerMode, DevServerState };
+/** Result of {@link claimDevServerState}: claimed, or lost to the live server already recorded. */
+interface ClaimDevServerStateResult {
+    /** The live record that won the race, when `ok` is `false`. */
+    existing?: DevServerState;
+    /** Whether this process now owns the record. */
+    ok: boolean;
+}
+
+/**
+ * Atomically claim `.lunora/dev.json` for a starting dev server. Unlike
+ * {@link writeDevServerState}, the create is exclusive (`wx`), which closes
+ * the check-then-write race where two near-simultaneous starts both read "no
+ * server", both spawn, and the second silently clobbers the first's record —
+ * leaving `dev stop` blind to the survivor. On losing the race to a LIVE
+ * server the claim fails with that record; a stale incumbent is cleared and
+ * the claim retried. Still best-effort on I/O errors: an unwritable checkout
+ * degrades to the plain (non-exclusive) write, never a crash.
+ */
+const claimDevServerState = (projectRoot: string, state: DevServerState): ClaimDevServerStateResult => {
+    const path = join(projectRoot, DEV_STATE_FILE);
+    const payload = `${JSON.stringify(state, undefined, 2)}\n`;
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+            mkdirSync(join(projectRoot, DEV_STATE_DIR), { recursive: true });
+            writeFileSync(path, payload, { encoding: "utf8", flag: "wx" });
+
+            return { ok: true };
+        } catch (error: unknown) {
+            if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+                // Permission/IO problem, not a race — fall back to the
+                // best-effort write so a read-only checkout behaves as before.
+                return { ok: writeDevServerState(projectRoot, state) !== undefined };
+            }
+
+            // Someone holds the file. Live (and not us) → they won. Stale →
+            // readLive cleared it; retry the exclusive create once.
+            const existing = readLiveDevServerState(projectRoot);
+
+            if (existing !== undefined && existing.pid !== state.pid) {
+                return { existing, ok: false };
+            }
+
+            if (existing !== undefined) {
+                // Our own pid already owns the record (restart in-process) — refresh it.
+                return { ok: writeDevServerState(projectRoot, state) !== undefined };
+            }
+        }
+    }
+
+    return { ok: writeDevServerState(projectRoot, state) !== undefined };
+};
+
+export type { ClaimDevServerStateResult, DevServerMode, DevServerState };
 export {
+    claimDevServerState,
     clearDevServerState,
     DEV_DAEMON_ENV,
     DEV_LOG_FILE,
@@ -221,6 +348,7 @@ export {
     DEV_STATE_DIR,
     DEV_STATE_FILE,
     isProcessAlive,
+    isRecordedProcessCurrent,
     readDevServerState,
     readLiveDevServerState,
     updateDevServerState,

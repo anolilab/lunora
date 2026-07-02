@@ -12,15 +12,26 @@
  * reports the existing instance instead of spawning a conflict.
  */
 import type { ChildProcess } from "node:child_process";
-import { spawn as nodeSpawn } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync } from "node:fs";
+import { spawn as nodeSpawn, spawnSync } from "node:child_process";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import type { DevServerState } from "@lunora/config";
-import { clearDevServerState, DEV_DAEMON_ENV, DEV_LOG_FILE, DEV_LOG_FILE_ENV, isProcessAlive, readDevServerState, readLiveDevServerState } from "@lunora/config";
+import {
+    clearDevServerState,
+    DEV_DAEMON_ENV,
+    DEV_LOG_FILE,
+    DEV_LOG_FILE_ENV,
+    isRecordedProcessCurrent,
+    readDevServerState,
+    readLiveDevServerState,
+    readProjectDependencyNames,
+} from "@lunora/config";
 
+import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
 import { printJson } from "../../util/output-format";
+import type { DevOptions } from "./index";
 
 /** How long `--background` waits for the server to accept requests before giving up. */
 const DEFAULT_READY_TIMEOUT_MS = 120_000;
@@ -28,13 +39,59 @@ const DEFAULT_READY_TIMEOUT_MS = 120_000;
 const POLL_INTERVAL_MS = 250;
 /** Grace period `dev stop` allows for a clean SIGTERM shutdown before SIGKILL. */
 const STOP_GRACE_MS = 10_000;
-/** Trailing log lines `dev logs` prints by default (0 = all). */
+/** Trailing log lines `dev logs` prints by default (0 = all, within {@link LOG_TAIL_MAX_BYTES}). */
 const DEFAULT_LOG_LINES = 100;
 /** Log lines surfaced when a background start fails before becoming ready. */
 const FAILURE_LOG_TAIL_LINES = 40;
+/** Upper bound on how much of the capture log is read back — a long-lived run's log can grow unbounded. */
+const LOG_TAIL_MAX_BYTES = 256 * 1024;
 
 /** Env overriding {@link DEFAULT_READY_TIMEOUT_MS}. */
 const READY_TIMEOUT_ENV = "LUNORA_DEV_READY_TIMEOUT_MS";
+
+/**
+ * How the dev child runs. `wrangler` is the classic `lunora dev` stack
+ * (wrangler worker + embedded studio + codegen watch). `vite` is a project on
+ * `@lunora/vite`: the Vite plugin already runs the worker, studio, and codegen
+ * inside the Vite dev server, so `lunora dev` runs the project's own dev
+ * script and gets out of the way — that's what makes `--background` / `stop` /
+ * `status` / `logs` work uniformly for Vite projects too.
+ */
+type DevFlavor = "vite" | "wrangler";
+
+/** Detect the dev flavor: a declared `@lunora/vite` dependency means Vite owns the dev server. */
+const detectDevFlavor = (cwd: string): DevFlavor => (readProjectDependencyNames(cwd).has("@lunora/vite") ? "vite" : "wrangler");
+
+/**
+ * The dev-server exec for the vite flavor — shared by the foreground plan and
+ * the background detach so the two spawn sites can't drift. The project's own
+ * `dev` script is the source of truth: for a meta-framework the dev server is
+ * the framework CLI (`astro dev`, `nuxt dev`, …), not bare `vite dev`, and
+ * every scaffolded template wires the right one into `scripts.dev`. Falls back
+ * to `vite dev` when there is no usable script, or when the script mentions
+ * `lunora` (it would re-enter this CLI and spawn itself forever).
+ */
+const viteDevCommand = (cwd: string): { args: ReadonlyArray<string>; command: string } => {
+    const manager = detectPackageManager(cwd);
+    let script: string | undefined;
+
+    try {
+        const raw = readFileSync(join(cwd, "package.json"), "utf8");
+
+        script = (JSON.parse(raw) as { scripts?: Record<string, string> }).scripts?.dev;
+    } catch {
+        // Missing / malformed package.json — fall through to the vite default.
+    }
+
+    if (script === undefined || script.trim() === "" || script.includes("lunora")) {
+        const exec = execArgsFor(manager, "vite", ["dev"]);
+
+        return { args: exec.args, command: exec.command };
+    }
+
+    // `<manager> run dev` is valid for npm, pnpm, yarn, and bun alike.
+    return { args: ["run", "dev"], command: manager };
+};
 
 const sleep = (ms: number): Promise<void> =>
     new Promise((resolve) => {
@@ -68,17 +125,26 @@ interface DetachedChild {
 }
 
 /** Spawns the detached daemon process. Injectable so tests drive the orchestration without real processes. */
-type DetachedSpawner = (descriptor: { args: ReadonlyArray<string>; command: string; cwd: string; env: Readonly<Record<string, string | undefined>>; logPath: string }) => DetachedChild;
+type DetachedSpawner = (descriptor: {
+    args: ReadonlyArray<string>;
+    command: string;
+    cwd: string;
+    env: Readonly<Record<string, string | undefined>>;
+    logPath: string;
+}) => DetachedChild;
 
 /**
  * Real detached spawner: routes the child's stdout+stderr into the capture log
  * (truncating any previous run's log), detaches it into its own process group,
- * and unrefs so the parent can exit while the child lives on.
+ * and unrefs so the parent can exit while the child lives on. The log is
+ * created owner-only (0600): dev output routinely echoes `.dev.vars` secrets,
+ * tokens, and connection strings, which must not be world-readable on a
+ * multi-user machine.
  */
 const defaultDetachedSpawner: DetachedSpawner = (descriptor) => {
     mkdirSync(dirname(descriptor.logPath), { recursive: true });
 
-    const logFd = openSync(descriptor.logPath, "w");
+    const logFd = openSync(descriptor.logPath, "w", 0o600);
 
     let child: ChildProcess;
 
@@ -109,13 +175,41 @@ const defaultDetachedSpawner: DetachedSpawner = (descriptor) => {
     };
 };
 
-/** Read the last `count` lines of a log file (all lines when `count` &lt;= 0); `[]` when unreadable. */
-const readLogTail = (path: string, count: number): string[] => {
-    let text: string;
-
+/**
+ * Read the trailing window of a log file as text, capped at
+ * {@link LOG_TAIL_MAX_BYTES} so a giant long-running capture log is never
+ * slurped whole; `undefined` when unreadable. When capped, the first
+ * (likely partial) line of the window is dropped.
+ */
+const readLogWindow = (path: string): string | undefined => {
     try {
-        text = readFileSync(path, "utf8");
+        const { size } = statSync(path);
+
+        if (size <= LOG_TAIL_MAX_BYTES) {
+            return readFileSync(path, "utf8");
+        }
+
+        const fd = openSync(path, "r");
+
+        try {
+            const buffer = Buffer.alloc(LOG_TAIL_MAX_BYTES);
+            const read = readSync(fd, buffer, 0, LOG_TAIL_MAX_BYTES, size - LOG_TAIL_MAX_BYTES);
+            const text = buffer.toString("utf8", 0, read);
+
+            return text.slice(text.indexOf("\n") + 1);
+        } finally {
+            closeSync(fd);
+        }
     } catch {
+        return undefined;
+    }
+};
+
+/** Read the last `count` lines of a log file (all lines when `count` &lt;= 0, bounded by {@link LOG_TAIL_MAX_BYTES}); `[]` when unreadable. */
+const readLogTail = (path: string, count: number): string[] => {
+    const text = readLogWindow(path);
+
+    if (text === undefined) {
         return [];
     }
 
@@ -132,6 +226,19 @@ const readLogTail = (path: string, count: number): string[] => {
 /** The absolute capture-log path for a project, honouring the state record when present. */
 const resolveLogPath = (cwd: string, state: DevServerState | undefined): string => state?.logFile ?? join(cwd, DEV_LOG_FILE);
 
+/** Print the `stop` / `status` / `logs` hint triple shown after every start-adjacent report. */
+const printLifecycleHints = (logger: Logger): void => {
+    logger.info("  Stop:   lunora dev stop");
+    logger.info("  Status: lunora dev status");
+    logger.info("  Logs:   lunora dev logs");
+};
+
+/** Report an already-running dev server + the lifecycle hints (the idempotent-start path). */
+const reportExistingServer = (logger: Logger, existing: { pid: number; url: string }): void => {
+    logger.warn(`Dev server already running at ${existing.url} (pid ${String(existing.pid)})`);
+    printLifecycleHints(logger);
+};
+
 /** Print the ready banner both humans and agents read after a background start. */
 const printBackgroundBanner = (logger: Logger, state: DevServerState): void => {
     logger.success(`Dev server running at ${state.url} (pid ${String(state.pid)})`);
@@ -140,9 +247,7 @@ const printBackgroundBanner = (logger: Logger, state: DevServerState): void => {
         logger.info(`  Studio: ${state.studioUrl}`);
     }
 
-    logger.info("  Stop:   lunora dev stop");
-    logger.info("  Status: lunora dev status");
-    logger.info("  Logs:   lunora dev logs");
+    printLifecycleHints(logger);
 };
 
 interface BackgroundCommandOptions {
@@ -173,7 +278,13 @@ type ReadyOutcome = { exitCode: number; status: "exited" } | { state: DevServerS
  * keeps the three racing signals — record file, HTTP socket, process death —
  * in one legible loop.
  */
-const waitUntilReady = async (parameters: { child: DetachedChild; cwd: string; deadline: number; pollIntervalMs: number; probe: ReadinessProbe }): Promise<ReadyOutcome> => {
+const waitUntilReady = async (parameters: {
+    child: DetachedChild;
+    cwd: string;
+    deadline: number;
+    pollIntervalMs: number;
+    probe: ReadinessProbe;
+}): Promise<ReadyOutcome> => {
     const { child, cwd, deadline, pollIntervalMs, probe } = parameters;
     const exited = child.exited.then((code): { exitCode: number } => {
         return { exitCode: code };
@@ -274,8 +385,138 @@ const runDevBackground = async (options: BackgroundCommandOptions): Promise<{ co
     return { code: 1 };
 };
 
+/**
+ * Rebuild the argv a detached daemon `lunora dev` re-invocation needs, from the
+ * already-parsed options. `--background`/`--json` are deliberately NOT
+ * forwarded: the daemon must run the foreground path (its detachment marker is
+ * {@link DEV_DAEMON_ENV}), and JSON logging travels as `LUNORA_LOG_JSON=1` env.
+ *
+ * KEEP IN SYNC with the `dev` option table in `./index.ts`: any new flag that
+ * must reach the detached daemon has to be forwarded here explicitly, or a
+ * background start will silently drop it.
+ */
+const daemonArguments = (options: DevOptions, remote: boolean): string[] => {
+    const args = ["dev"];
+
+    if (options.apiSpec !== undefined) {
+        args.push("--api-spec", options.apiSpec);
+    }
+
+    if (options.port !== undefined) {
+        args.push("--port", String(options.port));
+    }
+
+    if (options.workerPort !== undefined) {
+        args.push("--worker-port", String(options.workerPort));
+    }
+
+    if (options.codegen === false) {
+        args.push("--no-codegen");
+    }
+
+    if (options.studio === false) {
+        args.push("--no-studio");
+    }
+
+    if (remote) {
+        args.push("--remote");
+    }
+
+    return args;
+};
+
+/**
+ * Detach the dev server as a managed background process and block until it is
+ * ready: the project's dev script directly for a Vite project (its dev-state
+ * plugin writes the record), else this same CLI re-invoked as the daemon.
+ */
+const startBackground = (context: { cwd: string; jsonLogs: boolean; logger: Logger; options: DevOptions; remote: boolean }): Promise<{ code: number }> => {
+    const { cwd, jsonLogs, logger, options, remote } = context;
+
+    if (detectDevFlavor(cwd) === "vite") {
+        return runDevBackground({
+            command: viteDevCommand(cwd),
+            cwd,
+            ...(remote ? { env: { LUNORA_REMOTE: "1" } } : {}),
+            json: jsonLogs,
+            logger,
+        });
+    }
+
+    // Re-invoke this same CLI entry as the detached daemon.
+    return runDevBackground({
+        command: { args: [process.argv[1] ?? "lunora", ...daemonArguments(options, remote)], command: process.execPath },
+        cwd,
+        json: jsonLogs,
+        logger,
+    });
+};
+
+/**
+ * Process-group id of `pid` via `ps` (POSIX only), or `undefined`. The
+ * recorded PID is not necessarily a group leader — a Vite background record
+ * holds Vite's PID while the detached group is led by the package-manager
+ * wrapper — so the group must be looked up, never assumed to equal the PID.
+ */
+const processGroupId = (pid: number): number | undefined => {
+    try {
+        // eslint-disable-next-line sonarjs/no-os-command-from-path -- `ps` must resolve from PATH (POSIX standard tool); args are fixed and no shell is involved
+        const result = spawnSync("ps", ["-o", "pgid=", "-p", String(pid)], { encoding: "utf8" });
+        const pgid = Number.parseInt(result.stdout.trim(), 10);
+
+        return Number.isInteger(pgid) && pgid > 0 ? pgid : undefined;
+    } catch {
+        return undefined;
+    }
+};
+
+/** The signal seam `dev stop` drives — `process.kill` in production, recorded in tests. */
+type SignalFunction = (pid: number, signal: NodeJS.Signals) => void;
+
+/**
+ * Force-kill escalation after a stalled graceful shutdown, scoped by platform
+ * and by how the server was started.
+ *
+ * Windows has no POSIX process groups, so `taskkill /T /F` fells the whole
+ * child tree (wrangler/workerd/vite children would otherwise be orphaned
+ * holding the port). On POSIX, a BACKGROUND record was detached into its own
+ * process group containing only our children, so the group is killed
+ * (resolved via {@link processGroupId} — the recorded PID may not be its
+ * leader). A FOREGROUND record gets a single-PID kill only: the foreground
+ * CLI may share a process group with the user's shell job (no job control
+ * under `sh -c`), so a group kill could fell innocent processes.
+ */
+const forceKillRecordedServer = (state: DevServerState, signal: SignalFunction): void => {
+    if (process.platform === "win32") {
+        try {
+            // eslint-disable-next-line sonarjs/no-os-command-from-path -- `taskkill` must resolve from PATH (Windows system tool); args are fixed and no shell is involved
+            spawnSync("taskkill", ["/pid", String(state.pid), "/T", "/F"], { stdio: "ignore" });
+        } catch {
+            /* already gone */
+        }
+
+        return;
+    }
+
+    if (state.background === true) {
+        try {
+            signal(-(processGroupId(state.pid) ?? state.pid), "SIGKILL");
+
+            return;
+        } catch {
+            /* group gone or unkillable — fall through to the single PID */
+        }
+    }
+
+    try {
+        signal(state.pid, "SIGKILL");
+    } catch {
+        /* already gone */
+    }
+};
+
 interface StopCommandOptions {
-    /** Injection seam for tests — defaults to {@link isProcessAlive}. */
+    /** Injection seam for tests — defaults to {@link isRecordedProcessCurrent} against the record. */
     alive?: (pid: number) => boolean;
     cwd: string;
     json: boolean;
@@ -283,24 +524,28 @@ interface StopCommandOptions {
     /** Injection seam for tests — defaults to {@link POLL_INTERVAL_MS} / {@link STOP_GRACE_MS}. */
     pollIntervalMs?: number;
     /** Injection seam for tests — defaults to `process.kill`. */
-    signal?: (pid: number, signal: NodeJS.Signals) => void;
+    signal?: SignalFunction;
     stopGraceMs?: number;
 }
 
 /**
- * `lunora dev stop` — SIGTERM the recorded dev server, escalate to SIGKILL
- * after a grace period, and clear the state record. Idempotent: stopping when
- * nothing runs succeeds silently.
+ * `lunora dev stop` — SIGTERM the recorded dev server, escalate after a grace
+ * period (see {@link forceKillRecordedServer}), and clear the state record.
+ * Idempotent: stopping when nothing runs succeeds silently. The record's PID
+ * is verified to still be the process that wrote it (PID-reuse guard) before
+ * anything is signalled.
  */
 const runDevStop = async (options: StopCommandOptions): Promise<{ code: number }> => {
     const { cwd, logger } = options;
-    const alive = options.alive ?? isProcessAlive;
-    const signal = options.signal ?? ((pid: number, sig: NodeJS.Signals): void => {
-        process.kill(pid, sig);
-    });
+    const state = readDevServerState(cwd);
+    const alive = options.alive ?? ((pid: number): boolean => pid === state?.pid && isRecordedProcessCurrent(state));
+    const signal =
+        options.signal ??
+        ((pid: number, sig: NodeJS.Signals): void => {
+            process.kill(pid, sig);
+        });
     const pollInterval = options.pollIntervalMs ?? POLL_INTERVAL_MS;
     const grace = options.stopGraceMs ?? STOP_GRACE_MS;
-    const state = readDevServerState(cwd);
 
     if (state === undefined || !alive(state.pid)) {
         clearDevServerState(cwd);
@@ -328,18 +573,7 @@ const runDevStop = async (options: StopCommandOptions): Promise<{ code: number }
     }
 
     if (alive(state.pid)) {
-        // Graceful shutdown stalled — force-kill. Prefer the process GROUP
-        // (detached daemons lead their own group, taking wrangler/vite child
-        // processes down with them); fall back to the single PID.
-        try {
-            signal(-state.pid, "SIGKILL");
-        } catch {
-            try {
-                signal(state.pid, "SIGKILL");
-            } catch {
-                /* already gone */
-            }
-        }
+        forceKillRecordedServer(state, signal);
     }
 
     // The server clears its own record on clean shutdown; this covers the
@@ -423,7 +657,7 @@ const runDevStatus = (options: StatusCommandOptions): { code: number } => {
 
 interface LogsCommandOptions {
     cwd: string;
-    /** Trailing lines to print; 0 or negative = the whole log. */
+    /** Trailing lines to print; 0 or negative = the whole log (bounded by {@link LOG_TAIL_MAX_BYTES}). */
     lines?: number;
     logger: Logger;
 }
@@ -453,5 +687,60 @@ const runDevLogs = (options: LogsCommandOptions): { code: number } => {
     return { code: 0 };
 };
 
-export type { BackgroundCommandOptions, DetachedChild, DetachedSpawner, LogsCommandOptions, ReadinessProbe, StatusCommandOptions, StopCommandOptions };
-export { runDevBackground, runDevLogs, runDevStatus, runDevStop };
+/**
+ * Route a `lunora dev &lt;subcommand>` positional to its lifecycle command.
+ * Returns `undefined` when no subcommand was given (→ the caller runs the
+ * start path), a `{ code: 1 }` error for an unknown one.
+ */
+const runLifecycleSubcommand = (parameters: {
+    cwd: string;
+    json: boolean;
+    lines?: number;
+    logger: Logger;
+    subcommand: string | undefined;
+}): Promise<{ code: number }> | { code: number } | undefined => {
+    const { cwd, json, lines, logger, subcommand } = parameters;
+
+    if (subcommand === "stop") {
+        return runDevStop({ cwd, json, logger });
+    }
+
+    if (subcommand === "status") {
+        return runDevStatus({ cwd, json, logger });
+    }
+
+    if (subcommand === "logs") {
+        return runDevLogs({ cwd, lines, logger });
+    }
+
+    if (subcommand !== undefined) {
+        logger.error(`dev: unknown subcommand "${subcommand}" — expected stop | status | logs (or no subcommand to start the dev server)`);
+
+        return { code: 1 };
+    }
+
+    return undefined;
+};
+
+export type {
+    BackgroundCommandOptions,
+    DetachedChild,
+    DetachedSpawner,
+    DevFlavor,
+    LogsCommandOptions,
+    ReadinessProbe,
+    StatusCommandOptions,
+    StopCommandOptions,
+};
+export {
+    detectDevFlavor,
+    printLifecycleHints,
+    reportExistingServer,
+    runDevBackground,
+    runDevLogs,
+    runDevStatus,
+    runDevStop,
+    runLifecycleSubcommand,
+    startBackground,
+    viteDevCommand,
+};

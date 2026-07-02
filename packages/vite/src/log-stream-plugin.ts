@@ -106,12 +106,6 @@ const patchStream = (stream: WritableLike): (() => void) => {
 };
 
 /**
- * Vite plugin (serve-only) that formats Lunora worker logs in the terminal.
- * Patches `process.stdout`/`process.stderr` once the dev server is configured
- * and restores them when it closes.
- */
-
-/**
  * True when the worker's structured JSON events should pass through RAW
  * instead of being pretty-printed: an explicit `LUNORA_LOG_JSON=1|true`, or an
  * AI agent driving the process (agents parse JSON; the decorated line only
@@ -131,6 +125,11 @@ const wantRawJsonLogs = (): boolean => {
     return detectAiAgent() !== undefined;
 };
 
+/**
+ * Vite plugin (serve-only) that formats Lunora worker logs in the terminal.
+ * Patches `process.stdout`/`process.stderr` once the dev server is configured
+ * and restores them when it closes.
+ */
 const logStreamPlugin = (): Plugin => {
     let restore: (() => void) | undefined;
 

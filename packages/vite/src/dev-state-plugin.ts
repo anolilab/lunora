@@ -15,7 +15,7 @@
  * backgrounded run and `LUNORA_DEV_LOG_FILE` names the capture log, both
  * recorded so `status`/`logs` can report them.
  */
-import { clearDevServerState, DEV_DAEMON_ENV, DEV_LOG_FILE_ENV, readLiveDevServerState, writeDevServerState } from "@lunora/config";
+import { claimDevServerState, clearDevServerState, DEV_DAEMON_ENV, DEV_LOG_FILE_ENV } from "@lunora/config";
 import type { Plugin, ViteDevServer } from "vite";
 
 import { lunoraLine } from "./log";
@@ -65,20 +65,10 @@ const devStatePlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                     return;
                 }
 
-                // Never clobber another live server's record — surface it instead,
-                // so `lunora dev stop` keeps targeting the first server.
-                const existing = readLiveDevServerState(root);
-
-                if (existing !== undefined && existing.pid !== process.pid) {
-                    server.config.logger.warn(
-                        lunoraLine(`another dev server is already recorded at ${existing.url} (pid ${String(existing.pid)}) — leaving .lunora/dev.json untouched`),
-                    );
-
-                    return;
-                }
-
-                recorded = true;
-                writeDevServerState(root, {
+                // Atomic exclusive claim: never clobber another live server's
+                // record (even in a start race) — surface it instead, so
+                // `lunora dev stop` keeps targeting the first server.
+                const claim = claimDevServerState(root, {
                     background: process.env[DEV_DAEMON_ENV] === "1",
                     logFile: process.env[DEV_LOG_FILE_ENV],
                     mode: "vite",
@@ -86,6 +76,20 @@ const devStatePlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                     startedAt: new Date().toISOString(),
                     url,
                 });
+
+                if (!claim.ok) {
+                    if (claim.existing !== undefined) {
+                        server.config.logger.warn(
+                            lunoraLine(
+                                `another dev server is already recorded at ${claim.existing.url} (pid ${String(claim.existing.pid)}) — leaving .lunora/dev.json untouched`,
+                            ),
+                        );
+                    }
+
+                    return;
+                }
+
+                recorded = true;
             };
 
             server.httpServer?.once("close", () => {

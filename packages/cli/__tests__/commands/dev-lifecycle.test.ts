@@ -74,10 +74,12 @@ describe("lunora dev lifecycle", () => {
             expect(lines.some((line) => line.message.includes("Stopped dev server (pid 4242)"))).toBe(true);
         });
 
-        it("escalates to a process-group SIGKILL when SIGTERM stalls", async () => {
+        it("escalates a BACKGROUND record to a process-group SIGKILL when SIGTERM stalls", async () => {
             expect.assertions(2);
 
-            writeDevServerState(workdir, { mode: "cli", pid: 4242, url: "http://localhost:8787" });
+            // Only a background (detached) record may be group-killed — its
+            // group holds nothing but our own children.
+            writeDevServerState(workdir, { background: true, mode: "cli", pid: 4242, url: "http://localhost:8787" });
 
             const signals: { pid: number; signal: string }[] = [];
 
@@ -94,10 +96,38 @@ describe("lunora dev lifecycle", () => {
             });
 
             expect(result.code).toBe(0);
-            // SIGTERM first, then the group SIGKILL (negative pid).
+            // SIGTERM first, then the group SIGKILL (negative pid — the pgid
+            // lookup on the fake pid fails and falls back to the recorded pid).
             expect(signals).toStrictEqual([
                 { pid: 4242, signal: "SIGTERM" },
                 { pid: -4242, signal: "SIGKILL" },
+            ]);
+        });
+
+        it("escalates a FOREGROUND record with a single-pid SIGKILL only", async () => {
+            expect.assertions(1);
+
+            // A foreground CLI may share its process group with the user's
+            // shell job — group-killing it could fell innocent processes.
+            writeDevServerState(workdir, { mode: "cli", pid: 4242, url: "http://localhost:8787" });
+
+            const signals: { pid: number; signal: string }[] = [];
+
+            await runDevStop({
+                alive: () => true,
+                cwd: workdir,
+                json: false,
+                logger: recordingLogger().logger,
+                pollIntervalMs: 1,
+                signal: (pid, signal) => {
+                    signals.push({ pid, signal });
+                },
+                stopGraceMs: 5,
+            });
+
+            expect(signals).toStrictEqual([
+                { pid: 4242, signal: "SIGTERM" },
+                { pid: 4242, signal: "SIGKILL" },
             ]);
         });
 
@@ -136,9 +166,11 @@ describe("lunora dev lifecycle", () => {
         });
 
         it("reports URL, pid, uptime, and background for a live record", () => {
-            expect.assertions(2);
+            expect.assertions(3);
 
-            const startedAt = new Date(Date.now() - 30_000).toISOString();
+            // `startedAt` must postdate this process's start — a record older
+            // than its own process reads as a recycled PID and is cleared.
+            const startedAt = new Date().toISOString();
 
             writeDevServerState(workdir, { background: true, mode: "cli", pid: process.pid, startedAt, url: "http://localhost:8787" });
 
@@ -149,6 +181,7 @@ describe("lunora dev lifecycle", () => {
             const banner = lines.find((line) => line.message.includes("Dev server running at http://localhost:8787"));
 
             expect(banner?.message).toContain(`pid ${String(process.pid)}`);
+            expect(banner?.message).toContain("uptime");
             expect(banner?.message).toContain("background");
         });
 

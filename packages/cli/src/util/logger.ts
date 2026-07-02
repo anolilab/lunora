@@ -82,14 +82,15 @@ const wantJson = (): boolean => {
     return flag === "1" || flag === "true";
 };
 
+/** Instantiate a reporter class through the local {@link PailReporterConstructor} typing (see its packaging-bug note). */
+const constructReporter = (Reporter: unknown): PailReporter => new (Reporter as PailReporterConstructor)();
+
 const buildReporters = (): PailReporter[] => {
     if (configuredReporters !== undefined && configuredReporters.length > 0) {
         return configuredReporters;
     }
 
-    const Reporter: PailReporterConstructor = (wantJson() ? JsonReporter : LunoraReporter) as PailReporterConstructor;
-
-    return [new Reporter()];
+    return [constructReporter(wantJson() ? JsonReporter : LunoraReporter)];
 };
 
 /**
@@ -115,8 +116,8 @@ const forceJsonLogging = (): void => {
  */
 const logHandlers = {
     compose: (...reporters: PailReporter[]): PailReporter[] => reporters,
-    console: (): PailReporter => new (LunoraReporter as PailReporterConstructor)(),
-    json: (): PailReporter => new (JsonReporter as PailReporterConstructor)(),
+    console: (): PailReporter => constructReporter(LunoraReporter),
+    json: (): PailReporter => constructReporter(JsonReporter),
 };
 
 /**

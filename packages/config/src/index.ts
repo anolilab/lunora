@@ -23,8 +23,9 @@ export type {
 export { streamContainerLogs } from "./container-logs";
 export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./detect-framework";
 export { detectFramework, readProjectDependencyNames } from "./detect-framework";
-export type { DevServerMode, DevServerState } from "./dev-server-state";
+export type { ClaimDevServerStateResult, DevServerMode, DevServerState } from "./dev-server-state";
 export {
+    claimDevServerState,
     clearDevServerState,
     DEV_DAEMON_ENV,
     DEV_LOG_FILE,
@@ -32,6 +33,7 @@ export {
     DEV_STATE_DIR,
     DEV_STATE_FILE,
     isProcessAlive,
+    isRecordedProcessCurrent,
     readDevServerState,
     readLiveDevServerState,
     updateDevServerState,

@@ -31,7 +31,10 @@ const AGENT_MODE_ENV = "LUNORA_AGENT_MODE";
 
 /**
  * Known agent markers, first match wins. Each is set by the agent harness in
- * the shells it spawns; none appear in interactive human terminals.
+ * the shells it spawns; none appear in interactive human terminals. The bar
+ * for adding an entry is high on purpose: a false positive silently detaches
+ * a human's `lunora dev` and switches it to JSON logs, which reads as "dev
+ * didn't start" — only markers verified to be agent-shell-only belong here.
  */
 const AGENT_ENV_MARKERS: ReadonlyArray<AgentDetection> = [
     { name: "Claude Code", variable: "CLAUDECODE" },
@@ -40,8 +43,6 @@ const AGENT_ENV_MARKERS: ReadonlyArray<AgentDetection> = [
     { name: "Codex", variable: "CODEX_SANDBOX" },
     { name: "Gemini CLI", variable: "GEMINI_CLI" },
     { name: "Cline", variable: "CLINE_ACTIVE" },
-    { name: "Replit agent", variable: "REPLIT_AGENT" },
-    { name: "Jules", variable: "JULES_AGENT" },
 ];
 
 /** True when the env value spells an explicit "off" (`0` / `false`). */
