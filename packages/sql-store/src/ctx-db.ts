@@ -1341,8 +1341,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         fieldRef: columnRefSql,
         serialize: serializeColumnValue,
         // MySQL has no `||` string concat; the rest use the portable form compileWhereSql defaults to.
-        // The term is wildcard-escaped by compileContains, so pair it with `ESCAPE '\'` for literal matching.
-        ...(dialect.name === "mysql" ? { likeContains: (reference, term) => sql`${reference} LIKE CONCAT('%', ${term}, '%') ESCAPE '\\'` } : {}),
+        // The term is wildcard-escaped by compileContains, so pair it with a backslash `ESCAPE` for literal
+        // matching. MySQL treats backslash as a string-literal escape, so the SQL text must contain a DOUBLED
+        // backslash (`ESCAPE '\\'`) to denote one literal backslash; drizzle's `sql` tag uses the COOKED
+        // template string, so `'\\\\'` here renders `'\\'` in the SQL (a single `'\'` would escape the closing
+        // quote and raise a syntax error). SQLite/Postgres take backslash literally and use the portable default.
+        ...(dialect.name === "mysql" ? { likeContains: (reference, term) => sql`${reference} LIKE CONCAT('%', ${term}, '%') ESCAPE '\\\\'` } : {}),
     };
 
     /** NULL-safe equality for the OCC guard, bound to this ctx-db's engine (see the module-level {@link nullSafeEqualsSql}). */
