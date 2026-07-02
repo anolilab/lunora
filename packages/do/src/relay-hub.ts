@@ -27,7 +27,7 @@ import { stableStringify } from "./reactive-cache";
 import type { OwnerRelayFrame, RelayFrame, RelayShapePoke, RelayShapeSeed, RelayShapeSubscribe } from "./relay";
 import { DEFAULT_PROMOTION_THRESHOLDS, parseRelayName, relayName, shapeRoutingKey } from "./relay";
 import type { ShapeRowOp } from "./shape-global-diff";
-import { buildPokeFrames } from "./shape-global-diff";
+import { buildPokeFrames, encodeRowsPatch } from "./shape-global-diff";
 import { awaitWsDrain, trySendFrame } from "./subscription-delivery";
 import type { ResolvedShape, ShapeSubscriptionQuery, SocketAttachment, SubscriptionIdentity } from "./types";
 
@@ -485,7 +485,10 @@ class OwnerRelay extends RelayLink {
                 epoch,
                 fromCursor,
                 name: entry.name,
-                rowsPatch,
+                // Wire-encode before the poke crosses the owner→relay `JSON.stringify`
+                // hop (`requestRelayMessage`); the relay re-frames it with
+                // `preEncoded` so a `bytes`/`bigint` shape column isn't dropped/truncated.
+                rowsPatch: encodeRowsPatch(rowsPatch),
                 type: "relay_shape_poke",
             };
 
@@ -539,7 +542,9 @@ class OwnerRelay extends RelayLink {
                 epoch,
                 fromCursor,
                 name: entry.name,
-                rowsPatch,
+                // Wire-encode before the owner→relay `JSON.stringify` hop (see the
+                // cohort-multicast path); the relay re-frames it with `preEncoded`.
+                rowsPatch: encodeRowsPatch(rowsPatch),
                 targetConnectionId: entry.connectionId,
                 type: "relay_shape_poke",
             };
@@ -981,13 +986,19 @@ class RelayMember extends RelayLink {
                     continue;
                 }
 
-                const frames = buildPokeFrames([{ rowsPatch: poke.rowsPatch, shapeId: subId }], {
-                    baseCheckpoint: undefined,
-                    checkpoint: poke.checkpoint,
-                    epoch: poke.epoch,
-                    lastMutationId: undefined,
-                    pokeId: this.host.nextPokeId(),
-                });
+                const frames = buildPokeFrames(
+                    [{ rowsPatch: poke.rowsPatch, shapeId: subId }],
+                    {
+                        baseCheckpoint: undefined,
+                        checkpoint: poke.checkpoint,
+                        epoch: poke.epoch,
+                        lastMutationId: undefined,
+                        pokeId: this.host.nextPokeId(),
+                    },
+                    // `poke.rowsPatch` was wire-encoded by the owner before it crossed
+                    // the hub — don't double-encode it here.
+                    { preEncoded: true },
+                );
 
                 for (const frame of frames) {
                     trySendFrame(ws, frame);

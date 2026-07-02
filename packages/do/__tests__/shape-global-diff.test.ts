@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import { decodeWire } from "../../../shared/wire-codec";
 import type { ShapeRow } from "../src/ctx-db-shapes";
-import { buildPokeFrames, diffGlobalMembership, projectColumns } from "../src/shape-global-diff";
+import { buildPokeFrames, diffGlobalMembership, encodeRowsPatch, projectColumns } from "../src/shape-global-diff";
 
 const row = (id: string, doc: Record<string, unknown>): ShapeRow => {
     return { doc, id };
@@ -150,5 +151,51 @@ describe(buildPokeFrames, () => {
             },
             { checkpoint: 7, epoch: "e1", pokeId: "poke-1", type: "pokeEnd" },
         ]);
+    });
+});
+
+describe("relay poke wire fidelity (encodeRowsPatch + preEncoded)", () => {
+    // Regression: a relay-promoted shape's live poke crosses the owner→relay
+    // `JSON.stringify` hub hop as a raw structured value. Before the fix, a
+    // `bytes`/`bigint` column threw (bigint) or truncated to `{}` (ArrayBuffer)
+    // at that hop, then the relay re-framed the corrupted value. The owner now
+    // `encodeRowsPatch`es before the hop and the relay re-frames with
+    // `preEncoded`, so the value survives end-to-end.
+    it("carries bigint + bytes through owner-encode → hub JSON hop → relay preEncoded reframe", () => {
+        expect.assertions(3);
+
+        const bytes = new Uint8Array([1, 2, 3, 255]).buffer;
+        const rawRowsPatch = [{ key: "t1", op: "insert" as const, table: "coins", value: { _id: "t1", balance: 42n, blob: bytes } }];
+
+        // Owner side: encode before the poke crosses the hub, then simulate the
+        // `requestRelayMessage` `JSON.stringify` / relay-side `JSON.parse`.
+        const encoded = encodeRowsPatch(rawRowsPatch);
+
+        expect(() => JSON.stringify({ rowsPatch: encoded })).not.toThrow(); // raw bigint would throw here
+
+        // Deliberately round-trip through JSON (NOT structuredClone) — that IS the
+        // owner→relay hub hop this regression guards; structuredClone would preserve
+        // bigint/bytes and defeat the test.
+        // eslint-disable-next-line unicorn/prefer-structured-clone -- must exercise the real JSON transport hop, not a structured clone
+        const forwarded = JSON.parse(JSON.stringify({ rowsPatch: encoded })) as { rowsPatch: typeof encoded };
+
+        // Relay side: re-frame WITHOUT a second encode.
+        const frames =
+            forwarded.rowsPatch.length > 0
+                ? buildPokeFrames(
+                      [{ rowsPatch: forwarded.rowsPatch, shapeId: "s1" }],
+                      { baseCheckpoint: undefined, checkpoint: 1, epoch: "e1", lastMutationId: undefined, pokeId: "p1" },
+                      { preEncoded: true },
+                  )
+                : [];
+
+        const pokePart = frames
+            .map((frame) => JSON.parse(frame) as { rowsPatch?: { value?: unknown }[]; type: string })
+            .find((frame) => frame.type === "pokePart");
+        // Client decode of the delivered value round-trips to the real bigint + bytes.
+        const decoded = decodeWire(pokePart?.rowsPatch?.[0]?.value) as { balance: bigint; blob: ArrayBuffer };
+
+        expect(decoded.balance).toBe(42n);
+        expect(new Uint8Array(decoded.blob)).toStrictEqual(new Uint8Array([1, 2, 3, 255]));
     });
 });
