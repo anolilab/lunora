@@ -1,5 +1,6 @@
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { DockerProbe } from "../../util/docker";
 import { isDockerAvailable } from "../../util/docker";
 import type { Logger } from "../../util/logger";
@@ -60,7 +61,7 @@ const runContainersCommand = async (options: ContainersCommandOptions): Promise<
         return { code: 1 };
     }
 
-    const args = ["exec", "wrangler", "containers", subcommand, ...rest];
+    const args = ["containers", subcommand, ...rest];
 
     if (options.tag !== undefined) {
         args.push("--tag", options.tag);
@@ -74,7 +75,9 @@ const runContainersCommand = async (options: ContainersCommandOptions): Promise<
         args.push("--env", options.env);
     }
 
-    const descriptor: SpawnDescriptor = { args, command: "pnpm", cwd: options.cwd ?? process.cwd() };
+    const cwd = options.cwd ?? process.cwd();
+    const exec = execArgsFor(detectPackageManager(cwd), "wrangler", args);
+    const descriptor: SpawnDescriptor = { args: exec.args, command: exec.command, cwd };
 
     options.logger.info(`running ${descriptor.command} ${descriptor.args.join(" ")}`);
 

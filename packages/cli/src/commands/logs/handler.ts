@@ -2,6 +2,7 @@ import { readLinkedProject } from "@lunora/config";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
@@ -56,7 +57,7 @@ const runLogsCommand = async (options: LogsCommandOptions): Promise<LogsCommandR
         return { code: 1, descriptor: undefined, error: "invalid format" };
     }
 
-    const args = ["exec", "wrangler", "tail"];
+    const args = ["tail"];
 
     if (options.worker !== undefined) {
         args.push(options.worker);
@@ -86,9 +87,10 @@ const runLogsCommand = async (options: LogsCommandOptions): Promise<LogsCommandR
         args.push("--temporary");
     }
 
+    const exec = execArgsFor(detectPackageManager(cwd), "wrangler", args);
     const descriptor: SpawnDescriptor = {
-        args,
-        command: "pnpm",
+        args: exec.args,
+        command: exec.command,
         cwd,
     };
 

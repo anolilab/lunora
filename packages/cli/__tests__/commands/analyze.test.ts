@@ -119,5 +119,20 @@ describe("lunora analyze", () => {
             expect(argv).toContain("--dry-run");
             expect(argv).toContain("--outdir");
         });
+
+        it("launches wrangler through npx when the project declares npm", async () => {
+            expect.assertions(2);
+
+            // `detectPackageManager` reads the nearest package.json's `packageManager`.
+            writeFileSync(join(workdir, "package.json"), `{ "packageManager": "npm@10.9.0" }\n`, "utf8");
+            const { logger } = recordingLogger();
+            // exit 1 short-circuits before we walk the (never-created) outdir.
+            const { calls, spawner } = createRecordingSpawner(1);
+
+            await runAnalyzeCommand({ cwd: workdir, logger, spawner });
+
+            expect(calls[0]?.descriptor.command).toBe("npx");
+            expect(calls[0]?.descriptor.args.slice(0, 3)).toStrictEqual(["--", "wrangler", "deploy"]);
+        });
     });
 });
