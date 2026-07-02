@@ -137,6 +137,35 @@ describe("kvBrowser", () => {
         expect(mock.deleteKvKey).toHaveBeenCalledWith(expect.objectContaining({ key: "session:abc", namespace: "CACHE" }));
     });
 
+    it("surfaces an error and keeps failed keys when a bulk delete partially fails", async () => {
+        expect.assertions(2);
+
+        // First delete (session:abc, sorted first) rejects; session:def still deletes.
+        mock.deleteKvKey.mockRejectedValueOnce(new Error("nope"));
+
+        render(renderBrowser(mock));
+
+        fireEvent.click(await screen.findByTestId("kv-select-all"));
+        fireEvent.click(screen.getByTestId("kv-bulk-delete-btn"));
+
+        await screen.findByTestId("kv-bulk-error");
+
+        // The failed key's row survives; the successful one is pruned.
+        expect(screen.getByTestId("kv-key-row-session:abc")).toBeDefined();
+        expect(screen.queryByTestId("kv-key-row-session:def")).toBeNull();
+    });
+
+    it("blocks saving when the TTL is below Cloudflare's 60-second minimum", async () => {
+        expect.assertions(1);
+
+        render(renderBrowser(mock));
+
+        fireEvent.click(await screen.findByTestId("kv-key-row-session:abc"));
+        fireEvent.change(await screen.findByTestId("kv-ttl-input"), { target: { value: "30" } });
+
+        expect(isDisabled("kv-save-btn")).toBe(true);
+    });
+
     it("shows an empty state when no namespaces are configured", async () => {
         expect.assertions(1);
 
