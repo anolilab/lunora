@@ -95,7 +95,15 @@ mask({
 - **Aggregates fail closed.** `aggregate()` and `groupBy()` over a masked column
   throw `MASK_UNSUPPORTED` (HTTP 422): a group key _is_ the raw value and an
   aggregate is computed _from_ it, so neither can be served without leaking.
-  `count`, `rank`, and `rankBefore` (which return counts, not values) still work.
+- **Filtering and sorting by a masked column fail closed too.** A `where` /
+  `filter` that references a masked column also throws `MASK_UNSUPPORTED` (HTTP 422) — on `findMany`, `findFirst`, and `count` alike. A predicate like
+  `where: { ssn: { eq: X } }` (row present ⇒ value confirmed) or a range check
+  turns the mask into a value oracle, so it is rejected. You can't filter or
+  sort by a value the mask hides. The server-injected RLS filter is exempt: it
+  is server-trusted, not a caller-supplied oracle.
+- **Plain counts still work.** A `count`, `rank`, or `rankBefore` that returns a
+  count of rows (no column value, no masked-column `where`) passes through; only
+  a `count` whose `where` references a masked column throws.
 - **A throwing `MaskFn` redacts to `null`.** It never leaks the raw value.
 
 ## Tooling

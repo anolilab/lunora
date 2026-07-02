@@ -456,9 +456,9 @@ commits** on `fix/security-audit-run-1`, not as plan files — the record is in 
 history and PR #90. Only the one item needing a coordinated multi-component change
 remains as a plan.
 
-| Plan | Title                                   | Category     | Pri | Effort | Risk | Status                                                                                                                                                                                                                            |
-| ---- | --------------------------------------- | ------------ | --- | ------ | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 095  | Ephemeral, signed admin-WebSocket token | fix/security | P2  | M      | MED  | TODO — closes run-1 finding L4 (master `LUNORA_ADMIN_TOKEN` in the WS `?token=` query string). 3 phases (runtime capability → studio adoption → enforce). See [095-ephemeral-ws-admin-token.md](095-ephemeral-ws-admin-token.md). |
+| Plan | Title                                  | Category     | Pri | Effort | Risk | Status                                                                                                                                                                                                                            |
+| ---- | -------------------------------------- | ------------ | --- | ------ | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 095  | Keep the admin token out of the WS URL | fix/security | P2  | M      | MED  | TODO — closes run-1 finding L4 (master `LUNORA_ADMIN_TOKEN` in the WS `?token=` query string). 3 phases (runtime capability → studio adoption → enforce). See [095-ephemeral-ws-admin-token.md](095-ephemeral-ws-admin-token.md). |
 
 ## Notes for executors (carried from prior waves)
 

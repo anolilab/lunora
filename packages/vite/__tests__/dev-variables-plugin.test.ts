@@ -10,6 +10,7 @@ import { lunora } from "../src/index";
 
 const RESOLVED = (projectRoot: string) => {
     return {
+        allowUnauthenticatedShardAccess: false as const,
         apiSpec: "openapi" as const,
         cloudflare: {} as never,
         generatedDir: "lunora/_generated",

@@ -56,8 +56,12 @@ lunora backup <create|list|restore|pitr> [--dir <d>] [--at <iso>]
 ### `lunora init`
 
 Scaffolds a new Lunora project by fetching a template from
-`gh:anolilab/lunora/templates/<type>#<version>`. Pass `-t` / `--template`
-to choose the starting point:
+`gh:anolilab/lunora/templates/<type>#<version>`. `init` (and `add`) resolve
+that release branch to the immutable commit SHA it currently points at — logged
+as `pinned … → <sha>` — so the fetch is reproducible and tamper-evident; if the
+SHA can't be resolved (offline / rate-limited) it falls back to the branch with
+a one-line UNPINNED warning. Pass `-t` / `--template` to choose the starting
+point:
 
 | Template         | Description                                                                                    |
 | ---------------- | ---------------------------------------------------------------------------------------------- |

@@ -63,6 +63,7 @@ const writeFixture = (root: string): void => {
 
 const makeOptions = (projectRoot: string): ResolvedLunoraPluginOptions => {
     return {
+        allowUnauthenticatedShardAccess: false,
         apiSpec: "openapi",
         cloudflare: false,
         studio: false,

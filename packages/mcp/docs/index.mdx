@@ -43,6 +43,8 @@ Configuration comes from the environment, so the spawn config stays a plain
 
 - `LUNORA_URL` (**required**) — base URL of the deployed Worker.
 - `LUNORA_ADMIN_TOKEN` (optional) — bearer token sent on every RPC.
+- `LUNORA_MCP_ALLOW_WRITES` (optional) — set to `1`/`true`/`yes`/`on` to expose
+  the mutation/action run tools. Default: **read-only** (writes disabled).
 
 ```jsonc
 {
@@ -67,14 +69,20 @@ Configuration comes from the environment, so the spawn config stays a plain
 Each tool maps onto a method `LunoraClient` already provides. `TOOL_DEFINITIONS`
 is the registered tool surface; `callTool` dispatches a call against a client.
 
-| Tool                         | Input                                | What it does                                                                            |
-| ---------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------- |
-| `lunora_list_functions`      | _none_                               | Lists the deployment's public functions (queries, mutations, actions) with their kinds. |
-| `lunora_list_tables`         | _none_                               | Lists the deployment's `.global()` tables with their row counts.                        |
-| `lunora_get_function_schema` | `functionPath`                       | Returns one function's argument descriptors and kind, so a caller can build valid args. |
-| `lunora_run_query`           | `functionPath`, `args?`, `shardKey?` | Runs a query and returns its result. Read-only.                                         |
-| `lunora_run_mutation`        | `functionPath`, `args?`, `shardKey?` | Runs a mutation and returns its result. Writes data.                                    |
-| `lunora_run_action`          | `functionPath`, `args?`, `shardKey?` | Runs an action and returns its result. May call external services.                      |
+| Tool                         | Input                                | What it does                                                                                    |
+| ---------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| `lunora_list_functions`      | _none_                               | Lists the deployment's public functions (queries, mutations, actions) with their kinds.         |
+| `lunora_list_tables`         | _none_                               | Lists the deployment's `.global()` tables with their row counts.                                |
+| `lunora_get_function_schema` | `functionPath`                       | Returns one function's argument descriptors and kind, so a caller can build valid args.         |
+| `lunora_run_query`           | `functionPath`, `args?`, `shardKey?` | Runs a query and returns its result. Read-only.                                                 |
+| `lunora_run_mutation`        | `functionPath`, `args?`, `shardKey?` | Runs a mutation and returns its result. Writes data. **Requires writes enabled.**               |
+| `lunora_run_action`          | `functionPath`, `args?`, `shardKey?` | Runs an action and returns its result. May call external services. **Requires writes enabled.** |
+
+<Callout type="warn">
+    The server is **read-only by default**: only the introspection tools and `lunora_run_query` are exposed. `lunora_run_mutation` and `lunora_run_action` are
+    hidden from the advertised tool list *and* refused at dispatch unless you set `LUNORA_MCP_ALLOW_WRITES` (or pass `allowWrites: true` when building a server
+    programmatically). Grant a **least-privilege** token scoped to what the agent actually needs — never the deployment's admin token.
+</Callout>
 
 The three run-tools share one input schema:
 

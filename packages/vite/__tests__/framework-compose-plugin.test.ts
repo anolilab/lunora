@@ -29,6 +29,7 @@ import type { ResolvedLunoraPluginOptions } from "../src/types";
 
 const baseOptions = (overrides: Partial<ResolvedLunoraPluginOptions> = {}): ResolvedLunoraPluginOptions => {
     return {
+        allowUnauthenticatedShardAccess: false,
         apiSpec: "openapi",
         cloudflare: {},
         generatedDir: "lunora/_generated",
@@ -196,6 +197,20 @@ describe("framework-compose-plugin", () => {
             expect(code).toContain('import * as ssrModule from "@tanstack/react-start/server-entry"');
             expect(code).toContain("httpRouter: ssrModule.default");
             expect(code).toContain("composeWorker(");
+        });
+
+        it("omits allowUnauthenticatedShardAccess by default (shard access stays default-denied)", () => {
+            expect.hasAssertions();
+
+            expect(buildWorkerEntrySource("tanstack-start", "./lunora/_generated")).not.toContain("allowUnauthenticatedShardAccess");
+        });
+
+        it("emits allowUnauthenticatedShardAccess into composeWorker when opted in", () => {
+            expect.hasAssertions();
+
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", false, false, true);
+
+            expect(code).toContain("allowUnauthenticatedShardAccess: true,");
         });
 
         it("throws for a framework without class-A wiring", () => {

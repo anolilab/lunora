@@ -62,6 +62,36 @@ doesn't pin a shard is a **fan-out**: codegen routes it through the Query
 Coordinator Worker, which dispatches to every shard and merges the results.
 Avoid this in hot paths.
 
+## Securing shard access
+
+Once you shard, the shard key is a client-supplied address — one tenant could
+ask for another tenant's DO. Lunora **default-denies** cross-shard access: a
+request that names a shard other than the default (`shardKey !== defaultShard`,
+default `__root__`), or a fan-out, is rejected with `403`
+(`FORBIDDEN_SHARD` / `FORBIDDEN_FANOUT`) unless the worker opts in. A
+single-DO app never names a non-default shard, so it is unaffected.
+
+Configure `authorizeShard(identity, shardKey)` on `createWorker` to gate it —
+return `true` to allow, `false` to reject. Derive the decision from the
+verified `identity`, so a caller can only reach shards it owns:
+
+```ts
+createWorker({
+    shardDO: env.SHARD,
+    // Gate every non-default shard on the caller owning it.
+    authorizeShard: (identity, shardKey) => identity?.userId === shardKey,
+    // Fan-out is a separate, more privileged grant when `authorizeShard` is set.
+    authorizeFanOut: (identity) => identity?.role === "admin",
+});
+```
+
+The alternative is `allowUnauthenticatedShardAccess: true`, which opts into
+open shard/fan-out access. Only reach for it when **every** table is protected
+by per-row [RLS](/docs/concepts/rls) — the DO address is then no longer a
+security boundary, each row authorizes itself. The runtime logs a one-time
+security warning while it is on and no `authorizeShard`/`authorizeFanOut` is
+configured.
+
 ## See also
 
 - [Schema](/docs/concepts/schema)

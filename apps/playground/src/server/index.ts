@@ -136,6 +136,11 @@ const app = defineApp<Env>()
 
         await handler(message as ForwardableEmailMessageLike, env, context);
     })
+    // Demo/e2e default: this playground wires no shard authorization, so shard
+    // access is left OPEN (any caller may target any shard) and data is protected
+    // by per-row RLS. A PRODUCTION sharded app must gate this instead — e.g.
+    // `.extend(() => ({ authorizeShard: (identity, shardKey) => identity?.userId === ownerOf(shardKey) }))`.
+    .extend(() => ({ allowUnauthenticatedShardAccess: true }))
     .build();
 
 export const { ShardDO } = app;

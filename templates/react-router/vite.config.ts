@@ -27,5 +27,10 @@ export default defineConfig({
         // Vite 8 resolves tsconfig paths natively — no vite-tsconfig-paths plugin needed.
         tsconfigPaths: true,
     },
-    plugins: [cloudflare({ viteEnvironment: { name: "ssr" } }), reactRouter(), lunora({ cloudflare: false })],
+    // `allowUnauthenticatedShardAccess: true` is a DEMO default: the composed
+    // worker default-denies client-named shard access (403), so an auth-less
+    // `.shardBy(...)` demo needs this to work — data is protected by per-row RLS.
+    // A PRODUCTION sharded app should drop it and configure `authorizeShard` in a
+    // hand-written worker instead.
+    plugins: [cloudflare({ viteEnvironment: { name: "ssr" } }), reactRouter(), lunora({ allowUnauthenticatedShardAccess: true, cloudflare: false })],
 });

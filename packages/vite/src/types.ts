@@ -15,6 +15,16 @@ export type OverlayPluginOptions = NonNullable<Parameters<typeof errorOverlayPlu
 
 export interface LunoraPluginOptions {
     /**
+     * Allow a client-named NON-default shard / cross-shard fan-out WITHOUT an
+     * `authorizeShard`/`authorizeFanOut` callback. The auto-composed class-A worker
+     * (`virtual:lunora/worker`) default-denies such access (403 `FORBIDDEN_SHARD`);
+     * set this `true` to opt into open access — only safe when every table is
+     * protected by per-row RLS. A production sharded app should configure
+     * `authorizeShard` instead (via a hand-written class-B worker). Defaults to `false`.
+     */
+    allowUnauthenticatedShardAccess?: boolean;
+
+    /**
      * Which machine-readable API spec(s) codegen emits into `_generated/`.
      * `"openapi"` (default) writes `openapi.json` (OpenAPI 3.1; RPC + REST),
      * `"openrpc"` writes `openrpc.json` (OpenRPC 1.x; RPC-only), `"both"` writes
@@ -45,6 +55,7 @@ export interface LunoraPluginOptions {
 
 /** Resolved options after merging defaults. */
 export interface ResolvedLunoraPluginOptions {
+    allowUnauthenticatedShardAccess: boolean;
     apiSpec: NonNullable<CodegenOptions["apiSpec"]>;
     cloudflare: false | CloudflarePluginOptions;
     generatedDir: string;

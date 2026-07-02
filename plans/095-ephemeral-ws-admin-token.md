@@ -1,4 +1,4 @@
-# Plan 095: Ephemeral, signed admin-WebSocket token (`?token=` credential hygiene)
+# Plan 095: Keep the admin token out of the WebSocket URL (ephemeral signed sub-token)
 
 > **Executor instructions**: Follow step by step; run every verification and
 > confirm the expected result before continuing. This closes run-1 audit finding
