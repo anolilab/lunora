@@ -13,6 +13,7 @@ import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { fireAndForget, formatBytes } from "../../lib/internal";
 import { cn } from "../../lib/utils";
 import { deriveInsights } from "../advisors/derive-insights";
+import { BindingsOverview } from "./bindings-overview";
 
 interface HomePanelProps {
     /** Shard key the health digest targets on first load. Defaults to the root shard. */
@@ -407,6 +408,9 @@ export const HomePanel = ({ initialShardKey }: HomePanelProps): ReactElement => 
                     value={formatBytes(metrics?.databaseSize ?? null)}
                 />
             </div>
+
+            {/* Cloudflare bindings the app wires (KV / R2 / Vectorize) — count + names. */}
+            <BindingsOverview />
 
             {/* Activity: busiest functions, live connections, recent changes. */}
             <div className="grid gap-3 lg:grid-cols-3">
