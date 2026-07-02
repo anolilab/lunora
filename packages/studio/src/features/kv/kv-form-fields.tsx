@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 import { useState } from "react";
 
+import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
@@ -8,6 +9,19 @@ import { Textarea } from "../../components/ui/textarea";
 import { useT } from "../../i18n/i18n-context";
 import type { TtlUnit } from "./kv-fields";
 import { TTL_UNITS, ttlToSeconds } from "./kv-fields";
+
+/** Small ghost "×" button to dismiss the value editor / create form. */
+export const KvCloseButton = ({ onClick, testId }: { readonly onClick: () => void; readonly testId: string }): ReactElement => {
+    const t = useT();
+
+    return (
+        <Button aria-label={t("Close")} data-testid={testId} onClick={onClick} size="icon" variant="ghost">
+            <svg aria-hidden="true" className="size-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth={1.6} viewBox="0 0 24 24">
+                <path d="M6 6l12 12M18 6 6 18" />
+            </svg>
+        </Button>
+    );
+};
 
 /**
  * Shared "Expires after" field for the value editor and create form: an amount

@@ -9,7 +9,7 @@ import { Textarea } from "../../components/ui/textarea";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget } from "../../lib/internal";
 import { buildKvPutOptions, isJsonOrEmpty, isTtlValid } from "./kv-fields";
-import { MetadataField, TtlField } from "./kv-form-fields";
+import { KvCloseButton, MetadataField, TtlField } from "./kv-form-fields";
 
 /**
  * Self-contained, collapsible "new key" form. Owns its own field state; on
@@ -63,6 +63,11 @@ export const KvCreateForm = ({
     return (
         <section className="border border-border bg-card p-3" data-testid="kv-create-form">
             <div className="grid gap-3">
+                <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-foreground">{t("New key")}</span>
+                    <KvCloseButton onClick={onCancel} testId="kv-close-create" />
+                </div>
+
                 <div className="grid gap-1">
                     <Label className="text-xs" htmlFor="kv-create-name">
                         {t("Key name")}

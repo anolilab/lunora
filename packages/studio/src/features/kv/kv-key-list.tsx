@@ -378,6 +378,9 @@ export const KvKeyList = ({ namespace }: { readonly namespace: string }): ReactE
                     key={`${namespace}:${selectedKey}`}
                     keyName={selectedKey}
                     namespace={namespace}
+                    onClose={() => {
+                        dispatch({ name: null, type: "selectKey" });
+                    }}
                     onDeleted={onKeyDeleted}
                 />
             )}

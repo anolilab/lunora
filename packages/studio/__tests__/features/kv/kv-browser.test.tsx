@@ -166,6 +166,34 @@ describe("kvBrowser", () => {
         expect(isDisabled("kv-save-btn")).toBe(true);
     });
 
+    it("closes the value editor when its close button is clicked", async () => {
+        expect.assertions(2);
+
+        render(renderBrowser(mock));
+
+        fireEvent.click(await screen.findByTestId("kv-key-row-session:abc"));
+        await screen.findByTestId("kv-value-section");
+
+        fireEvent.click(screen.getByTestId("kv-close-editor"));
+
+        expect(screen.queryByTestId("kv-value-section")).toBeNull();
+        // The key row survives — closing only deselects.
+        expect(screen.getByTestId("kv-key-row-session:abc")).toBeDefined();
+    });
+
+    it("dismisses the create form via its close button", async () => {
+        expect.assertions(1);
+
+        render(renderBrowser(mock));
+
+        fireEvent.click(await screen.findByTestId("kv-new-key-btn"));
+        await screen.findByTestId("kv-create-form");
+
+        fireEvent.click(screen.getByTestId("kv-close-create"));
+
+        expect(screen.queryByTestId("kv-create-form")).toBeNull();
+    });
+
     it("shows an empty state when no namespaces are configured", async () => {
         expect.assertions(1);
 

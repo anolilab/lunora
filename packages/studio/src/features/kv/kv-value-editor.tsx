@@ -8,7 +8,7 @@ import { Label } from "../../components/ui/label";
 import { useT } from "../../i18n/i18n-context";
 import { copyToClipboard, errorMessage, fireAndForget, formatBytes } from "../../lib/internal";
 import { buildKvPutOptions, byteLength, isJsonOrEmpty, isTtlValid, tryFormatJson } from "./kv-fields";
-import { MetadataField, TtlField } from "./kv-form-fields";
+import { KvCloseButton, MetadataField, TtlField } from "./kv-form-fields";
 
 // --- value editor: one reducer for the read → edit → write lifecycle so a
 // single logical transition (e.g. "loaded") is one render, not five. ---
@@ -93,11 +93,13 @@ export const KvValueEditor = ({
     expiration,
     keyName,
     namespace,
+    onClose,
     onDeleted,
 }: {
     readonly expiration?: number;
     readonly keyName: string;
     readonly namespace: string;
+    readonly onClose: () => void;
     readonly onDeleted: (name: string) => void;
 }): ReactElement => {
     const client = useLunora();
@@ -204,6 +206,7 @@ export const KvValueEditor = ({
                 >
                     {t("Copy key")}
                 </Button>
+                <KvCloseButton onClick={onClose} testId="kv-close-editor" />
             </div>
 
             {state.loadError !== null && (
