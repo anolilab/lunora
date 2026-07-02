@@ -1,43 +1,89 @@
 import type { ReactElement } from "react";
+import { useState } from "react";
 
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { Textarea } from "../../components/ui/textarea";
 import { useT } from "../../i18n/i18n-context";
+import type { TtlUnit } from "./kv-fields";
+import { TTL_UNITS, ttlToSeconds } from "./kv-fields";
 
 /**
- * Shared "TTL (seconds)" field for the value editor and create form. Shows the
- * ≥60s validity error when `invalid`, else the optional helper text. `testId`
- * keys the input; its error surfaces under `${testId}-invalid`.
+ * Shared "Expires after" field for the value editor and create form: an amount
+ * input paired with a unit picker (seconds / minutes / hours / days) so users
+ * never hand-convert to seconds. It owns the amount + unit and reports the
+ * computed **seconds** string via `onChange` (`""` when blank), keeping the
+ * seconds-based validation + put-payload contract unchanged. Shows the ≥60s
+ * validity error when `invalid`, else the optional helper. `testId` keys the
+ * amount input; the unit picker is `${testId}-unit`, the error `${testId}-invalid`.
  */
 export const TtlField = ({
     helper,
     id,
     invalid,
     onChange,
-    placeholder,
     testId,
-    value,
 }: {
     readonly helper?: string;
     readonly id: string;
     readonly invalid: boolean;
-    readonly onChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
-    readonly placeholder?: string;
+    readonly onChange: (seconds: string) => void;
     readonly testId: string;
-    readonly value: string;
 }): ReactElement => {
     const t = useT();
+
+    const [amount, setAmount] = useState("");
+    const [unit, setUnit] = useState<TtlUnit>("seconds");
+
+    const onAmountChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
+        setAmount(event.target.value);
+        onChange(ttlToSeconds(event.target.value, unit));
+    };
+
+    const onUnitChange = (nextUnit: null | TtlUnit): void => {
+        if (nextUnit === null) {
+            return;
+        }
+
+        setUnit(nextUnit);
+        onChange(ttlToSeconds(amount, nextUnit));
+    };
+
+    const unitLabel: Record<TtlUnit, string> = { days: t("days"), hours: t("hours"), minutes: t("minutes"), seconds: t("seconds") };
 
     return (
         <div className="mb-3 grid gap-1">
             <Label className="text-xs" htmlFor={id}>
-                {t("TTL (seconds)")}
+                {t("Expires after")}
             </Label>
-            <Input aria-invalid={invalid} data-testid={testId} id={id} inputMode="numeric" onChange={onChange} placeholder={placeholder} value={value} />
+            <div className="flex gap-2">
+                <Input
+                    aria-invalid={invalid}
+                    className="flex-1"
+                    data-testid={testId}
+                    id={id}
+                    inputMode="numeric"
+                    onChange={onAmountChange}
+                    placeholder={t("No expiration")}
+                    value={amount}
+                />
+                <Select onValueChange={onUnitChange} value={unit}>
+                    <SelectTrigger aria-label={t("TTL unit")} className="w-[7.5rem]" data-testid={`${testId}-unit`}>
+                        <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                        {TTL_UNITS.map((option) => (
+                            <SelectItem key={option.key} value={option.key}>
+                                {unitLabel[option.key]}
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+            </div>
             {invalid ? (
                 <p className="text-xs text-destructive" data-testid={`${testId}-invalid`}>
-                    {t("TTL must be a whole number of at least 60 seconds.")}
+                    {t("TTL must be at least 60 seconds.")}
                 </p>
             ) : (
                 helper !== undefined && <p className="text-xs text-muted-foreground">{helper}</p>

@@ -59,6 +59,36 @@ export const isJsonOrEmpty = (value: string): boolean => {
     }
 };
 
+/** TTL units the picker offers, with their seconds multiplier — the order they render in. */
+export const TTL_UNITS = [
+    { key: "seconds", seconds: 1 },
+    { key: "minutes", seconds: 60 },
+    { key: "hours", seconds: 3600 },
+    { key: "days", seconds: 86_400 },
+] as const;
+
+/** One of the TTL picker's unit keys. */
+export type TtlUnit = (typeof TTL_UNITS)[number]["key"];
+
+/**
+ * Convert a picker amount in `unit` to an integer-**seconds** string — the value
+ * the seconds-based TTL contract expects. Blank → `""` (no expiry); a
+ * non-numeric / non-positive amount is returned as-is so {@link isTtlValid} flags
+ * it rather than this silently emitting a bogus value.
+ */
+export const ttlToSeconds = (amount: string, unit: TtlUnit): string => {
+    const trimmed = amount.trim();
+
+    if (trimmed === "") {
+        return "";
+    }
+
+    const value = Number(trimmed);
+    const perUnit = TTL_UNITS.find((option) => option.key === unit)?.seconds ?? 1;
+
+    return Number.isFinite(value) && value > 0 ? String(Math.round(value * perUnit)) : trimmed;
+};
+
 /**
  * True when the TTL input is empty (no expiry) or a whole number ≥ 60 seconds —
  * Cloudflare KV rejects any `expirationTtl` under 60, so this gates the write

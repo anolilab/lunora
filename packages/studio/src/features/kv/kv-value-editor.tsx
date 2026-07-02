@@ -7,7 +7,7 @@ import { Button } from "../../components/ui/button";
 import { Label } from "../../components/ui/label";
 import { useT } from "../../i18n/i18n-context";
 import { copyToClipboard, errorMessage, fireAndForget, formatBytes } from "../../lib/internal";
-import { buildKvPutOptions, byteLength, formatExpiration, isJsonOrEmpty, isTtlValid, tryFormatJson } from "./kv-fields";
+import { buildKvPutOptions, byteLength, isJsonOrEmpty, isTtlValid, tryFormatJson } from "./kv-fields";
 import { MetadataField, TtlField } from "./kv-form-fields";
 
 // --- value editor: one reducer for the read → edit → write lifecycle so a
@@ -137,10 +137,6 @@ export const KvValueEditor = ({
         dispatch({ type: "editMetadata", value: event.target.value });
     };
 
-    const onEditedTtlChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
-        dispatch({ type: "editTtl", value: event.target.value });
-    };
-
     const formattedValue = tryFormatJson(state.editedValue);
     const metadataValid = isJsonOrEmpty(state.editedMetadata);
     const ttlValid = isTtlValid(state.editedTtl);
@@ -263,10 +259,10 @@ export const KvValueEditor = ({
                         helper={t("Leave blank to keep the current expiration.")}
                         id="kv-ttl-input"
                         invalid={!ttlValid}
-                        onChange={onEditedTtlChange}
-                        placeholder={expiration === undefined ? t("No expiration") : formatExpiration(expiration)}
+                        onChange={(seconds) => {
+                            dispatch({ type: "editTtl", value: seconds });
+                        }}
                         testId="kv-ttl-input"
-                        value={state.editedTtl}
                     />
 
                     <MetadataField

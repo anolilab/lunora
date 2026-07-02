@@ -97,12 +97,10 @@ export const KvCreateForm = ({
                 <TtlField
                     id="kv-create-ttl"
                     invalid={!ttlValid}
-                    onChange={(event) => {
-                        setTtl(event.target.value);
+                    onChange={(seconds) => {
+                        setTtl(seconds);
                     }}
-                    placeholder={t("No expiration")}
                     testId="kv-create-ttl"
-                    value={ttl}
                 />
 
                 <MetadataField
