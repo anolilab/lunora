@@ -73,10 +73,12 @@ const useCheckout = (trigger: RedirectTrigger): UseCheckoutResult => {
     const [pending, setPending] = useState(false);
     const [error, setError] = useState<Error | undefined>(undefined);
 
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing: the `try { … } finally { … }` below bails React Compiler for the whole `useCheckout` hook (it can't lower a TryStatement with a finalizer yet), so this `useCallback` is the only thing keeping `checkout`'s identity stable. Keep it.
     const checkout = useCallback(async (): Promise<void> => {
         setPending(true);
         setError(undefined);
 
+        // react-doctor-disable-next-line react-hooks-js/todo -- the `finally { setPending(false) }` guarantees the pending flag always clears (success, redirect, or throw); the compiler can't lower a try/finally yet, but the finalizer is required semantics, not optimizable-away.
         try {
             const target = await trigger();
 
@@ -141,6 +143,7 @@ interface CustomerPortalButtonProps extends RedirectButtonOwnProps {
 const RedirectButton = ({ "aria-label": ariaLabel, children, className, disabled, onError, title, trigger }: RedirectButtonProps): ReactNode => {
     const { checkout, pending } = useCheckout(trigger);
 
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- kept deliberately: although React Compiler memoizes this component, ESLint's `react-perf/jsx-no-new-function-as-prop` (a static rule that can't see the compiler) requires memoized function props like the `onClick` below. Keep `useCallback` to satisfy that hard lint gate.
     const handleClick = useCallback((): void => {
         checkout().catch((error: unknown) => {
             const normalized = error instanceof Error ? error : new Error(String(error));

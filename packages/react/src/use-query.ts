@@ -2,9 +2,9 @@
 
 import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
 import { useQuery as useTanStackQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo } from "react";
+import { useEffect } from "react";
 
-import { getSubscriptionRegistry, lunoraQueryKey, serializeQueryKey, stableStringify } from "./cache";
+import { getSubscriptionRegistry, lunoraQueryKey, serializeQueryKey } from "./cache";
 import { useLunora } from "./lunora-provider";
 import type { UseQueryOptions } from "./types";
 
@@ -28,9 +28,11 @@ const useQuery = <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "
     const skipped = args === "skip";
     const argsRecord = skipped ? {} : (args as Record<string, unknown>);
 
-    // Memoise the queryKey so the effect dep array tracks structural equality
-    // via TanStack's hash, not reference equality of the args object.
-    const queryKey = useMemo(() => lunoraQueryKey(function_, argsRecord, shardKey), [function_.__lunoraRef, stableStringify(argsRecord), shardKey]);
+    // The queryKey is consumed structurally everywhere: TanStack hashes it and
+    // the subscription effect keys off `serializeQueryKey(queryKey)` (a content
+    // hash), so a fresh array reference each render is fine. React Compiler
+    // auto-memoizes this derivation; no manual `useMemo` is needed.
+    const queryKey = lunoraQueryKey(function_, argsRecord, shardKey);
 
     // eslint-disable-next-line @tanstack/query/exhaustive-deps -- client is provider-stable (it comes from LunoraContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache.
     const { data } = useTanStackQuery<ReturnOf<F>>({
@@ -51,6 +53,7 @@ const useQuery = <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "
         const registry = getSubscriptionRegistry(client);
 
         return registry.attach(queryClient, queryKey, function_, argsRecord, shardKey);
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the WS subscription re-attaches only when the serialized query key (a stable content hash), the client, or the skip flag changes — not on every fresh `function_`/`argsRecord`/`shardKey` object identity. `client` is provider-stable (swapping it remounts the provider subtree).
     }, [client, queryClient, serializeQueryKey(queryKey), skipped]);
 
     return data;

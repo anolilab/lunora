@@ -100,6 +100,7 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
     const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
 
     // One session id per mount unless the caller pins one.
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing: `makeSessionId()` mints a fresh random id; it must run once per mount (keyed on `options.sessionId`), never per render, or every render would generate a new presence-row id. Keep the explicit `useMemo` so the identity is stable even if the compiler bails this function.
     const generatedSessionId = useMemo(() => options.sessionId ?? makeSessionId(), [options.sessionId]);
 
     const [present, setPresent] = useState<ReturnOf<L> | undefined>(undefined);
@@ -116,6 +117,7 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
         inputsRef.current = { client, heartbeat, roomId, sessionId: generatedSessionId, shardKey };
     });
 
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing: `sendHeartbeat` is a dependency of the interval effect below; a stable identity keeps the interval from being torn down and re-armed on every render. It reads all live inputs from `inputsRef`, so the empty dep list is correct. Keep the explicit `useCallback`.
     const sendHeartbeat = useCallback((): void => {
         const { client: c, heartbeat: hb, roomId: room, sessionId: sid, shardKey: sk } = inputsRef.current;
         const args = {
@@ -128,6 +130,7 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
         c.mutation(hb, args, { shardKey: sk }).catch(() => undefined);
     }, []);
 
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing: `setData` is part of the hook's public return and builds on the stable `sendHeartbeat`; keeping it explicitly memoized preserves a steady identity for consumers that place it in their own effect deps.
     const setData = useCallback(
         (next: Record<string, unknown> | undefined): void => {
             dataRef.current = next;
@@ -191,6 +194,7 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
             cancelled = true;
             unsubscribe();
         };
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the subscription re-attaches on the query's stable `__lunoraRef` (not the whole `listPresent` object, which the caller may recreate each render with the same target) plus room/shard/client. `client` is provider-stable (swapping it remounts the provider subtree).
     }, [client, listPresent.__lunoraRef, roomId, shardKey]);
 
     return { present, sessionId: generatedSessionId, setData };

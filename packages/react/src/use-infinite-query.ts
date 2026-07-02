@@ -1,7 +1,7 @@
 "use client";
 
 import type { FunctionReference } from "@lunora/client";
-import { useCallback, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 
 import type { UseInfiniteQueryOptions, UseInfiniteQueryResult } from "./types";
 import usePaginatedCore from "./use-paginated-core";
@@ -53,11 +53,14 @@ const useInfiniteQuery = <F extends FunctionReference>(
         nextRef.current = { defaultNumItems: initialNumItems, loadMore };
     });
 
-    const fetchNextPage = useCallback((numberItems?: number) => {
+    // Reads only `nextRef.current` (a ref, not a reactive value), so React
+    // Compiler keeps this closure stable across renders without a manual
+    // `useCallback`.
+    const fetchNextPage = (numberItems?: number): void => {
         const { defaultNumItems, loadMore: load } = nextRef.current;
 
         load(numberItems ?? defaultNumItems);
-    }, []);
+    };
 
     return {
         fetchNextPage,

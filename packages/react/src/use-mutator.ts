@@ -36,6 +36,7 @@ const useMutator = function useMutator<TArgs = Record<string, unknown>>(handle: 
     // One runner per handle so its ref-counted in-flight tally is shared across
     // overlapping calls and only re-created when the bound handle changes. The
     // `useState` setters are referentially stable, so binding them once is safe.
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing: `createMutatorRunner` builds a stateful runner that owns the ref-counted in-flight tally; it must be created once per `handle`, not per render, or the tally resets and `pending` breaks. This is a store/identity cache, not a plain-value memo, so React Compiler's memoization is not a safe substitute — keep the explicit `useMemo`.
     const { mutate, reset } = useMemo(() => createMutatorRunner(handle, { setError, setPending }), [handle]);
 
     return { error, isError: error !== undefined, mutate, pending, reset };

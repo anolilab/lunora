@@ -36,11 +36,13 @@ const useSubscription = <F extends FunctionReference>(
         subscribeRef.current = { args, fn: function_ };
     });
 
+    // react-doctor-disable-next-line react-doctor/no-cascading-set-state -- intentional: the several `setState` calls here fire in mutually-exclusive branches/callbacks (skip reset, onData, deferred onError) across the subscription lifecycle, not as a synchronous cascade within one render.
     useEffect(() => {
         if (skipped) {
             // Args transitioned to "skip" — tear down any prior subscription
             // (handled by the previous effect's cleanup) and clear stale data so
             // the UI reflects "no subscription, no data", matching Solid/Vue.
+            // react-doctor-disable-next-line react-doctor/no-adjust-state-on-prop-change, react-hooks-js/set-state-in-effect -- intentional: clearing data when `args` becomes "skip" is a deliberate teardown that matches the Solid/Vue adapters; there is no prior value to derive from (the subscription is gone), so this cannot be lifted to render-phase derived state.
             setState({ data: undefined, error: undefined });
 
             return () => {};
