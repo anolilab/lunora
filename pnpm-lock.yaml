@@ -1102,6 +1102,9 @@ importers:
       '@lunora/auth':
         specifier: workspace:*
         version: link:../../packages/auth
+      '@lunora/bindings':
+        specifier: workspace:*
+        version: link:../../packages/bindings
       '@lunora/d1':
         specifier: workspace:*
         version: link:../../packages/d1
