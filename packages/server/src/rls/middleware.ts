@@ -809,14 +809,6 @@ const isFacadeEntry = (value: unknown): value is Record<string, unknown> => {
  */
 const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Map<string, Policy<Context>[]>, context: PolicyContext<Context>): RlsDatabase => {
     /**
-     * Route a table to the writer that should service it: `raw` for a policy
-     * table (already authorized here — must bypass the guard), `base` for any
-     * other table (so the secure-by-default guard denies a protected,
-     * policy-less table and passes a `.public()` one through).
-     */
-    const route = (tableName: string): RlsDatabase => (perTable.has(tableName) ? raw : base);
-
-    /**
      * Cached effective read `baseWhere` per table. Cached for the lifetime
      * of one wrapped writer — i.e. one request — so a single procedure
      * doesn't re-evaluate the same policy chain on every read.
@@ -847,6 +839,19 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
 
         return result;
     };
+
+    /**
+     * Route a READ to the writer that should service it. Uses `raw` (bypassing the
+     * secure-by-default guard) only when the table has an active `on:"read"` policy
+     * — i.e. `readBase(table).restricts` is true — because that read is authorized
+     * and filtered by the policy `baseWhere`. Otherwise it routes to the guarded
+     * `base`: a protected table that appears in the bundle only via a WRITE policy
+     * has no read policy, so it must fail closed under `.rls("required")` rather
+     * than returning every row unfiltered, while a `.public()` table passes
+     * through. This keeps read routing in fail-closed parity with `guardWriter` and
+     * `shape-read-base.ts`; writes route via `gateById`/insert, not this router.
+     */
+    const route = (tableName: string): RlsDatabase => (readBase(tableName).restricts ? raw : base);
 
     /**
      * The read filter for a TARGET table, attached to every read so `@lunora/do`'s
@@ -975,7 +980,13 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
             const writeOk = evaluateWrite(policies, op, { ...context, row: located.row }, nextRow);
 
             if (!writeOk) {
-                throw new LunoraError("FORBIDDEN", `${op} on "${located.tableName}" denied by policy`);
+                // Reject the denied write with FORBIDDEN — the intended, tested
+                // contract for an authorized-but-policy-denied mutation. SECURITY:
+                // do NOT interpolate the owning table name into the message (it was
+                // formerly `${op} on "${located.tableName}" denied by policy`) — an
+                // attacker holding a candidate id could otherwise learn which table
+                // a hidden record lives in. The generic message is table-agnostic.
+                throw new LunoraError("FORBIDDEN", `${op} denied by policy`);
             }
         }
 
@@ -1097,9 +1108,20 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
 
             const { baseWhere, restricts } = readBase(located.tableName);
 
-            // The owning table participates in RLS but the read policy doesn't
-            // restrict (e.g. policy returned `true`) → return the row as-is.
-            if (!restricts || !baseWhere) {
+            // The owning table participates in the bundle but has NO active read
+            // policy (e.g. it only carries a write/insert policy). `located.row` was
+            // read through the UNGUARDED `raw` writer, so returning it here would
+            // bypass the secure-by-default guard and leak every row of a protected
+            // table. Defer to the GUARDED `base.get` instead: a protected table
+            // fails closed under `.rls("required")` and a `.public()` one returns
+            // the row. Mirrors the `route`/`readRoute` fail-closed parity.
+            if (!restricts) {
+                return base.get(id, expectedTable);
+            }
+
+            // The owning table participates in RLS and the read policy grants
+            // unconditionally (`true` predicate → no `baseWhere`) → return the row.
+            if (!baseWhere) {
                 return located.row;
             }
 

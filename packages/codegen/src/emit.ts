@@ -2038,18 +2038,21 @@ const LUNORA_FLAG_KEYS: ReadonlyArray<{ key: string; type: "boolean" | "number" 
     const subscriptionOverride = `
         protected override runFlagSubscriptionRead(_functionPath: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; userId?: string }): Promise<unknown> {${clientBuild("() => flagsConfig.identify?.({ identity: identity?.identity ?? null, userId: identity?.userId ?? null })")}
             const key = typeof args.key === "string" ? args.key : "";
-            const rawContext = typeof args.context === "object" && args.context !== null ? (args.context as Record<string, unknown>) : undefined;
-            // The reactive channel is public (any socket, no auth required): never
-            // let a subscriber-supplied targetingKey override the verified identity
-            // resolved above, or a client could read another user's flags. Other
-            // (non-identity) targeting attributes pass through unchanged.
-            const { targetingKey: _clientTargetingKey, ...safeContext } = rawContext ?? {};
-            const context = (rawContext === undefined ? undefined : safeContext) as import("${flagsSpecifier}").EvaluationContext | undefined;
 
+            // SECURITY: the reactive channel is public (any socket, no auth). Serve
+            // ONLY statically-discovered flag keys — an arbitrary client-supplied key
+            // would let a subscriber probe the value of internal/unreleased flags the
+            // app never exposes. Unknown key ⇒ the "nothing to deliver" sentinel.
             // eslint-disable-next-line unicorn/no-null -- the base hook's "nothing to deliver" sentinel
-            if (key.length === 0) {
+            if (key.length === 0 || !LUNORA_FLAG_KEYS.some((entry) => entry.key === key)) {
                 return Promise.resolve(null);
             }
+
+            // SECURITY: evaluate under the socket's server-verified identity ONLY
+            // (the targetingKey resolved above). Client-supplied targeting context is
+            // NOT honored on this public channel — otherwise a subscriber could spoof
+            // targeting attributes (e.g. plan/role) to unlock a flag gated on them.
+            const context = undefined;
 
             if (args.type === "number") {
                 return flags.number(key, typeof args.default === "number" ? args.default : 0, context);

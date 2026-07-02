@@ -185,6 +185,59 @@ describe("stripe adapter", () => {
         expect(action.amount?.minorUnits).toBe(700n);
     });
 
+    it("maps an `incomplete` subscription to a non-entitling state, not an active grant (regression)", async () => {
+        expect.assertions(1);
+
+        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+
+        const event = {
+            data: {
+                object: {
+                    customer: "cus_1",
+                    id: "sub_1",
+                    items: { data: [{ price: { id: "price_1" }, quantity: 1 }] },
+                    metadata: { referenceId: "user_1" },
+                    status: "incomplete",
+                },
+            },
+            id: "evt_incomplete",
+            type: "customer.subscription.created",
+        };
+        const payload = JSON.stringify(event);
+        const timestamp = Math.floor(Date.now() / 1000);
+        const signature = await hmacSha256Hex("whsec", `${String(timestamp)}.${payload}`);
+        const signatureHeader = `t=${String(timestamp)},v1=${signature}`;
+        const headers = { get: (name: string) => (name === "stripe-signature" ? signatureHeader : null) };
+
+        const action = await adapter.parseWebhook({ headers, payload });
+
+        // `incomplete` = first payment not completed → must NOT be the entitling
+        // `subscription.active` (ACTIVE_STATES) — it is non-entitling `past_due`.
+        expect(action.type).toBe("subscription.past_due");
+    });
+
+    it("does not mark an `unpaid` subscription checkout active (regression)", async () => {
+        expect.assertions(1);
+
+        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+
+        const event = {
+            data: { object: { customer: "cus_1", id: "cs_1", mode: "subscription", payment_status: "unpaid", subscription: "sub_1" } },
+            id: "evt_cs_unpaid",
+            type: "checkout.session.completed",
+        };
+        const payload = JSON.stringify(event);
+        const timestamp = Math.floor(Date.now() / 1000);
+        const signature = await hmacSha256Hex("whsec", `${String(timestamp)}.${payload}`);
+        const signatureHeader = `t=${String(timestamp)},v1=${signature}`;
+        const headers = { get: (name: string) => (name === "stripe-signature" ? signatureHeader : null) };
+
+        const action = await adapter.parseWebhook({ headers, payload });
+
+        // An unpaid subscription checkout must not assert `subscription.active`.
+        expect(action.type).toBe("subscription.updated");
+    });
+
     it("rejects an unsigned webhook", async () => {
         expect.assertions(1);
 

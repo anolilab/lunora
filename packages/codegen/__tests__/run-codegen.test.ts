@@ -1511,9 +1511,11 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("FlagsResult");
             // The per-type chain keeps the typed details.* calls sound.
             expect(output).toContain("await flags.details.boolean(entry.key, false, evalContext)");
-            // Security: the public reactive channel must strip a client-supplied
-            // targetingKey so a subscriber can't read another user's flags.
-            expect(output).toContain("const { targetingKey: _clientTargetingKey, ...safeContext } = rawContext ?? {};");
+            // Security: the public reactive channel must (a) serve only statically
+            // discovered flag keys, so a subscriber can't probe arbitrary/internal
+            // flags, and (b) never honor client-supplied targeting context, so a
+            // subscriber can't spoof attributes to unlock a gated flag.
+            expect(output).toContain("!LUNORA_FLAG_KEYS.some((entry) => entry.key === key)");
             // Robustness: identify is wrapped in a thunk so a throwing identify fails open.
             expect(output).toContain("targetingKey: () => flagsConfig.identify?.(");
         });

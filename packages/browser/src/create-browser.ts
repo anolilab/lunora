@@ -46,6 +46,9 @@ const IPV6_NAT64_HEX = /^64:ff9b::[\da-f]{1,4}:[\da-f]{1,4}$/;
 /** Leading / trailing `URL.hostname` IPv6 brackets (`[::1]`). */
 const IPV6_BRACKETS = /^\[|\]$/g;
 
+/** A single trailing FQDN dot on a `URL.hostname` (`localhost.` → `localhost`). */
+const TRAILING_DOT = /\.$/;
+
 /**
  * Parse a canonical dotted-quad IPv4 string into its four octets, or `undefined`
  * if it isn't one. The WHATWG `URL` parser already normalizes the octal/hex/integer
@@ -165,9 +168,16 @@ const isPrivateHostname = (host: string): boolean =>
 /**
  * Classify a parsed URL's host as a private / internal SSRF target. IPv6 hosts
  * arrive bracketed from `URL.hostname` (`[::1]`); strip them before matching.
+ *
+ * SECURITY: the WHATWG URL parser preserves a trailing dot on a NAMED host
+ * (`http://localhost./` → `localhost.`, `metadata.google.internal.`) while
+ * canonicalizing it away for IPv4 literals. A fully-qualified trailing-dot form
+ * resolves to the same host, so strip a single trailing dot before matching or
+ * the FQDN form bypasses the special-hostname denylist (`localhost.` !==
+ * `localhost`, `redis.internal.` doesn't `.endsWith(".internal")`).
  */
 const isPrivateTarget = (parsed: URL): boolean => {
-    const host = parsed.hostname.replaceAll(IPV6_BRACKETS, "");
+    const host = parsed.hostname.replaceAll(IPV6_BRACKETS, "").replace(TRAILING_DOT, "");
 
     if (host.includes(":")) {
         return isPrivateIpv6(host);

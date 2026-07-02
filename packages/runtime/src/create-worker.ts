@@ -1221,9 +1221,30 @@ const parseEnvelope = async (request: Request): Promise<RpcEnvelope> => {
 
     const envelope = body as RpcEnvelope;
 
+    const fanOut = validateFanOut(envelope.fanOut);
+    const args = envelope.args ?? {};
+
+    // SECURITY (confused-deputy): for the reserved `__lunora_relation__:*` fan-out,
+    // `authorizeFanOut` is gated on `fanOut.table`, but the shard read uses
+    // `args.table` (relation-fanout.ts). Left unreconciled, a client could
+    // authorize a decoy table via `fanOut.table` and read a different, sensitive
+    // table via `args.table` — a raw, RLS-blind cross-tenant dump. Bind the read
+    // table to the authorized table (and reject an explicit mismatch) so the
+    // authorized table is provably the table read. The legitimate reverse-relation
+    // caller always sets both to the same value, so this is transparent to it.
+    if (fanOut && envelope.functionPath.startsWith("__lunora_relation__:")) {
+        const requestedTable = (args as { table?: unknown }).table;
+
+        if (typeof requestedTable === "string" && requestedTable !== fanOut.table) {
+            throw new LunoraError("RPC `args.table` must match the authorized `fanOut.table` for a relation fan-out", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        (args as { table?: unknown }).table = fanOut.table;
+    }
+
     return {
-        args: envelope.args ?? {},
-        fanOut: validateFanOut(envelope.fanOut),
+        args,
+        fanOut,
         functionPath: envelope.functionPath,
         shardKey: envelope.shardKey,
     };
@@ -1578,7 +1599,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * (system) identity so a server job can't reach a shard a same-shard end-user
      * RPC would be denied, then POSTs `{ functionPath, args }` to the shard's RPC.
      */
-    const dispatchToShard = async (functionPath: string, args: Record<string, unknown>, shardKey: string): Promise<Response> => {
+    const dispatchToShard = async (functionPath: string, args: Record<string, unknown>, shardKey: string, mutationId?: string): Promise<Response> => {
         if (options.authorizeShard) {
             // eslint-disable-next-line unicorn/no-null -- the public authorizeShard callback's anonymous-identity sentinel is `null`; system dispatch has no end-user identity
             const allowed = await options.authorizeShard(null, shardKey);
@@ -1588,13 +1609,26 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             }
         }
 
+        // `x-lunora-system` marks this as a trusted server-initiated dispatch so the
+        // shard may run `internal` functions (scheduled/cron jobs are typically
+        // internal). Authorization was already enforced above; this header is set
+        // only here, never on the client RPC path.
+        const headers: Record<string, string> = { "content-type": "application/json", "x-lunora-system": "1" };
+
+        // A stable per-job dedup key makes an at-least-once re-fire safe: the DO
+        // idempotency table (keyed on `(identity, mutation-id)`) collapses a repeat
+        // dispatch — e.g. a scheduler retry after the origin response was lost but
+        // the side effect already committed — so the job's effect isn't applied
+        // twice. Without it, at-least-once delivery double-applies non-idempotent
+        // handlers. System dispatch shares the empty identity, but the caller passes
+        // a unique per-job id so `("", id)` stays unique across distinct jobs.
+        if (mutationId !== undefined && mutationId.length > 0) {
+            headers["x-lunora-mutation-id"] = mutationId;
+        }
+
         const forwarded = new Request("https://shard.internal/rpc", {
-            // `x-lunora-system` marks this as a trusted server-initiated dispatch
-            // so the shard may run `internal` functions (scheduled/cron jobs are
-            // typically internal). Authorization was already enforced above; this
-            // header is set only here, never on the client RPC path.
             body: JSON.stringify({ args, functionPath }),
-            headers: { "content-type": "application/json", "x-lunora-system": "1" },
+            headers,
             method: "POST",
         });
 
@@ -1803,11 +1837,17 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         const args = (candidate.args ?? {}) as Record<string, unknown>;
         const shardKey = typeof candidate.shardKey === "string" && candidate.shardKey.length > 0 ? candidate.shardKey : defaultShard;
+        // Forward the scheduler record id as the idempotency key so an at-least-once
+        // re-fire (a retry after the origin response was lost but the side effect
+        // already committed) is deduped by the DO rather than double-applying the
+        // job. This makes the scheduler's "idempotent dispatch keyed by record id"
+        // contract actually hold.
+        const mutationId = typeof candidate.id === "string" && candidate.id.length > 0 ? candidate.id : undefined;
 
         // Re-apply per-shard authorization (inside `dispatchToShard`) so a
         // scheduled job cannot reach a shard a direct RPC for the same shard
         // would be denied — the scheduler runs jobs with no end-user identity.
-        const response = await dispatchToShard(candidate.functionPath, args, shardKey);
+        const response = await dispatchToShard(candidate.functionPath, args, shardKey, mutationId);
 
         // Workpool jobs hold a concurrency slot until the action settles; release
         // it best-effort (a missed release is reconciled by the pool's next drain).

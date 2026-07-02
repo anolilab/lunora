@@ -253,9 +253,14 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
 
                 return rows.map((row) => maskRow(row, columns, context));
             },
+            // SECURITY (value oracle): the predicate must see the MASKED row, not
+            // the raw stored row — otherwise a caller can `.filter(d => d.ssn ===
+            // guess)` to read the value the mask hides. Masking before the
+            // predicate keeps filtering on non-masked columns working while
+            // redacting masked cells the predicate can observe.
             filter: (predicate) =>
                 wrapReader(
-                    reader.filter((document) => predicate(document)),
+                    reader.filter((document) => predicate(maskRow(document, columns, context))),
                     columns,
                 ),
             first: async () => {
@@ -347,6 +352,59 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
         }
     };
 
+    /**
+     * Collect the field names a client `where` clause references, walking the
+     * `AND`/`OR` (arrays) and `NOT` (object) logical connectors. `__`-prefixed
+     * structural markers (e.g. the relation-EXISTS key) are not columns of this
+     * table, so they're skipped.
+     */
+    const collectWhereFields = (where: unknown, into: Set<string>): void => {
+        if (!where || typeof where !== "object" || Array.isArray(where)) {
+            return;
+        }
+
+        for (const [key, value] of Object.entries(where as Record<string, unknown>)) {
+            if (key === "AND" || key === "OR") {
+                if (Array.isArray(value)) {
+                    for (const clause of value) {
+                        collectWhereFields(clause, into);
+                    }
+                }
+            } else if (key === "NOT") {
+                collectWhereFields(value, into);
+            } else if (!key.startsWith("__")) {
+                into.add(key);
+            }
+        }
+    };
+
+    /**
+     * SECURITY (value oracle): masking only redacts OUTPUT values — it does not
+     * stop a caller filtering by a masked column. `findMany({ where: { ssn: { eq:
+     * X } } })` (row present ⇒ value confirmed) or a range predicate lets a caller
+     * binary-search the exact value the mask is meant to hide. Fail closed — like
+     * `assertReductionAllowed` does for aggregate/groupBy — when a client `where`
+     * references a masked column. `baseWhere` (the server-injected RLS filter) is
+     * deliberately NOT checked: it is server-trusted, not a caller oracle.
+     */
+    const assertWhereAllowed = (tableName: string, where: unknown, method: string): void => {
+        const columns = perTable.get(tableName);
+
+        if (!columns || where === undefined) {
+            return;
+        }
+
+        const referenced = new Set<string>();
+
+        collectWhereFields(where, referenced);
+
+        for (const field of referenced) {
+            if (field in columns) {
+                throw new LunoraError("MASK_UNSUPPORTED", `${method}() filtering "${tableName}" by masked column "${field}" is not supported`);
+            }
+        }
+    };
+
     const wrapped: MaskDatabase = {
         ...base,
 
@@ -356,7 +414,22 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
             return base.aggregate(tableName, options);
         },
 
+        count(tableName, whereOrArgs) {
+            // A masked-column `where` is an existence/value oracle even through a
+            // row-count (no value returned but presence leaks). `count(where)` may
+            // pass a bare `where` or an args wrapper — unwrap the client `where`.
+            const wrapper =
+                whereOrArgs && typeof whereOrArgs === "object" && !Array.isArray(whereOrArgs) ? (whereOrArgs as Record<string, unknown>) : undefined;
+            const where = wrapper && ("where" in wrapper || "baseWhere" in wrapper || "restrictsCounts" in wrapper) ? wrapper.where : whereOrArgs;
+
+            assertWhereAllowed(tableName, where, "count");
+
+            return base.count(tableName, whereOrArgs);
+        },
+
         async findFirst(tableName, args) {
+            assertWhereAllowed(tableName, args?.where, "findFirst");
+
             const row = await base.findFirst(tableName, args);
             const columns = perTable.get(tableName);
 
@@ -364,6 +437,8 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
         },
 
         async findFirstOrThrow(tableName, args) {
+            assertWhereAllowed(tableName, args?.where, "findFirstOrThrow");
+
             const row = await base.findFirstOrThrow(tableName, args);
             const columns = perTable.get(tableName);
 
@@ -371,6 +446,8 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
         },
 
         async findMany(tableName, args) {
+            assertWhereAllowed(tableName, args?.where, "findMany");
+
             const page = await base.findMany(tableName, args);
             const columns = perTable.get(tableName);
 

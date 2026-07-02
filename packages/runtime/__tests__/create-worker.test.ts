@@ -60,6 +60,20 @@ describe("createWorker", () => {
         expect(res.status).toBe(404);
     });
 
+    it("answers GET /_lunora/status with an unauthenticated ok probe", async () => {
+        expect.assertions(4);
+
+        const worker = createWorker({ shardDO: shard.namespace });
+
+        const res = await worker.fetch(new Request("https://app.example/_lunora/status"), {}, fakeContext);
+
+        expect(res.status).toBe(200);
+        expect(res.headers.get("cache-control")).toBe("no-store");
+        await expect(res.json()).resolves.toStrictEqual({ ok: true, service: "lunora", status: "ok" });
+        // The probe never touches a shard.
+        expect(shard.calls).toHaveLength(0);
+    });
+
     it("forwards POST /_lunora/rpc to the default __root__ shard", async () => {
         expect.assertions(4);
 
@@ -183,6 +197,31 @@ describe("createWorker", () => {
         expect(res.status).toBe(400);
         await expect(res.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST" } });
         // A non-string shardKey must never reach `idFromName` on the namespace.
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("rejects a relation fan-out whose args.table differs from the authorized fanOut.table (confused-deputy regression)", async () => {
+        expect.assertions(3);
+
+        const worker = createWorker({ shardDO: shard.namespace });
+
+        const res = await worker.fetch(
+            new Request("https://app.example/_lunora/rpc", {
+                body: JSON.stringify({
+                    args: { table: "secrets", where: {} },
+                    fanOut: { merge: { kind: "concat" }, table: "posts" },
+                    functionPath: "__lunora_relation__:read",
+                }),
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(res.status).toBe(400);
+        await expect(res.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST" } });
+        // The mismatched envelope is rejected at the edge — the raw, RLS-blind
+        // relation read of `secrets` (authorized only for `posts`) never reaches a shard.
         expect(shard.calls).toHaveLength(0);
     });
 
