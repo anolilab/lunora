@@ -4140,11 +4140,17 @@ class LunoraClient {
             return;
         }
 
+        const encodable = this.encodableOrSettleTerminal(sendable);
+
+        if (encodable.length === 0) {
+            return;
+        }
+
         // A lone write rides the proven single-call path; two or more coalesce
         // into `/_lunora/rpc-batch` round trips (plan 088 follow-on) — the
         // flaky-reconnect win (N queued writes → a handful of RTTs, not N).
-        if (sendable.length === 1) {
-            await this.replaySequential(sendable);
+        if (encodable.length === 1) {
+            await this.replaySequential(encodable);
 
             return;
         }
@@ -4156,8 +4162,8 @@ class LunoraClient {
         // didn't durably settle is re-queued once, in order, for the next reconnect.
         const toRequeue: QueuedMutation[] = [];
 
-        for (let start = 0; start < sendable.length; start += MAX_BATCH_ENTRIES) {
-            const chunk = sendable.slice(start, start + MAX_BATCH_ENTRIES);
+        for (let start = 0; start < encodable.length; start += MAX_BATCH_ENTRIES) {
+            const chunk = encodable.slice(start, start + MAX_BATCH_ENTRIES);
             // eslint-disable-next-line no-await-in-loop -- chunks replay sequentially to preserve FIFO ordering across the flush
             const outcome = await this.replayBatched(chunk);
 
@@ -4166,7 +4172,7 @@ class LunoraClient {
             if (outcome.stop) {
                 // A whole-batch transport failure — leave every not-yet-sent write
                 // queued (in order) for the next reconnect rather than sending on.
-                toRequeue.push(...sendable.slice(start + MAX_BATCH_ENTRIES));
+                toRequeue.push(...encodable.slice(start + MAX_BATCH_ENTRIES));
 
                 break;
             }
@@ -4175,6 +4181,31 @@ class LunoraClient {
         if (toRequeue.length > 0) {
             this.offlineQueue.requeue(toRequeue);
         }
+    }
+
+    /**
+     * Partition already-gated writes into the encodable ones (returned) and reject
+     * the rest terminally. A write whose args can't be wire-encoded (e.g. a RegExp
+     * or class instance in a `v.any()` field) can NEVER replay — the codec failure
+     * is deterministic, not transient. Rejecting here is essential: otherwise
+     * `encodeWire` throws mid-flush, is classified as transient (a codec error has
+     * no `.code`), and re-queues forever — a silent hang where the caller's Promise
+     * never settles and the optimistic write never rolls back. Encoding is cheap;
+     * the flush is the slow reconnect path.
+     */
+    private encodableOrSettleTerminal(items: QueuedMutation[]): QueuedMutation[] {
+        const encodable: QueuedMutation[] = [];
+
+        for (const item of items) {
+            try {
+                encodeWire(item.args);
+                encodable.push(item);
+            } catch (error) {
+                this.settleReplayTerminal(item, error instanceof Error ? error : new Error(String(error)));
+            }
+        }
+
+        return encodable;
     }
 
     /**

@@ -694,6 +694,48 @@ describe("offline lifecycle (e2e)", () => {
         client.close();
     });
 
+    it("12. rejects a queued write with un-encodable args instead of hanging the flush", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        // A RegExp can't be wire-encoded (only reachable via a `v.any()` arg). The
+        // write queues offline; on flush its encode is a DETERMINISTIC failure, so it
+        // must reject terminally, not re-queue forever (a silent hang).
+        const bad = client.mutation(fnRef("posts:create"), { pattern: /abc/g });
+        const settled = bad.then(
+            () => "resolved",
+            (error: unknown) => error,
+        );
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.runAllTimersAsync();
+
+        const result = await settled;
+
+        // The caller's Promise rejects with the codec error — no hang, no send.
+        expect(result).toBeInstanceOf(TypeError);
+        expect((result as Error).message).toMatch(/RegExp|encode/);
+        expect(fetchMock).not.toHaveBeenCalled();
+
+        client.close();
+    });
+
     it("9. drops and purges a persisted write whose schema version no longer matches", async () => {
         expect.assertions(2);
 
