@@ -16,6 +16,21 @@ export interface BrowserBindingLike {
 }
 
 /**
+ * Minimal projection of a Playwright `Route` (the argument the `page.route`
+ * handler receives). Only the members the SSRF redirect guard drives are
+ * declared: inspect the intercepted request's URL / navigation-ness, then either
+ * let it proceed ({@link RouteLike.continue}) or reject it ({@link RouteLike.abort}).
+ */
+export interface RouteLike {
+    /** Reject the intercepted request (fail-closed); `errorCode` is a Playwright abort reason. */
+    abort: (errorCode?: string) => Promise<void>;
+    /** Allow the intercepted request to proceed. */
+    continue: () => Promise<void>;
+    /** The intercepted request: its URL and (when available) whether it is a top-level navigation. */
+    request: () => { isNavigationRequest?: () => boolean; url: () => string };
+}
+
+/**
  * Minimal projection of a Playwright `Page` — just the methods the helpers drive.
  * Declared structurally so a test can inject a plain stub instead of a real
  * headless page (which needs workerd + the Browser Rendering binding).
@@ -30,6 +45,14 @@ export interface PageLike {
     goto: (url: string, options?: { timeout?: number; waitUntil?: string }) => Promise<unknown>;
     /** Render the page to a PDF buffer. */
     pdf: (options?: Record<string, unknown>) => Promise<Uint8Array>;
+
+    /**
+     * Register a request interceptor (Playwright `page.route`). Optional: a fake
+     * or older page double without it still works — the SSRF redirect guard only
+     * activates when interception is available, and the initial-URL guard applies
+     * regardless. `pattern` follows Playwright's glob/URL matcher.
+     */
+    route?: (pattern: string, handler: (route: RouteLike) => unknown) => Promise<void>;
     /** Render the page to a PNG/JPEG buffer. */
     screenshot: (options?: Record<string, unknown>) => Promise<Uint8Array>;
     /** Constrain the page viewport (a hard cap so a hostile page can't pin the worker). */
@@ -112,6 +135,17 @@ export interface PdfOptions extends NavigateOptions {
 
 export interface LunoraBrowserOptions {
     /**
+     * Strict host allowlist. When set (non-empty), a navigation URL is refused
+     * unless its hostname exactly matches one of these entries (case-insensitive,
+     * trailing-dot-normalized, IPv6 brackets stripped). This is the only guard
+     * that fully closes DNS rebinding: a public hostname that resolves to a
+     * private/metadata IP can still be pinned out if it isn't on the list. Set it
+     * whenever you pass client-controlled URLs to the browser. Leave it unset (the
+     * default) to keep the previous behavior (only the string-based SSRF guard).
+     */
+    allowedHosts?: string[];
+
+    /**
      * Opt out of the SSRF guard that, by default, refuses to navigate to a
      * private / internal / loopback / link-local host (RFC1918, `127.0.0.0/8`,
      * `169.254.0.0/16` incl. the cloud-metadata address, CGNAT, IPv6 ULA/
@@ -135,6 +169,19 @@ export interface LunoraBrowserOptions {
      */
     launch?: BrowserLaunchLike;
     /* eslint-enable no-secrets/no-secrets */
+
+    /**
+     * Best-effort DNS-rebinding re-check. When `true` (and `allowPrivateTargets`
+     * is `false`), the factory resolves the URL's hostname over Cloudflare DoH
+     * (`https://cloudflare-dns.com/dns-query`) and refuses to navigate if any
+     * resolved A/AAAA record is a private/internal address — closing the gap
+     * where a public hostname resolves to a private IP after the string guard
+     * passes. Off by default: it adds a DNS round-trip and is TOCTOU-imperfect
+     * (the browser re-resolves independently). If the DoH lookup itself fails, it
+     * falls back to the string guard rather than allowing a resolved private IP.
+     * For a hard guarantee prefer {@link LunoraBrowserOptions.allowedHosts}.
+     */
+    resolveDns?: boolean;
 
     /**
      * Default navigation timeout (ms) applied when a per-call `timeoutMs` is not

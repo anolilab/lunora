@@ -1,6 +1,6 @@
 import type { CryptoKey } from "jose";
 import { generateKeyPair, SignJWT } from "jose";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { composeResolvers, createAccessResolver } from "../src/resolver";
 import type { ResolvedIdentityLike } from "../src/types";
@@ -9,8 +9,7 @@ const TEAM = "acme";
 const ISSUER = "https://acme.cloudflareaccess.com";
 const AUD = "app-aud-tag";
 
-let publicKey: CryptoKey;
-let privateKey: CryptoKey;
+const { privateKey, publicKey } = await generateKeyPair("RS256");
 
 const sign = async (claims: Record<string, unknown>, key: CryptoKey = privateKey): Promise<string> =>
     new SignJWT(claims).setProtectedHeader({ alg: "RS256" }).setIssuedAt().setIssuer(ISSUER).setAudience(AUD).setExpirationTime("2h").sign(key);
@@ -20,12 +19,10 @@ const requestWithHeader = (token: string): Request => new Request("https://app.t
 const requestWithCookie = (token: string, cookie = "CF_Authorization"): Request =>
     new Request("https://app.test/", { headers: { cookie: `foo=bar; ${cookie}=${token}; baz=qux` } });
 
-beforeAll(async () => {
-    ({ privateKey, publicKey } = await generateKeyPair("RS256"));
-});
-
 describe("createAccessResolver", () => {
     it("resolves an SSO identity from the Cf-Access-Jwt-Assertion header", async () => {
+        expect.assertions(6);
+
         const resolve = createAccessResolver({ aud: AUD, keySet: publicKey, teamDomain: TEAM });
         const token = await sign({ email: "user@acme.test", groups: ["eng", "admins"], sub: "user-1" });
 
@@ -40,6 +37,8 @@ describe("createAccessResolver", () => {
     });
 
     it("falls back to the CF_Authorization cookie", async () => {
+        expect.assertions(1);
+
         const resolve = createAccessResolver({ aud: AUD, keySet: publicKey, teamDomain: TEAM });
         const token = await sign({ email: "user@acme.test", sub: "user-2" });
 
@@ -49,6 +48,8 @@ describe("createAccessResolver", () => {
     });
 
     it("derives userId from common_name for a service token (empty sub)", async () => {
+        expect.assertions(3);
+
         const resolve = createAccessResolver({ aud: AUD, keySet: publicKey, teamDomain: TEAM });
         const token = await sign({ common_name: "ci-bot", sub: "" });
 
@@ -60,13 +61,17 @@ describe("createAccessResolver", () => {
     });
 
     it("returns null when no token is present (anonymous)", async () => {
+        expect.assertions(1);
+
         const resolve = createAccessResolver({ aud: AUD, keySet: publicKey, teamDomain: TEAM });
 
         await expect(resolve(new Request("https://app.test/"))).resolves.toBeNull();
     });
 
     it("fails closed to null on a bad token and calls onError", async () => {
-        const onError = vi.fn();
+        expect.assertions(2);
+
+        const onError = vi.fn<(error: unknown, request: Request) => void>();
         const resolve = createAccessResolver({ aud: AUD, keySet: publicKey, onError, teamDomain: TEAM });
         const attacker = await generateKeyPair("RS256");
         const forged = await sign({ sub: "user-1" }, attacker.privateKey);
@@ -78,7 +83,9 @@ describe("createAccessResolver", () => {
     });
 
     it("does not call onError when there is simply no token", async () => {
-        const onError = vi.fn();
+        expect.assertions(1);
+
+        const onError = vi.fn<(error: unknown, request: Request) => void>();
         const resolve = createAccessResolver({ aud: AUD, keySet: publicKey, onError, teamDomain: TEAM });
 
         await resolve(new Request("https://app.test/"));
@@ -87,6 +94,8 @@ describe("createAccessResolver", () => {
     });
 
     it("lets mapClaims override the derived userId and add claims", async () => {
+        expect.assertions(2);
+
         const resolve = createAccessResolver({
             aud: AUD,
             keySet: publicKey,
@@ -106,6 +115,8 @@ describe("createAccessResolver", () => {
 
 describe("composeResolvers", () => {
     it("returns the first non-null identity", async () => {
+        expect.assertions(1);
+
         const anon = (): null => null;
         const access = createAccessResolver({ aud: AUD, keySet: publicKey, teamDomain: TEAM });
         const token = await sign({ sub: "user-9" });
@@ -118,6 +129,8 @@ describe("composeResolvers", () => {
     });
 
     it("falls through to a later resolver when earlier ones abstain", async () => {
+        expect.assertions(1);
+
         const fallback = (): ResolvedIdentityLike => {
             return { userId: "session-user" };
         };
@@ -132,6 +145,8 @@ describe("composeResolvers", () => {
     });
 
     it("returns null when every resolver abstains", async () => {
+        expect.assertions(1);
+
         const resolve = composeResolvers(
             () => null,
             () => null,

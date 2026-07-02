@@ -136,14 +136,44 @@ describe("decorateResponse", () => {
         expect(out.headers.get("content-security-policy")).toBe("default-src 'self'");
     });
 
-    it("skips the default CSP for HTML responses but keeps the other headers", () => {
+    it("applies the conservative default CSP for HTML responses (no default-src) and keeps the other headers", () => {
         expect.hasAssertions();
 
         const html = new Response("<html></html>", { headers: { "content-type": "text/html; charset=utf-8" } });
         const out = decorateResponse(html, httpsRequest(), resolved);
 
-        expect(out.headers.get("content-security-policy")).toBeNull();
+        const csp = out.headers.get("content-security-policy");
+
+        // Conservative HTML hardening; frame-ancestors mirrors the default SAMEORIGIN frameOptions.
+        expect(csp).toContain("base-uri 'none'");
+        expect(csp).toContain("object-src 'none'");
+        expect(csp).toContain("frame-ancestors 'self'");
+        expect(csp).not.toContain("default-src");
         expect(out.headers.get("x-content-type-options")).toBe("nosniff");
+    });
+
+    it("derives the HTML CSP frame-ancestors from frameOptions (DENY → 'none', disabled → omitted)", () => {
+        expect.hasAssertions();
+
+        const deny = resolveSecurity({ headers: { frameOptions: "DENY" } });
+        const denyCsp = decorateResponse(new Response("<html></html>", { headers: { "content-type": "text/html" } }), httpsRequest(), deny).headers.get(
+            "content-security-policy",
+        );
+
+        // Must NOT weaken X-Frame-Options: DENY with a looser 'self'.
+        expect(denyCsp).toContain("frame-ancestors 'none'");
+        expect(denyCsp).not.toContain("frame-ancestors 'self'");
+
+        const noFraming = resolveSecurity({ headers: { frameOptions: false } });
+        const noFramingCsp = decorateResponse(
+            new Response("<html></html>", { headers: { "content-type": "text/html" } }),
+            httpsRequest(),
+            noFraming,
+        ).headers.get("content-security-policy");
+
+        // Framing disabled → no frame-ancestors directive (framing left unrestricted), base hardening stays.
+        expect(noFramingCsp).not.toContain("frame-ancestors");
+        expect(noFramingCsp).toContain("base-uri 'none'");
     });
 
     it("applies an explicit CSP string to HTML too", () => {

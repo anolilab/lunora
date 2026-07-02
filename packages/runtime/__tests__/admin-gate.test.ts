@@ -26,7 +26,7 @@ describe("createWorker — adminGate (async Access-style admin authorization)", 
     it("authorizes an admin route when adminGate resolves true, with no bearer", async () => {
         expect.assertions(2);
 
-        const adminGate = vi.fn(async () => true);
+        const adminGate = vi.fn<() => Promise<boolean>>(async () => true);
         const worker = createWorker({ adminGate, functions: REGISTRY, shardDO: noopNamespace });
 
         const response = await worker.fetch(new Request(ADMIN_PATH, { method: "GET" }), {}, fakeContext);
@@ -95,7 +95,7 @@ describe("createWorker — adminGate (async Access-style admin authorization)", 
     it("never evaluates adminGate on the non-admin RPC hot path", async () => {
         expect.assertions(1);
 
-        const adminGate = vi.fn(async () => true);
+        const adminGate = vi.fn<() => Promise<boolean>>(async () => true);
         const worker = createWorker({ adminGate, functions: REGISTRY, shardDO: noopNamespace });
 
         await worker.fetch(

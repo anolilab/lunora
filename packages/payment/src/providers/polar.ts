@@ -78,7 +78,10 @@ const PAYMENT_STATE_BY_POLAR_ORDER_STATUS: Record<string, PaymentState> = {
 const SUBSCRIPTION_STATE_BY_POLAR_STATUS: Record<string, SubscriptionState> = {
     active: "active",
     canceled: "canceled",
-    incomplete: "trialing",
+    // SECURITY: `incomplete` (first payment not completed) must not map to an
+    // entitling state — see the equivalent note in the Stripe adapter. Treat it as
+    // non-entitling `past_due`; reserve `trialing` for a genuine trial.
+    incomplete: "past_due",
     incomplete_expired: "canceled",
     past_due: "past_due",
     trialing: "trialing",

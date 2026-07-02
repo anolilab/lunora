@@ -24,41 +24,51 @@ vi.mock(import("@cloudflare/flagship/server"), () => {
 // Imported after the mock is registered.
 const { flagshipProvider } = await import("../src/providers/flagship");
 
-beforeEach(() => {
-    constructed.length = 0;
-});
-
-describe("flagshipProvider — binding mode", () => {
-    it("resolves the named binding off env and passes it through", () => {
-        const binding = { evaluate: () => undefined };
-        const factory = flagshipProvider({ binding: "FLAGS", cacheTtl: 5000 });
-
-        factory({ FLAGS: binding });
-
-        expect(constructed).toHaveLength(1);
-        expect(constructed[0]).toEqual({ binding, cacheTtl: 5000 });
+describe("flagshipProvider", () => {
+    beforeEach(() => {
+        constructed.length = 0;
     });
 
-    it("throws a directed error when the binding is absent", () => {
-        const factory = flagshipProvider({ binding: "FLAGS" });
+    describe("flagshipProvider — binding mode", () => {
+        it("resolves the named binding off env and passes it through", () => {
+            expect.assertions(2);
 
-        expect(() => factory({})).toThrow(/no binding "FLAGS" found/);
+            const binding = { evaluate: () => undefined };
+            const factory = flagshipProvider({ binding: "FLAGS", cacheTtl: 5000 });
+
+            factory({ FLAGS: binding });
+
+            expect(constructed).toHaveLength(1);
+            expect(constructed[0]).toEqual({ binding, cacheTtl: 5000 });
+        });
+
+        it("throws a directed error when the binding is absent", () => {
+            expect.assertions(1);
+
+            const factory = flagshipProvider({ binding: "FLAGS" });
+
+            expect(() => factory({})).toThrow(/no binding "FLAGS" found/);
+        });
+
+        it("throws when the binding is null", () => {
+            expect.assertions(1);
+
+            const factory = flagshipProvider({ binding: "FLAGS" });
+
+            expect(() => factory({ FLAGS: null })).toThrow(/no binding "FLAGS" found/);
+        });
     });
 
-    it("throws when the binding is null", () => {
-        const factory = flagshipProvider({ binding: "FLAGS" });
+    describe("flagshipProvider — HTTP mode", () => {
+        it("constructs from static config, ignoring env", () => {
+            expect.assertions(2);
 
-        expect(() => factory({ FLAGS: null })).toThrow(/no binding "FLAGS" found/);
-    });
-});
+            const factory = flagshipProvider({ accountId: "acct", appId: "app-abc", authToken: "tok" });
 
-describe("flagshipProvider — HTTP mode", () => {
-    it("constructs from static config, ignoring env", () => {
-        const factory = flagshipProvider({ accountId: "acct", appId: "app-abc", authToken: "tok" });
+            factory({});
 
-        factory({});
-
-        expect(constructed).toHaveLength(1);
-        expect(constructed[0]).toEqual({ accountId: "acct", appId: "app-abc", authToken: "tok" });
+            expect(constructed).toHaveLength(1);
+            expect(constructed[0]).toEqual({ accountId: "acct", appId: "app-abc", authToken: "tok" });
+        });
     });
 });

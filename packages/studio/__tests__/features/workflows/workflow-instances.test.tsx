@@ -1,4 +1,4 @@
-import type { WorkflowInstanceDetail, WorkflowInstanceStatus, WorkflowInstanceSummary } from "@lunora/client";
+import type { WorkflowInstanceAction, WorkflowInstanceDetail, WorkflowInstanceStatus, WorkflowInstanceSummary } from "@lunora/client";
 import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement, ReactNode } from "react";
@@ -28,7 +28,7 @@ describe("workflowInstanceHistory", () => {
     it("lists instances for the workflow on mount", async () => {
         expect.assertions(2);
 
-        const loadInstances = vi.fn(async () => INSTANCES);
+        const loadInstances = vi.fn<(args: { name: string; status?: WorkflowInstanceStatus }) => Promise<WorkflowInstanceSummary[]>>(async () => INSTANCES);
         render(withProvider(createMockClient(), <WorkflowInstanceHistory loadInstances={loadInstances} workflowName="orders" />));
 
         await screen.findByTestId("workflow-instance-i1");
@@ -40,7 +40,7 @@ describe("workflowInstanceHistory", () => {
     it("reloads with a status filter when the dropdown changes", async () => {
         expect.assertions(1);
 
-        const loadInstances = vi.fn(async () => INSTANCES);
+        const loadInstances = vi.fn<(args: { name: string; status?: WorkflowInstanceStatus }) => Promise<WorkflowInstanceSummary[]>>(async () => INSTANCES);
         render(withProvider(createMockClient(), <WorkflowInstanceHistory loadInstances={loadInstances} workflowName="orders" />));
 
         await screen.findByTestId("workflow-instance-i1");
@@ -54,7 +54,7 @@ describe("workflowInstanceHistory", () => {
     it("opens a step timeline when an instance's Steps button is clicked", async () => {
         expect.assertions(2);
 
-        const loadDetail = vi.fn(async () => DETAIL);
+        const loadDetail = vi.fn<(args: { id: string; name: string }) => Promise<WorkflowInstanceDetail>>(async () => DETAIL);
         render(
             withProvider(createMockClient(), <WorkflowInstanceHistory loadDetail={loadDetail} loadInstances={async () => INSTANCES} workflowName="orders" />),
         );
@@ -70,7 +70,7 @@ describe("workflowInstanceHistory", () => {
     it("shows the not-configured state when the proxy reports WORKFLOWS_NOT_CONFIGURED", async () => {
         expect.assertions(1);
 
-        const loadInstances = vi.fn(async () => {
+        const loadInstances = vi.fn<(args: { name: string; status?: WorkflowInstanceStatus }) => Promise<WorkflowInstanceSummary[]>>(async () => {
             throw Object.assign(new Error("unconfigured"), { code: "WORKFLOWS_NOT_CONFIGURED" });
         });
         render(withProvider(createMockClient(), <WorkflowInstanceHistory loadInstances={loadInstances} workflowName="orders" />));
@@ -83,10 +83,12 @@ describe("workflowInstanceHistory", () => {
     it("runs a lifecycle action and reloads when a handler is supplied", async () => {
         expect.assertions(2);
 
-        const loadInstances = vi.fn(async () => INSTANCES);
-        const runAction = vi.fn(async () => {
-            return { status: "paused" as WorkflowInstanceStatus };
-        });
+        const loadInstances = vi.fn<(args: { name: string; status?: WorkflowInstanceStatus }) => Promise<WorkflowInstanceSummary[]>>(async () => INSTANCES);
+        const runAction = vi.fn<(args: { action: WorkflowInstanceAction; id: string; name: string }) => Promise<{ status: WorkflowInstanceStatus }>>(
+            async () => {
+                return { status: "paused" as WorkflowInstanceStatus };
+            },
+        );
         render(withProvider(createMockClient(), <WorkflowInstanceHistory loadInstances={loadInstances} runAction={runAction} workflowName="orders" />));
 
         fireEvent.click(await screen.findByTestId("workflow-instance-pause-i1"));
@@ -112,9 +114,11 @@ describe("workflowInstanceHistory", () => {
     it("hides lifecycle actions when readOnly, even with a handler supplied", async () => {
         expect.assertions(1);
 
-        const runAction = vi.fn(async () => {
-            return { status: "paused" as WorkflowInstanceStatus };
-        });
+        const runAction = vi.fn<(args: { action: WorkflowInstanceAction; id: string; name: string }) => Promise<{ status: WorkflowInstanceStatus }>>(
+            async () => {
+                return { status: "paused" as WorkflowInstanceStatus };
+            },
+        );
         render(
             withProvider(
                 createMockClient(),

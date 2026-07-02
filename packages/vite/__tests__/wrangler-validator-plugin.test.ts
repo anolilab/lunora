@@ -51,6 +51,7 @@ const VALID_WRANGLER = `{
 
 const makeOptions = (projectRoot: string): ResolvedLunoraPluginOptions => {
     return {
+        allowUnauthenticatedShardAccess: false,
         apiSpec: "openapi",
         cloudflare: false,
         studio: false,

@@ -19,7 +19,7 @@
 import SelectBuilder from "./builder";
 import type { QueryExecutor } from "./query";
 import type { Sql } from "./sql";
-import { toText } from "./sql";
+import { ident, toText } from "./sql";
 import type { R2SqlColumn, R2SqlConfig, R2SqlExplainOptions, R2SqlResult } from "./types";
 
 /** Default public R2 SQL REST host. */
@@ -147,11 +147,13 @@ export const createR2Sql = (config: R2SqlConfig): R2SqlClient => {
     };
 
     return {
-        describe: async (table) => exec(`DESCRIBE ${table}`),
+        describe: async (table) => exec(`DESCRIBE ${ident(table)}`),
         explain: async (statement, options) => exec(`EXPLAIN ${options?.format === "json" ? "FORMAT JSON " : ""}${toText(statement)}`),
+        // `SelectBuilder`'s constructor validates the table reference (allowing an
+        // optional `[AS] alias`), so no pre-validation here.
         from: <Row = Record<string, unknown>>(table: string) => new SelectBuilder<Row>(exec, table),
         query: async <Row = Record<string, unknown>>(statement: Sql | string) => exec(toText(statement)) as Promise<R2SqlResult<Row>>,
         showDatabases: async () => exec("SHOW DATABASES"),
-        showTables: async (namespace) => exec(`SHOW TABLES IN ${namespace}`),
+        showTables: async (namespace) => exec(`SHOW TABLES IN ${ident(namespace)}`),
     };
 };

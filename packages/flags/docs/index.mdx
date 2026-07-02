@@ -143,6 +143,8 @@ function Dashboard() {
 
 `useFlag(key, default)` resolves a single flag; `useFlags({ key: default, ... })` resolves a batch in one round trip.
 
+The reactive WebSocket channel is **server-trusted**. Each evaluation runs under the socket's own server-verified identity — the `targetingKey` comes from your server-side `identify(...)` (and any server-set context), never from the client. A subscriber cannot spoof targeting attributes (plan, role, …) to unlock a flag gated on them. The channel also serves **only** the flag keys codegen discovered statically from your `ctx.flags.<type>(...)` reads; an arbitrary or unknown key resolves to the supplied default, so a subscriber can't probe internal or unreleased flags.
+
 ### Other frameworks
 
 The same reactive contract ships in every Lunora client adapter — one import, idiomatic to each framework, all live over the existing WebSocket:

@@ -78,8 +78,10 @@ const useMutation = <F extends FunctionReference>(function_: F): MutationHook<F>
     // `mutateAsync`/`reset` are referentially stable across renders.
     const { data, error, isError, mutateAsync, reset } = mutation;
 
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing: React Compiler bails this hook (verified: the built chunk has no compiler-runtime memoization), so this `useCallback` is what keeps `mutate` referentially stable for consumers that place it in effect deps. Keep it.
     const mutate = useCallback((args: ArgsOf<F>, options?: CallOptions<F>): Promise<ReturnOf<F>> => mutateAsync({ args, options }), [mutateAsync]);
 
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing: React Compiler bails this hook (verified: no compiler-runtime in the built chunk), so this `useCallback` is what keeps `withOptimisticUpdate` stable across renders. Keep it.
     const withOptimisticUpdate = useCallback(
         (update: OptimisticUpdate<ArgsOf<F>>): MutationHook<F> => {
             // Bound update is the default; a per-call `optimisticUpdate` in

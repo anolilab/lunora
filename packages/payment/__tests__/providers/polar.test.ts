@@ -128,6 +128,20 @@ describe("polar adapter", () => {
         expect(action.subscriptionId).toBe("sub_1");
     });
 
+    it("maps an `incomplete` subscription to a non-entitling state, not an active grant (regression)", async () => {
+        expect.assertions(1);
+
+        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+
+        const payload = JSON.stringify({ data: { id: "sub_1", metadata: { referenceId: "user_1" }, status: "incomplete" }, type: "subscription.created" });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const action = await adapter.parseWebhook({ headers: headersFor("msg_incomplete", timestamp, sign("msg_incomplete", timestamp, payload)), payload });
+
+        // `incomplete` (first payment not completed) must NOT map to the entitling
+        // `subscription.active` — it maps to non-entitling `subscription.past_due`.
+        expect(action.type).toBe("subscription.past_due");
+    });
+
     it("ingests usage as an event keyed on the external customer id", async () => {
         expect.assertions(3);
 

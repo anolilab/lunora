@@ -1,8 +1,11 @@
 {
     "extends": "../../tsconfig.base.json",
     "compilerOptions": {
-        "outDir": "dist",
-        "rootDir": ".",
+        // Intentionally no `outDir`/`rootDir` (unlike sibling packages): `dialect.ts`
+        // inlines `../../../shared/quote-identifier` (a file outside this package,
+        // bundled in at build time), and a set `rootDir` would raise TS6059 for it.
+        // `lint:types` is `tsc --noEmit` and the real build is packem, so neither is
+        // load-bearing here. See shared/quote-identifier.ts.
         "moduleResolution": "bundler",
         "types": ["@cloudflare/workers-types", "@cloudflare/vitest-pool-workers/types", "node"]
     },

@@ -13,7 +13,7 @@ describe("defineMutator", () => {
     it("brands the declaration and preserves both impls", () => {
         expect.assertions(3);
 
-        const client = vi.fn();
+        const client = vi.fn<(tx: unknown, args: { text: string }) => void>();
         const mutator = defineMutator({
             args: { text: v.string() },
             client,
@@ -28,7 +28,7 @@ describe("defineMutator", () => {
     it("validates args before running the server impl via handler", async () => {
         expect.assertions(2);
 
-        const server = vi.fn((_ctx: MutationCtx, args: { text: string }) => `ok:${args.text}`);
+        const server = vi.fn<(_ctx: MutationCtx, args: { text: string }) => string>((_ctx, args) => `ok:${args.text}`);
         const mutator = defineMutator({ args: { text: v.string() }, server });
 
         await expect(mutator.handler({} as MutationCtx, { text: "hi" })).resolves.toBe("ok:hi");

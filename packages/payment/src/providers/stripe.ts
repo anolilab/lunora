@@ -96,7 +96,14 @@ const PAYMENT_STATE_BY_STRIPE_STATUS: Record<string, PaymentState> = {
 const SUBSCRIPTION_STATE_BY_STRIPE_STATUS: Record<string, SubscriptionState> = {
     active: "active",
     canceled: "canceled",
-    incomplete: "trialing",
+    // SECURITY: `incomplete` means the FIRST payment has not succeeded (SCA
+    // `requires_action` or a failed initial charge). It must NOT map to an
+    // entitling state — Stripe's recommended `payment_behavior: "default_incomplete"`
+    // makes `incomplete` the initial status of every new subscription, so mapping
+    // it to `trialing` (which is in ACTIVE_STATES) would grant paid entitlements
+    // before any payment. Reserve `trialing` for a genuine Stripe trial (status
+    // `trialing`, mapped below); treat `incomplete` as non-entitling `past_due`.
+    incomplete: "past_due",
     incomplete_expired: "canceled",
     past_due: "past_due",
     paused: "paused",
@@ -209,12 +216,24 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
 
         case "checkout.session.completed": {
             if (readString(object, "mode") === "subscription") {
+                // SECURITY: a completed subscription checkout is only ACTIVE when
+                // Stripe confirms it was paid (or no payment was required). An
+                // `unpaid` session (async payment still processing) must not grant
+                // entitlements — emit a non-entitling `subscription.updated` (a
+                // metadata patch that no-ops without an existing row); the
+                // authoritative active state still arrives via `customer.subscription.*`.
+                // Only promote to ACTIVE when Stripe EXPLICITLY confirms payment.
+                // An `unpaid` session (async payment still processing) — or a
+                // missing/unknown `payment_status` — must NOT entitle; fail closed.
+                const paymentStatus = readString(object, "payment_status");
+                const paid = paymentStatus === "paid" || paymentStatus === "no_payment_required";
+
                 return {
                     ...base,
                     customerId: readString(object, "customer"),
                     referenceId: readReferenceId(object),
                     subscriptionId: readString(object, "subscription"),
-                    type: "subscription.active",
+                    type: paid ? "subscription.active" : "subscription.updated",
                 };
             }
 

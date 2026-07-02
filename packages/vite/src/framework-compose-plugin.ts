@@ -145,7 +145,13 @@ const projectUsesUmbrella = (projectRoot: string): boolean => {
  * virtual module id. Absolute paths are resolved correctly in all environments
  * (Vite 8 + rolldown 1.x confirmed).
  */
-const buildWorkerEntrySource = (framework: DetectedFramework, generatedImportBase: string, hasContainers = false, useUmbrella = false): string => {
+const buildWorkerEntrySource = (
+    framework: DetectedFramework,
+    generatedImportBase: string,
+    hasContainers = false,
+    useUmbrella = false,
+    allowUnauthenticatedShardAccess = false,
+): string => {
     const wiring = CLASS_A_WIRING[framework];
 
     if (wiring === undefined) {
@@ -180,7 +186,7 @@ let worker;
 
 export default {
     async fetch(request, env, context) {
-        worker ??= composeWorker({
+        worker ??= composeWorker({${allowUnauthenticatedShardAccess ? "\n            allowUnauthenticatedShardAccess: true," : ""}
             functions: LUNORA_FUNCTIONS,
             httpRouter: ${wiring.handler},
             openApiSpec,
@@ -239,7 +245,13 @@ export const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, con
                 // check decides whether the composed entry re-exports them.
                 const hasContainers = existsSync(join(generatedImportBase, "containers.ts"));
 
-                return buildWorkerEntrySource(context.framework.framework, generatedImportBase, hasContainers, useUmbrella);
+                return buildWorkerEntrySource(
+                    context.framework.framework,
+                    generatedImportBase,
+                    hasContainers,
+                    useUmbrella,
+                    options.allowUnauthenticatedShardAccess,
+                );
             }
 
             return undefined;

@@ -19,6 +19,12 @@
 /** Escape a string as a single-quoted SQL literal (doubling embedded single quotes). */
 const quoteString = (value: string): string => `'${value.replaceAll("'", "''")}'`;
 
+/** A dotted identifier: one or more `\w` segments joined by `.` (e.g. `namespace.table`, `db.schema.table`). */
+const IDENTIFIER_RE = /^\w+(?:\.\w+)*$/;
+
+/** A table reference: a dotted identifier with an optional `[AS] alias` (e.g. `s.zones z`, `users AS u`). */
+const TABLE_REF_RE = /^\w+(?:\.\w+)*(?:\s+(?:as\s+)?\w+)?$/i;
+
 /**
  * A composed SQL fragment. Carries the finished `text`; `toString()` returns it
  * so a fragment can be dropped straight into a template or `String(...)`.
@@ -47,6 +53,36 @@ export const raw = (text: string): Sql => new Sql(text);
 
 /** Resolve a `string | Sql` to its raw text. A bare string is taken as trusted SQL (callers pass identifiers/fragments here). */
 export const toText = (value: Sql | string): string => (isSql(value) ? value.text : value);
+
+/**
+ * Validate a table/namespace/database identifier that will be spliced into R2 SQL
+ * text (which has no parameter binding and no identifier quoting we can rely on).
+ * Accepts only dotted `\w` segments and throws otherwise, so a client-supplied
+ * `describe`/`showTables` argument can't inject SQL. For a genuinely dynamic
+ * identifier you built yourself, wrap it with {@link raw}.
+ */
+export const ident = (name: string): string => {
+    if (typeof name !== "string" || !IDENTIFIER_RE.test(name)) {
+        throw new TypeError(`r2sql: invalid identifier ${JSON.stringify(name)} — expected dotted [A-Za-z0-9_] segments (e.g. "namespace.table").`);
+    }
+
+    return name;
+};
+
+/**
+ * Validate a table REFERENCE for a `FROM`/`JOIN` position: a dotted identifier
+ * plus an optional `[AS] alias`. Broader than {@link ident} (which forbids the
+ * alias) but still an allowlist — no whitespace beyond the single alias, no
+ * punctuation — so a caller-supplied table string can't inject SQL. Use
+ * {@link raw} for anything more dynamic that you built yourself.
+ */
+export const tableRef = (ref: string): string => {
+    if (typeof ref !== "string" || !TABLE_REF_RE.test(ref)) {
+        throw new TypeError(`r2sql: invalid table reference ${JSON.stringify(ref)} — expected "namespace.table" with an optional "[AS] alias".`);
+    }
+
+    return ref;
+};
 
 /**
  * Render a JS value as an R2 SQL literal:

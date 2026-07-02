@@ -10,10 +10,10 @@ const fakeBinding = (): QueueBindingLike & { batches: unknown[]; sends: unknown[
 
     return {
         batches,
-        send: vi.fn(async (body: unknown, options?: unknown) => {
+        send: vi.fn<(body: unknown, options?: unknown) => Promise<void>>(async (body, options) => {
             sends.push({ body, options });
         }),
-        sendBatch: vi.fn(async (messages: Iterable<unknown>, options?: unknown) => {
+        sendBatch: vi.fn<(messages: Iterable<unknown>, options?: unknown) => Promise<void>>(async (messages, options) => {
             batches.push({ messages: [...messages], options });
         }),
         sends,
@@ -22,6 +22,8 @@ const fakeBinding = (): QueueBindingLike & { batches: unknown[]; sends: unknown[
 
 describe("createQueues", () => {
     it("exposes a typed producer per binding", async () => {
+        expect.assertions(1);
+
         const email = fakeBinding();
         const queues = createQueues({ bindings: { emailQueue: email } });
 
@@ -31,6 +33,8 @@ describe("createQueues", () => {
     });
 
     it("forwards a batch", async () => {
+        expect.assertions(1);
+
         const email = fakeBinding();
         const queues = createQueues({ bindings: { emailQueue: email } });
 
@@ -40,6 +44,8 @@ describe("createQueues", () => {
     });
 
     it("throws a directed error for an unknown queue", async () => {
+        expect.assertions(1);
+
         const queues = createQueues({ bindings: { emailQueue: fakeBinding() } });
 
         await expect(queues.smsQueue!.send({})).rejects.toThrow(/no queue named "smsQueue".*known queues: emailQueue/s);
@@ -48,6 +54,8 @@ describe("createQueues", () => {
 
 describe("createQueueContext", () => {
     it("resolves producer bindings from env and skips absent ones", async () => {
+        expect.assertions(2);
+
         const email = fakeBinding();
         const queues = createQueueContext({ QUEUE_EMAIL: email }, [
             { binding: "QUEUE_EMAIL", exportName: "email", name: "email" },

@@ -4,7 +4,9 @@ import { createPipelines } from "../../src/pipelines/create-pipelines";
 
 describe("createPipelines", () => {
     it("wraps a single record in an array for the binding", async () => {
-        const send = vi.fn(async () => {});
+        expect.assertions(1);
+
+        const send = vi.fn<(records: unknown[]) => Promise<void>>(async () => {});
         const pipelines = createPipelines({ binding: { send } });
 
         await pipelines.send({ event: "purchase", userId: "1" });
@@ -13,7 +15,9 @@ describe("createPipelines", () => {
     });
 
     it("forwards an array of records unchanged", async () => {
-        const send = vi.fn(async () => {});
+        expect.assertions(1);
+
+        const send = vi.fn<(records: unknown[]) => Promise<void>>(async () => {});
         const pipelines = createPipelines({ binding: { send } });
 
         await pipelines.send([{ n: 1 }, { n: 2 }]);

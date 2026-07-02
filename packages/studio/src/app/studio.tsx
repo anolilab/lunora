@@ -12,7 +12,7 @@ import {
     useSearch,
 } from "@tanstack/react-router";
 import type { ReactElement, ReactNode } from "react";
-import { createContext, use, useEffect } from "react";
+import { createContext, use, useEffect, useMemo } from "react";
 
 import BrandMark from "../components/brand-mark";
 import { ErrorBoundary } from "../components/error-boundary";
@@ -724,44 +724,46 @@ const StudioLayout = (): ReactElement => {
 
     // Memoised on `t` (stable per locale) so the maps re-localise when the active
     // locale changes but aren't rebuilt on every unrelated render.
-    const tabLabel = {
-        analytics: t("Analytics"),
-        api: t("API"),
-        audit: t("Audit"),
-        authConfig: t("Configuration"),
-        authSessions: t("Sessions"),
-        dashboards: t("Dashboards"),
-        data: t("Data"),
-        drains: t("Log drains"),
-        export: t("Export / Import"),
-        fanout: t("Fan-out"),
-        files: t("Files"),
-        flags: t("Flags"),
-        functions: t("Functions"),
-        health: t("Health"),
-        home: t("Home"),
-        insights: t("Performance"),
-        logs: t("Logs"),
-        metrics: t("Metrics"),
-        migrations: t("Migrations"),
-        organizations: t("Organizations"),
-        pitr: t("Time Travel"),
-        mail: t("Mail"),
-        payments: t("Payments"),
-        permissions: t("Permissions"),
-        queues: t("Queues"),
-        realtime: t("Realtime"),
-        rls: t("RLS Policies"),
-        schedule: t("Scheduled"),
-        schema: t("Schema"),
-        security: t("Security"),
-        settings: t("Settings"),
-        sql: t("SQL editor"),
-        storageRules: t("Access Rules"),
-        users: t("Users"),
-        vectors: t("Vectors"),
-        workflows: t("Workflows"),
-    };
+    const tabLabel = useMemo(() => {
+        return {
+            analytics: t("Analytics"),
+            api: t("API"),
+            audit: t("Audit"),
+            authConfig: t("Configuration"),
+            authSessions: t("Sessions"),
+            dashboards: t("Dashboards"),
+            data: t("Data"),
+            drains: t("Log drains"),
+            export: t("Export / Import"),
+            fanout: t("Fan-out"),
+            files: t("Files"),
+            flags: t("Flags"),
+            functions: t("Functions"),
+            health: t("Health"),
+            home: t("Home"),
+            insights: t("Performance"),
+            logs: t("Logs"),
+            metrics: t("Metrics"),
+            migrations: t("Migrations"),
+            organizations: t("Organizations"),
+            pitr: t("Time Travel"),
+            mail: t("Mail"),
+            payments: t("Payments"),
+            permissions: t("Permissions"),
+            queues: t("Queues"),
+            realtime: t("Realtime"),
+            rls: t("RLS Policies"),
+            schedule: t("Scheduled"),
+            schema: t("Schema"),
+            security: t("Security"),
+            settings: t("Settings"),
+            sql: t("SQL editor"),
+            storageRules: t("Access Rules"),
+            users: t("Users"),
+            vectors: t("Vectors"),
+            workflows: t("Workflows"),
+        };
+    }, [t]);
 
     const groupLabel = {
         advisors: t("Advisors"),

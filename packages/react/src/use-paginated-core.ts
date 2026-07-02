@@ -78,7 +78,9 @@ const usePaginatedCore = function <T>(
     const resetKey = `${function_.__lunoraRef}::${baseArgsKey}::${String(initialNumItems)}::${shardKey ?? ""}`;
     const resetKeyRef = useRef(resetKey);
 
+    // react-doctor-disable-next-line react-hooks-js/refs -- intentional: React's sanctioned "reset state when an input changes" pattern — compare a render-phase ref to the current reset key and set state during render, guarded so it runs once per change (see comment above).
     if (resetKeyRef.current !== resetKey) {
+        // react-doctor-disable-next-line react-hooks-js/refs -- intentional: writing the ref guard here is what makes the render-phase reset fire exactly once per input change (see above).
         resetKeyRef.current = resetKey;
         setPages(initialPages(initialNumItems));
     }
@@ -86,6 +88,7 @@ const usePaginatedCore = function <T>(
     // Build the (queryKey, args) pair for each loaded page. `cursor`/`endCursor`
     // carry the page's fixed `(lower, upper]` range so the client opens one
     // dedup'd subscription per range.
+    // react-doctor-disable-next-line react-doctor/no-event-handler -- false positive: `pageEntries` is derived render state (the per-page (queryKey, args) list), not a faked event handler; the attach effect below reads it via `desiredRef` and keys on `pageKeysHash`. No user event triggers this derivation.
     const pageEntries = pages.map((page) => {
         const pageArgs = { ...baseArgs, paginationOpts: { cursor: page.lower, endCursor: page.upper, numItems: page.numItems } };
         const key: QueryKey = lunoraQueryKey(function_, pageArgs, shardKey);
@@ -190,6 +193,7 @@ const usePaginatedCore = function <T>(
 
             detaches.set(hash, registry.attach(queryClient, entry.key, desired.fn, entry.args, desired.shardKey));
         }
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the attach effect re-runs only when the set of page keys (`pageKeysHash`), the client, or the skip flag changes. `detachesRef`/`desiredRef`/`queryClient` are stable refs read at run time; the latest fn/args/entries come from `desiredRef.current` (updated in a sibling effect). Client swaps are handled explicitly via `detachClientRef`.
     }, [client, queryClient, pageKeysHash, skipped]);
 
     // Release every page on unmount.
@@ -201,6 +205,7 @@ const usePaginatedCore = function <T>(
 
             detachesRef.current.clear();
         },
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: unmount-only cleanup. `detachesRef` is a stable ref, so the empty dep array is correct — the teardown must run once on unmount, not every render.
         [],
     );
 
@@ -226,6 +231,7 @@ const usePaginatedCore = function <T>(
         });
 
         return unsubscribe;
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the cache subscription re-attaches only when `pageKeysHash` (or the stable `queryClient`) changes. The inner `pageEntries.some(...)` membership check reads this render's entries by closure, but the subscription itself must not re-attach every render — keying on the hash is the point.
     }, [queryClient, pageKeysHash]);
 
     const pageResults: (PaginationResult<T> | undefined)[] = skipped ? [] : pageEntries.map(({ key }) => queryClient.getQueryData<PaginationResult<T>>(key));
@@ -236,20 +242,24 @@ const usePaginatedCore = function <T>(
     // closes over this render's `pages` + `pageResults` directly — no render-phase
     // ref snapshot needed. `rebalance` applies one boundary edit per pass; the
     // resulting re-render drives the next until the layout is balanced.
+    // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: this SPLIT/JOIN maintenance effect deliberately runs every commit (no dep array) so it closes over the freshest `pages`/`pageResults`. `rebalance` applies at most one guarded boundary edit per pass, so the re-render chain converges instead of looping (see the block comment above).
     useEffect(() => {
         if (skipped) {
             return;
         }
 
+        // react-doctor-disable-next-line react-doctor/no-event-handler -- false positive: `rebalance` is a pure derivation over committed `pages`/`pageResults`, run post-commit to converge page sizes — not a side effect that belongs in a user event handler.
         const next = rebalance(pages, pageResults);
 
         if (next) {
+            // react-doctor-disable-next-line react-hooks-js/set-state-in-effect -- intentional: the guarded `setPages` applies one boundary edit per pass; the resulting re-render drives the next until the layout balances (see the block comment above). Convergent, not a cascading render.
             setPages(next);
         }
     });
 
     const { status } = derivePaginationStatus(skipped, pageResults);
 
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing: the render-phase `resetKeyRef` read above bails React Compiler for this whole hook, so this `useCallback` is the only thing keeping `loadMore`'s identity stable for consumers. Keep it.
     const loadMore = useCallback(
         (numberItems: number) => {
             setPages((current) => {

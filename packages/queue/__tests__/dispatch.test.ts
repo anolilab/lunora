@@ -6,14 +6,14 @@ import type { MessageBatchLike, MessageLike } from "../src/types";
 
 const message = <Body>(body: Body): MessageLike<Body> & { acked: boolean } => {
     const m = {
-        ack: vi.fn(() => {
+        ack: vi.fn<() => void>(() => {
             m.acked = true;
         }),
         acked: false,
         attempts: 1,
         body,
         id: "m1",
-        retry: vi.fn(),
+        retry: vi.fn<() => void>(),
         timestamp: new Date(0),
     };
 
@@ -22,15 +22,17 @@ const message = <Body>(body: Body): MessageLike<Body> & { acked: boolean } => {
 
 const batch = <Body>(queue: string, messages: MessageLike<Body>[]): MessageBatchLike<Body> => {
     return {
-        ackAll: vi.fn(),
+        ackAll: vi.fn<() => void>(),
         messages,
         queue,
-        retryAll: vi.fn(),
+        retryAll: vi.fn<() => void>(),
     };
 };
 
 describe("dispatchQueueBatch", () => {
     it("routes a batch to the matching push handler and runs it", async () => {
+        expect.assertions(2);
+
         const seen: unknown[] = [];
         const emailQueue = defineQueue<{ to: string }>({
             handler: (context, b) => {
@@ -51,10 +53,14 @@ describe("dispatchQueueBatch", () => {
     });
 
     it("throws when no handler is registered for the delivered queue", async () => {
+        expect.assertions(1);
+
         await expect(dispatchQueueBatch(batch("ghost", []), {}, { env: {} })).rejects.toThrow(/no push handler is registered/);
     });
 
     it("throws for a pull-declared queue with no handler", async () => {
+        expect.assertions(1);
+
         const pull = defineQueue({ mode: "pull" });
 
         await expect(dispatchQueueBatch(batch("p", []), { p: { definition: pull, exportName: "p" } }, { env: {} })).rejects.toThrow(/pull consumer/);

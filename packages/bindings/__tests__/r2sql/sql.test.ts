@@ -4,11 +4,15 @@ import { isSql, joinSql, lit, raw, Sql, sql, toText } from "../../src/r2sql/sql"
 
 describe("lit", () => {
     it("renders null and undefined as NULL", () => {
+        expect.assertions(2);
+
         expect(lit(null)).toBe("NULL");
         expect(lit(undefined)).toBe("NULL");
     });
 
     it("renders booleans, numbers, and bigints", () => {
+        expect.assertions(5);
+
         expect(lit(true)).toBe("true");
         expect(lit(false)).toBe("false");
         expect(lit(42)).toBe("42");
@@ -17,33 +21,47 @@ describe("lit", () => {
     });
 
     it("single-quotes strings and doubles embedded quotes", () => {
+        expect.assertions(2);
+
         expect(lit("hello")).toBe("'hello'");
         expect(lit("O'Brien")).toBe("'O''Brien'");
     });
 
     it("neutralises an injection attempt by escaping it into one literal", () => {
+        expect.assertions(1);
+
         expect(lit("North'; DROP TABLE x; --")).toBe("'North''; DROP TABLE x; --'");
     });
 
     it("renders Date as an RFC3339 string literal", () => {
+        expect.assertions(1);
+
         expect(lit(new Date("2025-09-24T01:00:00.000Z"))).toBe("'2025-09-24T01:00:00.000Z'");
     });
 
     it("renders arrays as a parenthesised IN list", () => {
+        expect.assertions(2);
+
         expect(lit([1, 2, 3])).toBe("(1, 2, 3)");
         expect(lit(["a", "b"])).toBe("('a', 'b')");
     });
 
     it("throws on an empty array (IN () is invalid SQL)", () => {
+        expect.assertions(1);
+
         expect(() => lit([])).toThrow(/empty array/);
     });
 
     it("throws on non-finite numbers", () => {
+        expect.assertions(2);
+
         expect(() => lit(Number.NaN)).toThrow(/non-finite/);
         expect(() => lit(Number.POSITIVE_INFINITY)).toThrow(/non-finite/);
     });
 
     it("throws on unsupported types", () => {
+        expect.assertions(2);
+
         expect(() => lit({ a: 1 })).toThrow(/cannot inline/);
         expect(() => lit(Symbol("x"))).toThrow(/cannot inline/);
     });
@@ -51,6 +69,8 @@ describe("lit", () => {
 
 describe("sql tag", () => {
     it("escapes interpolated values and splices Sql fragments verbatim", () => {
+        expect.assertions(2);
+
         const region = "North'; --";
         const fragment = sql`SELECT * FROM s.orders WHERE region = ${region} AND ${raw("active = true")} LIMIT ${10}`;
 
@@ -59,21 +79,29 @@ describe("sql tag", () => {
     });
 
     it("handles no interpolations", () => {
+        expect.assertions(1);
+
         expect(sql`SELECT 1`.text).toBe("SELECT 1");
     });
 });
 
 describe("raw / isSql / toText", () => {
     it("raw wraps text without escaping", () => {
+        expect.assertions(1);
+
         expect(raw("a + b").text).toBe("a + b");
     });
 
     it("isSql discriminates", () => {
+        expect.assertions(2);
+
         expect(isSql(raw("x"))).toBe(true);
         expect(isSql("x")).toBe(false);
     });
 
     it("toText unwraps Sql but passes strings through", () => {
+        expect.assertions(2);
+
         expect(toText(raw("x"))).toBe("x");
         expect(toText("y")).toBe("y");
     });
@@ -81,6 +109,8 @@ describe("raw / isSql / toText", () => {
 
 describe("joinSql", () => {
     it("joins fragments and strings with a separator", () => {
+        expect.assertions(1);
+
         expect(joinSql([sql`a = ${1}`, "b = 2", raw("c = 3")], " AND ").text).toBe("a = 1 AND b = 2 AND c = 3");
     });
 });

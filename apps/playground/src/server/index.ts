@@ -136,6 +136,15 @@ const app = defineApp<Env>()
 
         await handler(message as ForwardableEmailMessageLike, env, context);
     })
+    // This playground has `.auth()` but no per-row RLS, so leaving shard access
+    // OPEN would let an unauthenticated caller reach any channel's shard. Gate it
+    // on authentication instead: a non-default shard requires a signed-in user.
+    // (This is a coarse gate — a real multi-tenant app should check the caller
+    // OWNS the shard, e.g. `identity?.userId === ownerOf(shardKey)`, and add
+    // per-row RLS as defense-in-depth.)
+    .extend(() => {
+        return { authorizeShard: (identity) => identity?.userId !== undefined };
+    })
     .build();
 
 export const { ShardDO } = app;

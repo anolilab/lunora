@@ -1,3 +1,4 @@
+import { quoteIdentifier } from "../../../shared/quote-identifier";
 import type { AuditEntry } from "./audit-log";
 import type { SqlExec } from "./ctx-db";
 import type { SortDirection } from "./query-args";
@@ -801,9 +802,6 @@ const escapeLike = (value: string): string => value.replaceAll(/[\\%_]/g, (chara
  */
 const isInternalTable = (name: string): boolean =>
     name.startsWith("sqlite_") || name.startsWith("_cf_") || name.startsWith("__miniflare") || name.startsWith("__lunora") || name.includes("__fts_");
-
-/** Double-quote a SQL identifier, escaping any embedded double quotes. */
-const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 
 const clamp = (value: number, min: number, max: number): number => Math.min(Math.max(value, min), max);
 

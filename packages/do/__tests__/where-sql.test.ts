@@ -23,7 +23,7 @@ const baseStrategy: WhereSqlStrategy = {
 
 const mysqlStrategy: WhereSqlStrategy = {
     fieldRef: (field) => sql`${sql.identifier(field)}`,
-    likeContains: (reference, term) => sql`${reference} LIKE CONCAT('%', ${term}, '%')`,
+    likeContains: (reference, term) => sql`${reference} LIKE CONCAT('%', ${term}, '%') ESCAPE '\\'`,
     serialize,
 };
 
@@ -108,11 +108,25 @@ describe("compileWhereSql — per-engine rendering", () => {
 
         expect(render({ title: { contains: "O'Brien" } }, "postgres")).toEqual({
             params: ["O'Brien"],
-            sql: `"title" LIKE '%' || $1 || '%'`,
+            sql: String.raw`"title" LIKE '%' || $1 || '%' ESCAPE '\'`,
         });
         expect(render({ title: { contains: "O'Brien" } }, "mysql", mysqlStrategy)).toEqual({
             params: ["O'Brien"],
-            sql: "`title` LIKE CONCAT('%', ?, '%')",
+            sql: "`title` LIKE CONCAT('%', ?, '%') ESCAPE '\\'",
+        });
+    });
+
+    it("escapes LIKE wildcards in a `contains` term so they match literally", () => {
+        expect.assertions(2);
+
+        // `%`, `_`, and `\` are escaped in the bound param and paired with ESCAPE '\'.
+        expect(render({ title: { contains: "50%_off\\" } }, "postgres")).toEqual({
+            params: ["50\\%\\_off\\\\"],
+            sql: String.raw`"title" LIKE '%' || $1 || '%' ESCAPE '\'`,
+        });
+        expect(render({ title: { contains: "a_b" } }, "sqlite")).toEqual({
+            params: [String.raw`a\_b`],
+            sql: String.raw`"title" LIKE '%' || ? || '%' ESCAPE '\'`,
         });
     });
 

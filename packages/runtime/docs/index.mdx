@@ -59,12 +59,23 @@ path). Internally `fetch`:
 | `queryCoordinator`                                         | Enables cross-shard fan-out (`createQueryCoordinator({ registry })`); without it `fanOut` 400s |
 | `resolveIdentity`                                          | `(request, env) => identity \| null` — sets `ctx.auth` on the shard                            |
 | `authorizeShard` / `authorizeFanOut`                       | Per-shard / fan-out authorization gates (return `false` to reject)                             |
+| `allowUnauthenticatedShardAccess`                          | Opt into open shard/fan-out access (only safe when every table is per-row RLS-protected)       |
 | `routes`                                                   | `Record<string, Route>` of custom HTTP handlers (`"GET /healthz"` or `"/healthz"`)             |
 | `httpRouter`                                               | A meta-framework SSR handler / `httpRouter()` app, dispatched after the reserved endpoints     |
 | `security`                                                 | The secure-by-default HTTP edge — headers, CORS, CSRF (see `SecurityOptions`)                  |
 | `crons` / `cronJobs`                                       | Cron-trigger handlers keyed by their exact expression                                          |
 | `backupCron` / `backupStore` / `adminToken`                | The built-in scheduled NDJSON backup (see below)                                               |
 | `functions`, `*Introspector`, `storage*`, `openApiSpec`, … | Back the admin-gated `/_lunora/admin/*` endpoints the Studio reads                             |
+
+Cross-shard access is **default-denied**. A request that names a non-default
+shard (`shardKey !== defaultShardKey`, default `__root__`) or a fan-out is
+rejected with `403` — `FORBIDDEN_SHARD` / `FORBIDDEN_FANOUT` — unless the
+worker sets `authorizeShard` / `authorizeFanOut`, or
+`allowUnauthenticatedShardAccess: true`. A single-DO app never addresses a
+non-default shard, so it is unaffected; the gate only bites once you
+[`.shardBy()`](/docs/concepts/sharding). `allowUnauthenticatedShardAccess` is
+only safe when every table is protected by per-row RLS (the runtime logs a
+one-time warning while it is on with no `authorizeShard`/`authorizeFanOut`).
 
 ## `composeWorker` / `withFrameworkWorker`
 

@@ -316,7 +316,7 @@ const ApiDocsPanel = ({ functions, initialShardKey }: ApiDocsPanelProps): ReactE
         };
     }, [client, initialShardKey]);
 
-    const functionList = functions ?? [];
+    const functionList = useMemo(() => functions ?? [], [functions]);
 
     // Group function descriptors by their file segment, files sorted, functions
     // sorted within each file — a stable, scannable rail.

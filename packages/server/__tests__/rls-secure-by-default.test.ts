@@ -236,6 +236,14 @@ describe("rls — secure-by-default routing over a guarded writer", () => {
         },
     });
 
+    // `secrets` participates in the bundle ONLY via a write (insert) policy — it
+    // has no read policy. Reads of it must still fail closed through the guard.
+    const insertSecrets = definePolicy<TestContext>({
+        on: "insert",
+        table: "secrets",
+        when: () => true,
+    });
+
     it("routes a POLICY table read through the unwrapped writer (policies still work)", async () => {
         expect.assertions(2);
 
@@ -303,6 +311,52 @@ describe("rls — secure-by-default routing over a guarded writer", () => {
         await handler.handler({ auth: { userId: "u1" }, db: raw }, {});
 
         expect(log).toContain("raw.findMany:posts");
+    });
+
+    it("dENIES reading a protected WRITE-ONLY-policy table (no read policy) — no leak via raw (regression)", async () => {
+        expect.assertions(2);
+
+        const log: string[] = [];
+        const raw = createRawWriter([{ _id: "secret_1", table: "secrets" }], log);
+        const guarded = guard(raw, protectedTables, tableOfId);
+        // `secrets` is in the bundle via an INSERT policy but has NO read policy.
+        // A read must fail closed through the guard, NOT route to the unwrapped
+        // writer and return every row (the write-only-policy read-open bug).
+        const handler = lunora.query
+            .use(rlsForTest<TestContext>(definePolicies([readPosts, insertSecrets])))
+            .query(async ({ ctx }) => ctx.db.findMany("secrets"));
+
+        await expect(handler.handler({ auth: { userId: "u1" }, db: guarded }, {})).rejects.toThrow(FakeRlsRequiredError);
+        expect(log).not.toContain("raw.findMany:secrets");
+    });
+
+    it("dENIES get() on a protected WRITE-ONLY-policy table (no read policy) (regression)", async () => {
+        expect.assertions(1);
+
+        const log: string[] = [];
+        const raw = createRawWriter([{ _id: "secret_1", table: "secrets" }], log);
+        const guarded = guard(raw, protectedTables, tableOfId);
+        const handler = lunora.query.use(rlsForTest<TestContext>(definePolicies([readPosts, insertSecrets]))).query(async ({ ctx }) => ctx.db.get("secret_1"));
+
+        // The by-id path must defer to the guarded `base.get` (fail closed), never
+        // return the row it located through the unwrapped writer.
+        await expect(handler.handler({ auth: { userId: "u1" }, db: guarded }, {})).rejects.toThrow(FakeRlsRequiredError);
+    });
+
+    it("still allows writing the WRITE-ONLY-policy table (the insert policy works)", async () => {
+        expect.assertions(1);
+
+        const log: string[] = [];
+        const raw = createRawWriter([], log);
+        const guarded = guard(raw, protectedTables, tableOfId);
+        const handler = lunora.mutation
+            .use(rlsForTest<TestContext>(definePolicies([readPosts, insertSecrets])))
+            .mutation(async ({ ctx }) => ctx.db.insert("secrets", { _id: "secret_9" }));
+
+        await handler.handler({ auth: { userId: "u1" }, db: guarded }, {});
+
+        // The insert is authorized by its policy and routed to the unwrapped writer.
+        expect(log).toContain("raw.insert:secrets");
     });
 
     it("keeps LunoraError importable for downstream policy-denial assertions", () => {

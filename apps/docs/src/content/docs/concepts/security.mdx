@@ -98,6 +98,14 @@ createWorker({
 });
 ```
 
+The `/_lunora/ws` WebSocket upgrade is gated the same way: a cross-origin,
+cookie-bearing handshake is rejected before the socket opens, closing the
+Cross-Site WebSocket Hijacking (CSWSH) hole where a hostile page rides the
+victim's session cookie into a live subscription. Same-origin and bearer-token
+handshakes are unaffected. A genuinely cross-origin, cookie-authenticated
+client must add its origin to `csrf.trustedOrigins` — the same allowlist the
+HTTP guard reads.
+
 ### Body cap
 
 Request bodies are capped at 1 MiB before they reach a handler, so an oversized
@@ -142,6 +150,32 @@ export const signUp = mutation
 The rate limit runs first (the cheapest gate, shedding obvious floods before the
 Turnstile round-trip). Omitted fields are skipped; an empty bundle passes
 through unchanged.
+
+## Securing sharded access
+
+The moment an app [shards](/docs/concepts/sharding), the shard key becomes a
+client-supplied address, so cross-shard reads must be authorized. Lunora
+**default-denies** them: a request naming a non-default shard
+(`shardKey !== defaultShard`) or a fan-out is rejected with `403`
+(`FORBIDDEN_SHARD` / `FORBIDDEN_FANOUT`). A single-DO app never names a
+non-default shard and is unaffected.
+
+A sharded app must either configure `authorizeShard(identity, shardKey)` (return
+`true` to allow) — plus `authorizeFanOut` for cross-shard reads — or set
+`allowUnauthenticatedShardAccess: true` to opt into open access:
+
+```ts
+createWorker({
+    shardDO: env.SHARD,
+    authorizeShard: (identity, shardKey) => identity?.userId === shardKey,
+});
+```
+
+`allowUnauthenticatedShardAccess: true` is only safe when **every** table is
+protected by per-row [RLS](/docs/concepts/rls), so each row authorizes itself
+regardless of which DO served it. See
+[Securing shard access](/docs/concepts/sharding#securing-shard-access) for the
+full picture.
 
 ## Advisor catalog
 

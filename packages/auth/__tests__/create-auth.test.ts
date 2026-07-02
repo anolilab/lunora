@@ -227,12 +227,20 @@ describe("createAuth — secure-by-default hardening", () => {
         expect(auth.options.advanced?.useSecureCookies).toBe(true);
     });
 
-    it("leaves useSecureCookies unset for an http (dev) baseURL", () => {
+    it("disables useSecureCookies for an explicit http (dev) baseURL", () => {
         expect.assertions(1);
 
         const auth = createAuth({ baseURL: "http://localhost:8787", secret: "s".repeat(32) });
 
-        expect(auth.options.advanced?.useSecureCookies).toBeUndefined();
+        expect(auth.options.advanced?.useSecureCookies).toBe(false);
+    });
+
+    it("defaults useSecureCookies on when baseURL is unset (Workers serve HTTPS in prod)", () => {
+        expect.assertions(1);
+
+        const auth = createAuth({ secret: "s".repeat(32) });
+
+        expect(auth.options.advanced?.useSecureCookies).toBe(true);
     });
 
     it("honours an explicit useSecureCookies even on https", () => {

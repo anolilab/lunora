@@ -42,7 +42,7 @@ describe("runBin", () => {
 
         await runBin({ LUNORA_ADMIN_TOKEN: "admin-token", LUNORA_URL: "https://example.workers.dev" }, { connect, writeError });
 
-        expect(connect).toHaveBeenCalledWith({ token: "admin-token", url: "https://example.workers.dev" });
+        expect(connect).toHaveBeenCalledWith({ allowWrites: false, token: "admin-token", url: "https://example.workers.dev" });
     });
 
     it("passes an undefined token through when LUNORA_ADMIN_TOKEN is unset", async () => {
@@ -53,8 +53,19 @@ describe("runBin", () => {
 
         await runBin({ LUNORA_URL: "https://example.workers.dev" }, { connect, writeError });
 
-        expect(connect).toHaveBeenCalledWith({ token: undefined, url: "https://example.workers.dev" });
+        expect(connect).toHaveBeenCalledWith({ allowWrites: false, token: undefined, url: "https://example.workers.dev" });
         expect(writeError).not.toHaveBeenCalled();
+    });
+
+    it("enables writes only when LUNORA_MCP_ALLOW_WRITES is truthy", async () => {
+        expect.assertions(1);
+
+        const connect = vi.fn<Connect>(async () => undefined);
+        const writeError = vi.fn<WriteError>();
+
+        await runBin({ LUNORA_MCP_ALLOW_WRITES: "true", LUNORA_URL: "https://example.workers.dev" }, { connect, writeError });
+
+        expect(connect).toHaveBeenCalledWith({ allowWrites: true, token: undefined, url: "https://example.workers.dev" });
     });
 
     it("surfaces a startup failure as a BinError(1) and writes the cause", async () => {

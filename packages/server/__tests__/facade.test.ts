@@ -11,30 +11,30 @@ import { bindTableFacade } from "../src/facade";
  * onto the writer's `{ id, patch }` shape.
  */
 const makeWriter = () => {
-    const deleteMany = vi.fn();
-    const patchMany = vi.fn();
-    const insertMany = vi.fn();
-    const deleteOne = vi.fn();
-    const patchOne = vi.fn();
+    const deleteMany = vi.fn<NonNullable<FacadeWriterLike["deleteMany"]>>();
+    const patchMany = vi.fn<NonNullable<FacadeWriterLike["patchMany"]>>();
+    const insertMany = vi.fn<NonNullable<FacadeWriterLike["insertMany"]>>();
+    const deleteOne = vi.fn<FacadeWriterLike["delete"]>();
+    const patchOne = vi.fn<FacadeWriterLike["patch"]>();
 
     const writer = {
-        aggregate: vi.fn(),
-        count: vi.fn(),
+        aggregate: vi.fn<FacadeWriterLike["aggregate"]>(),
+        count: vi.fn<FacadeWriterLike["count"]>(),
         delete: deleteOne,
         deleteMany,
-        findFirst: vi.fn(),
-        findFirstOrThrow: vi.fn(),
-        findMany: vi.fn(),
-        get: vi.fn(),
-        groupBy: vi.fn(),
-        insert: vi.fn(),
+        findFirst: vi.fn<FacadeWriterLike["findFirst"]>(),
+        findFirstOrThrow: vi.fn<FacadeWriterLike["findFirstOrThrow"]>(),
+        findMany: vi.fn<FacadeWriterLike["findMany"]>(),
+        get: vi.fn<FacadeWriterLike["get"]>(),
+        groupBy: vi.fn<FacadeWriterLike["groupBy"]>(),
+        insert: vi.fn<FacadeWriterLike["insert"]>(),
         insertMany,
         patch: patchOne,
         patchMany,
-        query: vi.fn(),
-        rank: vi.fn(),
-        rankPage: vi.fn(),
-        replace: vi.fn(),
+        query: vi.fn<FacadeWriterLike["query"]>(),
+        rank: vi.fn<FacadeWriterLike["rank"]>(),
+        rankPage: vi.fn<FacadeWriterLike["rankPage"]>(),
+        replace: vi.fn<FacadeWriterLike["replace"]>(),
     } as unknown as FacadeWriterLike;
 
     return { deleteMany, deleteOne, entry: bindTableFacade(writer, "messages"), insertMany, patchMany, patchOne };
@@ -89,28 +89,28 @@ const uniqueConflict = (): Error => Object.assign(new Error(`unique constraint v
 
 /** A writer with individually-controllable findFirst/insert/patch, bound to the `users` table. */
 const makeComposingWriter = () => {
-    const findFirst = vi.fn();
-    const insert = vi.fn();
-    const patch = vi.fn();
+    const findFirst = vi.fn<FacadeWriterLike["findFirst"]>();
+    const insert = vi.fn<FacadeWriterLike["insert"]>();
+    const patch = vi.fn<FacadeWriterLike["patch"]>();
 
     const writer = {
-        aggregate: vi.fn(),
-        count: vi.fn(),
-        delete: vi.fn(),
-        deleteMany: vi.fn(),
+        aggregate: vi.fn<FacadeWriterLike["aggregate"]>(),
+        count: vi.fn<FacadeWriterLike["count"]>(),
+        delete: vi.fn<FacadeWriterLike["delete"]>(),
+        deleteMany: vi.fn<NonNullable<FacadeWriterLike["deleteMany"]>>(),
         findFirst,
-        findFirstOrThrow: vi.fn(),
-        findMany: vi.fn(),
-        get: vi.fn(),
-        groupBy: vi.fn(),
+        findFirstOrThrow: vi.fn<FacadeWriterLike["findFirstOrThrow"]>(),
+        findMany: vi.fn<FacadeWriterLike["findMany"]>(),
+        get: vi.fn<FacadeWriterLike["get"]>(),
+        groupBy: vi.fn<FacadeWriterLike["groupBy"]>(),
         insert,
-        insertMany: vi.fn(),
+        insertMany: vi.fn<NonNullable<FacadeWriterLike["insertMany"]>>(),
         patch,
-        patchMany: vi.fn(),
-        query: vi.fn(),
-        rank: vi.fn(),
-        rankPage: vi.fn(),
-        replace: vi.fn(),
+        patchMany: vi.fn<NonNullable<FacadeWriterLike["patchMany"]>>(),
+        query: vi.fn<FacadeWriterLike["query"]>(),
+        rank: vi.fn<FacadeWriterLike["rank"]>(),
+        rankPage: vi.fn<FacadeWriterLike["rankPage"]>(),
+        replace: vi.fn<FacadeWriterLike["replace"]>(),
     } as unknown as FacadeWriterLike;
 
     return { entry: bindTableFacade(writer, "users"), findFirst, insert, patch };

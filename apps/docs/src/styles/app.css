@@ -97,6 +97,7 @@
     :root {
         /* Color/surface/radius tokens + .dark overrides come from the shared
            tokens import above. Only docs-specific additions remain here. */
+        /* eslint-disable-next-line css/use-baseline -- intentional progressive enhancement, degrades gracefully */
         interpolate-size: allow-keywords;
     }
 
@@ -206,11 +207,13 @@ html {
 
 /* Skip layout/paint for off-screen sections */
 .content-auto {
+    /* eslint-disable-next-line css/use-baseline -- intentional progressive enhancement, degrades gracefully */
     content-visibility: auto;
     contain-intrinsic-size: auto 600px;
 }
 
 .no-visible-scrollbar {
+    /* eslint-disable-next-line css/use-baseline -- intentional progressive enhancement, degrades gracefully */
     scrollbar-width: none;
     -ms-overflow-style: none;
     -webkit-overflow-scrolling: touch;

@@ -60,6 +60,13 @@ export const welcomeEmail = action.input({ userId: v.id("users") }).action(async
 });
 ```
 
+### Security: recipient policy & HTML content are yours
+
+The mailer blocks header/CRLF/comma injection in addresses, but it does **not** decide _who_ you send to or _what_ HTML you render:
+
+- **Open relay.** Derive `to` / `cc` / `bcc` from server-trusted state (a looked-up user record), never from raw request input, and prefer a fixed or allowlisted `from`. Sending to an arbitrary user-supplied address turns your deployment into a spam relay.
+- **Template XSS / content injection.** Treat template HTML like any other HTML sink — never interpolate untrusted data into raw markup without escaping. The mailer sends whatever HTML you hand it verbatim.
+
 ## React Email templates
 
 Pass a `@react-email/components` element through the `react` field. The

@@ -1,7 +1,7 @@
 import type { GlobalTableInfo } from "@lunora/client";
 import { useLunora } from "@lunora/react";
 import type { ChangeEvent, ReactElement, ReactNode } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ShardInput } from "../../components/shard-input";
 import { StorageTierBadge, TIER_META } from "../../components/storage-tier";
@@ -200,28 +200,31 @@ export const SchemaViewer = ({ initialShardKey, initialTable, schemaEditable }: 
     const [globalColumns, setGlobalColumns] = useState<Record<string, string[]>>({});
     const [globalExpanded, setGlobalExpanded] = useState<null | string>(null);
 
-    const refresh = async (shard: string): Promise<void> => {
-        setError(null);
+    const refresh = useCallback(
+        async (shard: string): Promise<void> => {
+            setError(null);
 
-        try {
-            const result = (await client.query(LIST_TABLES, {}, callOptions(shard))) as TableInfo[];
+            try {
+                const result = (await client.query(LIST_TABLES, {}, callOptions(shard))) as TableInfo[];
 
-            recordShard(shard);
-            setTables(result);
-            setColumns({});
-            setIndexes({});
-            setExpanded(null);
-            // Drop cached typed columns for this shard so the diagram
-            // re-probes against the freshly listed tables.
-            setShardColumns((previous) => Object.fromEntries(Object.entries(previous).filter(([cachedShard]) => cachedShard !== shard)));
-            setShardColumnsError((previous) => Object.fromEntries(Object.entries(previous).filter(([cachedShard]) => cachedShard !== shard)));
-        } catch (error_) {
-            setTables(null);
-            setError(errorMessage(error_));
-        }
-    };
+                recordShard(shard);
+                setTables(result);
+                setColumns({});
+                setIndexes({});
+                setExpanded(null);
+                // Drop cached typed columns for this shard so the diagram
+                // re-probes against the freshly listed tables.
+                setShardColumns((previous) => Object.fromEntries(Object.entries(previous).filter(([cachedShard]) => cachedShard !== shard)));
+                setShardColumnsError((previous) => Object.fromEntries(Object.entries(previous).filter(([cachedShard]) => cachedShard !== shard)));
+            } catch (error_) {
+                setTables(null);
+                setError(errorMessage(error_));
+            }
+        },
+        [client],
+    );
 
-    const refreshGlobal = async (): Promise<void> => {
+    const refreshGlobal = useCallback(async (): Promise<void> => {
         setGlobalError(null);
 
         try {
@@ -230,7 +233,7 @@ export const SchemaViewer = ({ initialShardKey, initialTable, schemaEditable }: 
             setGlobalTables(null);
             setGlobalError(errorMessage(error_));
         }
-    };
+    }, [client]);
 
     // Re-read on the debounced shard key so switching shards re-loads the schema
     // once the value settles (no Refresh button). Schema is static between
@@ -242,47 +245,50 @@ export const SchemaViewer = ({ initialShardKey, initialTable, schemaEditable }: 
         fireAndForget(refreshGlobal());
     }, [refresh, refreshGlobal, debouncedShard]);
 
-    const toggle = async (table: string): Promise<void> => {
-        if (expanded === table) {
-            setExpanded(null);
+    const toggle = useCallback(
+        async (table: string): Promise<void> => {
+            if (expanded === table) {
+                setExpanded(null);
 
-            return;
-        }
+                return;
+            }
 
-        setExpanded(table);
+            setExpanded(table);
 
-        // Key the column cache by shard + table so editing the shard input
-        // (before the debounced re-load settles) and then expanding a table
-        // can't return a previous shard's columns; the probe below uses the
-        // same shardKey.
-        const cacheKey = `${shardKey}:${table}`;
+            // Key the column cache by shard + table so editing the shard input
+            // (before the debounced re-load settles) and then expanding a table
+            // can't return a previous shard's columns; the probe below uses the
+            // same shardKey.
+            const cacheKey = `${shardKey}:${table}`;
 
-        if (columns[cacheKey] !== undefined) {
-            return;
-        }
+            if (columns[cacheKey] !== undefined) {
+                return;
+            }
 
-        // Probe columns and indexes concurrently. Indexes are best-effort: an
-        // older worker without `listTableIndexes` (or one without an admin
-        // token for that read) still shows the column list.
-        const [page, indexResult] = await Promise.allSettled([
-            client.query(READ_TABLE_PAGE, { limit: 1, offset: 0, table }, callOptions(shardKey)) as Promise<TablePage>,
-            client.query(LIST_TABLE_INDEXES, { table }, callOptions(shardKey)) as Promise<TableIndexesResult>,
-        ]);
+            // Probe columns and indexes concurrently. Indexes are best-effort: an
+            // older worker without `listTableIndexes` (or one without an admin
+            // token for that read) still shows the column list.
+            const [page, indexResult] = await Promise.allSettled([
+                client.query(READ_TABLE_PAGE, { limit: 1, offset: 0, table }, callOptions(shardKey)) as Promise<TablePage>,
+                client.query(LIST_TABLE_INDEXES, { table }, callOptions(shardKey)) as Promise<TableIndexesResult>,
+            ]);
 
-        if (page.status === "fulfilled") {
-            setColumns((previous) => {
-                return { ...previous, [cacheKey]: page.value.columns };
-            });
-        } else {
-            setError(errorMessage(page.reason));
-        }
+            if (page.status === "fulfilled") {
+                setColumns((previous) => {
+                    return { ...previous, [cacheKey]: page.value.columns };
+                });
+            } else {
+                setError(errorMessage(page.reason));
+            }
 
-        if (indexResult.status === "fulfilled") {
-            setIndexes((previous) => {
-                return { ...previous, [cacheKey]: indexResult.value.indexes };
-            });
-        }
-    };
+            if (indexResult.status === "fulfilled") {
+                setIndexes((previous) => {
+                    return { ...previous, [cacheKey]: indexResult.value.indexes };
+                });
+            }
+        },
+        [client, columns, expanded, shardKey],
+    );
 
     const toggleGlobal = async (table: string): Promise<void> => {
         if (globalExpanded === table) {
@@ -340,54 +346,57 @@ export const SchemaViewer = ({ initialShardKey, initialTable, schemaEditable }: 
     // their column names. A `describeTables` rejection (an older worker without the
     // admin op) flags the shard so schema tables show "columns unavailable" rather
     // than mistaking the failure for empty tables.
-    const probeSchema = async (shard: string, shardNames: string[], globalNames: string[]): Promise<void> => {
-        const [described, globalPages] = await Promise.all([
-            Promise.allSettled([
-                client.query(DESCRIBE_TABLES, { tables: [...shardNames, ...globalNames] }, callOptions(shard)) as Promise<TablesColumnsResult>,
-            ]),
-            Promise.all(
-                globalNames.map(async (table): Promise<{ columns: string[]; refs: Record<string, string>; table: string }> => {
-                    const page = await Promise.allSettled([client.readGlobalTablePage({ limit: 1, offset: 0, table })]);
-                    const value = page[0].status === "fulfilled" ? page[0].value : undefined;
+    const probeSchema = useCallback(
+        async (shard: string, shardNames: string[], globalNames: string[]): Promise<void> => {
+            const [described, globalPages] = await Promise.all([
+                Promise.allSettled([
+                    client.query(DESCRIBE_TABLES, { tables: [...shardNames, ...globalNames] }, callOptions(shard)) as Promise<TablesColumnsResult>,
+                ]),
+                Promise.all(
+                    globalNames.map(async (table): Promise<{ columns: string[]; refs: Record<string, string>; table: string }> => {
+                        const page = await Promise.allSettled([client.readGlobalTablePage({ limit: 1, offset: 0, table })]);
+                        const value = page[0].status === "fulfilled" ? page[0].value : undefined;
 
-                    return { columns: value?.columns ?? [], refs: value?.refs ?? {}, table };
-                }),
-            ),
-        ]);
+                        return { columns: value?.columns ?? [], refs: value?.refs ?? {}, table };
+                    }),
+                ),
+            ]);
 
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive: an older/malformed worker can resolve a fulfilled payload without columnsByTable, which the static type can't express
-        const typedColumns = described[0].status === "fulfilled" ? (described[0].value?.columnsByTable ?? {}) : {};
-        const columnsFailed = described[0].status === "rejected";
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive: an older/malformed worker can resolve a fulfilled payload without columnsByTable, which the static type can't express
+            const typedColumns = described[0].status === "fulfilled" ? (described[0].value?.columnsByTable ?? {}) : {};
+            const columnsFailed = described[0].status === "rejected";
 
-        // Name-only columns for global tables the schema doesn't know about.
-        // PRAGMA gives no types, but `PRAGMA foreign_key_list` recovers real FK
-        // constraints, so a column that references another table carries its
-        // `ref` — letting the diagram draw global→global edges (e.g. better-auth's
-        // `session.userId → user`, `twoFactor.userId → user`).
-        const globalFallback = new Map<string, ColumnMeta[]>(
-            globalPages.map(({ columns: columnNames, refs, table }) => [
-                table,
-                columnNames.map((name): ColumnMeta => {
-                    const ref = refs[name];
+            // Name-only columns for global tables the schema doesn't know about.
+            // PRAGMA gives no types, but `PRAGMA foreign_key_list` recovers real FK
+            // constraints, so a column that references another table carries its
+            // `ref` — letting the diagram draw global→global edges (e.g. better-auth's
+            // `session.userId → user`, `twoFactor.userId → user`).
+            const globalFallback = new Map<string, ColumnMeta[]>(
+                globalPages.map(({ columns: columnNames, refs, table }) => [
+                    table,
+                    columnNames.map((name): ColumnMeta => {
+                        const ref = refs[name];
 
-                    return ref === undefined ? { name, optional: false, type: "" } : { name, optional: false, ref, type: "id" };
-                }),
-            ]),
-        );
+                        return ref === undefined ? { name, optional: false, type: "" } : { name, optional: false, ref, type: "id" };
+                    }),
+                ]),
+            );
 
-        const resolved = [...shardNames, ...globalNames].map((table): [string, ColumnMeta[]] => {
-            const typed = typedColumns[table] ?? [];
+            const resolved = [...shardNames, ...globalNames].map((table): [string, ColumnMeta[]] => {
+                const typed = typedColumns[table] ?? [];
 
-            return [table, typed.length > 0 ? typed : (globalFallback.get(table) ?? [])];
-        });
+                return [table, typed.length > 0 ? typed : (globalFallback.get(table) ?? [])];
+            });
 
-        setShardColumns((previous) => {
-            return { ...previous, [shard]: Object.fromEntries(resolved) };
-        });
-        setShardColumnsError((previous) => {
-            return { ...previous, [shard]: columnsFailed };
-        });
-    };
+            setShardColumns((previous) => {
+                return { ...previous, [shard]: Object.fromEntries(resolved) };
+            });
+            setShardColumnsError((previous) => {
+                return { ...previous, [shard]: columnsFailed };
+            });
+        },
+        [client],
+    );
 
     // When the graph opens (or the shard switches) probe every table's columns
     // once per shard. List view never probes, so the graph cost is opt-in. This is

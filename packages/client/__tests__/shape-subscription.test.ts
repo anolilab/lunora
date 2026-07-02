@@ -114,6 +114,8 @@ describe("lunoraClient subscribeShape", () => {
     });
 
     it("seeds + diffs a shape from atomic poke frames", () => {
+        expect.assertions(3);
+
         const client = makeClient();
         const seen: Record<string, unknown>[][] = [];
 
@@ -159,6 +161,8 @@ describe("lunoraClient subscribeShape", () => {
     });
 
     it("surfaces the advanced watermark to onCheckpoint after each applied poke", () => {
+        expect.assertions(1);
+
         const client = makeClient();
         const watermarks: { checkpoint?: number; mutationId?: number }[] = [];
 
@@ -189,6 +193,8 @@ describe("lunoraClient subscribeShape", () => {
     });
 
     it("does not apply a poke missing its pokeStart (connected mid-poke)", () => {
+        expect.assertions(1);
+
         const client = makeClient();
         const seen: Record<string, unknown>[][] = [];
 
@@ -206,6 +212,8 @@ describe("lunoraClient subscribeShape", () => {
     });
 
     it("resumes from the last applied checkpoint on reconnect", () => {
+        expect.assertions(2);
+
         vi.useFakeTimers();
 
         const client = makeClient();

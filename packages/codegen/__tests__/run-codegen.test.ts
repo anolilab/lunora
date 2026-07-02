@@ -499,6 +499,28 @@ export default defineFlags({ provider: (env) => env.PROVIDER, identify: (auth) =
             expect(result.generated.server).toContain('readonly flags: import("@lunora/flags").LunoraFlags;');
         });
 
+        it("routes ctx.flags imports through the lunorash umbrella when the project depends on `lunorash`", () => {
+            expect.assertions(4);
+
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { lunorash: "*" }, name: "umbrella-flags-app" }));
+            writeFileSync(
+                join(workdir, "lunora", "flags.ts"),
+                `import { defineFlags } from "lunorash/flags";
+export default defineFlags({ provider: (env) => env.PROVIDER, identify: (auth) => auth.userId ?? undefined });
+`,
+                "utf8",
+            );
+
+            const result = runCodegen({ lint: false, projectRoot: workdir });
+
+            // Flags surface routed through the umbrella…
+            expect(result.generated.shard).toContain('import { createFlags } from "lunorash/flags"');
+            expect(result.generated.server).toContain('readonly flags: import("lunorash/flags").LunoraFlags;');
+            // …and never the granular `@lunora/flags` specifier (the pre-fix bug).
+            expect(result.generated.shard).not.toContain("@lunora/flags");
+            expect(result.generated.server).not.toContain("@lunora/flags");
+        });
+
         it("wires ctx.sql (Hyperdrive) end-to-end onto the ActionCtx ONLY (value-level) when an action reads ctx.sql", () => {
             expect.assertions(4);
 
@@ -1489,9 +1511,11 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("FlagsResult");
             // The per-type chain keeps the typed details.* calls sound.
             expect(output).toContain("await flags.details.boolean(entry.key, false, evalContext)");
-            // Security: the public reactive channel must strip a client-supplied
-            // targetingKey so a subscriber can't read another user's flags.
-            expect(output).toContain("const { targetingKey: _clientTargetingKey, ...safeContext } = rawContext ?? {};");
+            // Security: the public reactive channel must (a) serve only statically
+            // discovered flag keys, so a subscriber can't probe arbitrary/internal
+            // flags, and (b) never honor client-supplied targeting context, so a
+            // subscriber can't spoof attributes to unlock a gated flag.
+            expect(output).toContain("!LUNORA_FLAG_KEYS.some((entry) => entry.key === key)");
             // Robustness: identify is wrapped in a thunk so a throwing identify fails open.
             expect(output).toContain("targetingKey: () => flagsConfig.identify?.(");
         });

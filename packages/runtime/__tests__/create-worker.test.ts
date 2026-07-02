@@ -86,7 +86,7 @@ describe("createWorker", () => {
     it("uses the envelope shardKey when provided", async () => {
         expect.assertions(1);
 
-        const worker = createWorker({ shardDO: shard.namespace });
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: shard.namespace });
 
         await worker.fetch(
             new Request("https://app.example/_lunora/rpc", {
@@ -186,10 +186,35 @@ describe("createWorker", () => {
         expect(shard.calls).toHaveLength(0);
     });
 
+    it("rejects a relation fan-out whose args.table differs from the authorized fanOut.table (confused-deputy regression)", async () => {
+        expect.assertions(3);
+
+        const worker = createWorker({ shardDO: shard.namespace });
+
+        const res = await worker.fetch(
+            new Request("https://app.example/_lunora/rpc", {
+                body: JSON.stringify({
+                    args: { table: "secrets", where: {} },
+                    fanOut: { merge: { kind: "concat" }, table: "posts" },
+                    functionPath: "__lunora_relation__:read",
+                }),
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(res.status).toBe(400);
+        await expect(res.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST" } });
+        // The mismatched envelope is rejected at the edge — the raw, RLS-blind
+        // relation read of `secrets` (authorized only for `posts`) never reaches a shard.
+        expect(shard.calls).toHaveLength(0);
+    });
+
     it("forwards /_lunora/ws upgrades to the correct shard", async () => {
         expect.assertions(2);
 
-        const worker = createWorker({ shardDO: shard.namespace });
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: shard.namespace });
 
         const upgrade = new Request("https://app.example/_lunora/ws?shard=channel-7", {
             headers: { Upgrade: "websocket" },
@@ -207,7 +232,7 @@ describe("createWorker", () => {
         // No resolveIdentity → every caller is anonymous. A forged x-lunora-userid /
         // x-lunora-identity on the upgrade must NOT reach the shard, else an anonymous
         // attacker could spoof a verified identity on the socket.
-        const worker = createWorker({ shardDO: shard.namespace });
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: shard.namespace });
 
         const upgrade = new Request("https://app.example/_lunora/ws?shard=channel-7", {
             headers: { Upgrade: "websocket", "x-lunora-identity": '{"roles":["admin"]}', "x-lunora-userid": "victim" },
@@ -225,6 +250,7 @@ describe("createWorker", () => {
 
         // A forged x-lunora-userid must be replaced by the server-resolved one, never honoured.
         const worker = createWorker({
+            allowUnauthenticatedShardAccess: true,
             resolveIdentity: () => {
                 return { userId: "user_42" };
             },
@@ -249,6 +275,91 @@ describe("createWorker", () => {
         const res = await worker.fetch(new Request("https://app.example/_lunora/ws?shard=x"), {}, fakeContext);
 
         expect(res.status).toBe(426);
+    });
+
+    it("rejects a cross-origin cookie-bearing WS upgrade (CSWSH guard, H1)", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: shard.namespace });
+
+        // A browser on evil.com auto-attaches the victim's cookie to the handshake;
+        // the cross-origin `Origin` must be rejected before any forwarding.
+        const upgrade = new Request("https://app.example/_lunora/ws", {
+            headers: { cookie: "session=victim", Origin: "https://evil.com", Upgrade: "websocket" },
+        });
+
+        const res = await worker.fetch(upgrade, {}, fakeContext);
+
+        expect(res.status).toBe(403);
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("allows a same-origin cookie-bearing WS upgrade", async () => {
+        expect.assertions(1);
+
+        const worker = createWorker({ shardDO: shard.namespace });
+
+        const upgrade = new Request("https://app.example/_lunora/ws", {
+            headers: { cookie: "session=me", Origin: "https://app.example", Upgrade: "websocket" },
+        });
+
+        await worker.fetch(upgrade, {}, fakeContext);
+
+        expect(shard.calls).toHaveLength(1);
+    });
+
+    it("allows a token (no-cookie) cross-origin WS upgrade — CSWSH only rides cookies", async () => {
+        expect.assertions(1);
+
+        const worker = createWorker({ shardDO: shard.namespace });
+
+        // No Cookie header → not a forgeable-by-a-browser credential, so the origin
+        // guard is exempt (bearer/token/server-to-server clients keep working).
+        const upgrade = new Request("https://app.example/_lunora/ws", {
+            headers: { Origin: "https://evil.com", Upgrade: "websocket" },
+        });
+
+        await worker.fetch(upgrade, {}, fakeContext);
+
+        expect(shard.calls).toHaveLength(1);
+    });
+
+    it("default-denies a non-default shard when no authorize callback is configured (M1)", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ shardDO: shard.namespace });
+
+        const res = await worker.fetch(
+            new Request("https://app.example/_lunora/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "messages:list", shardKey: "tenant-b" }),
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(res.status).toBe(403);
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("default-denies a fan-out envelope when no authorize callback is configured (M2)", async () => {
+        expect.assertions(1);
+
+        const worker = createWorker({
+            queryCoordinator: { fanOut: vi.fn<() => never>() } as never,
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(
+            new Request("https://app.example/_lunora/rpc", {
+                body: JSON.stringify({ args: {}, fanOut: { merge: { kind: "concat" }, table: "messages" }, functionPath: "messages:list" }),
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(res.status).toBe(403);
     });
 
     it("invokes custom routes before default handlers", async () => {
@@ -284,7 +395,7 @@ describe("createWorker", () => {
             idFromName: vi.fn<ShardNamespaceLike["idFromName"]>(),
         };
 
-        const worker = createWorker({ shardDO: namespace });
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: namespace });
 
         await worker.fetch(
             new Request("https://app.example/_lunora/rpc", {
@@ -407,6 +518,7 @@ describe("createWorker", () => {
         });
 
         const worker = createWorker({
+            allowUnauthenticatedShardAccess: true,
             queryCoordinator: {
                 fanOut: fanOut as never,
                 orchestrateExport: vi.fn<() => never>(),
@@ -579,6 +691,43 @@ describe("createWorker", () => {
         await expect(res.json()).resolves.toMatchObject({ error: { code: "FORBIDDEN_SHARD" } });
         // The gate must short-circuit before any shard dispatch happens.
         expect(shard.calls).toHaveLength(0);
+    });
+
+    it("exempts a reserved `__lunora_admin__:*` RPC from authorizeShard (the DO's admin-bearer gate authorizes it)", async () => {
+        expect.assertions(4);
+
+        // Even with a fail-closed `authorizeShard`, a token-gated admin RPC must
+        // reach the shard DO (the real admin authority) instead of being 403'd by
+        // the per-tenant gate — an admin request carries an admin bearer, not an
+        // end-user identity, so `authorizeShard(null, …)` would default-deny it.
+        // Regression: this broke E2E mail-capture once the playground configured
+        // `authorizeShard`.
+        const authorizeShard = vi.fn<() => boolean>(() => false);
+        const worker = createWorker({
+            authorizeShard,
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(
+            new Request("https://app.example/_lunora/rpc", {
+                // A real admin bearer rides the `authorization` header; this
+                // worker-level test only proves the tenant gate is skipped, so the
+                // mock shard (standing in for the DO's `isAdminAuthorized`) accepts
+                // it unconditionally.
+                body: JSON.stringify({ args: { limit: 50 }, functionPath: "__lunora_admin__:getCapturedMail" }),
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(res.status).toBe(200);
+        // The per-tenant gate must NOT be consulted for a reserved admin op…
+        expect(authorizeShard).not.toHaveBeenCalled();
+        // …and the request must be forwarded to the (default __root__) shard,
+        // whose `isAdminAuthorized` bearer check is the real gate.
+        expect(shard.calls).toHaveLength(1);
+        expect(shard.calls[0]!.shardKey).toBe("__root__");
     });
 
     it.each([
@@ -1261,7 +1410,7 @@ describe("createWorker — relay-tier routing (plan 075 Phase 2)", () => {
 
         const forwards: Forward[] = [];
         const namespace = routingNamespace(2, forwards);
-        const worker = createWorker({ shardDO: namespace });
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: namespace });
 
         await worker.fetch(upgrade("promoted-a"), { SHARD: namespace }, fakeContext);
 
@@ -1275,7 +1424,7 @@ describe("createWorker — relay-tier routing (plan 075 Phase 2)", () => {
 
         const forwards: Forward[] = [];
         const namespace = routingNamespace(0, forwards);
-        const worker = createWorker({ shardDO: namespace });
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: namespace });
 
         await worker.fetch(upgrade("cold-b"), { SHARD: namespace }, fakeContext);
 
@@ -1288,7 +1437,7 @@ describe("createWorker — relay-tier routing (plan 075 Phase 2)", () => {
 
         const forwards: Forward[] = [];
         const namespace = routingNamespace(2, forwards);
-        const worker = createWorker({ shardDO: namespace });
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: namespace });
 
         // `env` does not expose the namespace → no binding → no probe, no relay routing.
         await worker.fetch(upgrade("cold-c"), {}, fakeContext);

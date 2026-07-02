@@ -22,11 +22,6 @@ const withGlobalIndexedDb = <T>(run: () => T): T => {
     }
 };
 
-afterEach(() => {
-    // Guard against a leaked global if an assertion threw inside the probe.
-    delete (globalThis as { indexedDB?: IDBFactory }).indexedDB;
-});
-
 describe("resolvePersistenceAdapter", () => {
     const explicit: PersistenceAdapter = {
         append: () => Promise.resolve(),
@@ -35,20 +30,33 @@ describe("resolvePersistenceAdapter", () => {
         remove: () => Promise.resolve(),
     };
 
+    afterEach(() => {
+        // Guard against a leaked global if an assertion threw inside the probe.
+        delete (globalThis as { indexedDB?: IDBFactory }).indexedDB;
+    });
+
     it("returns an explicit adapter unchanged", () => {
+        expect.assertions(1);
+
         expect(resolvePersistenceAdapter(explicit)).toBe(explicit);
     });
 
     it("opts out on `false`", () => {
+        expect.assertions(1);
+
         expect(resolvePersistenceAdapter(false)).toBeUndefined();
     });
 
     it("stays in memory when no IndexedDB is available", () => {
+        expect.assertions(1);
+
         // Node test env: no `indexedDB` global.
         expect(resolvePersistenceAdapter(undefined)).toBeUndefined();
     });
 
     it("auto-probes a durable IndexedDB store by default when available", () => {
+        expect.assertions(2);
+
         withGlobalIndexedDb(() => {
             const resolved = resolvePersistenceAdapter(undefined);
 
@@ -58,12 +66,16 @@ describe("resolvePersistenceAdapter", () => {
     });
 
     it("suppresses the auto-default when an outbox owns the write path", () => {
+        expect.assertions(1);
+
         withGlobalIndexedDb(() => {
             expect(resolvePersistenceAdapter(undefined, false)).toBeUndefined();
         });
     });
 
     it("still honours an explicit adapter even when the auto-default is suppressed", () => {
+        expect.assertions(1);
+
         withGlobalIndexedDb(() => {
             expect(resolvePersistenceAdapter(explicit, false)).toBe(explicit);
         });
@@ -78,19 +90,32 @@ describe("resolveQueryCacheAdapter", () => {
         remove: () => Promise.resolve(),
     };
 
+    afterEach(() => {
+        // Guard against a leaked global if an assertion threw inside the probe.
+        delete (globalThis as { indexedDB?: IDBFactory }).indexedDB;
+    });
+
     it("returns an explicit adapter unchanged", () => {
+        expect.assertions(1);
+
         expect(resolveQueryCacheAdapter(explicit)).toBe(explicit);
     });
 
     it("opts out on `false`", () => {
+        expect.assertions(1);
+
         expect(resolveQueryCacheAdapter(false)).toBeUndefined();
     });
 
     it("stays in memory when no IndexedDB is available", () => {
+        expect.assertions(1);
+
         expect(resolveQueryCacheAdapter(undefined)).toBeUndefined();
     });
 
     it("auto-probes a durable IndexedDB store by default when available", () => {
+        expect.assertions(2);
+
         withGlobalIndexedDb(() => {
             const resolved = resolveQueryCacheAdapter(undefined);
 

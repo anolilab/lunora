@@ -61,6 +61,7 @@ const resolveOptions = (options: LunoraPluginOptions | undefined): ResolvedLunor
     }
 
     return {
+        allowUnauthenticatedShardAccess: input.allowUnauthenticatedShardAccess ?? false,
         apiSpec: input.apiSpec ?? "openapi",
         cloudflare: cloudflareOption,
         studio: input.studio ?? true,

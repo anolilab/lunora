@@ -9,7 +9,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
-import { callTool, TOOL_DEFINITIONS } from "./tools";
+import { callTool, toolDefinitions } from "./tools";
 
 /**
  * Resolve the package's real version so the MCP `initialize` handshake reports
@@ -57,13 +57,26 @@ const SERVER_INFO = { name: "lunora", version: resolveVersion() } as const;
 
 interface LunoraMcpServerOptions {
     /**
+     * Expose the write tools (`lunora_run_mutation` / `lunora_run_action`).
+     * Defaults to `false`: the server is READ-ONLY unless explicitly opted in,
+     * so a prompt-injected or misaligned agent can't mutate the deployment with
+     * the configured token. When false the write tools are omitted from the
+     * advertised tool list AND refused at dispatch.
+     */
+    allowWrites?: boolean;
+
+    /**
      * Pre-built client (test injection). When omitted a `LunoraClient` is
      * created from `url`/`token`/`fetch`.
      */
     client?: LunoraClient;
     /** `fetch` implementation; defaults to the ambient global. */
     fetch?: typeof fetch;
-    /** Bearer token sent on every RPC (typically the admin token). */
+
+    /**
+     * Bearer token sent on every RPC. Prefer a LEAST-PRIVILEGE token here, not
+     * the admin token — the token bounds everything the exposed agent can do.
+     */
     token?: string;
     /** Base URL of the deployed Lunora Worker. Required unless `client` is given. */
     url?: string;
@@ -99,17 +112,18 @@ const resolveClient = (options: LunoraMcpServerOptions): LunoraClient => {
  */
 const createLunoraMcpServer = (options: LunoraMcpServerOptions): Server => {
     const client = resolveClient(options);
+    const allowWrites = options.allowWrites ?? false;
     const server = new Server(SERVER_INFO, { capabilities: { tools: {} } });
 
     server.setRequestHandler(ListToolsRequestSchema, () => {
-        return { tools: [...TOOL_DEFINITIONS] };
+        return { tools: [...toolDefinitions(allowWrites)] };
     });
 
     server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
         // ToolResult is structurally a CallToolResult; the assertion bridges the
         // SDK's open-ended index signature (passthrough zod schema) which a
         // closed interface can't satisfy by inference alone.
-        const result = await callTool(client, request.params.name, request.params.arguments ?? {});
+        const result = await callTool(client, request.params.name, request.params.arguments ?? {}, allowWrites);
 
         return result as CallToolResult;
     });

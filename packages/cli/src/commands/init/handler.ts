@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 import { BADGES, isInteractive } from "@lunora/config";
@@ -18,7 +18,7 @@ import { detectInstalledManagers, installArgsFor } from "../../util/detect-packa
 import type { Logger } from "../../util/logger";
 import { patchViteConfig } from "../../util/patch-vite-config";
 import { PromptCancelledError } from "../../util/prompt-cancelled";
-import { resolveDistTag, resolveSourceRef, resolveTagVersions } from "../../util/source-ref";
+import { resolveDistTag, resolvePinnedSourceRef, resolveSourceRef, resolveTagVersions } from "../../util/source-ref";
 import type { Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import type { NextStep } from "../../util/tui-prompts";
@@ -357,6 +357,14 @@ const collectFiles = (directory: string): ReadonlyArray<string> => {
     const out: string[] = [];
 
     for (const entry of walkSync(directory, { includeDirs: false, includeFiles: true })) {
+        // Skip symlinks: a hostile `--source`/`--from` template could ship a
+        // symlink to e.g. `~/.ssh/id_rsa`, and reading THROUGH it would copy the
+        // victim's private file into the scaffolded project. We only ever copy
+        // real regular files from a template.
+        if (lstatSync(entry.path).isSymbolicLink()) {
+            continue;
+        }
+
         out.push(entry.path);
     }
 
@@ -715,7 +723,13 @@ const scaffoldFromRemote = async (options: {
     const stagingDirectory = join(stagingRoot, "template");
 
     try {
-        const remote = resolveTemplateSource(templateType, source, ref);
+        // Pin the moving release branch to the immutable commit it currently
+        // points at before giget fetches it (supply-chain hardening) — logs the
+        // SHA, or warns + falls back to the branch when the pin can't be resolved
+        // (offline / rate-limited). A custom `--source` isn't part of the pinnable
+        // `gh:anolilab/lunora` repo (and drops the ref entirely), so skip it.
+        const pinnedRef = source !== undefined && source.length > 0 ? ref : await resolvePinnedSourceRef(ref, logger);
+        const remote = resolveTemplateSource(templateType, source, pinnedRef);
 
         // Fetch + scaffold as a live checklist ("Project initialized!" with ✔ rows,
         // create-astro style; off a TTY the tasks run bare so CI/tests stay clean).

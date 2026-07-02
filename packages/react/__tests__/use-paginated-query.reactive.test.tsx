@@ -11,6 +11,7 @@ import { usePaginatedQuery } from "../src/use-paginated-query";
 // applied). Give async assertions generous headroom — and raise vitest's own
 // per-test timeout above it, so the test budget (default 5s) can't expire
 // mid-`waitFor` and re-introduce the flake (seen on node 24 under load).
+// eslint-disable-next-line vitest/require-hook -- intentional module-level RTL config; must apply before any render
 configure({ asyncUtilTimeout: 15_000 });
 vi.setConfig({ testTimeout: 20_000 });
 

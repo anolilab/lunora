@@ -36,6 +36,8 @@ const setup = (responseInit?: FakeResponseInit) => {
 
 describe("createR2Sql request", () => {
     it("sends a POST to the bucket endpoint with the bearer token, query and warehouse", async () => {
+        expect.assertions(5);
+
         const { client, fetchImpl } = setup({ body: { result: { rows: [{ n: 1 }] }, success: true } });
 
         await client.query(sql`SELECT 1 AS n`);
@@ -53,6 +55,8 @@ describe("createR2Sql request", () => {
     });
 
     it("honours a custom endpoint override", async () => {
+        expect.assertions(1);
+
         const fetchImpl = vi.fn<typeof globalThis.fetch>(async () => fakeResponse());
         const client = createR2Sql({ accountId: "a", apiToken: "t", bucket: "b", endpoint: "https://example.test/v1/accounts", fetch: fetchImpl });
 
@@ -64,6 +68,8 @@ describe("createR2Sql request", () => {
 
 describe("response normalisation", () => {
     it("reads rows from `result.rows` and infers columns when no schema is echoed", async () => {
+        expect.assertions(3);
+
         const { client } = setup({ body: { errors: [], result: { rows: [{ id: "x", total: 5 }] }, success: true } });
 
         const out = await client.query<{ id: string; total: number }>("SELECT id, total FROM s.orders");
@@ -74,6 +80,8 @@ describe("response normalisation", () => {
     });
 
     it("returns an empty result when `result` is absent", async () => {
+        expect.assertions(3);
+
         const { client } = setup({ body: { success: true } });
         const result = await client.query("SELECT 1");
 
@@ -83,6 +91,8 @@ describe("response normalisation", () => {
     });
 
     it("prefers the echoed `result.schema` over inference", async () => {
+        expect.assertions(1);
+
         const { client } = setup({ body: { result: { rows: [{ id: "x" }], schema: [{ name: "id", type: "string" }] }, success: true } });
         const result = await client.query("SELECT id FROM s.orders");
 
@@ -92,6 +102,8 @@ describe("response normalisation", () => {
 
 describe("errors", () => {
     it("throws R2SqlError on a non-2xx status", async () => {
+        expect.assertions(2);
+
         const { client } = setup({ body: "rate limited", ok: false, status: 429 });
 
         await expect(client.query("SELECT 1")).rejects.toBeInstanceOf(R2SqlError);
@@ -99,12 +111,16 @@ describe("errors", () => {
     });
 
     it("throws on a success:false envelope with a 2xx status", async () => {
+        expect.assertions(1);
+
         const { client } = setup({ body: { errors: [{ message: "syntax error" }], success: false } });
 
         await expect(client.query("SELECT bad")).rejects.toThrow(/syntax error/);
     });
 
     it("throws a normalised error on a non-JSON 2xx body", async () => {
+        expect.assertions(1);
+
         const { client } = setup({ nonJson: true });
 
         await expect(client.query("SELECT 1")).rejects.toThrow(/non-JSON body/);
@@ -113,6 +129,8 @@ describe("errors", () => {
 
 describe("helpers", () => {
     it("explain prefixes EXPLAIN (and FORMAT JSON)", async () => {
+        expect.assertions(2);
+
         const { client, fetchImpl } = setup();
 
         await client.explain(sql`SELECT 1`);
@@ -125,6 +143,8 @@ describe("helpers", () => {
     });
 
     it("schema-discovery helpers emit the right statements", async () => {
+        expect.assertions(1);
+
         const { client, fetchImpl } = setup();
 
         await client.showDatabases();
@@ -137,6 +157,8 @@ describe("helpers", () => {
     });
 
     it("from() builds a runnable query bound to the client", async () => {
+        expect.assertions(2);
+
         const { client, fetchImpl } = setup({ body: { result: { rows: [{ region: "North" }] }, success: true } });
 
         const out = await client.from("sales.orders").select("region").distinct().limit(10).run();

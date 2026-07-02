@@ -17,7 +17,8 @@ interface FakeState extends ShardDOState {
 }
 
 /** A `state.storage.transaction` double mirroring the platform: run the closure, propagate (the platform rolls back a thrown closure). */
-const fakeTransaction = (): TransactionMock => vi.fn(async <R>(closure: () => Promise<R>): Promise<R> => closure()) as TransactionMock;
+const fakeTransaction = (): TransactionMock =>
+    vi.fn<<R>(closure: () => Promise<R>) => Promise<R>>(async <R>(closure: () => Promise<R>): Promise<R> => closure()) as TransactionMock;
 
 const createFakeState = (sqlExec: ExecMock = vi.fn<(query: string) => unknown>(), transaction: TransactionMock | undefined = fakeTransaction()): FakeState => {
     const state: FakeState = {

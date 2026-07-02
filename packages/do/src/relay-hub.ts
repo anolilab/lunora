@@ -37,6 +37,57 @@ const DEFAULT_RELAY_FAN = 2;
 /** Hard ceiling on relays per shard (per-deployment via `LUNORA_MAX_RELAYS`) — the cost cap a viral shard can never exceed. */
 const DEFAULT_MAX_RELAYS = 8;
 
+/** Env var carrying the optional relay control-channel HMAC secret. */
+const RELAY_SECRET_KEY = "LUNORA_RELAY_SECRET";
+
+/** Header carrying the hex HMAC-SHA256 of the relay control-frame body. */
+const RELAY_SIGNATURE_HEADER = "x-lunora-relay-sig";
+
+/** The relay control-channel secret, or `undefined` when message authentication is not configured. */
+const relaySecretOf = (env: unknown): string | undefined => {
+    const value = (env as Record<string, unknown> | undefined)?.[RELAY_SECRET_KEY];
+
+    return typeof value === "string" && value.length > 0 ? value : undefined;
+};
+
+/** Constant-time hex-string compare (mirrors the DO admin-token compare) — avoids leaking match progress via early exit. */
+const constantTimeEqual = (a: string, b: string): boolean => {
+    if (a.length !== b.length) {
+        return false;
+    }
+
+    let mismatch = 0;
+
+    for (let index = 0; index < a.length; index += 1) {
+        // eslint-disable-next-line unicorn/prefer-code-point -- compare per UTF-16 code unit; hex strings carry no surrogates
+        const charA = a.charCodeAt(index);
+        // eslint-disable-next-line unicorn/prefer-code-point -- compare per UTF-16 code unit; hex strings carry no surrogates
+        const charB = b.charCodeAt(index);
+
+        // eslint-disable-next-line no-bitwise -- constant-time accumulate of every code-unit delta
+        mismatch |= charA ^ charB;
+    }
+
+    return mismatch === 0;
+};
+
+/**
+ * HMAC-SHA256 of `body` under `secret`, hex-encoded. Authenticates the internal
+ * `/_lunora/relay` control channel (L6): without it, safety rests solely on DO
+ * network isolation, so any DO in the namespace (or a future custom route that
+ * forwarded a client path+body to a shard) could inject forged relay frames —
+ * e.g. deliver an arbitrary `rowsPatch` to another subscriber's socket. Opt-in:
+ * only enforced when `LUNORA_RELAY_SECRET` is set, so existing deployments are
+ * unaffected until they provision the secret.
+ */
+const signRelayBody = async (secret: string, body: string): Promise<string> => {
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign"]);
+    const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
+
+    return [...new Uint8Array(signature)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+};
+
 /** Read a positive integer env var by `key`, falling back to `fallback` when unset/invalid. */
 const envPositiveInt = (env: unknown, key: string, fallback: number): number => {
     const raw = (env as Record<string, unknown> | undefined)?.[key];
@@ -157,10 +208,33 @@ abstract class RelayLink {
      * to `relay.ts` without a case here is a COMPILE error, not a runtime mis-route.
      */
     public async handleControl(request: Request): Promise<Response> {
+        // Read the raw body first so we can authenticate it before parsing (L6).
+        let raw: string;
+
+        try {
+            raw = await request.text();
+        } catch {
+            return new Response("bad request", { status: 400 });
+        }
+
+        // When a relay secret is configured, require a valid HMAC over the raw
+        // body. Fail closed on a missing/mismatched signature so a forged frame
+        // can't reach the dispatch below. Unconfigured ⇒ legacy network-trust.
+        const secret = relaySecretOf(this.host.env());
+
+        if (secret !== undefined) {
+            const supplied = request.headers.get(RELAY_SIGNATURE_HEADER);
+            const expected = await signRelayBody(secret, raw);
+
+            if (supplied === null || !constantTimeEqual(supplied, expected)) {
+                return new Response("forbidden", { status: 403 });
+            }
+        }
+
         let message: OwnerRelayFrame;
 
         try {
-            message = await request.json();
+            message = JSON.parse(raw) as OwnerRelayFrame;
         } catch {
             return new Response("bad request", { status: 400 });
         }
@@ -242,11 +316,21 @@ abstract class RelayLink {
         }
 
         const stub = typeof namespace.getByName === "function" ? namespace.getByName(targetName) : namespace.get(namespace.idFromName(targetName));
+        const body = JSON.stringify(message);
+        const headers: Record<string, string> = { "content-type": "application/json", "x-lunora-shard-binding": this.host.shardBinding() ?? "" };
+
+        // Sign the control-frame body when a relay secret is configured (L6), so
+        // the receiver can authenticate it. Signed over the exact bytes we send.
+        const secret = relaySecretOf(this.host.env());
+
+        if (secret !== undefined) {
+            headers[RELAY_SIGNATURE_HEADER] = await signRelayBody(secret, body);
+        }
 
         try {
             return await stub.fetch("https://relay.internal/_lunora/relay", {
-                body: JSON.stringify(message),
-                headers: { "content-type": "application/json", "x-lunora-shard-binding": this.host.shardBinding() ?? "" },
+                body,
+                headers,
                 method: "POST",
             });
         } catch {
@@ -697,8 +781,9 @@ class OwnerRelay extends RelayLink {
      * sound against the cross-identity row-leak (review). Resolves under the anonymous
      * multicast identity (the base) plus two `Proxy`-backed identities that return a
      * distinct value for ANY accessed claim, requires all to agree on table + where +
-     * columns, rejects any table with an RLS read policy or a masked projected column,
-     * and fails closed if the claims are enumerated (a wholesale copy the proxy can't
+     * columns, rejects any table with an RLS read policy or ANY masked column
+     * defined (even if unprojected — see {@link OwnerRelay.tableHasAnyMask}), and
+     * fails closed if the claims are enumerated (a wholesale copy the proxy can't
      * differentiate).
      */
     private probeShapeRelayUniform(name: string, args: Record<string, unknown>): boolean {
@@ -718,7 +803,7 @@ class OwnerRelay extends RelayLink {
             return false;
         }
 
-        if (this.shapeColumnsMasked(base.table, base.columns)) {
+        if (this.tableHasAnyMask(base.table)) {
             return false;
         }
 
@@ -775,21 +860,18 @@ class OwnerRelay extends RelayLink {
         return matches && !enumerated;
     }
 
-    /** Whether any column the shape projects from `table` is masked — a masked value is identity-dependent, so the shape can't be relay-uniform. */
-    private shapeColumnsMasked(table: string, columns: ReadonlyArray<string> | undefined): boolean {
-        const masked = this.host.maskMetadata().columns.filter((entry) => entry.table === table);
-
-        if (masked.length === 0) {
-            return false;
-        }
-
-        if (columns === undefined) {
-            return true; // projects every column → any mask on the table makes it non-uniform
-        }
-
-        const projected = new Set(columns);
-
-        return masked.some((entry) => projected.has(entry.column));
+    /**
+     * Whether `table` has ANY masked column defined (L7). Deliberately conservative:
+     * we disqualify a shape from relay-multicast if its table declares any mask at
+     * all, even when the current query doesn't project the masked column. A masked
+     * value is identity-dependent, and keying uniformity off the *projected* set
+     * meant a later column addition (or a `select` change) could silently widen a
+     * cohort to include an identity-dependent value. Refusing on any table-level
+     * mask removes that footgun; the cost is a few extra shapes falling back to the
+     * per-identity path, which is always correct.
+     */
+    private tableHasAnyMask(table: string): boolean {
+        return this.host.maskMetadata().columns.some((entry) => entry.table === table);
     }
 }
 

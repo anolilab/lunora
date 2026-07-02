@@ -74,6 +74,13 @@ export interface HyperdriveConnection {
 export interface SqlClient {
     /**
      * Run a parameterised SQL statement and return the result rows.
+     *
+     * SECURITY: `text` is executed verbatim — the package never rewrites or
+     * escapes it. NEVER interpolate untrusted/user input into `text`; put every
+     * value in `params` and reference it with a positional placeholder (`$1`/`?`).
+     * Building `text` by string-concatenating request data is a SQL-injection
+     * sink against your own Postgres/MySQL. Identifiers (table/column names) can't
+     * be parameterised — allowlist them against a fixed set, don't interpolate.
      * @param text SQL text with driver-native positional placeholders.
      * @param params Bound parameter values, positionally matched to `text`.
      * @returns The rows the statement produced (empty for non-`SELECT`s that

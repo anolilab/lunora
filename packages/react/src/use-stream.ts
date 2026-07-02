@@ -111,6 +111,7 @@ const useStream = <F extends FunctionReference<"stream">>(
         // the trailing `.catch` is a belt-and-braces guard that can never fire.
         (async () => {
             try {
+                // react-doctor-disable-next-line react-hooks-js/todo -- `for await` over the stream iterable is the effect's core consumer loop; it lives inside a background IIFE (not render), and the compiler simply can't lower `for-await` yet. The construct is required, not optimizable-away.
                 for await (const chunk of iterable) {
                     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `stillMounted` is flipped to `false` by the cleanup closure between awaits; TS's static flow analysis can't see the async mutation, so this guard is real, not dead.
                     if (!stillMounted) {
@@ -144,6 +145,7 @@ const useStream = <F extends FunctionReference<"stream">>(
             cancel();
             cancelRef.current = undefined;
         };
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the stream re-opens on the query's stable `__lunoraRef` and the serialized args (a content hash) rather than the raw `function_`/`args` object identity, so a caller recreating them with the same value doesn't tear down and re-open the stream. `client` is provider-stable.
     }, [client, function_.__lunoraRef, serialized, skipped, options.shardKey, options.maxBuffer]);
 
     return {
