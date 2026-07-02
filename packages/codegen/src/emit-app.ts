@@ -103,6 +103,10 @@ const buildAccessImports = (hasAccess: boolean, hasAuth: boolean): string[] =>
           ]
         : [];
 
+/** KV-browser imports — the introspector factory + namespace type backing `createWorker({ kvIntrospector })`. */
+const buildKvImports = (hasKv: boolean): string[] =>
+    hasKv ? [`import type { KVNamespaceLike } from "@lunora/bindings/kv";`, `import { createKvIntrospector } from "@lunora/bindings/kv";`] : [];
+
 /** Import lines — only what the enabled capabilities need. Add-ons via `@lunora/*`; the runtime via the umbrella subpath when the app depends on `lunora`. */
 const buildImportLines = (options: EmitAppOptions): string[] => {
     const {
@@ -111,6 +115,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
         hasFramework,
         hasGlobal,
         hasHyperdriveGlobal,
+        hasKv,
         hasQueue,
         hasScheduler,
         hasStorage,
@@ -158,6 +163,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
                   `import type { SqlCtxDbOptions, SqlExec } from "@lunora/sql-store";`,
               ]
             : []),
+        ...buildKvImports(hasKv),
         ...(hasScheduler
             ? [`import type { DurableObjectNamespaceLike } from "@lunora/scheduler";`, `import { createScheduler } from "@lunora/scheduler";`]
             : []),
@@ -490,6 +496,21 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
         ? [
               `        if (this.storageDeclaration) {
             Object.assign(options, this.buildStorageAdmin(env));
+        }`,
+          ]
+        : []),
+    // The studio's KV browser reads the same `env.KV` namespace that backs
+    // `ctx.kv` (the framework's single-binding default). Guarded on presence so a
+    // deployment that declares no `kv_namespaces` binding just lists no
+    // namespaces rather than crashing on build.
+    ...(options.hasKv
+        ? [
+              `        {
+            const kvNamespace = (env as Record<string, unknown>).KV;
+
+            if (kvNamespace) {
+                options.kvIntrospector = createKvIntrospector({ namespaces: { KV: kvNamespace as KVNamespaceLike } });
+            }
         }`,
           ]
         : []),

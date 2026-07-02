@@ -36,6 +36,9 @@ import type {
     GlobalFilterClause,
     GlobalTableInfo,
     GlobalTablePage,
+    KvKeyListResult,
+    KvNamespaceSummary,
+    KvValueResult,
     LunoraClientOptions,
     OutboxSink,
     PersistenceAdapter,
@@ -151,6 +154,9 @@ const GLOBAL_TABLE_PATH = "/_lunora/admin/global/table";
 const GLOBAL_FACET_PATH = "/_lunora/admin/global/facet";
 const VECTOR_INDEXES_PATH = "/_lunora/admin/vector/indexes";
 const VECTOR_QUERY_PATH = "/_lunora/admin/vector/query";
+const KV_NAMESPACES_PATH = "/_lunora/admin/kv/namespaces";
+const KV_KEYS_PATH = "/_lunora/admin/kv/keys";
+const KV_VALUE_PATH = "/_lunora/admin/kv/value";
 const AUTH_USERS_PATH = "/_lunora/admin/auth/users";
 const AUTH_SESSIONS_PATH = "/_lunora/admin/auth/sessions";
 const AUTH_CREATE_USER_PATH = "/_lunora/admin/auth/users/create";
@@ -2048,6 +2054,85 @@ class LunoraClient {
         const body = (await this.adminFetch(VECTOR_QUERY_PATH, "POST", options)) as { matches?: VectorQueryMatch[] };
 
         return body.matches ?? [];
+    }
+
+    // --- KV namespace admin -------------------------------------------------
+
+    /**
+     * List the worker's registered Workers KV namespaces (binding names). Hits
+     * the admin-gated `GET /_lunora/admin/kv/namespaces` endpoint — the worker
+     * must be built with a `kvIntrospector` and `adminToken`. Powers the
+     * studio's KV browser.
+     */
+    public async listKvNamespaces(): Promise<KvNamespaceSummary[]> {
+        if (this.closed) {
+            throw new Error("LunoraClient is closed");
+        }
+
+        const body = (await this.adminFetch(KV_NAMESPACES_PATH, "GET")) as { namespaces?: KvNamespaceSummary[] };
+
+        return body.namespaces ?? [];
+    }
+
+    /**
+     * List keys in a KV namespace, optionally filtered by `prefix` and
+     * paginated via `cursor`. Hits the admin-gated
+     * `GET /_lunora/admin/kv/keys` endpoint.
+     */
+    public async listKvKeys(options: { cursor?: string; limit?: number; namespace: string; prefix?: string }): Promise<KvKeyListResult> {
+        if (this.closed) {
+            throw new Error("LunoraClient is closed");
+        }
+
+        const path = withQuery(KV_KEYS_PATH, {
+            cursor: options.cursor,
+            limit: options.limit,
+            namespace: options.namespace,
+            prefix: options.prefix,
+        });
+
+        return (await this.adminFetch(path, "GET")) as KvKeyListResult;
+    }
+
+    /**
+     * Read a KV value (as text) and its metadata. Hits the admin-gated
+     * `GET /_lunora/admin/kv/value` endpoint. Returns `{ value: null, metadata: null }`
+     * when the key is absent.
+     */
+    public async getKvValue(options: { key: string; namespace: string }): Promise<KvValueResult> {
+        if (this.closed) {
+            throw new Error("LunoraClient is closed");
+        }
+
+        const path = withQuery(KV_VALUE_PATH, { key: options.key, namespace: options.namespace });
+
+        return (await this.adminFetch(path, "GET")) as KvValueResult;
+    }
+
+    /**
+     * Write a string value (with optional TTL and metadata) to a KV namespace.
+     * Hits the admin-gated `PUT /_lunora/admin/kv/value` endpoint.
+     */
+    public async putKvValue(options: { expirationTtl?: number; key: string; metadata?: unknown; namespace: string; value: string }): Promise<void> {
+        if (this.closed) {
+            throw new Error("LunoraClient is closed");
+        }
+
+        await this.adminFetch(KV_VALUE_PATH, "PUT", options);
+    }
+
+    /**
+     * Delete a key from a KV namespace. No-op when the key is absent. Hits the
+     * admin-gated `DELETE /_lunora/admin/kv/value` endpoint.
+     */
+    public async deleteKvKey(options: { key: string; namespace: string }): Promise<void> {
+        if (this.closed) {
+            throw new Error("LunoraClient is closed");
+        }
+
+        const path = withQuery(KV_VALUE_PATH, { key: options.key, namespace: options.namespace });
+
+        await this.adminFetch(path, "DELETE");
     }
 
     // --- Auth admin ---------------------------------------------------------

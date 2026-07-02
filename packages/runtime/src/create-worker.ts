@@ -15,6 +15,8 @@ import type { IdentityContractLike, ResolvedIdentity } from "./identity-resolver
 import { wrapResolverWithContract } from "./identity-resolvers";
 import { streamingImport } from "./import-stream";
 import { buildIntrospectionAdminRoutes } from "./introspection-admin-routes";
+import type { KvIntrospector } from "./kv-admin-routes";
+import { buildKvAdminRoutes } from "./kv-admin-routes";
 import type { ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext } from "./observability";
 import { emitRpcEvent } from "./observability";
 import { buildOrchestrationAdminRoutes } from "./orchestration-admin-routes";
@@ -690,6 +692,15 @@ interface WorkerOptions {
      * @see https://developers.cloudflare.com/durable-objects/reference/data-location/
      */
     jurisdiction?: DurableObjectJurisdiction;
+
+    /**
+     * Introspector for Workers KV namespaces, backing the studio's KV browser
+     * via `GET /_lunora/admin/kv/namespaces`, `GET /_lunora/admin/kv/keys`,
+     * `GET|PUT|DELETE /_lunora/admin/kv/value`. Build it from the env's bound
+     * KV namespaces with `createKvIntrospector` from `@lunora/bindings/kv`.
+     * Omit it and those endpoints respond `KV_NOT_CONFIGURED`.
+     */
+    kvIntrospector?: KvIntrospector;
 
     /**
      * Optional telemetry sink. When supplied, the worker emits one
@@ -1985,6 +1996,12 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         vectorIntrospector: options.vectorIntrospector,
     });
 
+    const kvAdminRoutes = buildKvAdminRoutes({
+        kvIntrospector: options.kvIntrospector,
+        readJsonBody: readJsonBodyWithLimit,
+        requireAdminOption,
+    });
+
     const introspectionAdminRoutes = buildIntrospectionAdminRoutes({
         assertAdmin: assertAdminAuthorized,
         options: {
@@ -3012,6 +3029,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         ...workflowsAdminRoutes,
         ...storageAdminRoutes,
         ...vectorAdminRoutes,
+        ...kvAdminRoutes,
         ...introspectionAdminRoutes,
         // `/_lunora/admin/auth/*` — the whole user-management plane, one route per
         // `AuthAdmin` op, dispatched by the descriptor table in `./auth-admin-routes`.
@@ -3439,3 +3457,4 @@ export type {
     ResolvedIdentity,
 } from "./identity-resolvers";
 export { composeIdentityResolvers, routeIdentityResolvers } from "./identity-resolvers";
+export type { KvIntrospector, KvKeyEntry, KvKeyListResult, KvNamespaceSummary, KvValueResult } from "./kv-admin-routes";

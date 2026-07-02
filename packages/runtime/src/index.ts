@@ -34,6 +34,7 @@ export type {
     IdentityContractLike,
     IdentityResolver,
     IdentityValidation,
+    KvIntrospector,
     ListAuthUsersOptions,
     LunoraHandlerOptions,
     LunoraWorker,
@@ -49,6 +50,7 @@ export type {
     VectorQueryMatch,
     WorkerOptions,
 } from "./create-worker";
+export type { KvKeyEntry, KvKeyListResult, KvNamespaceSummary, KvValueResult } from "./create-worker";
 export {
     composeIdentityResolvers,
     composeWorker,
