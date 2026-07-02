@@ -30,6 +30,21 @@ interface CapturedCall {
     tableOrId?: string;
 }
 
+/** Index-range builder passed to `.withIndex(name, q => …)` — mirrors `@lunora/do`'s `IndexRangeBuilderLike`. */
+interface FakeIndexBuilder {
+    eq: (field: string, value: unknown) => FakeIndexBuilder;
+    gt: (field: string, value: unknown) => FakeIndexBuilder;
+    gte: (field: string, value: unknown) => FakeIndexBuilder;
+    lt: (field: string, value: unknown) => FakeIndexBuilder;
+    lte: (field: string, value: unknown) => FakeIndexBuilder;
+}
+
+/** Search-filter builder passed to `.withSearchIndex(name, q => …)` — mirrors `@lunora/do`'s `SearchFilterBuilderLike`. */
+interface FakeSearchBuilder {
+    eq: (field: string, value: unknown) => FakeSearchBuilder;
+    search: (field: string, query: string) => FakeSearchBuilder;
+}
+
 interface FakeReader {
     collect: () => Promise<Record<string, unknown>[]>;
     filter: (predicate: (document: Record<string, unknown>) => boolean) => FakeReader;
@@ -38,8 +53,8 @@ interface FakeReader {
     paginate: () => Promise<{ continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }>;
     take: (limit: number) => Promise<Record<string, unknown>[]>;
     unique: () => Promise<Record<string, unknown> | null>;
-    withIndex: (indexName?: string) => FakeReader;
-    withSearchIndex: () => FakeReader;
+    withIndex: (indexName?: string, range?: (q: FakeIndexBuilder) => FakeIndexBuilder) => FakeReader;
+    withSearchIndex: (indexName: string, search: (q: FakeSearchBuilder) => FakeSearchBuilder) => FakeReader;
 }
 
 interface FakeDatabase {
@@ -187,8 +202,32 @@ const enableQueryReader = (database: FakeDatabase, rows: (Record<string, unknown
             },
             take: async (limit) => list.slice(0, limit),
             unique: async () => list[0] ?? null,
-            withIndex: () => makeReader(list),
-            withSearchIndex: () => makeReader(list),
+            // Run the range callback against a chainable no-op builder — mirrors
+            // `@lunora/do`'s reader, and proves the mask guard's recorder pass is
+            // an EXTRA run the (pure) callback survives (the reader still runs it).
+            withIndex: (_indexName, range) => {
+                const builder: FakeIndexBuilder = {
+                    eq: () => builder,
+                    gt: () => builder,
+                    gte: () => builder,
+                    lt: () => builder,
+                    lte: () => builder,
+                };
+
+                range?.(builder);
+
+                return makeReader(list);
+            },
+            withSearchIndex: (_indexName, search) => {
+                const builder: FakeSearchBuilder = {
+                    eq: () => builder,
+                    search: () => builder,
+                };
+
+                search(builder);
+
+                return makeReader(list);
+            },
         };
     };
 
@@ -516,6 +555,84 @@ describe("mask — value oracle via filter/sort fails closed (regression)", () =
         await handler.handler(makeContext(database, "u1"), {});
 
         expect(database.calls.some((call) => call.method === "findMany")).toBe(true);
+    });
+});
+
+describe("mask — value oracle via index readers fails closed (regression)", () => {
+    it("withSearchIndex searching a masked column throws MASK_UNSUPPORTED", async () => {
+        expect.assertions(1);
+
+        const seed = [{ _id: "u1", email: "a@x.com", name: "Ann", table: "users" }];
+        const database = createFakeDatabase(seed);
+
+        enableQueryReader(database, seed);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { email: "redact" } }))
+            // A search index over a masked column is the headline oracle: the
+            // matched (masked) row confirms the search term equals the hidden
+            // value. Must fail closed before the search ever runs.
+            .query(async ({ ctx }) =>
+                (ctx as unknown as TestContext).db
+                    .query("users")
+                    .withSearchIndex("by_email", (q) => q.search("email", "a@x.com"))
+                    .first(),
+            );
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+    });
+
+    it("withIndex ranging over a masked column throws MASK_UNSUPPORTED", async () => {
+        expect.assertions(1);
+
+        const seed = [{ _id: "u1", email: "a@x.com", name: "Ann", table: "users" }];
+        const database = createFakeDatabase(seed);
+
+        enableQueryReader(database, seed);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { email: "redact" } }))
+            // An index equality/range over a masked column confirms / binary-
+            // searches the hidden value the same way a masked `where` does.
+            .query(async ({ ctx }) =>
+                (ctx as unknown as TestContext).db
+                    .query("users")
+                    .withIndex("by_email", (q) => q.eq("email", "a@x.com"))
+                    .first(),
+            );
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
+    });
+
+    it("withIndex over a NON-masked column of a masked table still works and masks output (Strategy A)", async () => {
+        expect.assertions(4);
+
+        const seed = [
+            { _id: "u1", createdAt: 1, email: "a@x.com", name: "Ann", table: "users" },
+            { _id: "u2", createdAt: 2, email: "b@x.com", name: "Bo", table: "users" },
+        ];
+        const database = createFakeDatabase(seed);
+
+        enableQueryReader(database, seed);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { email: "redact" } }))
+            // Ranging over a NON-masked column is a legitimate index read: it must
+            // pass through (precise Strategy A), and the returned rows must still
+            // be masked on output.
+            .query(async ({ ctx }) =>
+                (ctx as unknown as TestContext).db
+                    .query("users")
+                    .withIndex("by_created", (q) => q.gte("createdAt", 1))
+                    .collect(),
+            );
+
+        const rows = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(rows).toHaveLength(2);
+        expect(rows[0]?.["email"]).toBeNull();
+        expect(rows[1]?.["email"]).toBeNull();
+        expect(rows[0]?.["name"]).toBe("Ann");
     });
 });
 
