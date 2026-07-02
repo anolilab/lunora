@@ -1,3 +1,5 @@
+## @lunora/scheduler [1.0.0-alpha.4](https://github.com/anolilab/lunora/compare/%40lunora%2Fscheduler%401.0.0-alpha.3...%40lunora%2Fscheduler%401.0.0-alpha.4) (2026-07-02)
+
 ## @lunora/scheduler [1.0.0-alpha.3](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.2...@lunora/scheduler@1.0.0-alpha.3) (2026-06-27)
 
 ### Features
