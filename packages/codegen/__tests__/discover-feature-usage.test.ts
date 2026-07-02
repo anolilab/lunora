@@ -222,7 +222,10 @@ describe("discover-feature-usage", () => {
             expect.assertions(1);
 
             expect(buildStudioFeatures(ALL_OFF, NO_SIGNALS)).toStrictEqual({
+                analytics: false,
+                auth: false,
                 flags: false,
+                kv: false,
                 mail: false,
                 payments: false,
                 queues: false,

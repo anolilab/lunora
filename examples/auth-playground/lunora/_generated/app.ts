@@ -39,7 +39,7 @@ interface ComposedApp extends LunoraWorker {
 class AppBuilder<Env extends Record<string, unknown>> {
     private adminToken?: Selector<Env, string>;
     private authDeclaration?: AuthDeclaration<Env>;
-    private readonly extendFns: ((env: Env) => Partial<WorkerOptions>)[] = [];
+    private readonly extendFns: ((env: Env, derived: Readonly<WorkerOptions>) => Partial<WorkerOptions>)[] = [];
     private readonly routeMap: Record<string, Route> = {};
     private shardSelector?: Selector<Env, ShardNamespaceLike>;
 
@@ -59,8 +59,8 @@ class AppBuilder<Env extends Record<string, unknown>> {
         return this;
     }
 
-    /** Escape hatch — merge raw `WorkerOptions` (anything not yet sugared) over the derived options at build time. */
-    public extend(fn: (env: Env) => Partial<WorkerOptions>): this {
+    /** Escape hatch — merge raw `WorkerOptions` (anything not yet sugared) over the derived options at build time. The second `derived` argument is a snapshot of the options assembled so far (after `.auth(...)` etc.), so you can compose rather than clobber — e.g. wrap `derived.resolveIdentity` instead of replacing it. */
+    public extend(fn: (env: Env, derived: Readonly<WorkerOptions>) => Partial<WorkerOptions>): this {
         this.extendFns.push(fn);
 
         return this;
@@ -182,7 +182,7 @@ class AppBuilder<Env extends Record<string, unknown>> {
         }
 
         for (const fn of this.extendFns) {
-            Object.assign(options, fn(env));
+            Object.assign(options, fn(env, { ...options }));
         }
 
         return options;

@@ -55,6 +55,7 @@ import { FlagsPanel } from "../features/flags/flags-panel";
 import { FunctionRunner } from "../features/functions/function-runner";
 import { FunctionStatsPanel } from "../features/functions/function-stats";
 import { HomePanel } from "../features/home/home-panel";
+import { KvBrowser } from "../features/kv/kv-browser";
 import { AuditPanel } from "../features/logs/audit-panel";
 import { LogDrainsPanel } from "../features/logs/log-drains-panel";
 import { LogsPanel } from "../features/logs/logs-panel";
@@ -104,6 +105,7 @@ type StudioTab =
     | "health"
     | "home"
     | "insights"
+    | "kv"
     | "logs"
     | "mail"
     | "metrics"
@@ -278,6 +280,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     health: <path d="M3 12h4l2 6 4-14 2 8h6" />,
     home: <path d="M3 11.5 12 4l9 7.5M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9" />,
     insights: <path d="M12 3a6 6 0 0 0-3.6 10.8c.5.4.8.9.9 1.5l.2 1.2h5l.2-1.2c.1-.6.4-1.1.9-1.5A6 6 0 0 0 12 3ZM9.5 20.5h5M10 18h4" />,
+    kv: <path d="M5 5h14v4H5V5Zm0 5h14v4H5v-4Zm0 5h14v4H5v-4Z" />,
     logs: <path d="M5 6h14M5 10h14M5 14h9M5 18h11" />,
     mail: <path d="M4 5h16v14H4V5Zm0 1.5 8 6 8-6" />,
     payments: <path d="M3 7h18v10H3V7Zm0 3h18M7 14h4" />,
@@ -318,7 +321,7 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "database", tabs: ["data", "sql", "schema", "migrations", "vectors", "pitr", "export"] },
     { key: "functions", tabs: ["functions", "api", "workflows", "queues"] },
     { key: "auth", tabs: ["users", "organizations", "authSessions", "authConfig"] },
-    { key: "storage", tabs: ["files", "storageRules"] },
+    { key: "storage", tabs: ["files", "storageRules", "kv"] },
     { key: "observability", tabs: ["logs", "audit", "realtime", "fanout", "metrics", "analytics", "health"] },
     { key: "advisors", tabs: ["security", "rls", "permissions", "insights"] },
     { key: "operations", tabs: ["schedule", "mail", "drains", "payments", "flags"] },
@@ -336,13 +339,19 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
  * the access-rules view; `scheduler` gates the scheduled-jobs view.
  */
 const TAB_FEATURE: Partial<Record<StudioTab, keyof StudioFeaturesResult>> = {
+    analytics: "analytics",
+    authConfig: "auth",
+    authSessions: "auth",
     files: "storage",
     flags: "flags",
+    kv: "kv",
     mail: "mail",
+    organizations: "auth",
     payments: "payments",
     queues: "queues",
     schedule: "scheduler",
     storageRules: "storage",
+    users: "auth",
     vectors: "vectors",
     workflows: "workflows",
 };
@@ -389,6 +398,7 @@ const TABS = [
     "authConfig",
     "files",
     "storageRules",
+    "kv",
     "dashboards",
     "metrics",
     "analytics",
@@ -742,6 +752,7 @@ const StudioLayout = (): ReactElement => {
             health: t("Health"),
             home: t("Home"),
             insights: t("Performance"),
+            kv: t("KV"),
             logs: t("Logs"),
             metrics: t("Metrics"),
             migrations: t("Migrations"),
@@ -811,6 +822,7 @@ const StudioLayout = (): ReactElement => {
         security: t("Review admin gates, credentials, and log redaction."),
         settings: t("Read-only deployment config — vars, secrets, and bindings."),
         sql: t("Run read-only SQL against a shard."),
+        kv: t("Browse and edit key-value pairs in your Workers KV namespaces."),
         storageRules: t("Inspect storage access rules — per bucket, operation, and key prefix."),
         users: t("Manage auth users — roles, bans, sessions, and identity."),
         vectors: t("Browse Vectorize indexes and run similarity searches."),
@@ -1009,6 +1021,7 @@ const buildRouter = ({
         export: <ExportImportPanel initialShardKey={initialShardKey} />,
         fanout: <FanoutPanel initialShardKey={initialShardKey} />,
         files: <FileBrowser />,
+        kv: <KvBrowser />,
         flags: <FlagsPanel initialShardKey={initialShardKey} />,
         functions: (
             <div className="flex flex-col gap-8">

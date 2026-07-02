@@ -403,8 +403,14 @@ interface StorageRulesResult {
  * package's tests and the studio's fails the build if the two key sets diverge.
  */
 interface StudioFeaturesResult {
+    /** `@lunora/bindings/analytics` / `ctx.analytics` is used, or it is a declared dependency. */
+    analytics: boolean;
+    /** `@lunora/auth` is a declared dependency (backs the Users / Sessions / Organizations / Configuration pages). */
+    auth: boolean;
     /** `@lunora/flags` / `ctx.flags` is used, or it is a declared dependency. */
     flags: boolean;
+    /** `@lunora/bindings/kv` / `ctx.kv` is used, or it is a declared dependency. */
+    kv: boolean;
     /** `@lunora/mail` is imported by a `lunora/` source or a declared dependency. */
     mail: boolean;
     /** `@lunora/payment` is used (import or `ctx.payments`) or a declared dependency. */

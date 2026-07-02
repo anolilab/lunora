@@ -2914,7 +2914,10 @@ const emitShard = ({
     // to the generated `studioFeatures()` override. The default (all-false) hides
     // every optional page — matching the un-generated base-class behaviour.
     const studioFeaturesData: StudioFeaturesResult = studioFeatures ?? {
+        analytics: false,
+        auth: false,
         flags: false,
+        kv: false,
         mail: false,
         payments: false,
         queues: false,

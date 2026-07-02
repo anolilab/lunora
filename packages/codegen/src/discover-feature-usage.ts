@@ -213,7 +213,10 @@ const discoverFeatureUsage = (project: Project, lunoraDirectory: string): Featur
  */
 const buildStudioFeatures = (usage: FeatureUsage, signals: StudioFeatureSignals): StudioFeaturesResult => {
     return {
+        analytics: usage.analytics || signals.dependencies.has("@lunora/bindings/analytics"),
+        auth: signals.dependencies.has("@lunora/auth"),
         flags: usage.flags || signals.dependencies.has("@lunora/flags"),
+        kv: usage.kv || signals.dependencies.has("@lunora/bindings/kv"),
         mail: usage.mail || signals.dependencies.has("@lunora/mail"),
         payments: usage.payments || signals.dependencies.has("@lunora/payment"),
         queues: signals.queueCount > 0 || signals.dependencies.has("@lunora/queue"),

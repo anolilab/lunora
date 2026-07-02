@@ -103,6 +103,9 @@ const buildAccessImports = (hasAccess: boolean, hasAuth: boolean): string[] =>
           ]
         : [];
 
+/** KV-browser import — the zero-config env-scanning introspector factory backing `createWorker({ kvIntrospector })`. */
+const buildKvImports = (hasKv: boolean): string[] => (hasKv ? [`import { createKvIntrospectorFromEnv } from "@lunora/bindings/kv";`] : []);
+
 /** Import lines — only what the enabled capabilities need. Add-ons via `@lunora/*`; the runtime via the umbrella subpath when the app depends on `lunora`. */
 const buildImportLines = (options: EmitAppOptions): string[] => {
     const {
@@ -111,6 +114,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
         hasFramework,
         hasGlobal,
         hasHyperdriveGlobal,
+        hasKv,
         hasQueue,
         hasScheduler,
         hasStorage,
@@ -158,6 +162,7 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
                   `import type { SqlCtxDbOptions, SqlExec } from "@lunora/sql-store";`,
               ]
             : []),
+        ...buildKvImports(hasKv),
         ...(hasScheduler
             ? [`import type { DurableObjectNamespaceLike } from "@lunora/scheduler";`, `import { createScheduler } from "@lunora/scheduler";`]
             : []),
@@ -493,6 +498,12 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
         }`,
           ]
         : []),
+    // The studio's KV browser is wired zero-config: `createKvIntrospectorFromEnv`
+    // scans `env` for every bound Workers KV namespace, so each `kv_namespaces`
+    // entry in wrangler.jsonc appears under its binding name (any name, any count)
+    // with no manual `createKvIntrospector` call. A deployment with no KV binding
+    // yields an empty namespace list rather than crashing.
+    ...(options.hasKv ? [`        options.kvIntrospector = createKvIntrospectorFromEnv(env);`] : []),
     ...(options.hasAuth
         ? [
               `        if (this.authDeclaration) {

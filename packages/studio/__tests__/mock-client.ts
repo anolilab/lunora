@@ -9,6 +9,9 @@ import type {
     GlobalFilterClause,
     GlobalTableInfo,
     GlobalTablePage,
+    KvKeyListResult,
+    KvNamespaceSummary,
+    KvValueResult,
     LunoraClient,
     ScheduleRecord,
     ShardTrafficResult,
@@ -26,6 +29,7 @@ interface MockClientHooks {
     cancelScheduledJob: ReturnType<typeof vi.fn>;
     createAuthUser: ReturnType<typeof vi.fn>;
     deleteAuthPasskey: ReturnType<typeof vi.fn>;
+    deleteKvKey: ReturnType<typeof vi.fn>;
     deleteStorageObject: ReturnType<typeof vi.fn>;
     disableAuthTwoFactor: ReturnType<typeof vi.fn>;
     /** Push a value to every live subscriber registered for `reference`. */
@@ -39,6 +43,7 @@ interface MockClientHooks {
     fetchOpenRpc: ReturnType<typeof vi.fn>;
     getAuthCapabilities: ReturnType<typeof vi.fn>;
     getCronJobs: ReturnType<typeof vi.fn>;
+    getKvValue: ReturnType<typeof vi.fn>;
     impersonateAuthUser: ReturnType<typeof vi.fn>;
     listAuthAccounts: ReturnType<typeof vi.fn>;
     listAuthOrganizations: ReturnType<typeof vi.fn>;
@@ -49,11 +54,14 @@ interface MockClientHooks {
     listAuthUsers: ReturnType<typeof vi.fn>;
     listFunctions: ReturnType<typeof vi.fn>;
     listGlobalTables: ReturnType<typeof vi.fn>;
+    listKvKeys: ReturnType<typeof vi.fn>;
+    listKvNamespaces: ReturnType<typeof vi.fn>;
     listScheduledJobs: ReturnType<typeof vi.fn>;
     listStorageBuckets: ReturnType<typeof vi.fn>;
     listStorageObjects: ReturnType<typeof vi.fn>;
     listVectorIndexes: ReturnType<typeof vi.fn>;
     mutation: ReturnType<typeof vi.fn>;
+    putKvValue: ReturnType<typeof vi.fn>;
     query: ReturnType<typeof vi.fn>;
     queryVectorIndex: ReturnType<typeof vi.fn>;
     readGlobalTablePage: ReturnType<typeof vi.fn>;
@@ -99,6 +107,10 @@ interface MockClientImpls {
     fetchOpenApi?: () => Record<string, unknown>;
     fetchOpenRpc?: () => Record<string, unknown>;
     getCronJobs?: () => CronJobInfo[];
+    /** The KV namespaces the browser lists. Defaults to `[]`. */
+    kvNamespaces?: KvNamespaceSummary[];
+    /** Seed entries per namespace binding → key → stored entry. Mutated in place by put/delete. */
+    kvSeed?: Record<string, Record<string, { expiration?: number; metadata?: unknown; value: string }>>;
     listAuthSessions?: (options: { limit?: number; offset?: number; userId?: string }) => AuthPage<AuthSession>;
     listAuthUsers?: (options: ListAuthUsersOptions) => AuthPage<AuthUser>;
     listFunctions?: () => FunctionDescriptor[];
@@ -150,6 +162,42 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         async (table: string) => impls.shardTraffic?.(table) ?? { failed: 0, ok: 0, shards: [] },
     );
     const listGlobalTables = vi.fn<() => Promise<GlobalTableInfo[]>>(async () => impls.listGlobalTables?.() ?? []);
+
+    // In-memory KV store, seeded from `impls.kvSeed` and mutated in place by
+    // put/delete so create → list → edit → delete round-trips the way the real
+    // introspector does.
+    const kvStore: Record<string, Record<string, { expiration?: number; metadata?: unknown; value: string }>> = impls.kvSeed ?? {};
+    const listKvNamespaces = vi.fn<() => Promise<KvNamespaceSummary[]>>(async () => impls.kvNamespaces ?? []);
+    const listKvKeys = vi.fn<(options: { cursor?: string; limit?: number; namespace: string; prefix?: string }) => Promise<KvKeyListResult>>(
+        async (options: { cursor?: string; limit?: number; namespace: string; prefix?: string }) => {
+            const entries = kvStore[options.namespace] ?? {};
+            const keys = Object.keys(entries)
+                .filter((name) => (options.prefix === undefined ? true : name.startsWith(options.prefix)))
+                .toSorted((a, b) => a.localeCompare(b))
+                .map((name) => {
+                    return { expiration: entries[name]?.expiration, metadata: entries[name]?.metadata, name };
+                });
+
+            return { keys, listComplete: true };
+        },
+    );
+    const getKvValue = vi.fn<(options: { key: string; namespace: string }) => Promise<KvValueResult>>(async (options: { key: string; namespace: string }) => {
+        const entry = kvStore[options.namespace]?.[options.key];
+
+        return { metadata: entry?.metadata ?? null, value: entry?.value ?? null };
+    });
+    const putKvValue = vi.fn<
+        (options: { expiration?: number; expirationTtl?: number; key: string; metadata?: unknown; namespace: string; value: string }) => Promise<void>
+    >(async (options: { expiration?: number; expirationTtl?: number; key: string; metadata?: unknown; namespace: string; value: string }) => {
+        const bucket = kvStore[options.namespace] ?? {};
+
+        kvStore[options.namespace] = bucket;
+        bucket[options.key] = { expiration: options.expiration, metadata: options.metadata, value: options.value };
+    });
+    const deleteKvKey = vi.fn<(options: { key: string; namespace: string }) => Promise<void>>(async (options: { key: string; namespace: string }) => {
+        delete kvStore[options.namespace]?.[options.key];
+    });
+
     const listVectorIndexes = vi.fn<() => Promise<VectorIndexSummary[]>>(async () => impls.listVectorIndexes?.() ?? []);
     const queryVectorIndex = vi.fn<(options: { name: string; text: string; topK?: number }) => Promise<VectorQueryMatch[]>>(
         async (options: { name: string; text: string; topK?: number }) => impls.queryVectorIndex?.(options) ?? [],
@@ -300,20 +348,25 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         // mock has no socket, so it reports a stable "idle" and never notifies.
         connectionStatus: () => "idle" as const,
         onConnectionStatus: (_listener: () => void) => () => {},
+        deleteKvKey,
         deleteStorageObject,
         facetGlobalColumn,
         fetchOpenApi,
         fetchOpenRpc,
         getCronJobs,
+        getKvValue,
         listAuthSessions,
         listAuthUsers,
         listFunctions,
         listGlobalTables,
+        listKvKeys,
+        listKvNamespaces,
         listScheduledJobs,
         listStorageBuckets,
         listStorageObjects,
         listVectorIndexes,
         mutation,
+        putKvValue,
         query,
         queryVectorIndex,
         readGlobalTablePage,
@@ -330,6 +383,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         action,
         asClient,
         cancelScheduledJob,
+        deleteKvKey,
         deleteStorageObject,
         emit,
         emitError,
@@ -338,15 +392,19 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         fetchOpenApi,
         fetchOpenRpc,
         getCronJobs,
+        getKvValue,
         listAuthSessions,
         listAuthUsers,
         listFunctions,
         listGlobalTables,
+        listKvKeys,
+        listKvNamespaces,
         listScheduledJobs,
         listStorageBuckets,
         listStorageObjects,
         listVectorIndexes,
         mutation,
+        putKvValue,
         query,
         queryVectorIndex,
         readGlobalTablePage,

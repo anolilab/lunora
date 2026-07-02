@@ -39,7 +39,7 @@ import createSqliteExec from "./_helpers/node-sqlite";
  * `StudioFeaturesResult` without updating this tuple — and there if the studio
  * copy drifts — forcing both packages to move together.
  */
-const STUDIO_FEATURE_KEYS = ["flags", "mail", "payments", "queues", "scheduler", "storage", "vectors", "workflows"] as const;
+const STUDIO_FEATURE_KEYS = ["analytics", "auth", "flags", "kv", "mail", "payments", "queues", "scheduler", "storage", "vectors", "workflows"] as const;
 
 /** `true` only when `Keys` and `Canonical` are mutually assignable (the exact same key set). */
 type KeysMatch<Keys extends string, Canonical extends string> = [Keys] extends [Canonical] ? ([Canonical] extends [Keys] ? true : never) : never;
@@ -397,14 +397,29 @@ describe("shardDO admin introspection", () => {
         const baseResponse = await base.fetch(adminRequest(ADMIN_FUNCTIONS.studioFeatures, {}, ADMIN_TOKEN));
 
         await expect(baseResponse.json()).resolves.toEqual({
-            result: { flags: false, mail: false, payments: false, queues: false, scheduler: false, storage: false, vectors: false, workflows: false },
+            result: {
+                analytics: false,
+                auth: false,
+                flags: false,
+                kv: false,
+                mail: false,
+                payments: false,
+                queues: false,
+                scheduler: false,
+                storage: false,
+                vectors: false,
+                workflows: false,
+            },
         });
 
         // The codegen subclass overrides `studioFeatures()` with the discovered flags.
         class FeaturedShard extends AdminShard {
             // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
             protected override studioFeatures(): {
+                analytics: boolean;
+                auth: boolean;
                 flags: boolean;
+                kv: boolean;
                 mail: boolean;
                 payments: boolean;
                 queues: boolean;
@@ -413,7 +428,19 @@ describe("shardDO admin introspection", () => {
                 vectors: boolean;
                 workflows: boolean;
             } {
-                return { flags: true, mail: false, payments: true, queues: true, scheduler: true, storage: false, vectors: false, workflows: true };
+                return {
+                    analytics: false,
+                    auth: false,
+                    flags: true,
+                    kv: false,
+                    mail: false,
+                    payments: true,
+                    queues: true,
+                    scheduler: true,
+                    storage: false,
+                    vectors: false,
+                    workflows: true,
+                };
             }
         }
 
@@ -421,7 +448,19 @@ describe("shardDO admin introspection", () => {
         const response = await featured.fetch(adminRequest(ADMIN_FUNCTIONS.studioFeatures, {}, ADMIN_TOKEN));
 
         await expect(response.json()).resolves.toEqual({
-            result: { flags: true, mail: false, payments: true, queues: true, scheduler: true, storage: false, vectors: false, workflows: true },
+            result: {
+                analytics: false,
+                auth: false,
+                flags: true,
+                kv: false,
+                mail: false,
+                payments: true,
+                queues: true,
+                scheduler: true,
+                storage: false,
+                vectors: false,
+                workflows: true,
+            },
         });
     });
 
@@ -463,7 +502,19 @@ describe("shardDO admin introspection", () => {
         // The compile-time guard (STUDIO_FEATURES_KEY_GUARD) is what actually fails
         // the build on drift; this asserts the tuple matches the wire shape at runtime too.
         expect(STUDIO_FEATURES_KEY_GUARD).toBe(true);
-        expect([...STUDIO_FEATURE_KEYS]).toStrictEqual(["flags", "mail", "payments", "queues", "scheduler", "storage", "vectors", "workflows"]);
+        expect([...STUDIO_FEATURE_KEYS]).toStrictEqual([
+            "analytics",
+            "auth",
+            "flags",
+            "kv",
+            "mail",
+            "payments",
+            "queues",
+            "scheduler",
+            "storage",
+            "vectors",
+            "workflows",
+        ]);
     });
 
     it("keeps QueueMetadata's keys in lockstep with the studio's hand-mirror", () => {

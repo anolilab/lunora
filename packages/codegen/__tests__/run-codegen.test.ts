@@ -1454,7 +1454,10 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             const output = emitShard({
                 schema: { tables: [], vectorIndexes: [] },
                 studioFeatures: {
+                    analytics: false,
+                    auth: false,
                     flags: false,
+                    kv: false,
                     mail: false,
                     payments: true,
                     queues: false,

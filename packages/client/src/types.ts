@@ -855,11 +855,11 @@ export interface FunctionDescriptor {
  * cron introspection), so the studio renders these read-only.
  */
 // The admin wire-shape types `CronJobInfo` (cron-triggers tab), `VectorIndexSummary`
-// + `VectorQueryMatch` (vector browser) are owned by the runtime contract
-// (`@lunora/runtime`, which defines the `/_lunora/admin/*` endpoints) and
-// re-exported here for SDK consumers — a single source of truth, no hand-kept
+// + `VectorQueryMatch` (vector browser), and the KV browser types are owned by the
+// runtime contract (`@lunora/runtime`, which defines the `/_lunora/admin/*` endpoints)
+// and re-exported here for SDK consumers — a single source of truth, no hand-kept
 // copies to drift. Type-only re-export, so no worker code reaches the browser SDK.
-export type { CronJobInfo, VectorIndexSummary, VectorQueryMatch } from "@lunora/runtime";
+export type { CronJobInfo, KvKeyEntry, KvKeyListResult, KvNamespaceSummary, KvValueResult, VectorIndexSummary, VectorQueryMatch } from "@lunora/runtime";
 
 /** A `.global()` (D1-backed) table plus its row count, from `/_lunora/admin/global/tables`. */
 export interface GlobalTableInfo {

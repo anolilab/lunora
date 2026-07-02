@@ -2927,7 +2927,19 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with the statically-discovered feature flags
     protected studioFeatures(): StudioFeaturesResult {
-        return { flags: false, mail: false, payments: false, queues: false, scheduler: false, storage: false, vectors: false, workflows: false };
+        return {
+            analytics: false,
+            auth: false,
+            flags: false,
+            kv: false,
+            mail: false,
+            payments: false,
+            queues: false,
+            scheduler: false,
+            storage: false,
+            vectors: false,
+            workflows: false,
+        };
     }
 
     /**
