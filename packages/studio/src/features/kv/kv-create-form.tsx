@@ -1,6 +1,6 @@
 import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useReducer } from "react";
 
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -10,6 +10,40 @@ import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget } from "../../lib/internal";
 import { buildKvPutOptions, isJsonOrEmpty, isTtlValid } from "./kv-fields";
 import { MetadataField, TtlField } from "./kv-form-fields";
+
+// --- one reducer for the whole form so a submit (busy + cleared error) is a
+// single transition, and the field group stays cohesive. ---
+
+interface CreateState {
+    busy: boolean;
+    error: null | string;
+    metadata: string;
+    name: string;
+    ttl: string;
+    value: string;
+}
+
+type CreateAction =
+    { error: string; type: "submitFailed" } | { field: "metadata" | "name" | "ttl" | "value"; type: "setField"; value: string } | { type: "submitStart" };
+
+const INITIAL_CREATE_STATE: CreateState = { busy: false, error: null, metadata: "", name: "", ttl: "", value: "" };
+
+const createReducer = (state: CreateState, action: CreateAction): CreateState => {
+    switch (action.type) {
+        case "setField": {
+            return { ...state, [action.field]: action.value };
+        }
+        case "submitFailed": {
+            return { ...state, busy: false, error: action.error };
+        }
+        case "submitStart": {
+            return { ...state, busy: true, error: null };
+        }
+        default: {
+            return state;
+        }
+    }
+};
 
 /**
  * Renders the new-key form inside the side sheet. Owns its own field state; on
@@ -28,33 +62,26 @@ export const KvCreateForm = ({
     const client = useLunora();
     const t = useT();
 
-    const [name, setName] = useState("");
-    const [value, setValue] = useState("");
-    const [ttl, setTtl] = useState("");
-    const [metadata, setMetadata] = useState("");
-    const [busy, setBusy] = useState(false);
-    const [error, setError] = useState<null | string>(null);
+    const [state, dispatch] = useReducer(createReducer, INITIAL_CREATE_STATE);
 
-    const metadataValid = isJsonOrEmpty(metadata);
-    const ttlValid = isTtlValid(ttl);
-    const canSubmit = name.trim() !== "" && metadataValid && ttlValid && !busy;
+    const metadataValid = isJsonOrEmpty(state.metadata);
+    const ttlValid = isTtlValid(state.ttl);
+    const canSubmit = state.name.trim() !== "" && metadataValid && ttlValid && !state.busy;
 
     const onSubmit = (): void => {
         if (!canSubmit) {
             return;
         }
 
-        setBusy(true);
-        setError(null);
+        dispatch({ type: "submitStart" });
 
         fireAndForget(
             (async (): Promise<void> => {
                 try {
-                    await client.putKvValue(buildKvPutOptions({ metadata, ttl, value }, name, namespace));
+                    await client.putKvValue(buildKvPutOptions({ metadata: state.metadata, ttl: state.ttl, value: state.value }, state.name, namespace));
                     onCreated();
                 } catch (error_) {
-                    setBusy(false);
-                    setError(errorMessage(error_));
+                    dispatch({ error: errorMessage(error_), type: "submitFailed" });
                 }
             })(),
         );
@@ -71,10 +98,10 @@ export const KvCreateForm = ({
                     data-testid="kv-create-name"
                     id="kv-create-name"
                     onChange={(event) => {
-                        setName(event.target.value);
+                        dispatch({ field: "name", type: "setField", value: event.target.value });
                     }}
                     placeholder={t("Key name")}
-                    value={name}
+                    value={state.name}
                 />
             </div>
 
@@ -87,9 +114,9 @@ export const KvCreateForm = ({
                     data-testid="kv-create-value"
                     id="kv-create-value"
                     onChange={(event) => {
-                        setValue(event.target.value);
+                        dispatch({ field: "value", type: "setField", value: event.target.value });
                     }}
-                    value={value}
+                    value={state.value}
                 />
             </div>
 
@@ -97,7 +124,7 @@ export const KvCreateForm = ({
                 id="kv-create-ttl"
                 invalid={!ttlValid}
                 onChange={(seconds) => {
-                    setTtl(seconds);
+                    dispatch({ field: "ttl", type: "setField", value: seconds });
                 }}
                 testId="kv-create-ttl"
             />
@@ -105,24 +132,26 @@ export const KvCreateForm = ({
             <MetadataField
                 id="kv-create-metadata"
                 invalidTestId="kv-create-metadata-invalid"
-                onChange={setMetadata}
+                onChange={(metadata) => {
+                    dispatch({ field: "metadata", type: "setField", value: metadata });
+                }}
                 testId="kv-create-metadata"
                 valid={metadataValid}
-                value={metadata}
+                value={state.metadata}
             />
 
             <div className="flex flex-wrap gap-2">
                 <Button data-testid="kv-create-submit" disabled={!canSubmit} onClick={onSubmit}>
-                    {busy ? t("Creating…") : t("Create key")}
+                    {state.busy ? t("Creating…") : t("Create key")}
                 </Button>
-                <Button data-testid="kv-create-cancel" disabled={busy} onClick={onCancel} variant="outline">
+                <Button data-testid="kv-create-cancel" disabled={state.busy} onClick={onCancel} variant="outline">
                     {t("Cancel")}
                 </Button>
             </div>
 
-            {error !== null && (
+            {state.error !== null && (
                 <p className="text-sm text-destructive" data-testid="kv-create-error" role="alert">
-                    {error}
+                    {state.error}
                 </p>
             )}
         </div>

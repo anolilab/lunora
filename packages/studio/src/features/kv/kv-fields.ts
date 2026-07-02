@@ -25,6 +25,19 @@ interface KvPutFields {
     value: string;
 }
 
+/** Parse a TTL input into a positive integer of seconds, or `undefined` when blank/invalid. Internal to {@link buildKvPutOptions}. */
+const parseTtl = (value: string): number | undefined => {
+    const trimmed = value.trim();
+
+    if (trimmed === "") {
+        return undefined;
+    }
+
+    const seconds = Number(trimmed);
+
+    return Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds) : undefined;
+};
+
 /** Format a KV expiration (Unix seconds) as an ISO string, or an em dash when unset. */
 export const formatExpiration = (expiration: number | undefined): string => (expiration === undefined ? "—" : new Date(expiration * 1000).toISOString());
 
@@ -104,19 +117,6 @@ export const isTtlValid = (value: string): boolean => {
     const seconds = Number(trimmed);
 
     return Number.isInteger(seconds) && seconds >= 60;
-};
-
-/** Parse a TTL input into a positive integer of seconds, or `undefined` when blank/invalid. */
-export const parseTtl = (value: string): number | undefined => {
-    const trimmed = value.trim();
-
-    if (trimmed === "") {
-        return undefined;
-    }
-
-    const seconds = Number(trimmed);
-
-    return Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds) : undefined;
 };
 
 /**

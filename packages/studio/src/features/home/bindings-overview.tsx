@@ -60,6 +60,13 @@ const BindingCard = ({ group }: { readonly group: BindingGroup }): ReactElement 
     );
 };
 
+/** Fixed card display order: KV → R2 → Vectorize. */
+const TAB_ORDER = ["kv", "files", "vectors"];
+
+/** Replace the card for `card.tab` (if already present) and keep the list in {@link TAB_ORDER}. */
+const upsertCard = (current: BindingGroup[], card: BindingGroup): BindingGroup[] =>
+    [...current.filter((group) => group.tab !== card.tab), card].toSorted((a, b) => TAB_ORDER.indexOf(a.tab) - TAB_ORDER.indexOf(b.tab));
+
 /**
  * The Home **Bindings** overview — a card per configured Cloudflare-binding
  * capability (KV namespaces, R2 buckets, Vectorize indexes) showing its count and
@@ -73,53 +80,53 @@ export const BindingsOverview = (): null | ReactElement => {
     const features = useStudioFeatures();
     const t = useT();
 
-    const [kv, setKv] = useState<null | string[]>(null);
-    const [buckets, setBuckets] = useState<null | string[]>(null);
-    const [vectors, setVectors] = useState<null | string[]>(null);
+    // One list of resolved cards, built as each best-effort read settles — each
+    // card is upserted by its tab and kept in the fixed KV → R2 → Vectorize order.
+    const [groups, setGroups] = useState<BindingGroup[]>([]);
 
     useEffect(() => {
         const token = { cancelled: false };
 
-        if (features.kv) {
+        const sources = [
+            {
+                enabled: features.kv,
+                label: t("KV Namespaces"),
+                load: async (): Promise<string[]> => {
+                    const namespaces = await client.listKvNamespaces();
+
+                    return namespaces.map((ns) => ns.binding);
+                },
+                tab: "kv",
+                testId: "home-binding-kv",
+            },
+            { enabled: features.storage, label: t("R2 Buckets"), load: () => client.listStorageBuckets(), tab: "files", testId: "home-binding-r2" },
+            {
+                enabled: features.vectors,
+                label: t("Vectorize Indexes"),
+                load: async (): Promise<string[]> => {
+                    const indexes = await client.listVectorIndexes();
+
+                    return indexes.map((index) => index.name);
+                },
+                tab: "vectors",
+                testId: "home-binding-vectors",
+            },
+        ];
+
+        for (const source of sources) {
+            if (!source.enabled) {
+                continue;
+            }
+
             fireAndForget(
                 (async (): Promise<void> => {
                     try {
-                        const result = await client.listKvNamespaces();
+                        const bindings = await source.load();
 
                         if (!token.cancelled) {
-                            setKv(result.map((ns) => ns.binding));
-                        }
-                    } catch {
-                        /* best-effort — omit the card */
-                    }
-                })(),
-            );
-        }
+                            const card: BindingGroup = { bindings, label: source.label, tab: source.tab, testId: source.testId };
 
-        if (features.storage) {
-            fireAndForget(
-                (async (): Promise<void> => {
-                    try {
-                        const result = await client.listStorageBuckets();
-
-                        if (!token.cancelled) {
-                            setBuckets(result);
-                        }
-                    } catch {
-                        /* best-effort — omit the card */
-                    }
-                })(),
-            );
-        }
-
-        if (features.vectors) {
-            fireAndForget(
-                (async (): Promise<void> => {
-                    try {
-                        const result = await client.listVectorIndexes();
-
-                        if (!token.cancelled) {
-                            setVectors(result.map((index) => index.name));
+                            setGroups((current) => upsertCard(current, card));
                         }
                     } catch {
                         /* best-effort — omit the card */
@@ -131,21 +138,7 @@ export const BindingsOverview = (): null | ReactElement => {
         return () => {
             token.cancelled = true;
         };
-    }, [client, features.kv, features.storage, features.vectors]);
-
-    const groups: BindingGroup[] = [];
-
-    if (features.kv && kv !== null) {
-        groups.push({ bindings: kv, label: t("KV Namespaces"), tab: "kv", testId: "home-binding-kv" });
-    }
-
-    if (features.storage && buckets !== null) {
-        groups.push({ bindings: buckets, label: t("R2 Buckets"), tab: "files", testId: "home-binding-r2" });
-    }
-
-    if (features.vectors && vectors !== null) {
-        groups.push({ bindings: vectors, label: t("Vectorize Indexes"), tab: "vectors", testId: "home-binding-vectors" });
-    }
+    }, [client, features.kv, features.storage, features.vectors, t]);
 
     if (groups.length === 0) {
         return null;
