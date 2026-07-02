@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import type { SqlCursor, SqlExec } from "../src/ctx-db";
 import {
     createFanoutCounters,
     facetColumn,
@@ -80,6 +81,47 @@ describe("introspect", () => {
 
             expect(page.total).toBe(3);
             expect(page.rows).toEqual([{ __id__: "m2", text: "world", votes: 1 }]);
+        });
+
+        it("omits the total and issues no COUNT when skipCount is set", () => {
+            expect.assertions(4);
+
+            // Record every executed statement so we can assert the COUNT is skipped.
+            const queries: string[] = [];
+            const recordingSql: SqlExec = {
+                exec: <Row = Record<string, unknown>>(query: string, ...parameters: unknown[]): SqlCursor<Row> => {
+                    queries.push(query);
+
+                    return database.sql.exec<Row>(query, ...parameters);
+                },
+            };
+
+            const page = readTablePage(recordingSql, { skipCount: true, table: "messages" });
+
+            // Rows + columns still returned; only the count is elided.
+            expect(page.total).toBeUndefined();
+            expect(page.rows).toHaveLength(3);
+            expect(page.columns).toEqual(["__id__", "text", "votes"]);
+            // No `SELECT COUNT(*)` was ever executed.
+            expect(queries.some((query) => /COUNT\(\*\)/iu.test(query))).toBe(false);
+        });
+
+        it("still runs the COUNT and reports the total when skipCount is false", () => {
+            expect.assertions(2);
+
+            const queries: string[] = [];
+            const recordingSql: SqlExec = {
+                exec: <Row = Record<string, unknown>>(query: string, ...parameters: unknown[]): SqlCursor<Row> => {
+                    queries.push(query);
+
+                    return database.sql.exec<Row>(query, ...parameters);
+                },
+            };
+
+            const page = readTablePage(recordingSql, { search: "o", skipCount: false, table: "messages" });
+
+            expect(page.total).toBe(2);
+            expect(queries.some((query) => /COUNT\(\*\)/iu.test(query))).toBe(true);
         });
 
         it("clamps an oversized limit to the 500 ceiling and floors a negative offset", () => {

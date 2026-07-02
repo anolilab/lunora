@@ -5673,6 +5673,7 @@ abstract class ShardDO {
             orderBy: parseTablePageOrderBy(args["orderBy"]),
             refs: this.tableRefs(table),
             search: typeof args["search"] === "string" ? args["search"] : undefined,
+            skipCount: typeof args["skipCount"] === "boolean" ? args["skipCount"] : undefined,
             table,
         });
 
