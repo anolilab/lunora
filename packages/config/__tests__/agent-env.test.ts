@@ -13,7 +13,7 @@ describe("agent-env", () => {
         expect.assertions(3);
 
         expect(detectAiAgent({ CLAUDECODE: "1" })?.name).toBe("Claude Code");
-        expect(detectAiAgent({ CURSOR_AGENT: "1" })?.name).toBe("Cursor agent");
+        expect(detectAiAgent({ CURSOR_AGENT: "1" })?.name).toBe("Cursor Agent");
         expect(detectAiAgent({ GEMINI_CLI: "1" })?.name).toBe("Gemini CLI");
     });
 

@@ -1978,6 +1978,9 @@ importers:
       '@visulima/colorize':
         specifier: 2.0.0-alpha.14
         version: 2.0.0-alpha.14
+      '@visulima/find-ai-runner':
+        specifier: 1.0.0-alpha.9
+        version: 1.0.0-alpha.9
       dockerode:
         specifier: catalog:tooling
         version: 5.0.1
@@ -10067,6 +10070,11 @@ packages:
     peerDependenciesMeta:
       ai:
         optional: true
+
+  '@visulima/find-ai-runner@1.0.0-alpha.9':
+    resolution: {integrity: sha512-O7zIsOVCXLe4I6jBsqxqIF+F3trmtYB6BfLFpaiW/6fDYdJr2vXdYAdd44vuC6+G/ysOW/KrRvKJT4egRvFyDg==}
+    engines: {node: ^22.14.0 || >=24.10.0}
+    hasBin: true
 
   '@visulima/find-cache-dir@3.0.0-alpha.9':
     resolution: {integrity: sha512-fp4h/pUodZWV64gLLriyEi6iZpkOO3+TCQHore8PPJC9ldVUgvOfFQ2Vb+Y92cFBQ7h24lDpQa/Tgjxr0oNA0w==}
@@ -26606,6 +26614,8 @@ snapshots:
       - rrule
 
   '@visulima/error@6.0.0-alpha.34': {}
+
+  '@visulima/find-ai-runner@1.0.0-alpha.9': {}
 
   '@visulima/find-cache-dir@3.0.0-alpha.9': {}
 
