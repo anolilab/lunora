@@ -302,6 +302,17 @@ export type WorkflowRunStepFunction = <A extends StepArgsValidator, Result>(
 export interface WorkflowBranch<Output = unknown> {
     /** Phantom marker for the branch output type — never present at runtime. */
     readonly __output?: Output;
+
+    /**
+     * Optional group-saga compensation (plan 075 Phase 3): the `lunora/workflows.ts`
+     * export name of a workflow to run if a **sibling** branch in the same
+     * `ctx.parallel(...)` group fails **after** this branch has already completed.
+     * It is spawned fire-and-forget (a durable, replay-safe idempotent create) with
+     * {@link BranchCompensationParams} as its `ctx.params`. Omit for no
+     * compensation — a group where no branch sets this behaves exactly as a plain
+     * fan-out (fail-fast, no rollback).
+     */
+    readonly compensateWith?: string;
     /** Optional explicit child instance id (defaults to a deterministic parent-derived id). */
     readonly id?: string;
     /** The params the child instance is created with — surfaced as the child's `ctx.params`. */
@@ -310,6 +321,25 @@ export interface WorkflowBranch<Output = unknown> {
     readonly timeout?: number | string;
     /** The `lunora/workflows.ts` export name of the child workflow to run. */
     readonly workflow: string;
+}
+
+/**
+ * The `ctx.params` a group-saga compensation workflow (a branch's
+ * {@link WorkflowBranch.compensateWith}) receives when a sibling's failure rolls
+ * back the group. Everything is plain-serialisable — the compensation is an
+ * ordinary declared workflow, so it can `ctx.runStep(...)` its own undo logic.
+ */
+export interface BranchCompensationParams {
+    /** Index signature: this is a workflow `params` bag, so it is a valid `Record&lt;string, unknown>` payload. */
+    [key: string]: unknown;
+    /** The export name of the completed branch being compensated. */
+    branch: string;
+    /** The serialised error of the sibling branch whose failure triggered the group rollback. */
+    error: { message: string; name: string };
+    /** Declaration-order index of the completed branch being compensated. */
+    index: number;
+    /** The completed branch's output value — what it returned before the group failed. */
+    output?: unknown;
 }
 
 /** Map a tuple of {@link WorkflowBranch}es to the tuple of their output types, preserving order. */

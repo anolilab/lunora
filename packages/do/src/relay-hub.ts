@@ -24,8 +24,8 @@
 import type { SqlExec } from "./ctx-db";
 import type { MaskPoliciesResult, RlsPoliciesResult } from "./introspect";
 import { stableStringify } from "./reactive-cache";
-import type { OwnerRelayFrame, RelayFrame, RelayShapePoke, RelayShapeSeed, RelayShapeSubscribe } from "./relay";
-import { DEFAULT_PROMOTION_THRESHOLDS, parseRelayName, relayName, shapeRoutingKey } from "./relay";
+import type { OwnerRelayFrame, PromotionState, RelayFrame, RelayShapePoke, RelayShapeSeed, RelayShapeSubscribe } from "./relay";
+import { clampPromotionThresholds, DEFAULT_PROMOTION_THRESHOLDS, nextPromotionState, parseRelayName, relayName, shapeRoutingKey } from "./relay";
 import type { ShapeRowOp } from "./shape-global-diff";
 import { buildPokeFrames, encodeRowsPatch } from "./shape-global-diff";
 import { awaitWsDrain, trySendFrame } from "./subscription-delivery";
@@ -328,6 +328,9 @@ class OwnerRelay extends RelayLink {
         }
     >();
 
+    /** The owner's current promotion state (plan 075 Phase 4), carried across `relayCount()` calls so hysteresis has memory — a shard hovering near the threshold can't flap. */
+    private promotionState: PromotionState = "owned";
+
     public constructor(host: RelayHost, ownerKey: string) {
         super(host, { ownerKey });
     }
@@ -367,14 +370,24 @@ class OwnerRelay extends RelayLink {
 
     /**
      * How many relays the runtime should spread new connections across for this shard
-     * (plan 075 Phase 2). `0` keeps every connection on the owner. The owner promotes
-     * once its live socket count crosses `LUNORA_RELAY_THRESHOLD`, fanning to a fixed
-     * `LUNORA_RELAY_FAN` (capped by `LUNORA_MAX_RELAYS`, the cost ceiling).
+     * (plan 075 Phase 2, hysteresis added in Phase 4). `0` keeps every connection on
+     * the owner. The owner promotes once its live socket count reaches
+     * `LUNORA_RELAY_THRESHOLD` (`tUp`), fanning to a fixed `LUNORA_RELAY_FAN` (capped
+     * by `LUNORA_MAX_RELAYS`, the cost ceiling), and only collapses back to
+     * owner-served once subscribers drain below `LUNORA_RELAY_COLLAPSE_THRESHOLD`
+     * (`tDown`) — the band between the two holds the current state so a shard
+     * hovering near the threshold can't flap. {@link clampPromotionThresholds}
+     * guarantees a valid `tDown < tUp` band even under a misconfigured collapse
+     * threshold. Advances the promotion latch, so it is not a pure read.
      */
     public override relayCount(): number {
-        const threshold = envPositiveInt(this.host.env(), "LUNORA_RELAY_THRESHOLD", DEFAULT_PROMOTION_THRESHOLDS.tUp);
+        const subscribers = this.host.getWebSockets().length;
+        const tUp = envPositiveInt(this.host.env(), "LUNORA_RELAY_THRESHOLD", DEFAULT_PROMOTION_THRESHOLDS.tUp);
+        const tDownRaw = envPositiveInt(this.host.env(), "LUNORA_RELAY_COLLAPSE_THRESHOLD", DEFAULT_PROMOTION_THRESHOLDS.tDown);
 
-        if (this.host.getWebSockets().length < threshold) {
+        this.promotionState = nextPromotionState(this.promotionState, subscribers, clampPromotionThresholds(tUp, tDownRaw));
+
+        if (this.promotionState === "owned") {
             return 0;
         }
 

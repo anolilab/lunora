@@ -20,6 +20,7 @@ export { createWorkflowRunContext } from "./run-context";
 export { createRunStep, validateStepArgs } from "./run-step";
 export type {
     ArgsOf,
+    BranchCompensationParams,
     FunctionReference,
     InferStepArgs,
     LunoraWorkflowsOptions,
