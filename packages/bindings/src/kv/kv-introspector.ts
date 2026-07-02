@@ -44,7 +44,7 @@ interface KvIntrospectorLike {
     getValue: (options: { key: string; namespace: string }) => Promise<KvValueResultLike>;
     listKeys: (options: { cursor?: string; limit?: number; namespace: string; prefix?: string }) => Promise<KvKeyListResultLike>;
     listNamespaces: () => Promise<KvNamespaceSummaryLike[]>;
-    putValue: (options: { expirationTtl?: number; key: string; metadata?: unknown; namespace: string; value: string }) => Promise<void>;
+    putValue: (options: { expiration?: number; expirationTtl?: number; key: string; metadata?: unknown; namespace: string; value: string }) => Promise<void>;
 }
 
 /** Construction options for {@link createKvIntrospector}. */
@@ -121,10 +121,20 @@ const createKvIntrospector = (options: CreateKvIntrospectorOptions): KvIntrospec
         return { metadata: result.metadata ?? null, value: (result.value as string | null) ?? null };
     };
 
-    const putValue = async (putOptions: { expirationTtl?: number; key: string; metadata?: unknown; namespace: string; value: string }): Promise<void> => {
+    const putValue = async (putOptions: {
+        expiration?: number;
+        expirationTtl?: number;
+        key: string;
+        metadata?: unknown;
+        namespace: string;
+        value: string;
+    }): Promise<void> => {
         const ns = resolveNamespace(putOptions.namespace);
 
+        // `expiration` (absolute) lets the studio round-trip a key's existing TTL
+        // on edit so saving a value doesn't silently make an expiring key permanent.
         await ns.put(putOptions.key, putOptions.value, {
+            expiration: putOptions.expiration,
             expirationTtl: putOptions.expirationTtl,
             metadata: putOptions.metadata,
         });

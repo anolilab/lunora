@@ -2110,10 +2110,19 @@ class LunoraClient {
     }
 
     /**
-     * Write a string value (with optional TTL and metadata) to a KV namespace.
-     * Hits the admin-gated `PUT /_lunora/admin/kv/value` endpoint.
+     * Write a string value to a KV namespace. Accepts an absolute `expiration`
+     * (Unix seconds) or a relative `expirationTtl`, plus optional `metadata` —
+     * re-send the loaded values on edit so a save preserves rather than clears
+     * them. Hits the admin-gated `PUT /_lunora/admin/kv/value` endpoint.
      */
-    public async putKvValue(options: { expirationTtl?: number; key: string; metadata?: unknown; namespace: string; value: string }): Promise<void> {
+    public async putKvValue(options: {
+        expiration?: number;
+        expirationTtl?: number;
+        key: string;
+        metadata?: unknown;
+        namespace: string;
+        value: string;
+    }): Promise<void> {
         if (this.closed) {
             throw new Error("LunoraClient is closed");
         }

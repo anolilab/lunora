@@ -60,8 +60,8 @@ interface KvIntrospector {
     listKeys: (options: { cursor?: string; limit?: number; namespace: string; prefix?: string }) => Promise<KvKeyListResult>;
     /** List the registered KV namespaces (binding names). */
     listNamespaces: () => Promise<KvNamespaceSummary[]>;
-    /** Write a value (as text) with optional TTL and metadata. */
-    putValue: (options: { expirationTtl?: number; key: string; metadata?: unknown; namespace: string; value: string }) => Promise<void>;
+    /** Write a value (as text) with optional absolute expiration / relative TTL and metadata. */
+    putValue: (options: { expiration?: number; expirationTtl?: number; key: string; metadata?: unknown; namespace: string; value: string }) => Promise<void>;
 }
 
 /** The worker internals the KV routes reach through injection rather than closure. */
@@ -129,11 +129,15 @@ const buildKvAdminRoutes = (deps: KvAdminRouteDeps): Record<string, (request: Re
         const prefix = url.searchParams.get("prefix") ?? undefined;
         const cursor = url.searchParams.get("cursor") ?? undefined;
         const limitRaw = url.searchParams.get("limit");
-        const limit = limitRaw === null ? undefined : Number.parseInt(limitRaw, 10);
+        const parsedLimit = limitRaw === null ? undefined : Number.parseInt(limitRaw, 10);
 
-        if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+        if (parsedLimit !== undefined && (!Number.isInteger(parsedLimit) || parsedLimit < 1)) {
             throw new LunoraError("KV-keys `limit` must be a positive integer", { code: "BAD_REQUEST", status: 400 });
         }
+
+        // KV caps a single `list` page at 1000 keys; clamp so an over-large limit
+        // returns a (bounded) page rather than surfacing a raw binding error.
+        const limit = parsedLimit === undefined ? undefined : Math.min(parsedLimit, 1000);
 
         return ok(await introspector.listKeys({ cursor, limit, namespace, prefix }));
     };
@@ -146,7 +150,14 @@ const buildKvAdminRoutes = (deps: KvAdminRouteDeps): Record<string, (request: Re
 
     const handleKvValuePut = async (request: Request): Promise<Response> => {
         const introspector = gate(request);
-        const candidate = (await readJsonBody(request)) as { expirationTtl?: unknown; key?: unknown; metadata?: unknown; namespace?: unknown; value?: unknown };
+        const candidate = (await readJsonBody(request)) as {
+            expiration?: unknown;
+            expirationTtl?: unknown;
+            key?: unknown;
+            metadata?: unknown;
+            namespace?: unknown;
+            value?: unknown;
+        };
 
         if (typeof candidate.namespace !== "string" || candidate.namespace === "") {
             throw new LunoraError("KV-value PUT request requires a `namespace` string", { code: "BAD_REQUEST", status: 400 });
@@ -167,7 +178,17 @@ const buildKvAdminRoutes = (deps: KvAdminRouteDeps): Record<string, (request: Re
             throw new LunoraError("KV-value PUT `expirationTtl` must be an integer ≥ 60", { code: "BAD_REQUEST", status: 400 });
         }
 
+        // Absolute expiration (Unix seconds) — the studio round-trips a key's
+        // existing TTL here so editing a value preserves rather than clears it.
+        if (
+            candidate.expiration !== undefined &&
+            (typeof candidate.expiration !== "number" || !Number.isInteger(candidate.expiration) || candidate.expiration < 0)
+        ) {
+            throw new LunoraError("KV-value PUT `expiration` must be a non-negative integer (Unix seconds)", { code: "BAD_REQUEST", status: 400 });
+        }
+
         await introspector.putValue({
+            expiration: candidate.expiration,
             expirationTtl: candidate.expirationTtl,
             key: candidate.key,
             metadata: candidate.metadata,
