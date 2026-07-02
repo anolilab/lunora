@@ -1,4 +1,6 @@
+import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { stableStringify } from "../../../shared/stable-key";
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import createInMemoryBookmarkStorage from "./bookmark";
 import { applyDelta, isMutationDelta } from "./delta-merge";
 import Listeners from "./listeners";
@@ -68,6 +70,7 @@ import type {
 } from "./types";
 
 const RPC_PATH = "/_lunora/rpc";
+const RPC_BATCH_PATH = "/_lunora/rpc-batch";
 const WS_PATH = "/_lunora/ws";
 
 /** Build the `&amp;bucket=…` query fragment for a storage admin request, or `""` when no bucket is selected. */
@@ -450,6 +453,77 @@ interface PokeBuffer {
     lastMutationId: Map<string, number>;
     parts: Map<string, RowOp[]>;
 }
+
+/** An `Error` carrying the server's machine-readable `code` and (for a `LunoraError`) structured `data`. The client's public error contract for RPC/batch failures. */
+type LunoraClientError = Error & { code?: string; data?: unknown };
+
+/** Rebuild a thrown `Error` from a server `{ code, message, data? }` envelope, wire-decoding `data` so `bigint`/`bytes` inside it survive. */
+const reconstructError = (errorBody: { code?: string; data?: unknown; message?: string }): LunoraClientError => {
+    const error = new Error(errorBody.message ?? "request failed") as LunoraClientError;
+
+    error.code = errorBody.code;
+
+    if (errorBody.data !== undefined) {
+        error.data = decodeWire(errorBody.data);
+    }
+
+    return error;
+};
+
+/**
+ * Wire-encode a call's `args`/payload, tagging an encode failure with the call it
+ * came from. The bare codec error ("wire-codec: cannot encode a RegExp …") names
+ * the type but not the operation — which is useless on the fire-and-forget whisper
+ * path and the async outbox flush, where the throw has no call-site stack. Prefixing
+ * with `label` (e.g. `args for 'messages:send'`) turns it into an actionable message
+ * while preserving the original via `cause`.
+ */
+const encodeCallArgs = (payload: unknown, label: string): unknown => {
+    try {
+        return encodeWire(payload);
+    } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+
+        throw new TypeError(`LunoraClient: cannot encode ${label} — ${reason}`, error instanceof Error ? { cause: error } : undefined);
+    }
+};
+
+/** One demuxed result slot of a {@link LunoraClient.batch} call (plan 088). */
+type BatchSlot = { error: LunoraClientError; ok: false } | { ok: true; value: unknown };
+
+/**
+ * Demux a `/_lunora/rpc-batch` response into per-call slots in input order,
+ * wire-decoding each success value and reconstructing `.code`/`.data` on a
+ * failing call. A slot the server never returned surfaces as an error rather
+ * than a silent `undefined` success.
+ */
+const demuxBatchResults = (rawResults: { body?: unknown; id?: number }[], count: number): BatchSlot[] => {
+    const slots = Array.from<BatchSlot | undefined>({ length: count });
+
+    for (const entry of rawResults) {
+        if (typeof entry.id !== "number" || entry.id < 0 || entry.id >= count) {
+            continue;
+        }
+
+        const inner = entry.body as { error?: { code?: string; data?: unknown; message?: string }; result?: unknown } | undefined;
+
+        slots[entry.id] =
+            inner && "error" in inner && inner.error ? { error: reconstructError(inner.error), ok: false } : { ok: true, value: decodeWire(inner?.result) };
+    }
+
+    return slots.map((slot) => slot ?? { error: new Error("batch call returned no result"), ok: false });
+};
+
+/**
+ * Per-slot error codes the worker injects for a **transient** shard/transport
+ * failure rather than an application verdict: a whole sub-batch that couldn't
+ * reach its shard (`SHARD_UNAVAILABLE`) or whose shard response was unusable /
+ * partial (`SHARD_ERROR`). For a single-shard outbox flush these fail every entry
+ * uniformly, so a durable-outbox replay **re-queues** them for the next reconnect
+ * instead of dropping the write — mirroring the single-call path's "codeless =
+ * transient" rule. Every other coded error is a server verdict (terminal).
+ */
+const TRANSIENT_BATCH_ERROR_CODES = new Set(["SHARD_ERROR", "SHARD_UNAVAILABLE"]);
 
 /**
  * Lunora browser/edge client. Talks RPC over HTTP and real-time deltas over
@@ -1107,7 +1181,14 @@ class LunoraClient {
         const conn = this.getConnection(options.shardKey);
 
         if (conn) {
-            sendOn(conn, { data, topic, type: "whisper" });
+            // Wire-encode before send so `bigint`/bytes payloads survive (raw
+            // `JSON.stringify` would throw on a bigint). The shard relays the
+            // encoded value verbatim and the receiving client `decodeWire`s it —
+            // `encodeWire` is identity for JSON-safe data, so this stays
+            // backward-compatible with older shards/clients. Omitted `data`
+            // becomes an explicit `null` (the documented receiver contract).
+            // eslint-disable-next-line unicorn/no-null -- an omitted whisper body is delivered as an explicit JSON `null`, never `undefined`
+            sendOn(conn, { data: encodeCallArgs(data ?? null, `whisper data for topic '${topic}'`), topic, type: "whisper" });
         }
     }
 
@@ -1193,6 +1274,77 @@ class LunoraClient {
         }
 
         return (await this.rpc(function_.__lunoraRef, args as Record<string, unknown>, options.shardKey, { attachBookmark: true })) as ReturnOf<F>;
+    }
+
+    /**
+     * Batch several independent calls into ONE round trip (plan 088). Each call is
+     * dispatched server-side exactly as an individual RPC — per-shard
+     * authorization, `(identity, mutationId)` idempotency, and custom-mutator
+     * watermark ordering are all preserved — and the worker splits the batch by
+     * shard so calls to different shards fan out to their own DOs. Results are
+     * demuxed back in input order; a failing call does NOT fail the batch (its
+     * slot carries `{ ok: false, error }`, with `.code`/`.data` reconstructed like
+     * a single call). Args/results ride the value codec (bytes/bigint survive).
+     *
+     * No promise pipelining and no capability passing — a call's args cannot
+     * reference another call's result (see plan 088 §fence; capabilities are
+     * incompatible with DO hibernation).
+     */
+    public async batch(calls: ReadonlyArray<{ args?: Record<string, unknown>; fn: FunctionReference; shardKey?: string }>): Promise<BatchSlot[]> {
+        if (this.closed) {
+            throw new Error("LunoraClient is closed");
+        }
+
+        if (!this.fetchImpl) {
+            throw new Error("LunoraClient: no `fetch` implementation available");
+        }
+
+        if (calls.length === 0) {
+            return [];
+        }
+
+        const response = await this.fetchImpl(joinUrl(this.url, RPC_BATCH_PATH), {
+            body: JSON.stringify({
+                calls: calls.map((call, index) => {
+                    return {
+                        args: encodeCallArgs(call.args ?? {}, `args for batch call '${call.fn.__lunoraRef}'`),
+                        functionPath: call.fn.__lunoraRef,
+                        id: index,
+                        shardKey: call.shardKey,
+                    };
+                }),
+            }),
+            headers: this.rpcRequestHeaders({ attachBookmark: true }),
+            method: "POST",
+        });
+
+        const bookmark = response.headers.get("x-d1-bookmark");
+
+        if (bookmark) {
+            this.bookmark.set(bookmark);
+        }
+
+        let body: { error?: { code?: string; data?: unknown; message?: string }; results?: { body?: unknown; id?: number }[] };
+
+        try {
+            body = await response.json();
+        } catch {
+            throw new Error(`LunoraClient: batch response was not JSON (status ${response.status.toString()})`);
+        }
+
+        // A whole-batch rejection (bad request, method, or a per-entry authorization
+        // denial that fails the batch closed BEFORE any dispatch) comes back as a
+        // non-2xx `{ error }` with no `results` — surface it like a single call
+        // rather than reporting every slot as an opaque "no result".
+        if (!response.ok || (body.error && !body.results)) {
+            if (body.error) {
+                throw reconstructError(body.error);
+            }
+
+            throw new Error(`LunoraClient: batch request failed (status ${response.status.toString()})`);
+        }
+
+        return demuxBatchResults(body.results ?? [], calls.length);
     }
 
     /**
@@ -2294,7 +2446,14 @@ class LunoraClient {
         const conn = this.getConnection(shardKey);
         const message: ClientMessage = {
             id,
-            query: { args: argsRecord, functionPath: function_.__lunoraRef, shardKey },
+            // Wire-encode the stream args so `bigint`/bytes survive the send (raw
+            // `JSON.stringify` throws on a bigint); the shard `decodeWire`s them
+            // before invoking the stream handler.
+            query: {
+                args: encodeCallArgs(argsRecord, `stream args for '${function_.__lunoraRef}'`) as Record<string, unknown>,
+                functionPath: function_.__lunoraRef,
+                shardKey,
+            },
             type: "stream",
         };
 
@@ -2924,7 +3083,10 @@ class LunoraClient {
         const headers = this.rpcRequestHeaders(flags);
 
         const response = await this.fetchImpl(joinUrl(this.url, RPC_PATH), {
-            body: JSON.stringify({ args, functionPath, shardKey }),
+            // `encodeWire` tags leaves plain JSON can't carry (`bigint`,
+            // `ArrayBuffer`/typed arrays, `NaN`/±Infinity); a pure-JSON `args`
+            // encodes byte-identically, so a pre-codec server still interops.
+            body: JSON.stringify({ args: encodeCallArgs(args, `args for '${functionPath}'`), functionPath, shardKey }),
             headers,
             method: "POST",
         });
@@ -2948,10 +3110,9 @@ class LunoraClient {
         }
 
         if ("error" in body) {
-            const error = new Error(body.error.message);
-
-            (error as Error & { code?: string }).code = body.error.code;
-            throw error;
+            // Reconstruct the thrown error with its `.code` and (for an app
+            // `LunoraError`) wire-decoded `.data`.
+            throw reconstructError(body.error);
         }
 
         // A non-2xx response whose body parsed as JSON but carried no `error`
@@ -2966,7 +3127,7 @@ class LunoraClient {
         flags.onMutationAck?.(body.lastMutationId);
         flags.onCommitCursor?.(body.commitCursor);
 
-        return body.result;
+        return decodeWire(body.result);
     }
 
     /**
@@ -3440,7 +3601,7 @@ class LunoraClient {
                 const { data, id } = message;
                 const stream = this.streams.get(id);
 
-                stream?.handle.push(data);
+                stream?.handle.push(decodeWire(data));
 
                 return;
             }
@@ -3576,7 +3737,13 @@ class LunoraClient {
 
         const existing = buffer.parts.get(message.shapeId) ?? [];
 
-        existing.push(...message.rowsPatch);
+        // Wire-decode each row-op's post-image (no-op on a pure-JSON value), so a
+        // shape carrying a `bytes`/`bigint` column applies real values locally.
+        // Loop rather than `push(...map())` — a large `rowsPatch` would otherwise
+        // allocate an intermediate array and risk the JS argument-count ceiling.
+        for (const op of message.rowsPatch) {
+            existing.push(op.value === undefined ? op : { ...op, value: decodeWire(op.value) as Record<string, unknown> });
+        }
         buffer.parts.set(message.shapeId, existing);
 
         if (message.lastMutationId !== undefined) {
@@ -3794,10 +3961,12 @@ class LunoraClient {
     // eslint-disable-next-line class-methods-use-this -- instance method for symmetry with the other message handlers; reads no shared client state
     private resolveDataPayload(message: ServerDataMessage, state: SubscriptionState): unknown {
         if ("data" in message && message.data !== undefined) {
-            return message.data;
+            // Wire-decode the snapshot so a `bytes`/`bigint` column arrives as a
+            // real ArrayBuffer/bigint (no-op on a pure-JSON payload).
+            return decodeWire(message.data);
         }
 
-        const { delta } = message;
+        const delta = decodeWire(message.delta);
 
         // Merge into the authoritative `serverBase`, NOT the displayed `lastValue`
         // (which may carry an optimistic overlay) — a delta describes a change to
@@ -3825,9 +3994,11 @@ class LunoraClient {
             return;
         }
 
+        const data = decodeWire(message.data);
+
         for (const handler of handlers) {
             try {
-                handler(message.data, message.from);
+                handler(data, message.from);
             } catch {
                 /* user callback threw — ignore */
             }
@@ -3972,65 +4143,172 @@ class LunoraClient {
         const key = connectionKey(shardKey);
         const drained = this.offlineQueue.drain((item) => connectionKey(item.shardKey) === key);
 
-        // Sequential replay — parallel `.then()` chains would race and break
-        // the FIFO ordering callers rely on, particularly when replayed
-        // mutations depend on each other.
-        for (let index = 0; index < drained.length; index += 1) {
-            const item = drained[index];
+        if (drained.length === 0) {
+            return;
+        }
+
+        // Gate every drained write against ONE identity snapshot. A batch is a
+        // single authenticated request, so all its entries necessarily run under
+        // one identity; the single-write path likewise has no between-item `await`
+        // where a `setAuthToken` / token rotation could slip in, so an up-front
+        // snapshot re-gates exactly what the old per-item read did. Mismatches are
+        // rejected (not silently dropped) so awaiting callers see a deterministic
+        // failure; the rest keep their FIFO order.
+        const currentIdentity = this.identityFingerprint();
+        const sendable: QueuedMutation[] = [];
+
+        for (const item of drained) {
+            if (this.passesReplayIdentityGate(item, currentIdentity)) {
+                sendable.push(item);
+            }
+        }
+
+        if (sendable.length === 0) {
+            return;
+        }
+
+        const encodable = this.encodableOrSettleTerminal(sendable);
+
+        if (encodable.length === 0) {
+            return;
+        }
+
+        // A lone write rides the proven single-call path; two or more coalesce
+        // into `/_lunora/rpc-batch` round trips (plan 088 follow-on) — the
+        // flaky-reconnect win (N queued writes → a handful of RTTs, not N).
+        if (encodable.length === 1) {
+            await this.replaySequential(encodable);
+
+            return;
+        }
+
+        // Chunk to the worker's per-batch cap: a flush larger than
+        // `MAX_BATCH_ENTRIES` would otherwise be one over-cap request the worker
+        // rejects wholesale (dropping every durable write). Chunks replay
+        // sequentially to preserve FIFO order across the flush; every write that
+        // didn't durably settle is re-queued once, in order, for the next reconnect.
+        const toRequeue: QueuedMutation[] = [];
+
+        for (let start = 0; start < encodable.length; start += MAX_BATCH_ENTRIES) {
+            const chunk = encodable.slice(start, start + MAX_BATCH_ENTRIES);
+            // eslint-disable-next-line no-await-in-loop -- chunks replay sequentially to preserve FIFO ordering across the flush
+            const outcome = await this.replayBatched(chunk);
+
+            toRequeue.push(...outcome.requeue);
+
+            if (outcome.stop) {
+                // A whole-batch transport failure — leave every not-yet-sent write
+                // queued (in order) for the next reconnect rather than sending on.
+                toRequeue.push(...encodable.slice(start + MAX_BATCH_ENTRIES));
+
+                break;
+            }
+        }
+
+        if (toRequeue.length > 0) {
+            this.offlineQueue.requeue(toRequeue);
+        }
+    }
+
+    /**
+     * Partition already-gated writes into the encodable ones (returned) and reject
+     * the rest terminally. A write whose args can't be wire-encoded (e.g. a RegExp
+     * or class instance in a `v.any()` field) can NEVER replay — the codec failure
+     * is deterministic, not transient. Rejecting here is essential: otherwise
+     * `encodeWire` throws mid-flush, is classified as transient (a codec error has
+     * no `.code`), and re-queues forever — a silent hang where the caller's Promise
+     * never settles and the optimistic write never rolls back. Encoding is cheap;
+     * the flush is the slow reconnect path.
+     */
+    private encodableOrSettleTerminal(items: QueuedMutation[]): QueuedMutation[] {
+        const encodable: QueuedMutation[] = [];
+
+        for (const item of items) {
+            try {
+                encodeCallArgs(item.args, `args for '${item.functionPath}'`);
+                encodable.push(item);
+            } catch (error) {
+                this.settleReplayTerminal(item, error instanceof Error ? error : new Error(String(error)));
+            }
+        }
+
+        return encodable;
+    }
+
+    /**
+     * Identity guard for one queued write about to replay: a write stamped under
+     * one identity must never replay under another. The live `queuedIdentities`
+     * map is the source of truth for the current session; a hydrated write whose
+     * id isn't in the map falls back to the stamp persisted with the record
+     * (`item.identity`), so a reload can't replay another user's queued writes.
+     * Only legacy records (persisted before stamps were durable —
+     * `item.identity === undefined`) replay under whatever identity is current.
+     *
+     * `Map.get` returns `undefined` for unstamped/hydrated ids and `item.identity`
+     * is `undefined` for legacy records; a persisted `null` (queued while signed
+     * out) is a real value that must not collapse into `undefined` — hence the
+     * explicit `=== undefined` check rather than `??`. Returns `true` when the
+     * write may replay; otherwise settles it `OFFLINE_IDENTITY_CHANGED` and returns
+     * `false`. Either way the live stamp is consumed.
+     */
+    private passesReplayIdentityGate(item: QueuedMutation, currentIdentity: string | null): boolean {
+        const liveStamp = item.id === undefined ? undefined : this.queuedIdentities.get(item.id);
+        const stamped = liveStamp === undefined ? item.identity : liveStamp;
+
+        if (stamped !== undefined && stamped !== currentIdentity) {
+            this.queuedIdentities.delete(item.id ?? "");
+            this.unpersist(item.id);
+
+            const error = new Error("offline mutation skipped: auth identity changed before replay");
+
+            (error as Error & { code?: string }).code = "OFFLINE_IDENTITY_CHANGED";
+            item.reject(error);
+            this.emitItemSettled(item, "rejected", error);
+
+            return false;
+        }
+
+        this.queuedIdentities.delete(item.id ?? "");
+
+        return true;
+    }
+
+    /** Settle a write that replayed successfully: confirm its optimistic layer against the echoed commit cursor BEFORE resolving, so the gapless drop is in place when the awaiter (and any confirming frame) observes the settle. */
+    private settleReplaySuccess(item: QueuedMutation, value: unknown, commitCursor: number | undefined): void {
+        this.unpersist(item.id);
+        item.onCommit?.(commitCursor);
+        item.resolve(value);
+        this.emitItemSettled(item, "committed");
+    }
+
+    /** Settle a write the server reached a coded verdict on: replaying would re-trigger the same failure (a poison-message loop), so drop it. */
+    private settleReplayTerminal(item: QueuedMutation, error: unknown): void {
+        this.unpersist(item.id);
+        item.reject(error);
+        this.emitItemSettled(item, "rejected", error);
+    }
+
+    /**
+     * Replay already-identity-gated writes one at a time on the single-call `/rpc`
+     * path, preserving FIFO order (parallel `.then()` chains would race the
+     * ordering callers depend on). Each replays under its stable `mutationId` so
+     * the server dedups a write it already committed (exactly-once). A coded error
+     * is a server verdict (drop it); a codeless (transport/transient) failure stops
+     * the flush and re-queues this write and every unreplayed one for the next
+     * reconnect — their callers stay pending, and the identity guard re-applies on
+     * retry via each record's persisted stamp.
+     */
+    private async replaySequential(items: QueuedMutation[]): Promise<void> {
+        for (let index = 0; index < items.length; index += 1) {
+            const item = items[index];
 
             if (!item) {
                 continue;
             }
 
-            // Re-read the live identity *per item*, at the point of sending,
-            // rather than once at flush start. A `setAuthToken` / token rotation
-            // during the `await this.rpc(...)` below changes the identity
-            // mid-flush; items already drained into `drained` have left the queue
-            // and so escape the eager `rejectQueuedForIdentityChange` drain — so
-            // the only place left to re-gate them is here. Capturing once would
-            // let a write enqueued under user A replay against the loop's
-            // start-of-flush identity even after the session rotated to user B.
-            const currentIdentity = this.identityFingerprint();
-            // Identity guard: a write stamped under one identity must never
-            // replay under another. The live `queuedIdentities` map is the
-            // source of truth for the current session; a hydrated write whose id
-            // isn't in the map falls back to the stamp persisted with the record
-            // (`item.identity`), so a reload can no longer replay another user's
-            // queued writes. Only legacy records (persisted before stamps were
-            // durable — `item.identity === undefined`) replay under whatever
-            // identity is current, matching the prior ambient behaviour.
-            // Mismatches are rejected, not silently dropped, so awaiting callers
-            // see a deterministic failure.
-            //
-            // `Map.get` returns `undefined` for unstamped/hydrated ids and
-            // `item.identity` is `undefined` for legacy records; a persisted
-            // `null` (queued while signed out) is a real value that must not be
-            // collapsed into `undefined` — hence the explicit `=== undefined`
-            // check rather than `??`.
-            const liveStamp = item.id === undefined ? undefined : this.queuedIdentities.get(item.id);
-            const stamped = liveStamp === undefined ? item.identity : liveStamp;
-
-            if (stamped !== undefined && stamped !== currentIdentity) {
-                this.queuedIdentities.delete(item.id ?? "");
-                this.unpersist(item.id);
-
-                const error = new Error("offline mutation skipped: auth identity changed before replay");
-
-                (error as Error & { code?: string }).code = "OFFLINE_IDENTITY_CHANGED";
-                item.reject(error);
-                this.emitItemSettled(item, "rejected", error);
-
-                continue;
-            }
-
-            this.queuedIdentities.delete(item.id ?? "");
-
             try {
-                // Replay under the write's stable id so the server dedups a
-                // mutation it already committed (e.g. the response was lost on the
-                // first send) — exactly-once rather than at-least-once.
                 let commitCursor: number | undefined;
-                // eslint-disable-next-line no-await-in-loop -- sequential replay preserves the FIFO order callers depend on (see above)
+                // eslint-disable-next-line no-await-in-loop -- sequential replay preserves the FIFO order callers depend on
                 const value = await this.rpc(item.functionPath, item.args, item.shardKey, {
                     captureBookmark: true,
                     mutationId: item.id,
@@ -4039,39 +4317,145 @@ class LunoraClient {
                     },
                 });
 
-                this.unpersist(item.id);
-                // Confirm the optimistic layer against the replay's commit cursor
-                // BEFORE resolving, so the gapless drop is in place when the awaiter
-                // (and any confirming frame) observes the settle.
-                item.onCommit?.(commitCursor);
-                item.resolve(value);
-                this.emitItemSettled(item, "committed");
+                this.settleReplaySuccess(item, value, commitCursor);
             } catch (error) {
-                // Only a *coded* error means the server reached a verdict on a
-                // mutation it received: replaying would re-trigger the same
-                // failure (a poison-message loop), so drop it. Transport/transient
-                // failures — offline mid-replay, a 5xx, a non-JSON body — carry no
-                // code and may mean the write never committed; dropping one here
-                // would silently lose a durable write the queue exists to protect.
                 if ((error as { code?: string }).code !== undefined) {
-                    this.unpersist(item.id);
-                    item.reject(error);
-                    this.emitItemSettled(item, "rejected", error);
+                    this.settleReplayTerminal(item, error);
 
                     continue;
                 }
 
-                // Stop the flush and re-queue this write and every unreplayed one
-                // (still in durable storage) in FIFO order. Their callers stay
-                // pending; the next reconnect retries them. The identity guard
-                // still applies on retry via each record's persisted stamp.
-                this.offlineQueue.requeue(drained.slice(index));
+                this.offlineQueue.requeue(items.slice(index));
 
                 return;
             }
         }
     }
+
+    /**
+     * Coalesce already-identity-gated writes for a single shard into ONE
+     * `/_lunora/rpc-batch` round trip (plan 088 follow-on). The worker forwards
+     * them to the shard DO, which replays each through its single-call dispatch, so
+     * per-entry `mutationId` idempotency and in-order application are inherited from
+     * the proven path. Per-slot demux mirrors {@link replaySequential}'s
+     * classification: success confirms the optimistic layer against the echoed
+     * `commitCursor`; a coded application verdict is terminal; a transient shard
+     * failure (`SHARD_UNAVAILABLE`/`SHARD_ERROR`), a missing slot, or a whole-batch
+     * transport failure re-queues for the next reconnect (never dropping a durable
+     * write). A whole-batch coded rejection (bad request / authorization denial the
+     * server reached a verdict on) is terminal for every entry.
+     *
+     * Returns the writes that must be re-queued and `stop` — `true` when the whole
+     * chunk failed at the transport level, so the caller leaves later chunks queued
+     * rather than sending on. The caller re-queues once, in order, so requeuing is
+     * NOT done here.
+     */
+    private async replayBatched(items: QueuedMutation[]): Promise<{ requeue: QueuedMutation[]; stop: boolean }> {
+        if (!this.fetchImpl) {
+            return { requeue: items, stop: true };
+        }
+
+        let response: Response;
+
+        try {
+            response = await this.fetchImpl(joinUrl(this.url, RPC_BATCH_PATH), {
+                body: JSON.stringify({
+                    calls: items.map((item, index) => {
+                        return {
+                            args: encodeCallArgs(item.args, `args for '${item.functionPath}'`),
+                            functionPath: item.functionPath,
+                            id: index,
+                            // Stable per-write key so the DO dedups a write it already
+                            // committed (exactly-once), exactly as the single-call replay.
+                            mutationId: item.id,
+                            shardKey: item.shardKey,
+                        };
+                    }),
+                }),
+                headers: this.rpcRequestHeaders({ attachBookmark: true }),
+                method: "POST",
+            });
+        } catch {
+            // Transport failure (offline mid-flush) — nothing committed; retry all.
+            return { requeue: items, stop: true };
+        }
+
+        const bookmark = response.headers.get("x-d1-bookmark");
+
+        if (bookmark) {
+            this.bookmark.set(bookmark);
+        }
+
+        let body: { error?: { code?: string; data?: unknown; message?: string }; results?: { body?: RpcResponseBody; id?: number }[] };
+
+        try {
+            body = await response.json();
+        } catch {
+            // Non-JSON body (an edge 5xx, say) — transient, don't lose the writes.
+            return { requeue: items, stop: true };
+        }
+
+        // Whole-batch rejection with no per-slot results: a coded `{ error }` (bad
+        // request / authorization denial) is a verdict on every entry — terminal;
+        // a non-2xx WITHOUT a coded envelope is a transient transport error.
+        if (!body.results) {
+            if (body.error) {
+                const error = reconstructError(body.error);
+
+                for (const item of items) {
+                    this.settleReplayTerminal(item, error);
+                }
+
+                return { requeue: [], stop: false };
+            }
+
+            return { requeue: items, stop: true };
+        }
+
+        return { requeue: this.settleReplayBatchSlots(items, body.results), stop: false };
+    }
+
+    /**
+     * Demux a `/_lunora/rpc-batch` reply back onto the queued writes it replayed,
+     * in input order. Each slot's envelope classifies its write the same way
+     * {@link replaySequential} does: a success confirms the optimistic layer
+     * against the echoed `commitCursor`; a coded application verdict is terminal;
+     * a transient shard failure ({@link TRANSIENT_BATCH_ERROR_CODES}) or a slot the
+     * server never returned is returned for the caller to re-queue.
+     * @returns the writes that must be re-queued (transient slots), in input order
+     */
+    private settleReplayBatchSlots(items: QueuedMutation[], results: { body?: RpcResponseBody; id?: number }[]): QueuedMutation[] {
+        const bySlot = new Map<number, RpcResponseBody>();
+
+        for (const entry of results) {
+            if (typeof entry.id === "number" && entry.body !== undefined) {
+                bySlot.set(entry.id, entry.body);
+            }
+        }
+
+        const requeue: QueuedMutation[] = [];
+
+        for (const [index, item] of items.entries()) {
+            const inner = bySlot.get(index);
+
+            if (inner === undefined) {
+                // The server never returned this slot — it may or may not have
+                // committed; retry under the same `mutationId` (idempotent).
+                requeue.push(item);
+            } else if ("error" in inner) {
+                if (TRANSIENT_BATCH_ERROR_CODES.has(inner.error.code)) {
+                    requeue.push(item);
+                } else {
+                    this.settleReplayTerminal(item, reconstructError(inner.error));
+                }
+            } else {
+                this.settleReplaySuccess(item, decodeWire(inner.result), inner.commitCursor);
+            }
+        }
+
+        return requeue;
+    }
 }
 
 export { LunoraClient };
-export type { ConnectionStatus, MutationCallOptions, MutationSettledEvent, SyncWatermark };
+export type { BatchSlot, ConnectionStatus, LunoraClientError, MutationCallOptions, MutationSettledEvent, SyncWatermark };

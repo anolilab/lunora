@@ -18,6 +18,13 @@
  * spurious cache misses on optional args — while inside an array it encodes as
  * `null` to preserve positional semantics.
  *
+ * Fail-loud contract: a value a stable JSON key can't faithfully encode throws a
+ * `TypeError` rather than silently collapsing to a colliding key. `bigint` (which
+ * `JSON.stringify` rejects) and non-plain objects (`Date`, `ArrayBuffer`, typed
+ * arrays, `Map`, `Set`, `RegExp`, class instances — all of which have no own
+ * enumerable keys and would otherwise encode to `{}`) are refused, so two distinct
+ * values can never share one cache key and serve each other's cached data.
+ *
  * NOTE: `@lunora/seed`'s `copycat/hash.ts` carries its own, intentionally
  * forked, `stableStringify`. Do **not** fold it into this one: its hash domain
  * depends on an exact encoding (e.g. it must never emit `U+0000` at the start and
@@ -42,12 +49,35 @@ const stableStringify = (value: unknown): string => {
         return "null";
     }
 
+    // Fail loud on a `bigint`: `JSON.stringify(1n)` throws a cryptic native error,
+    // so surface a clear, actionable one instead. A bigint isn't supported in a
+    // cache key (query / subscription / shape args) — pass it as a string.
+    if (typeof value === "bigint") {
+        throw new TypeError("stableStringify: cannot use a bigint in a cache key (query/subscription/shape args) — pass it as a string");
+    }
+
     if (value === null || typeof value !== "object") {
         return JSON.stringify(value);
     }
 
     if (Array.isArray(value)) {
         return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+    }
+
+    // Reject non-plain objects (`Date`, `ArrayBuffer`, typed arrays, `Map`, `Set`,
+    // `RegExp`, class instances). They have no own enumerable string keys, so the
+    // record branch below would encode every one of them to `{}` — a SILENT
+    // cache-key collision where two distinct values share a key and are served
+    // each other's cached data. Fail loud at the call site instead. (Only plain
+    // objects — `Object.prototype` or a null prototype — and arrays are keyable.)
+    const proto = Object.getPrototypeOf(value) as object | null;
+
+    if (proto !== null && proto !== Object.prototype) {
+        const name = (value as { constructor?: { name?: string } }).constructor?.name ?? "value";
+
+        throw new TypeError(
+            `stableStringify: cannot use a ${name} in a cache key (query/subscription/shape args) — only plain objects, arrays, and JSON primitives are supported`,
+        );
     }
 
     const record = value as Record<string, unknown>;

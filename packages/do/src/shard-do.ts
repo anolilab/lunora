@@ -2,11 +2,15 @@ import type { DurableObjectStorage } from "@cloudflare/workers-types";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
+import type { BatchEntry } from "../../../shared/batch-wire";
+import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { ExportRow, ImportShardResult } from "./admin-export-import";
 import { parseExportShardArgs, parseImportShardArgs } from "./admin-export-import";
 import { appendAuditEntry, ensureAuditTable, readAuditLog } from "./audit-log";
 import type { AuthMetrics } from "./auth-metrics";
 import { readAuthMetrics, recordAuthEvent } from "./auth-metrics";
+import { buildBatchEntryRequest } from "./batch";
 import type { CdcChange, SqlExec } from "./ctx-db";
 import {
     advanceClientWatermark,
@@ -2000,7 +2004,11 @@ abstract class ShardDO {
                 return this.respondFromIdempotencyCache(payload.functionPath, dispatchStartedAt, mutatorClass, cached.value);
             }
 
-            const result = await this.handleRpc(payload.functionPath, payload.args ?? {});
+            // Decode the wire codec (`bytes`/`bigint`/typed-array/±Infinity leaves)
+            // ONLY for the handler, so `validateArgs` sees real `ArrayBuffer`/`bigint`
+            // values. `payload.args` stays in wire form for the request log/metrics
+            // below (JSON-safe — a raw `bigint` there would throw `JSON.stringify`).
+            const result = await this.handleRpc(payload.functionPath, decodeWire(payload.args ?? {}) as Record<string, unknown>);
 
             this.recordPostDispatchBookkeeping(result, mutatorClass);
 
@@ -2051,7 +2059,11 @@ abstract class ShardDO {
             // mutator echoes the applied `lastMutationId` so the client can drop
             // the pending optimistic overlay as soon as the ack lands (the poke
             // frame carries the same watermark for passive subscribers).
-            const response = this.buildDispatchResponse(mutatorClass, result);
+            // Encode the result to wire form exactly here (the fresh path). The
+            // idempotency cache also stores the encoded form (see
+            // `persistIdempotentResult`), so `respondFromIdempotencyCache` /
+            // `buildDispatchResponse` never re-encode — no double-encoding.
+            const response = this.buildDispatchResponse(mutatorClass, encodeWire(result));
 
             await this.flushChangedTables();
 
@@ -2261,7 +2273,9 @@ abstract class ShardDO {
             // catch only guards the rare pre-try throw path (e.g. ws.send on a
             // socket the runtime already tore down) so a dead socket can't
             // surface as an unhandled rejection.
-            this.handleStream(ws, envelope.id, envelope.query.functionPath, envelope.query.args ?? {}).catch(() => {
+            // Decode the wire-encoded stream args (bigint/bytes survive the WS hop)
+            // before handing them to the stream handler — mirrors the `/rpc` path.
+            this.handleStream(ws, envelope.id, envelope.query.functionPath, decodeWire(envelope.query.args ?? {}) as Record<string, unknown>).catch(() => {
                 /* socket already gone; nothing to report */
             });
 
@@ -3323,12 +3337,14 @@ abstract class ShardDO {
         const now = Date.now();
 
         try {
-            // `JSON.stringify(undefined)` is `undefined`, not a string — a void
-            // mutation must still cache a non-null `result_json`, so fall back to
-            // the literal `"null"`. (`JSON.stringify` is typed `=> string`, hence
-            // the disable: the `??` is load-bearing at runtime despite the type.)
-            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- JSON.stringify(undefined) returns undefined at runtime
-            writeIdempotent(this.sql as SqlExec, this.currentRequestUserId ?? "", this.currentRequestMutationId, JSON.stringify(result) ?? "null", now);
+            // Store the WIRE-encoded result so the cache holds JSON-safe bytes (a
+            // raw `bigint` result would otherwise throw here) and a later replay
+            // returns byte-identical wire form without a second `encodeWire`.
+            // `encodeWire` maps a void mutation's `undefined` to a tagged array, so
+            // `JSON.stringify` always yields a string for real data — the old
+            // `?? "null"` floor is now dead (a non-data result would throw and the
+            // catch below swallows it, since this bookkeeping is best-effort).
+            writeIdempotent(this.sql as SqlExec, this.currentRequestUserId ?? "", this.currentRequestMutationId, JSON.stringify(encodeWire(result)), now);
 
             // Throttled GC: drop dedup rows past the retention window at most once
             // per interval per warm instance.
@@ -4467,10 +4483,21 @@ abstract class ShardDO {
         }
 
         if (error && typeof error === "object" && (error as { name?: string }).name === "LunoraError") {
-            const lunoraError = error as { code?: string; message?: string; status?: number };
+            const lunoraError = error as { code?: string; data?: unknown; message?: string; status?: number };
             const status = typeof lunoraError.status === "number" ? lunoraError.status : 500;
+            const body: { code: string; data?: unknown; message: string } = {
+                code: lunoraError.code ?? "INTERNAL",
+                message: lunoraError.message ?? "internal error",
+            };
 
-            return jsonResponse({ error: { code: lunoraError.code ?? "INTERNAL", message: lunoraError.message ?? "internal error" } }, status);
+            // Propagate an explicit app error's structured payload (wire-encoded so
+            // a `bigint`/`bytes` in `data` survives). Only this deliberate-error
+            // branch carries `data`; the generic fall-through below stays redacted.
+            if (lunoraError.data !== undefined) {
+                body.data = encodeWire(lunoraError.data);
+            }
+
+            return jsonResponse({ error: body }, status);
         }
 
         // Do NOT echo arbitrary error.message values to clients — an unhandled
@@ -4481,6 +4508,84 @@ abstract class ShardDO {
         console.error("[@lunora/do] unhandled RPC error:", error);
 
         return jsonResponse({ error: { code: "RPC_FAILED", message: "internal error" } }, 500);
+    }
+
+    /**
+     * Batch dispatch (plan 088). Applies each `calls[]` entry through the SAME
+     * single-call `/rpc` path (via a nested `this.fetch`), **sequentially**, so
+     * the per-`(identity, mutationId)` idempotency dedup and the per-client
+     * `__client_watermark` ordering are enforced entry-by-entry exactly as for an
+     * individual call — no duplication of the dispatch core, no reordering.
+     *
+     * Failures are **per-slot, not fail-fast**: an entry that throws (or a
+     * custom-mutator `OUT_OF_ORDER` gap) is captured in its own result slot and
+     * later entries still run. Ordering is still safe — a later same-client
+     * mutator after a gap re-classifies as a gap too (the watermark never
+     * advanced), so it cannot apply out of order; unrelated entries/queries are
+     * independent. The response is `{ results: [{ id, status, body }] }` in
+     * request order; each `body` is the untouched single-call envelope (its
+     * `result` already wire-encoded), so the client demuxes + decodes each
+     * exactly as one call.
+     */
+    private async handleBatchRpc(request: Request): Promise<Response> {
+        let payload: { calls?: unknown };
+
+        try {
+            payload = await request.json();
+        } catch {
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid JSON body" } }, 400);
+        }
+
+        if (!Array.isArray(payload.calls)) {
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: "batch `calls` must be an array" } }, 400);
+        }
+
+        // Defense-in-depth against a single request pinning this single-threaded
+        // DO with a huge sequential loop (the worker caps this too).
+        if (payload.calls.length > MAX_BATCH_ENTRIES) {
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: `batch exceeds the ${String(MAX_BATCH_ENTRIES)}-call limit` } }, 400);
+        }
+
+        const results: { body: unknown; id: unknown; status: number }[] = [];
+        let latestBookmark: string | undefined;
+
+        for (const raw of payload.calls) {
+            // eslint-disable-next-line no-await-in-loop -- sequential BY DESIGN: preserves per-client watermark ordering + idempotency across the batch
+            const outcome = await this.dispatchBatchEntry(request, raw as BatchEntry);
+
+            if (outcome.bookmark !== undefined) {
+                latestBookmark = outcome.bookmark;
+            }
+
+            results.push({ body: outcome.body, id: outcome.id, status: outcome.status });
+        }
+
+        return jsonResponse({ results }, 200, latestBookmark);
+    }
+
+    /** Dispatch one batch entry through the single-call `/rpc` path and capture its envelope (plan 088). */
+    private async dispatchBatchEntry(
+        batchRequest: Request,
+        entry: BatchEntry,
+    ): Promise<{ body: unknown; bookmark: string | undefined; id: unknown; status: number }> {
+        try {
+            const response = await this.fetch(buildBatchEntryRequest(batchRequest, entry));
+
+            return { body: await response.json(), bookmark: response.headers.get("x-d1-bookmark") ?? undefined, id: entry.id, status: response.status };
+        } catch (error: unknown) {
+            // A malformed entry (non-object, or missing `functionPath`) makes the
+            // per-entry request builder / the nested `/rpc` dispatch throw *before*
+            // the single-call path's own try/catch. Contain it to this slot so one
+            // bad entry can't 500 the whole batch (per-slot isolation is the contract).
+            const message = error instanceof Error ? error.message : String(error);
+
+            return {
+                body: { error: { code: "BATCH_ENTRY_FAILED", message } },
+                bookmark: undefined,
+                id: (entry as BatchEntry | null | undefined)?.id,
+                status: 500,
+            };
+        }
     }
 
     /**
@@ -5783,7 +5888,7 @@ abstract class ShardDO {
                 // while we keep pumping `ws.send` calls.
                 await awaitWsDrain(ws);
 
-                ws.send(JSON.stringify({ data: chunk, id, type: "chunk" }));
+                ws.send(JSON.stringify({ data: encodeWire(chunk), id, type: "chunk" }));
             }
 
             if (!controller.signal.aborted) {
@@ -6976,7 +7081,7 @@ abstract class ShardDO {
         }
 
         // eslint-disable-next-line unicorn/no-null -- mirrors pushSubscriptionData: an undefined result serializes to JSON null so the baseline matches the wire form
-        memos.set(subId, { lastJson: JSON.stringify(outcome.result ?? null), tables: outcome.tables });
+        memos.set(subId, { lastJson: JSON.stringify(encodeWire(outcome.result ?? null)), tables: outcome.tables });
     }
 
     /**
@@ -7007,8 +7112,13 @@ abstract class ShardDO {
 
         const cursorSuffix = cdcSuffix(cursor, epoch);
 
+        // Wire-encode the result so a `bytes`/`bigint` column survives the frame
+        // (raw `JSON.stringify` drops a buffer to `{}` / throws on a bigint). A
+        // pure-JSON result encodes byte-identically, so this baseline + `data`
+        // frame stay unchanged for the common case, and the delta path (which
+        // encodes its next rows too) diffs against a consistently-encoded baseline.
         // eslint-disable-next-line unicorn/no-null -- WS frame payload: an undefined result serializes to JSON null so the delta frame carries an explicit value
-        const json = JSON.stringify(outcome.result ?? null);
+        const json = JSON.stringify(encodeWire(outcome.result ?? null));
         const existing = memos.get(subId);
 
         if (existing?.lastJson === json) {
@@ -7199,6 +7309,13 @@ abstract class ShardDO {
             return jsonResponse({ relayCount: this.relay?.relayCount() ?? 0 });
         }
 
+        // Batch dispatch (plan 088): each entry replays through the single-call
+        // `/rpc` path (see `handleBatchRpc`), so idempotency + watermark ordering
+        // are preserved without duplicating the dispatch core.
+        if (url.pathname === "/rpc-batch" && request.method === "POST") {
+            return this.handleBatchRpc(request);
+        }
+
         if (request.headers.get("Upgrade") === "websocket") {
             return this.handleWebSocketUpgrade(request);
         }
@@ -7365,6 +7482,11 @@ abstract class ShardDO {
             return;
         }
 
+        // The client already wire-encoded `data` before sending, and the receiving
+        // client `decodeWire`s it — so relay the encoded value verbatim rather than
+        // re-encoding it (a second `encodeWire` pass would double-tag it). An older
+        // client that sent raw JSON-safe data is unaffected: `encodeWire` was
+        // identity for that data, so the passthrough form is byte-identical.
         // eslint-disable-next-line unicorn/no-null -- JSON payload: an undefined whisper body serializes to null so the frame carries an explicit value
         const dataJson = JSON.stringify(data ?? null);
 

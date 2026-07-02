@@ -1,6 +1,7 @@
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import type { AsyncStorageLike } from "../src/async-storage-persistence";
 import { createAsyncStoragePersistence } from "../src/async-storage-persistence";
 import { isConflictError } from "../src/errors";
@@ -561,6 +562,176 @@ describe("offline lifecycle (e2e)", () => {
         // is purged from durable storage.
         expect(fetchMock).not.toHaveBeenCalled();
         await expect(createAsyncStoragePersistence({ storage }).load()).resolves.toEqual([]);
+
+        client.close();
+    });
+
+    it("10. coalesces a multi-write outbox flush into ONE rpc-batch round trip (plan 088 follow-on)", async () => {
+        expect.assertions(6);
+
+        vi.useFakeTimers();
+
+        const fetchMock = vi.fn<typeof fetch>(async (input) => {
+            const url = input as string;
+
+            // The whole point: the flush of N same-shard writes hits the batch
+            // endpoint once, not the single-call endpoint N times.
+            if (url.endsWith("/_lunora/rpc-batch")) {
+                return jsonResponse({
+                    results: [
+                        { body: { commitCursor: 101, result: { id: "a" } }, id: 0 },
+                        { body: { commitCursor: 102, result: { id: "b" } }, id: 1 },
+                        { body: { commitCursor: 103, result: { id: "c" } }, id: 2 },
+                    ],
+                });
+            }
+
+            throw new Error(`unexpected single-call fetch to ${url}`);
+        });
+
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        // Connect once (so writes queue rather than throw), then drop offline.
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        // Three writes to the same (default) shard queue up while offline.
+        const pending = Promise.all([
+            client.mutation(fnRef("posts:create"), { title: "a" }),
+            client.mutation(fnRef("posts:create"), { title: "b" }),
+            client.mutation(fnRef("posts:create"), { title: "c" }),
+        ]);
+
+        await vi.advanceTimersByTimeAsync(0);
+
+        // Reconnect → flush.
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.runAllTimersAsync();
+
+        const results = await pending;
+
+        // ONE request, to the batch endpoint, carrying all three writes...
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect((fetchMock.mock.calls[0]![0] as string).endsWith("/_lunora/rpc-batch")).toBe(true);
+
+        const sentCalls = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string).calls as { functionPath: string; id: number; mutationId?: string }[];
+
+        expect(sentCalls).toHaveLength(3);
+        // ...each carrying a stable per-write idempotency key (id)...
+        expect(sentCalls.every((call) => typeof call.mutationId === "string" && call.mutationId.length > 0)).toBe(true);
+        // ...and every caller's Promise resolves with its own demuxed result.
+        expect(results).toEqual([{ id: "a" }, { id: "b" }, { id: "c" }]);
+        // FIFO order preserved in the request.
+        expect(sentCalls.map((call) => call.id)).toEqual([0, 1, 2]);
+
+        client.close();
+    });
+
+    it("11. chunks an over-cap outbox flush into multiple batch requests (no write dropped)", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers();
+
+        // More writes than fit in one batch — the flush must split into
+        // cap-sized requests, not send one over-cap batch the worker would reject
+        // wholesale (which would drop every durable write).
+        const total = MAX_BATCH_ENTRIES + 2;
+        const batchSizes: number[] = [];
+
+        const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+            if (!(input as string).endsWith("/_lunora/rpc-batch")) {
+                throw new Error(`unexpected single-call fetch to ${input as string}`);
+            }
+
+            const { calls } = JSON.parse((init as RequestInit).body as string) as { calls: { id: number }[] };
+
+            batchSizes.push(calls.length);
+
+            return jsonResponse({
+                results: calls.map((call) => {
+                    return { body: { result: { ok: true } }, id: call.id };
+                }),
+            });
+        });
+
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        const pending = Promise.all(Array.from({ length: total }, (_, index) => client.mutation(fnRef("posts:create"), { index })));
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.runAllTimersAsync();
+
+        const results = await pending;
+
+        // Split into ceil(total / cap) = 2 requests, none over the cap...
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(Math.max(...batchSizes)).toBeLessThanOrEqual(MAX_BATCH_ENTRIES);
+        // ...every write was sent exactly once (none dropped)...
+        expect(batchSizes.reduce((sum, size) => sum + size, 0)).toBe(total);
+        // ...and every caller's Promise resolved.
+        expect(results).toHaveLength(total);
+
+        client.close();
+    });
+
+    it("12. rejects a queued write with un-encodable args instead of hanging the flush", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            heartbeatIntervalMs: 0,
+            reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.subscribe(fnRef("posts:list"), {}, () => undefined);
+        latestSocket().open();
+        latestSocket().triggerClose();
+
+        // A RegExp can't be wire-encoded (only reachable via a `v.any()` arg). The
+        // write queues offline; on flush its encode is a DETERMINISTIC failure, so it
+        // must reject terminally, not re-queue forever (a silent hang).
+        const bad = client.mutation(fnRef("posts:create"), { pattern: /abc/g });
+        const settled = bad.then(
+            () => "resolved",
+            (error: unknown) => error,
+        );
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(10);
+        latestSocket().open();
+        await vi.runAllTimersAsync();
+
+        const result = await settled;
+
+        // The caller's Promise rejects with the codec error — no hang, no send.
+        expect(result).toBeInstanceOf(TypeError);
+        expect((result as Error).message).toMatch(/RegExp|encode/);
+        expect(fetchMock).not.toHaveBeenCalled();
 
         client.close();
     });

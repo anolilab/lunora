@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { encodeWire } from "../../../shared/wire-codec";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 import type { SocketAttachment, SubscriptionEnvelope } from "../src/types";
@@ -147,6 +148,32 @@ describe("shardDO streaming queries", () => {
         expect(types.filter((t) => t === "chunk")).toHaveLength(3);
         expect(types.at(-1)).toBe("complete");
         expect(frames.filter((f) => f.type === "chunk").map((f) => f.data)).toEqual([{ tick: 1 }, { tick: 2 }, { tick: 3 }]);
+    });
+
+    it("decodes wire-encoded stream args so bigint/bytes reach the handler", async () => {
+        expect.assertions(2);
+
+        const shard = new StreamShard(state, {});
+        let received: Record<string, unknown> | undefined;
+
+        shard.registered.set("metrics:echo", async function* echoGen(args) {
+            received = args;
+            yield { ok: true };
+        });
+
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, { subs: {} });
+        // The client wire-encodes stream args before the WS send (raw JSON.stringify
+        // throws on a bigint); the DO must decodeWire them before invoking the
+        // handler — mirroring the /rpc path.
+        const args = encodeWire({ cursor: 42n, seed: new Uint8Array([9, 8, 7]) }) as Record<string, unknown>;
+
+        await shard.driveMessage(ws, { id: "stream_echo", query: { args, functionPath: "metrics:echo" }, type: "stream" });
+        await waitForTerminator(ws);
+
+        expect(received?.cursor).toBe(42n);
+        expect([...(received?.seed as Uint8Array)]).toEqual([9, 8, 7]);
     });
 
     it("client unsubscribe mid-stream aborts the iterator and stops further chunks", async () => {

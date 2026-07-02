@@ -12,6 +12,7 @@
  * barrel, tests) are unchanged.
  */
 
+import { encodeWire } from "../../../shared/wire-codec";
 import type { MutationDelta } from "./types";
 
 /** Identity field every Lunora document row carries. */
@@ -127,7 +128,13 @@ const collectUpsertDeltas = (previous: RowIndex, next: RowIndex, deltaTable: str
     for (const id of next.order) {
         const nextRow = next.byId.get(id) as Record<string, unknown>;
         const previousRow = previous.byId.get(id);
-        const nextFingerprint = JSON.stringify(nextRow);
+        // `nextRow` is the raw query row (may hold `bigint`/`ArrayBuffer`), so
+        // wire-encode it before fingerprinting/framing — `JSON.stringify` alone
+        // throws on a bigint and drops a buffer to `{}`. `previousRow` comes from
+        // the already-encoded baseline (see the `data`-frame `json`), so it is NOT
+        // re-encoded. For a pure-JSON row `encodeWire` is structurally identical,
+        // so the fingerprint compare and the frame stay byte-identical.
+        const nextFingerprint = JSON.stringify(encodeWire(nextRow));
         const previousFingerprint = previousRow === undefined ? undefined : JSON.stringify(previousRow);
 
         if (previousFingerprint === nextFingerprint) {

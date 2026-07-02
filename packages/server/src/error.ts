@@ -4,7 +4,10 @@
  * The runtime's structural error mapper keys off `name === "LunoraError"` plus
  * the numeric `status`, so throwing one of these from a handler or middleware
  * yields the right RPC/HTTP status without any further wiring. `code` carries
- * the machine-readable reason for clients.
+ * the machine-readable reason for clients; the optional `data` carries a
+ * structured, JSON+wire-encodable payload propagated verbatim to the client
+ * (e.g. `{ retryAfterMs }`). Only an explicit `LunoraError`'s `data` crosses the
+ * wire — an unhandled throw is still redacted to a generic message server-side.
  */
 
 const CODE_STATUS = {
@@ -59,9 +62,13 @@ export class LunoraError extends Error {
 
     public readonly status: number;
 
-    public constructor(code: LunoraErrorCode, message?: string) {
+    /** Structured, JSON+wire-encodable payload surfaced to the client alongside `code`. */
+    public readonly data?: unknown;
+
+    public constructor(code: LunoraErrorCode, message?: string, data?: unknown) {
         super(message ?? code);
         this.code = code;
         this.status = CODE_STATUS[code];
+        this.data = data;
     }
 }

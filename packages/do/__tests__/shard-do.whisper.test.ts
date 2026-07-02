@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
 
@@ -99,6 +100,35 @@ describe("shardDO whispering", () => {
         await send(shard, b, { data: { y: 2 }, topic: "cursors", type: "whisper" });
 
         expect(a.frames[0]).toEqual({ data: { y: 2 }, topic: "cursors", type: "whisper" });
+    });
+
+    it("relays a wire-encoded whisper payload verbatim so bigint/bytes round-trip", async () => {
+        expect.assertions(3);
+
+        const a = new FakeSocket({ subs: {}, userId: "user-a" });
+        const b = new FakeSocket({ subs: {} });
+        const shard = makeShard([a, b]);
+
+        await send(shard, a, { topic: "cursors", type: "whisper_subscribe" });
+        await send(shard, b, { topic: "cursors", type: "whisper_subscribe" });
+
+        // The client wire-encodes before sending; the shard must relay that tagged
+        // form verbatim (a second `encodeWire` here would double-tag it) so the
+        // receiving client can `decodeWire` back to the real bigint/bytes values.
+        const payload = { count: 9_007_199_254_740_993n, raw: new Uint8Array([1, 2, 3, 255]) };
+
+        await send(shard, a, { data: encodeWire(payload), topic: "cursors", type: "whisper" });
+
+        const relayed = b.frames[0]?.data;
+
+        // Relayed byte-for-byte as the client encoded it (no re-encode on the hop).
+        expect(relayed).toEqual(encodeWire(payload));
+
+        // ...and it decodes back to the original values on the receiver.
+        const decoded = decodeWire(relayed) as { count: bigint; raw: Uint8Array };
+
+        expect(decoded.count).toBe(9_007_199_254_740_993n);
+        expect([...decoded.raw]).toEqual([1, 2, 3, 255]);
     });
 
     it("stops delivering after a whisper_unsubscribe", async () => {

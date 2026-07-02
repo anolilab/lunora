@@ -9,13 +9,14 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED.
 ## Wave 1 — Cloudflare platform coverage (baseline `058071c8`, 2026-06-15)
 
 Does lunora support a given Cloudflare product/binding? The 14 completed plans
-(027–032, 034, 035, 038–043) shipped and were removed. Remaining (all P3, deferred):
+(027–032, 034, 035, 038–043) shipped and were removed. **036 (Pipelines) has since
+shipped and is likewise removed** (see status). Remaining (all P3, deferred):
 
-| Plan | Cloudflare product        | Shape                                  | Status              |
-| ---- | ------------------------- | -------------------------------------- | ------------------- |
-| 033  | Stream (video)            | `@lunora/stream` (REST + signed URLs)  | TODO (P3, deferred) |
-| 036  | Pipelines                 | hint-binding + `ctx` send helper       | TODO (P3, deferred) |
-| 037  | Realtime / Calls (WebRTC) | optional TURN/SFU helper (out-of-core) | TODO (P3, deferred) |
+| Plan | Cloudflare product        | Shape                                  | Status                                                                                                                                                                                                                                                              |
+| ---- | ------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 033  | Stream (video)            | `@lunora/stream` (REST + signed URLs)  | TODO (P3, deferred)                                                                                                                                                                                                                                                 |
+| 036  | Pipelines                 | hint-binding + `ctx` send helper       | DONE & REMOVED — shipped as `@lunora/bindings/pipelines` (`createPipelines` → `ctx.pipelines`, ActionCtx-only), wrangler `pipelines[]` validation + binding inference/reconcile (hint-only), codegen feature-probe + `emitPipelinesFragments`. Verified 2026-07-01. |
+| 037  | Realtime / Calls (WebRTC) | optional TURN/SFU helper (out-of-core) | TODO (P3, deferred)                                                                                                                                                                                                                                                 |
 
 ## Wave 2 — all-package gaps + end-to-end DX (baseline `b51b440a`, 2026-06-17)
 
@@ -128,19 +129,23 @@ live code before planning; excerpts in each plan are from first-hand reads at
 Selected bundles (user choice): security + quick perf wins, correctness fixes,
 sync-engine characterization tests, larger perf + refactor.
 
-| Plan | Title                                                          | Category  | Pri | Effort | Risk | Status |
-| ---- | -------------------------------------------------------------- | --------- | --- | ------ | ---- | ------ |
-| 064  | Redact raw `error.message` in DO RPC error fall-through        | security  | P1  | S      | LOW  | TODO   |
-| 065  | Keyed optimistic subscription fan-out (drop triple-match loop) | perf      | P1  | S      | LOW  | TODO   |
-| 066  | Cache synced-row JSON in `@lunora/db` diff-emit                | perf      | P1  | S      | LOW  | TODO   |
-| 067  | Grouped relation count (kill N+1 in `resolveCounts`)           | perf      | P2  | M      | MED  | TODO   |
-| 068  | Fix list optimistic overlay hang on unchanged mutator result   | bug       | P1  | M      | MED  | TODO   |
-| 069  | Tests: client shape re-seed on epoch fork / base divergence    | tests     | P2  | S      | LOW  | TODO   |
-| 070  | Tests: server shape resume-vs-reseed matrix                    | tests     | P2  | M      | LOW  | TODO   |
-| 071  | Tests: mutator handler-failure watermark self-healing          | tests     | P2  | M      | LOW  | TODO   |
-| 072  | Share op-log read across shape pokes in one flush              | perf      | P2  | M      | MED  | TODO   |
-| 073  | Dedup identity-independent reactive query runs across sockets  | perf      | P2  | M      | MED  | TODO   |
-| 074  | Extract shared socket-pool helper (dedup poke worker pools)    | tech-debt | P3  | S      | LOW  | TODO   |
+**All 11 DONE & REMOVED** — shipped to `alpha` in a prior session (reconciled &
+verified against live code 2026-07-01; plan files removed, this table + the
+commits are the record).
+
+| Plan | Title                                                          | Category  | Pri | Effort | Risk | Status                                                                                                                                                                     |
+| ---- | -------------------------------------------------------------- | --------- | --- | ------ | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 064  | Redact raw `error.message` in DO RPC error fall-through        | security  | P1  | S      | LOW  | DONE — `dd340715` (#70): `shard-do.ts` fall-through returns generic `"internal error"`, logs raw server-side; test asserts redaction                                       |
+| 065  | Keyed optimistic subscription fan-out (drop triple-match loop) | perf      | P1  | S      | LOW  | DONE — `lunora-client.ts` uses O(1) `SubscriptionRegistry.key(...)` lookup, triple-match loop gone                                                                         |
+| 066  | Cache synced-row JSON in `@lunora/db` diff-emit                | perf      | P1  | S      | LOW  | DONE — `db/src/internals.ts` `makeDiffEmit` takes a `syncedJson` cache; each row stringified once                                                                          |
+| 067  | Grouped relation count (kill N+1 in `resolveCounts`)           | perf      | P2  | M      | MED  | DONE — `do/src/relations.ts` issues one `GROUP BY … IN(values)` per relation (was per-value)                                                                               |
+| 068  | Fix list optimistic overlay hang on unchanged mutator result   | bug       | P1  | M      | MED  | DONE — `dd340715` (#70): DO emits a lightweight `settled` frame with watermark; client `onCheckpoint` drops the overlay; DB wires the checkpoint gate                      |
+| 069  | Tests: client shape re-seed on epoch fork / base divergence    | tests     | P2  | S      | LOW  | DONE — `74b7c250` (#63): `client/__tests__/shape-reseed.test.ts` (fork, base divergence, happy path + edges)                                                               |
+| 070  | Tests: server shape resume-vs-reseed matrix                    | tests     | P2  | M      | LOW  | DONE — `6676048b` (#64): `do/__tests__/shard-do.shape-resume-matrix.test.ts` (parameterized `canResume` matrix)                                                            |
+| 071  | Tests: mutator handler-failure watermark self-healing          | tests     | P2  | M      | LOW  | DONE — `fd6e03fe` (#65): `do/__tests__/shard-do.mutator-watermark-selfheal.test.ts` (6 cases + advance-gap)                                                                |
+| 072  | Share op-log read across shape pokes in one flush              | perf      | P2  | M      | MED  | DONE — `dd340715` (#70): `readShapeOpRange()` + per-flush `opRangeCache`; membership probe stays per-shape; test validates one drain                                       |
+| 073  | Dedup identity-independent reactive query runs across sockets  | perf      | P2  | M      | MED  | DONE — `dd340715` (#70): `isIdentityIndependent()` + `resolveReactiveOutcomeDeduped()` + flush-local `reactiveRunCache`; negative RLS test confirms no cross-identity leak |
+| 074  | Extract shared socket-pool helper (dedup poke worker pools)    | tech-debt | P3  | S      | LOW  | DONE — `dd340715` (#70): `do/src/socket-pool.ts` `runSocketPool()`; both `refreshSubscriptions`/`pokeShapeSubscribers` call it; `socket-pool.test.ts`                      |
 
 ### Recommended execution order & dependencies
 
@@ -211,9 +216,9 @@ partysync). Two genuine gaps surfaced; one is filed as a design spike here. The
 other (Yjs/CRDT collaborative editing via `y-partyserver`) is tracked separately
 as a prospective `@lunora/collab` package and is **not** in this directory yet.
 
-| Plan | Title                                                        | Category          | Pri | Effort | Risk | Status                                                                                                                                                                                                                                                  |
-| ---- | ------------------------------------------------------------ | ----------------- | --- | ------ | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 075  | Auto-elastic fan-out relay tier (hidden high-fanout scaling) | perf/architecture | P3  | XL     | HIGH | Phases 0–2 SHIPPED (observability + design/calibration + whisper relay hub, runtime routing, collapse, Studio surface; workerd-proven). Follow-ups: per-topic granularity + demand-based relay right-sizing; Phase 3 (RLS-uniform reactive-shape relay) |
+| Plan | Title                                                        | Category          | Pri | Effort | Risk | Status                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ---- | ------------------------------------------------------------ | ----------------- | --- | ------ | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 075  | Auto-elastic fan-out relay tier (hidden high-fanout scaling) | perf/architecture | P3  | XL     | HIGH | Phases 0–3 SHIPPED (verified 2026-07-01) — Ph0 design + Ph1 observability + Ph2 whisper relay hub (`do/src/relay.ts`, `relay-hub.ts`; runtime routing, collapse, Studio surface; workerd-proven) + **Ph3 RLS-uniform reactive-shape relay** (`isShapeRelayUniform`, `buildShapeSeedFrames`/`multicastRelayShapePokes`, `proxyRelayShapePokes`; `relay-shape.workerd.test.ts` + `relay-uniform-gate.test.ts`). Follow-up: Phase 4 (collapse tuning + cost ceiling + advisor) |
 
 ### Notes
 
@@ -269,9 +274,9 @@ already shipped (`defineShape` + `@lunora/db`, RLS-filtered op-log pokes). The
 missing half is the **upstream edge**: getting the external Postgres slice into the
 per-agent DO in the first place (`ctx.sql` is action-only/non-reactive, no CDC).
 
-| Plan | Title                                  | Category          | Pri | Effort | Risk | Status                                                                                                                                                                                                                                                                                                                                                                 |
-| ---- | -------------------------------------- | ----------------- | --- | ------ | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 077  | Hyperdrive → per-agent DO shape ingest | architecture/data | P2  | XL     | HIGH | SIGNED OFF; PHASES 0–1 LANDED — design/Decisions in [077-phase0-design.md](077-phase0-design.md) (§11 approved); `__bench__/external-source-*` close the gate (~10k full-pull cap); diff+materialize in `@lunora/do`, `pullSourceRows`/`projectSourceRow` in `@lunora/hyperdrive` + docs recipe (all green). Phase 2 (`.source()` modifier + codegen + poll loop) next |
+| Plan | Title                                  | Category          | Pri | Effort | Risk | Status                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ---- | -------------------------------------- | ----------------- | --- | ------ | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 077  | Hyperdrive → per-agent DO shape ingest | architecture/data | P2  | XL     | HIGH | SIGNED OFF; PHASES 0–2 SHIPPED (verified 2026-07-01) — Ph0 design [077-phase0-design.md](077-phase0-design.md) (§11) + `__bench__/external-source-*` gate; Ph1 `pullSourceRows`/`projectSourceRow` in `@lunora/hyperdrive` + diff/materialize in `@lunora/do` + docs recipe; **Ph2 `.source()` modifier** (`server/src/schema.ts`, `ExternalSourceDefinition`) + codegen `pollExternalSources` emission + `external_source_unscoped`/`external_source_on_global` advisor lints + DO poll loop (`runExternalSourceTick`); end-to-end `.source()`→codegen→poll→materialize→`defineShape`→clients. Follow-ups: Phase 3 (live trigger→queue CDC), Phase 4 (DO-consumes-DO shape) |
 
 ### Notes
 
@@ -289,6 +294,102 @@ per-agent DO in the first place (`ctx.sql` is action-only/non-reactive, no CDC).
   full-pull steady tick is read-dominated — ~18 µs (10 rows) → ~1.4 ms (1k) → ~20 ms
   (10k); `applyCdcChanges` ~17 µs/row. Sets a ~10k full-pull row cap (incremental mode
   above) and a size-scaled cadence (2 s floor for ≲1k slices, slower for larger).
+
+## Wave 8 — all-package sweep (baseline `c490bad7`, 2026-07-01)
+
+Broad audit across **all 45 packages** (`/improve` "every package"), 8 read-only
+Explore agents clustered by size/importance, steered away from the sync-engine
+hot paths already covered by 064–078. The codebase is in strong shape after seven
+prior waves, so the yield is a handful of small, high-confidence items — and a
+notably high subagent false-positive rate (see "considered and rejected" below;
+several headline "security" findings did not survive vetting against live code).
+Every finding below was confirmed by first-hand reads; excerpts in each plan are
+from the live code at `c490bad7`. **All 7 DONE — implemented, reviewed, and
+consolidated onto `advisor/wave-8` (pushed to origin; PR against `alpha` to be
+opened). Plan files removed per the directory convention; this table + the
+commits are the record.**
+
+| Plan | Title                                                        | Category | Pkg       | Pri | Effort | Risk | Status                                                                                                                                                                                                                               |
+| ---- | ------------------------------------------------------------ | -------- | --------- | --- | ------ | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 079  | topK shard-merge total-order comparator (no `NaN`)           | bug      | runtime   | P2  | S      | LOW  | DONE — `advisor/wave-8` `6f0c073b` (orig `bc9f7d24`); reviewer re-ran `lint:types` + 433 tests green                                                                                                                                 |
+| 080  | Report offline-queue `hydrate()` load failures               | bug/dx   | client    | P2  | S      | LOW  | DONE — `advisor/wave-8` `31c85c3c` (orig `1aec9f52`); reviewer re-ran `lint:types` + 292 tests green                                                                                                                                 |
+| 081  | Make `.dev.vars` append atomic vs concurrent writers         | bug      | config    | P3  | S–M    | LOW  | DONE — `advisor/wave-8` `eaadf0b8` (orig `ab9f00a2`); reviewer re-ran `lint:types` + 377 tests green. In-scope deviation: `appendDevVariables` takes a `buildAdditions` closure so the CAS loop re-plans per attempt (true re-merge) |
+| 082  | Log when a scheduled job is parked in the dead-letter store  | dx/obs   | scheduler | P3  | S      | LOW  | DONE — `advisor/wave-8` `9299e16f` (orig `1173a002`); diff reviewed (console.warn, id+functionPath, no args), 102 tests green                                                                                                        |
+| 083  | Serialize flag-eval context once per request (memo-key perf) | perf     | flags     | P3  | S      | LOW  | DONE — `advisor/wave-8` `1256edd2` (orig `07e54ec5`); diff reviewed (self-delimiting key, empty-context short-circuit), 51 tests green                                                                                               |
+| 084  | Guard `releaseClaim` on the migration pause path             | bug      | do        | P3  | S      | LOW  | DONE — `advisor/wave-8` `9cfcbe05` (orig `914f501c`); diff reviewed (try/catch, main rethrow intact, stubbed-UPDATE test), 992 tests green                                                                                           |
+| 085  | Reject empty / whitespace-only `lunora init` project names   | bug      | cli       | P3  | S      | LOW  | DONE — `advisor/wave-8` `f62b8427` (orig `f7ac5afb`); diff reviewed (trimmed-empty guard before traversal check), 521 tests green                                                                                                    |
+
+> **Wave 8 integration (2026-07-01):** all 7 approved commits consolidated onto
+> branch **`advisor/wave-8`**, linear history on top of `origin/alpha`
+> (`origin/alpha` was at `c490bad7`, the plans' baseline — 0 commits ahead, so
+> the rebase was a confirmed no-op). Order: 079 topK `6f0c073b` → 080 client
+> `31c85c3c` → 081 config `eaadf0b8` → 082 scheduler `9299e16f` → 083 flags
+> `1256edd2` → 084 do `9cfcbe05` → 085 cli `f62b8427`. 14 files (7 source + 7
+> test), disjoint packages, no `plans/` committed. The seven individual
+> `advisor/NNN-*` branches are preserved. **Pushed to origin; PR against `alpha`
+> to be opened.** The seven `079-085-*.md` plan files were **removed** after this
+> table captured the record (they were never committed; the code lives in the
+> commits above).
+>
+> **Wave 8 execution note (2026-07-01):** all 7 plans dispatched to isolated-worktree executors. Each plan's code lives on its own `advisor/NNN-*` branch (worktrees under `.claude/worktrees/`); **none merged to `alpha` — that is the user's call.** Reviewer read every diff and independently re-ran the two P2 suites (079, 080). Executors' `git` commands landed in the shared main checkout (only Read/Edit were worktree-isolated), causing transient `advisor/* ↔ alpha` HEAD bounces that all netted back to `alpha`; the pre-existing `feat/077 → alpha` switch + `pull` at 11:04 predates the executors (not caused by this run). `feat/077-hyperdrive-do-shape-ingest` was deleted before the run and is recoverable at `67109d3e`.
+
+### Recommended execution order
+
+All seven are independent (no cross-plan deps) and small. Recommended order by
+leverage: **079, 080** first (the two P2 correctness/durability wins with clean
+verification), then the P3 quick wins **081 → 082 → 083 → 084 → 085** in any order.
+Each is scoped to one package and re-runs that package's `lint:types` + `test` as
+its gate.
+
+### Findings considered and rejected (Wave 8)
+
+Vetted against live code and dropped — recorded so they aren't re-audited:
+
+- **ratelimit "fails open on store error"** — FALSE POSITIVE. The subagent audited
+  `rate-limiter.ts` in isolation; the `rateLimit` middleware (`middleware.ts:62-82`)
+  wraps `limit()` in try/catch and **fails closed (503) by default**, with an
+  explicit documented `failOpen` opt-in.
+- **dispatch `response.text()` double-read** (`create-dispatch-runner.ts:74-78`) —
+  FALSE POSITIVE. The two `.text()` calls are on mutually exclusive paths (`throw`
+  inside `if (!response.ok)` exits before the success-path read).
+- **D1 `getBookmark` null→undefined coercion** (`d1-client.ts:124`) — by design; the
+  wrapper's documented contract returns `undefined` for "no bookmark yet".
+- **client WebSocket listeners "never removed"** (`lunora-client.ts:3159+`) — not a
+  leak; the four listeners belong to the local `socket`, which is dereferenced
+  (`conn.socket` reassigned) and GC'd with its listeners when superseded. Guarded
+  standard pattern (`if (conn.socket !== socket) return`).
+- **optimistic-layer transform swallow** (`optimistic-layers.ts:42-47`) — by design;
+  a throwing layer is skipped and the error surfaces on mutation settle (documented).
+- **react cache polling ignores tab visibility** (`react/src/cache.ts:84`) — only the
+  WS-unavailable fallback timer; narrow, low impact. Not selected.
+- **browser DNS-rebinding SSRF** — documented out-of-scope in `create-browser.ts:195-197`;
+  the SSRF guard (protocol / private-IP / credential-strip) is sound.
+- **studio admin token in `sessionStorage`** — subagent's threat model is wrong:
+  `sessionStorage` is cleared on tab close and does NOT survive a browser restart
+  (that is `localStorage`). Documented deliberate tradeoff; studio is a local UI.
+- **browser `clampViewport` partial object**, **payment webhook-replay / money BigInt
+  precision / auth `withoutHeaders` collision / signed-URL safe-integer**, **runtime
+  topK-`k` unbounded / admin-RPC rate-limit / fan-out partial-result policy**, **cli
+  secret-name quoting / `Promise.all`→`allSettled` / dev-stream error handler**,
+  **analytics `track()` name validation** — all type-guarded, app-boundary,
+  threat-model-dependent, or negligible-impact nits; not worth plans.
+- **SessionDO GC alarm re-arm** (`session-do.ts:273`) — reconsidered on close read
+  and REJECTED: the `if (remaining > 0 …)` guard is correct, because `remaining === 0`
+  means all expired records were just deleted in the same sweep (no residue to
+  reclaim), and any later `create()` re-arms via `armGcAlarm()`. Self-heals.
+
+### Not audited this pass
+
+- **Direction / roadmap** (features, what to build next) — out of scope for this
+  correctness/security/perf/tests/tech-debt sweep. Run `/improve next` for a
+  grounded direction pass.
+- **Docs** category — only spot-checked.
+- **Plausible test-coverage / tech-debt leads surfaced but not selected** (would
+  need gap-confirmation before planning): workflow fan-out failure-mode tests
+  (`packages/workflow`), MCP tool-surface authz/error tests (`packages/mcp`),
+  codegen namespace-collision test for case-insensitive filesystems
+  (`packages/codegen`), advisor static-lint edge-case predicate dedup
+  (`packages/advisor`).
 
 ## Notes for executors (carried from prior waves)
 

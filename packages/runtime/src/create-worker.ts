@@ -1,8 +1,10 @@
+import type { BatchEntry } from "../../../shared/batch-wire";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
 import { relayName } from "../../../shared/relay-name";
 import type { AuthAdmin, AuthIntrospector } from "./auth-admin-routes";
 import { buildAuthAdminRoutes } from "./auth-admin-routes";
+import { groupBatchCallsByShard } from "./batch";
 import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit } from "./body-readers";
 import { buildDataMovementAdminRoutes } from "./data-movement-admin-routes";
 import type { FunctionArgumentDescriptor } from "./describe-args";
@@ -909,6 +911,7 @@ interface RpcContext {
 const NDJSON_ENCODER = new TextEncoder();
 
 const RPC_PATH = "/_lunora/rpc";
+const RPC_BATCH_PATH = "/_lunora/rpc-batch";
 const WS_PATH = "/_lunora/ws";
 const SCHEDULER_DISPATCH_PATH = "/_lunora/scheduler/dispatch";
 /** Admin-gated POST that manually fires one code-defined cron job by name (studio "Run now"). */
@@ -2366,6 +2369,203 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     /**
+     * Batch RPC transport (plan 088). Accepts `{ calls: [{ id, functionPath, args,
+     * shardKey?, mutationId?, clientId?, clientSeq? }] }`, resolves identity ONCE,
+     * runs the per-shard `authorizeShard` gate on every entry (identical to
+     * `handleRpc`), groups entries by `shardKey`, and forwards one `/rpc-batch`
+     * sub-request per shard DO — so a batch spanning many shards is split and
+     * each DO applies its slice sequentially (preserving per-client watermark
+     * ordering + idempotency). Per-entry results are reassembled by `id`; the
+     * response is `{ results: [{ id, status, body }] }`, each `body` the untouched
+     * single-call envelope. Capabilities/pipelining are explicitly NOT supported
+     * (see plan 088 §fence — incompatible with DO hibernation).
+     */
+    const handleBatchRpc = async (request: Request, env: unknown, context?: ExecutionContextLike): Promise<Response> => {
+        if (request.method !== "POST") {
+            throw new LunoraError("RPC batch endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const text = await readBodyTextWithLimit(request);
+        let body: unknown;
+
+        try {
+            body = JSON.parse(text);
+        } catch {
+            throw new LunoraError("RPC batch body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+            throw new LunoraError("RPC batch body must be an object", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const { calls } = body as { calls?: unknown };
+
+        if (!Array.isArray(calls)) {
+            throw new LunoraError("RPC batch `calls` must be an array", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        // Identity is resolved ONCE for the batch (one authenticated request); the
+        // per-shard gate below still runs for every entry, exactly as `handleRpc`.
+        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, options.resolveIdentity);
+
+        // Validate + group by target shard (throws on a malformed/reserved/oversized batch).
+        const groups = groupBatchCallsByShard(calls, defaultShard);
+
+        // Per-shard authorization for every entry — same gate as the single-call
+        // path — run in parallel (they share the resolved identity).
+        await Promise.all(
+            [...groups.entries()].flatMap(([shardKey, entries]) =>
+                entries.map((entry) => authorizeRpcEnvelope({ args: entry.args, functionPath: entry.functionPath, shardKey }, identity)),
+            ),
+        );
+
+        const { observability } = options;
+        const sinkContext: ObservabilitySinkContext | undefined = context
+            ? {
+                  waitUntil: (promise) => {
+                      context.waitUntil?.(promise);
+                  },
+              }
+            : undefined;
+
+        const results: unknown[] = [];
+        let latestBookmark: string | undefined;
+
+        // A slot-level error envelope for an entry whose shard sub-batch never
+        // produced a per-call result (forward failure, non-JSON, non-2xx, or an
+        // omitted id). Containing it to the entry's own slot keeps a single
+        // unhealthy shard from discarding the results of the healthy shards that
+        // rode the same batch — the demux contract is "every slot gets a body".
+        const slotError = (entry: BatchEntry, status: number, code: string, message: string): { body: unknown; id: unknown; status: number } => {
+            return { body: { error: { code, message } }, id: entry.id, status };
+        };
+
+        // Fail a whole sub-batch to its own slots: emit one observability event per
+        // entry (built by `eventFor` so the forward vs. non-JSON paths keep their
+        // own error mapping) and push a slot-level error for each, so an unhealthy
+        // shard never throws away the results of the healthy shards in the batch.
+        const failSubBatch = (
+            entries: BatchEntry[],
+            status: number,
+            code: string,
+            message: string,
+            eventFor: (entry: BatchEntry) => ObservabilityEvent,
+        ): void => {
+            for (const entry of entries) {
+                emitRpcEvent(observability, eventFor(entry), sinkContext);
+                results.push(slotError(entry, status, code, message));
+            }
+        };
+
+        // Single-call parity: emit one observability event per delivered entry. The
+        // sub-batch wall-clock is shared across its entries (one DO round-trip), so
+        // the per-entry `durationMs` is an honest approximation.
+        const emitEntryEvents = (
+            entries: BatchEntry[],
+            shardKey: string,
+            durationMs: number,
+            statusById: Map<unknown, number>,
+            fallbackStatus: number,
+        ): void => {
+            for (const entry of entries) {
+                const status = statusById.get(entry.id) ?? fallbackStatus;
+                const ok = status < 400;
+
+                emitRpcEvent(
+                    observability,
+                    {
+                        durationMs,
+                        functionPath: entry.functionPath,
+                        ok,
+                        shardKey,
+                        ...(ok ? {} : { error: { code: "SHARD_ERROR", message: `batched call returned ${String(status)}`, status } }),
+                    },
+                    sinkContext,
+                );
+            }
+        };
+
+        // Fan the per-shard sub-batches out in parallel (different DOs, independent
+        // watermarks); entries WITHIN a shard stay ordered by the DO's sequential loop.
+        await Promise.all(
+            [...groups.entries()].map(async ([shardKey, entries]) => {
+                const headers = new Headers(forwardedHeaders);
+
+                headers.set("content-type", "application/json");
+
+                const subRequest = new Request("https://shard.internal/rpc-batch", { body: JSON.stringify({ calls: entries }), headers, method: "POST" });
+                const subStartedAt = Date.now();
+                let response: Response;
+
+                try {
+                    response = await forwardToShard(shardDO, shardKey, subRequest);
+                } catch (error) {
+                    // The whole sub-batch failed to reach the shard — slot-error every
+                    // entry it carried instead of throwing the batch.
+                    const durationMs = Date.now() - subStartedAt;
+                    const message = error instanceof Error ? error.message : String(error);
+
+                    failSubBatch(entries, 502, "SHARD_UNAVAILABLE", message, (entry) => buildErrorEvent(entry.functionPath, durationMs, error, { shardKey }));
+
+                    return;
+                }
+
+                const durationMs = Date.now() - subStartedAt;
+                const bookmark = response.headers.get("x-d1-bookmark");
+
+                if (bookmark) {
+                    latestBookmark = bookmark;
+                }
+
+                let parsed: { results?: { body?: unknown; id?: number; status?: number }[] };
+
+                try {
+                    parsed = await response.json();
+                } catch {
+                    // Malformed shard response — fail every entry to its own slot
+                    // rather than dropping them silently into "no result".
+                    const message = `shard batch returned a non-JSON response (${String(response.status)})`;
+
+                    failSubBatch(entries, response.status, "SHARD_ERROR", message, (entry) => {
+                        return {
+                            durationMs,
+                            error: { code: "SHARD_ERROR", message, status: response.status },
+                            functionPath: entry.functionPath,
+                            ok: false,
+                            shardKey,
+                        };
+                    });
+
+                    return;
+                }
+
+                const entryResults = Array.isArray(parsed.results) ? parsed.results : [];
+                const statusById = new Map(entryResults.map((entry) => [entry.id, entry.status ?? response.status]));
+                const seenIds = new Set(entryResults.map((entry) => entry.id));
+
+                emitEntryEvents(entries, shardKey, durationMs, statusById, response.status);
+                results.push(...entryResults);
+
+                // Any entry the shard omitted (short/partial response) gets an
+                // explicit slot error rather than a silent "no result" client-side.
+                for (const entry of entries) {
+                    if (!seenIds.has(entry.id)) {
+                        results.push(slotError(entry, response.status, "SHARD_ERROR", `shard batch omitted result for call ${String(entry.id)}`));
+                    }
+                }
+            }),
+        );
+
+        const responseHeaders: Record<string, string> = { "content-type": "application/json" };
+
+        if (latestBookmark !== undefined) {
+            responseHeaders["x-d1-bookmark"] = latestBookmark;
+        }
+
+        return Response.json({ results }, { headers: responseHeaders, status: 200 });
+    };
+
+    /**
      * In-process server-query fast-path (PLAN4 §2.2 bullet 3 / §5.3 / risk #3).
      *
      * An SSR loader running INSIDE this same worker (the `httpRouter` seam) can
@@ -2710,6 +2910,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const internalRoutes: Record<string, InternalRoute> = {
         [WS_PATH]: (request, env, url) => handleWebSocketUpgrade(request, env, url),
         [RPC_PATH]: (request, env, _url, context) => handleRpc(request, env, context),
+        [RPC_BATCH_PATH]: (request, env, _url, context) => handleBatchRpc(request, env, context),
         [SCHEDULER_DISPATCH_PATH]: (request, env) => handleSchedulerDispatch(request, env),
         [CRON_JOBS_RUN_PATH]: (request, env) => handleRunCronJob(request, env),
         // Extracted handler clusters built above, merged in (mirroring the auth
