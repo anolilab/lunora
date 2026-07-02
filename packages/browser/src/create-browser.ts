@@ -161,6 +161,90 @@ const isPrivateIpv6 = (host: string): boolean => {
     );
 };
 
+/** Cloudflare DoH JSON endpoint used for the opt-in `resolveDns` rebinding re-check. */
+const DOH_ENDPOINT = "https://cloudflare-dns.com/dns-query";
+
+/** DoH `Answer.type` codes we inspect: 1 = A (IPv4), 28 = AAAA (IPv6). */
+const DNS_TYPE_A = 1;
+const DNS_TYPE_AAAA = 28;
+
+/** Normalize a host string for allowlist comparison: strip IPv6 brackets + a trailing FQDN dot, lowercase. */
+const normalizeHost = (host: string): string => host.replaceAll(IPV6_BRACKETS, "").replace(TRAILING_DOT, "").toLowerCase();
+
+/**
+ * Classify a single DoH-resolved IP (its record `type` + `data`) as private.
+ * Reuses the same IPv4/IPv6 range tables as the string guard; an A `data` is a
+ * dotted quad, an AAAA `data` is an IPv6 literal. An unparseable A record is
+ * treated as private (fail-closed), matching {@link parseIpv4} elsewhere.
+ */
+const isPrivateResolvedIp = (data: string, type: number): boolean => {
+    if (type === DNS_TYPE_A) {
+        const v4 = parseIpv4(data);
+
+        return v4 === undefined || isPrivateIpv4(v4);
+    }
+
+    return isPrivateIpv6(data.toLowerCase());
+};
+
+/**
+ * Query Cloudflare DoH (JSON `application/dns-json`) for one record `type` of
+ * `hostname`. Returns the `Answer` array (possibly empty) on success, or
+ * `undefined` if the lookup itself failed (network error / non-200 / unparseable
+ * body) so the caller can fall back to the string guard rather than fail-open.
+ */
+const dohLookup = async (hostname: string, type: number): Promise<{ data: string; type: number }[] | undefined> => {
+    try {
+        const response = await fetch(`${DOH_ENDPOINT}?name=${encodeURIComponent(hostname)}&type=${String(type)}`, {
+            headers: { accept: "application/dns-json" },
+        });
+
+        if (!response.ok) {
+            return undefined;
+        }
+
+        const body: { Answer?: { data: string; type: number }[] } = await response.json();
+
+        return body.Answer ?? [];
+    } catch {
+        return undefined;
+    }
+};
+
+/**
+ * Opt-in DNS-rebinding re-check for a validated navigation target. Resolves the
+ * host's A + AAAA records over DoH and throws if any resolved address is
+ * private/internal. Best-effort: IP-literal hosts (already classified by the
+ * string guard) are skipped, and if BOTH DoH queries fail we return silently and
+ * lean on the string guard — we only ever refuse on an address that actually
+ * resolved to a private range, never fail-open on one that did.
+ */
+const assertResolvedHostIsPublic = async (target: string): Promise<void> => {
+    const host = normalizeHost(new URL(target).hostname);
+
+    // IP literals can't rebind through DNS and were already classified by the
+    // string guard; only a named host needs the resolved-address re-check.
+    if (host.includes(":") || parseIpv4(host) !== undefined) {
+        return;
+    }
+
+    const [aRecords, aaaaRecords] = await Promise.all([dohLookup(host, DNS_TYPE_A), dohLookup(host, DNS_TYPE_AAAA)]);
+
+    // Both lookups failed — fall back to the string guard (which already passed)
+    // rather than fail-open. If either resolved, inspect what came back.
+    if (aRecords === undefined && aaaaRecords === undefined) {
+        return;
+    }
+
+    for (const answer of [...(aRecords ?? []), ...(aaaaRecords ?? [])]) {
+        if ((answer.type === DNS_TYPE_A || answer.type === DNS_TYPE_AAAA) && isPrivateResolvedIp(answer.data, answer.type)) {
+            throw new Error(
+                `@lunora/browser: url host "${host}" resolves to a private/internal address (${answer.data}); refusing to navigate (DNS-rebinding guard)`,
+            );
+        }
+    }
+};
+
 /** Special-use hostname literals that resolve to the local host / internal namespaces. */
 const isPrivateHostname = (host: string): boolean =>
     host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal") || host.endsWith(".home.arpa");
@@ -196,17 +280,25 @@ const isPrivateTarget = (parsed: URL): boolean => {
  * so a hostile caller can't drive it at a local file or a non-network scheme.
  * - Credentials — a `user:pass@host` userinfo component is rejected: page navigation
  * never needs it, and it's a credential-leak / host-spoof smell.
+ * - Host allowlist — when `allowedHosts` is set (non-empty), the hostname must match
+ * one of its entries exactly (case-insensitive, trailing-dot-normalized, IPv6 brackets
+ * stripped); anything else is refused. This is the one guard that fully closes DNS
+ * rebinding for a URL boundary that accepts client-controlled hosts.
  * - SSRF target — unless `allowPrivateTargets` is set, a private / internal / loopback
  * / link-local host is refused (see {@link isPrivateTarget}). Browser Rendering egresses
  * from Cloudflare's network, but a private-network binding / Cloudflare Tunnel can still
  * make such hosts reachable, so default-deny is the safe posture; trusted internal use
  * opts in explicitly.
  *
- * Returns the normalized absolute URL string. Does **not** resolve DNS, so a public
- * hostname that later resolves to a private address (DNS rebinding) is out of scope —
- * keep caller-supplied URLs trusted regardless of this guard.
+ * Returns the normalized absolute URL string. This string check classifies the host
+ * as-written — it does **not** resolve DNS. So **without `allowedHosts` (or the opt-in
+ * `resolveDns` re-check applied by the caller before `page.goto`), a PUBLIC hostname that
+ * resolves — via attacker-controlled DNS — to a private/metadata IP is NOT blocked**
+ * (classic DNS rebinding, out of scope here). Any app that passes client-controlled URLs
+ * to the browser should set `allowedHosts` (hard guarantee) or enable `resolveDns`
+ * (best-effort re-check); otherwise keep caller-supplied URLs trusted.
  */
-const validateUrl = (url: string, allowPrivateTargets: boolean): string => {
+const validateUrl = (url: string, allowPrivateTargets: boolean, allowedHosts?: ReadonlyArray<string>): string => {
     if (typeof url !== "string" || url.length === 0) {
         throw new Error("@lunora/browser: url must be a non-empty string");
     }
@@ -225,6 +317,14 @@ const validateUrl = (url: string, allowPrivateTargets: boolean): string => {
 
     if (parsed.username !== "" || parsed.password !== "") {
         throw new Error("@lunora/browser: url must not embed credentials (strip the `user:pass@` userinfo)"); // gitleaks:allow -- illustrative error text, not a credential
+    }
+
+    if (allowedHosts && allowedHosts.length > 0) {
+        const host = normalizeHost(parsed.hostname);
+
+        if (!allowedHosts.some((entry) => normalizeHost(entry) === host)) {
+            throw new Error(`@lunora/browser: url host "${parsed.hostname}" is not in the configured allowedHosts allowlist`);
+        }
     }
 
     if (!allowPrivateTargets && isPrivateTarget(parsed)) {
@@ -316,8 +416,15 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
         use: (page: PageLike) => Promise<T>,
         viewport?: { height: number; width: number },
     ): Promise<T> => {
-        const target = validateUrl(url, options.allowPrivateTargets ?? false);
+        const allowPrivateTargets = options.allowPrivateTargets ?? false;
+        const target = validateUrl(url, allowPrivateTargets, options.allowedHosts);
         const timeout = resolveTimeout(navigate.timeoutMs, options.timeoutMs);
+
+        // Opt-in DNS-rebinding re-check: resolve the host and reject if it maps to
+        // a private address, before we pay for a browser launch + `page.goto`.
+        if (!allowPrivateTargets && (options.resolveDns ?? false)) {
+            await assertResolvedHostIsPublic(target);
+        }
 
         return withBrowser(async (browser) => {
             const context = await browser.newContext();

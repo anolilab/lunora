@@ -9,7 +9,7 @@ import { join } from "@visulima/path";
 import { downloadTemplate } from "giget";
 
 import type { Logger } from "../../util/logger";
-import { resolveSourceRef } from "../../util/source-ref";
+import { resolvePinnedSourceRef, resolveSourceRef } from "../../util/source-ref";
 import parseManifest from "./manifest";
 import type { AddCommandOptions, RegistryManifest, ResolvedItem } from "./types";
 
@@ -94,6 +94,16 @@ const fetchToStaging = async (remote: string, label: string, logger: Logger): Pr
 };
 
 /**
+ * The ref to append to a remote fetch. When the base is the default
+ * `gh:anolilab/lunora` registry, pin the moving release branch to the immutable
+ * commit it currently points at (supply-chain hardening; logs the SHA, or warns
+ * + falls back to the branch when offline / rate-limited). A custom `--source`
+ * may point at a different repo we can't resolve against, so it stays unpinned.
+ */
+const resolveRemoteRef = async (options: AddCommandOptions): Promise<string> =>
+    options.source !== undefined && options.source.length > 0 ? resolveSourceRef(options.ref) : resolvePinnedSourceRef(options.ref, options.logger);
+
+/**
  * Resolve a single item's directory: straight from `--from` (offline) or by
  * fetching it via giget. Returns the directory + a cleanup callback.
  */
@@ -112,7 +122,7 @@ const resolveItemDirectory = async (name: string, options: AddCommandOptions): P
 
     const base = options.source ?? DEFAULT_SOURCE_BASE;
 
-    return fetchToStaging(`${base}/${name}#${resolveSourceRef(options.ref)}`, "item", options.logger);
+    return fetchToStaging(`${base}/${name}#${await resolveRemoteRef(options)}`, "item", options.logger);
 };
 
 /**
@@ -129,7 +139,7 @@ const resolveRegistryRoot = async (options: AddCommandOptions): Promise<{ cleanu
     }
 
     const base = options.source ?? DEFAULT_SOURCE_BASE;
-    const { cleanup, directory } = await fetchToStaging(`${base}#${resolveSourceRef(options.ref)}`, "registry", options.logger);
+    const { cleanup, directory } = await fetchToStaging(`${base}#${await resolveRemoteRef(options)}`, "registry", options.logger);
 
     return { cleanup, root: directory };
 };

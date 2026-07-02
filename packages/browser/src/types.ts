@@ -112,6 +112,17 @@ export interface PdfOptions extends NavigateOptions {
 
 export interface LunoraBrowserOptions {
     /**
+     * Strict host allowlist. When set (non-empty), a navigation URL is refused
+     * unless its hostname exactly matches one of these entries (case-insensitive,
+     * trailing-dot-normalized, IPv6 brackets stripped). This is the only guard
+     * that fully closes DNS rebinding: a public hostname that resolves to a
+     * private/metadata IP can still be pinned out if it isn't on the list. Set it
+     * whenever you pass client-controlled URLs to the browser. Leave it unset (the
+     * default) to keep the previous behavior (only the string-based SSRF guard).
+     */
+    allowedHosts?: string[];
+
+    /**
      * Opt out of the SSRF guard that, by default, refuses to navigate to a
      * private / internal / loopback / link-local host (RFC1918, `127.0.0.0/8`,
      * `169.254.0.0/16` incl. the cloud-metadata address, CGNAT, IPv6 ULA/
@@ -135,6 +146,19 @@ export interface LunoraBrowserOptions {
      */
     launch?: BrowserLaunchLike;
     /* eslint-enable no-secrets/no-secrets */
+
+    /**
+     * Best-effort DNS-rebinding re-check. When `true` (and `allowPrivateTargets`
+     * is `false`), the factory resolves the URL's hostname over Cloudflare DoH
+     * (`https://cloudflare-dns.com/dns-query`) and refuses to navigate if any
+     * resolved A/AAAA record is a private/internal address — closing the gap
+     * where a public hostname resolves to a private IP after the string guard
+     * passes. Off by default: it adds a DNS round-trip and is TOCTOU-imperfect
+     * (the browser re-resolves independently). If the DoH lookup itself fails, it
+     * falls back to the string guard rather than allowing a resolved private IP.
+     * For a hard guarantee prefer {@link LunoraBrowserOptions.allowedHosts}.
+     */
+    resolveDns?: boolean;
 
     /**
      * Default navigation timeout (ms) applied when a per-call `timeoutMs` is not

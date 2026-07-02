@@ -18,7 +18,7 @@ import { detectInstalledManagers, installArgsFor } from "../../util/detect-packa
 import type { Logger } from "../../util/logger";
 import { patchViteConfig } from "../../util/patch-vite-config";
 import { PromptCancelledError } from "../../util/prompt-cancelled";
-import { resolveDistTag, resolveSourceRef, resolveTagVersions } from "../../util/source-ref";
+import { resolveDistTag, resolvePinnedSourceRef, resolveSourceRef, resolveTagVersions } from "../../util/source-ref";
 import type { Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import type { NextStep } from "../../util/tui-prompts";
@@ -723,7 +723,13 @@ const scaffoldFromRemote = async (options: {
     const stagingDirectory = join(stagingRoot, "template");
 
     try {
-        const remote = resolveTemplateSource(templateType, source, ref);
+        // Pin the moving release branch to the immutable commit it currently
+        // points at before giget fetches it (supply-chain hardening) — logs the
+        // SHA, or warns + falls back to the branch when the pin can't be resolved
+        // (offline / rate-limited). A custom `--source` isn't part of the pinnable
+        // `gh:anolilab/lunora` repo (and drops the ref entirely), so skip it.
+        const pinnedRef = source !== undefined && source.length > 0 ? ref : await resolvePinnedSourceRef(ref, logger);
+        const remote = resolveTemplateSource(templateType, source, pinnedRef);
 
         // Fetch + scaffold as a live checklist ("Project initialized!" with ✔ rows,
         // create-astro style; off a TTY the tasks run bare so CI/tests stay clean).

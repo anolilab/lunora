@@ -15,6 +15,8 @@ import { fileURLToPath } from "node:url";
 
 import { dirname, join } from "@visulima/path";
 
+import type { Logger } from "./logger";
+
 /** Branch used when the CLI is unpublished (`0.0.0`) or its package.json can't be read. */
 const DEFAULT_SOURCE_REF_FALLBACK = "alpha";
 
@@ -126,6 +128,100 @@ const resolveSourceRef = (ref: string | undefined): string => {
     return resolveVersionRef(resolveCliVersion());
 };
 
+/**
+ * The GitHub repo the default `init` templates + registry items are fetched from
+ * (the `gh:anolilab/lunora/…` base). Branch → commit-SHA pinning resolves against
+ * this repo's API; a custom `--source` pointing elsewhere is left unpinned.
+ */
+const SOURCE_REPO = "anolilab/lunora";
+
+/** A 40-hex git commit SHA — already immutable, so it is never re-resolved. */
+const COMMIT_SHA = /^[0-9a-f]{40}$/iu;
+
+/** A leading-`v` or bare SemVer version tag (`v1.2.3`, `1.2.3`, `1.0.0-alpha.1`) — points at a fixed commit. */
+const LEADING_VERSION_TAG = /^v?\d+\.\d+\.\d+/u;
+
+/** The release tooling's per-package tag form (`@lunora/cli@1.2.3`) — also a fixed commit. */
+const PACKAGE_VERSION_TAG = /@\d+\.\d+\.\d+/u;
+
+/**
+ * True when `ref` is already immutable — a full commit SHA or a version tag — so
+ * it never needs to be re-resolved to a commit.
+ */
+const isImmutableRef = (ref: string): boolean => COMMIT_SHA.test(ref) || LEADING_VERSION_TAG.test(ref) || PACKAGE_VERSION_TAG.test(ref);
+
+/**
+ * The `Authorization` header for the GitHub API, honouring `GITHUB_TOKEN` /
+ * `GH_TOKEN` when present so CI / heavy users don't hit the 60/hr unauthenticated
+ * rate limit. Absent → an empty header set (anonymous request, still fine).
+ */
+const githubAuthHeaders = (): Record<string, string> => {
+    const token = process.env["GITHUB_TOKEN"] ?? process.env["GH_TOKEN"];
+
+    return token !== undefined && token.length > 0 ? { authorization: `Bearer ${token}` } : {};
+};
+
+/**
+ * Resolve a branch name to the commit SHA it currently points at, via the GitHub
+ * commits API. Best-effort: returns `undefined` on any failure (offline, 404,
+ * rate-limited, malformed body, timeout) so the caller can fall back to the
+ * moving branch. Uses `fetch` (Node 22/24 global) — no new dependency.
+ */
+const fetchBranchSha = async (branch: string): Promise<string | undefined> => {
+    try {
+        const response = await fetch(`https://api.github.com/repos/${SOURCE_REPO}/commits/${branch}`, {
+            headers: { accept: "application/vnd.github+json", "user-agent": "lunora-cli", ...githubAuthHeaders() },
+            signal: AbortSignal.timeout(10_000),
+        });
+
+        if (!response.ok) {
+            return undefined;
+        }
+
+        const body = (await response.json()) as { sha?: unknown };
+
+        // Only accept a well-formed 40-hex SHA — anything else can't be trusted
+        // as a pin (and would fail the `isSafeRef` charset gate downstream).
+        return typeof body.sha === "string" && COMMIT_SHA.test(body.sha) ? body.sha : undefined;
+    } catch {
+        return undefined;
+    }
+};
+
+/**
+ * Resolve the source ref AND pin a moving release branch to the immutable commit
+ * SHA it currently points at, so remote template / registry fetches are
+ * reproducible and tamper-evident (supply-chain hardening). The flow:
+ *
+ * First {@link resolveSourceRef} validates + derives the ref (explicit `--ref`,
+ * else the version-derived release branch). An already-immutable ref — a 40-hex
+ * SHA or a version tag ({@link isImmutableRef}) — is returned verbatim; no API
+ * call is made. Otherwise the ref is a long-lived branch, so it is resolved to
+ * its current SHA via the GitHub API and that SHA (which still passes the
+ * `isSafeRef` charset gate) is fetched instead; the pin is logged so the user can
+ * audit it. If resolution fails (offline / rate-limited / air-gapped), the branch
+ * is used with a one-line warning that the fetch is UNPINNED — never a hard fail.
+ */
+const resolvePinnedSourceRef = async (ref: string | undefined, logger: Logger): Promise<string> => {
+    const resolved = resolveSourceRef(ref);
+
+    if (isImmutableRef(resolved)) {
+        return resolved;
+    }
+
+    const sha = await fetchBranchSha(resolved);
+
+    if (sha === undefined) {
+        logger.warn(`could not pin ${SOURCE_REPO}#${resolved} to a commit — fetching the UNPINNED branch (set GITHUB_TOKEN if rate-limited).`);
+
+        return resolved;
+    }
+
+    logger.info(`pinned ${SOURCE_REPO}#${resolved} → ${sha}`);
+
+    return sha;
+};
+
 /** npm dist-tag a stable CLI pins sibling `@lunora/*` deps to. */
 const STABLE_DIST_TAG = "latest";
 
@@ -213,4 +309,4 @@ const resolveTagVersions = async (names: Iterable<string>, tag: string): Promise
     return resolved;
 };
 
-export { resolveDistTag, resolveSourceRef, resolveTagVersion, resolveTagVersions, resolveVersionRef };
+export { isImmutableRef, resolveDistTag, resolvePinnedSourceRef, resolveSourceRef, resolveTagVersion, resolveTagVersions, resolveVersionRef };

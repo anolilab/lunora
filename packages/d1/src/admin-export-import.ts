@@ -9,6 +9,7 @@ import type { DatabaseWriterLike, SchemaLike } from "@lunora/do";
 
 import type { D1Exec } from "./d1-ctx-db";
 import { decodeGlobalRow } from "./d1-ctx-db";
+import { quoteIdentifier } from "./dialect";
 
 /** One exported row: `doc` is reconstructed from the column tuple. */
 interface ExportRow {
@@ -31,8 +32,6 @@ interface ImportResult {
 }
 
 const DEFAULT_BATCH_SIZE = 200;
-
-const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 
 /**
  * Return every `.global()` table in the schema, optionally narrowed by an

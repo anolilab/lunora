@@ -13,11 +13,13 @@
  * so the CLI can import it without pulling the D1 runtime.
  */
 
+// The one canonical SQL identifier quoter, bundler-inlined from `shared/` (zero
+// runtime dep, keeps this module pure) and re-exported to preserve the
+// `@lunora/d1/dialect` public API.
+import { quoteIdentifier } from "../../../shared/quote-identifier";
+
 /** SQLite column type affinities Lunora emits. */
 export type SqlAffinity = "BLOB" | "INTEGER" | "REAL" | "TEXT";
-
-/** Double-quote (and escape) a SQL identifier. */
-export const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 
 /**
  * SQLite affinity for a column by its validator `kind`, chosen so the value the
@@ -72,3 +74,5 @@ export const columnRef = (field: string): string => {
 
 /** Physical index identifier — `&lt;table>_&lt;name>`, so two tables' like-named indexes don't collide in SQLite's flat index namespace. */
 export const physicalIndexName = (tableName: string, indexName: string): string => quoteIdentifier(`${tableName}_${indexName}`);
+
+export { quoteIdentifier } from "../../../shared/quote-identifier";
