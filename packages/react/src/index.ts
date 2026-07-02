@@ -1,11 +1,13 @@
 "use client";
 
-// Every export in this barrel is a client-side hook or the context provider —
-// they call `useState`/`useEffect`/`use(...)` and own a live WS connection, so
-// each source module here declares `"use client"` and is meant to run only in
-// Client Components. In a Next.js / RSC app, import these from your own
-// `"use client"` files (see the provider/hook examples in the docs); server-side
-// data loading lives in the socket-free `@lunora/react/server` entry.
+// The hook/provider exports in this barrel are client-side — they call
+// `useState`/`useEffect`/`use(...)` and own a live WS connection, so each source
+// module here declares `"use client"` and is meant to run only in Client
+// Components. In a Next.js / RSC app, import these from your own `"use client"`
+// files (see the provider/hook examples in the docs); server-side data loading
+// lives in the socket-free `@lunora/react/server` entry. The framework-neutral
+// error discriminators re-exported from `@lunora/client` at the bottom are pure
+// helpers (no hooks) surfaced here so a React-only user gets them in one import.
 export { Authenticated, AuthLoading, Unauthenticated } from "./auth-gates";
 export type { AuthState } from "./auth-state";
 export { useAuthState } from "./auth-state";
@@ -55,3 +57,8 @@ export { useRateLimit } from "./use-rate-limit";
 export type { UseStreamOptions, UseStreamResult, UseStreamStatus } from "./use-stream";
 export { useStream } from "./use-stream";
 export { default as useSubscription } from "./use-subscription";
+
+// Framework-neutral error discriminators re-exported from `@lunora/client` so a
+// React-only user gets them without a second import (see the header note).
+export type { LunoraErrorCode } from "@lunora/client";
+export { getErrorCode, getRetryAfterMs, isConflictError, isForbiddenError, isRateLimitedError, isUnauthorizedError } from "@lunora/client";

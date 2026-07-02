@@ -3,6 +3,7 @@ import { stableStringify } from "../../../shared/stable-key";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import createInMemoryBookmarkStorage from "./bookmark";
 import { applyDelta, isMutationDelta } from "./delta-merge";
+import type { LunoraErrorCode } from "./errors";
 import Listeners from "./listeners";
 import type { OptimisticUpdate } from "./local-store";
 import { createLocalStore } from "./local-store";
@@ -460,8 +461,8 @@ interface PokeBuffer {
     parts: Map<string, RowOp[]>;
 }
 
-/** An `Error` carrying the server's machine-readable `code` and (for a `LunoraError`) structured `data`. The client's public error contract for RPC/batch failures. */
-type LunoraClientError = Error & { code?: string; data?: unknown };
+/** An `Error` carrying the server's machine-readable `code` and (for a `LunoraError`) structured `data`. The client's public error contract for RPC/batch failures. The `(string & {})` arm keeps forward-compat/unknown server codes assignable without losing autocomplete on the known {@link LunoraErrorCode} union. */
+type LunoraClientError = Error & { code?: LunoraErrorCode | (string & {}); data?: unknown };
 
 /** Rebuild a thrown `Error` from a server `{ code, message, data? }` envelope, wire-decoding `data` so `bigint`/`bytes` inside it survive. */
 const reconstructError = (errorBody: { code?: string; data?: unknown; message?: string }): LunoraClientError => {
