@@ -470,6 +470,24 @@ const reconstructError = (errorBody: { code?: string; data?: unknown; message?: 
     return error;
 };
 
+/**
+ * Wire-encode a call's `args`/payload, tagging an encode failure with the call it
+ * came from. The bare codec error ("wire-codec: cannot encode a RegExp …") names
+ * the type but not the operation — which is useless on the fire-and-forget whisper
+ * path and the async outbox flush, where the throw has no call-site stack. Prefixing
+ * with `label` (e.g. `args for 'messages:send'`) turns it into an actionable message
+ * while preserving the original via `cause`.
+ */
+const encodeCallArgs = (payload: unknown, label: string): unknown => {
+    try {
+        return encodeWire(payload);
+    } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+
+        throw new TypeError(`LunoraClient: cannot encode ${label} — ${reason}`, error instanceof Error ? { cause: error } : undefined);
+    }
+};
+
 /** One demuxed result slot of a {@link LunoraClient.batch} call (plan 088). */
 type BatchSlot = { error: LunoraClientError; ok: false } | { ok: true; value: unknown };
 
@@ -1170,7 +1188,7 @@ class LunoraClient {
             // backward-compatible with older shards/clients. Omitted `data`
             // becomes an explicit `null` (the documented receiver contract).
             // eslint-disable-next-line unicorn/no-null -- an omitted whisper body is delivered as an explicit JSON `null`, never `undefined`
-            sendOn(conn, { data: encodeWire(data ?? null), topic, type: "whisper" });
+            sendOn(conn, { data: encodeCallArgs(data ?? null, `whisper data for topic '${topic}'`), topic, type: "whisper" });
         }
     }
 
@@ -1288,7 +1306,12 @@ class LunoraClient {
         const response = await this.fetchImpl(joinUrl(this.url, RPC_BATCH_PATH), {
             body: JSON.stringify({
                 calls: calls.map((call, index) => {
-                    return { args: encodeWire(call.args ?? {}), functionPath: call.fn.__lunoraRef, id: index, shardKey: call.shardKey };
+                    return {
+                        args: encodeCallArgs(call.args ?? {}, `args for batch call '${call.fn.__lunoraRef}'`),
+                        functionPath: call.fn.__lunoraRef,
+                        id: index,
+                        shardKey: call.shardKey,
+                    };
                 }),
             }),
             headers: this.rpcRequestHeaders({ attachBookmark: true }),
@@ -2426,7 +2449,11 @@ class LunoraClient {
             // Wire-encode the stream args so `bigint`/bytes survive the send (raw
             // `JSON.stringify` throws on a bigint); the shard `decodeWire`s them
             // before invoking the stream handler.
-            query: { args: encodeWire(argsRecord) as Record<string, unknown>, functionPath: function_.__lunoraRef, shardKey },
+            query: {
+                args: encodeCallArgs(argsRecord, `stream args for '${function_.__lunoraRef}'`) as Record<string, unknown>,
+                functionPath: function_.__lunoraRef,
+                shardKey,
+            },
             type: "stream",
         };
 
@@ -3059,7 +3086,7 @@ class LunoraClient {
             // `encodeWire` tags leaves plain JSON can't carry (`bigint`,
             // `ArrayBuffer`/typed arrays, `NaN`/±Infinity); a pure-JSON `args`
             // encodes byte-identically, so a pre-codec server still interops.
-            body: JSON.stringify({ args: encodeWire(args), functionPath, shardKey }),
+            body: JSON.stringify({ args: encodeCallArgs(args, `args for '${functionPath}'`), functionPath, shardKey }),
             headers,
             method: "POST",
         });
@@ -4198,7 +4225,7 @@ class LunoraClient {
 
         for (const item of items) {
             try {
-                encodeWire(item.args);
+                encodeCallArgs(item.args, `args for '${item.functionPath}'`);
                 encodable.push(item);
             } catch (error) {
                 this.settleReplayTerminal(item, error instanceof Error ? error : new Error(String(error)));
@@ -4335,7 +4362,7 @@ class LunoraClient {
                 body: JSON.stringify({
                     calls: items.map((item, index) => {
                         return {
-                            args: encodeWire(item.args),
+                            args: encodeCallArgs(item.args, `args for '${item.functionPath}'`),
                             functionPath: item.functionPath,
                             id: index,
                             // Stable per-write key so the DO dedups a write it already
