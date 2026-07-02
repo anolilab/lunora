@@ -38,7 +38,20 @@ const createClient = (features?: Partial<StudioFeaturesResult>): MockClientHooks
             // Optional-feature flags drive which nav pages render. Default every
             // flag on (the studio's back-compat default) unless a test overrides one.
             if (reference === ADMIN_FUNCTIONS.studioFeatures) {
-                return { flags: true, mail: true, payments: true, queues: true, scheduler: true, storage: true, vectors: true, workflows: true, ...features };
+                return {
+                    analytics: true,
+                    auth: true,
+                    flags: true,
+                    kv: true,
+                    mail: true,
+                    payments: true,
+                    queues: true,
+                    scheduler: true,
+                    storage: true,
+                    vectors: true,
+                    workflows: true,
+                    ...features,
+                };
             }
 
             // The logs panel mounts when its domain is opened; hand it the real
@@ -72,7 +85,7 @@ const renderAndFind = async (testId: string): Promise<HTMLElement> => {
  * studio copy of the type drifts from this tuple — keeping both packages' copies
  * of the wire contract in lockstep.
  */
-const STUDIO_FEATURE_KEYS = ["flags", "mail", "payments", "queues", "scheduler", "storage", "vectors", "workflows"] as const;
+const STUDIO_FEATURE_KEYS = ["analytics", "auth", "flags", "kv", "mail", "payments", "queues", "scheduler", "storage", "vectors", "workflows"] as const;
 
 /** `true` only when `Keys` and `Canonical` are mutually assignable (the exact same key set). */
 type KeysMatch<Keys extends string, Canonical extends string> = [Keys] extends [Canonical] ? ([Canonical] extends [Keys] ? true : never) : never;

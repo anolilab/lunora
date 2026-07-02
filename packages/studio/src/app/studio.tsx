@@ -339,13 +339,19 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
  * the access-rules view; `scheduler` gates the scheduled-jobs view.
  */
 const TAB_FEATURE: Partial<Record<StudioTab, keyof StudioFeaturesResult>> = {
+    analytics: "analytics",
+    authConfig: "auth",
+    authSessions: "auth",
     files: "storage",
     flags: "flags",
+    kv: "kv",
     mail: "mail",
+    organizations: "auth",
     payments: "payments",
     queues: "queues",
     schedule: "scheduler",
     storageRules: "storage",
+    users: "auth",
     vectors: "vectors",
     workflows: "workflows",
 };

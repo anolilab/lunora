@@ -505,7 +505,10 @@ export interface StorageRulesResult {
  * fails the build if these keys ever diverge from the source contract.
  */
 export interface StudioFeaturesResult {
+    analytics: boolean;
+    auth: boolean;
     flags: boolean;
+    kv: boolean;
     mail: boolean;
     payments: boolean;
     queues: boolean;

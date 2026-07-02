@@ -504,7 +504,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasHyperdrive,
         hasHyperdriveGlobal: schema.tables.some((table) => table.shardMode === "global" && table.globalBackend === "hyperdrive"),
         hasImages,
-        hasKv,
+        // Auto-wire the studio's KV introspector on the SAME condition the nav
+        // gates its tab on (`studioFeatures.kv` = ctx.kv usage OR a declared
+        // `@lunora/bindings/kv` dep), so a visible KV tab always has a working
+        // backend — never the reverse. The `ctx.kv` type-seam stays usage-only.
+        hasKv: studioFeatures.kv,
         hasPayments,
         hasR2sql,
         hasQueue: queues.some((queue) => queue.mode === "push"),
