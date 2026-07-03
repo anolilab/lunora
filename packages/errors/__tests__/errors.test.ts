@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ERROR_CATALOG, findSolutionByMessage, invariant, isLunoraError, LunoraError, resolveHint, unreachable } from "../src";
+import { ERROR_CATALOG, findSolutionByMessage, invariant, isInternalCode, isLunoraError, LunoraError, resolveHint, unreachable } from "../src";
 
 describe("lunoraError", () => {
     it("fills status/title/hint from the catalog by code", () => {
@@ -71,6 +71,20 @@ describe("isLunoraError", () => {
         expect(isLunoraError(new Error("x"))).toBe(false);
         expect(isLunoraError({ code: "X", status: 1 })).toBe(false);
         expect(isLunoraError(undefined)).toBe(false);
+    });
+});
+
+describe("isInternalCode", () => {
+    it("flags the internal/redacted codes", () => {
+        expect(isInternalCode("INTERNAL")).toBe(true);
+        expect(isInternalCode("INTERNAL_SERVER_ERROR")).toBe(true);
+        expect(isInternalCode("RPC_FAILED")).toBe(true);
+    });
+
+    it("does not flag client-safe codes", () => {
+        expect(isInternalCode("BAD_REQUEST")).toBe(false);
+        expect(isInternalCode("CONFLICT")).toBe(false);
+        expect(isInternalCode("NOT_FOUND")).toBe(false);
     });
 });
 

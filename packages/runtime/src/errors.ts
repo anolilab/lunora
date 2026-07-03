@@ -1,4 +1,4 @@
-import { isLunoraError, LunoraError as BaseLunoraError } from "@lunora/errors";
+import { isInternalCode, isLunoraError, LunoraError as BaseLunoraError } from "@lunora/errors";
 
 interface LunoraErrorBody {
     error: {
@@ -18,6 +18,20 @@ interface LunoraErrorBody {
  */
 const toErrorResponse = (error: unknown): Response => {
     if (isLunoraError(error)) {
+        // An internal/invariant code must not echo its message (may carry stack
+        // traces, file paths, or internal identifiers) — log it, send generic.
+        if (isInternalCode(error.code)) {
+            // eslint-disable-next-line no-console
+            console.error("[lunora] internal error:", error);
+
+            const redacted: LunoraErrorBody = { error: { code: error.code, message: "Internal error" } };
+
+            return Response.json(redacted, {
+                headers: { "content-type": "application/json" },
+                status: error.status,
+            });
+        }
+
         const body: LunoraErrorBody = { error: { code: error.code, message: error.message } };
 
         return Response.json(body, {

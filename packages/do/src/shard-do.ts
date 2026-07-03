@@ -1,5 +1,5 @@
 import type { DurableObjectStorage } from "@cloudflare/workers-types";
-import { isLunoraError, resolveHint } from "@lunora/errors";
+import { isInternalCode, isLunoraError, resolveHint } from "@lunora/errors";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
@@ -4489,6 +4489,15 @@ abstract class ShardDO {
         // surface. `isLunoraError` is structural, so this package still takes no
         // hard dependency on the packages that throw these.
         if (isLunoraError(error)) {
+            // An internal/invariant code must not echo its message (may carry SQL
+            // fragments, paths, or internal identifiers) — log it, send generic.
+            if (isInternalCode(error.code)) {
+                // eslint-disable-next-line no-console -- server-side diagnostic for an internal error
+                console.error("[@lunora/do] internal error:", error);
+
+                return jsonResponse({ error: { code: error.code, message: "internal error" } }, error.status);
+            }
+
             const body: { code: string; data?: unknown; docsUrl?: string; hint?: string | string[]; message: string } = {
                 code: error.code,
                 message: error.message,

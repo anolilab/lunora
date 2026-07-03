@@ -97,6 +97,16 @@ export const ERROR_CATALOG = {
 export type LunoraErrorCode = keyof typeof ERROR_CATALOG;
 
 /**
+ * True when `code` is an internal/redacted code — an internal failure or
+ * unhandled invariant whose `message` must NOT cross the wire (it may carry SQL
+ * fragments, file paths, or internal identifiers). The transport mappers emit a
+ * generic message for these (and log the real one server-side). Throwing a
+ * `LunoraError` with any *other* code is the author's vouch that its message is
+ * client-safe.
+ */
+export const isInternalCode = (code: string): boolean => code === "INTERNAL" || code === "INTERNAL_SERVER_ERROR" || code === "RPC_FAILED";
+
+/**
  * A message-matched solution for errors that reach a consumer without a `code`
  * — chiefly `@lunora/codegen` build errors, which are thrown as plain messages
  * into generated code (and flattened to `{ message }` by the Vite overlay), so
