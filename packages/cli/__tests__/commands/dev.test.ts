@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -39,6 +39,30 @@ describe("lunora dev", () => {
             expect(plan.wrangler.args.join(" ")).toContain("dev");
             expect(plan.wrangler.args.join(" ")).not.toContain("vite");
             expect(plan.studioEnabled).toBe(true);
+        });
+
+        it("adds a framework redirect hint (wrangler plan unchanged) in a Vite project", () => {
+            expect.assertions(4);
+
+            // A meta-framework project: `@lunora/vite` runs the worker inside Vite.
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ devDependencies: { "@react-router/dev": "^7.0.0" } }), "utf8");
+
+            const plan = planDevCommand({ cwd: workdir, logger: silentLogger() });
+
+            expect(plan.frameworkHint).toContain("react-router");
+            expect(plan.frameworkHint).toContain("lunora dev");
+            // The wrangler spawn is unchanged — the hint never replaces it.
+            expect(plan.wrangler.args.join(" ")).toContain("wrangler dev");
+            expect(plan.wrangler.tag).toBe("wrangler");
+        });
+
+        it("adds no hint for a standalone project (no framework)", () => {
+            expect.assertions(2);
+
+            const plan = planDevCommand({ cwd: workdir, logger: silentLogger() });
+
+            expect(plan.frameworkHint).toBeUndefined();
+            expect(plan.wrangler.args.join(" ")).toContain("wrangler dev");
         });
 
         it("flags the worker as a dev deployment via `--var WORKER_ENV:development`", () => {
@@ -192,6 +216,36 @@ describe("lunora dev", () => {
             expect(codegenClosed).toBe(true);
             expect(studioClosed).toBe(true);
             expect(result.plan.workerOrigin).toBe("http://localhost:8787");
+        });
+
+        it("logs the framework redirect hint but still spawns the worker", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { nuxt: "^3.0.0" } }), "utf8");
+
+            const warnings: string[] = [];
+            let workerSpawned = false;
+
+            const result = await runDevCommand({
+                cwd: workdir,
+                logger: { ...silentLogger(), warn: (message) => warnings.push(message) },
+                startCodegen: () => {
+                    return { close: () => {}, watchAvailable: true };
+                },
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                startWorker: () => {
+                    workerSpawned = true;
+
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            expect(result.code).toBe(0);
+            expect(workerSpawned).toBe(true);
+            expect(warnings.some((line) => line.includes("nuxt") && line.includes("lunora dev"))).toBe(true);
         });
 
         it("fills empty .dev.vars secrets + the admin token before the worker boots", async () => {

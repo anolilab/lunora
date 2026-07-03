@@ -6,6 +6,7 @@ import {
     AGENT_RULES_HINT,
     claimAgentRulesHint,
     detectAgentRules,
+    detectFramework,
     DEV_VARS_EXAMPLE_FILE,
     DEV_VARS_FILE,
     discoverContainerInfo,
@@ -28,6 +29,7 @@ import type { CodegenWatcherHandle } from "../../util/codegen-watch";
 import { startCodegenWatch } from "../../util/codegen-watch";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import type { PackageManager } from "../../util/detect-package-manager";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
 import type { SpawnDescriptor } from "../../util/spawn";
@@ -102,6 +104,15 @@ interface DevRemotePlan {
 
 interface DevCommandPlan {
     codegenEnabled: boolean;
+
+    /**
+     * One-line redirect hint printed when a Vite/meta-framework is detected: in
+     * those projects the worker runs *inside* Vite, so the user should run their
+     * framework dev script for the full app. `undefined` for a standalone project
+     * (no framework) — `lunora dev` is the right command there. Purely
+     * informational: the wrangler spawn runs regardless.
+     */
+    frameworkHint?: string;
     /** The remote-binding decision: which D1/KV/R2 bindings hit the deployed worker. */
     remote: DevRemotePlan;
     studioEnabled: boolean;
@@ -142,6 +153,9 @@ const resolveRemotePlan = (options: DevCommandOptions, cwd: string): { args: str
     return { args: ["--config", result.configPath], plan: { bindings, cleanup, enabled: true } };
 };
 
+/** The dev-server script invocation for the framework redirect hint (`pnpm dev`, `npm run dev`, …). */
+const frameworkDevScript = (manager: PackageManager): string => (manager === "npm" || manager === "bun" ? `${manager} run dev` : `${manager} dev`);
+
 /**
  * Plan `lunora dev`: it runs the worker via `wrangler dev` and nothing else as a
  * child process. Vite is intentionally NOT spawned — a project may not use Vite,
@@ -152,6 +166,15 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
     const cwd = options.cwd ?? process.cwd();
     const workerPort = options.workerPort ?? DEFAULT_WORKER_PORT;
     const manager = detectPackageManager(cwd);
+    // In a Vite/meta-framework project the `@lunora/vite` plugin runs the worker
+    // inside Vite, so `lunora dev` (wrangler-only) gives just the worker — no
+    // frontend, no HMR. Detect the framework and surface a one-line redirect hint;
+    // the wrangler spawn still runs regardless (this is a hint, not a redirect).
+    const detection = detectFramework(cwd);
+    const frameworkHint =
+        detection.framework === "none"
+            ? undefined
+            : `this project uses ${detection.framework} — the worker runs inside Vite there. run \`${frameworkDevScript(manager)}\` for the full app (frontend + HMR); \`lunora dev\` starts only the worker.`;
     const remote = resolveRemotePlan(options, cwd);
     // `--var WORKER_ENV:development` flags the worker as a dev deployment so the
     // runtime streams every RPC dispatch summary to the terminal by default
@@ -164,6 +187,7 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
 
     return {
         codegenEnabled: options.codegen !== false,
+        frameworkHint,
         remote: remote.plan,
         studioEnabled: options.studio !== false,
         studioPort: options.port ?? DEFAULT_STUDIO_PORT,
@@ -481,6 +505,12 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
             } catch (error: unknown) {
                 logger.warn(`studio server failed to start (${error instanceof Error ? error.message : String(error)}) — continuing without it`);
             }
+        }
+
+        // A Vite/meta-framework was detected: nudge the user to their framework
+        // dev script for the full app before wrangler starts (the worker still runs).
+        if (plan.frameworkHint !== undefined) {
+            logger.warn(plan.frameworkHint);
         }
 
         const worker = (options.startWorker ?? defaultWorkerSpawner)(plan.wrangler, logger);
