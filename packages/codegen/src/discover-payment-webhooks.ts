@@ -1,7 +1,7 @@
 import type { Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName } from "./argument-taint";
+import { calleeName, enclosingExportName } from "./argument-taint";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 import type { PaymentWebhookIR } from "./ir";
 
@@ -13,19 +13,6 @@ import type { PaymentWebhookIR } from "./ir";
  * options carry no tolerance knob.
  */
 const WEBHOOK_ADAPTER_CALLEES = new Set(["createPolarAdapter", "createStripeAdapter"]);
-
-/** The simple callee name of a call expression — a bare identifier (`createStripeAdapter`) or a member access (`payment.createStripeAdapter` → `createStripeAdapter`). */
-const calleeName = (expression: TsNode): string | undefined => {
-    if (Node.isIdentifier(expression)) {
-        return expression.getText();
-    }
-
-    if (Node.isPropertyAccessExpression(expression)) {
-        return expression.getName();
-    }
-
-    return undefined;
-};
 
 /** A node's numeric literal value (`300`), or `undefined` when it isn't a plain numeric literal (`60 * 60`, an identifier, an env read — not statically knowable, so never flagged). */
 const numericLiteralValue = (node: TsNode | undefined): number | undefined => (node && Node.isNumericLiteral(node) ? Number(node.getText()) : undefined);

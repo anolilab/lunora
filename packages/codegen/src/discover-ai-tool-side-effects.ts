@@ -1,7 +1,7 @@
 import type { CallExpression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName, referencesArgs } from "./argument-taint";
+import { calleeName, enclosingExportName, referencesArgs } from "./argument-taint";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 import type { AiToolSideEffectIR } from "./ir";
 
@@ -27,19 +27,6 @@ const SIDE_EFFECT_SINKS: ReadonlyArray<{ methods: ReadonlySet<string>; prefixes:
     { methods: new Set(["fetch"]), prefixes: ["context", "ctx"] },
     { methods: new Set(["queue", "send"]), prefixes: ["context.email", "context.mail", "ctx.email", "ctx.mail"] },
 ];
-
-/** The simple callee name of a call expression — a bare identifier (`generateText`) or a member access (`ai.generateText` → `generateText`). */
-const calleeName = (expression: TsNode): string | undefined => {
-    if (Node.isIdentifier(expression)) {
-        return expression.getText();
-    }
-
-    if (Node.isPropertyAccessExpression(expression)) {
-        return expression.getName();
-    }
-
-    return undefined;
-};
 
 /** The privileged side-effect label a call matches (`ctx.db.insert`, `ctx.run`, …), or `undefined` when the call is not a tracked sink. */
 const sideEffectLabel = (call: CallExpression): string | undefined => {

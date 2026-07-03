@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName } from "./argument-taint";
+import { calleeName, enclosingExportName } from "./argument-taint";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 import { IDENTITY_FILENAME } from "./discover-identity";
 import type { IdentityClaimReadIR } from "./ir";
@@ -42,19 +42,6 @@ const declaredClaimKeys = (objectLiteral: ObjectLiteralExpression): Set<string> 
     }
 
     return keys;
-};
-
-/** The simple callee name of a call expression — a bare identifier (`defineIdentity`) or a member access (`server.defineIdentity` → `defineIdentity`). */
-const calleeName = (expression: TsNode): string | undefined => {
-    if (Node.isIdentifier(expression)) {
-        return expression.getText();
-    }
-
-    if (Node.isPropertyAccessExpression(expression)) {
-        return expression.getName();
-    }
-
-    return undefined;
 };
 
 /**

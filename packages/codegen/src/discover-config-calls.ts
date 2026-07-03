@@ -1,6 +1,7 @@
 import type { ArrowFunction, Block, FunctionExpression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
+import { calleeName } from "./argument-taint";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 import type { ConfigCallIR } from "./ir";
 
@@ -29,23 +30,6 @@ const CALLBACK_CALLEES = new Set(["extend"]);
 
 /** The subset of {@link ConfigCallIR} a config/callback reader can determine from the argument alone — the caller fills in `callee`/`file`/`line`. */
 type ConfigCallEvidence = Pick<ConfigCallIR, "analyzable" | "presentKeys" | "trueKeys">;
-
-/**
- * The simple callee name of a call/new expression — the trailing identifier for a
- * bare call (`createPayment`) or a member call (`payment.createPayment` →
- * `createPayment`). Returns `undefined` for anything without a resolvable name.
- */
-const calleeName = (expression: TsNode): string | undefined => {
-    if (Node.isIdentifier(expression)) {
-        return expression.getText();
-    }
-
-    if (Node.isPropertyAccessExpression(expression)) {
-        return expression.getName();
-    }
-
-    return undefined;
-};
 
 /**
  * Read an object literal's properties into the present/true key sets. A spread

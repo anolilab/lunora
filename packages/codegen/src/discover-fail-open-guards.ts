@@ -1,7 +1,7 @@
 import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName } from "./argument-taint";
+import { calleeName, enclosingExportName } from "./argument-taint";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 import type { FailOpenGuardIR } from "./ir";
 
@@ -22,23 +22,6 @@ const OPTIONS_ARGUMENT_INDEX = new Map<string, number>([
 
 /** The callee names that take a rate-limit `name` as their second string argument (the Turnstile guard has none). */
 const RATE_LIMIT_CALLEES = new Set(["dbRateLimit", "rateLimit"]);
-
-/**
- * The simple callee name of a call expression — the trailing identifier for a
- * bare call (`rateLimit(...)`) or a member call (`ratelimit.rateLimit(...)` →
- * `rateLimit`). Matched by shape so a re-export or alias still resolves.
- */
-const calleeName = (expression: TsNode): string | undefined => {
-    if (Node.isIdentifier(expression)) {
-        return expression.getText();
-    }
-
-    if (Node.isPropertyAccessExpression(expression)) {
-        return expression.getName();
-    }
-
-    return undefined;
-};
 
 /**
  * Whether the options-object argument sets `failOpen: true` as a boolean

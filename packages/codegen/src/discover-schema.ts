@@ -1018,18 +1018,23 @@ const extendCallsOf = (defineSchemaCall: CallExpression): CallExpression[] => {
     return calls;
 };
 
-/** Recognised Cloudflare DO data-residency jurisdictions — the literals a `.jurisdiction("…")` call may carry. */
-const JURISDICTIONS = new Set<SchemaIR["jurisdiction"]>(["eu", "fedramp", "us"]);
-
 /**
- * Walk the builder chain wrapping a `defineSchema(...)` call for a
- * `.jurisdiction("…")` link and return its string-literal argument. Mirrors
- * {@link extendCallsOf}'s parent-walk so the call is found regardless of where
- * it sits in the chain (`defineSchema(...).rls(...).jurisdiction("us").extend(...)`).
- * Returns `undefined` when absent; throws on an unrecognised literal so a typo
- * fails loudly rather than emitting an invalid jurisdiction.
+ * Walk the builder chain wrapping `defineSchemaCall` for a `.&lt;methodName>("literal")`
+ * link and return its validated string-literal argument, or `undefined` when the
+ * method is absent from the chain (found regardless of where it sits, e.g.
+ * `defineSchema(...).rls("required").jurisdiction("us").extend(...)`). Shared by
+ * {@link jurisdictionOf} and {@link rlsModeOf}, which differ only in the method
+ * name, the allowed-literal `Set`, and the diagnostic phrasing. Throws (via
+ * {@link diagnosticAt}) on a non-literal argument or an unrecognised literal, so a
+ * typo fails loudly rather than silently mis-modelling the schema.
  */
-const jurisdictionOf = (defineSchemaCall: CallExpression): SchemaIR["jurisdiction"] => {
+const chainedStringLiteralArgument = <T extends string>(
+    defineSchemaCall: CallExpression,
+    methodName: string,
+    noun: string,
+    allowed: ReadonlySet<T>,
+    expected: string,
+): T | undefined => {
     let current: TsNode = defineSchemaCall;
 
     for (;;) {
@@ -1045,17 +1050,17 @@ const jurisdictionOf = (defineSchemaCall: CallExpression): SchemaIR["jurisdictio
             break;
         }
 
-        if (parent.getName() === "jurisdiction") {
+        if (parent.getName() === methodName) {
             const argument = callParent.getArguments()[0];
 
             if (!argument || !Node.isStringLiteral(argument)) {
-                throw diagnosticAt(callParent, '`.jurisdiction(...)` expects a string literal ("eu", "us", or "fedramp")');
+                throw diagnosticAt(callParent, `\`.${methodName}(...)\` expects a string literal (${expected})`);
             }
 
-            const value = argument.getLiteralText() as SchemaIR["jurisdiction"];
+            const value = argument.getLiteralText() as T;
 
-            if (!JURISDICTIONS.has(value)) {
-                throw diagnosticAt(argument, `unknown jurisdiction ${JSON.stringify(value)} — expected "eu", "us", or "fedramp"`);
+            if (!allowed.has(value)) {
+                throw diagnosticAt(argument, `unknown ${noun} ${JSON.stringify(value)} — expected ${expected}`);
             }
 
             return value;
@@ -1066,55 +1071,30 @@ const jurisdictionOf = (defineSchemaCall: CallExpression): SchemaIR["jurisdictio
 
     return undefined;
 };
+
+/** Recognised Cloudflare DO data-residency jurisdictions — the literals a `.jurisdiction("…")` call may carry. */
+const JURISDICTIONS = new Set<NonNullable<SchemaIR["jurisdiction"]>>(["eu", "fedramp", "us"]);
+
+/**
+ * The `.jurisdiction("…")` link's literal on the chain wrapping a `defineSchema(...)`
+ * call (`defineSchema(...).rls(...).jurisdiction("us").extend(...)`), or `undefined`
+ * when absent. Throws on an unrecognised literal so a typo fails loudly rather than
+ * emitting an invalid jurisdiction. See {@link chainedStringLiteralArgument}.
+ */
+const jurisdictionOf = (defineSchemaCall: CallExpression): SchemaIR["jurisdiction"] =>
+    chainedStringLiteralArgument(defineSchemaCall, "jurisdiction", "jurisdiction", JURISDICTIONS, '"eu", "us", or "fedramp"');
 
 /** Recognised `.rls(...)` mode literals — currently only `"required"`. */
-const RLS_MODES = new Set<SchemaIR["rlsMode"]>(["required"]);
+const RLS_MODES = new Set<NonNullable<SchemaIR["rlsMode"]>>(["required"]);
 
 /**
- * Walk the builder chain wrapping a `defineSchema(...)` call for a
- * `.rls("required")` link and return its string-literal argument. Mirrors
- * {@link jurisdictionOf}'s parent-walk so the call is found regardless of
- * where it sits in the chain (`defineSchema(...).rls("required").extend(...)`).
- * Returns `undefined` when absent; throws on an unrecognised literal so a typo
- * fails loudly rather than silently treating the schema as RLS-unenforced.
+ * The `.rls("required")` link's literal on the chain wrapping a `defineSchema(...)`
+ * call (`defineSchema(...).rls("required").extend(...)`), or `undefined` when absent.
+ * Throws on an unrecognised literal so a typo fails loudly rather than silently
+ * treating the schema as RLS-unenforced. See {@link chainedStringLiteralArgument}.
  */
-const rlsModeOf = (defineSchemaCall: CallExpression): SchemaIR["rlsMode"] => {
-    let current: TsNode = defineSchemaCall;
-
-    for (;;) {
-        const parent = current.getParent();
-
-        if (!parent || !Node.isPropertyAccessExpression(parent)) {
-            break;
-        }
-
-        const callParent = parent.getParent();
-
-        if (!callParent || !Node.isCallExpression(callParent)) {
-            break;
-        }
-
-        if (parent.getName() === "rls") {
-            const argument = callParent.getArguments()[0];
-
-            if (!argument || !Node.isStringLiteral(argument)) {
-                throw diagnosticAt(callParent, '`.rls(...)` expects a string literal ("required")');
-            }
-
-            const value = argument.getLiteralText() as SchemaIR["rlsMode"];
-
-            if (!RLS_MODES.has(value)) {
-                throw diagnosticAt(argument, `unknown rls mode ${JSON.stringify(value)} — expected "required"`);
-            }
-
-            return value;
-        }
-
-        current = callParent;
-    }
-
-    return undefined;
-};
+const rlsModeOf = (defineSchemaCall: CallExpression): SchemaIR["rlsMode"] =>
+    chainedStringLiteralArgument(defineSchemaCall, "rls", "rls mode", RLS_MODES, '"required"');
 
 /** Parse the base `defineSchema({ table: defineTable(...) })` object literal into {@link TableIR}s. */
 const parseBaseTables = (object: ObjectLiteralExpression): TableIR[] => {

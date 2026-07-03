@@ -1,28 +1,9 @@
 import type { CallExpression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName } from "./argument-taint";
+import { calleeName, enclosingExportName } from "./argument-taint";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 import type { AuthConfigIR } from "./ir";
-
-/**
- * The simple callee name of a call expression — the trailing identifier for a
- * bare call (`createAuth`) or a member call (`auth.createAuth` → `createAuth`).
- * Returns `undefined` for anything without a resolvable name. Matched by shape
- * (an `import`-agnostic, fail-closed convention the other feeders share), so a
- * re-export or alias still resolves.
- */
-const calleeName = (expression: TsNode): string | undefined => {
-    if (Node.isIdentifier(expression)) {
-        return expression.getText();
-    }
-
-    if (Node.isPropertyAccessExpression(expression)) {
-        return expression.getName();
-    }
-
-    return undefined;
-};
 
 /**
  * The initializer of a named property on an object-literal `object`, when

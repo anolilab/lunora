@@ -1,31 +1,12 @@
 import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { enclosingExportName, isArgumentDerived, isScopedByContext } from "./argument-taint";
+import { calleeName, enclosingExportName, isArgumentDerived, isScopedByContext } from "./argument-taint";
 import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 import type { RatelimitKeySelectorIR } from "./ir";
 
 /** The `@lunora/ratelimit` middleware factories whose third argument carries a `key` selector. */
 const RATELIMIT_CALLEES = new Set(["dbRateLimit", "rateLimit"]);
-
-/**
- * The simple callee name of a call expression — the trailing identifier for a
- * bare call (`rateLimit(...)`) or a member call (`ratelimit.rateLimit(...)` →
- * `rateLimit`). Matched by shape (an `import`-agnostic, fail-closed
- * convention, the same one the other feeders use), so a re-export or alias
- * still resolves.
- */
-const calleeName = (expression: TsNode): string | undefined => {
-    if (Node.isIdentifier(expression)) {
-        return expression.getText();
-    }
-
-    if (Node.isPropertyAccessExpression(expression)) {
-        return expression.getName();
-    }
-
-    return undefined;
-};
 
 /**
  * The initializer of a `key` property on `options`, or `undefined` when
