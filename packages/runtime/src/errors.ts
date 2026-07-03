@@ -1,5 +1,5 @@
 import type { ErrorBody } from "@lunora/errors";
-import { isLunoraError, LunoraError as BaseLunoraError, toErrorBody } from "@lunora/errors";
+import { LunoraError as BaseLunoraError, toErrorBody } from "@lunora/errors";
 
 interface LunoraErrorBody {
     error: ErrorBody;
@@ -13,7 +13,7 @@ interface LunoraErrorBody {
  * `@lunora/do` data layer) is echoed with its `code`/`message`/`hint`/`docsUrl`;
  * an internal-coded error keeps its status but its message is redacted; anything
  * else becomes a generic `INTERNAL` 500. All of these share the unified shape
- * recognized by {@link isLunoraError}.
+ * recognized by `isLunoraError`.
  */
 const toErrorResponse = (error: unknown): Response => {
     const { body, redacted, status } = toErrorBody(error, { fallbackCode: "INTERNAL", redactedMessage: "Internal error" });
@@ -36,7 +36,7 @@ const toErrorResponse = (error: unknown): Response => {
  * dispatch-specific codes (`METHOD_NOT_ALLOWED`, `*_NOT_CONFIGURED`, …) and an
  * explicit status, so they don't need a central catalog entry. Because it is a
  * real `LunoraError`, it carries the unified wire shape and is recognized by
- * {@link isLunoraError} everywhere. Anything thrown that isn't a `LunoraError`
+ * `isLunoraError` everywhere. Anything thrown that isn't a `LunoraError`
  * is mapped to a generic 500 with code `INTERNAL`.
  */
 class LunoraError extends BaseLunoraError {
