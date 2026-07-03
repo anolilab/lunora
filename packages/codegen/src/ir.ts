@@ -456,6 +456,33 @@ export interface WorkflowIR {
     steps: ReadonlyArray<WorkflowStepIR>;
 }
 
+/**
+ * An agent lifted from a `defineAgent()` export in `lunora/agents.ts`. A
+ * `defineAgent` compiles its durable tool-loop onto a Cloudflare Workflow, so —
+ * like {@link WorkflowIR} — an agent is NOT a Durable Object: wrangler gets only
+ * a `workflows[]` entry, never a `durable_objects` binding or a migration class.
+ * Carries what the emitters and the config layer need to wire the generated
+ * agent `WorkflowEntrypoint` class (e.g. `SupportAgentWorkflow`), the typed
+ * per-agent `ctx.agents` producer, and the reconciled wrangler `workflows[]`
+ * entry. Names are derived via `@lunora/agent`'s shared helpers so codegen and
+ * the config layer can never disagree.
+ */
+export interface AgentIR {
+    /** The Cloudflare `Workflow` binding name, e.g. `AGENT_SUPPORT`. */
+    bindingName: string;
+    /** Generated `WorkflowEntrypoint` class name, e.g. `SupportAgentWorkflow`. */
+    className: string;
+    /** The `lunora/agents.ts` export name, e.g. `support`. */
+    exportName: string;
+
+    /**
+     * The stable wrangler `workflows[].name`. Defaults to the kebab-cased export
+     * name (`support` → `agent-support`); a static `name:` literal in the
+     * definition overrides it.
+     */
+    name: string;
+}
+
 /** One durable step call lifted from a workflow handler body (the use side of {@link WorkflowIR.steps}). */
 export interface WorkflowStepIR {
     /** 1-based line of the durable step call. */

@@ -1,5 +1,6 @@
 export { formatAdvisories, lintSchema } from "./advisor";
 export { CodegenDiagnosticError, diagnosticAt } from "./diagnostics";
+export { AGENTS_FILENAME, discoverAgents } from "./discover-agents";
 export { default as discoverAuthApiCalls } from "./discover-authapi-calls";
 export { CONTAINERS_FILENAME, discoverContainers } from "./discover-containers";
 export { default as discoverCrons } from "./discover-crons";
@@ -20,6 +21,7 @@ export { discoverShapes, SHAPES_FILENAME } from "./discover-shapes";
 export { default as discoverStorageRulesMetadata } from "./discover-storage-rules";
 export { discoverWorkflows, WORKFLOWS_FILENAME } from "./discover-workflows";
 export {
+    emitAgents,
     emitApi,
     emitCollections,
     emitContainers,
@@ -37,6 +39,7 @@ export {
 export type { EmitAppOptions } from "./emit-app";
 export { emitApp } from "./emit-app";
 export type {
+    AgentIR,
     AuthApiCallIR,
     ContainerIR,
     CronJobIR,

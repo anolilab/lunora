@@ -14,6 +14,7 @@ import type { CapabilityKey } from "./capabilities";
 import { SERVER_CTX_FIELDS } from "./capabilities";
 import compileArgsValidator from "./compile-validator";
 import type {
+    AgentIR,
     ContainerIR,
     CronJobIR,
     EnvIR,
@@ -639,6 +640,84 @@ ${objectMembers}
 /* eslint-enable no-secrets/no-secrets -- re-enable after the workflows-ref emitter */
 
 /**
+ * The `@lunora/agent` runtime functions codegen auto-registers under the
+ * `agents:*` namespace whenever the project declares at least one agent. Their
+ * values come from `agentComponent()` imported directly inside the generated
+ * dispatch table, so apps never re-export them by hand — and function
+ * discovery (which cannot resolve a destructured re-export through a
+ * published package's `.d.ts`) is never involved.
+ */
+const AGENT_RUNTIME_FUNCTION_NAMES = ["agentAppendMessage", "agentEnsureThread", "agentMessages", "agentPatchThread", "agentThread"] as const;
+
+/** Names the app registered itself under the `agents` namespace — they win over auto-registration. */
+const takenAgentFunctionNames = (functions: ReadonlyArray<FunctionIR>): ReadonlySet<string> =>
+    new Set(functions.filter((definition) => sanitizeNamespace(definition.filePath) === "agents").map((definition) => definition.exportName));
+
+/**
+ * Dispatch-table fragment for the auto-registered agent runtime functions.
+ * Every string is empty when the project declares no agents (or the app shadows
+ * every name), keeping agent-free output byte-identical.
+ */
+const renderAgentFunctionRegistry = (
+    agents: ReadonlyArray<AgentIR>,
+    functions: ReadonlyArray<FunctionIR>,
+): { importLine: string; lines: string; prelude: string } => {
+    const empty = { importLine: "", lines: "", prelude: "" };
+
+    if (agents.length === 0) {
+        return empty;
+    }
+
+    const taken = takenAgentFunctionNames(functions);
+    const names = AGENT_RUNTIME_FUNCTION_NAMES.filter((name) => !taken.has(name));
+
+    if (names.length === 0) {
+        return empty;
+    }
+
+    return {
+        importLine: 'import { agentComponent } from "@lunora/agent";\n',
+        lines: names.map((name) => `    "agents:${name}": lunoraAgentRuntimeFunctions.${name} as unknown as RegisteredLunoraFunction,`).join("\n"),
+        prelude:
+            "\n/**\n * The `@lunora/agent` runtime component — auto-registered because `lunora/agents.ts`\n * declares agents. The durable loop dispatches the internal mutations; clients\n * subscribe to the public queries (`agents:agentMessages` is the live thread view).\n */\nconst lunoraAgentRuntimeFunctions = agentComponent().functions;\n",
+    };
+};
+
+/**
+ * Synthetic `FunctionIR` entries for the auto-registered PUBLIC agent queries,
+ * so `api.agents.agentMessages` / `api.agents.agentThread` exist as typed
+ * references (`useSubscription(api.agents.agentMessages, { key })`). The three
+ * internal mutations are deliberately not surfaced — the loop dispatches them
+ * by path over the scheduler channel and nothing client- or caller-side needs
+ * a reference. App-registered names win (no duplicate members).
+ */
+const syntheticAgentApiFunctions = (agents: ReadonlyArray<AgentIR>, functions: ReadonlyArray<FunctionIR>): FunctionIR[] => {
+    if (agents.length === 0) {
+        return [];
+    }
+
+    const taken = takenAgentFunctionNames(functions);
+    const definitions: FunctionIR[] = [
+        {
+            args: { key: { kind: "string" }, limit: { inner: { kind: "number" }, kind: "optional" } },
+            exportName: "agentMessages",
+            filePath: "agents",
+            kind: "query",
+            returnType: "Record<string, unknown>[]",
+        },
+        {
+            args: { key: { kind: "string" } },
+            exportName: "agentThread",
+            filePath: "agents",
+            kind: "query",
+            returnType: "Record<string, unknown> | undefined",
+        },
+    ];
+
+    return definitions.filter((definition) => !taken.has(definition.exportName));
+};
+
+/**
  * Emit `_generated/api.ts` — the typed `api.*` registry (public functions), the
  * `internal.*` registry, and (when the project declares workflows) the typed
  * `workflows.*` reference object. `api`/`internal` are the same `anyApi` proxy
@@ -646,9 +725,14 @@ ${objectMembers}
  * server-side at dispatch, not in the reference. Splitting the *types* keeps
  * internal functions off the client-facing `api` surface.
  */
-const emitApi = (functions: ReadonlyArray<FunctionIR>, workflows: ReadonlyArray<WorkflowIR> = [], useUmbrella = false): string => {
+const emitApi = (
+    functions: ReadonlyArray<FunctionIR>,
+    workflows: ReadonlyArray<WorkflowIR> = [],
+    useUmbrella = false,
+    agents: ReadonlyArray<AgentIR> = [],
+): string => {
     const base = baseSpecifiers(useUmbrella);
-    const publicFunctions = functions.filter((definition) => definition.visibility !== "internal");
+    const publicFunctions = [...functions.filter((definition) => definition.visibility !== "internal"), ...syntheticAgentApiFunctions(agents, functions)];
     const internalFunctions = functions.filter((definition) => definition.visibility === "internal");
 
     const publicBody = renderApiBody(publicFunctions);
@@ -1018,6 +1102,8 @@ const buildStorageBucketNames = (schema: SchemaIR, ruleBuckets: ReadonlyArray<st
 };
 
 interface EmitServerOptions {
+    /** Agents declared via `defineAgent` exports — wires the typed `ctx.agents` producers onto Mutation/Action contexts. */
+    agents?: ReadonlyArray<AgentIR>;
     containers?: ReadonlyArray<ContainerIR>;
 
     /**
@@ -1074,6 +1160,7 @@ interface EmitServerOptions {
 
 /* eslint-disable sonarjs/cognitive-complexity -- emitter that gates each Cloudflare-capability fragment behind its own `has*`/length flag to assemble dense generated TS; the branching is the per-binding emission contract, not refactorable logic */
 const emitServer = ({
+    agents = [],
     containers = [],
     env,
     hasAccessFacade = false,
@@ -1151,6 +1238,11 @@ const emitServer = ({
             assertIdentifier(queue.bindingName, `queue binding "${queue.bindingName}"`);
 
             return `    /** Queue producer binding for the \`${queue.exportName}\` queue. */\n    readonly ${queue.bindingName}?: unknown;`;
+        }),
+        ...agents.map((agent) => {
+            assertIdentifier(agent.bindingName, `agent binding "${agent.bindingName}"`);
+
+            return `    /** Workflow binding for the \`${agent.exportName}\` agent. */\n    readonly ${agent.bindingName}?: unknown;`;
         }),
     ].join("\n");
     const envBlock = `
@@ -1262,6 +1354,24 @@ ${queues.map((queue) => `    readonly ${queue.exportName}: QueueProducer<QueueBo
         : "";
     const queuesContextField = hasQueues ? `\n    readonly queues: LunoraQueues;` : "";
 
+    // Agents live on BOTH MutationCtx and ActionCtx (an agent run is kicked off
+    // from a mutation or an action — like `ctx.workflows` / `ctx.queues`). Each
+    // declared agent becomes a typed `AgentHandle` producer. The base contexts
+    // carry no `agents` member, so — like queues — this adds the field without
+    // an Omit. The handle is not parameterized by the definition (`run` takes the
+    // flat `AgentRunInput`), so no `typeof lunoraAgentDefinitions` import is needed.
+    const hasAgents = agents.length > 0;
+    const agentsTypeImport = hasAgents ? `import type { AgentHandle } from "@lunora/agent";\n` : "";
+    const agentsTypeBlock = hasAgents
+        ? `
+
+/** This project's declared agents, addressable from \`ctx.agents\` by their \`lunora/agents.ts\` export name. */
+export interface LunoraAgents {
+${agents.map((agent) => `    readonly ${agent.exportName}: AgentHandle;`).join("\n")}
+}`
+        : "";
+    const agentsContextField = hasAgents ? `\n    readonly agents: LunoraAgents;` : "";
+
     // Typed identity layer (Plan 080). When the project declares the single
     // `defineIdentity(...)` contract in `lunora/identity.ts`, the generated
     // server recovers the claim *type* from the declaration itself (via
@@ -1334,11 +1444,11 @@ import type {
 } from "${base.server}";
 
 import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, Relations, TableName } from "./dataModel.js";
-${aiTypeImport}${paymentsTypeImport}${containersTypeImport}${workflowsTypeImport}${queuesTypeImport}${identityTypeImport}${envTypeImport}
+${aiTypeImport}${paymentsTypeImport}${containersTypeImport}${workflowsTypeImport}${queuesTypeImport}${agentsTypeImport}${identityTypeImport}${envTypeImport}
 export type { DataModel, Doc, Id, TableName } from "./dataModel.js";
 
 /** Storage buckets this schema declares (\`v.storage("name")\`), narrowing \`ctx.storage.bucket(name)\`. */
-export type StorageBucketName = ${storageBucketUnion};${envBlock}${workflowsTypeBlock}${queuesTypeBlock}${identityTypeBlock}${envTypeBlock}
+export type StorageBucketName = ${storageBucketUnion};${envBlock}${workflowsTypeBlock}${queuesTypeBlock}${agentsTypeBlock}${identityTypeBlock}${envTypeBlock}
 
 /**
  * Project-typed contexts. The base contexts from \`@lunora/server\` are
@@ -1376,13 +1486,13 @@ export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"${authOmit}
 export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${workflowsOmit}${authOmit}${envOmit}> {
     readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${analyticsContextField}${envContextField}${workflowsContextField}${queuesContextField}${authContextField}
+    readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${analyticsContextField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
 }
 
 export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${workflowsOmit}${authOmit}${envOmit}> {
     readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: StorageBase<StorageBucketName>;${accessContextField}${aiActionField}${paymentsActionField}${containersActionField}${kvContextField}${flagsContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${envContextField}${workflowsContextField}${queuesContextField}${authContextField}
+    readonly storage: StorageBase<StorageBucketName>;${accessContextField}${aiActionField}${paymentsActionField}${containersActionField}${kvContextField}${flagsContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${envContextField}${workflowsContextField}${queuesContextField}${agentsContextField}${authContextField}
 }
 
 /**
@@ -1486,10 +1596,20 @@ const emitFunctions = (
     useUmbrella = false,
     mutators: ReadonlyArray<MutatorIR> = [],
     shapes: ReadonlyArray<ShapeIR> = [],
+    agents: ReadonlyArray<AgentIR> = [],
 ): string => {
     const hasFunctions = functions.length > 0;
     const base = baseSpecifiers(useUmbrella);
     const { dispatchBody, importBlock, installBlock, migrationBody, mutatorPaths, shapeBody } = renderFunctionRegistry(functions, migrations, mutators, shapes);
+    // Auto-registered agent runtime functions (see renderAgentFunctionRegistry).
+    const agentRegistry = renderAgentFunctionRegistry(agents, functions);
+    let dispatchBodyWithAgents = dispatchBody;
+
+    if (agentRegistry.lines.length > 0) {
+        // Splice the auto entries after the discovered ones, preserving the
+        // `{\n    entries\n}` layout either side already emits.
+        dispatchBodyWithAgents = dispatchBody.length > 0 ? `${dispatchBody.slice(0, -1)}\n${agentRegistry.lines}\n` : `\n${agentRegistry.lines}\n`;
+    }
     const lifecycleHooks = renderLifecycleManifest(functions);
 
     // Replication-shape + custom-mutator registries (local-first sync engine).
@@ -1530,7 +1650,7 @@ const emitFunctions = (
     const callerParameter = hasFunctions ? "context" : "_context";
     const callRegisteredHelper = hasFunctions ? `${CALL_REGISTERED_HELPER}\n\n` : "";
 
-    return `${GENERATED_HEADER}${importBlock}${compiledArgsImport}${shapeTypeImport}import type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";
+    return `${GENERATED_HEADER}${importBlock}${agentRegistry.importLine}${compiledArgsImport}${shapeTypeImport}import type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";
 ${dataModelImport}
 /**
  * Single registered function, narrowed to the shape \`handleRpc\` needs.
@@ -1550,12 +1670,12 @@ export interface RegisteredLunoraFunction {
     /** \`"internal"\` functions are rejected on the external RPC path; absence === public. */
     visibility?: "internal" | "public";
 }
-
+${agentRegistry.prelude}
 /**
  * Static dispatch table. The key matches the \`__lunoraRef\` the client
  * emits (\`api[namespace][fn].__lunoraRef === "namespace:fn"\`).
  */
-export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {${dispatchBody}};
+export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {${dispatchBodyWithAgents}};
 ${compiledArgsInstall}${shapeRegistry}${mutatorPathsRegistry}
 /**
  * Connection-lifecycle manifest: the function paths the generated ShardDO
@@ -2539,6 +2659,54 @@ ${classes}`;
 /* eslint-enable no-secrets/no-secrets */
 
 /**
+ * Emit `_generated/agents.ts` — one `WorkflowEntrypoint` class per `defineAgent`
+ * export, each a thin subclass of `LunoraWorkflow` (`@lunora/workflow/do`)
+ * constructed with the compiled agent tool-loop (`compileAgentWorkflow`). Like
+ * `_generated/workflows.ts`, the worker entry must re-export these classes:
+ * wrangler requires every `workflows[].class_name` to be exported by the
+ * deployed worker. Returns "" when the project declares no agents (the file is
+ * not written then).
+ */
+const emitAgents = (agents: ReadonlyArray<AgentIR>): string => {
+    if (agents.length === 0) {
+        return "";
+    }
+
+    const classes = agents
+        .map((agent) => {
+            assertIdentifier(agent.exportName, `agent export "${agent.exportName}"`);
+            assertIdentifier(agent.className, `agent class "${agent.className}"`);
+
+            return `/** WorkflowEntrypoint for the \`${agent.exportName}\` agent (binding \`${agent.bindingName}\`). */
+export class ${agent.className} extends LunoraWorkflow<AgentRunInput, AgentRunResult> {
+    public constructor(ctx: ConstructorParameters<typeof LunoraWorkflow>[0], env: Record<string, unknown>) {
+        super(ctx, env, compileAgentWorkflow(${agent.exportName}, "${agent.exportName}"), "${agent.exportName}");
+    }
+}
+`;
+        })
+        .join("\n");
+
+    const imports = agents.map((agent) => agent.exportName).join(", ");
+
+    return `${GENERATED_HEADER}/**
+ * WorkflowEntrypoint classes for the agents declared in \`lunora/agents.ts\`.
+ * Each \`defineAgent\` compiles a replay-safe tool-loop onto a Cloudflare
+ * Workflow. Re-export them from your worker entry — wrangler requires each
+ * \`workflows[].class_name\` to be exported by the worker:
+ *
+ * \`export * from "./lunora/_generated/agents.js";\`
+ */
+import LunoraWorkflow from "@lunora/workflow/do";
+import { compileAgentWorkflow } from "@lunora/agent";
+import type { AgentRunInput, AgentRunResult } from "@lunora/agent";
+
+import { ${imports} } from "../agents.js";
+
+${classes}`;
+};
+
+/**
  * Emit `_generated/queues.ts` — the push-consumer registry the worker `queue()`
  * handler dispatches through. Maps each push queue's stable wrangler name (which
  * `batch.queue` carries) to its `defineQueue` definition + export name. Pull
@@ -2647,6 +2815,42 @@ const emitQueueFragments = (queues: ReadonlyArray<QueueIR>): { build: string; co
         specs: `
 /** Wiring specs for \`ctx.queues\` (codegen-derived from \`lunora/queues.ts\`). */
 const LUNORA_QUEUES: ReadonlyArray<QueueBindingSpec> = [
+${specEntries}
+];
+`,
+    };
+};
+
+/**
+ * The `ctx.agents` producer fragments, mirroring {@link emitQueueFragments}.
+ * Every declared agent resolves its `AGENT_*` Workflow binding off `env` lazily
+ * (via `createAgentContext`), so a missing binding only throws when that agent
+ * is actually started. `ctx.agents` rides Mutation + Action contexts (starting a
+ * run is a side effect — the type omits it from QueryCtx), but at runtime it is
+ * woven onto the shared ctx literal exactly like `ctx.workflows` / `ctx.queues`.
+ */
+const emitAgentFragments = (agents: ReadonlyArray<AgentIR>): { build: string; contextField: string; importLines: string[]; specs: string } => {
+    if (agents.length === 0) {
+        return { build: "", contextField: "", importLines: [], specs: "" };
+    }
+
+    for (const agent of agents) {
+        assertIdentifier(agent.exportName, `agent export "${agent.exportName}"`);
+        assertIdentifier(agent.bindingName, `agent binding "${agent.bindingName}"`);
+    }
+
+    const specEntries = agents.map((agent) => `    { binding: "${agent.bindingName}", exportName: "${agent.exportName}" },`).join("\n");
+
+    return {
+        build: `
+            const agents = createAgentContext(env, LUNORA_AGENTS);
+`,
+        contextField: `\n                agents,`,
+        importLines: [`import { createAgentContext } from "@lunora/agent";`, `import type { AgentBindingSpec } from "@lunora/agent";`],
+        // eslint-disable-next-line no-secrets/no-secrets -- the emitted readonly-array type annotation is dense generated TS, not a credential
+        specs: `
+/** Wiring specs for \`ctx.agents\` (codegen-derived from \`lunora/agents.ts\`). */
+const LUNORA_AGENTS: ReadonlyArray<AgentBindingSpec> = [
 ${specEntries}
 ];
 `,
@@ -2829,6 +3033,8 @@ const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueue
 
 interface EmitShardOptions {
     advisories?: ReadonlyArray<Finding>;
+    /** Agents declared via `defineAgent` exports in `lunora/agents.ts` — wires the typed `ctx.agents` producers. */
+    agents?: ReadonlyArray<AgentIR>;
     containers?: ReadonlyArray<ContainerIR>;
     /** The single `defineEnv(...)` contract declared in `lunora/env.ts` — applies the accessor to the worker `env` to populate `ctx.env`. */
     env?: EnvIR;
@@ -2873,6 +3079,7 @@ interface EmitShardOptions {
 /* eslint-disable sonarjs/cognitive-complexity -- emitter that gates each Cloudflare-capability fragment behind its own `has*`/length flag to assemble dense generated TS; the branching is the per-binding emission contract, not refactorable logic */
 const emitShard = ({
     advisories = [],
+    agents = [],
     containers = [],
     env,
     flagKeys = [],
@@ -2930,6 +3137,7 @@ const emitShard = ({
         importLines: workflowImportLines,
         specs: workflowSpecs,
     } = emitWorkflowFragments(workflows);
+    const { build: agentsBuild, contextField: agentsContextField, importLines: agentImportLines, specs: agentSpecs } = emitAgentFragments(agents);
     const {
         build: paymentsBuild,
         configField: paymentsConfigField,
@@ -3153,6 +3361,7 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
         ...containerImportLines,
         ...workflowImportLines,
         ...queueImportLines,
+        ...agentImportLines,
         ...paymentsImports,
         ``,
         `import schema from "../schema.js";`,
@@ -3608,7 +3817,7 @@ const LUNORA_STORAGE_RULES: StorageRulesResult = ${JSON.stringify(storageRulesDa
 
 /** Which optional package-backed features this app wires up (discovered from imports / \`ctx.*\` reads / schema signals) served via \`__lunora_admin__:studioFeatures\` so the studio hides nav pages whose package isn't enabled. */
 const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = ${JSON.stringify(studioFeaturesData, undefined, 4)};
-${flagsOverrides.constant}${shapeReadRegistryConst}${workflowsMetadataConst}${queuesMetadataConst}${containerSpecs}${workflowSpecs}${queueSpecs}
+${flagsOverrides.constant}${shapeReadRegistryConst}${workflowsMetadataConst}${queuesMetadataConst}${containerSpecs}${workflowSpecs}${queueSpecs}${agentSpecs}
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to \`__cdc_log\` on every write (backs streaming export + replay-PITR). */
     cdc?: boolean;
@@ -4044,7 +4253,7 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
             // dispatch path) fall back to the per-request fields as before.
             const userId = options.identity ? options.identity.userId : this.getCurrentUserId();
             const identity = options.identity ? options.identity.identity : this.getCurrentIdentity();
-${vectorsBuild}${aiBuild}${everyContextBuild}${containersBuild}${workflowsBuild}${queuesBuild}
+${vectorsBuild}${aiBuild}${everyContextBuild}${containersBuild}${workflowsBuild}${queuesBuild}${agentsBuild}
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             // Build the storage adapter once and share it between \`ctx.storage\`
             // and \`ctx.db.system._storage\` so both read the same R2 binding. The
@@ -4086,7 +4295,7 @@ ${facadeBlock}${paymentsBuild}
                 log,
                 now,${ormContextField}
                 scheduler,
-                storage,${vectorsContextField}${aiContextField}${everyContextField}${paymentsContextField}${containersContextField}${workflowsContextField}${queuesContextField}
+                storage,${vectorsContextField}${aiContextField}${everyContextField}${paymentsContextField}${containersContextField}${workflowsContextField}${queuesContextField}${agentsContextField}
             };
 ${isActionLine}${actionOnlyBlock}
             ctx.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__lunoraRef, fnArgs, ctx);
@@ -4488,6 +4697,7 @@ const emitWranglerCronTriggers = (crons: ReadonlyArray<CronJobIR>): string[] => 
 
 export {
     buildStorageColumns,
+    emitAgents,
     emitApi,
     emitCollections,
     emitContainers,

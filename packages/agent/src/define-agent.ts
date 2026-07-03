@@ -26,7 +26,7 @@ const agentDefaultName = (exportName: string): string => `agent-${exportName.rep
  *
  * ```ts
  * // lunora/agents.ts
- * import { agentComponent, defineAgent, defineAgentTool } from "@lunora/agent";
+ * import { defineAgent, defineAgentTool } from "@lunora/agent";
  *
  * export const support = defineAgent({
  *     instructions: "You are a helpful support agent.",
@@ -39,10 +39,10 @@ const agentDefaultName = (exportName: string): string => `agent-${exportName.rep
  *         }),
  *     },
  * });
- *
- * // Re-export the runtime functions so codegen registers them under `agents:*`:
- * export const { agentAppendMessage, agentEnsureThread, agentMessages, agentPatchThread, agentThread } = agentComponent().functions;
  * ```
+ *
+ * Declaring an agent is enough — codegen auto-registers the `agents:*` runtime
+ * functions (from `agentComponent()`) and the `ctx.agents` producer surface.
  */
 const defineAgent = (config: AgentConfig): AgentDefinition => {
     // The type forbids it, but a plain-JS caller can still omit the model —

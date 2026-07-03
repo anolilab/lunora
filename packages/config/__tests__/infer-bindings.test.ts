@@ -333,6 +333,71 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
         expect(result.workflows).toEqual([]);
     });
 
+    const AGENTS_TS = `import { defineAgent } from "@lunora/agent";
+
+export const support = defineAgent({ model: "m" });
+`;
+
+    it("infers a declared agent as exported via the star re-export", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("lunora/agents.ts", AGENTS_TS);
+        write(
+            "src/server/index.ts",
+            `${ENTRY_SHARD_ONLY}
+export * from "../../lunora/_generated/agents.js";
+`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.agents).toHaveLength(1);
+        expect(result.agents[0]).toMatchObject({ bindingName: "AGENT_SUPPORT", className: "SupportAgentWorkflow", exported: true });
+        expect(result.signals.join(" ")).toContain('agent "support" declared and exported');
+    });
+
+    it("infers a declared agent as exported via a named re-export of the AgentWorkflow class", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("lunora/agents.ts", AGENTS_TS);
+        write(
+            "src/server/index.ts",
+            `${ENTRY_SHARD_ONLY}
+export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
+`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.agents[0]).toMatchObject({ exported: true });
+    });
+
+    it("flags a declared agent the entry does not export", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("lunora/agents.ts", AGENTS_TS);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.agents[0]).toMatchObject({ exported: false });
+        expect(result.signals.join(" ")).toContain('agent "support" is declared but SupportAgentWorkflow is not exported');
+    });
+
+    it("reports no agents for a project without lunora/agents.ts", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.agents).toEqual([]);
+    });
+
     it("infers payment from a @lunora/payment import and hints at the provider secrets, without binding a class", async () => {
         expect.assertions(4);
 

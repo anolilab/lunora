@@ -18,7 +18,7 @@ pnpm add @lunora/agent
 
 ```ts
 // lunora/agents.ts
-import { agentComponent, defineAgent, defineAgentTool } from "@lunora/agent";
+import { defineAgent, defineAgentTool } from "@lunora/agent";
 import { jsonSchema } from "@lunora/ai";
 
 export const support = defineAgent({
@@ -37,11 +37,12 @@ export const support = defineAgent({
         }),
     },
 });
-
-// Re-export the runtime functions so codegen registers them under `agents:*`
-// (the durable loop persists thread state through them):
-export const { agentAppendMessage, agentEnsureThread, agentMessages, agentPatchThread, agentThread } = agentComponent().functions;
 ```
+
+Declaring an agent is enough: codegen auto-registers the runtime functions the
+durable loop persists through (`agents:agentAppendMessage`, `agents:agentEnsureThread`,
+`agents:agentPatchThread`) plus the public thread queries (`agents:agentMessages`,
+`agents:agentThread`), and wires the typed `ctx.agents.<name>` producer.
 
 Merge the thread tables into your schema — they auto-prefix to
 `agent_threads` / `agent_messages` and can never collide with app tables:

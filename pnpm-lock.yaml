@@ -2024,6 +2024,9 @@ importers:
       '@lunora/advisor':
         specifier: workspace:*
         version: link:../advisor
+      '@lunora/agent':
+        specifier: workspace:*
+        version: link:../agent
       '@lunora/container':
         specifier: workspace:*
         version: link:../container

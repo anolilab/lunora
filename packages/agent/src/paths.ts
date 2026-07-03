@@ -1,10 +1,9 @@
 import type { AgentFunctionPaths, AgentFunctionReference } from "./types";
 
 /**
- * The `lunora/` module the agent runtime functions live in. Apps re-export
- * `agentComponent().functions` from `lunora/agents.ts` (the same file that
- * declares the agents), so codegen registers them under this namespace and
- * the loop's dispatch paths below hold by construction.
+ * The namespace the agent runtime functions register under. Codegen
+ * auto-registers `agentComponent().functions` here whenever `lunora/agents.ts`
+ * declares an agent, so the loop's dispatch paths below hold by construction.
  */
 export const AGENT_MODULE = "agents";
 

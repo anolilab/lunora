@@ -24,6 +24,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 
 import { init as initLexer, parse as lexModule } from "es-module-lexer";
 
+import type { AgentIR } from "./agent-info";
+import { discoverAgentInfo } from "./agent-info";
 import type { ContainerIR } from "./container-info";
 import { discoverContainerInfo } from "./container-info";
 import { discoverFlagsInfo } from "./flags-info";
@@ -160,6 +162,18 @@ interface InferredWorkflow extends WorkflowIR {
 }
 
 /**
+ * A `defineAgent` declaration plus whether its generated agent
+ * `WorkflowEntrypoint` class (e.g. `SupportAgentWorkflow`) is exported by the
+ * worker entry. An agent compiles onto a Cloudflare Workflow, so — exactly like
+ * {@link InferredWorkflow} — only exported agents are safe to provision
+ * (wrangler rejects a `workflows[].class_name` the worker doesn't export), and
+ * an agent is NOT a Durable Object (no `durable_objects` binding or migration).
+ */
+interface InferredAgent extends AgentIR {
+    exported: boolean;
+}
+
+/**
  * A queue declared in `lunora/queues.ts`. Unlike workflows, a queue needs no
  * worker-entry class export (its `queue()` handler rides `createWorker`), so
  * there is no `exported` flag — every declared queue is reconcilable into the
@@ -168,6 +182,8 @@ interface InferredWorkflow extends WorkflowIR {
 type InferredQueue = QueueIR;
 
 interface InferredBindings {
+    /** Agents declared in `lunora/agents.ts` (exported or not — see {@link InferredAgent.exported}); reconciled into `workflows[]`. */
+    agents: InferredAgent[];
     /** Containers declared in `lunora/containers.ts` (exported or not — see {@link InferredContainer.exported}). */
     containers: InferredContainer[];
     /** Durable Objects the worker entry exports → safe to bind. */
@@ -503,6 +519,54 @@ const detectWorkflowExports = (entryPath: string | undefined, workflows: Readonl
 };
 
 /**
+ * Matches an `export * from "…/_generated/agents"` (with or without the `.js`
+ * extension) — the conventional way a worker entry re-exports every generated
+ * agent WorkflowEntrypoint class at once. `es-module-lexer` lists the module
+ * request but not the names a star re-export forwards, so the path itself is
+ * the signal that all generated agent classes are exported.
+ */
+const AGENTS_STAR_REEXPORT_PATTERN = /\bexport\s*\*\s*from\s*["'][^"']*_generated\/agents(?:\.js)?["']/;
+
+/**
+ * Whether the worker entry exports each generated agent WorkflowEntrypoint
+ * class: a named export of the class or the conventional
+ * `export * from "./lunora/_generated/agents"` star re-export. Mirrors
+ * {@link detectWorkflowExports} — an agent compiles onto a Cloudflare Workflow,
+ * so exports are the only safe provisioning signal (wrangler validates
+ * `class_name` against the worker's exports at deploy).
+ */
+const detectAgentExports = (entryPath: string | undefined, agents: ReadonlyArray<AgentIR>): InferredAgent[] => {
+    if (agents.length === 0) {
+        return [];
+    }
+
+    if (entryPath === undefined) {
+        return agents.map((agent) => {
+            return { ...agent, exported: false };
+        });
+    }
+
+    const code = readFileSync(entryPath, "utf8");
+    const starReexport = AGENTS_STAR_REEXPORT_PATTERN.test(code);
+
+    let exportedNames: Set<string>;
+
+    try {
+        const [, exports] = lexModule(code);
+
+        exportedNames = new Set(exports.map((entry) => entry.n));
+    } catch {
+        exportedNames = new Set(
+            agents.map((agent) => agent.className).filter((className) => new RegExp(String.raw`\bexport\b[^\n;]*\b${className}\b`).test(code)),
+        );
+    }
+
+    return agents.map((agent) => {
+        return { ...agent, exported: starReexport || exportedNames.has(agent.className) };
+    });
+};
+
+/**
  * The schema-derived signal: a `.global()` table needs the `DB` D1 binding.
  * Delegates to the shared `discoverSchemaInfo` so inference and the wrangler
  * validator read the exact same fact. A missing or unparseable schema yields
@@ -533,8 +597,12 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
     return merged;
 };
 
-/** Provenance lines for declared DO containers / workflows. */
-const describeDeclaredExports = (containers: ReadonlyArray<InferredContainer>, workflows: ReadonlyArray<InferredWorkflow>): string[] => [
+/** Provenance lines for declared DO containers / workflows / agents. */
+const describeDeclaredExports = (
+    containers: ReadonlyArray<InferredContainer>,
+    workflows: ReadonlyArray<InferredWorkflow>,
+    agents: ReadonlyArray<InferredAgent>,
+): string[] => [
     ...containers.map((container) =>
         container.exported
             ? `${container.bindingName}/${container.className} (container "${container.exportName}" declared and exported)`
@@ -544,6 +612,11 @@ const describeDeclaredExports = (containers: ReadonlyArray<InferredContainer>, w
         workflow.exported
             ? `${workflow.bindingName}/${workflow.className} (workflow "${workflow.exportName}" declared and exported)`
             : `hint: workflow "${workflow.exportName}" is declared but ${workflow.className} is not exported by the worker entry — add \`export * from "./lunora/_generated/workflows"\``,
+    ),
+    ...agents.map((agent) =>
+        agent.exported
+            ? `${agent.bindingName}/${agent.className} (agent "${agent.exportName}" declared and exported)`
+            : `hint: agent "${agent.exportName}" is declared but ${agent.className} is not exported by the worker entry — add \`export * from "./lunora/_generated/agents"\``,
     ),
 ];
 
@@ -594,6 +667,7 @@ const describeSignals = (
     capabilities: Capabilities,
     containers: ReadonlyArray<InferredContainer> = [],
     workflows: ReadonlyArray<InferredWorkflow> = [],
+    agents: ReadonlyArray<InferredAgent> = [],
 ): string[] => {
     const exported = new Set(durableObjects.map((object) => object.className));
     const signals = durableObjects.map((object) => `${object.binding}/${object.className} (exported by worker entry)`);
@@ -602,7 +676,7 @@ const describeSignals = (
         signals.push("DB (.global() table declared)");
     }
 
-    signals.push(...describeDeclaredExports(containers, workflows), ...describeCapabilitySignals(capabilities, exported));
+    signals.push(...describeDeclaredExports(containers, workflows, agents), ...describeCapabilitySignals(capabilities, exported));
 
     return signals;
 };
@@ -625,6 +699,9 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     const needsD1 = capabilities.needsD1 || schemaNeedsD1(options.projectRoot, schemaDirectory);
     const containers = detectContainerExports(entryPath, discoverContainerInfo(options.projectRoot, schemaDirectory).containers);
     const workflows = detectWorkflowExports(entryPath, discoverWorkflowInfo(options.projectRoot, schemaDirectory).workflows);
+    // Agents compile onto Cloudflare Workflows, so — like workflows — only an
+    // exported agent WorkflowEntrypoint class is safe to reconcile into `workflows[]`.
+    const agents = detectAgentExports(entryPath, discoverAgentInfo(options.projectRoot, schemaDirectory).agents);
     // Queues need no worker-entry export (their `queue()` handler rides
     // `createWorker`), so the discovered list is reconcilable as-is.
     const queues = [...discoverQueueInfo(options.projectRoot, schemaDirectory).queues];
@@ -643,7 +720,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
         capabilityFlags[flag] = capabilities[flag];
     }
 
-    const signals = describeSignals(durableObjects, needsD1, capabilities, containers, workflows);
+    const signals = describeSignals(durableObjects, needsD1, capabilities, containers, workflows, agents);
 
     if (flagshipBinding !== undefined) {
         signals.push(
@@ -652,6 +729,7 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     }
 
     return {
+        agents,
         containers,
         durableObjects,
         flagshipBinding,
@@ -686,5 +764,5 @@ const packageNamesFromBindings = (bindings: InferredBindings): string[] => {
     return names;
 };
 
-export type { DurableObjectClass, DurableObjectSpec, InferOptions, InferredBindings, InferredContainer, InferredQueue, InferredWorkflow };
+export type { DurableObjectClass, DurableObjectSpec, InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredQueue, InferredWorkflow };
 export { inferLunoraBindings, packageNamesFromBindings };

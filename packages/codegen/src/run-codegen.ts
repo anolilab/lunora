@@ -8,6 +8,7 @@ import { Project } from "ts-morph";
 
 import { lintSchema } from "./advisor";
 import discoverAdminRoutes from "./discover-admin-routes";
+import { discoverAgents } from "./discover-agents";
 import discoverAiRawRuns from "./discover-ai-raw-runs";
 import discoverAiToolSideEffects from "./discover-ai-tool-side-effects";
 import discoverArgumentDerivedFetches from "./discover-argument-derived-fetches";
@@ -66,6 +67,7 @@ import discoverWorkflowCalls from "./discover-workflow-calls";
 import { discoverWorkflows } from "./discover-workflows";
 import {
     buildStorageColumns,
+    emitAgents,
     emitApi,
     emitCollections,
     emitContainers,
@@ -82,7 +84,7 @@ import {
     emitWranglerCronTriggers,
 } from "./emit";
 import { emitApp } from "./emit-app";
-import type { ContainerIR, QueueIR, WorkflowIR, WranglerVariableIR } from "./ir";
+import type { AgentIR, ContainerIR, QueueIR, WorkflowIR, WranglerVariableIR } from "./ir";
 import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
 import { buildOpenRpcDocument, emitOpenRpcModule } from "./openrpc";
 import type { SchemaSnapshot } from "./schema-drift";
@@ -331,6 +333,12 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // (`_generated/queues.ts` → the worker `queue()` dispatch), and the config
     // layer's wrangler `queues.producers[]` / `queues.consumers[]` reconciliation.
     const queues = discoverQueues(project, lunoraDirectory);
+    // Agents declared via `defineAgent` exports in `lunora/agents.ts` — each
+    // compiles onto a Cloudflare Workflow, so this drives `_generated/agents.ts`
+    // (the agent WorkflowEntrypoint classes), the typed `ctx.agents` producers on
+    // Mutation/Action contexts, and the config layer's reconciliation of the
+    // wrangler `workflows[]` array (an agent binding is a Workflow binding).
+    const agents = discoverAgents(project, lunoraDirectory);
     const crons = discoverCrons(project, lunoraDirectory, workflows);
 
     // Static advisories (unindexed FKs, redundant indexes, unknown index/relation
@@ -490,8 +498,9 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const emitStartedAt = timingEnabled ? performance.now() : 0;
 
     const dataModelContent = emitDataModel(schema, useUmbrella);
-    const apiContent = emitApi(functions, workflows, useUmbrella);
+    const apiContent = emitApi(functions, workflows, useUmbrella, agents);
     const serverContent = emitServer({
+        agents,
         containers,
         env,
         hasAccessFacade,
@@ -512,9 +521,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         useUmbrella,
         workflows,
     });
-    const functionsContent = emitFunctions(functions, migrations, useUmbrella, mutators, shapes);
+    const functionsContent = emitFunctions(functions, migrations, useUmbrella, mutators, shapes, agents);
     const shardContent = emitShard({
         advisories,
+        agents,
         containers,
         env,
         flagKeys,
@@ -547,6 +557,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const collectionsContent = emitCollections(shapes, dependencies.has("@lunora/db"), useUmbrella);
     const containersContent = emitContainers(containers, schema.jurisdiction);
     const workflowsContent = emitWorkflows(workflows);
+    const agentsContent = emitAgents(agents);
     const queuesContent = emitQueues(queues);
     const cronsContent = emitCrons(crons);
     const vectorsContent = emitVectors(schema.vectorIndexes);
@@ -661,6 +672,8 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         //   - seed.ts        → `@lunora/seed`, when it's a declared dependency
         writeIfPresent(join(outputDirectory, "containers.ts"), containersContent);
         writeIfPresent(join(outputDirectory, "workflows.ts"), workflowsContent);
+        //   - agents.ts      → `@lunora/agent`, when agents are declared
+        writeIfPresent(join(outputDirectory, "agents.ts"), agentsContent);
         writeIfPresent(join(outputDirectory, "queues.ts"), queuesContent);
         writeIfPresent(join(outputDirectory, "seed.ts"), seedContent);
         //   - collections.ts → `@lunora/db`, when the project declares shapes
@@ -702,9 +715,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
 
     return {
         advisories,
+        agents,
         containers,
         cronTriggers: emitWranglerCronTriggers(crons),
         generated: {
+            agents: agentsContent,
             api: apiContent,
             app: appContent,
             collections: collectionsContent,
@@ -809,6 +824,14 @@ export interface CodegenResult {
     advisories: ReadonlyArray<Finding>;
 
     /**
+     * Agents discovered from `defineAgent` exports in `lunora/agents.ts` — the
+     * list the config layer reconciles into wrangler's `workflows[]` array (an
+     * agent compiles onto a Cloudflare Workflow). Agents are NOT Durable Objects,
+     * so this adds no binding or migration. Empty when the project declares none.
+     */
+    agents: ReadonlyArray<AgentIR>;
+
+    /**
      * Containers discovered from `defineContainer` exports in
      * `lunora/containers.ts` — the list the config layer reconciles into
      * wrangler's `containers[]`, `CONTAINER_*` Durable Object bindings, and
@@ -824,6 +847,8 @@ export interface CodegenResult {
     cronTriggers: ReadonlyArray<string>;
 
     generated: {
+        /** WorkflowEntrypoint classes for declared agents (`_generated/agents.ts`); `""` (and not written) when no agents are declared. */
+        agents: string;
         api: string;
         /** Fluent worker-composition builder (`_generated/app.ts`) — `defineApp()`. Always written. */
         app: string;
