@@ -25,7 +25,8 @@ const authCsrfCheckDisabled: Lint = {
     facing: "EXTERNAL",
     level: "ERROR",
     name: "auth_csrf_check_disabled",
-    remediation: "Remove `advanced.disableCSRFCheck: true` from `createAuth({...})` and rely on `trustedOrigins` for origin validation instead of disabling the check.",
+    remediation:
+        "Remove `advanced.disableCSRFCheck: true` from `createAuth({...})` and rely on `trustedOrigins` for origin validation instead of disabling the check.",
     run: (context) => {
         if (context.authConfigs === undefined) {
             return [];

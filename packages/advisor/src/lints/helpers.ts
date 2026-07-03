@@ -56,7 +56,8 @@ export const SYSTEM_FIELDS: ReadonlySet<string> = new Set(["_creationTime", "_id
  * lookup table (e.g. `emojis`, `countries`, no such columns) apart from a
  * `.public()` table that actually carries data an RLS opt-out would expose.
  */
-export const ownershipOrPiiColumns = (table: AdvisorTable): string[] => table.fields.filter((field) => OWNERSHIP_FIELD_NAMES.has(field) || PII_FIELD_NAMES.has(field));
+export const ownershipOrPiiColumns = (table: AdvisorTable): string[] =>
+    table.fields.filter((field) => OWNERSHIP_FIELD_NAMES.has(field) || PII_FIELD_NAMES.has(field));
 
 /**
  * Build a `Set` of a table's columns (declared + system) once, so repeated

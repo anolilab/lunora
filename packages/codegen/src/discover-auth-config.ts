@@ -74,7 +74,7 @@ const readAuthConfig = (config: ObjectLiteralExpression): Omit<AuthConfigIR, "ex
         analyzable: true,
         disableCsrfCheck: isTrueLiteral(propertyInitializer(advanced, "disableCSRFCheck")),
         emailPasswordEnabled: isTrueLiteral(propertyInitializer(emailAndPassword, "enabled")),
-        requireEmailVerification: isTrueLiteral(propertyInitializer(emailAndPassword, "requireEmailVerification")),
+        requireEmailVerification: isTrueLiteral(propertyInitializer(emailAndPassword, "requireEmailVerification")), // gitleaks:allow -- ts-morph property-name lookup, not a secret
         secureCookiesDisabled: isFalseLiteral(propertyInitializer(advanced, "useSecureCookies")),
         sessionFreshAgeZero: isZeroLiteral(propertyInitializer(session, "freshAge")),
         trustedOriginsWildcard: hasWildcardOrigin(propertyInitializer(config, "trustedOrigins")),

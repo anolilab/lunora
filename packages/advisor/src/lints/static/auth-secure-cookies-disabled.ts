@@ -27,7 +27,8 @@ const authSecureCookiesDisabled: Lint = {
     facing: "EXTERNAL",
     level: "ERROR",
     name: "auth_secure_cookies_disabled",
-    remediation: "Remove `advanced.useSecureCookies: false` from `createAuth({...})` — let Lunora's secure-by-default posture set the `Secure` cookie attribute for an HTTPS deployment.",
+    remediation:
+        "Remove `advanced.useSecureCookies: false` from `createAuth({...})` — let Lunora's secure-by-default posture set the `Secure` cookie attribute for an HTTPS deployment.",
     run: (context) => {
         if (context.authConfigs === undefined) {
             return [];

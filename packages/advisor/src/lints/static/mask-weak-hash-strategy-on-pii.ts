@@ -9,7 +9,8 @@ import type { Lint } from "../../types";
  * false negatives (an unusual PII column name that slips through) are
  * preferable to false positives on an unrelated column.
  */
-const PII_COLUMN_RE = /address|birthdate|creditcard|dateofbirth|dob|driverslicense|email|firstname|fullname|lastname|nationalid|passport|phone|socialsecurity|ssn|taxid/u;
+const PII_COLUMN_RE =
+    /address|birthdate|creditcard|dateofbirth|dob|driverslicense|email|firstname|fullname|lastname|nationalid|passport|phone|socialsecurity|ssn|taxid/u;
 
 /** `true` when `column`, normalized (non-alphanumeric stripped, lowercased), matches {@link PII_COLUMN_RE}. */
 const isPiiColumn = (column: string): boolean => PII_COLUMN_RE.test(column.replaceAll(/[^a-z0-9]/giu, "").toLowerCase());

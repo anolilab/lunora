@@ -26,7 +26,8 @@ const authSessionFreshageZero: Lint = {
     facing: "EXTERNAL",
     level: "WARN",
     name: "auth_session_freshage_zero",
-    remediation: "Remove `session.freshAge: 0` from `createAuth({...})` (or set it to a real window) so sensitive operations require a recently re-authenticated session.",
+    remediation:
+        "Remove `session.freshAge: 0` from `createAuth({...})` (or set it to a real window) so sensitive operations require a recently re-authenticated session.",
     run: (context) => {
         if (context.authConfigs === undefined) {
             return [];

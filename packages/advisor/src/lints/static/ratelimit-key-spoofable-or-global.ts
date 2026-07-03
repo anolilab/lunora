@@ -30,7 +30,7 @@ const ratelimitKeySpoofableOrGlobal: Lint = {
     level: "WARN",
     name: "ratelimit_key_spoofable_or_global",
     remediation:
-        "Derive the rate-limit `key` from a server-trusted value — `ctx.auth.userId` for authenticated callers, `ctx.ip` for anonymous ones (e.g. `key: (ctx) => ctx.auth.userId ?? ctx.ip ?? \"anon\"`) — instead of an `args` field the caller controls.",
+        'Derive the rate-limit `key` from a server-trusted value — `ctx.auth.userId` for authenticated callers, `ctx.ip` for anonymous ones (e.g. `key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anon"`) — instead of an `args` field the caller controls.',
     run: (context) => {
         if (context.ratelimitKeySelectors === undefined) {
             return [];

@@ -59,7 +59,7 @@ describe("discoverMaskStrategies", () => {
         rmSync(workdir, { force: true, recursive: true });
     });
 
-    it("captures a column whose strategy is the literal \"hash\"", () => {
+    it('captures a column whose strategy is the literal "hash"', () => {
         expect.assertions(1);
 
         const row = rowsFor().find((strategy) => strategy.column === "email");
@@ -67,7 +67,7 @@ describe("discoverMaskStrategies", () => {
         expect(row).toMatchObject({ column: "email", exportName: "listMasked", strategy: "hash", table: "users" });
     });
 
-    it("captures a column whose strategy is the literal \"redact\"", () => {
+    it('captures a column whose strategy is the literal "redact"', () => {
         expect.assertions(1);
 
         const row = rowsFor().find((strategy) => strategy.column === "ssn");

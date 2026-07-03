@@ -37,7 +37,7 @@ const allowUnauthenticatedShardAccessEnabled: Lint = {
     level: "WARN",
     name: "allow_unauthenticated_shard_access_enabled",
     remediation:
-        'Prefer `authorizeShard` / `authorizeFanOut` (which take precedence over `allowUnauthenticatedShardAccess` and let you allow specific unauthenticated cases) over the blanket opt-out. If the app genuinely needs open shard access, enforce `.rls("required")` on the schema with no `.public()` tables so a missing identity still can\'t read another tenant\'s rows.',
+        "Prefer `authorizeShard` / `authorizeFanOut` (which take precedence over `allowUnauthenticatedShardAccess` and let you allow specific unauthenticated cases) over the blanket opt-out. If the app genuinely needs open shard access, enforce `.rls(\"required\")` on the schema with no `.public()` tables so a missing identity still can't read another tenant's rows.",
     run: (context) => {
         if (context.configCalls === undefined) {
             return [];

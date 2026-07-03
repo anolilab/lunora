@@ -6,7 +6,7 @@ import { fromServerSchema } from "../src";
 import publicTableRlsOptoutConfusion from "../src/lints/static/public-table-rls-optout-confusion";
 
 describe("public_table_rls_optout_confusion", () => {
-    it("flags a .public() table with ownership-shaped columns under .rls(\"required\")", () => {
+    it('flags a .public() table with ownership-shaped columns under .rls("required")', () => {
         expect.assertions(2);
 
         const schema = fromServerSchema(

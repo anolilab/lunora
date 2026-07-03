@@ -348,7 +348,7 @@ describe("allow_unauthenticated_shard_access_enabled", () => {
         expect(allowUnauthenticatedShardAccessEnabled.run({ configCalls: calls, schema: rlsRequiredSchema })).toHaveLength(0);
     });
 
-    it("flags when the schema is .rls(\"required\") but still has a .public() table", () => {
+    it('flags when the schema is .rls("required") but still has a .public() table', () => {
         expect.assertions(1);
 
         const gapSchema = fromServerSchema(defineSchema({ users: defineTable({ name: v.string() }).public() }).rls("required"));

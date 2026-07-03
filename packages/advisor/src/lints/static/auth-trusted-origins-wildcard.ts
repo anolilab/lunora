@@ -24,7 +24,8 @@ const authTrustedOriginsWildcard: Lint = {
     facing: "EXTERNAL",
     level: "ERROR",
     name: "auth_trusted_origins_wildcard",
-    remediation: "List the specific origins your deployment serves in `trustedOrigins` instead of `\"*\"` — a wildcard disables origin validation for every caller.",
+    remediation:
+        'List the specific origins your deployment serves in `trustedOrigins` instead of `"*"` — a wildcard disables origin validation for every caller.',
     run: (context) => {
         if (context.authConfigs === undefined) {
             return [];

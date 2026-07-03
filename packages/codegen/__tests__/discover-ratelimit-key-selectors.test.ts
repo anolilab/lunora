@@ -32,10 +32,7 @@ describe("discoverRatelimitKeySelectors", () => {
     it("flags a rateLimit(...) key selector derived from args", () => {
         expect.assertions(2);
 
-        write(
-            "send.ts",
-            `export const send = mutation.use(rateLimit(limiter, "send", { key: (ctx) => args.email })).mutation(async ({ ctx, args }) => {});`,
-        );
+        write("send.ts", `export const send = mutation.use(rateLimit(limiter, "send", { key: (ctx) => args.email })).mutation(async ({ ctx, args }) => {});`);
 
         const found = discoverRatelimitKeySelectors(project, join(workdir, "lunora"));
 
@@ -57,10 +54,7 @@ describe("discoverRatelimitKeySelectors", () => {
     it("flags an args-derived key selector with a block-body arrow", () => {
         expect.assertions(1);
 
-        write(
-            "block.ts",
-            `export const send = mutation.use(rateLimit(limiter, "send", { key: (ctx) => { return args.email; } })).mutation(async () => {});`,
-        );
+        write("block.ts", `export const send = mutation.use(rateLimit(limiter, "send", { key: (ctx) => { return args.email; } })).mutation(async () => {});`);
 
         expect(discoverRatelimitKeySelectors(project, join(workdir, "lunora"))).toHaveLength(1);
     });
@@ -68,10 +62,7 @@ describe("discoverRatelimitKeySelectors", () => {
     it("ignores a key selector scoped by ctx.auth.userId", () => {
         expect.assertions(1);
 
-        write(
-            "scoped.ts",
-            `export const send = mutation.use(rateLimit(limiter, "send", { key: (ctx) => ctx.auth.userId })).mutation(async () => {});`,
-        );
+        write("scoped.ts", `export const send = mutation.use(rateLimit(limiter, "send", { key: (ctx) => ctx.auth.userId })).mutation(async () => {});`);
 
         expect(discoverRatelimitKeySelectors(project, join(workdir, "lunora"))).toHaveLength(0);
     });
