@@ -137,4 +137,37 @@ describe("startStudioServer", () => {
             await studio.close();
         }
     });
+
+    it("serves standalone JS from the directory and rejects path traversal", async () => {
+        expect.assertions(5);
+
+        const port = await getFreePort();
+        const studio = await startStudioServer({ cwd: "/tmp", port, workerOrigin: "http://localhost:8787" });
+        const loopbackHost = `127.0.0.1:${String(port)}`;
+
+        try {
+            const entry = await requestStudio(port, "/studio.js", loopbackHost);
+            // A `.js` request that escapes the standalone directory: the server takes
+            // the basename and the resolver rejects anything outside the dir.
+            const traversal = await requestStudio(port, "/../../../../../../etc/passwd.js", loopbackHost);
+            const unknownChunk = await requestStudio(port, "/chunk-DOESNOTEXIST0.js", loopbackHost);
+
+            // The entry is served from the standalone directory when the studio is
+            // built (200), or reports "not built" (501) — never a traversal leak.
+            expect([200, 501]).toContain(entry.statusCode);
+
+            // A traversal `.js` request must never be served: 404 when the studio is
+            // built (the file isn't in the dir), 501 when it isn't — never 200, and
+            // never the target file's contents.
+            expect([404, 501]).toContain(traversal.statusCode);
+            expect(traversal.body).not.toContain("root:");
+
+            // An unknown chunk resolves to 404 (built) / 501 (not) — never the SPA
+            // document, which would hand a module request an HTML body.
+            expect([404, 501]).toContain(unknownChunk.statusCode);
+            expect(unknownChunk.body).not.toContain("<!doctype html>");
+        } finally {
+            await studio.close();
+        }
+    });
 });

@@ -20,11 +20,14 @@ import type { Duplex } from "node:stream";
 import { detectAgentRules } from "@lunora/config";
 import type { LocalEndpointHandler } from "@lunora/config/studio-host";
 import {
+    assetContentType,
     handlePolicyScaffoldRequest,
     handleSchemaEditRequest,
     handleSeedRequest,
+    isStandaloneModulePath,
     loadStudioAssets,
     POLICY_SCAFFOLD_ENDPOINT,
+    readStandaloneAsset,
     renderStudioHtml,
     resolveAdminToken,
     SCHEMA_EDIT_ENDPOINT,
@@ -194,7 +197,14 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
     };
 
     const serveStaticAsset = (pathname: string, response: ServerResponse): boolean => {
-        if (pathname !== "/studio.js" && pathname !== "/styles.css") {
+        // Own the studio's static assets: `/styles.css`, plus every `.js` / `.js.map`
+        // under the standalone directory — the `studio.js` entry and its on-demand,
+        // code-split `chunk-*.js` siblings. Anything else is an SPA route and falls
+        // through to the history fallback (the document) below.
+        const isStyle = pathname === "/styles.css";
+        const isModule = isStandaloneModulePath(pathname);
+
+        if (!isStyle && !isModule) {
             return false;
         }
 
@@ -215,9 +225,29 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
             return true;
         }
 
-        const isScript = pathname === "/studio.js";
+        if (isStyle) {
+            sendAsset(response, assets.styles, "text/css; charset=utf-8");
 
-        sendAsset(response, isScript ? assets.script : assets.styles, isScript ? "text/javascript; charset=utf-8" : "text/css; charset=utf-8");
+            return true;
+        }
+
+        // `.js` / `.js.map`: serve the request's basename from the standalone dir.
+        // `readStandaloneAsset` is path-traversal-safe (lone filenames only), so a
+        // `/../../etc/passwd`-style request can't escape it; a name that doesn't
+        // resolve to a file in the directory answers 404 (never the SPA document,
+        // which would hand a module request an HTML body).
+        const fileName = pathname.slice(pathname.lastIndexOf("/") + 1);
+        const bytes = readStandaloneAsset(fileName, import.meta.url);
+
+        if (bytes === undefined) {
+            response.statusCode = 404;
+            response.setHeader("Content-Type", "text/plain");
+            response.end("Not found");
+
+            return true;
+        }
+
+        sendAsset(response, bytes, assetContentType(fileName));
 
         return true;
     };
