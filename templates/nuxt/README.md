@@ -53,8 +53,10 @@ deploy, a same-origin client.
 
 ## Develop
 
+Start the dev server with your package manager (`npm`, `pnpm`, `yarn`, or `bun`):
+
 ```bash
-pnpm dev
+<pm> run dev
 ```
 
 `nuxt dev` serves the app and the `/_lunora/**` route together. Live queries

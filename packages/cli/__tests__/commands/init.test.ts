@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -173,6 +173,28 @@ describe("lunora init", () => {
 
             expect(result.code).toBe(0);
             expect(calls).toHaveLength(0);
+        });
+
+        it("prints package-manager-neutral overlay next-steps for an npm project", async () => {
+            expect.assertions(3);
+
+            // An existing react-router project that declares npm; the overlay path
+            // (`--in-place`) must render its next-steps with the project's manager.
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({ devDependencies: { "@react-router/dev": "^7.0.0" }, packageManager: "npm@10.9.0" }),
+                "utf8",
+            );
+            const infos: string[] = [];
+            const logger: Logger = { ...silentLogger(), info: (message) => infos.push(message) };
+
+            const result = await runInitCommand({ cwd: workdir, inPlace: true, logger });
+
+            const printed = infos.join("\n");
+
+            expect(result.code).toBe(0);
+            expect(printed).toContain("npm install @lunora/react");
+            expect(printed).not.toContain("pnpm add");
         });
 
         it("substitutes {{name}} placeholders", async () => {
