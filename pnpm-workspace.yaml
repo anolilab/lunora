@@ -518,6 +518,7 @@ minimumReleaseAgeExclude:
   - '@visulima/vis-binding-win32-x64-msvc@1.0.0-alpha.43'
   - '@visulima/vis@1.0.0-alpha.43'
   - '@visulima/email@1.0.0-alpha.41'
+  - '@visulima/find-ai-runner@1.0.0-alpha.9'
   - esbuild@0.28.1
   - js-yaml@4.1.2
   - '@opentelemetry/core@2.8.0'

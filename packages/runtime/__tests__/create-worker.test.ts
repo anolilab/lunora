@@ -60,6 +60,33 @@ describe("createWorker", () => {
         expect(res.status).toBe(404);
     });
 
+    it("answers GET /_lunora/status with an unauthenticated ok probe", async () => {
+        expect.assertions(4);
+
+        const worker = createWorker({ shardDO: shard.namespace });
+
+        const res = await worker.fetch(new Request("https://app.example/_lunora/status"), {}, fakeContext);
+
+        expect(res.status).toBe(200);
+        expect(res.headers.get("cache-control")).toBe("no-store");
+        // Bare ok — no framework name/version, so production deployments don't
+        // hand scanners a fingerprint.
+        await expect(res.json()).resolves.toStrictEqual({ ok: true });
+        // The probe never touches a shard.
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("rejects non-GET/HEAD on /_lunora/status with 405", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ shardDO: shard.namespace });
+
+        const res = await worker.fetch(new Request("https://app.example/_lunora/status", { method: "POST" }), {}, fakeContext);
+
+        expect(res.status).toBe(405);
+        expect(res.headers.get("allow")).toBe("GET, HEAD");
+    });
+
     it("forwards POST /_lunora/rpc to the default __root__ shard", async () => {
         expect.assertions(4);
 

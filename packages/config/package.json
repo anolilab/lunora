@@ -69,6 +69,7 @@
         "@lunora/errors": "1.0.0-alpha.1",
         "@lunora/seed": "1.0.0-alpha.14",
         "@visulima/colorize": "2.0.0-alpha.14",
+        "@visulima/find-ai-runner": "1.0.0-alpha.9",
         "dockerode": "catalog:tooling",
         "es-module-lexer": "catalog:vite",
         "jsonc-parser": "catalog:vite",

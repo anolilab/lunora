@@ -48,8 +48,13 @@ const FRAMEWORK_SIGNATURES: ReadonlyArray<{ class: FrameworkClass; dependency: s
 /** The standalone (class-C) result returned when no known framework is present or detection fails. */
 const STANDALONE: FrameworkDetection = { class: "C", framework: "none" };
 
-/** Read and parse the project `package.json`, returning its merged dependency name set (empty on any failure). */
-const readDependencyNames = (root: string): ReadonlySet<string> => {
+/**
+ * Read and parse the project `package.json`, returning its merged
+ * `dependencies` + `devDependencies` name set (empty on any failure). Public
+ * so sibling consumers (e.g. the CLI's Vite-project detection) share one
+ * best-effort reader instead of re-parsing `package.json` themselves.
+ */
+const readProjectDependencyNames = (root: string): ReadonlySet<string> => {
     const packageJsonPath = join(root, "package.json");
 
     if (!existsSync(packageJsonPath)) {
@@ -77,7 +82,7 @@ const readDependencyNames = (root: string): ReadonlySet<string> => {
  * SPA flow is preserved.
  */
 const detectFramework = (root: string): FrameworkDetection => {
-    const dependencies = readDependencyNames(root);
+    const dependencies = readProjectDependencyNames(root);
 
     if (dependencies.size === 0) {
         return STANDALONE;
@@ -93,4 +98,4 @@ const detectFramework = (root: string): FrameworkDetection => {
 };
 
 export type { DetectedFramework, FrameworkClass, FrameworkDetection };
-export { detectFramework };
+export { detectFramework, readProjectDependencyNames };

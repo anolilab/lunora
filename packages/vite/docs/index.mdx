@@ -78,6 +78,22 @@ lunora({
 
 Set `overlay: false` to disable it entirely.
 
+## Dev-server state & AI agents
+
+While `vite dev` runs, the plugin registers the server in `.lunora/dev.json`
+(URL, PID, start time — per-checkout, gitignored, secret-free) and removes the
+record on shutdown. That record is what lets `lunora dev status`, `lunora dev
+stop`, and `lunora dev logs` manage a Vite-based project, and what
+`lunora dev --background` blocks on before reporting the URL and PID — so an
+AI agent can start, health-check (`GET /_lunora/status` on the worker), and
+stop your dev server without parsing terminal output or leaking zombie
+processes.
+
+When an AI agent is detected (or `LUNORA_LOG_JSON=1` is set), the worker's
+structured log events pass through as raw single-line JSON instead of the
+pretty `[lunora]` terminal rendering, so machine consumers can parse them
+directly. Set `LUNORA_AGENT_MODE=0` to opt out of agent detection.
+
 ## See also
 
 - [@lunora/cli](/docs/packages/cli)

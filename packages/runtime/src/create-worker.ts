@@ -923,6 +923,16 @@ const ADMIN_PATH_PREFIX = "/_lunora/admin/";
 /** The lone cross-shard admin route that sits outside {@link ADMIN_PATH_PREFIX}. */
 const MIGRATE_PATH = "/_lunora/migrate";
 
+/**
+ * Public, unauthenticated health probe (`GET /_lunora/status`). Dev tooling and
+ * AI agents poll it to confirm the worker is up and routing (the CLI's
+ * `lunora dev --background` blocks on it before detaching). Deliberately
+ * static and secret-free, and the body is a bare `{"ok":true}` — no framework
+ * name or version — so a production deployment doesn't hand scanners a
+ * stronger fingerprint than the path shape already implies.
+ */
+const STATUS_PATH = "/_lunora/status";
+
 /** True for the admin routes the async `adminGate` may authorize — everything under `/_lunora/admin/` plus `/_lunora/migrate`. */
 const isAdminPath = (pathname: string): boolean => pathname.startsWith(ADMIN_PATH_PREFIX) || pathname === MIGRATE_PATH;
 // The cross-shard orchestration (`migrate` / `rank` / `rankpage` / `shard-traffic`)
@@ -3019,6 +3029,15 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const customRoutes = options.routes !== undefined && Object.keys(options.routes).length > 0 ? options.routes : undefined;
 
     const internalRoutes: Record<string, InternalRoute> = {
+        [STATUS_PATH]: (request) => {
+            // Health probes are reads; anything else on this path is a scanner
+            // or a mistake — refuse rather than answer 200 to arbitrary verbs.
+            if (request.method !== "GET" && request.method !== "HEAD") {
+                return new Response(undefined, { headers: { allow: "GET, HEAD" }, status: 405 });
+            }
+
+            return Response.json({ ok: true }, { headers: { "cache-control": "no-store" } });
+        },
         [WS_PATH]: (request, env, url) => handleWebSocketUpgrade(request, env, url),
         [RPC_PATH]: (request, env, _url, context) => handleRpc(request, env, context),
         [RPC_BATCH_PATH]: (request, env, _url, context) => handleBatchRpc(request, env, context),

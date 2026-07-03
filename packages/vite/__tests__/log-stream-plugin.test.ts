@@ -1,5 +1,5 @@
 import type { ViteDevServer } from "vite";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import logStreamPlugin from "../src/log-stream-plugin";
 
@@ -55,8 +55,38 @@ const captureStdout = (lines: string[], { tty = false }: { tty?: boolean } = {})
 const logLine = JSON.stringify({ function: "messages:list", level: "info", message: "hi", source: "lunora", type: "log" });
 
 describe("logStreamPlugin", () => {
+    // Pin both JSON-mode inputs: the suite itself often runs under an AI agent
+    // (CLAUDECODE etc.), which would legitimately flip the plugin into raw-JSON
+    // passthrough and skip the stream patch these tests exercise.
+    beforeEach(() => {
+        vi.stubEnv("LUNORA_AGENT_MODE", "0");
+        vi.stubEnv("LUNORA_LOG_JSON", "");
+    });
+
     afterEach(() => {
+        vi.unstubAllEnvs();
         vi.restoreAllMocks();
+    });
+
+    it("leaves the streams untouched in JSON mode (LUNORA_LOG_JSON=1)", () => {
+        expect.assertions(1);
+
+        vi.stubEnv("LUNORA_LOG_JSON", "1");
+
+        // Raw structured event passes through unformatted for machine consumers.
+        const received = captureStdout([`${logLine}\n`]);
+
+        expect(received.join("")).toBe(`${logLine}\n`);
+    });
+
+    it("passes raw JSON through when an AI agent drives the process", () => {
+        expect.assertions(1);
+
+        vi.stubEnv("LUNORA_AGENT_MODE", "1");
+
+        const received = captureStdout([`${logLine}\n`]);
+
+        expect(received.join("")).toBe(`${logLine}\n`);
     });
 
     it("only applies in serve mode", () => {
