@@ -1,6 +1,6 @@
 {
     "name": "lunorash",
-    "version": "1.0.0-alpha.57",
+    "version": "1.0.0-alpha.58",
     "description": "The Lunora umbrella package: one install for the server authoring API, worker runtime, Durable Objects, and the lunora CLI",
     "keywords": [
         "backend",
@@ -138,7 +138,7 @@
         "@lunora/client": "1.0.0-alpha.16",
         "@lunora/do": "1.0.0-alpha.21",
         "@lunora/flags": "1.0.0-alpha.3",
-        "@lunora/runtime": "1.0.0-alpha.15",
+        "@lunora/runtime": "1.0.0-alpha.16",
         "@lunora/server": "1.0.0-alpha.13",
         "@lunora/values": "1.0.0-alpha.3"
     },
