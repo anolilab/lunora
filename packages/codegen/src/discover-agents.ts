@@ -1,7 +1,9 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import { agentBindingName, agentClassName, agentDefaultName } from "@lunora/agent";
+// The /naming subpath keeps codegen from loading the agent runtime (and the
+// AI SDK behind it) just to derive deploy names.
+import { agentBindingName, agentClassName, agentDefaultName } from "@lunora/agent/naming";
 import type { CallExpression, Expression, Identifier, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 

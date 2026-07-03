@@ -2,8 +2,8 @@ import type { WorkflowDefinition } from "@lunora/workflow";
 import { defineWorkflow } from "@lunora/workflow";
 
 import { runAgentLoop } from "./agent-loop";
-import { agentDefaultName } from "./define-agent";
 import { createAgentGenerate } from "./generate";
+import { agentDefaultName } from "./naming";
 import { DEFAULT_AGENT_FUNCTION_PATHS } from "./paths";
 import type { AgentDefinition, AgentFunctionPaths, AgentRunInput, AgentRunResult } from "./types";
 

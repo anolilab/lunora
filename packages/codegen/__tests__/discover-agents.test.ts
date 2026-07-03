@@ -228,7 +228,7 @@ describe("auto-registered agent runtime functions", () => {
 
         const content = emitFunctions([], [], false, [], [], discoverSupportAgent());
 
-        expect(content).toContain('import { agentComponent } from "@lunora/agent";');
+        expect(content).toContain('import { agentComponent } from "@lunora/agent/component";');
         expect(content).toContain("const lunoraAgentRuntimeFunctions = agentComponent().functions;");
 
         for (const name of ["agentAppendMessage", "agentEnsureThread", "agentMessages", "agentPatchThread", "agentThread"]) {

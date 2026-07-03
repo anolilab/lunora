@@ -58,7 +58,7 @@ export default defineSchema({/* your tables */}).extend(agentExtension);
 
 ```ts
 // inside a mutation or action:
-const { id } = await ctx.agents.support.run({ input: message, threadKey, title: "Support chat" });
+const { id } = await ctx.agents.support.run({ input: message, owner: ctx.auth.userId, threadKey, title: "Support chat" });
 
 // client: subscribe to the thread — user turns, tool calls, tool results and
 // assistant replies stream in as they persist (reactive subscription, so it
@@ -67,7 +67,24 @@ useSubscription(api.agents.agentMessages, { key: threadKey });
 ```
 
 Reuse the same `threadKey` to continue a conversation — the loop reads the
-persisted history each turn.
+persisted history each turn. Only one run should be active per thread at a
+time: two concurrent runs on the same key would interleave their messages into
+one history (they share the thread's sequence counter).
+
+## Access control
+
+Pass `owner: ctx.auth.userId` when starting a run. An **owned** thread's public
+queries (`agents:agentThread`, `agents:agentMessages`) answer only for a caller
+with that verified identity — for anyone else the thread is indistinguishable
+from one that doesn't exist, so key-guessing leaks nothing. The owner is
+immutable after the first run. Omitting `owner` leaves the thread readable by
+anyone who knows its key — only appropriate for single-tenant or anonymous
+apps.
+
+The agent tables are RLS-exempt (`.public()`): under a `.rls("required")`
+schema the auto-registered runtime functions cannot engage app RLS policies,
+so access control is enforced _inside_ them instead — the owner gate on reads,
+and internal-only visibility on every write.
 
 ## Replay-safety (the correctness core)
 

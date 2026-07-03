@@ -2,20 +2,8 @@ import { LunoraError } from "@lunora/errors";
 
 import type { AgentConfig, AgentDefinition, AgentToolConfig, AgentToolDefinition } from "./types";
 
-/** camelCase boundary, for deriving SNAKE / kebab names from an export name. */
-const CAMEL_BOUNDARY = /([a-z0-9])([A-Z])/gu;
-
 /** Tool names surface as model function names — keep them identifier-shaped. */
 const TOOL_NAME_PATTERN = /^[a-zA-Z][\w-]*$/u;
-
-/** `support` → `SupportAgentWorkflow` — the generated WorkflowEntrypoint class name. */
-const agentClassName = (exportName: string): string => `${exportName.charAt(0).toUpperCase()}${exportName.slice(1)}AgentWorkflow`;
-
-/** `support` → `AGENT_SUPPORT` — the Cloudflare Workflows binding name. */
-const agentBindingName = (exportName: string): string => `AGENT_${exportName.replaceAll(CAMEL_BOUNDARY, "$1_$2").toUpperCase()}`;
-
-/** `supportBot` → `agent-support-bot` — the default deployed workflow name. */
-const agentDefaultName = (exportName: string): string => `agent-${exportName.replaceAll(CAMEL_BOUNDARY, "$1-$2").toLowerCase()}`;
 
 /**
  * Declare a durable agent. The definition compiles onto a Cloudflare Workflow
@@ -90,4 +78,4 @@ const defineAgentTool = <Input, Output>(config: AgentToolConfig<Input, Output>):
     return { ...config, isLunoraAgentTool: true };
 };
 
-export { agentBindingName, agentClassName, agentDefaultName, defineAgent, defineAgentTool, isAgentDefinition };
+export { defineAgent, defineAgentTool, isAgentDefinition };
