@@ -171,7 +171,7 @@ catalogs:
     # verified-good Playwright-on-Workers release; bumps are vetted against a live worker.
     "@cloudflare/playwright": 1.3.0
     "@cloudflare/vitest-pool-workers": ^0.16.20
-    "@cloudflare/workers-types": ^4.20260628.1
+    "@cloudflare/workers-types": ^5.20260703.1
     miniflare: ^4.20260625.0
     wrangler: ^4.105.0
   e2e:
@@ -451,7 +451,7 @@ minimumReleaseAgeExclude:
   - '@cloudflare/flagship@0.4.2'
   - '@cloudflare/vite-plugin@1.40.1'
   - '@cloudflare/vitest-pool-workers@0.16.12'
-  - '@cloudflare/workers-types@4.20260616.1'
+  - '@cloudflare/workers-types'
   - '@eslint-react/ast@5.8.17'
   - '@eslint-react/core@5.8.17'
   - '@eslint-react/eslint@5.8.17'
