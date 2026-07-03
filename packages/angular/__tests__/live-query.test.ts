@@ -1,5 +1,5 @@
-import type { FunctionReference } from "@lunora/client";
-import { describe, expect, it } from "vitest";
+import type { FunctionReference, SubscriptionError } from "@lunora/client";
+import { describe, expect, it, vi } from "vitest";
 
 import { liveQuery } from "../src/live-query";
 import { createFakeClient, createFakeDestroyRef } from "./fake-client";
@@ -48,6 +48,20 @@ describe(liveQuery, () => {
         destroy.destroy();
 
         expect(fake.subscriptions[0]?.unsubscribed).toBe(true);
+    });
+
+    it("forwards a post-attach subscription error to onError", () => {
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+        const onError = vi.fn<(error: SubscriptionError) => void>();
+
+        liveQuery(listRef, { channelId: "channel:demo" }, { client: fake.asClient, destroyRef: destroy.asDestroyRef, onError });
+
+        const error: SubscriptionError = { code: "internal", message: "boom" };
+
+        fake.subscriptions[0]?.emitError(error);
+
+        expect(onError).toHaveBeenCalledWith(error);
     });
 
     it("stops updating the signal after teardown", () => {

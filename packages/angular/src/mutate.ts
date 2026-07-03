@@ -1,6 +1,6 @@
 import type { ArgsOf, FunctionReference, LunoraClient, MutationCallOptions, ReturnOf } from "@lunora/client";
 
-import { injectLunoraClient } from "./client";
+import { resolveLunoraClient } from "./client";
 
 export interface MutateOptions<F extends FunctionReference> extends MutationCallOptions<unknown, unknown, ArgsOf<F>> {
     /**
@@ -33,5 +33,5 @@ export interface MutateOptions<F extends FunctionReference> extends MutationCall
 export const mutate = <F extends FunctionReference>(reference: F, args: ArgsOf<F>, options: MutateOptions<F> = {}): Promise<ReturnOf<F>> => {
     const { client, ...callOptions } = options;
 
-    return (client ?? injectLunoraClient()).mutation(reference, args, callOptions);
+    return resolveLunoraClient(client).mutation(reference, args, callOptions);
 };

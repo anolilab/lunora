@@ -85,3 +85,13 @@ export const provideLunora = (optionsOrClient: LunoraClient | ProvideLunoraOptio
  * ```
  */
 export const injectLunoraClient = (): LunoraClient => inject(LUNORA_CLIENT);
+
+/**
+ * Resolve the {@link LunoraClient} a reactive primitive should use: the explicit
+ * `client` when given, else the injected {@link LUNORA_CLIENT}. The single lookup
+ * path shared by `liveQuery`, `mutate`, and `connectionStatus` — passing `client`
+ * lets them run outside an injection context (or in a test), while omitting it
+ * resolves from DI. Must be called within an injection context when `client` is
+ * omitted (it delegates to {@link injectLunoraClient}).
+ */
+export const resolveLunoraClient = (client?: LunoraClient): LunoraClient => client ?? injectLunoraClient();

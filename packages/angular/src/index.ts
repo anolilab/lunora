@@ -33,6 +33,7 @@ export type {
     LunoraClientOptions,
     MutationCallOptions,
     ReturnOf,
+    SubscriptionError,
     Unsubscribe,
 } from "@lunora/client";
 // Re-export the core client contract so consumers can stay on a single import for

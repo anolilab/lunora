@@ -1,6 +1,6 @@
 /* eslint-disable no-underscore-dangle -- `__lunoraRef` is the Lunora function-reference field the wire types expose; fixtures mirror it verbatim. */
 import type { DestroyRef } from "@angular/core";
-import type { ConnectionStatus, FunctionReference, LunoraClient, Unsubscribe } from "@lunora/client";
+import type { ConnectionStatus, FunctionReference, LunoraClient, SubscriptionError, Unsubscribe } from "@lunora/client";
 
 /**
  * A minimal stand-in for `LunoraClient` exposing just the surface the Angular
@@ -11,6 +11,8 @@ import type { ConnectionStatus, FunctionReference, LunoraClient, Unsubscribe } f
  */
 export interface FakeSubscription {
     args: Record<string, unknown>;
+    /** Deliver an async error to the subscription's `onError` channel (no-op if none was wired). */
+    emitError: (error: SubscriptionError) => void;
     functionPath: string;
     push: (value: unknown) => void;
     shardKey?: string;
@@ -66,10 +68,11 @@ export const createFakeClient = (initialStatus: ConnectionStatus = "idle"): Fake
             function_: FunctionReference,
             args: Record<string, unknown>,
             callback: (data: unknown) => void,
-            options?: { shardKey?: string },
+            options?: { onError?: (error: SubscriptionError) => void; shardKey?: string },
         ): Unsubscribe => {
             const sub: FakeSubscription = {
                 args,
+                emitError: (error: SubscriptionError) => options?.onError?.(error),
                 functionPath: function_.__lunoraRef,
                 push: callback,
                 shardKey: options?.shardKey,

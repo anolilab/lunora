@@ -2,7 +2,7 @@ import type { Signal } from "@angular/core";
 import { DestroyRef, inject, signal } from "@angular/core";
 import type { ConnectionStatus, LunoraClient } from "@lunora/client";
 
-import { injectLunoraClient } from "./client";
+import { resolveLunoraClient } from "./client";
 
 export interface ConnectionStatusOptions {
     /** Client to observe. Defaults to the injected `LUNORA_CLIENT`. */
@@ -22,7 +22,7 @@ export interface ConnectionStatusOptions {
  * injection context (component/service field or constructor).
  */
 export const connectionStatus = (options: ConnectionStatusOptions = {}): Signal<ConnectionStatus> => {
-    const client = options.client ?? injectLunoraClient();
+    const client = resolveLunoraClient(options.client);
     const destroyRef = options.destroyRef ?? inject(DestroyRef);
 
     const status = signal<ConnectionStatus>(client.connectionStatus());

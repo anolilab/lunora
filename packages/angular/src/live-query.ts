@@ -1,9 +1,9 @@
 import type { Signal } from "@angular/core";
 import { DestroyRef, inject, signal } from "@angular/core";
-import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf } from "@lunora/client";
+import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionError } from "@lunora/client";
 import { createQuerySubscription } from "@lunora/client/query";
 
-import { injectLunoraClient } from "./client";
+import { resolveLunoraClient } from "./client";
 
 export interface LiveQueryOptions {
     /**
@@ -18,6 +18,15 @@ export interface LiveQueryOptions {
      * component is destroyed. Pass one explicitly to control the lifetime yourself.
      */
     destroyRef?: DestroyRef;
+
+    /**
+     * Called when the subscription errors after the initial attach — the async
+     * error channel `createQuerySubscription` only wires when a sink is present.
+     * Without it, a post-attach failure is dropped silently: the signal simply
+     * stops updating with no error state exposed. Pass a handler to surface it
+     * (log, toast, set an error signal of your own).
+     */
+    onError?: (error: SubscriptionError) => void;
 
     /** Route to a specific shard when the target function is `.shardBy(...)`-partitioned. */
     shardKey?: string;
@@ -51,7 +60,7 @@ export const liveQuery = <F extends FunctionReference>(
     args: ArgsOf<F> | "skip",
     options: LiveQueryOptions = {},
 ): Signal<ReturnOf<F> | undefined> => {
-    const client = options.client ?? injectLunoraClient();
+    const client = resolveLunoraClient(options.client);
     const destroyRef = options.destroyRef ?? inject(DestroyRef);
 
     const value = signal<ReturnOf<F> | undefined>(undefined);
@@ -64,6 +73,7 @@ export const liveQuery = <F extends FunctionReference>(
             onData: (next) => {
                 value.set(next);
             },
+            onError: options.onError,
             onReset: () => {
                 value.set(undefined);
             },
