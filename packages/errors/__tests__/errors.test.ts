@@ -10,8 +10,9 @@ describe("lunoraError", () => {
         expect(error.code).toBe("NOT_FOUND");
         expect(error.status).toBe(404);
         expect(error.name).toBe("LunoraError");
-        // Falls back to the catalog title when no message is given.
-        expect(error.message).toBe(ERROR_CATALOG.NOT_FOUND.title);
+        // No message given → the code is the message; the title stays separate metadata.
+        expect(error.message).toBe("NOT_FOUND");
+        expect(error.title).toBe(ERROR_CATALOG.NOT_FOUND.title);
     });
 
     it("carries a catalog hint for CONFLICT", () => {

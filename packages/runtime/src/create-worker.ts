@@ -1,3 +1,5 @@
+import { isLunoraError } from "@lunora/errors";
+
 import type { BatchEntry } from "../../../shared/batch-wire";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
@@ -8,7 +10,7 @@ import { groupBatchCallsByShard } from "./batch";
 import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit } from "./body-readers";
 import { buildDataMovementAdminRoutes } from "./data-movement-admin-routes";
 import type { FunctionArgumentDescriptor } from "./describe-args";
-import { isStructuralConflictError, isStructuralLunoraError, LunoraError, toErrorResponse } from "./errors";
+import { LunoraError, toErrorResponse } from "./errors";
 import type { ExportRow } from "./export-stream";
 import { collectKnownTables, streamExportRows } from "./export-stream";
 import type { IdentityContractLike, ResolvedIdentity } from "./identity-resolvers";
@@ -996,9 +998,9 @@ const buildErrorEvent = (
     error: unknown,
     extra: { fanOut?: { table: string }; shardKey?: string },
 ): ObservabilityEvent => {
-    const mappable = error instanceof LunoraError || isStructuralLunoraError(error) || isStructuralConflictError(error);
-    const code = mappable ? (error as { code: string }).code : "INTERNAL_SERVER_ERROR";
-    const status = mappable ? (error as { status: number }).status : 500;
+    const mappable = isLunoraError(error);
+    const code = mappable ? error.code : "INTERNAL_SERVER_ERROR";
+    const status = mappable ? error.status : 500;
     const message = error instanceof Error ? error.message : String(error);
 
     return {

@@ -63,6 +63,11 @@ export const ERROR_CATALOG = {
     UNPROCESSABLE: { status: 422, title: "Unprocessable" },
     NOT_IMPLEMENTED: { status: 501, title: "Not implemented" },
 
+    /** RPC/REST dispatch codes emitted by the runtime + Durable Object router. */
+    FUNCTION_NOT_FOUND: { status: 404, title: "Function not found" },
+    METHOD_NOT_ALLOWED: { status: 405, title: "Method not allowed" },
+    PAYLOAD_TOO_LARGE: { status: 413, title: "Payload too large" },
+
     /** Free-form internal failure — redacted to a generic message on the wire. */
     INTERNAL: { status: 500, title: "Internal error" },
     /** Alias of {@link ERROR_CATALOG.INTERNAL} kept for `@lunora/server`'s historical code name. */

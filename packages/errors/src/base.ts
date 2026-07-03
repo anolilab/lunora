@@ -76,7 +76,9 @@ export class LunoraError extends VisulimaError {
             cause: options.cause,
             hint: options.hint ?? entry?.hint,
             location: options.location,
-            message: message ?? entry?.title ?? code,
+            // No message supplied → default to the code (a stable, predictable
+            // identifier). The human-readable `title` stays separate metadata.
+            message: message ?? code,
             name: options.name ?? "LunoraError",
             title: options.title ?? entry?.title,
         });

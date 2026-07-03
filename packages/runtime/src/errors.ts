@@ -1,3 +1,5 @@
+import { isLunoraError, LunoraError as BaseLunoraError } from "@lunora/errors";
+
 interface LunoraErrorBody {
     error: {
         code: string;
@@ -6,68 +8,16 @@ interface LunoraErrorBody {
 }
 
 /**
- * Error type recognised by the runtime's error middleware. Anything thrown
- * that isn't a `LunoraError` is mapped to a generic 500 with code `INTERNAL`.
+ * Convert any thrown value into a JSON error response.
+ *
+ * Recognizes any error carrying the unified Lunora shape (a string `code` + a
+ * numeric `status`) via {@link isLunoraError} — this includes `@lunora/server`'s
+ * `LunoraError`, this runtime `LunoraError`, and the `@lunora/do` data-layer
+ * errors (`ConflictError`, `NotFoundError`, `NotUniqueError`, `RlsRequiredError`,
+ * …), all of which share that shape. Everything else is redacted.
  */
-class LunoraError extends Error {
-    public readonly code: string;
-
-    public readonly status: number;
-
-    public constructor(message: string, options?: { cause?: unknown; code?: string; status?: number }) {
-        super(message, { cause: options?.cause });
-        this.name = "LunoraError";
-        this.code = options?.code ?? "INTERNAL";
-        this.status = options?.status ?? 500;
-    }
-
-    public toResponse(): Response {
-        const body: LunoraErrorBody = { error: { code: this.code, message: this.message } };
-
-        return Response.json(body, {
-            headers: { "content-type": "application/json" },
-            status: this.status,
-        });
-    }
-}
-
-/** Shape recognised by the runtime's structural error checks. */
-type StructuralLunoraErrorLike = { code: string; message: string; name: string; status: number };
-
-const hasErrorShape = (error: unknown, name: string): error is StructuralLunoraErrorLike => {
-    if (!error || typeof error !== "object") {
-        return false;
-    }
-
-    const candidate = error as { code?: unknown; message?: unknown; name?: unknown; status?: unknown };
-
-    return candidate.name === name && typeof candidate.code === "string" && typeof candidate.status === "number" && typeof candidate.message === "string";
-};
-
-/**
- * Structural match for `ConflictError` from `@lunora/do`. We deliberately
- * avoid importing the class so `@lunora/runtime` stays free of a hard
- * dependency on the DO package — the contract is the public shape
- * (`name === "ConflictError"`, numeric `status`, string `code`).
- */
-const isStructuralConflictError = (error: unknown): error is StructuralLunoraErrorLike => hasErrorShape(error, "ConflictError");
-
-/**
- * Structural match for any error mirroring {@link LunoraError}'s shape
- * (`name === "LunoraError"`, numeric `status`, string `code`). Used by
- * `@lunora/do`'s `CountRlsUnsupportedError` (and any future cross-package
- * error that opts in to the structural mapper) so packages downstream of the
- * runtime can throw transport-mappable errors without taking a runtime dep.
- */
-const isStructuralLunoraError = (error: unknown): error is StructuralLunoraErrorLike => hasErrorShape(error, "LunoraError");
-
-/** Convert any thrown value into a JSON error response. */
 const toErrorResponse = (error: unknown): Response => {
-    if (error instanceof LunoraError) {
-        return error.toResponse();
-    }
-
-    if (isStructuralLunoraError(error) || isStructuralConflictError(error)) {
+    if (isLunoraError(error)) {
         const body: LunoraErrorBody = { error: { code: error.code, message: error.message } };
 
         return Response.json(body, {
@@ -90,5 +40,25 @@ const toErrorResponse = (error: unknown): Response => {
     });
 };
 
-export { isStructuralConflictError, isStructuralLunoraError, LunoraError, toErrorResponse };
-export type { LunoraErrorBody, StructuralLunoraErrorLike };
+/**
+ * Transport-level error for the worker entry. A thin ergonomic wrapper over the
+ * shared `@lunora/errors` `LunoraError` that keeps the runtime's historical
+ * `(message, { code, status })` signature — the runtime mints these with
+ * dispatch-specific codes (`METHOD_NOT_ALLOWED`, `*_NOT_CONFIGURED`, …) and an
+ * explicit status, so they don't need a central catalog entry. Because it is a
+ * real `LunoraError`, it carries the unified wire shape and is recognized by
+ * {@link isLunoraError} everywhere. Anything thrown that isn't a `LunoraError`
+ * is mapped to a generic 500 with code `INTERNAL`.
+ */
+class LunoraError extends BaseLunoraError {
+    public constructor(message: string, options?: { cause?: unknown; code?: string; status?: number }) {
+        super(options?.code ?? "INTERNAL", message, { cause: options?.cause, status: options?.status });
+    }
+
+    public toResponse(): Response {
+        return toErrorResponse(this);
+    }
+}
+
+export { LunoraError, toErrorResponse };
+export type { LunoraErrorBody };
