@@ -9,6 +9,8 @@ import type { AdvisorConfigCall } from "./config-calls";
 import type { AdvisorContainerKeyAccess } from "./container-key-accesses";
 import type { AdvisorContainerOverride } from "./container-overrides";
 import type { AdvisorContainer } from "./containers";
+import type { AdvisorFailOpenGuard } from "./fail-open-guards";
+import type { AdvisorFlagSecurityDefault } from "./flag-security-defaults";
 import type { AdvisorHttpActionGuard } from "./http-action-guards";
 import type { AdvisorHyperdriveCall } from "./hyperdrive-calls";
 import type { AdvisorImageDeliveryUrlAccess } from "./image-delivery-url-accesses";
@@ -210,6 +212,29 @@ export interface LintContext {
      * the container lints find nothing.
      */
     containers?: ReadonlyArray<AdvisorContainer>;
+
+    /**
+     * `rateLimit`/`dbRateLimit` (`@lunora/ratelimit`) and `verifyTurnstileMiddleware`
+     * (`@lunora/auth`) middleware calls, each with whether its options literal set
+     * `failOpen: true` and the rate-limit `name` — the
+     * `ratelimit_middleware_fail_open` input. These guards fail closed by default; a
+     * `failOpen: true` admits every request during a limiter/siteverify outage, so
+     * the lint fires when a fail-open guard protects an auth/payment-sensitive
+     * procedure. Supplied by the codegen feeder; absent for runtime callers, where
+     * the lint finds nothing.
+     */
+    failOpenGuards?: ReadonlyArray<AdvisorFailOpenGuard>;
+
+    /**
+     * `ctx.flags.boolean(key, default)` reads with a statically-known string key and
+     * boolean-literal default — the `flag_gates_security_with_unsafe_default` input.
+     * OpenFeature returns the default when the provider errors, so a fail-open
+     * default on a security-shaped key (an `enforce`/`rls`/`gate`/`lockdown`
+     * protection defaulting `false`, or an `allow`/`permit`/`bypass` permission
+     * defaulting `true`) silently opens access during an outage. Supplied by the
+     * codegen feeder; absent for runtime callers, where the lint finds nothing.
+     */
+    flagSecurityDefaults?: ReadonlyArray<AdvisorFlagSecurityDefault>;
 
     /**
      * `httpAction`/`httpRoute` handlers that perform a side effect

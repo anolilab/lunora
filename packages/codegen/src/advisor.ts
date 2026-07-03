@@ -13,6 +13,8 @@ import type {
     ContainerIR,
     ContainerKeyAccessIR,
     ContainerOverrideIR,
+    FailOpenGuardIR,
+    FlagSecurityDefaultIR,
     HttpActionGuardIR,
     ImageDeliveryUrlAccessIR,
     InsertWriteIR,
@@ -171,6 +173,8 @@ export const lintSchema = (
     ratelimitKeySelectors?: ReadonlyArray<RatelimitKeySelectorIR>,
     storageUploads?: ReadonlyArray<StorageUploadIR>,
     httpActionGuards?: ReadonlyArray<HttpActionGuardIR>,
+    failOpenGuards?: ReadonlyArray<FailOpenGuardIR>,
+    flagSecurityDefaults?: ReadonlyArray<FlagSecurityDefaultIR>,
 ): Finding[] =>
     runAdvisor(
         {
@@ -185,6 +189,8 @@ export const lintSchema = (
             containerKeyAccesses,
             containerOverrides,
             containers,
+            failOpenGuards,
+            flagSecurityDefaults,
             httpActionGuards,
             imageDeliveryUrlAccesses,
             inserts,

@@ -32,6 +32,7 @@ import containerStartEnableInternetOverride from "./lints/static/container-start
 import duplicateIndex from "./lints/static/duplicate-index";
 import emptyIndex from "./lints/static/empty-index";
 import filterWithoutIndex from "./lints/static/filter-without-index";
+import flagGatesSecurityWithUnsafeDefault from "./lints/static/flag-gates-security-with-unsafe-default";
 import hardcodedSecret from "./lints/static/hardcoded-secret";
 import httpActionMissingAuthGuard from "./lints/static/http-action-missing-auth-guard";
 import hyperdriveOutsideAction from "./lints/static/hyperdrive-outside-action";
@@ -56,6 +57,7 @@ import publicTableRlsOptoutConfusion from "./lints/static/public-table-rls-optou
 import r2sqlOutsideAction from "./lints/static/r2sql-outside-action";
 import ratelimitDefaultMemoryStore from "./lints/static/ratelimit-default-memory-store";
 import ratelimitKeySpoofableOrGlobal from "./lints/static/ratelimit-key-spoofable-or-global";
+import ratelimitMiddlewareFailOpen from "./lints/static/ratelimit-middleware-fail-open";
 import relationReferencesUnknownField from "./lints/static/relation-references-unknown-field";
 import relationReferencesUnknownTable from "./lints/static/relation-references-unknown-table";
 import rlsUncoveredTable from "./lints/static/rls-uncovered-table";
@@ -91,6 +93,8 @@ export type { AdvisorConfigCall } from "./config-calls";
 export type { AdvisorContainerKeyAccess } from "./container-key-accesses";
 export type { AdvisorContainerOverride } from "./container-overrides";
 export type { AdvisorContainer } from "./containers";
+export type { AdvisorFailOpenGuard } from "./fail-open-guards";
+export type { AdvisorFlagSecurityDefault } from "./flag-security-defaults";
 export type { AdvisorHttpActionGuard } from "./http-action-guards";
 export type { AdvisorHyperdriveCall } from "./hyperdrive-calls";
 export type { AdvisorImageDeliveryUrlAccess } from "./image-delivery-url-accesses";
@@ -124,6 +128,7 @@ export { default as emptyIndex } from "./lints/static/empty-index";
 export { default as externalSourceOnGlobal } from "./lints/static/external-source-on-global";
 export { default as externalSourceUnscoped } from "./lints/static/external-source-unscoped";
 export { default as filterWithoutIndex } from "./lints/static/filter-without-index";
+export { default as flagGatesSecurityWithUnsafeDefault } from "./lints/static/flag-gates-security-with-unsafe-default";
 export { default as hardcodedSecret } from "./lints/static/hardcoded-secret";
 export { default as httpActionMissingAuthGuard } from "./lints/static/http-action-missing-auth-guard";
 export { default as hyperdriveOutsideAction } from "./lints/static/hyperdrive-outside-action";
@@ -148,6 +153,7 @@ export { default as publicTableRlsOptoutConfusion } from "./lints/static/public-
 export { default as r2sqlOutsideAction } from "./lints/static/r2sql-outside-action";
 export { default as ratelimitDefaultMemoryStore } from "./lints/static/ratelimit-default-memory-store";
 export { default as ratelimitKeySpoofableOrGlobal } from "./lints/static/ratelimit-key-spoofable-or-global";
+export { default as ratelimitMiddlewareFailOpen } from "./lints/static/ratelimit-middleware-fail-open";
 export { default as relationReferencesUnknownField } from "./lints/static/relation-references-unknown-field";
 export { default as relationReferencesUnknownTable } from "./lints/static/relation-references-unknown-table";
 export { default as rlsUncoveredTable } from "./lints/static/rls-uncovered-table";
@@ -266,6 +272,8 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     storageGenerateUploadUrlNoContentTypePin,
     storagePresignedUrlForPrivateContent,
     httpActionMissingAuthGuard,
+    ratelimitMiddlewareFailOpen,
+    flagGatesSecurityWithUnsafeDefault,
 ];
 
 /**

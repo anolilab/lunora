@@ -1354,6 +1354,58 @@ export interface HttpActionGuardIR {
     sideEffect: string;
 }
 
+/**
+ * One rate-limit / Turnstile middleware call in `lunora/` — the
+ * `ratelimit_middleware_fail_open` lint input. `rateLimit`/`dbRateLimit`
+ * (`@lunora/ratelimit`) and `verifyTurnstileMiddleware` (`@lunora/auth`) each
+ * accept a `failOpen` escape hatch that admits every request when the
+ * limiter/siteverify is unavailable; `failOpen` is `true` only when the options
+ * literal set it to the boolean literal `true` (anything else is fail-closed).
+ * The lint escalates a fail-open guard to a finding when the guarded procedure
+ * (`exportName`/`limitName`) looks auth/payment-sensitive. Structurally
+ * identical to `AdvisorFailOpenGuard`.
+ */
+export interface FailOpenGuardIR {
+    /** The middleware factory at the call site: `rateLimit` / `dbRateLimit` / `verifyTurnstileMiddleware`. */
+    callee: string;
+    /** Export binding name of the procedure the guard is attached to, or `"&lt;module>"` at file scope. */
+    exportName: string;
+    /** `true` only when the options literal set `failOpen: true` as a boolean literal; a non-literal or absent option is treated as fail-closed. */
+    failOpen: boolean;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** The rate-limit `name` (second string argument) for `rateLimit`/`dbRateLimit`; `""` for `verifyTurnstileMiddleware`. */
+    limitName: string;
+    /** 1-based line of the middleware call, or `0` when unknown. */
+    line: number;
+}
+
+/* eslint-disable no-secrets/no-secrets -- the referenced advisor evidence type name in the doc comment, not a credential */
+
+/**
+ * One `ctx.flags.boolean("key", &lt;boolean-literal>)` read in `lunora/` — the
+ * `flag_gates_security_with_unsafe_default` lint input. OpenFeature returns the
+ * `defaultValue` when the provider errors, so a fail-open default on a
+ * security-shaped key silently opens access during an outage. Only reads with a
+ * statically-known string key and boolean-literal default are recorded; the lint
+ * owns the security-shape + polarity judgment. Structurally identical to
+ * `AdvisorFlagSecurityDefault`.
+ */
+export interface FlagSecurityDefaultIR {
+    /** The boolean-literal default returned on a provider outage (fail-open value). */
+    defaultValue: boolean;
+    /** Export binding name of the procedure performing the flag read, or `"&lt;module>"` at file scope. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** The flag key — the first string-literal argument of `ctx.flags.boolean`. */
+    key: string;
+    /** 1-based line of the `ctx.flags.boolean` call, or `0` when unknown. */
+    line: number;
+}
+
+/* eslint-enable no-secrets/no-secrets -- re-enable after the FlagSecurityDefaultIR doc block */
+
 export interface ProjectIR {
     crons: ReadonlyArray<CronJobIR>;
     functions: ReadonlyArray<FunctionIR>;
