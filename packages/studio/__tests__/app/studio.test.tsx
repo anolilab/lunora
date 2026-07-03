@@ -41,6 +41,7 @@ const createClient = (features?: Partial<StudioFeaturesResult>): MockClientHooks
                 return {
                     analytics: true,
                     auth: true,
+                    containers: true,
                     flags: true,
                     kv: true,
                     mail: true,
@@ -85,7 +86,20 @@ const renderAndFind = async (testId: string): Promise<HTMLElement> => {
  * studio copy of the type drifts from this tuple — keeping both packages' copies
  * of the wire contract in lockstep.
  */
-const STUDIO_FEATURE_KEYS = ["analytics", "auth", "flags", "kv", "mail", "payments", "queues", "scheduler", "storage", "vectors", "workflows"] as const;
+const STUDIO_FEATURE_KEYS = [
+    "analytics",
+    "auth",
+    "containers",
+    "flags",
+    "kv",
+    "mail",
+    "payments",
+    "queues",
+    "scheduler",
+    "storage",
+    "vectors",
+    "workflows",
+] as const;
 
 /** `true` only when `Keys` and `Canonical` are mutually assignable (the exact same key set). */
 type KeysMatch<Keys extends string, Canonical extends string> = [Keys] extends [Canonical] ? ([Canonical] extends [Keys] ? true : never) : never;

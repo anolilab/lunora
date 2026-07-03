@@ -507,6 +507,7 @@ export interface StorageRulesResult {
 export interface StudioFeaturesResult {
     analytics: boolean;
     auth: boolean;
+    containers: boolean;
     flags: boolean;
     kv: boolean;
     mail: boolean;

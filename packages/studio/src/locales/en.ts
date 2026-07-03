@@ -1056,6 +1056,15 @@ const MESSAGE_IDS = [
     "Delivered",
     "Peak width",
     "Max time",
+    "Containers",
+    "Container",
+    "Last event",
+    "Detail",
+    "When",
+    "No container activity",
+    "Live Cloudflare Containers — current lifecycle state per container from the log stream.",
+    "Cloudflare Containers are observed from their lifecycle log stream. This shows the current state per container — ports and health checks aren't carried in that stream.",
+    "No container lifecycle activity yet. Instances declared with defineContainer show up here once they start, sleep, stop, or error.",
 ] as const;
 
 /** A known studio message id — one of the entries in {@link MESSAGE_IDS}. */
