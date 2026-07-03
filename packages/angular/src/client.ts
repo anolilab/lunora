@@ -4,11 +4,18 @@ import type { LunoraClientOptions } from "@lunora/client";
 import { LunoraClient } from "@lunora/client";
 
 /**
- * Same-origin default (SSR-safe): the page's origin in the browser, `""` during
- * SSR / Node where there is no `location`. Matches the single-worker deploy where
+ * Same-origin default: the page's origin in the browser, `""` during SSR / Node
+ * where there is no `location`. Matches the single-worker deploy where
  * `/_lunora/ws` loops back into the app's own worker. `globalThis` is cast to make
  * `location` genuinely optional — the DOM lib types it as always present, but it
  * is absent on the server.
+ *
+ * The `""` server fallback is safe for the common flow, because the reactive
+ * primitives (`liveQuery` / `connectionStatus`) open their WebSocket lazily in the
+ * browser — an SSR render never issues a request. But **server-side data-loading**
+ * (a `query`/`mutation` run during SSR) with `""` builds a relative URL that native
+ * `fetch` rejects (`TypeError: Failed to parse URL`); for that, pass an explicit
+ * `url` to {@link provideLunora}.
  */
 const sameOriginUrl = (): string => (globalThis as { location?: Location }).location?.origin ?? "";
 
@@ -30,7 +37,9 @@ export const LUNORA_CLIENT: InjectionToken<LunoraClient> = new InjectionToken<Lu
 
 /**
  * Options accepted by {@link provideLunora}. Identical to {@link LunoraClientOptions}
- * except `url` is optional — it defaults to the page origin (SSR-safe `""`).
+ * except `url` is optional — it defaults to the page origin in the browser (and to
+ * `""` on the server; pass an explicit `url` for SSR data-loading — see
+ * {@link sameOriginUrl}).
  */
 export type ProvideLunoraOptions = Omit<LunoraClientOptions, "url"> & { url?: string };
 
