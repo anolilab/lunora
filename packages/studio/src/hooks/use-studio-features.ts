@@ -18,6 +18,7 @@ const STUDIO_FEATURES = adminRef(ADMIN_FUNCTIONS.studioFeatures);
 const DEFAULT_STUDIO_FEATURES: StudioFeaturesResult = {
     analytics: true,
     auth: true,
+    containers: true,
     flags: true,
     kv: true,
     mail: true,
@@ -41,6 +42,7 @@ const coerceFeatures = (raw: unknown): StudioFeaturesResult => {
     return {
         analytics: flag("analytics"),
         auth: flag("auth"),
+        containers: flag("containers"),
         flags: flag("flags"),
         kv: flag("kv"),
         mail: flag("mail"),

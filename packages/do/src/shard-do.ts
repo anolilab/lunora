@@ -2930,6 +2930,7 @@ abstract class ShardDO {
         return {
             analytics: false,
             auth: false,
+            containers: false,
             flags: false,
             kv: false,
             mail: false,

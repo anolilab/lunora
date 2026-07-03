@@ -84,6 +84,7 @@ const AuthConfigPanel = lazyNamed(() => import("../features/auth/auth-config-pan
 const AuthSessionsPanel = lazyNamed(() => import("../features/auth/auth-sessions-panel"), "AuthSessionsPanel");
 const OrganizationsPanel = lazyNamed(() => import("../features/auth/organizations-panel"), "OrganizationsPanel");
 const UsersPanel = lazyNamed(() => import("../features/auth/users-panel"), "UsersPanel");
+const ContainersPanel = lazyNamed(() => import("../features/containers/containers-panel"), "ContainersPanel");
 const TableEditor = lazyNamed(() => import("../features/data/table-editor"), "TableEditor");
 const ExportImportPanel = lazyNamed(() => import("../features/database/export-import"), "ExportImportPanel");
 const MigrationsPanel = lazyNamed(() => import("../features/database/migrations"), "MigrationsPanel");
@@ -127,6 +128,7 @@ type StudioTab =
     | "audit"
     | "authConfig"
     | "authSessions"
+    | "containers"
     | "dashboards"
     | "data"
     | "drains"
@@ -298,6 +300,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
         <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4-3a7.4 7.4 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7.3 7.3 0 0 0-2-1.2l-.4-2.6h-3.6l-.4 2.6a7.3 7.3 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7.4 7.4 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7.3 7.3 0 0 0 2 1.2l.4 2.6h3.6l.4-2.6a7.3 7.3 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6a7.4 7.4 0 0 0 .1-1.2Z" />
     ),
     authSessions: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0-13.5V12l4 2" />,
+    containers: <path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5v-9Zm0 0 9 4.5m0 0 9-4.5m-9 4.5V21" />,
     dashboards: <path d="M4 5h7v6H4V5Zm9 0h7v4h-7V5ZM4 14h7v5H4v-5Zm9-1h7v6h-7v-6Z" />,
     drains: <path d="M5 5h14M7 5v6a5 5 0 0 0 10 0V5M10 16h4v3h-4zM12 19v2" />,
     data: (
@@ -352,7 +355,7 @@ type NavGroup = { readonly key: NavGroupKey; readonly tabs: ReadonlyArray<Studio
 const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "overview", tabs: ["home", "dashboards"] },
     { key: "database", tabs: ["data", "sql", "schema", "migrations", "vectors", "pitr", "export"] },
-    { key: "functions", tabs: ["functions", "api", "workflows", "queues"] },
+    { key: "functions", tabs: ["functions", "api", "workflows", "queues", "containers"] },
     { key: "auth", tabs: ["users", "organizations", "authSessions", "authConfig"] },
     { key: "storage", tabs: ["files", "storageRules", "kv"] },
     { key: "observability", tabs: ["logs", "audit", "realtime", "fanout", "metrics", "analytics", "health"] },
@@ -375,6 +378,7 @@ const TAB_FEATURE: Partial<Record<StudioTab, keyof StudioFeaturesResult>> = {
     analytics: "analytics",
     authConfig: "auth",
     authSessions: "auth",
+    containers: "containers",
     files: "storage",
     flags: "flags",
     kv: "kv",
@@ -420,6 +424,7 @@ const TABS = [
     "api",
     "workflows",
     "queues",
+    "containers",
     "schema",
     "migrations",
     "vectors",
@@ -790,6 +795,7 @@ const StudioLayout = (): ReactElement => {
             audit: t("Audit"),
             authConfig: t("Configuration"),
             authSessions: t("Sessions"),
+            containers: t("Containers"),
             dashboards: t("Dashboards"),
             data: t("Data"),
             drains: t("Log drains"),
@@ -844,6 +850,7 @@ const StudioLayout = (): ReactElement => {
         audit: t("A durable log of admin state-changing operations."),
         authConfig: t("Enabled plugins and session config (read-only)."),
         authSessions: t("Browse and revoke active sessions across all users."),
+        containers: t("Live Cloudflare Containers — current lifecycle state per container from the log stream."),
         dashboards: t("Chart widgets backed by saved read-only SQL queries."),
         data: t("Browse and edit rows across your shard and global tables."),
         drains: t("Forward logs to Logpush, Tail Workers, or a webhook collector."),
@@ -1054,6 +1061,7 @@ const buildRouter = ({
         audit: <AuditPanel initialShardKey={initialShardKey} />,
         authConfig: <AuthConfigPanel />,
         authSessions: <AuthSessionsPanel />,
+        containers: <ContainersPanel />,
         dashboards: <DashboardsPanel initialShardKey={initialShardKey} />,
         data: <TableEditor editable={dataEditable} initialShardKey={initialShardKey} />,
         drains: <LogDrainsPanel />,

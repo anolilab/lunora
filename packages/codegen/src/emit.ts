@@ -2916,6 +2916,7 @@ const emitShard = ({
     const studioFeaturesData: StudioFeaturesResult = studioFeatures ?? {
         analytics: false,
         auth: false,
+        containers: false,
         flags: false,
         kv: false,
         mail: false,

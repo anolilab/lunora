@@ -29,6 +29,8 @@ interface FeatureUsage {
     analytics: boolean;
     /** A `lunora/` source imports `@lunora/browser` or reads `ctx.browser`. */
     browser: boolean;
+    /** A `lunora/` source imports `@lunora/container` (e.g. `defineContainer`) or reads `ctx.containers`. */
+    container: boolean;
     /** A `lunora/` source imports `@lunora/flags` or reads `ctx.flags`. */
     flags: boolean;
     /** A `lunora/` source imports `@lunora/hyperdrive` or reads `ctx.sql`. */
@@ -72,6 +74,10 @@ const PROBES: Record<keyof FeatureUsage, FeatureProbe> = {
     ai: { contextProperty: "ai", moduleSpecifier: "@lunora/ai" },
     analytics: { contextProperty: "analytics", moduleSpecifier: "@lunora/bindings/analytics" },
     browser: { contextProperty: "browser", moduleSpecifier: "@lunora/browser" },
+    // `lunora/containers.ts` imports `defineContainer` from `@lunora/container`,
+    // and handlers reach live instances via `ctx.containers` — either signals the
+    // app wires containers, so the studio should show the Containers page.
+    container: { contextProperty: "containers", moduleSpecifier: "@lunora/container" },
     flags: { contextProperty: "flags", moduleSpecifier: "@lunora/flags" },
     hyperdrive: { contextProperty: "sql", moduleSpecifier: "@lunora/hyperdrive" },
     images: { contextProperty: "images", moduleSpecifier: "@lunora/bindings/images" },
@@ -98,6 +104,8 @@ const PROBES: Record<keyof FeatureUsage, FeatureProbe> = {
  * (`src/server`), detected via the project's declared dependencies.
  */
 interface StudioFeatureSignals {
+    /** Number of declared containers — any `defineContainer` means the containers page is relevant. */
+    containerCount: number;
     /** Number of declared cron jobs — any cron means the scheduler page is relevant. */
     cronCount: number;
     /** The `@lunora/*` packages this app depends on (from its `package.json`). */
@@ -169,6 +177,7 @@ const discoverFeatureUsage = (project: Project, lunoraDirectory: string): Featur
         ai: false,
         analytics: false,
         browser: false,
+        container: false,
         flags: false,
         hyperdrive: false,
         images: false,
@@ -228,6 +237,7 @@ const buildStudioFeatures = (usage: FeatureUsage, signals: StudioFeatureSignals)
     return {
         analytics: usage.analytics || signals.dependencies.has("@lunora/bindings/analytics"),
         auth: signals.dependencies.has("@lunora/auth"),
+        containers: usage.container || signals.containerCount > 0 || signals.dependencies.has("@lunora/container"),
         flags: usage.flags || signals.dependencies.has("@lunora/flags"),
         kv: usage.kv || signals.dependencies.has("@lunora/bindings/kv"),
         mail: usage.mail || signals.dependencies.has("@lunora/mail"),
