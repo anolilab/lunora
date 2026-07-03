@@ -1578,6 +1578,40 @@ export interface RawRowReturnIR {
 
 /* eslint-enable no-secrets/no-secrets -- re-enable after the RawRowReturnIR doc block */
 
+/* eslint-disable no-secrets/no-secrets -- the referenced advisor lint rule id in the doc comment, not a credential */
+
+/**
+ * One `query`/`mutation` handler that gates a `ctx.db.get`/`patch`/`delete` on a
+ * null-checked `ctx.db.normalizeId(table, id)` result — the
+ * `normalize_id_used_as_authorization` lint input. `normalizeId` validates an id's
+ * structural shape only (it never reads the database), so a non-null result proves
+ * the id is well-formed, never that the caller owns the row; gating access on it is
+ * an IDOR. The lint owns the negative proof — it keeps only `visibility === "public"`
+ * rows with no `.use(rls(...))` and no ownership/identity mention (`mentionsOwnership`),
+ * then joins `table` against the schema's RLS mode before flagging. Structurally
+ * identical to `AdvisorNormalizeIdAuthorization` so values pass straight through.
+ */
+export interface NormalizeIdAuthorizationIR {
+    /** Export binding name of the procedure performing the normalize-then-access. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the `ctx.db.normalizeId(...)` call the access is gated on. */
+    line: number;
+    /** `true` when the handler anywhere reads an ownership-named identifier or `ctx.auth`/`ctx.identity`/… — an intervening ownership signal. */
+    mentionsOwnership: boolean;
+    /** The id-first `ctx.db` sink the normalized id reaches. */
+    sinkMethod: "delete" | "get" | "patch";
+    /** Table named in the `normalizeId` call, or `""` when its table argument wasn't a string literal. */
+    table: string;
+    /** `true` when the procedure's builder chain carries a `.use(rls(...))` step. */
+    usesRls: boolean;
+    /** `"internal"` for `internalQuery`/`internalMutation`; `"public"` for `query`/`mutation`. */
+    visibility: "internal" | "public";
+}
+
+/* eslint-enable no-secrets/no-secrets -- re-enable after the NormalizeIdAuthorizationIR doc block */
+
 /**
  * One committed `wrangler.jsonc` `vars` entry whose value is a plaintext secret —
  * the `plaintext_secret_in_wrangler_vars` lint input. `vars` are baked into the

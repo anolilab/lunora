@@ -25,6 +25,7 @@ import type { AdvisorMaskProcedure } from "./mask-procedures";
 import type { AdvisorMaskStrategy } from "./mask-strategies";
 import type { AdvisorMutatorWrite } from "./mutator-writes";
 import type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
+import type { AdvisorNormalizeIdAuthorization } from "./normalize-id-authorization";
 import type { AdvisorOwnerFieldWrite } from "./owner-field-writes";
 import type { AdvisorPaymentWebhook } from "./payment-webhooks";
 import type { AdvisorPrivilegedDispatch } from "./privileged-dispatches";
@@ -382,6 +383,18 @@ export interface LintContext {
      * finds nothing.
      */
     nondeterministicCalls?: ReadonlyArray<AdvisorNondeterministicCall>;
+
+    /**
+     * `query`/`mutation` handlers that gate a `ctx.db.get`/`patch`/`delete` on a
+     * null-checked `ctx.db.normalizeId(table, id)` result — the
+     * `normalize_id_used_as_authorization` input. `normalizeId` validates an id's
+     * structural shape only (it never reads the database), so gating access on a
+     * non-null result is an IDOR. The lint keeps only public procedures with no
+     * `.use(rls(...))` and no ownership/identity mention, then joins `table` against
+     * the schema's RLS mode before flagging. Supplied by the codegen feeder; absent
+     * for runtime callers, where the lint finds nothing.
+     */
+    normalizeIdAuthorizations?: ReadonlyArray<AdvisorNormalizeIdAuthorization>;
 
     /**
      * `ctx.db` writes (`insert` / `replace` / `patch` / `insertManyUnsafe`) that set

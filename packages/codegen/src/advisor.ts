@@ -27,6 +27,7 @@ import type {
     MaskStrategyIR,
     MutatorWriteIR,
     NondeterministicCallIR,
+    NormalizeIdAuthorizationIR,
     OwnerFieldWriteIR,
     PaymentWebhookIR,
     PrivilegedDispatchIR,
@@ -191,6 +192,7 @@ export const lintSchema = (
     softDeleteReads?: ReadonlyArray<SoftDeleteReadIR>,
     relationLoads?: ReadonlyArray<RelationLoadIR>,
     rawRowReturns?: ReadonlyArray<RawRowReturnIR>,
+    normalizeIdAuthorizations?: ReadonlyArray<NormalizeIdAuthorizationIR>,
     wranglerVariables?: ReadonlyArray<WranglerVariableIR>,
 ): Finding[] =>
     runAdvisor(
@@ -220,6 +222,7 @@ export const lintSchema = (
             maskStrategies,
             mutatorWrites,
             nondeterministicCalls,
+            normalizeIdAuthorizations,
             ownerFieldWrites,
             paymentWebhooks,
             privilegedDispatches,

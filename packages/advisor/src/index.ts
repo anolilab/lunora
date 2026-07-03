@@ -50,6 +50,7 @@ import maskWeakHashStrategyOnPii from "./lints/static/mask-weak-hash-strategy-on
 import maskedRelationLeakViaWith from "./lints/static/masked-relation-leak-via-with";
 import mutatorFullRowReplace from "./lints/static/mutator-full-row-replace";
 import nondeterministicQueryMutation from "./lints/static/nondeterministic-query-mutation";
+import normalizeIdUsedAsAuthorization from "./lints/static/normalize-id-used-as-authorization";
 import outputProjectionMissingOnPublicRead from "./lints/static/output-projection-missing-on-public-read";
 import ownerFieldFromArgsNotAuth from "./lints/static/owner-field-from-args-not-auth";
 import paymentCreateWithoutAuthorize from "./lints/static/payment-create-without-authorize";
@@ -157,6 +158,7 @@ export { default as maskWeakHashStrategyOnPii } from "./lints/static/mask-weak-h
 export { default as maskedRelationLeakViaWith } from "./lints/static/masked-relation-leak-via-with";
 export { default as mutatorFullRowReplace } from "./lints/static/mutator-full-row-replace";
 export { default as nondeterministicQueryMutation } from "./lints/static/nondeterministic-query-mutation";
+export { default as normalizeIdUsedAsAuthorization } from "./lints/static/normalize-id-used-as-authorization";
 export { default as outputProjectionMissingOnPublicRead } from "./lints/static/output-projection-missing-on-public-read";
 export { default as ownerFieldFromArgsNotAuth } from "./lints/static/owner-field-from-args-not-auth";
 export { default as paymentCreateWithoutAuthorize } from "./lints/static/payment-create-without-authorize";
@@ -198,6 +200,7 @@ export type { AdvisorMaskProcedure } from "./mask-procedures";
 export type { AdvisorMaskStrategy } from "./mask-strategies";
 export type { AdvisorMutatorWrite } from "./mutator-writes";
 export type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
+export type { AdvisorNormalizeIdAuthorization } from "./normalize-id-authorization";
 export type { AdvisorOwnerFieldWrite } from "./owner-field-writes";
 export type { AdvisorPaymentWebhook } from "./payment-webhooks";
 export type { AdvisorPrivilegedDispatch } from "./privileged-dispatches";
@@ -305,6 +308,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     softDeleteIncludeDeletedFromArgs,
     maskedRelationLeakViaWith,
     outputProjectionMissingOnPublicRead,
+    normalizeIdUsedAsAuthorization,
     plaintextSecretInWranglerVariables,
 ];
 

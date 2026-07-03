@@ -38,6 +38,7 @@ import discoverMigrations from "./discover-migrations";
 import discoverMutatorWrites from "./discover-mutator-writes";
 import { discoverMutators } from "./discover-mutators";
 import discoverNondeterministicCalls from "./discover-nondeterministic-calls";
+import discoverNormalizeIdAuthorization from "./discover-normalize-id-authorization";
 import discoverOwnerFieldWrites from "./discover-owner-field-writes";
 import discoverPackageDependencies from "./discover-package-dependencies";
 import discoverPaymentWebhooks from "./discover-payment-webhooks";
@@ -381,6 +382,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   discoverSoftDeleteReads(project, lunoraDirectory),
                   discoverRelationLoads(project, lunoraDirectory),
                   discoverRawRowReturns(project, lunoraDirectory),
+                  discoverNormalizeIdAuthorization(project, lunoraDirectory),
                   options.wranglerVariables,
               );
 
