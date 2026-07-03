@@ -103,6 +103,24 @@ describe("discoverStorageKeyAccesses", () => {
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
     });
 
+    it("ignores a key prefixed by a locally-bound ctx identity (two hops)", () => {
+        expect.assertions(1);
+
+        // The recommended remediation, written idiomatically: the identity reaches ctx
+        // only through the `userId` binding, one hop deeper than the key template — so
+        // `avatars/${userId}/${args.key}` is scoped, not attacker-controlled.
+        write(
+            "identity-prefix.ts",
+            `export const uploadAvatar = action(async ({ ctx, args }) => {
+                const userId = ctx.auth.userId ?? "anonymous";
+                const scopedKey = \`avatars/\${userId}/\${args.key}\`;
+                return ctx.storage.avatars.generateUploadUrl(scopedKey, { contentType: args.contentType });
+            });`,
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
     it("ignores a fixed literal key", () => {
         expect.assertions(1);
 

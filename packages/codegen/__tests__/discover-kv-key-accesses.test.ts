@@ -86,6 +86,19 @@ describe("discoverKvKeyAccesses", () => {
         expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
     });
 
+    it("ignores a key prefixed by a locally-bound ctx identity (two hops)", () => {
+        expect.assertions(1);
+
+        // ctx identity bound to `userId` first, then composed into the key — the
+        // identity reaches ctx one hop deeper than the key template itself.
+        write(
+            "identity-prefix.ts",
+            `export const read = query(async ({ ctx, args }) => { const userId = ctx.auth.userId ?? "anon"; const k = \`\${userId}:\${args.id}\`; return ctx.kv.get(k); });`,
+        );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
     it("ignores a fixed literal key", () => {
         expect.assertions(1);
 

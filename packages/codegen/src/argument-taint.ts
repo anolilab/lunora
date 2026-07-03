@@ -182,13 +182,22 @@ export const isArgumentDerived = (expression: TsNode): boolean => {
 };
 
 /**
- * True when `node` is scoped by a server-trusted `ctx` value — directly, or through
- * one local `const` hop, symmetric with {@link isArgumentDerived}. A storage/kv key
- * such as `${ctx.auth.userId}/${args.name}` references *both* `args` and `ctx`; the
- * IDOR sinks treat any key that reaches `ctx` — even via `const k = scoped; … k` —
- * as scoped rather than attacker-controlled, so a correctly-prefixed key is not
- * flagged. Following the same single hop as the taint check keeps the two
- * predicates from disagreeing on a local-`const` key.
+ * True when `node` is scoped by a server-trusted `ctx` value — directly, through
+ * one local `const` hop (symmetric with {@link isArgumentDerived}), or through a
+ * locally-bound ctx identity composed into the key. A storage/kv key such as
+ * `${ctx.auth.userId}/${args.name}` references *both* `args` and `ctx`; the IDOR
+ * sinks treat any key that reaches `ctx` — even via `const k = scoped; … k` — as
+ * scoped rather than attacker-controlled, so a correctly-prefixed key is not
+ * flagged.
+ *
+ * The recommended remediation is usually written through an intermediate binding —
+ * `const userId = ctx.auth.userId; … `${userId}/${args.name}`` — which puts the
+ * ctx value *two* hops from the sink: one hop expands the key to its template, and
+ * the identity reaches `ctx` only through the `userId` binding. So after the direct
+ * and single-hop checks, each value-identifier composed into the key is followed
+ * one hop to its own initializer, treating a key built from a ctx-derived local as
+ * scoped. This only ever *suppresses* a finding (a fail-safe under-report), never
+ * introduces one.
  */
 export const isScopedByContext = (node: TsNode): boolean => {
     if (textuallyReferencesContext(node)) {
@@ -197,7 +206,20 @@ export const isScopedByContext = (node: TsNode): boolean => {
 
     const initializer = singleHopInitializer(node);
 
-    return initializer !== undefined && textuallyReferencesContext(initializer);
+    if (initializer !== undefined && textuallyReferencesContext(initializer)) {
+        return true;
+    }
+
+    // Follow each value-identifier composed into the (expanded) key one hop to its
+    // own `const` initializer — `${userId}/…` reaches ctx via `const userId = ctx.*`.
+    const composed = initializer ?? node;
+    const identifiers = Node.isIdentifier(composed) ? [composed] : composed.getDescendantsOfKind(SyntaxKind.Identifier);
+
+    return identifiers.some((identifier) => {
+        const boundInitializer = singleHopInitializer(identifier);
+
+        return boundInitializer !== undefined && textuallyReferencesContext(boundInitializer);
+    });
 };
 
 /**
