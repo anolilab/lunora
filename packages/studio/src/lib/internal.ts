@@ -21,6 +21,36 @@ export const callOptions = (shardKey: string): { shardKey?: string } => {
 export const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 /**
+ * Extract an actionable hint (Markdown) carried on a thrown value — a
+ * `LunoraClientError` reconstructed from the server envelope exposes `hint` as a
+ * string or an array of lines. Returns `undefined` when the error carries none.
+ */
+export const errorHint = (error: unknown): string | undefined => {
+    if (error === null || typeof error !== "object" || !("hint" in error)) {
+        return undefined;
+    }
+
+    const { hint } = error as { hint?: unknown };
+
+    if (typeof hint === "string") {
+        return hint;
+    }
+
+    return Array.isArray(hint) ? hint.filter((line): line is string => typeof line === "string").join("\n") : undefined;
+};
+
+/** Extract a documentation URL (the wire `docsUrl` field) carried on a thrown value (a `LunoraClientError`), or `undefined`. */
+export const errorDocumentationUrl = (error: unknown): string | undefined => {
+    if (error === null || typeof error !== "object" || !("docsUrl" in error)) {
+        return undefined;
+    }
+
+    const value = (error as { docsUrl?: unknown }).docsUrl;
+
+    return typeof value === "string" ? value : undefined;
+};
+
+/**
  * Render a single table-cell value as text without throwing on objects or null.
  * Shared by the shard and global data browsers so cell rendering can't drift
  * between them.
