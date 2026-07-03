@@ -28,8 +28,14 @@ export const ErrorAlert = ({ className, error, testId }: ErrorAlertProps): React
             <p className="font-medium">{errorMessage(error)}</p>
             {hint === undefined ? null : <p className="mt-1 whitespace-pre-wrap text-xs opacity-90">{flattenHint(hint)}</p>}
             {documentationUrl === undefined ? null : (
-                <a className="mt-1 inline-block text-xs underline" href={documentationUrl} rel="noreferrer" target="_blank">
-                    Learn more
+                <a
+                    aria-label="View documentation for this error"
+                    className="mt-1 inline-block text-xs underline"
+                    href={documentationUrl}
+                    rel="noreferrer"
+                    target="_blank"
+                >
+                    View error docs
                 </a>
             )}
         </Alert>
