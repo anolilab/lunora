@@ -51,6 +51,46 @@ const textuallyReferencesContext = (node: TsNode): boolean => {
     return node.getDescendantsOfKind(SyntaxKind.Identifier).some((identifier) => isContextValueReference(identifier));
 };
 
+/**
+ * True when `identifier` is a *value* reference to an `httpAction` handler's
+ * request parameter — the taint root the `args`/`ctx` helpers never reach, because
+ * the request arrives as a positional parameter the user names freely
+ * (`request` / `req` / `r`) rather than a fixed `args`/`ctx` binding. Mirror of
+ * {@link isArgsValueReference} with a dynamic root name: excludes the trailing
+ * `.&lt;requestName>` of a member access and the key of an explicit
+ * `{ &lt;requestName>: … }` property; a `{ request }` shorthand IS a value reference.
+ */
+const isRequestValueReference = (identifier: Identifier, requestName: string): boolean => {
+    if (identifier.getText() !== requestName) {
+        return false;
+    }
+
+    const parent = identifier.getParent();
+
+    if (Node.isPropertyAccessExpression(parent) && parent.getNameNode() === identifier) {
+        return false;
+    }
+
+    return !(Node.isPropertyAssignment(parent) && parent.getNameNode() === identifier);
+};
+
+/**
+ * The leftmost identifier of a member/element-access (and non-null) chain
+ * (`body.tag.id` → `body`), or `undefined` when the chain doesn't root at a bare
+ * identifier. Lets the request taint follow one hop through the *object* of a
+ * member access (`const body = await request.json(); … body.tag`), which the
+ * bare-identifier {@link singleHopInitializer} hop alone cannot reach.
+ */
+const memberAccessRootIdentifier = (node: TsNode): Identifier | undefined => {
+    let current: TsNode = node;
+
+    while (Node.isPropertyAccessExpression(current) || Node.isElementAccessExpression(current) || Node.isNonNullExpression(current)) {
+        current = current.getExpression();
+    }
+
+    return Node.isIdentifier(current) ? current : undefined;
+};
+
 /** True when `node` is, or textually contains, a value reference to the `args` binding. */
 export const referencesArgs = (node: TsNode): boolean => {
     if (Node.isIdentifier(node)) {
@@ -115,6 +155,53 @@ export const isScopedByContext = (node: TsNode): boolean => {
     const initializer = singleHopInitializer(node);
 
     return initializer !== undefined && textuallyReferencesContext(initializer);
+};
+
+/**
+ * True when `node` is, or textually contains, a value reference to the `httpAction`
+ * request parameter `requestName`. The request-rooted analog of
+ * {@link referencesArgs}: catches `request.headers.get("x")`,
+ * `new URL(request.url).searchParams.get("q")`, and `await request.json()`, which
+ * the `args`-rooted feeders can't see (an HTTP handler receives a raw `Request`,
+ * not the validated `args` object).
+ */
+export const referencesRequestInput = (node: TsNode, requestName: string): boolean => {
+    if (Node.isIdentifier(node)) {
+        return isRequestValueReference(node, requestName);
+    }
+
+    return node.getDescendantsOfKind(SyntaxKind.Identifier).some((identifier) => isRequestValueReference(identifier, requestName));
+};
+
+/**
+ * True when `node` is derived from the `httpAction` request parameter — directly,
+ * through one local `const` hop (`const h = request.headers; h.get("x")`), or
+ * through one hop on the *root* of a member access (`const body = await
+ * request.json(); … body.tag`). Symmetric with {@link isArgumentDerived}, plus the
+ * member-root hop so a reflected request *body* value (always bound to a `const`
+ * before its fields are read) is reached. Deliberately bounded to a single hop —
+ * an unreached case is a fail-safe under-report, not a false negative that matters.
+ */
+export const isRequestInputDerived = (node: TsNode, requestName: string): boolean => {
+    if (referencesRequestInput(node, requestName)) {
+        return true;
+    }
+
+    const initializer = singleHopInitializer(node);
+
+    if (initializer !== undefined && referencesRequestInput(initializer, requestName)) {
+        return true;
+    }
+
+    const root = memberAccessRootIdentifier(node);
+
+    if (root !== undefined) {
+        const rootInitializer = singleHopInitializer(root);
+
+        return rootInitializer !== undefined && referencesRequestInput(rootInitializer, requestName);
+    }
+
+    return false;
 };
 
 /** The export name of the nearest exported `const x = …` ancestor, or `"&lt;module>"` when at file scope. */

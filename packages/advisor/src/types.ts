@@ -13,6 +13,7 @@ import type { AdvisorContainer } from "./containers";
 import type { AdvisorFailOpenGuard } from "./fail-open-guards";
 import type { AdvisorFlagSecurityDefault } from "./flag-security-defaults";
 import type { AdvisorHttpActionGuard } from "./http-action-guards";
+import type { AdvisorHttpHeaderWrite } from "./http-header-writes";
 import type { AdvisorHyperdriveCall } from "./hyperdrive-calls";
 import type { AdvisorIdentityClaimRead } from "./identity-claim-reads";
 import type { AdvisorImageDeliveryUrlAccess } from "./image-delivery-url-accesses";
@@ -260,6 +261,14 @@ export interface LintContext {
      * lint finds nothing.
      */
     httpActionGuards?: ReadonlyArray<AdvisorHttpActionGuard>;
+
+    /**
+     * Response-header writes, inside `httpAction` handlers, whose value is derived
+     * from raw request input (`request.headers`/URL/query/body) with no CR/LF
+     * sanitizer — the `http_action_response_header_injection` input. Supplied by the
+     * codegen feeder; absent for runtime callers, where the lint finds nothing.
+     */
+    httpHeaderWrites?: ReadonlyArray<AdvisorHttpHeaderWrite>;
 
     /**
      * Hyperdrive `ctx.sql` accesses discovered lexically inside `query`/`mutation`

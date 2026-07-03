@@ -36,6 +36,7 @@ import filterWithoutIndex from "./lints/static/filter-without-index";
 import flagGatesSecurityWithUnsafeDefault from "./lints/static/flag-gates-security-with-unsafe-default";
 import hardcodedSecret from "./lints/static/hardcoded-secret";
 import httpActionMissingAuthGuard from "./lints/static/http-action-missing-auth-guard";
+import httpActionResponseHeaderInjection from "./lints/static/http-action-response-header-injection";
 import hyperdriveOutsideAction from "./lints/static/hyperdrive-outside-action";
 import identityUndeclaredClaimTrusted from "./lints/static/identity-undeclared-claim-trusted";
 import imagesUrlSourceFromUserInput from "./lints/static/images-url-source-from-user-input";
@@ -103,6 +104,7 @@ export type { AdvisorContainer } from "./containers";
 export type { AdvisorFailOpenGuard } from "./fail-open-guards";
 export type { AdvisorFlagSecurityDefault } from "./flag-security-defaults";
 export type { AdvisorHttpActionGuard } from "./http-action-guards";
+export type { AdvisorHttpHeaderWrite } from "./http-header-writes";
 export type { AdvisorHyperdriveCall } from "./hyperdrive-calls";
 export type { AdvisorIdentityClaimRead } from "./identity-claim-reads";
 export type { AdvisorImageDeliveryUrlAccess } from "./image-delivery-url-accesses";
@@ -140,6 +142,7 @@ export { default as filterWithoutIndex } from "./lints/static/filter-without-ind
 export { default as flagGatesSecurityWithUnsafeDefault } from "./lints/static/flag-gates-security-with-unsafe-default";
 export { default as hardcodedSecret } from "./lints/static/hardcoded-secret";
 export { default as httpActionMissingAuthGuard } from "./lints/static/http-action-missing-auth-guard";
+export { default as httpActionResponseHeaderInjection } from "./lints/static/http-action-response-header-injection";
 export { default as hyperdriveOutsideAction } from "./lints/static/hyperdrive-outside-action";
 export { default as identityUndeclaredClaimTrusted } from "./lints/static/identity-undeclared-claim-trusted";
 export { default as imagesUrlSourceFromUserInput } from "./lints/static/images-url-source-from-user-input";
@@ -290,6 +293,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     storageGenerateUploadUrlNoContentTypePin,
     storagePresignedUrlForPrivateContent,
     httpActionMissingAuthGuard,
+    httpActionResponseHeaderInjection,
     ratelimitMiddlewareFailOpen,
     flagGatesSecurityWithUnsafeDefault,
     aiToolSideEffectPromptInjection,

@@ -25,6 +25,7 @@ import discoverFlagSecurityDefaults from "./discover-flag-security-defaults";
 import { discoverFlagKeys } from "./discover-flags";
 import { discoverFunctions, listLunoraSourceFiles } from "./discover-functions";
 import discoverHttpActionGuards from "./discover-http-action-guards";
+import discoverHttpHeaderWrites from "./discover-http-header-writes";
 import discoverHttpRoutes from "./discover-http-routes";
 import { discoverIdentity } from "./discover-identity";
 import discoverIdentityClaimReads from "./discover-identity-claim-reads";
@@ -370,6 +371,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   discoverRatelimitKeySelectors(project, lunoraDirectory),
                   discoverStorageUploads(project, lunoraDirectory),
                   discoverHttpActionGuards(project, lunoraDirectory),
+                  discoverHttpHeaderWrites(project, lunoraDirectory),
                   discoverFailOpenGuards(project, lunoraDirectory),
                   discoverFlagSecurityDefaults(project, lunoraDirectory),
                   discoverAiToolSideEffects(project, lunoraDirectory),

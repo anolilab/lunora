@@ -1355,6 +1355,33 @@ export interface HttpActionGuardIR {
 }
 
 /**
+ * One response-header write, inside an `httpAction` handler, whose value is derived
+ * from raw request input (`request.headers`, `request.url`/query, `await
+ * request.json()`) with no CR/LF sanitizer — the
+ * `http_action_response_header_injection` lint input. A `Request`-derived string
+ * placed verbatim into a response header lets a caller smuggle `\r\n` and inject
+ * extra headers or split the response (header injection / response splitting). Only
+ * sites whose value is request-tainted AND unguarded are recorded: a value routed
+ * through a CR/LF guard (`isSafeHeaderValue`), a URL/URI encoder
+ * (`encodeURIComponent`/`encodeURI`), a numeric coercion (`Number`/`parseInt`/
+ * `parseFloat`), or `btoa` is treated as safe and never recorded (`String(...)` /
+ * `.toString()` are NOT sanitizers — they don't strip CR/LF). Structurally
+ * identical to `AdvisorHttpHeaderWrite`.
+ */
+export interface HttpHeaderWriteIR {
+    /** Export binding name of the enclosing handler, or `"&lt;module>"` when mounted inline. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** The header name being written (`"location"`), or `""` when the key is not a string literal. */
+    headerName: string;
+    /** 1-based line of the request-tainted header value. */
+    line: number;
+    /** How the header was written: `response-init` / `headers-ctor` / `headers-set` / `headers-append`. */
+    via: string;
+}
+
+/**
  * One rate-limit / Turnstile middleware call in `lunora/` — the
  * `ratelimit_middleware_fail_open` lint input. `rateLimit`/`dbRateLimit`
  * (`@lunora/ratelimit`) and `verifyTurnstileMiddleware` (`@lunora/auth`) each
