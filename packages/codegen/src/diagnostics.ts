@@ -1,19 +1,21 @@
+import { LunoraError } from "@lunora/errors";
 import type { Node } from "ts-morph";
 
 /**
  * An error thrown by codegen discovery when the user's schema or function
  * source has a structural problem that can be pinpointed to a specific source
- * location. The `file`, `line`, and `column` properties mirror what Vite's
- * error-overlay `loc` field expects so the browser can display the exact spot.
+ * location. A `LunoraError` subclass (`code: "CODEGEN_DIAGNOSTIC"`); the `file`,
+ * `line`, and `column` properties (also passed through as the base `loc`) mirror
+ * what Vite's error-overlay `loc` field expects so the browser can display the
+ * exact spot.
  */
-export class CodegenDiagnosticError extends Error {
+export class CodegenDiagnosticError extends LunoraError {
     public readonly column: number;
     public readonly file: string;
     public readonly line: number;
 
     public constructor(message: string, file: string, line: number, column: number) {
-        super(message);
-        this.name = "CodegenDiagnosticError";
+        super("CODEGEN_DIAGNOSTIC", message, { location: { column, file, line }, name: "CodegenDiagnosticError" });
         this.file = file;
         this.line = line;
         this.column = column;

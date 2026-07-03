@@ -1,9 +1,9 @@
 # Plan 114: Unified error layer — `@lunora/errors` on `@visulima/error`
 
-> **Executor instructions**: Phases 1–4a are DONE and committed on
-> `feat/unified-error-layer`. Phases 4b (Studio UI) and 3 (per-package class
-> collapse) remain. Follow step by step; run each verify. Update this file's
-> Status as phases land.
+> **Executor instructions**: Phases 1, 2, 4a, 4b, and the Phase-3 **class
+> collapse** are DONE and committed on `feat/unified-error-layer`. What remains is
+> optional: the rest of the Studio panels (4c) and the raw `throw new Error(...)`
+> site migration (Phase 3, non-blocking). Follow step by step; run each verify.
 
 ## Status
 
@@ -94,30 +94,40 @@ advisors, logs, payments) to `<ErrorAlert error={errorSource} />`, threading
 > (Studio jsdom tests SIGTERM in the sandbox — see the pinned memory; do not gate
 > on `run test`).
 
-### Phase 3 — Per-package class collapse ⬜ TODO (incremental)
+### Phase 3 — Per-package class collapse ✅ (classes) / ⬜ (raw throw sites)
 
-Collapse the remaining custom classes onto `@lunora/errors`' `LunoraError`
-(subclass, fixed `name` + `code` + catalog `status`, preserve extra fields).
-The RPC edge already surfaces hints **by code**, so this is consistency/ergonomics,
-not a functional blocker — do it package-by-package:
+**Custom classes collapsed onto `@lunora/errors`' `LunoraError`** (subclass, fixed
+`name` + `code` + catalog/explicit `status`, extra fields preserved):
 
-- **Wire-crossing** (`@lunora/do`): `ConflictError` (keep `.kind`), `NotFoundError`,
-  `NotUniqueError`, `CountRlsUnsupportedError`, `RlsRequiredError` (keep `.table`);
-  `@lunora/values` `ValidationError` (add `code:"VALIDATION_ERROR"`, `status:400`,
-  keep `path/expected/received`) — then drop the ValidationError-by-name branch in
-  `shard-do.ts`/`server/http.ts`.
-- **Server/runtime-only**: `LunoraPaymentError`, `RateLimitError`, `AnalyticsSqlError`,
-  `R2SqlError`, `WorkflowsRestError`, `LunoraEnvError`, `LunoraAuthAdminError`,
-  `LunoraAuthHeadersError`, `ContainerBridgeError`.
-- **CLI/build-time**: `PromptCancelledError`, `CodegenDiagnosticError` (file/line/col
-  → `location`), `SchemaSnapshotParseError`, `BinError` (keep numeric exit `code`
-  distinct — it is **not** a wire code).
-- **EXCLUDE** `@lunora/workflow` `NonRetryableError` — the Workers runtime classifies
-  it by `.name` and rebuilds it as the native `cloudflare:workflows` class at the DO
-  boundary; leave its brand/name semantics untouched.
-- Route the remaining `throw new Error(...)` domain sites through `LunoraError` /
-  `invariant`; leave genuine JS `TypeError`/`RangeError` guards and codegen's
-  emitted-into-generated-code throw strings (NodeNext `.js` exception) alone.
+- **Wire-crossing** ✅ (commit `ee0cdb46`): `@lunora/do` `ConflictError` (keeps
+  `.kind`), `NotFoundError`, `NotUniqueError`, `CountRlsUnsupportedError`,
+  `RlsRequiredError` (keeps `.table`); `@lunora/values` `ValidationError`
+  (`code:"VALIDATION_ERROR"`, `status:400`, keeps `path/expected/received`).
+  Dropped the ValidationError-by-name branch in `shard-do.ts` (the `isLunoraError`
+  branch now catches it).
+- **Server/runtime-only** ✅ (commit `2da61da0`): `LunoraPaymentError`,
+  `RateLimitError`, `AnalyticsSqlError`, `R2SqlError`, `WorkflowsRestError`,
+  `LunoraEnvError`, `LunoraAuthAdminError`, `LunoraAuthHeadersError`,
+  `ContainerBridgeError`.
+- **Build-time** ✅: `CodegenDiagnosticError` (file/line/col → base `location`),
+  `SchemaSnapshotParseError`.
+
+**Intentional exclusions** (control-flow / process signals, not displayable
+Lunora errors — unifying them adds friction without user value):
+
+- `@lunora/workflow` `NonRetryableError` — Workers classifies it by `.name` and
+  rebuilds it as the native `cloudflare:workflows` class at the DO boundary.
+- `@lunora/cli` `PromptCancelledError` — a cancel signal (`exit 130`);
+  `instanceof`-gated in the command wrapper, deliberately dependency-free.
+- `@lunora/mcp` `BinError` — carries a **numeric process exit code**, not a
+  string wire code.
+
+**Remaining ⬜ (optional follow-up):** route the remaining raw
+`throw new Error(...)` domain sites through `LunoraError` / `invariant`
+package-by-package. This is **not** a functional blocker — the RPC edge already
+surfaces hints by `code`, and unhandled throws stay correctly redacted. Leave
+genuine JS `TypeError`/`RangeError` guards and codegen's emitted-into-generated
+throw strings (NodeNext `.js` exception) alone.
 
 ## Verify (whole)
 
