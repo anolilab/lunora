@@ -133,6 +133,76 @@ describe("discoverNormalizeIdAuthorization", () => {
         expect(rowFor("getOwned")).toMatchObject({ mentionsOwnership: true });
     });
 
+    it("flags mentionsOwnership when identity comes from a helper that receives ctx", () => {
+        expect.assertions(1);
+
+        // Repro of the audit's F1: identity via a helper + an unlisted ownership column.
+        // Pre-fix this recorded mentionsOwnership:false and the SECURITY lint fired on authorized code.
+        write(
+            "helper-identity.ts",
+            `export const getInvoice = query(async ({ args, ctx }) => {
+                const id = ctx.db.normalizeId("invoices", args.id);
+                if (!id) throw new Error("nf");
+                const authorized = await canAccess(ctx, id);
+                if (!authorized) throw new Error("forbidden");
+                return ctx.db.get(id);
+            });`,
+        );
+
+        expect(rowFor("getInvoice")).toMatchObject({ mentionsOwnership: true });
+    });
+
+    it("flags mentionsOwnership when it compares a loaded row's property, even for an unlisted column", () => {
+        expect.assertions(1);
+
+        // `spaceRef` is deliberately NOT in OWNERSHIP_IDENTIFIER_NAMES — proves the
+        // property-comparison signal catches ownership checks list-free.
+        write(
+            "row-compare.ts",
+            `export const getScoped = query(async ({ args, ctx }) => {
+                const id = ctx.db.normalizeId("docs", args.id);
+                if (!id) throw new Error("nf");
+                const doc = await ctx.db.get(id);
+                if (doc.spaceRef !== args.spaceRef) throw new Error("forbidden");
+                return doc;
+            });`,
+        );
+
+        expect(rowFor("getScoped")).toMatchObject({ mentionsOwnership: true });
+    });
+
+    it("flags mentionsOwnership for a newly-recognized ownership column name (customerId)", () => {
+        expect.assertions(1);
+
+        write(
+            "customer.ts",
+            `export const getByCustomer = query(async ({ args, ctx }) => {
+                const id = ctx.db.normalizeId("invoices", args.id);
+                if (!id) throw new Error("nf");
+                const customerId = args.customerId;
+                return ctx.db.get(id);
+            });`,
+        );
+
+        expect(rowFor("getByCustomer")).toMatchObject({ mentionsOwnership: true });
+    });
+
+    it("keeps mentionsOwnership false for a null gate that only compares the id against null", () => {
+        expect.assertions(1);
+
+        // The `id === null` gate must NOT read as an ownership comparison, or the lint would never fire.
+        write(
+            "idor.ts",
+            `export const getRaw = query(async ({ args, ctx }) => {
+                const id = ctx.db.normalizeId("posts", args.id);
+                if (id === null) throw new Error("nf");
+                return ctx.db.get(id);
+            });`,
+        );
+
+        expect(rowFor("getRaw")).toMatchObject({ mentionsOwnership: false });
+    });
+
     it("marks usesRls when the builder chain carries .use(rls(...))", () => {
         expect.assertions(1);
 

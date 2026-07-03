@@ -1,7 +1,15 @@
-import type { ArrowFunction, CallExpression, FunctionExpression, Node as TsNode, Project } from "ts-morph";
+import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { classifyProcedureCall, listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
+import type { InspectableHandler } from "./discover-functions";
+import {
+    chainUsesWrappedCall,
+    classifyProcedureCall,
+    isDatabaseAccessor,
+    listLunoraSourceFiles,
+    lunoraRelativePath,
+    procedureHandler,
+} from "./discover-functions";
 import type { NormalizeIdAuthorizationIR } from "./ir";
 
 /**
@@ -18,16 +26,24 @@ const SINK_METHODS = new Set<NormalizeIdAuthorizationIR["sinkMethod"]>(["delete"
  * flag over. A read/compare of any of these (or of `ctx.auth`/`ctx.identity`/…)
  * suppresses the finding: the handler is doing more than a shape check. Kept wide
  * on purpose — a false negative (a real IDOR we stay quiet on) is cheaper than a
- * false positive that trains users to ignore the advisor.
+ * false positive that trains users to ignore the advisor. This list is only one of
+ * several ownership signals (see `handlerMentionsOwnership`); it does not need to
+ * enumerate every possible column name.
  */
 const OWNERSHIP_IDENTIFIER_NAMES = new Set<string>([
     "accountId",
     "authorId",
+    "companyId",
     "createdBy",
     "createdById",
+    "customerId",
+    "groupId",
+    "memberId",
     "organizationId",
     "orgId",
     "ownerId",
+    "projectId",
+    "teamId",
     "tenantId",
     "userId",
     "workspaceId",
@@ -36,71 +52,13 @@ const OWNERSHIP_IDENTIFIER_NAMES = new Set<string>([
 /** `ctx` sub-namespaces whose read implies the handler consults the caller's identity. */
 const IDENTITY_ACCESSORS = new Set<string>(["auth", "identity", "session", "user"]);
 
-/** A function whose body we can inspect — an inline arrow or function expression handler. */
-type InspectableHandler = ArrowFunction | FunctionExpression;
-
-/** The inline arrow/function-expression handler at `argument`, or `undefined` when it isn't one. */
-const inlineHandler = (argument: TsNode | undefined): InspectableHandler | undefined =>
-    argument !== undefined && (Node.isArrowFunction(argument) || Node.isFunctionExpression(argument)) ? argument : undefined;
-
-/** True when `receiver` is the database accessor: `ctx.db` (property named `db`) or a bare `db`. */
-const isDatabaseAccessor = (receiver: TsNode): boolean =>
-    (Node.isPropertyAccessExpression(receiver) && receiver.getName() === "db") || (Node.isIdentifier(receiver) && receiver.getText() === "db");
-
-/**
- * The inline handler function of a classified procedure call, or `undefined` when
- * it isn't inspectable. The terminal call's first argument is either the handler
- * function directly (`mutation(async ({ ctx }) => …)` / `c.use(…).query(handler)`)
- * or an object literal carrying it under a `handler` property — both are handled.
- */
-const procedureHandler = (initializer: CallExpression): InspectableHandler | undefined => {
-    const argument = initializer.getArguments()[0];
-    const direct = inlineHandler(argument);
-
-    if (direct !== undefined) {
-        return direct;
-    }
-
-    if (argument === undefined || !Node.isObjectLiteralExpression(argument)) {
-        return undefined;
-    }
-
-    const property = argument.getProperty("handler");
-
-    return property !== undefined && Node.isPropertyAssignment(property) ? inlineHandler(property.getInitializer()) : undefined;
-};
-
-/** The simple name of a call's callee — a bare identifier's text or a property access's member name, else `""`. */
-const calleeName = (callee: TsNode): string => {
-    if (Node.isIdentifier(callee)) {
-        return callee.getText();
-    }
-
-    return Node.isPropertyAccessExpression(callee) ? callee.getName() : "";
-};
-
-/** True when the builder chain rooted at `receiver` carries a `.use(rls(...))` step — a `.use(...)` whose first argument is a call to `rls`. */
-const chainUsesRls = (receiver: TsNode): boolean => {
-    let node: TsNode = receiver;
-
-    while (Node.isCallExpression(node)) {
-        const callee = node.getExpression();
-
-        if (!Node.isPropertyAccessExpression(callee)) {
-            break;
-        }
-
-        const argument = node.getArguments()[0];
-
-        if (callee.getName() === "use" && argument !== undefined && Node.isCallExpression(argument) && calleeName(argument.getExpression()) === "rls") {
-            return true;
-        }
-
-        node = callee.getExpression();
-    }
-
-    return false;
-};
+/** Equality operators — an equality check against a loaded row's property (`row.ownerId !== viewer.id`) is an ownership comparison; range operators (`&lt;`/`&gt;`) almost never are, so they are excluded to avoid suppressing on an unrelated `arr.length &gt; 0`. */
+const EQUALITY_OPERATORS = new Set<SyntaxKind>([
+    SyntaxKind.EqualsEqualsEqualsToken,
+    SyntaxKind.EqualsEqualsToken,
+    SyntaxKind.ExclamationEqualsEqualsToken,
+    SyntaxKind.ExclamationEqualsToken,
+]);
 
 /**
  * The table a `ctx.db.normalizeId(table, id)` call validates against, or `undefined`
@@ -203,10 +161,68 @@ const idSinkMethod = (handler: InspectableHandler, name: string): NormalizeIdAut
 };
 
 /**
- * True when the handler anywhere reads an ownership-named identifier or a
- * `ctx.auth`/`ctx.identity`/… namespace — evidence it reasons about who owns the
- * row (the intervening ownership predicate the negative-proof lint must not flag
- * over). Biases the rule toward silence: any ownership signal at all suppresses.
+ * The leftmost identifier of a dotted / indexed / awaited expression — `ctx` in
+ * `ctx.auth.userId`, `viewer` in `viewer.teamId`, `undefined` for a literal or a
+ * more complex head.
+ */
+const rootIdentifierName = (node: TsNode): string | undefined => {
+    let current: TsNode = node;
+
+    while (
+        Node.isPropertyAccessExpression(current) ||
+        Node.isElementAccessExpression(current) ||
+        Node.isNonNullExpression(current) ||
+        Node.isParenthesizedExpression(current) ||
+        Node.isAsExpression(current) ||
+        Node.isAwaitExpression(current)
+    ) {
+        current = current.getExpression();
+    }
+
+    return Node.isIdentifier(current) ? current.getText() : undefined;
+};
+
+/**
+ * True when the handler passes `ctx` (or any `ctx.`-rooted value) into a function
+ * call — `getViewer(ctx)`, `requireUser(ctx)`, `authorize(ctx, id)`. Delegating the
+ * whole context to a helper is a strong tell that identity/authorization is resolved
+ * out of line, so the handler is doing more than a shape check. A `ctx.db.get(id)`
+ * method call does NOT match: there `ctx` is the receiver, not an argument.
+ */
+const delegatesContextToHelper = (handler: InspectableHandler): boolean =>
+    handler.getDescendantsOfKind(SyntaxKind.CallExpression).some((call) => call.getArguments().some((argument) => rootIdentifierName(argument) === "ctx"));
+
+/**
+ * True when the handler contains an equality comparison with a property-access
+ * operand — `invoice.customerId !== me.id`, `doc.teamId !== viewer.teamId`. Comparing
+ * a loaded row's field against another value is an ownership/tenancy check regardless
+ * of the column's name, so this catches the whole class without enumerating columns.
+ * The `normalizeId` null gate (`if (!id)` / `id === null`) doesn't match — its operands
+ * are the bare id binding and `null`, neither a property access — so a genuine
+ * IDOR-shaped handler (validate, gate, use, with no field comparison) still fires.
+ */
+const comparesRowProperty = (handler: InspectableHandler): boolean =>
+    handler.getDescendantsOfKind(SyntaxKind.BinaryExpression).some((binary) => {
+        if (!EQUALITY_OPERATORS.has(binary.getOperatorToken().getKind())) {
+            return false;
+        }
+
+        return Node.isPropertyAccessExpression(binary.getLeft()) || Node.isPropertyAccessExpression(binary.getRight());
+    });
+
+/**
+ * True when the handler shows any evidence it reasons about who owns the row — the
+ * intervening ownership predicate the negative-proof lint must not flag over. Four
+ * FN-biased signals, any of which suppresses the finding:
+ *
+ * 1. an ownership-named identifier (`ownerId`, `teamId`, `customerId`, …);
+ * 2. a `ctx.auth`/`ctx.identity`/`ctx.session`/`ctx.user` read;
+ * 3. identity delegated to a helper that receives `ctx` (`getViewer(ctx)`);
+ * 4. an equality comparison on a loaded row's property (`row.ownerCol !== viewer.col`).
+ *
+ * Signals 3 and 4 make the rule robust to unlisted column names and to apps that
+ * factor auth into a helper (good practice) — biasing hard toward silence so a
+ * SECURITY-category finding never fires on genuinely-authorized code.
  */
 const handlerMentionsOwnership = (handler: InspectableHandler): boolean => {
     for (const identifier of handler.getDescendantsOfKind(SyntaxKind.Identifier)) {
@@ -223,7 +239,7 @@ const handlerMentionsOwnership = (handler: InspectableHandler): boolean => {
         }
     }
 
-    return false;
+    return delegatesContextToHelper(handler) || comparesRowProperty(handler);
 };
 
 /** Reduce one exported `query`/`mutation` declaration to its `normalizeId`-as-authorization rows (deduped by binding). */
@@ -251,7 +267,7 @@ const normalizeIdAuthorizationsInDeclaration = (declaration: TsNode, relativePat
         return [];
     }
 
-    const usesRls = classified.receiver !== undefined && chainUsesRls(classified.receiver);
+    const usesRls = classified.receiver !== undefined && chainUsesWrappedCall(classified.receiver, "use", "rls");
     const mentionsOwnership = handlerMentionsOwnership(handler);
 
     const seen = new Set<string>();
