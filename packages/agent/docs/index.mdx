@@ -1,0 +1,109 @@
+---
+title: "@lunora/agent"
+description: Durable AI agents — defineAgent compiles a replay-safe tool-loop onto Cloudflare Workflows with live thread subscriptions.
+---
+
+`@lunora/agent` is Lunora's durable-agent primitive. `defineAgent` declares a
+model + tools + memory; the definition compiles onto a **Cloudflare Workflow**
+where each LLM turn and each tool call is a named durable step, and every
+message persists idempotently into DO SQLite thread tables. The client
+subscribes to the thread query and watches the conversation stream in live —
+no new transport, no HTTP streaming infrastructure.
+
+```sh
+pnpm add @lunora/agent
+```
+
+## Declaring an agent
+
+```ts
+// lunora/agents.ts
+import { agentComponent, defineAgent, defineAgentTool } from "@lunora/agent";
+import { jsonSchema } from "@lunora/ai";
+
+export const support = defineAgent({
+    instructions: "You are a helpful support agent.",
+    maxTurns: 8,
+    model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", // Workers AI id, AI SDK model, or (env) => model
+    tools: {
+        getWeather: defineAgentTool({
+            description: "Look up the current weather for a city.",
+            execute: async ({ city }, { idempotencyKey, run, threadKey }) => {
+                // `run` dispatches any Lunora function; `idempotencyKey` is the
+                // durable step name — dedupe side effects on it.
+                return run({ __lunoraRef: "weather:lookup" }, { city });
+            },
+            inputSchema: jsonSchema({ properties: { city: { type: "string" } }, required: ["city"], type: "object" }),
+        }),
+    },
+});
+
+// Re-export the runtime functions so codegen registers them under `agents:*`
+// (the durable loop persists thread state through them):
+export const { agentAppendMessage, agentEnsureThread, agentMessages, agentPatchThread, agentThread } = agentComponent().functions;
+```
+
+Merge the thread tables into your schema — they auto-prefix to
+`agent_threads` / `agent_messages` and can never collide with app tables:
+
+```ts
+// lunora/schema.ts
+import { agentExtension } from "@lunora/agent";
+
+export default defineSchema({/* your tables */}).extend(agentExtension);
+```
+
+## Running + observing
+
+```ts
+// inside a mutation or action:
+const { id } = await ctx.agents.support.run({ input: message, threadKey, title: "Support chat" });
+
+// client: subscribe to the thread — user turns, tool calls, tool results and
+// assistant replies stream in as they persist (reactive subscription, so it
+// survives reconnects and multiple observers for free):
+useSubscription(api.agents.agentMessages, { key: threadKey });
+```
+
+Reuse the same `threadKey` to continue a conversation — the loop reads the
+persisted history each turn.
+
+## Replay-safety (the correctness core)
+
+- **Completed steps never re-run.** Each LLM turn is the durable step
+  `llm:turn:N`; each tool call is `tool:NAME:CALL_ID` (the provider's stable
+  call id). Cloudflare Workflows memoizes completed steps by name, so a
+  crashed run resumes without re-charging a card or re-paying for a model
+  call.
+- **Failed steps retry at-least-once.** A tool that dies mid-body will run
+  again — side-effecting tools receive their step name as
+  `ctx.idempotencyKey` and must dedupe on it.
+- **Messages persist idempotently.** Every write is keyed
+  `INSTANCE:ROLE:POSITION` and deduped by a unique index, so replays never
+  duplicate the thread.
+
+## Memory (RAG)
+
+Point `memory.source` at an action that wraps
+[`@lunora/ai/rag`](/docs/packages/ai)'s `retrieve` — the loop runs it as a
+durable step at run start and injects the returned `context` into every
+turn's prompt:
+
+```ts
+// lunora/rag.ts
+export const searchDocs = action.input({ query: v.string(), topK: v.optional(v.number()) }).action(async ({ args, ctx }) => {
+    return docs(ctx).retrieve(args.query, { topK: args.topK });
+});
+
+// lunora/agents.ts
+export const support = defineAgent({ memory: { source: "rag:searchDocs", topK: 5 }, model: "..." });
+```
+
+Dispatching to a real action keeps retrieval inside a fully wired ctx —
+codegen-resolved vector bindings, RLS, observability — instead of
+re-plumbing vectors into the workflow runtime.
+
+## See also
+
+- [@lunora/ai](/docs/packages/ai) — the model surface (`ctx.ai`) + `defineRag`
+- [@lunora/workflow](/docs/packages/workflow) — the durable-execution engine underneath
