@@ -2159,6 +2159,9 @@ importers:
 
   packages/do:
     dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@visulima/redact':
         specifier: catalog:redact
         version: 3.0.0-alpha.14

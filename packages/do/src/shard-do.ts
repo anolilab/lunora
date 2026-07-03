@@ -1,4 +1,5 @@
 import type { DurableObjectStorage } from "@cloudflare/workers-types";
+import { isLunoraError, resolveHint } from "@lunora/errors";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
@@ -4482,35 +4483,45 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- cohesive DO instance method (groups with the request handlers); kept non-static so subclasses can override the error mapping
     private errorToResponse(error: unknown): Response {
-        // Structural duck-typing so this package does not need a runtime
-        // dependency on `@lunora/values` or `@lunora/runtime`. The shapes
-        // below are the public surface of those error types.
-        if (error instanceof ConflictError) {
-            return jsonResponse({ error: { code: error.code, message: error.message } }, error.status);
+        // Any error carrying the unified Lunora shape (string `code` + numeric
+        // `status`) — `ConflictError`, `NotFoundError`, `NotUniqueError`,
+        // `RlsRequiredError`, `@lunora/server`'s `LunoraError`, … — is safe to
+        // surface. `isLunoraError` is structural, so this package still takes no
+        // hard dependency on the packages that throw these.
+        if (isLunoraError(error)) {
+            const body: { code: string; data?: unknown; docsUrl?: string; hint?: string | string[]; message: string } = {
+                code: error.code,
+                message: error.message,
+            };
+
+            // Propagate an explicit app error's structured payload (wire-encoded so
+            // a `bigint`/`bytes` in `data` survives). Only the known-safe error
+            // branch carries `data`; the generic fall-through below stays redacted.
+            if (error.data !== undefined) {
+                body.data = encodeWire(error.data);
+            }
+
+            // Surface the actionable fix (from the error, or resolved by `code`
+            // from the central catalog) so the client, Studio, and CLI can render it.
+            const hint = resolveHint({ code: error.code, hint: error.hint, message: error.message });
+
+            if (hint !== undefined) {
+                body.hint = hint;
+            }
+
+            if (error.docsUrl !== undefined) {
+                body.docsUrl = error.docsUrl;
+            }
+
+            return jsonResponse({ error: body }, error.status);
         }
 
+        // `ValidationError` (from `@lunora/values`) has no numeric `status` yet, so
+        // match it structurally by name and map to a 400.
         if (error && typeof error === "object" && (error as { name?: string }).name === "ValidationError") {
             const message = error instanceof Error ? error.message : "validation failed";
 
             return jsonResponse({ error: { code: "VALIDATION_ERROR", message } }, 400);
-        }
-
-        if (error && typeof error === "object" && (error as { name?: string }).name === "LunoraError") {
-            const lunoraError = error as { code?: string; data?: unknown; message?: string; status?: number };
-            const status = typeof lunoraError.status === "number" ? lunoraError.status : 500;
-            const body: { code: string; data?: unknown; message: string } = {
-                code: lunoraError.code ?? "INTERNAL",
-                message: lunoraError.message ?? "internal error",
-            };
-
-            // Propagate an explicit app error's structured payload (wire-encoded so
-            // a `bigint`/`bytes` in `data` survives). Only this deliberate-error
-            // branch carries `data`; the generic fall-through below stays redacted.
-            if (lunoraError.data !== undefined) {
-                body.data = encodeWire(lunoraError.data);
-            }
-
-            return jsonResponse({ error: body }, status);
         }
 
         // Do NOT echo arbitrary error.message values to clients — an unhandled

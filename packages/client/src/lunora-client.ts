@@ -461,17 +461,33 @@ interface PokeBuffer {
     parts: Map<string, RowOp[]>;
 }
 
-/** An `Error` carrying the server's machine-readable `code` and (for a `LunoraError`) structured `data`. The client's public error contract for RPC/batch failures. The `(string & {})` arm keeps forward-compat/unknown server codes assignable without losing autocomplete on the known {@link LunoraErrorCode} union. */
-type LunoraClientError = Error & { code?: LunoraErrorCode | (string & {}); data?: unknown };
+/**
+ * An `Error` carrying the server's machine-readable `code` and (for a
+ * `LunoraError`) structured `data`, plus an optional actionable `hint` (Markdown)
+ * and `docsUrl` resolved from the central error catalog. The client's public
+ * error contract for RPC/batch failures — a UI can render `hint`/`docsUrl` to
+ * tell the user how to fix the error. The `(string & {})` arm keeps
+ * forward-compat/unknown server codes assignable without losing autocomplete on
+ * the known {@link LunoraErrorCode} union.
+ */
+type LunoraClientError = Error & { code?: LunoraErrorCode | (string & {}); data?: unknown; docsUrl?: string; hint?: string | string[] };
 
-/** Rebuild a thrown `Error` from a server `{ code, message, data? }` envelope, wire-decoding `data` so `bigint`/`bytes` inside it survive. */
-const reconstructError = (errorBody: { code?: string; data?: unknown; message?: string }): LunoraClientError => {
+/** Rebuild a thrown `Error` from a server `{ code, message, data?, hint?, docsUrl? }` envelope, wire-decoding `data` so `bigint`/`bytes` inside it survive. */
+const reconstructError = (errorBody: { code?: string; data?: unknown; docsUrl?: string; hint?: string | string[]; message?: string }): LunoraClientError => {
     const error = new Error(errorBody.message ?? "request failed") as LunoraClientError;
 
     error.code = errorBody.code;
 
     if (errorBody.data !== undefined) {
         error.data = decodeWire(errorBody.data);
+    }
+
+    if (errorBody.hint !== undefined) {
+        error.hint = errorBody.hint;
+    }
+
+    if (errorBody.docsUrl !== undefined) {
+        error.docsUrl = errorBody.docsUrl;
     }
 
     return error;
