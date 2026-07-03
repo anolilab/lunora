@@ -168,6 +168,14 @@ export interface TableIR {
      */
     globalBackend?: "d1" | "hyperdrive";
     indexes: ReadonlyArray<IndexIR>;
+
+    /**
+     * `true` when the table chain carried `.public()` — an explicit opt-OUT of
+     * the schema's `.rls("required")` enforcement for this one table. Optional:
+     * hand-built IR and tables that never called `.public()` default it to
+     * `false`.
+     */
+    isPublic?: boolean;
     name: string;
     /** Rank indexes declared inline via `.rankIndex(name, …)`. */
     rankIndexes: ReadonlyArray<RankIndexIR>;
@@ -193,6 +201,14 @@ export interface SchemaIR {
      * Absent ⇒ un-pinned.
      */
     jurisdiction?: JurisdictionIR;
+
+    /**
+     * Set when `defineSchema(...).rls("required")` was chained onto the schema —
+     * every table's `ctx.db` write path is denied without an RLS-covering
+     * procedure unless the table itself is `.public()` (see {@link TableIR.isPublic}).
+     * Absent when the schema never called `.rls("required")`.
+     */
+    rlsMode?: "required";
     tables: ReadonlyArray<TableIR>;
     /** All vector indexes (inline Shape A hoisted + standalone Shape B), flattened. */
     vectorIndexes: ReadonlyArray<VectorIndexIR>;
@@ -704,6 +720,31 @@ export interface MaskMetadataIR {
 }
 
 /**
+ * One masked column whose `mask(policies)` strategy is a statically-known
+ * literal (`"hash"` or `"redact"`) — the `mask_weak_hash_strategy_on_pii` lint
+ * input. Unlike {@link MaskColumnMetadataIR} (app-wide, deduped by `(table,
+ * column)`, studio-preview evidence), this is per declaration site (file + line
+ * + enclosing export), undeduped, so the lint can point at the exact
+ * `mask(...)` call that applies a weak strategy. A `MaskFn` (custom, non-literal)
+ * strategy carries no lint-relevant signal and is never recorded here.
+ * Structurally identical to `AdvisorMaskStrategy`.
+ */
+export interface MaskStrategyIR {
+    /** Masked column name. */
+    column: string;
+    /** Export binding name of the procedure whose `.use(mask(...))` chain declared this column, or `"&lt;module>"` when declared at file scope. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the masked column's strategy property. */
+    line: number;
+    /** The statically-known strategy literal: `"hash"` or `"redact"`. */
+    strategy: string;
+    /** Logical table the masked column belongs to. */
+    table: string;
+}
+
+/**
  * One statically-readable policy entry from an `rls([...])` array literal,
  * surfaced to the studio's read-only RLS inspector via the generated
  * `rlsPolicies()` hook. Captures the policy's `table` + `on` operation and the
@@ -818,12 +859,18 @@ export interface ProcedureMiddlewareIR {
     callsMail: boolean;
     /** Export binding name of the procedure (e.g. `signUp`). */
     exportName: string;
+    /** `true` when the handler fans work out to a privileged, cost-bearing dispatch surface (scheduler `runAfter`/`runAt`, a queue producer send, or a workflow create). Feeds the privileged-fanout lint. */
+    fanOut: boolean;
     /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
     file: string;
     /** Registration kind — only `mutation`/`action` are write-shaped; `query` is read-only. */
     kind: "action" | "mutation" | "query";
+    /** `true` when the handler runs an AI generation (`generateText`/`streamText`/`generateObject`/`streamObject`) with no `maxOutputTokens` bound in its config literal. Feeds the `ai_unbounded_generation_public` lint. */
+    unboundedAiGeneration: boolean;
     /** `true` when the chain carries `.use(verifyTurnstile(...))` or a `protectPublic({ captcha })` bundle. */
     usesCaptcha: boolean;
+    /** `true` when the handler calls `ctx.db.insertManyUnsafe(...)`, bypassing validators and triggers. Feeds the `insert_many_unsafe_user_data` lint. */
+    usesInsertManyUnsafe: boolean;
     /** `true` when the chain carries `.use(mask(...))`. */
     usesMask: boolean;
     /** `true` when the chain carries `.use(rateLimit(...))` or a `protectPublic({ rateLimit })` bundle. */
@@ -855,6 +902,28 @@ export interface ArgumentValidatorIR {
     line: number;
     /** Arg names declared as `v.string()` with no statically-visible max-length bound. */
     unboundedStringArgs: string[];
+}
+
+/**
+ * One factory/constructor call in `lunora/` whose config object literal a
+ * security lint inspects for a present-or-absent key — the shared input for the
+ * config-call security lints (payment authorize, inbound-mail verify, rate-limit
+ * store, browser private-targets). Structurally identical to `AdvisorConfigCall`
+ * so it passes straight through to the advisor without conversion.
+ */
+export interface ConfigCallIR {
+    /** `true` when the config argument was a static object literal the feeder could read. */
+    analyzable: boolean;
+    /** The factory function or constructor name at the call site, e.g. `createPayment` / `RateLimiter`. */
+    callee: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the call site, or `0` when unknown. */
+    line: number;
+    /** Keys present in the config object literal (empty when not `analyzable`). */
+    presentKeys: string[];
+    /** Keys in the config object literal explicitly assigned the literal `true`. */
+    trueKeys: string[];
 }
 
 /**
@@ -893,6 +962,323 @@ export interface SqlInterpolationIR {
 }
 
 /**
+ * One `ctx.fetch(url, …)` call inside an action whose URL argument is derived
+ * from the handler's `args` — the `action_fetch_ssrf` lint input. `ctx.fetch` is
+ * the action-only outbound-request escape hatch with no host allowlist, so a URL
+ * assembled from request input is a server-side request forgery vector (cloud
+ * metadata endpoints, internal services). Only arg-derived URLs reach here; a
+ * fixed literal or a URL built from config/`ctx.*` is not recorded. Structurally
+ * identical to `AdvisorArgumentDerivedFetch`.
+ */
+export interface ArgumentDerivedFetchIR {
+    /** Export binding name of the action performing the `ctx.fetch` call. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the `ctx.fetch` call, or `0` when unknown. */
+    line: number;
+}
+
+/**
+ * One `ctx.kv.&lt;method>(key, …)` call whose namespace key is derived from the
+ * handler's `args` with no server-side scoping — the `kv_unscoped_user_key_idor`
+ * lint input. Workers KV is a single flat namespace, so a key taken straight from
+ * request input lets any caller read, overwrite, or delete another user's entry
+ * (IDOR). Only arg-derived, unscoped keys reach here; a fixed literal, or a key
+ * prefixed with a server-trusted identity (`${ctx.auth.userId}:…` — references
+ * `ctx`, so treated as scoped), is not recorded. `list` is excluded (it takes a
+ * prefix, not a per-entry key). Structurally identical to `AdvisorKvKeyAccess`.
+ */
+export interface KvKeyAccessIR {
+    /** Export binding name of the procedure performing the `ctx.kv` access. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the `ctx.kv` call, or `0` when unknown. */
+    line: number;
+    /** The `ctx.kv` method invoked: `get` / `getRaw` / `getWithMetadata` / `put` / `delete`. */
+    method: string;
+}
+
+/**
+ * One `ctx.db` write (`insert` / `replace` / `patch` / `insertManyUnsafe`) that sets
+ * an ownership / identity column — `userId`, `ownerId`, `tenantId`, and the like —
+ * from the handler's `args` instead of the server-trusted identity. The
+ * `owner_field_from_args_not_auth` lint input: the ownership column decides who a
+ * row belongs to, so a value taken from request input lets any caller write rows
+ * owned by another user or tenant (the act-as-any-user / cross-tenant IDOR vector).
+ * A column stamped from `ctx.*`, or set to a fixed literal, is not recorded; only an
+ * arg-derived identity write reaches here. Structurally identical to
+ * `AdvisorOwnerFieldWrite`.
+ */
+export interface OwnerFieldWriteIR {
+    /** Export binding name of the procedure performing the write. */
+    exportName: string;
+    /** The identity column being written from `args` (e.g. `userId`). */
+    field: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the `ctx.db` write call, or `0` when unknown. */
+    line: number;
+    /** The `ctx.db` write method (`insert` / `replace` / `patch` / `insertManyUnsafe`). */
+    method: string;
+}
+
+/**
+ * One `ctx.storage.&lt;bucket>.&lt;method>(key, …)` call whose R2 object key is derived
+ * from the handler's `args` with no server-side scoping — the
+ * `storage_key_from_user_args` lint input. The bucket read/write/URL/delete methods
+ * key by their first argument, so an object key taken straight from request input is
+ * object-level IDOR (read/overwrite/delete anyone's object). A key referencing a
+ * server-trusted `ctx.*` value (e.g. `${ctx.auth.userId}/…`) is treated as scoped
+ * and is not recorded; only an arg-derived, `ctx`-free key reaches here.
+ * Structurally identical to `AdvisorStorageKeyAccess`.
+ */
+export interface StorageKeyAccessIR {
+    /** Export binding name of the procedure performing the storage call. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the storage call, or `0` when unknown. */
+    line: number;
+    /** The bucket method invoked with the arg-derived key, e.g. `get` / `put` / `delete` / `download`. */
+    method: string;
+}
+
+/**
+ * One `ctx.containers.&lt;exportName>.get(name, …)` call whose instance key is derived
+ * from the handler's `args` with no server-side scoping — the
+ * `container_instance_key_from_user_input` lint input. Each container definition's
+ * `.get(name)` accessor routes to one instance per `name`, so a key taken straight from
+ * request input lets any caller reach another tenant's container (a cross-tenant IDOR). A
+ * fixed literal key, or one derived from a server-trusted identity (`${ctx.auth.userId}` —
+ * references `ctx`, so treated as scoped), is not recorded; only an arg-derived, unscoped
+ * key reaches here. `.any()`/`.pool()` take no key and are not sinks. Structurally
+ * identical to `AdvisorContainerKeyAccess`.
+ */
+export interface ContainerKeyAccessIR {
+    /** Export binding name of the procedure performing the `ctx.containers` access. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the `ctx.containers.*.get` call, or `0` when unknown. */
+    line: number;
+    /** The container accessor method invoked — always `get`. */
+    method: string;
+}
+
+/**
+ * One `ctx.ai.run(model, …)` call whose model-id argument is derived from the handler's
+ * `args` with no server-side scoping — the `ai_raw_run_escape_hatch` lint input.
+ * `ctx.ai.run` is the raw Workers AI binding passthrough, bypassing the typed
+ * `ctx.ai.model(...)` + AI-SDK layer (`generateText`/`streamText`/…) that caps output and
+ * enforces a schema, so an arg-derived model id lets any caller select an arbitrary model.
+ * A fixed literal model, or one scoped by a server-trusted `ctx.*` value, is not recorded;
+ * only an arg-derived, unscoped model id reaches here (an arg-derived `inputs` argument is
+ * normal usage and is never inspected). Structurally identical to `AdvisorAiRawRun`.
+ */
+export interface AiRawRunIR {
+    /** Export binding name of the procedure performing the `ctx.ai.run` call. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the `ctx.ai.run` call, or `0` when unknown. */
+    line: number;
+}
+
+/**
+ * One `ctx.vectors.&lt;method>(indexName, input)` call whose `input.namespace` is derived
+ * from the handler's `args` with no server-side scoping — the
+ * `vectors_namespace_from_user_input` lint input. A Vectorize namespace partitions one
+ * index into isolated sub-collections, so a namespace taken straight from request input
+ * lets any caller read or poison another tenant's vectors. A fixed literal namespace, or
+ * one prefixed with a server-trusted identity (`${ctx.auth.orgId}` — references `ctx`, so
+ * treated as scoped), is not recorded; only an arg-derived, unscoped namespace reaches
+ * here. Structurally identical to `AdvisorVectorNamespaceAccess`.
+ */
+export interface VectorNamespaceAccessIR {
+    /** Export binding name of the procedure performing the `ctx.vectors` access. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the `ctx.vectors` call, or `0` when unknown. */
+    line: number;
+    /** The `ctx.vectors` method invoked: `query` / `upsert` / `upsertMany`. */
+    method: string;
+}
+
+/**
+ * One `ctx.mail`/`ctx.email` `send`/`queue` call whose recipient field (`to`/`cc`/`bcc`)
+ * is derived from the handler's `args` with no server-side scoping — the
+ * `mail_recipient_from_request_input` lint input. A recipient taken straight from request
+ * input turns the deployment into an open relay / spam amplifier (any caller can direct
+ * mail to an arbitrary address). A fixed literal recipient, or one scoped by a
+ * server-trusted `ctx.*` value (e.g. `ctx.auth.user.email`), is not recorded; only an
+ * arg-derived, unscoped recipient reaches here. Structurally identical to
+ * `AdvisorMailRecipientAccess`.
+ */
+export interface MailRecipientAccessIR {
+    /** Export binding name of the procedure performing the `ctx.mail`/`ctx.email` call. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the `ctx.mail`/`ctx.email` call, or `0` when unknown. */
+    line: number;
+    /** The mailer method invoked: `send` / `queue`. */
+    method: string;
+}
+
+/**
+ * One `ctx.browser.&lt;method>(url, …)` call whose navigation URL (`arguments[0]`)
+ * is derived from the handler's `args` with no server-side scoping — the
+ * `browser_user_url_without_allowlist` lint input. The lint additionally
+ * cross-references `createBrowser` config-call evidence to suppress findings
+ * when the browser is hardened with an `allowedHosts` allowlist or
+ * `resolveDns`. Structurally identical to `AdvisorBrowserUrlAccess`.
+ */
+export interface BrowserUrlAccessIR {
+    /** Export binding name of the procedure performing the `ctx.browser` call. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the `ctx.browser` call, or `0` when unknown. */
+    line: number;
+    /** The browser method invoked: `content` / `pdf` / `scrape` / `screenshot`. */
+    method: string;
+}
+
+/**
+ * One runtime container-override call: a `&lt;handle>.start({ enableInternet: true, … })`
+ * launch override, or a `&lt;handle>.egress.&lt;method>(...)` runtime firewall mutation
+ * (`allow` / `deny` / `setAllowed`) — the `container_start_enable_internet_override`
+ * and `container_runtime_egress_relaxation` lint input. Both shapes re-open network
+ * access the static `defineContainer` declaration (and its `container_public_internet`
+ * lint) assumes is locked down. Matched structurally by call shape, independent of the
+ * receiver's resolved type. Structurally identical to `AdvisorContainerOverride`.
+ */
+export interface ContainerOverrideIR {
+    /** e.g. the egress method name, or `"enableInternet: true"`. */
+    detail: string;
+    /** Export binding name of the procedure performing the call. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** Which override shape matched. */
+    kind: "egress_relaxation" | "enable_internet";
+    /** 1-based line of the call, or `0` when unknown. */
+    line: number;
+}
+
+/**
+ * One `buildImageDeliveryUrl({ key, … })` call (`@lunora/bindings/images`) whose
+ * `key` — the CDN transform's source image, an absolute URL or an
+ * origin-relative key — is derived from the handler's `args` with no
+ * server-side scoping — the `images_url_source_from_user_input` lint input.
+ * `ctx.images.transform`/`info` take image *bytes*, never a URL, so they are not
+ * sinks; only the `key` of `buildImageDeliveryUrl` accepts a URL-or-key source
+ * and is inspected. An arg-derived `key` lets any caller point the CDN's
+ * `/cdn-cgi/image/` transform at an attacker-chosen origin (SSRF / open proxy)
+ * or at an arbitrary key under the account's own store. A fixed literal, or a
+ * key scoped by a server-trusted `ctx.*` value, is not recorded. Structurally
+ * identical to `AdvisorImageDeliveryUrlAccess`.
+ */
+export interface ImageDeliveryUrlAccessIR {
+    /** Export binding name of the procedure performing the `buildImageDeliveryUrl` call. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the `buildImageDeliveryUrl` call, or `0` when unknown. */
+    line: number;
+}
+
+/**
+ * One `createAuth({...})` call's configuration snapshot — the shared input for
+ * the five `auth_*` security lints (trusted-origins wildcard, CSRF check
+ * disabled, secure cookies disabled, email verification disabled, session
+ * freshAge zero). Matched by callee NAME (an `import`-agnostic, fail-closed
+ * convention the other feeders share), so a re-export or alias still resolves.
+ * When the config argument isn't a statically-analyzable object literal (a
+ * top-level spread, or not an object literal at all), `analyzable` is `false`
+ * and every boolean fact defaults to its SAFE (not-flagged) value — an opaque
+ * config can't be relied on either way. Structurally identical to
+ * `AdvisorAuthConfig`.
+ */
+export interface AuthConfigIR {
+    /** `true` when the call's config argument was a static object literal the feeder could read. */
+    analyzable: boolean;
+    /** `advanced.disableCSRFCheck === true`. */
+    disableCsrfCheck: boolean;
+    /** `emailAndPassword.enabled === true`. */
+    emailPasswordEnabled: boolean;
+    /** Export binding name enclosing the `createAuth(...)` call. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the `createAuth(...)` call, or `0` when unknown. */
+    line: number;
+    // eslint-disable-next-line no-secrets/no-secrets -- the dotted config-path in the doc comment, not a credential
+    /** `emailAndPassword.requireEmailVerification === true` present. */
+    requireEmailVerification: boolean;
+    /** `advanced.useSecureCookies === false`. */
+    secureCookiesDisabled: boolean;
+    /** `session.freshAge === 0` (explicit literal). */
+    sessionFreshAgeZero: boolean;
+    /** `trustedOrigins` array literal contains a `"*"` element. */
+    trustedOriginsWildcard: boolean;
+}
+
+/**
+ * One `rateLimit`/`dbRateLimit` middleware call (`@lunora/ratelimit`) whose
+ * `key` selector — the per-caller rate-limit sub-key, `(ctx) => string |
+ * undefined` — is derived from the handler's `args` with no server-side
+ * scoping (no reference to the trusted `ctx` binding anywhere in the selector)
+ * — the `ratelimit_key_spoofable_or_global` lint input. A key an attacker
+ * controls lets them rotate it per request and bypass the limit entirely,
+ * defeating its purpose. A selector scoped by `ctx` (e.g. `ctx.auth.userId`,
+ * `ctx.ip`), or one with no `args` reference at all (a fixed/global bucket —
+ * the "no key" case this lint deliberately does not flag, to keep it low-FP),
+ * is not recorded. Structurally identical to `AdvisorRatelimitKeySelector`.
+ */
+export interface RatelimitKeySelectorIR {
+    /** The `rateLimit`/`dbRateLimit` callee invoked. */
+    callee: string;
+    /** Export binding name of the procedure whose `.use(...)` chain carries the call. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** The rate limit's `name` argument (the second positional argument), or `""` when not a string literal. */
+    limitName: string;
+    /** 1-based line of the `rateLimit`/`dbRateLimit` call, or `0` when unknown. */
+    line: number;
+}
+
+/**
+ * One payload-derived privileged dispatch — a `ctx.run`/`context.run` back into a
+ * Lunora function from inside a `defineQueue` push handler or a `defineWorkflow`
+ * handler, whose args reference the handler's untrusted payload (`context.params`
+ * for a workflow, a `for (… of batch.messages)` body for a queue) — the
+ * `privileged_dispatch_unvalidated_payload` lint input. Both handler kinds run
+ * under the **system identity** (RLS disabled), so forwarding attacker-influenced
+ * payload into the dispatch bypasses the target's row policy. The resolved
+ * `targetFile`/`targetExport` let the lint join RLS-procedure evidence and fire
+ * only for RLS-gated targets. Structurally identical to `AdvisorPrivilegedDispatch`.
+ */
+export interface PrivilegedDispatchIR {
+    /** `"queue"` for a `defineQueue` handler, `"workflow"` for a `defineWorkflow` handler. */
+    dispatchKind: "queue" | "workflow";
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** Export binding name of the handler performing the dispatch. */
+    handlerExport: string;
+    /** 1-based line of the dispatch call, or `0` when unknown. */
+    line: number;
+    /** Export name of the dispatched target (`send` in `api.messages.send`). */
+    targetExport: string;
+    /** File path of the dispatched target relative to `lunora/` (`messages` in `api.messages.send`). */
+    targetFile: string;
+}
+
+/**
  * One discovered `httpRoute.&lt;verb>("/admin/…")` route on an admin/privileged-looking
  * path, with whether its builder chain references an auth/admin guard — the
  * `admin_route_without_guard` lint input. Structurally identical to
@@ -909,6 +1295,341 @@ export interface AdminRouteIR {
     path: string;
     /** `true` when the handler body references an auth/session/admin guard (`ctx.auth`, `getSession`, `requireAdmin`, …). */
     usesGuard: boolean;
+}
+
+/**
+ * One tracked `ctx.storage.&lt;bucket>.&lt;method>(...)` upload/signing call — the
+ * shared input for the storage config-hygiene security lints
+ * (`storage_upload_without_content_type_allowlist`, `storage_upload_without_max_size`,
+ * `storage_generate_upload_url_no_content_type_pin`, `storage_presigned_url_for_private_content`).
+ * `upload`/`store` carry the `UploadOptions` guards (`allowedContentTypes` /
+ * `maxSize`); `generateUploadUrl` carries the signed-PUT `contentType` pin;
+ * `getPresignedUrl`/`getSignedUrl` carry a statically-known `expiresInSeconds`
+ * literal. `presentKeys` is empty (and `expiresInSeconds` unset) when the
+ * options argument was absent, a non-literal, or a spread — see `analyzable`.
+ * Structurally identical to `AdvisorStorageUpload`.
+ */
+export interface StorageUploadIR {
+    /** `true` when the call's options-object argument (or its deliberate absence) was statically resolvable. */
+    analyzable: boolean;
+    /** Numeric literal value of an `expiresInSeconds` option, when statically known (`getSignedUrl` / `getPresignedUrl` only). */
+    expiresInSeconds?: number;
+    /** Export binding name of the procedure performing the call. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the call, or `0` when unknown. */
+    line: number;
+    /** The `ctx.storage` method invoked. */
+    method: "generateUploadUrl" | "getPresignedUrl" | "getSignedUrl" | "store" | "upload";
+    /** Options-object keys present at the call site (empty when not `analyzable`, or when no options argument was passed). */
+    presentKeys: string[];
+}
+
+/**
+ * One discovered `httpAction`/`httpRoute` handler in `lunora/` that performs a
+ * side effect (`ctx.runMutation` / `ctx.runAction` / a `ctx.db.{insert,patch,
+ * replace,delete,insertManyUnsafe}` write) from the HTTP edge, with whether it
+ * reads `ctx.auth` — the `http_action_missing_auth_guard` lint input. A handler
+ * that mutates state or dispatches an action without ever consulting the request
+ * identity is an unauthenticated write bypassing identity/RLS. Only handlers with
+ * a statically-resolvable inline body and `ctx` binding are recorded (fail-safe
+ * under-report); read-only handlers are never recorded. Structurally identical to
+ * `AdvisorHttpActionGuard`.
+ */
+export interface HttpActionGuardIR {
+    /** Export binding name of the handler (or `"&lt;module>"` when mounted inline / not a named binding). */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** Which HTTP surface the handler is: a raw `httpAction` or a typed `httpRoute` route. */
+    kind: "httpAction" | "httpRoute";
+    /** 1-based line of the handler call, or `0` when unknown. */
+    line: number;
+    /** For an `httpRoute`, the uppercased verb (`"POST"`); absent for a raw `httpAction`. */
+    method?: string;
+    /** `true` when the handler reads `ctx.auth` (a direct member access or a `const { auth } = ctx` destructure). */
+    readsAuth: boolean;
+    /** The first side effect found, as a stable label: `runMutation`, `runAction`, or `db.&lt;method>`. */
+    sideEffect: string;
+}
+
+/**
+ * One response-header write, inside an `httpAction` handler, whose value is derived
+ * from raw request input (`request.headers`, `request.url`/query, `await
+ * request.json()`) with no CR/LF sanitizer — the
+ * `http_action_response_header_injection` lint input. A `Request`-derived string
+ * placed verbatim into a response header lets a caller smuggle `\r\n` and inject
+ * extra headers or split the response (header injection / response splitting). Only
+ * sites whose value is request-tainted AND unguarded are recorded: a value routed
+ * through a CR/LF guard (`isSafeHeaderValue`), a URL/URI encoder
+ * (`encodeURIComponent`/`encodeURI`), a numeric coercion (`Number`/`parseInt`/
+ * `parseFloat`), or `btoa` is treated as safe and never recorded (`String(...)` /
+ * `.toString()` are NOT sanitizers — they don't strip CR/LF). Structurally
+ * identical to `AdvisorHttpHeaderWrite`.
+ */
+export interface HttpHeaderWriteIR {
+    /** Export binding name of the enclosing handler, or `"&lt;module>"` when mounted inline. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** The header name being written (`"location"`), or `""` when the key is not a string literal. */
+    headerName: string;
+    /** 1-based line of the request-tainted header value. */
+    line: number;
+    /** How the header was written. */
+    via: "headers-append" | "headers-ctor" | "headers-set" | "response-init";
+}
+
+/**
+ * One rate-limit / Turnstile middleware call in `lunora/` — the
+ * `ratelimit_middleware_fail_open` lint input. `rateLimit`/`dbRateLimit`
+ * (`@lunora/ratelimit`) and `verifyTurnstileMiddleware` (`@lunora/auth`) each
+ * accept a `failOpen` escape hatch that admits every request when the
+ * limiter/siteverify is unavailable; `failOpen` is `true` only when the options
+ * literal set it to the boolean literal `true` (anything else is fail-closed).
+ * The lint escalates a fail-open guard to a finding when the guarded procedure
+ * (`exportName`/`limitName`) looks auth/payment-sensitive. Structurally
+ * identical to `AdvisorFailOpenGuard`.
+ */
+export interface FailOpenGuardIR {
+    /** The middleware factory at the call site: `rateLimit` / `dbRateLimit` / `verifyTurnstileMiddleware`. */
+    callee: string;
+    /** Export binding name of the procedure the guard is attached to, or `"&lt;module>"` at file scope. */
+    exportName: string;
+    /** `true` only when the options literal set `failOpen: true` as a boolean literal; a non-literal or absent option is treated as fail-closed. */
+    failOpen: boolean;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** The rate-limit `name` (second string argument) for `rateLimit`/`dbRateLimit`; `""` for `verifyTurnstileMiddleware`. */
+    limitName: string;
+    /** 1-based line of the middleware call, or `0` when unknown. */
+    line: number;
+}
+
+/* eslint-disable no-secrets/no-secrets -- the referenced advisor evidence type name in the doc comment, not a credential */
+
+/**
+ * One `ctx.flags.boolean("key", &lt;boolean-literal>)` read in `lunora/` — the
+ * `flag_gates_security_with_unsafe_default` lint input. OpenFeature returns the
+ * `defaultValue` when the provider errors, so a fail-open default on a
+ * security-shaped key silently opens access during an outage. Only reads with a
+ * statically-known string key and boolean-literal default are recorded; the lint
+ * owns the security-shape + polarity judgment. Structurally identical to
+ * `AdvisorFlagSecurityDefault`.
+ */
+export interface FlagSecurityDefaultIR {
+    /** The boolean-literal default returned on a provider outage (fail-open value). */
+    defaultValue: boolean;
+    /** Export binding name of the procedure performing the flag read, or `"&lt;module>"` at file scope. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** The flag key — the first string-literal argument of `ctx.flags.boolean`. */
+    key: string;
+    /** 1-based line of the `ctx.flags.boolean` call, or `0` when unknown. */
+    line: number;
+}
+
+/* eslint-enable no-secrets/no-secrets -- re-enable after the FlagSecurityDefaultIR doc block */
+
+/**
+ * One `generateText` / `streamText` call in `lunora/` whose `tools` reach a
+ * privileged side effect (a DB write, function dispatch, or outbound
+ * fetch/mail/queue send). `userInputDerived` records whether the model input
+ * (`prompt`/`messages`/`system`) flows from the handler's `args`; the
+ * `ai_tool_side_effect_prompt_injection` lint fires only when it does.
+ * Structurally identical to `AdvisorAiToolSideEffect`.
+ */
+export interface AiToolSideEffectIR {
+    /** Export binding name of the procedure performing the call. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the generation call, or `0` when unknown. */
+    line: number;
+    /** The generation entrypoint invoked. */
+    method: "generateText" | "streamText";
+    /** The privileged side-effect sink a model-callable tool reaches (`ctx.db.insert`, `ctx.run`, `ctx.fetch`, …). */
+    sideEffect: string;
+    /** `true` when a model-input option is derived from the handler's `args` (a bare `args.x`, or a name destructured from `args`). */
+    userInputDerived: boolean;
+}
+
+/**
+ * One `&lt;receiver>.identity.&lt;key>` claim read in `lunora/`, where `&lt;receiver>` is
+ * an RLS/mask policy `auth` (or `ctx.auth`/`context.auth`). `declared` records
+ * whether `&lt;key>` is in the app's `defineIdentity({ ... })` contract (or the
+ * always-present `userId`); the `identity_undeclared_claim_trusted` lint fires on
+ * the undeclared reads. Emitted only when a resolvable identity contract exists.
+ * Structurally identical to `AdvisorIdentityClaimRead`.
+ */
+export interface IdentityClaimReadIR {
+    /** `true` when `key` is a declared claim (in the `defineIdentity` contract, or the always-present `userId`). */
+    declared: boolean;
+    /** Export binding name of the enclosing declaration (`&lt;module>` at file scope). */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** The claim key read off the identity bag. */
+    key: string;
+    /** 1-based line of the read, or `0` when unknown. */
+    line: number;
+}
+
+/**
+ * One payment webhook-adapter construction in `lunora/` (`createStripeAdapter` /
+ * `createPolarAdapter`). `toleranceSeconds` carries the statically-known
+ * `webhookToleranceSeconds` replay window when it is a plain numeric literal; the
+ * payment-webhook wide-tolerance lint fires when it exceeds a conservative
+ * ceiling. Structurally identical to `AdvisorPaymentWebhook`.
+ */
+export interface PaymentWebhookIR {
+    /** The adapter factory invoked. */
+    callee: "createPolarAdapter" | "createStripeAdapter";
+    /** Export binding name of the enclosing declaration (`&lt;module>` at file scope). */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the construction, or `0` when unknown. */
+    line: number;
+    /** Statically-known `webhookToleranceSeconds` literal, when present and a plain numeric literal. */
+    toleranceSeconds?: number;
+}
+
+/**
+ * One `ctx.db.&lt;table>.findMany({ includeDeleted })` list read whose
+ * `includeDeleted` is either a hardcoded `true` or derived from the handler's
+ * `args` — the `soft_delete_include_deleted_from_args` lint input. The lint joins
+ * `table` against the schema's soft-delete tables and `visibility` against
+ * `.public()` before flagging. Structurally identical to `AdvisorSoftDeleteRead`
+ * so values pass straight through without conversion.
+ */
+export interface SoftDeleteReadIR {
+    /** Export binding name of the procedure performing the read. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** `true` when `includeDeleted` was derived from the handler's `args` (any caller can flip it). */
+    fromArgs: boolean;
+    /** `true` when `includeDeleted` was a hardcoded `true` literal (always resurfaces soft-deleted rows). */
+    hardcodedTrue: boolean;
+    /** 1-based line of the read call. */
+    line: number;
+    /** Table read, or `""` when the table-arg form's first argument wasn't a string literal. */
+    table: string;
+    /** `"internal"` for `internalQuery` / `internalMutation` / `internalAction`. */
+    visibility: "internal" | "public";
+}
+
+/**
+ * One `ctx.db.&lt;table>.findMany({ with: { &lt;rel> } })` relation-hydrating list read
+ * — the `masked_relation_leak_via_with` lint input. Column masking does not
+ * descend into `with`-hydrated relations, so a masked table surfaced only through
+ * a `with` on an unprotected parent read is returned in the clear. The lint
+ * resolves each relation accessor to its target table and joins it against the
+ * discovered mask evidence before flagging. Structurally identical to
+ * `AdvisorRelationLoad` so values pass straight through without conversion.
+ */
+export interface RelationLoadIR {
+    /** Export binding name of the procedure performing the read. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the read call. */
+    line: number;
+    /** Parent table the read targets, or `""` when the table-arg form's first argument wasn't a string literal. */
+    parentTable: string;
+    /** Relation accessor names named in the read's `with: { … }` map — matched against the parent table's declared relations. */
+    relations: string[];
+    /** `"internal"` for `internalQuery` / `internalMutation` / `internalAction`. */
+    visibility: "internal" | "public";
+}
+
+/* eslint-disable no-secrets/no-secrets -- the referenced advisor lint rule id in the doc comment, not a credential */
+
+/**
+ * One `query` handler whose `return` hands back the raw rows of a table — the
+ * result of a `ctx.db.&lt;table>.findMany()` / `.findFirst()` / `.get()` read, or a
+ * `ctx.db.query("&lt;table>")…collect()` fluent chain — returned directly (or through
+ * one local `const` hop) with no hand-built projection. The
+ * `output_projection_missing_on_public_read` lint keeps only `visibility ===
+ * "public"` rows with no `.output(...)` / `.use(mask(...))` on the chain, then
+ * joins `table` against the schema and flags one whose columns are PII-named.
+ * Structurally identical to `AdvisorRawRowReturn` so values pass straight through
+ * without conversion.
+ */
+export interface RawRowReturnIR {
+    /** Export binding name of the query returning the raw rows. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the `return` (or concise-body) expression. */
+    line: number;
+    /** Table whose raw rows are returned, or `""` when the read's table wasn't a string literal. */
+    table: string;
+    /** `true` when the procedure's builder chain carries a `.use(mask(...))` step. */
+    usesMask: boolean;
+    /** `true` when the procedure's builder chain carries an `.output(...)` return-shape projection. */
+    usesOutput: boolean;
+    /** `"internal"` for `internalQuery`; `"public"` for `query`. */
+    visibility: "internal" | "public";
+}
+
+/* eslint-enable no-secrets/no-secrets -- re-enable after the RawRowReturnIR doc block */
+
+/* eslint-disable no-secrets/no-secrets -- the referenced advisor lint rule id in the doc comment, not a credential */
+
+/**
+ * One `query`/`mutation` handler that gates a `ctx.db.get`/`patch`/`delete` on a
+ * null-checked `ctx.db.normalizeId(table, id)` result — the
+ * `normalize_id_used_as_authorization` lint input. `normalizeId` validates an id's
+ * structural shape only (it never reads the database), so a non-null result proves
+ * the id is well-formed, never that the caller owns the row; gating access on it is
+ * an IDOR. The lint owns the negative proof — it keeps only `visibility === "public"`
+ * rows with no `.use(rls(...))` and no ownership/identity mention (`mentionsOwnership`),
+ * then joins `table` against the schema's RLS mode before flagging. Structurally
+ * identical to `AdvisorNormalizeIdAuthorization` so values pass straight through.
+ */
+export interface NormalizeIdAuthorizationIR {
+    /** Export binding name of the procedure performing the normalize-then-access. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the `ctx.db.normalizeId(...)` call the access is gated on. */
+    line: number;
+    /** `true` when the handler anywhere reads an ownership-named identifier or `ctx.auth`/`ctx.identity`/… — an intervening ownership signal. */
+    mentionsOwnership: boolean;
+    /** The id-first `ctx.db` sink the normalized id reaches. */
+    sinkMethod: "delete" | "get" | "patch";
+    /** Table named in the `normalizeId` call, or `""` when its table argument wasn't a string literal. */
+    table: string;
+    /** `true` when the procedure's builder chain carries a `.use(rls(...))` step. */
+    usesRls: boolean;
+    /** `"internal"` for `internalQuery`/`internalMutation`; `"public"` for `query`/`mutation`. */
+    visibility: "internal" | "public";
+}
+
+/* eslint-enable no-secrets/no-secrets -- re-enable after the NormalizeIdAuthorizationIR doc block */
+
+/**
+ * One committed `wrangler.jsonc` `vars` entry whose value is a plaintext secret —
+ * the `plaintext_secret_in_wrangler_vars` lint input. `vars` are baked into the
+ * deployed Worker in cleartext and checked into source control, so a real API key
+ * / token / private key there ships the secret to every reader of the repo and the
+ * bundle; it belongs in a Secrets Store binding or `wrangler secret put`. Produced
+ * by `@lunora/config` (which reads `wrangler.jsonc`), not a ts-morph feeder —
+ * codegen only passes it through. Structurally identical to `AdvisorWranglerVariable`.
+ */
+export interface WranglerVariableIR {
+    /** The `wrangler.jsonc` file the var was read from, relative to the project root. */
+    file: string;
+    /** The offending `vars` key (e.g. `STRIPE_SECRET_KEY`). */
+    key: string;
+    /** Heuristic that matched, e.g. `stripe_live_key` / `private_key` / `secret_named_var`. */
+    kind: string;
+    /** Redacted preview of the value (first few chars + length) for the finding detail — never the full secret. */
+    preview: string;
 }
 
 export interface ProjectIR {

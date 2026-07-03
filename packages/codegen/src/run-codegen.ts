@@ -8,32 +8,59 @@ import { Project } from "ts-morph";
 
 import { lintSchema } from "./advisor";
 import discoverAdminRoutes from "./discover-admin-routes";
+import discoverAiRawRuns from "./discover-ai-raw-runs";
+import discoverAiToolSideEffects from "./discover-ai-tool-side-effects";
+import discoverArgumentDerivedFetches from "./discover-argument-derived-fetches";
 import discoverArgumentValidators from "./discover-argument-validators";
+import discoverAuthConfig from "./discover-auth-config";
 import discoverAuthApiCalls from "./discover-authapi-calls";
+import discoverBrowserUrlAccesses from "./discover-browser-url-accesses";
+import discoverConfigCalls from "./discover-config-calls";
+import discoverContainerKeyAccesses from "./discover-container-key-accesses";
+import discoverContainerOverrides from "./discover-container-overrides";
 import { discoverContainers } from "./discover-containers";
 import discoverCrons from "./discover-crons";
+import discoverFailOpenGuards from "./discover-fail-open-guards";
 import { buildStudioFeatures, discoverFeatureUsage } from "./discover-feature-usage";
+import discoverFlagSecurityDefaults from "./discover-flag-security-defaults";
 import { discoverFlagKeys } from "./discover-flags";
 import { discoverFunctions, listLunoraSourceFiles } from "./discover-functions";
+import discoverHttpActionGuards from "./discover-http-action-guards";
+import discoverHttpHeaderWrites from "./discover-http-header-writes";
 import discoverHttpRoutes from "./discover-http-routes";
 import { discoverIdentity } from "./discover-identity";
+import discoverIdentityClaimReads from "./discover-identity-claim-reads";
+import discoverImageDeliveryUrlAccesses from "./discover-image-delivery-url-accesses";
 import discoverInserts from "./discover-inserts";
-import discoverMaskProcedures, { discoverMaskMetadata } from "./discover-mask-procedures";
+import discoverKvKeyAccesses from "./discover-kv-key-accesses";
+import discoverMailRecipientAccesses from "./discover-mail-recipient-accesses";
+import discoverMaskProcedures, { discoverMaskMetadata, discoverMaskStrategies } from "./discover-mask-procedures";
 import discoverMigrations from "./discover-migrations";
 import discoverMutatorWrites from "./discover-mutator-writes";
 import { discoverMutators } from "./discover-mutators";
 import discoverNondeterministicCalls from "./discover-nondeterministic-calls";
+import discoverNormalizeIdAuthorization from "./discover-normalize-id-authorization";
+import discoverOwnerFieldWrites from "./discover-owner-field-writes";
 import discoverPackageDependencies from "./discover-package-dependencies";
+import discoverPaymentWebhooks from "./discover-payment-webhooks";
+import discoverPrivilegedDispatches from "./discover-privileged-dispatches";
 import discoverProcedureMiddleware from "./discover-procedure-middleware";
 import discoverQueries from "./discover-queries";
 import { discoverQueues } from "./discover-queues";
 import discoverR2sqlCalls from "./discover-r2sql-calls";
+import discoverRatelimitKeySelectors from "./discover-ratelimit-key-selectors";
+import discoverRawRowReturns from "./discover-raw-row-returns";
+import discoverRelationLoads from "./discover-relation-loads";
 import discoverRlsProcedures, { discoverRlsMetadata } from "./discover-rls-procedures";
 import discoverSchema from "./discover-schema";
 import discoverSecrets from "./discover-secrets";
 import { discoverShapes } from "./discover-shapes";
+import discoverSoftDeleteReads from "./discover-soft-delete-reads";
 import discoverSqlInterpolation from "./discover-sql-interpolation";
+import discoverStorageKeyAccesses from "./discover-storage-key-accesses";
 import discoverStorageRulesMetadata from "./discover-storage-rules";
+import discoverStorageUploads from "./discover-storage-uploads";
+import discoverVectorNamespaceAccesses from "./discover-vector-namespace-accesses";
 import discoverWorkflowCalls from "./discover-workflow-calls";
 import { discoverWorkflows } from "./discover-workflows";
 import {
@@ -54,7 +81,7 @@ import {
     emitWranglerCronTriggers,
 } from "./emit";
 import { emitApp } from "./emit-app";
-import type { ContainerIR, QueueIR, WorkflowIR } from "./ir";
+import type { ContainerIR, QueueIR, WorkflowIR, WranglerVariableIR } from "./ir";
 import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
 import { buildOpenRpcDocument, emitOpenRpcModule } from "./openrpc";
 import type { SchemaSnapshot } from "./schema-drift";
@@ -329,6 +356,35 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   discoverR2sqlCalls(project, lunoraDirectory),
                   shapes,
                   discoverMutatorWrites(project, lunoraDirectory),
+                  discoverConfigCalls(project, lunoraDirectory),
+                  discoverArgumentDerivedFetches(project, lunoraDirectory),
+                  discoverKvKeyAccesses(project, lunoraDirectory),
+                  discoverOwnerFieldWrites(project, lunoraDirectory),
+                  discoverStorageKeyAccesses(project, lunoraDirectory),
+                  discoverAiRawRuns(project, lunoraDirectory),
+                  discoverContainerKeyAccesses(project, lunoraDirectory),
+                  discoverMailRecipientAccesses(project, lunoraDirectory),
+                  discoverVectorNamespaceAccesses(project, lunoraDirectory),
+                  discoverBrowserUrlAccesses(project, lunoraDirectory),
+                  discoverPrivilegedDispatches(project, lunoraDirectory),
+                  discoverContainerOverrides(project, lunoraDirectory),
+                  discoverAuthConfig(project, lunoraDirectory),
+                  discoverMaskStrategies(project, lunoraDirectory),
+                  discoverImageDeliveryUrlAccesses(project, lunoraDirectory),
+                  discoverRatelimitKeySelectors(project, lunoraDirectory),
+                  discoverStorageUploads(project, lunoraDirectory),
+                  discoverHttpActionGuards(project, lunoraDirectory),
+                  discoverHttpHeaderWrites(project, lunoraDirectory),
+                  discoverFailOpenGuards(project, lunoraDirectory),
+                  discoverFlagSecurityDefaults(project, lunoraDirectory),
+                  discoverAiToolSideEffects(project, lunoraDirectory),
+                  discoverIdentityClaimReads(project, lunoraDirectory),
+                  discoverPaymentWebhooks(project, lunoraDirectory),
+                  discoverSoftDeleteReads(project, lunoraDirectory),
+                  discoverRelationLoads(project, lunoraDirectory),
+                  discoverRawRowReturns(project, lunoraDirectory),
+                  discoverNormalizeIdAuthorization(project, lunoraDirectory),
+                  options.wranglerVariables,
               );
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,
@@ -710,6 +766,15 @@ export interface CodegenOptions {
      * a breaking change. Ignored when `dryRun` is true.
      */
     updateSchemaBaseline?: boolean;
+
+    /**
+     * Committed `wrangler.jsonc` `vars` entries that hold plaintext secrets — the
+     * `plaintext_secret_in_wrangler_vars` lint input. Produced by `@lunora/config`
+     * (which reads `wrangler.jsonc`) and threaded through by the CLI / Vite plugin;
+     * codegen only forwards it to the advisor. Absent when no wrangler config is
+     * present or the caller doesn't scan it.
+     */
+    wranglerVariables?: ReadonlyArray<WranglerVariableIR>;
 }
 
 export interface CodegenResult {

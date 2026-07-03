@@ -178,4 +178,43 @@ export const ghost = defineShape({ table: "mesages", where: () => ({}) });
         expect(byName("shape_unknown_table")).toHaveLength(1);
         expect(byName("shape_unknown_table")[0]?.metadata).toMatchObject({ exportName: "ghost", table: "mesages" });
     });
+
+    it('flags a `.public()` table with a PII column under `.rls("required")` (full discover → lint path)', () => {
+        expect.assertions(2);
+
+        writeFileSync(
+            join(workdir, "lunora", "schema.ts"),
+            `import { defineSchema, defineTable, v } from "@lunora/server";
+export const schema = defineSchema({
+    accounts: defineTable({ email: v.string() }).public(),
+}).rls("required");
+`,
+            "utf8",
+        );
+
+        const findings = runCodegen({ projectRoot: workdir }).advisories;
+        const finding = findings.find((advisory) => advisory.name === "public_table_rls_optout_confusion");
+
+        expect(finding).toBeDefined();
+        expect(finding?.metadata).toMatchObject({ columns: ["email"], table: "accounts" });
+    });
+
+    it("flags `.extend()` enabling allowUnauthenticatedShardAccess on an RLS-gapped schema (full discover → lint path)", () => {
+        expect.assertions(2);
+
+        // The fixture schema (UNINDEXED) never calls `.rls("required")`, so it already has an RLS gap.
+        writeFileSync(
+            join(workdir, "lunora", "server.ts"),
+            `import { defineApp } from "@lunora/runtime";
+export const app = defineApp().extend(() => ({ allowUnauthenticatedShardAccess: true })).build();
+`,
+            "utf8",
+        );
+
+        const findings = runCodegen({ projectRoot: workdir }).advisories;
+        const finding = findings.find((advisory) => advisory.name === "allow_unauthenticated_shard_access_enabled");
+
+        expect(finding).toBeDefined();
+        expect(finding?.metadata).toMatchObject({ callee: "extend", file: "server" });
+    });
 });

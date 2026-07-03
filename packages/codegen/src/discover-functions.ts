@@ -1,7 +1,17 @@
 import { lstatSync, readdirSync } from "node:fs";
 import { extname, join, relative, sep } from "node:path";
 
-import type { CallExpression, Identifier, Project, SourceFile, Symbol as TsSymbol, Type, VariableDeclaration } from "ts-morph";
+import type {
+    ArrowFunction,
+    CallExpression,
+    FunctionExpression,
+    Identifier,
+    Project,
+    SourceFile,
+    Symbol as TsSymbol,
+    Type,
+    VariableDeclaration,
+} from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { FunctionIR, ValidatorIR } from "./ir";
@@ -646,6 +656,104 @@ const classifyProcedureCall = (call: CallExpression): ProcedureClassification | 
     return undefined;
 };
 
+/** A function whose body we can inspect — an inline arrow or function expression handler. */
+type InspectableHandler = ArrowFunction | FunctionExpression;
+
+/** The inline arrow/function-expression handler at `argument`, or `undefined` when it isn't one. */
+const inlineHandler = (argument: Node | undefined): InspectableHandler | undefined =>
+    argument !== undefined && (Node.isArrowFunction(argument) || Node.isFunctionExpression(argument)) ? argument : undefined;
+
+/** True when `receiver` is the database accessor: `ctx.db` (property named `db`) or a bare `db`. */
+const isDatabaseAccessor = (receiver: Node): boolean =>
+    (Node.isPropertyAccessExpression(receiver) && receiver.getName() === "db") || (Node.isIdentifier(receiver) && receiver.getText() === "db");
+
+/**
+ * The inline handler function of a classified procedure call, or `undefined` when
+ * it isn't inspectable. The terminal call's first argument is either the handler
+ * function directly (`query(async ({ ctx }) => …)` / `c.use(…).query(handler)`) or
+ * an object literal carrying it under a `handler` property (`query({ args, handler })`)
+ * — both surface forms are handled. The companion to {@link classifyProcedureCall}:
+ * classify the call, then pull out the body to inspect.
+ */
+const procedureHandler = (initializer: CallExpression): InspectableHandler | undefined => {
+    const argument = initializer.getArguments()[0];
+    const direct = inlineHandler(argument);
+
+    if (direct !== undefined) {
+        return direct;
+    }
+
+    if (argument === undefined || !Node.isObjectLiteralExpression(argument)) {
+        return undefined;
+    }
+
+    const property = argument.getProperty("handler");
+
+    return property !== undefined && Node.isPropertyAssignment(property) ? inlineHandler(property.getInitializer()) : undefined;
+};
+
+/** The simple name of a call's callee — a bare identifier's text or a property access's member name, else `""`. */
+const calleeName = (callee: Node): string => {
+    if (Node.isIdentifier(callee)) {
+        return callee.getText();
+    }
+
+    return Node.isPropertyAccessExpression(callee) ? callee.getName() : "";
+};
+
+/** True when the builder chain rooted at `receiver` carries a step whose method name is `method` (`.output(...)` / `.use(...)`). */
+const chainHasStep = (receiver: Node, method: string): boolean => {
+    let node: Node = receiver;
+
+    while (Node.isCallExpression(node)) {
+        const callee = node.getExpression();
+
+        if (!Node.isPropertyAccessExpression(callee)) {
+            break;
+        }
+
+        if (callee.getName() === method) {
+            return true;
+        }
+
+        node = callee.getExpression();
+    }
+
+    return false;
+};
+
+/**
+ * True when the builder chain rooted at `receiver` carries a
+ * `.&lt;method>(&lt;wrappedCallee>(...))` step — a `.&lt;method>(...)` whose first argument
+ * is a call to `wrappedCallee` (e.g. `.use(mask(...))` or `.use(rls(...))`).
+ */
+const chainUsesWrappedCall = (receiver: Node, method: string, wrappedCallee: string): boolean => {
+    let node: Node = receiver;
+
+    while (Node.isCallExpression(node)) {
+        const callee = node.getExpression();
+
+        if (!Node.isPropertyAccessExpression(callee)) {
+            break;
+        }
+
+        const argument = node.getArguments()[0];
+
+        if (
+            callee.getName() === method &&
+            argument !== undefined &&
+            Node.isCallExpression(argument) &&
+            calleeName(argument.getExpression()) === wrappedCallee
+        ) {
+            return true;
+        }
+
+        node = callee.getExpression();
+    }
+
+    return false;
+};
+
 /**
  * Recursively collect `.ts` files under a lunora source directory, skipping
  * `_generated/`, `node_modules/`, and `schema.ts`. Shared by function and
@@ -930,5 +1038,15 @@ const discoverFunctions = (project: Project, lunoraDirectory: string): FunctionI
     return functions;
 };
 
-export type { ProcedureClassification };
-export { classifyProcedureCall, discoverFunctions, listLunoraSourceFiles, lunoraRelativePath };
+export type { InspectableHandler, ProcedureClassification };
+export {
+    chainHasStep,
+    chainUsesWrappedCall,
+    classifyProcedureCall,
+    discoverFunctions,
+    inlineHandler,
+    isDatabaseAccessor,
+    listLunoraSourceFiles,
+    lunoraRelativePath,
+    procedureHandler,
+};

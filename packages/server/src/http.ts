@@ -592,7 +592,9 @@ const toHttpEtag = (etag: string): string => {
  * True when `value` is safe to use as an HTTP header field-value: no CR, LF, or
  * NUL. Guards against response-header injection / `Headers`-construction throws
  * when reflecting attacker-influenced object metadata (e.g. a stored
- * `Content-Type`).
+ * `Content-Type`). Exported (see the `export {}` at the file end) so an `httpAction`
+ * handler can guard a request-derived header value before writing it — the fix the
+ * `http_action_response_header_injection` advisor lint points to.
  */
 const isSafeHeaderValue = (value: string): boolean => {
     for (let index = 0; index < value.length; index += 1) {
@@ -757,7 +759,7 @@ const serveStorageObject = async (context: ContextWithStorage, key: string, requ
     });
 };
 
-export { httpAction, httpRoute, httpRouter, serveStorageObject };
+export { httpAction, httpRoute, httpRouter, isSafeHeaderValue, serveStorageObject };
 
 export type {
     HttpActionCtx,

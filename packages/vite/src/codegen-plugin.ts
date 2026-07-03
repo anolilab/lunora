@@ -3,7 +3,7 @@ import { join, resolve, sep } from "node:path";
 
 import { CodegenDiagnosticError, createCodegenProject, refreshCodegenProject, runCodegen } from "@lunora/codegen";
 import type { ExportGap } from "@lunora/config";
-import { inferLunoraBindings, reconcileWranglerBindings } from "@lunora/config";
+import { collectWranglerSecretVariables, inferLunoraBindings, reconcileWranglerBindings } from "@lunora/config";
 import type { Project } from "ts-morph";
 import type { Plugin, ViteDevServer } from "vite";
 
@@ -104,7 +104,13 @@ const runCodegenSafely = (
     }
 
     try {
-        const result = runCodegen({ apiSpec: options.apiSpec, lunoraDirectory: options.schemaDir, project, projectRoot: options.projectRoot });
+        const result = runCodegen({
+            apiSpec: options.apiSpec,
+            lunoraDirectory: options.schemaDir,
+            project,
+            projectRoot: options.projectRoot,
+            wranglerVariables: collectWranglerSecretVariables(options.projectRoot),
+        });
 
         // Reconcile code-first cron definitions into wrangler.jsonc so the user
         // never hand-edits `triggers.crons`. Best-effort: a wrangler problem

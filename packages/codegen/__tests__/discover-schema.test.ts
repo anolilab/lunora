@@ -1287,4 +1287,64 @@ describe("discoverSchema", () => {
 
         expect(() => discoverSchema(project, schemaPath)).toThrow(/unknown jurisdiction/);
     });
+
+    it("captures `.public()` into the table IR; defaults to false", () => {
+        expect.assertions(2);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                emojis: defineTable({ glyph: v.string() }).public(),
+                messages: defineTable({ text: v.string() }),
+            });
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+
+        expect(schema.tables.find((table) => table.name === "emojis")?.isPublic).toBe(true);
+        expect(schema.tables.find((table) => table.name === "messages")?.isPublic).toBe(false);
+    });
+
+    it("defaults rlsMode to undefined when `.rls(...)` is not declared", () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                messages: defineTable({ text: v.string() }),
+            });
+        `);
+
+        expect(discoverSchema(project, schemaPath).rlsMode).toBeUndefined();
+    });
+
+    it('captures `.rls("required")` into the schema IR, regardless of position in the builder chain', () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                messages: defineTable({ text: v.string() }),
+            }).jurisdiction("eu").rls("required");
+        `);
+
+        expect(discoverSchema(project, schemaPath).rlsMode).toBe("required");
+    });
+
+    it("throws a diagnostic on an unknown `.rls(...)` mode literal", () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                messages: defineTable({ text: v.string() }),
+            }).rls("optional");
+        `);
+
+        expect(() => discoverSchema(project, schemaPath)).toThrow(/unknown rls mode/);
+    });
 });

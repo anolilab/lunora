@@ -3,24 +3,53 @@ import { runAdvisor } from "@lunora/advisor";
 
 import type {
     AdminRouteIR,
+    AiRawRunIR,
+    AiToolSideEffectIR,
+    ArgumentDerivedFetchIR,
     ArgumentValidatorIR,
     AuthApiCallIR,
+    AuthConfigIR,
+    BrowserUrlAccessIR,
+    ConfigCallIR,
     ContainerIR,
+    ContainerKeyAccessIR,
+    ContainerOverrideIR,
+    FailOpenGuardIR,
+    FlagSecurityDefaultIR,
+    HttpActionGuardIR,
+    HttpHeaderWriteIR,
+    IdentityClaimReadIR,
+    ImageDeliveryUrlAccessIR,
     InsertWriteIR,
+    KvKeyAccessIR,
+    MailRecipientAccessIR,
     MaskProcedureIR,
+    MaskStrategyIR,
     MutatorWriteIR,
     NondeterministicCallIR,
+    NormalizeIdAuthorizationIR,
+    OwnerFieldWriteIR,
+    PaymentWebhookIR,
+    PrivilegedDispatchIR,
     ProcedureMiddlewareIR,
     QueryReadIR,
     R2sqlCallIR,
+    RatelimitKeySelectorIR,
+    RawRowReturnIR,
+    RelationLoadIR,
     RlsProcedureIR,
     SchemaIR,
     SecretLiteralIR,
     ShapeIR,
+    SoftDeleteReadIR,
     SqlInterpolationIR,
+    StorageKeyAccessIR,
+    StorageUploadIR,
     TableIR,
+    VectorNamespaceAccessIR,
     WorkflowCallIR,
     WorkflowIR,
+    WranglerVariableIR,
 } from "./ir";
 
 /**
@@ -57,6 +86,7 @@ const flattenIndexes = (table: TableIR): AdvisorIndex[] => [
  */
 const toAdvisorSchema = (schema: SchemaIR): AdvisorSchema => {
     return {
+        rlsMode: schema.rlsMode,
         tables: schema.tables.map((table) => {
             return {
                 externallyManaged: table.externallyManaged ?? false,
@@ -70,6 +100,7 @@ const toAdvisorSchema = (schema: SchemaIR): AdvisorSchema => {
                     : undefined,
                 fields: Object.keys(table.shape),
                 indexes: flattenIndexes(table),
+                isPublic: table.isPublic ?? false,
                 name: table.name,
                 relations: table.relations.map((relation) => {
                     return {
@@ -82,6 +113,7 @@ const toAdvisorSchema = (schema: SchemaIR): AdvisorSchema => {
                     };
                 }),
                 shardKind: typeof table.shardMode === "string" ? table.shardMode : "shardBy",
+                softDelete: table.softDelete,
             };
         }),
     };
@@ -102,8 +134,9 @@ const toAdvisorShapes = (shapes: ReadonlyArray<ShapeIR>): AdvisorShape[] =>
  * Run the static lints against a discovered {@link SchemaIR} and the reads/writes/calls
  * found in function bodies: query reads feed `filter_without_index`, insert writes
  * feed `table_without_insert`, authApi calls feed `auth_api_call_without_headers`,
- * rls procedure snapshots feed `rls_uncovered_table`, and mask procedure
- * snapshots feed `mask_uncovered_pii_column`; declared containers
+ * rls procedure snapshots feed `rls_uncovered_table`, mask procedure
+ * snapshots feed `mask_uncovered_pii_column`, and per-column mask strategies
+ * feed `mask_weak_hash_strategy_on_pii`; declared containers
  * feed the `container_*` lints; declared workflows (with their durable step labels)
  * + `ctx.workflows.get(...)` call sites feed the `workflow_unused` /
  * `workflow_unknown_target` / duplicate-step-name lints; non-deterministic
@@ -132,27 +165,85 @@ export const lintSchema = (
     r2sqlCalls?: ReadonlyArray<R2sqlCallIR>,
     shapes?: ReadonlyArray<ShapeIR>,
     mutatorWrites?: ReadonlyArray<MutatorWriteIR>,
+    configCalls?: ReadonlyArray<ConfigCallIR>,
+    argumentDerivedFetches?: ReadonlyArray<ArgumentDerivedFetchIR>,
+    kvKeyAccesses?: ReadonlyArray<KvKeyAccessIR>,
+    ownerFieldWrites?: ReadonlyArray<OwnerFieldWriteIR>,
+    storageKeyAccesses?: ReadonlyArray<StorageKeyAccessIR>,
+    aiRawRuns?: ReadonlyArray<AiRawRunIR>,
+    containerKeyAccesses?: ReadonlyArray<ContainerKeyAccessIR>,
+    mailRecipientAccesses?: ReadonlyArray<MailRecipientAccessIR>,
+    vectorNamespaceAccesses?: ReadonlyArray<VectorNamespaceAccessIR>,
+    browserUrlAccesses?: ReadonlyArray<BrowserUrlAccessIR>,
+    privilegedDispatches?: ReadonlyArray<PrivilegedDispatchIR>,
+    containerOverrides?: ReadonlyArray<ContainerOverrideIR>,
+    authConfigs?: ReadonlyArray<AuthConfigIR>,
+    maskStrategies?: ReadonlyArray<MaskStrategyIR>,
+    imageDeliveryUrlAccesses?: ReadonlyArray<ImageDeliveryUrlAccessIR>,
+    ratelimitKeySelectors?: ReadonlyArray<RatelimitKeySelectorIR>,
+    storageUploads?: ReadonlyArray<StorageUploadIR>,
+    httpActionGuards?: ReadonlyArray<HttpActionGuardIR>,
+    httpHeaderWrites?: ReadonlyArray<HttpHeaderWriteIR>,
+    failOpenGuards?: ReadonlyArray<FailOpenGuardIR>,
+    flagSecurityDefaults?: ReadonlyArray<FlagSecurityDefaultIR>,
+    aiToolSideEffects?: ReadonlyArray<AiToolSideEffectIR>,
+    identityClaimReads?: ReadonlyArray<IdentityClaimReadIR>,
+    paymentWebhooks?: ReadonlyArray<PaymentWebhookIR>,
+    softDeleteReads?: ReadonlyArray<SoftDeleteReadIR>,
+    relationLoads?: ReadonlyArray<RelationLoadIR>,
+    rawRowReturns?: ReadonlyArray<RawRowReturnIR>,
+    normalizeIdAuthorizations?: ReadonlyArray<NormalizeIdAuthorizationIR>,
+    wranglerVariables?: ReadonlyArray<WranglerVariableIR>,
 ): Finding[] =>
     runAdvisor(
         {
             adminRoutes,
+            aiRawRuns,
+            aiToolSideEffects,
+            argumentDerivedFetches,
             argValidators: argumentValidators,
             authApiCalls,
+            authConfigs,
+            browserUrlAccesses,
+            configCalls,
+            containerKeyAccesses,
+            containerOverrides,
             containers,
+            failOpenGuards,
+            flagSecurityDefaults,
+            httpActionGuards,
+            httpHeaderWrites,
+            identityClaimReads,
+            imageDeliveryUrlAccesses,
             inserts,
+            kvKeyAccesses,
+            mailRecipientAccesses,
             maskProcedures,
+            maskStrategies,
             mutatorWrites,
             nondeterministicCalls,
+            normalizeIdAuthorizations,
+            ownerFieldWrites,
+            paymentWebhooks,
+            privilegedDispatches,
             procedureProtections,
             queries,
             r2sqlCalls,
+            ratelimitKeySelectors,
+            rawRowReturns,
+            relationLoads,
             rlsProcedures,
             schema: toAdvisorSchema(schema),
             secretLiterals,
             shapes: shapes === undefined ? undefined : toAdvisorShapes(shapes),
+            softDeleteReads,
             sqlInterpolations,
+            storageKeyAccesses,
+            storageUploads,
+            vectorNamespaceAccesses,
             workflowCalls,
             workflows,
+            wranglerVariables,
         },
         { source: "static" },
     );

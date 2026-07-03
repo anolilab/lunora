@@ -64,6 +64,7 @@ export type {
     ValidatorIR,
     VectorIndexIR,
     WorkflowIR,
+    WranglerVariableIR,
 } from "./ir";
 export type { OpenApiEmitInput } from "./openapi";
 export { buildOpenApiDocument, emitOpenApi, emitOpenApiModule } from "./openapi";
@@ -92,6 +93,7 @@ export {
 } from "./schema-drift";
 export { schemaFromIr } from "./schema-from-ir";
 export { LUNORA_ERROR_CODES, validatorIrToJsonSchema } from "./schema-ir";
+export { redact, secretKindOf } from "./secret-rules";
 export type { LunoraSolution, LunoraSolutionRule } from "./solutions";
 export { findLunoraSolution, LUNORA_SOLUTION_RULES } from "./solutions";
 export type { Finding } from "@lunora/advisor";

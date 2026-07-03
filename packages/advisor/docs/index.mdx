@@ -48,27 +48,100 @@ counters; it appears in the same Advisors view once a deployment has traffic.
 
 ### Security
 
-| Lint                                     | Level   | Flags                                                                                                               |
-| ---------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------- |
-| `hardcoded_secret`                       | `ERROR` | A secret literal committed in source                                                                                |
-| `sql_injection_risk`                     | `ERROR` | Unsafe interpolation in a `ctx.sql` string                                                                          |
-| `external_source_unscoped`               | `ERROR` | A `.source()` + `.shardBy()` table with no `tenantBy` — every tenant DO would replicate the whole multitenant table |
-| `rls_uncovered_table`                    | `WARN`  | An RLS-gated table read without the `rls()` middleware                                                              |
-| `mask_uncovered_pii_column`              | `WARN`  | A maskable column returned without the `mask()` middleware                                                          |
-| `admin_route_without_guard`              | `WARN`  | An admin route with no auth guard                                                                                   |
-| `auth_api_call_without_headers`          | `WARN`  | A privileged `ctx.authApi` call missing request headers                                                             |
-| `policy_references_unknown_table`        | `WARN`  | An RLS policy bound to a table that doesn't exist                                                                   |
-| `public_arg_uses_any`                    | `WARN`  | A public argument typed `v.any()`                                                                                   |
-| `public_mutation_without_ratelimit`      | `WARN`  | A public write with no rate limit                                                                                   |
-| `user_creating_mutation_without_captcha` | `WARN`  | An account-creating / mail-sending write with no CAPTCHA                                                            |
-| `container_public_internet`              | `INFO`  | A container with public egress enabled by default                                                                   |
-| `unbounded_string_arg`                   | `INFO`  | A public string argument with no length bound                                                                       |
+Secrets, injection & SSRF:
+
+| Lint                                 | Level   | Flags                                                                        |
+| ------------------------------------ | ------- | ---------------------------------------------------------------------------- |
+| `hardcoded_secret`                   | `ERROR` | A secret literal committed in source                                         |
+| `plaintext_secret_in_wrangler_vars`  | `ERROR` | A plaintext secret in `wrangler.jsonc` `vars` (belongs in the Secrets Store) |
+| `sql_injection_risk`                 | `ERROR` | Unsafe interpolation in a `ctx.sql` string                                   |
+| `action_fetch_ssrf`                  | `ERROR` | A `ctx.fetch` URL derived from user args (SSRF)                              |
+| `browser_allow_private_targets`      | `ERROR` | Browser rendering with the private-target SSRF guard disabled                |
+| `browser_user_url_without_allowlist` | `WARN`  | Browser navigation to an arg-derived URL with no allowlist                   |
+
+IDOR & unscoped access (a user-derived key/id reaches a resource without a server-scoped check):
+
+| Lint                                     | Level   | Flags                                                                                                      |
+| ---------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------- |
+| `owner_field_from_args_not_auth`         | `ERROR` | An ownership column written from `args` instead of the server identity                                     |
+| `storage_key_from_user_args`             | `ERROR` | An R2 object key taken directly from user args                                                             |
+| `kv_unscoped_user_key_idor`              | `ERROR` | A KV key derived from unscoped user args                                                                   |
+| `container_instance_key_from_user_input` | `WARN`  | A container instance key from arg-derived unscoped input (cross-tenant IDOR)                               |
+| `images_url_source_from_user_input`      | `WARN`  | An image-delivery URL built from unscoped user input                                                       |
+| `mail_recipient_from_request_input`      | `WARN`  | A mail recipient derived from request input                                                                |
+| `vectors_namespace_from_user_input`      | `WARN`  | A Vectorize namespace derived from unscoped user input                                                     |
+| `normalize_id_used_as_authorization`     | `INFO`  | A `normalizeId()` result gates access with no ownership/RLS check — it validates id _shape_, not ownership |
+
+RLS, masking & output shape:
+
+| Lint                                         | Level   | Flags                                                                                                          |
+| -------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------- |
+| `external_source_unscoped`                   | `ERROR` | A `.source()` + `.shardBy()` table with no `tenantBy` — every tenant DO replicates the whole multitenant table |
+| `rls_uncovered_table`                        | `WARN`  | An RLS-gated table read without the `rls()` middleware                                                         |
+| `policy_references_unknown_table`            | `WARN`  | An RLS policy bound to a table that doesn't exist                                                              |
+| `public_table_rls_optout_confusion`          | `WARN`  | A `.public()` table that opts out of RLS but carries sensitive columns                                         |
+| `allow_unauthenticated_shard_access_enabled` | `WARN`  | Unauthenticated shard access enabled on an RLS-gapped schema                                                   |
+| `mask_uncovered_pii_column`                  | `WARN`  | A maskable column returned without the `mask()` middleware                                                     |
+| `mask_weak_hash_strategy_on_pii`             | `WARN`  | A `mask()` `"hash"` strategy (unsalted FNV-1a) on a PII column — recoverable                                   |
+| `masked_relation_leak_via_with`              | `INFO`  | A masked table surfaced unmasked through a `with`-relation on a public read                                    |
+| `output_projection_missing_on_public_read`   | `INFO`  | A public query returns raw rows with PII columns and no `.output(...)` projection                              |
+| `soft_delete_include_deleted_from_args`      | `INFO`  | Soft-deleted rows resurfaced via `includeDeleted` on a public read                                             |
+
+Auth configuration (`createAuth`):
+
+| Lint                                | Level   | Flags                                                         |
+| ----------------------------------- | ------- | ------------------------------------------------------------- |
+| `auth_csrf_check_disabled`          | `ERROR` | `createAuth` with the CSRF check disabled                     |
+| `auth_secure_cookies_disabled`      | `ERROR` | `createAuth` with secure cookies disabled                     |
+| `auth_trusted_origins_wildcard`     | `ERROR` | `createAuth` `trustedOrigins` set to a wildcard               |
+| `auth_email_verification_disabled`  | `WARN`  | `createAuth` with email verification disabled                 |
+| `auth_session_freshage_zero`        | `WARN`  | `createAuth` session `freshAge` of zero                       |
+| `auth_api_call_without_headers`     | `WARN`  | A privileged `ctx.authApi` call missing request headers       |
+| `identity_undeclared_claim_trusted` | `WARN`  | Authorization trusts an undeclared (forgeable) identity claim |
+
+HTTP handlers, procedures & rate limits:
+
+| Lint                                      | Level   | Flags                                                                        |
+| ----------------------------------------- | ------- | ---------------------------------------------------------------------------- |
+| `mail_inbound_dispatch_without_verify`    | `ERROR` | An inbound-email handler with no `verify` hook (runs under the admin bearer) |
+| `privileged_dispatch_unvalidated_payload` | `ERROR` | A queue/workflow forwards an untrusted payload into an RLS-gated function    |
+| `admin_route_without_guard`               | `WARN`  | An admin route with no auth guard                                            |
+| `http_action_missing_auth_guard`          | `WARN`  | An HTTP handler that does a side effect but never reads `ctx.auth`           |
+| `http_action_response_header_injection`   | `WARN`  | A response header written from unsanitized request input (CRLF injection)    |
+| `insert_many_unsafe_user_data`            | `WARN`  | A public procedure using `insertManyUnsafe` (bypasses validators + triggers) |
+| `public_arg_uses_any`                     | `WARN`  | A public argument typed `v.any()`                                            |
+| `public_mutation_without_ratelimit`       | `WARN`  | A public write with no rate limit                                            |
+| `user_creating_mutation_without_captcha`  | `WARN`  | An account-creating / mail-sending write with no CAPTCHA                     |
+| `ratelimit_default_memory_store`          | `WARN`  | A `RateLimiter` using the per-isolate default memory store                   |
+| `ratelimit_middleware_fail_open`          | `WARN`  | A fail-open rate-limit / CAPTCHA guard on a sensitive procedure              |
+| `ratelimit_key_spoofable_or_global`       | `WARN`  | A rate-limit key derived from spoofable user input                           |
+| `flag_gates_security_with_unsafe_default` | `WARN`  | A security flag that fails open to the permissive branch                     |
+| `unbounded_string_arg`                    | `INFO`  | A public string argument with no length bound                                |
+
+Storage, AI, containers & payments:
+
+| Lint                                              | Level   | Flags                                                              |
+| ------------------------------------------------- | ------- | ------------------------------------------------------------------ |
+| `payment_create_without_authorize`                | `ERROR` | `createPayment(...)` with no `authorize` gate                      |
+| `storage_upload_without_content_type_allowlist`   | `WARN`  | A storage upload with no content-type allowlist (stored XSS)       |
+| `storage_upload_without_max_size`                 | `WARN`  | A storage upload with no size cap                                  |
+| `storage_generate_upload_url_no_content_type_pin` | `WARN`  | A signed upload URL with no content-type pin                       |
+| `storage_presigned_url_for_private_content`       | `WARN`  | A native presigned / near-max-TTL signed URL for private content   |
+| `privileged_fanout_from_public_procedure`         | `WARN`  | A public procedure fanning out to a privileged dispatch surface    |
+| `ai_unbounded_generation_public`                  | `WARN`  | A public procedure running AI generation with no `maxOutputTokens` |
+| `ai_raw_run_escape_hatch`                         | `WARN`  | A `ctx.ai.run` model selected from user args                       |
+| `ai_tool_side_effect_prompt_injection`            | `WARN`  | An AI tool side effect reachable via prompt injection              |
+| `container_start_enable_internet_override`        | `WARN`  | A runtime `.start()` override re-enabling container internet       |
+| `container_runtime_egress_relaxation`             | `WARN`  | A runtime egress mutation relaxing the container firewall          |
+| `payment_webhook_wide_tolerance`                  | `WARN`  | A payment-webhook replay-tolerance window that's implausibly wide  |
+| `container_public_internet`                       | `INFO`  | A container with public egress enabled by default                  |
 
 ### Performance
 
 | Lint                           | Level  | Flags                                                  |
 | ------------------------------ | ------ | ------------------------------------------------------ |
 | `filter_without_index`         | `WARN` | A query filter on a column no index covers             |
+| `shape_targets_global_table`   | `WARN` | A shape replicating from a global (cross-shard) table  |
 | `unindexed_foreign_key`        | `INFO` | A foreign-key column with no index on the owning table |
 | `unindexed_relation_target`    | `INFO` | The `many`-side foreign key of a relation is unindexed |
 | `duplicate_index`              | `INFO` | A redundant index already covered by another           |
@@ -81,6 +154,7 @@ counters; it appears in the same Advisors view once a deployment has traffic.
 | `index_references_unknown_field`    | `ERROR` | An index naming a field the table doesn't have                                                     |
 | `relation_references_unknown_field` | `ERROR` | A relation pointing at a field that doesn't exist                                                  |
 | `relation_references_unknown_table` | `ERROR` | A relation pointing at a table that doesn't exist                                                  |
+| `shape_unknown_table`               | `ERROR` | A shape bound to a table that doesn't exist                                                        |
 | `workflow_unknown_target`           | `ERROR` | A workflow call naming a workflow that doesn't exist                                               |
 | `workflow_duplicate_step_name`      | `ERROR` | A durable step name reused within one workflow (the second call returns the first's cached result) |
 | `external_source_on_global`         | `ERROR` | A table that is both `.source()` and `.global()` — contradictory tiers                             |

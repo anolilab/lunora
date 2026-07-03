@@ -1,24 +1,53 @@
 import type { AdvisorAdminRoute } from "./admin-routes";
+import type { AdvisorAiRawRun } from "./ai-raw-runs";
+import type { AdvisorAiToolSideEffect } from "./ai-tool-side-effects";
+import type { AdvisorArgumentDerivedFetch } from "./argument-derived-fetches";
 import type { AdvisorArgumentValidator } from "./argument-validators";
+import type { AdvisorAuthConfig } from "./auth-config";
 import type { AdvisorAuthApiCall } from "./authapi-calls";
+import type { AdvisorBrowserUrlAccess } from "./browser-url-accesses";
+import type { AdvisorConfigCall } from "./config-calls";
+import type { AdvisorContainerKeyAccess } from "./container-key-accesses";
+import type { AdvisorContainerOverride } from "./container-overrides";
 import type { AdvisorContainer } from "./containers";
+import type { AdvisorFailOpenGuard } from "./fail-open-guards";
+import type { AdvisorFlagSecurityDefault } from "./flag-security-defaults";
+import type { AdvisorHttpActionGuard } from "./http-action-guards";
+import type { AdvisorHttpHeaderWrite } from "./http-header-writes";
 import type { AdvisorHyperdriveCall } from "./hyperdrive-calls";
+import type { AdvisorIdentityClaimRead } from "./identity-claim-reads";
+import type { AdvisorImageDeliveryUrlAccess } from "./image-delivery-url-accesses";
 import type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
 import type { AdvisorInsertWrite } from "./inserts";
+import type { AdvisorKvKeyAccess } from "./kv-key-accesses";
+import type { AdvisorMailRecipientAccess } from "./mail-recipient-accesses";
 import type { AdvisorMaskProcedure } from "./mask-procedures";
+import type { AdvisorMaskStrategy } from "./mask-strategies";
 import type { AdvisorMutatorWrite } from "./mutator-writes";
 import type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
+import type { AdvisorNormalizeIdAuthorization } from "./normalize-id-authorization";
+import type { AdvisorOwnerFieldWrite } from "./owner-field-writes";
+import type { AdvisorPaymentWebhook } from "./payment-webhooks";
+import type { AdvisorPrivilegedDispatch } from "./privileged-dispatches";
 import type { AdvisorProcedureProtection } from "./procedure-protections";
 import type { AdvisorQueryRead } from "./queries";
 import type { AdvisorR2sqlCall } from "./r2sql-calls";
+import type { AdvisorRatelimitKeySelector } from "./ratelimit-key-selectors";
+import type { AdvisorRawRowReturn } from "./raw-row-returns";
+import type { AdvisorRelationLoad } from "./relation-loads";
 import type { AdvisorRlsProcedure } from "./rls-procedures";
 import type { AdvisorSchema } from "./schema";
 import type { AdvisorSecretLiteral } from "./secrets";
 import type { AdvisorShape } from "./shapes";
 import type { AdvisorShardTraffic } from "./shard-traffic";
+import type { AdvisorSoftDeleteRead } from "./soft-delete-reads";
 import type { AdvisorSqlInterpolation } from "./sql-interpolation";
+import type { AdvisorStorageKeyAccess } from "./storage-key-accesses";
+import type { AdvisorStorageUpload } from "./storage-uploads";
 import type { AdvisorTableSample } from "./table-samples";
+import type { AdvisorVectorNamespaceAccess } from "./vector-namespace-accesses";
 import type { AdvisorWorkflow, AdvisorWorkflowCall } from "./workflows";
+import type { AdvisorWranglerVariable } from "./wrangler-variables";
 
 /**
  * Severity of a finding, mirroring splinter's `level`. `ERROR` is a definite
@@ -97,6 +126,36 @@ export interface LintContext {
     adminRoutes?: ReadonlyArray<AdvisorAdminRoute>;
 
     /**
+     * `ctx.ai.run(model, …)` calls whose model-id argument is derived from the
+     * handler's `args` with no server-side scoping — the `ai_raw_run_escape_hatch`
+     * input. `ctx.ai.run` is the raw Workers AI passthrough, so an arg-derived model
+     * id lets any caller select an arbitrary model, bypassing the typed
+     * `ctx.ai.model(...)` + AI-SDK layer's cap/schema (an arg-derived `inputs`
+     * argument is normal usage and is not recorded). Supplied by the codegen feeder;
+     * absent for runtime callers, where the lint finds nothing.
+     */
+    aiRawRuns?: ReadonlyArray<AdvisorAiRawRun>;
+
+    /**
+     * `generateText` / `streamText` calls whose model-callable `tools` reach a
+     * privileged side effect (DB write / function dispatch / outbound
+     * fetch/mail/queue) — the `ai_tool_side_effect_prompt_injection` input. Each
+     * row's `userInputDerived` says whether the model input flows from `args`; the
+     * lint fires only when it does. Supplied by the codegen feeder; absent for
+     * runtime callers, where the lint finds nothing.
+     */
+    aiToolSideEffects?: ReadonlyArray<AdvisorAiToolSideEffect>;
+
+    /**
+     * `ctx.fetch(url, …)` calls inside actions whose URL argument is derived from
+     * the handler's `args` — the `action_fetch_ssrf` input. `ctx.fetch` has no
+     * host allowlist, so a URL built from request input is a server-side request
+     * forgery vector. Supplied by the codegen feeder; absent for runtime callers,
+     * where the lint finds nothing.
+     */
+    argumentDerivedFetches?: ReadonlyArray<AdvisorArgumentDerivedFetch>;
+
+    /**
      * Per-public-procedure argument validators that weaken input safety — the
      * `public_arg_uses_any` (`v.any()` args) and `unbounded_string_arg` (length-less
      * `v.string()` args) input. Supplied by the codegen feeder for public procedures
@@ -112,11 +171,106 @@ export interface LintContext {
     authApiCalls?: ReadonlyArray<AdvisorAuthApiCall>;
 
     /**
+     * Per-`createAuth({...})`-call configuration snapshots — the shared input for
+     * the five `auth_*` security lints (`auth_trusted_origins_wildcard`,
+     * `auth_csrf_check_disabled`, `auth_secure_cookies_disabled`,
+     * `auth_email_verification_disabled`, `auth_session_freshage_zero`). Each
+     * carries whether the call's config object literal was statically analyzable
+     * and, when it was, the handful of nested facts the lints check (a
+     * `trustedOrigins` wildcard, `advanced.disableCSRFCheck`/`useSecureCookies`,
+     * `emailAndPassword.enabled`/`requireEmailVerification`,
+     * `session.freshAge === 0`). Supplied by the codegen feeder; absent for
+     * runtime callers, where the auth-config lints find nothing.
+     */
+    authConfigs?: ReadonlyArray<AdvisorAuthConfig>;
+
+    /**
+     * `ctx.browser.&lt;method>(url, …)` calls whose navigation URL is derived from the
+     * handler's `args` with no server-side scoping — the
+     * `browser_user_url_without_allowlist` input. `@lunora/browser` blocks
+     * private/internal targets by default, but a request-supplied public URL can
+     * still be an open-proxy / SSRF vector; the lint suppresses findings when a
+     * `createBrowser` config-call is hardened with `allowedHosts` or `resolveDns`.
+     * Supplied by the codegen feeder; absent for runtime callers, where the lint
+     * finds nothing.
+     */
+    browserUrlAccesses?: ReadonlyArray<AdvisorBrowserUrlAccess>;
+
+    /**
+     * Factory/constructor calls in `lunora/` whose config object literal a
+     * security lint inspects for a present-or-absent key — the shared input for
+     * the config-call security lints (payment authorize, inbound-mail verify,
+     * rate-limit store, browser private-targets). Supplied by the codegen feeder;
+     * absent for runtime callers, where the config-call lints find nothing.
+     */
+    configCalls?: ReadonlyArray<AdvisorConfigCall>;
+
+    /**
+     * `ctx.containers.&lt;name>.get(key, …)` calls whose instance key is derived from
+     * the handler's `args` with no server-side scoping — the
+     * `container_instance_key_from_user_input` input. Each container definition's
+     * `.get(name)` accessor routes to one instance per key, so an arg-derived key lets
+     * any caller reach another tenant's container (cross-tenant IDOR). A key scoped by
+     * a server-trusted `ctx.*` value, or a fixed literal, is not recorded. Supplied by
+     * the codegen feeder; absent for runtime callers, where the lint finds nothing.
+     */
+    containerKeyAccesses?: ReadonlyArray<AdvisorContainerKeyAccess>;
+
+    /**
+     * Runtime container-override calls — a `.start({ enableInternet: true, … })`
+     * launch override, or a `.egress.&lt;method>(...)` runtime firewall mutation — the
+     * `container_start_enable_internet_override` and `container_runtime_egress_relaxation`
+     * lint input. Supplied by the codegen feeder; absent for runtime callers, where
+     * those lints find nothing.
+     */
+    containerOverrides?: ReadonlyArray<AdvisorContainerOverride>;
+
+    /**
      * Containers declared in `lunora/containers.ts` — the `container_*` lint
      * input. Supplied by the codegen feeder; absent for runtime callers, where
      * the container lints find nothing.
      */
     containers?: ReadonlyArray<AdvisorContainer>;
+
+    /**
+     * `rateLimit`/`dbRateLimit` (`@lunora/ratelimit`) and `verifyTurnstileMiddleware`
+     * (`@lunora/auth`) middleware calls, each with whether its options literal set
+     * `failOpen: true` and the rate-limit `name` — the
+     * `ratelimit_middleware_fail_open` input. These guards fail closed by default; a
+     * `failOpen: true` admits every request during a limiter/siteverify outage, so
+     * the lint fires when a fail-open guard protects an auth/payment-sensitive
+     * procedure. Supplied by the codegen feeder; absent for runtime callers, where
+     * the lint finds nothing.
+     */
+    failOpenGuards?: ReadonlyArray<AdvisorFailOpenGuard>;
+
+    /**
+     * `ctx.flags.boolean(key, default)` reads with a statically-known string key and
+     * boolean-literal default — the `flag_gates_security_with_unsafe_default` input.
+     * OpenFeature returns the default when the provider errors, so a fail-open
+     * default on a security-shaped key (an `enforce`/`rls`/`gate`/`lockdown`
+     * protection defaulting `false`, or an `allow`/`permit`/`bypass` permission
+     * defaulting `true`) silently opens access during an outage. Supplied by the
+     * codegen feeder; absent for runtime callers, where the lint finds nothing.
+     */
+    flagSecurityDefaults?: ReadonlyArray<AdvisorFlagSecurityDefault>;
+
+    /**
+     * `httpAction`/`httpRoute` handlers that perform a side effect
+     * (`ctx.runMutation` / `ctx.runAction` / a `ctx.db` write) from the HTTP edge,
+     * with whether each reads `ctx.auth` — the `http_action_missing_auth_guard`
+     * input. Supplied by the codegen feeder; absent for runtime callers, where the
+     * lint finds nothing.
+     */
+    httpActionGuards?: ReadonlyArray<AdvisorHttpActionGuard>;
+
+    /**
+     * Response-header writes, inside `httpAction` handlers, whose value is derived
+     * from raw request input (`request.headers`/URL/query/body) with no CR/LF
+     * sanitizer — the `http_action_response_header_injection` input. Supplied by the
+     * codegen feeder; absent for runtime callers, where the lint finds nothing.
+     */
+    httpHeaderWrites?: ReadonlyArray<AdvisorHttpHeaderWrite>;
 
     /**
      * Hyperdrive `ctx.sql` accesses discovered lexically inside `query`/`mutation`
@@ -125,6 +279,32 @@ export interface LintContext {
      * intended surface); absent for runtime callers, where the lint finds nothing.
      */
     hyperdriveCalls?: ReadonlyArray<AdvisorHyperdriveCall>;
+
+    /**
+     * `&lt;receiver>.identity.&lt;key>` claim reads (RLS/mask policy `auth`, or
+     * `ctx.auth`/`context.auth`) — the `identity_undeclared_claim_trusted` input.
+     * `defineIdentity` validates only declared claims and forwards undeclared ones
+     * verbatim, so each row's `declared` flag says whether `key` is in the contract
+     * (or the always-present `userId`); the lint fires on the undeclared reads.
+     * Supplied by the codegen feeder — and only when a resolvable `defineIdentity`
+     * contract exists; absent for runtime callers, where the lint finds nothing.
+     */
+    identityClaimReads?: ReadonlyArray<AdvisorIdentityClaimRead>;
+
+    /**
+     * `buildImageDeliveryUrl({ key, … })` calls (`@lunora/bindings/images`) whose
+     * `key` — the CDN transform's source image, an absolute URL or an
+     * origin-relative key — is derived from the handler's `args` with no
+     * server-side scoping — the `images_url_source_from_user_input` input.
+     * `ctx.images.transform`/`info` take image bytes, never a URL, so they are
+     * not sinks; only the `key` of `buildImageDeliveryUrl` accepts a URL-or-key
+     * source and is inspected. An arg-derived key lets any caller point the
+     * CDN's `/cdn-cgi/image/` transform at an attacker-chosen origin (SSRF /
+     * open proxy). A fixed literal, or a key scoped by a server-trusted `ctx.*`
+     * value, is not recorded. Supplied by the codegen feeder; absent for
+     * runtime callers, where the lint finds nothing.
+     */
+    imageDeliveryUrlAccesses?: ReadonlyArray<AdvisorImageDeliveryUrlAccess>;
 
     /**
      * Per-declared-index hit counts observed at runtime (the dead-index half of
@@ -144,6 +324,28 @@ export interface LintContext {
     inserts?: ReadonlyArray<AdvisorInsertWrite>;
 
     /**
+     * `ctx.kv.&lt;method>(key, …)` calls whose namespace key is derived from the
+     * handler's `args` with no server-side scoping — the `kv_unscoped_user_key_idor`
+     * input. Workers KV is one flat namespace, so a key taken straight from request
+     * input lets any caller read/overwrite/delete another user's entry (IDOR). Only
+     * arg-derived, unscoped keys are recorded (a fixed literal or a
+     * `${ctx.auth.userId}:…` prefix is not). Supplied by the codegen feeder; absent
+     * for runtime callers, where the lint finds nothing.
+     */
+    kvKeyAccesses?: ReadonlyArray<AdvisorKvKeyAccess>;
+
+    /**
+     * `ctx.mail`/`ctx.email` `send`/`queue` calls whose `to`/`cc`/`bcc` recipient is
+     * derived from the handler's `args` with no server-side scoping — the
+     * `mail_recipient_from_request_input` input. A recipient taken straight from
+     * request input turns the deployment into an open relay / spam amplifier (any
+     * caller can direct mail to an arbitrary address). A recipient scoped by a
+     * server-trusted `ctx.*` value, or a fixed literal, is not recorded. Supplied by
+     * the codegen feeder; absent for runtime callers, where the lint finds nothing.
+     */
+    mailRecipientAccesses?: ReadonlyArray<AdvisorMailRecipientAccess>;
+
+    /**
      * Per-procedure column-masking usage discovered in function bodies (the
      * `mask_uncovered_pii_column` input). Carries whether each procedure's builder
      * chain includes `.use(mask(...))`, which `(table, column)` pairs its mask
@@ -152,6 +354,16 @@ export interface LintContext {
      * nothing.
      */
     maskProcedures?: ReadonlyArray<AdvisorMaskProcedure>;
+
+    /**
+     * Masked columns whose `mask(policies)` strategy is a statically-known
+     * literal (the `mask_weak_hash_strategy_on_pii` input). One row per masked
+     * column, with the `"hash"` / `"redact"` strategy literal attached; a
+     * `MaskFn` (custom, non-literal) strategy is never recorded. Supplied by
+     * the codegen feeder; absent for runtime callers, where the lint finds
+     * nothing.
+     */
+    maskStrategies?: ReadonlyArray<AdvisorMaskStrategy>;
 
     /**
      * Whole-row `ctx.db.replace(id, document)` writes lifted from custom
@@ -171,6 +383,52 @@ export interface LintContext {
      * finds nothing.
      */
     nondeterministicCalls?: ReadonlyArray<AdvisorNondeterministicCall>;
+
+    /**
+     * `query`/`mutation` handlers that gate a `ctx.db.get`/`patch`/`delete` on a
+     * null-checked `ctx.db.normalizeId(table, id)` result — the
+     * `normalize_id_used_as_authorization` input. `normalizeId` validates an id's
+     * structural shape only (it never reads the database), so gating access on a
+     * non-null result is an IDOR. The lint keeps only public procedures with no
+     * `.use(rls(...))` and no ownership/identity mention, then joins `table` against
+     * the schema's RLS mode before flagging. Supplied by the codegen feeder; absent
+     * for runtime callers, where the lint finds nothing.
+     */
+    normalizeIdAuthorizations?: ReadonlyArray<AdvisorNormalizeIdAuthorization>;
+
+    /**
+     * `ctx.db` writes (`insert` / `replace` / `patch` / `insertManyUnsafe`) that set
+     * an ownership / identity column (`userId`, `ownerId`, `tenantId`, …) from the
+     * handler's `args` instead of the server-trusted identity — the
+     * `owner_field_from_args_not_auth` input. The ownership column decides who a row
+     * belongs to, so an arg-derived value lets any caller write rows owned by another
+     * user or tenant (act-as-any-user / cross-tenant IDOR). A column stamped from
+     * `ctx.*`, or a fixed literal, is not recorded. Supplied by the codegen feeder;
+     * absent for runtime callers, where the lint finds nothing.
+     */
+    ownerFieldWrites?: ReadonlyArray<AdvisorOwnerFieldWrite>;
+
+    /**
+     * Payment webhook-adapter constructions (`createStripeAdapter` /
+     * `createPolarAdapter`) — the payment-webhook wide-tolerance lint's input. Each row's
+     * `toleranceSeconds` is the statically-known `webhookToleranceSeconds` replay
+     * window (default 300s); the lint fires only above a conservative ceiling, where
+     * the endpoint would accept stale, replayable signed payloads. Supplied by the
+     * codegen feeder; absent for runtime callers, where the lint finds nothing.
+     */
+    paymentWebhooks?: ReadonlyArray<AdvisorPaymentWebhook>;
+
+    /**
+     * Payload-derived privileged dispatches — the `privileged_dispatch_unvalidated_payload`
+     * input. Each is a `ctx.run`/`context.run` back into a Lunora function from inside a
+     * `defineQueue` push handler or a `defineWorkflow` handler, whose args reference the
+     * handler's untrusted payload (`context.params` for a workflow, a `for (… of
+     * batch.messages)` body for a queue). Both handler kinds run under the system identity
+     * (RLS disabled), so the lint joins the resolved target against `rlsProcedures` and
+     * fires only when the target enforces a row policy. Supplied by the codegen feeder;
+     * absent for runtime callers, where the lint finds nothing.
+     */
+    privilegedDispatches?: ReadonlyArray<AdvisorPrivilegedDispatch>;
 
     /**
      * Per-procedure protective-middleware snapshots — the
@@ -196,6 +454,42 @@ export interface LintContext {
      * intended surface); absent for runtime callers, where the lint finds nothing.
      */
     r2sqlCalls?: ReadonlyArray<AdvisorR2sqlCall>;
+
+    /**
+     * `rateLimit`/`dbRateLimit` middleware calls (`@lunora/ratelimit`) whose
+     * `key` selector is derived from the handler's `args` with no server-side
+     * scoping — the `ratelimit_key_spoofable_or_global` input. A key an
+     * attacker controls lets them rotate it per request and bypass the limit
+     * entirely, defeating its purpose. A selector scoped by `ctx` (e.g.
+     * `ctx.auth.userId`, `ctx.ip`), or one with no `args` reference at all (a
+     * fixed/global bucket), is not recorded. Supplied by the codegen feeder;
+     * absent for runtime callers, where the lint finds nothing.
+     */
+    ratelimitKeySelectors?: ReadonlyArray<AdvisorRatelimitKeySelector>;
+
+    /* eslint-disable no-secrets/no-secrets -- the referenced lint rule id in the doc comment, not a credential */
+
+    /**
+     * `query` handlers that `return` the raw rows of a table (a `ctx.db` row read
+     * or `ctx.db.query(...)` fluent chain, returned directly or through one local
+     * `const` hop, with no hand-built projection) — the
+     * `output_projection_missing_on_public_read` input. The lint keeps only public
+     * queries with no `.output(...)`/mask on the chain, then joins `table` against
+     * the schema's PII-named columns before nudging. Supplied by the codegen
+     * feeder; absent for runtime callers, where the lint finds nothing.
+     */
+    /* eslint-enable no-secrets/no-secrets -- re-enable after the rawRowReturns doc block */
+    rawRowReturns?: ReadonlyArray<AdvisorRawRowReturn>;
+
+    /**
+     * `ctx.db.&lt;table>.findMany({ with: { &lt;rel> } })` relation-hydrating list reads
+     * — the `masked_relation_leak_via_with` input. Column masking is applied to a
+     * read's top-level rows but does not descend into `with`-hydrated relations,
+     * so a masked table surfaced only through a `with` on an unprotected public
+     * read is returned in the clear. Supplied by the codegen feeder; absent for
+     * runtime callers, where the lint finds nothing.
+     */
+    relationLoads?: ReadonlyArray<AdvisorRelationLoad>;
 
     /**
      * Per-procedure RLS usage discovered in function bodies (the
@@ -235,12 +529,47 @@ export interface LintContext {
     shardTraffic?: ReadonlyArray<AdvisorShardTraffic>;
 
     /**
+     * `ctx.db.&lt;table>.findMany({ includeDeleted })` list reads whose
+     * `includeDeleted` is a hardcoded `true` or derived from the handler's
+     * `args` — the `soft_delete_include_deleted_from_args` input. On a public
+     * read of a `.softDelete()` table this resurfaces soft-deleted rows to any
+     * caller (arg-derived) or every caller (hardcoded). Supplied by the codegen
+     * feeder; absent for runtime callers, where the lint finds nothing.
+     */
+    softDeleteReads?: ReadonlyArray<AdvisorSoftDeleteRead>;
+
+    /**
      * `ctx.sql` tagged-template interpolations that splice an unparameterized
      * string-building expression into the query — the `sql_injection_risk` input.
      * Supplied by the codegen feeder; absent for runtime callers, where the lint
      * finds nothing.
      */
     sqlInterpolations?: ReadonlyArray<AdvisorSqlInterpolation>;
+
+    /**
+     * `ctx.storage.&lt;bucket>.&lt;method>(key, …)` calls whose R2 object key is derived
+     * from the handler's `args` with no server-side scoping — the
+     * `storage_key_from_user_args` input. The bucket read/write/URL/delete methods
+     * key by their first argument, so an arg-derived key is object-level IDOR
+     * (read/overwrite/delete anyone's object). A key referencing a server-trusted
+     * `ctx.*` value (e.g. `${ctx.auth.userId}/…`) is treated as scoped and not
+     * recorded. Supplied by the codegen feeder; absent for runtime callers, where
+     * the lint finds nothing.
+     */
+    storageKeyAccesses?: ReadonlyArray<AdvisorStorageKeyAccess>;
+
+    /**
+     * Tracked `ctx.storage.&lt;bucket>.&lt;method>(...)` upload/signing calls — the
+     * shared input for the storage config-hygiene lints
+     * (`storage_upload_without_content_type_allowlist`, `storage_upload_without_max_size`,
+     * `storage_generate_upload_url_no_content_type_pin`,
+     * `storage_presigned_url_for_private_content`). Each row carries the method
+     * invoked, which options-object keys were present, and (for the two URL
+     * signers) a statically-known `expiresInSeconds` literal. Supplied by the
+     * codegen feeder; absent for runtime callers, where these lints find
+     * nothing.
+     */
+    storageUploads?: ReadonlyArray<AdvisorStorageUpload>;
 
     /**
      * Bounded row samples per table — the `constraint_validator` lint input.
@@ -267,6 +596,17 @@ export interface LintContext {
     tableScans?: ReadonlyArray<AdvisorTableScan>;
 
     /**
+     * `ctx.vectors.&lt;method>(index, { namespace, … })` calls whose `namespace` is
+     * derived from the handler's `args` with no server-side scoping — the
+     * `vectors_namespace_from_user_input` input. A Vectorize namespace partitions one
+     * index into isolated sub-collections, so an arg-derived namespace lets any caller
+     * read or poison another tenant's vectors. A namespace scoped by a server-trusted
+     * `ctx.*` value, or a fixed literal, is not recorded. Supplied by the codegen
+     * feeder; absent for runtime callers, where the lint finds nothing.
+     */
+    vectorNamespaceAccesses?: ReadonlyArray<AdvisorVectorNamespaceAccess>;
+
+    /**
      * `ctx.workflows.get("name")` call sites discovered in function bodies — the
      * use-side input the `workflow_unused` and `workflow_unknown_target` lints
      * cross-reference against {@link LintContext.workflows}. Supplied by the
@@ -282,6 +622,14 @@ export interface LintContext {
      * nothing.
      */
     workflows?: ReadonlyArray<AdvisorWorkflow>;
+
+    /**
+     * Committed `wrangler.jsonc` `vars` entries holding plaintext secrets — the
+     * input for the `plaintext_secret_in_wrangler_vars` lint. Supplied by
+     * `@lunora/config` (which reads `wrangler.jsonc`) via the codegen pass-through;
+     * absent for runtime callers, where the lint finds nothing.
+     */
+    wranglerVariables?: ReadonlyArray<AdvisorWranglerVariable>;
 }
 
 /**
