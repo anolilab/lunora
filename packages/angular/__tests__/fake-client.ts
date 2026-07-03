@@ -114,8 +114,12 @@ export interface FakeDestroyRef {
 
 export const createFakeDestroyRef = (): FakeDestroyRef => {
     const callbacks: (() => void)[] = [];
+    let isDestroyed = false;
 
     const destroyRef = {
+        get destroyed() {
+            return isDestroyed;
+        },
         onDestroy: (callback: () => void) => {
             callbacks.push(callback);
 
@@ -132,6 +136,8 @@ export const createFakeDestroyRef = (): FakeDestroyRef => {
     return {
         asDestroyRef: destroyRef,
         destroy: () => {
+            isDestroyed = true;
+
             for (const callback of callbacks) {
                 callback();
             }

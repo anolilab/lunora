@@ -23,7 +23,7 @@ describe("injection context", () => {
     const makeInjector = (fakeClient: ReturnType<typeof createFakeClient>): Injector & { destroy: () => void } =>
         AngularInjector.create({
             providers: [{ provide: LUNORA_CLIENT, useValue: fakeClient.asClient }],
-        }) as Injector & { destroy: () => void };
+        });
 
     it("injectLunoraClient resolves the provided client", () => {
         const fake = createFakeClient();

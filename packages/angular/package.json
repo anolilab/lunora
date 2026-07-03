@@ -23,6 +23,12 @@
         "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/angular"
     },
+    "files": [
+        "./dist",
+        "README.md",
+        "LICENSE.md",
+        "__assets__"
+    ],
     "type": "module",
     "sideEffects": false,
     "main": "./dist/index.mjs",
@@ -35,12 +41,6 @@
         },
         "./package.json": "./package.json"
     },
-    "files": [
-        "./dist",
-        "README.md",
-        "LICENSE.md",
-        "__assets__"
-    ],
     "publishConfig": {
         "access": "public"
     },
@@ -59,7 +59,7 @@
         "@lunora/client": "1.0.0-alpha.15"
     },
     "devDependencies": {
-        "@angular/core": "^19.2.0",
+        "@angular/core": "^20.3.25",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
