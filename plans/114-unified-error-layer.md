@@ -84,11 +84,14 @@ Done: `errorHint`/`errorDocumentationUrl` helpers (`studio/src/lib/internal.ts`)
 the additive `errorSource` field on `useAdminQuery`/`useClientQuery` (keeps
 `error: string`), the reusable `<ErrorAlert error={…}>` component
 (`components/error-alert.tsx`, message + stripped-markdown hint + docs link), and
-the flags panel wired to it.
-TODO (mechanical, reusable component now exists): swap the remaining ~11
-per-feature `role="alert"` message sites (kv, data, storage, analytics, schema,
-advisors, logs, payments) to `<ErrorAlert error={errorSource} />`, threading
-`errorSource` where the panel doesn't already read the hook error.
+**9 panels** wired to it: flags, storage-rules, rls, queues, settings,
+subscriptions, fanout, function-stats, audit.
+TODO (mechanical): the remaining panels whose error is aggregated across multiple
+queries (home, insights, permissions), renamed, held in local state (kv, data
+browser), or routed through the shared `AdvisorView` (insights, security-advisor)
+— each needs `errorSource` threaded to its specific error source before the
+`<ErrorAlert>` swap. Verify via `lint:types` + `lint:eslint` + build (Studio jsdom
+tests SIGTERM in the sandbox).
 
 > Verify via `pnpm --filter @lunora/studio run lint:types` + `lint:eslint` + build
 > (Studio jsdom tests SIGTERM in the sandbox — see the pinned memory; do not gate
