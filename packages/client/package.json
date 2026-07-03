@@ -76,6 +76,9 @@
         "fallow:dead-code": "fallow dead-code",
         "fallow:health": "fallow health --score"
     },
+    "dependencies": {
+        "@lunora/errors": "1.0.0-alpha.0"
+    },
     "devDependencies": {
         "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
@@ -94,8 +97,5 @@
     },
     "engines": {
         "node": "^22.15.0 || >=24.11.0"
-    },
-    "dependencies": {
-        "@lunora/errors": "1.0.0-alpha.0"
     }
 }
