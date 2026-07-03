@@ -54,6 +54,21 @@ export const packages: PackageInfo[] = [
     {
         accentColor: categoryColors["Core Runtime"]!,
         category: "Core Runtime",
+        description:
+            "Unified error layer: one LunoraError + a central catalog of codes, statuses, and actionable hints, rendered across CLI, overlay, Studio, and the client.",
+        docsPath: "/docs/packages/errors",
+        features: [
+            "Central error catalog (code → status/hint/docsUrl)",
+            "Structural isLunoraError guard + invariant helpers",
+            "Hints surfaced in CLI, Studio, and the client SDK",
+        ],
+        name: "Errors",
+        npmName: "@lunora/errors",
+        slug: "errors",
+    },
+    {
+        accentColor: categoryColors["Core Runtime"]!,
+        category: "Core Runtime",
         description: "Unscoped umbrella — one install for the base packages (server, values, runtime, do, client) via subpaths, plus the lunora CLI bin.",
         docsPath: "/docs/packages/lunorash",
         features: ["One-install base bundle", "Subpath exports (lunorash/server, /client, …)", "Ships the lunora CLI bin"],
