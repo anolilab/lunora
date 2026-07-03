@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import type { CallExpression, Expression, ObjectLiteralExpression } from "ts-morph";
 import { Node } from "ts-morph";
 
@@ -107,7 +108,7 @@ const parseObjectShape = (object: ObjectLiteralExpression): Record<string, Valid
         const fieldName = property.getName();
 
         if (!FIELD_NAME_RE.test(fieldName)) {
-            throw new Error(`@lunora/codegen: field name is not a valid JS identifier: ${JSON.stringify(fieldName)}`);
+            throw new LunoraError("INTERNAL", `@lunora/codegen: field name is not a valid JS identifier: ${JSON.stringify(fieldName)}`);
         }
 
         out[fieldName] = parseValidator(initializer);
@@ -184,7 +185,7 @@ const parseBuilderMember = (member: string, args: ReadonlyArray<Node>): Validato
             // Loud failure — silently emitting `unknown` masks codegen bugs.
             // `emit.ts` keeps a fallback case for safety, but this parser
             // must call out validator kinds it does not recognise.
-            throw new Error(`Unsupported validator kind: ${member}`);
+            throw new LunoraError("INTERNAL", `Unsupported validator kind: ${member}`);
         }
     }
 };

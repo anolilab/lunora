@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import { platform } from "node:os";
 
+import { LunoraError } from "@lunora/errors";
+
 interface OpenUrlOptions {
     /** Inject a custom opener (tests, alternate platforms, headless CI). */
     opener?: (url: string) => Promise<void>;
@@ -77,11 +79,11 @@ const openUrl = async (url: string, options: OpenUrlOptions = {}): Promise<void>
     try {
         parsed = new URL(url);
     } catch {
-        throw new Error(`Invalid URL: ${url}`);
+        throw new LunoraError("INTERNAL", `Invalid URL: ${url}`);
     }
 
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-        throw new Error(`Refusing to open non-http(s) URL: ${url}`);
+        throw new LunoraError("INTERNAL", `Refusing to open non-http(s) URL: ${url}`);
     }
 
     const opener = options.opener ?? platformOpener;

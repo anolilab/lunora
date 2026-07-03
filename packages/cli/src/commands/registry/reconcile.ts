@@ -5,6 +5,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
+import { LunoraError } from "@lunora/errors";
 import { dirname, join } from "@visulima/path";
 
 import { insertSchemaExtension } from "../../util/insert-schema-extension";
@@ -84,12 +85,13 @@ const reconcileSchemaExtension = (
     }
 
     if (result.reason === "invalid-identifier") {
-        throw new Error(
+        throw new LunoraError(
+            "INTERNAL",
             `schema-extension item "${itemKey}" is not a valid JS identifier — it is spliced into lunora/schema.ts as \`import { ${itemKey} }\` / \`.extend(${itemKey}.extension)\`. Rename the item to a valid identifier (no leading digit, no "-").`,
         );
     }
 
-    throw new Error(`schema-extension merge failed for "${itemKey}": ${result.reason}`);
+    throw new LunoraError("INTERNAL", `schema-extension merge failed for "${itemKey}": ${result.reason}`);
 };
 
 /** Print a `--diff` preview for one whole-file destination; writes nothing. */

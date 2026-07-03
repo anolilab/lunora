@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/errors";
+
 import applyJurisdiction from "./jurisdiction";
 import type { ArgsOf, FunctionReference, LunoraSchedulerOptions, RunOptions, Scheduler, ScheduleRecord } from "./types";
 
@@ -18,7 +20,7 @@ const callDO = async <T>(options: LunoraSchedulerOptions, path: string, body: un
     if (!response.ok) {
         const text = await response.text();
 
-        throw new Error(`@lunora/scheduler: SchedulerDO ${path} failed (${String(response.status)}): ${text}`);
+        throw new LunoraError("INTERNAL", `@lunora/scheduler: SchedulerDO ${path} failed (${String(response.status)}): ${text}`);
     }
 
     return await response.json();
@@ -31,7 +33,7 @@ const getDO = async <T>(options: LunoraSchedulerOptions, path: string): Promise<
     if (!response.ok) {
         const text = await response.text();
 
-        throw new Error(`@lunora/scheduler: SchedulerDO ${path} failed (${String(response.status)}): ${text}`);
+        throw new LunoraError("INTERNAL", `@lunora/scheduler: SchedulerDO ${path} failed (${String(response.status)}): ${text}`);
     }
 
     return await response.json();
@@ -47,11 +49,11 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
     // (exercised by createScheduler({} as never) in the tests).
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the required type
     if (!options.namespace) {
-        throw new Error("@lunora/scheduler: `namespace` (SchedulerDO binding) is required");
+        throw new LunoraError("INTERNAL", "@lunora/scheduler: `namespace` (SchedulerDO binding) is required");
     }
 
     if (!options.originUrl) {
-        throw new Error("@lunora/scheduler: `originUrl` is required so the DO can dispatch back to the Worker");
+        throw new LunoraError("INTERNAL", "@lunora/scheduler: `originUrl` is required so the DO can dispatch back to the Worker");
     }
 
     const runAt = async <F extends FunctionReference>(
@@ -83,7 +85,7 @@ const createScheduler = (options: LunoraSchedulerOptions): Scheduler => {
         options_: RunOptions = {},
     ): Promise<{ id: string; scheduledFor: number }> => {
         if (!Number.isFinite(delayMs) || delayMs < 0) {
-            throw new Error("@lunora/scheduler: `delayMs` must be a non-negative finite number");
+            throw new LunoraError("INTERNAL", "@lunora/scheduler: `delayMs` must be a non-negative finite number");
         }
 
         return runAt(Date.now() + delayMs, function_, args, options_);

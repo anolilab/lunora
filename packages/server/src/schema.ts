@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import type { Validator } from "@lunora/values";
 import { isOrWrapsFromValidator, v } from "@lunora/values";
 
@@ -227,7 +228,7 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
     // anywhere in a column, including nested under v.optional/array/object/etc.
     for (const [columnName, validator] of Object.entries(shape)) {
         if (isOrWrapsFromValidator(validator)) {
-            throw new Error(`defineTable: column "${columnName}" uses v.from() which is args-only — table columns need a concrete v.* type`);
+            throw new LunoraError("INTERNAL", `defineTable: column "${columnName}" uses v.from() which is args-only — table columns need a concrete v.* type`);
         }
     }
 
@@ -250,7 +251,7 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
             const op: AggregateOp = options?.op ?? "count";
 
             if (op !== "count" && !options?.field) {
-                throw new Error(`aggregateIndex "${name}": op "${op}" requires a "field"`);
+                throw new LunoraError("INTERNAL", `aggregateIndex "${name}": op "${op}" requires a "field"`);
             }
 
             aggregateIndexes.push({
@@ -305,7 +306,7 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
         rankIndex(name, options) {
             // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive: `sortBy` is typed required but untyped JS callers can omit it
             if (!options.sortBy || options.sortBy.length === 0) {
-                throw new Error(`rankIndex "${name}": "sortBy" is required and must list at least one key`);
+                throw new LunoraError("INTERNAL", `rankIndex "${name}": "sortBy" is required and must list at least one key`);
             }
 
             const sortBy: RankSortKey[] = options.sortBy.map((key) => {
@@ -366,11 +367,11 @@ const defineTable = <Shape extends Record<string, Validator>>(inputShape: Shape)
             // `external_source_unscoped` / `external_source_on_global` advisor lints
             // over the discovered IR rather than here.
             if (!definition.binding) {
-                throw new Error("source: `binding` is required (the wrangler Hyperdrive binding name)");
+                throw new LunoraError("INTERNAL", "source: `binding` is required (the wrangler Hyperdrive binding name)");
             }
 
             if (!definition.query) {
-                throw new Error("source: `query` is required (the tenant-membership SQL)");
+                throw new LunoraError("INTERNAL", "source: `query` is required (the tenant-membership SQL)");
             }
 
             externalSource = definition;
@@ -465,7 +466,7 @@ const defineAggregateIndex = (name: string, options: AggregateIndexOptions): Agg
     const op: AggregateOp = options.op ?? "count";
 
     if (op !== "count" && !options.field) {
-        throw new Error(`aggregateIndex "${name}": op "${op}" requires a "field"`);
+        throw new LunoraError("INTERNAL", `aggregateIndex "${name}": op "${op}" requires a "field"`);
     }
 
     return { by: options.by, field: options.field, name, on: options.on, op, where: options.where };
@@ -491,7 +492,7 @@ interface RankIndexOptions {
 const defineRankIndex = (name: string, options: RankIndexOptions): RankIndexDefinition => {
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive: `sortBy` is typed required but untyped JS callers can omit it
     if (!options.sortBy || options.sortBy.length === 0) {
-        throw new Error(`rankIndex "${name}": "sortBy" is required and must list at least one key`);
+        throw new LunoraError("INTERNAL", `rankIndex "${name}": "sortBy" is required and must list at least one key`);
     }
 
     const sortBy: RankSortKey[] = options.sortBy.map((key) => {
@@ -619,7 +620,7 @@ const attachStandaloneIndexes = (
         const table = tables[index.on];
 
         if (!table) {
-            throw new Error(`defineAggregateIndex "${index.name}": unknown table "${index.on}"`);
+            throw new LunoraError("INTERNAL", `defineAggregateIndex "${index.name}": unknown table "${index.on}"`);
         }
 
         (table.aggregateIndexes as AggregateIndexDefinition[]).push(index);
@@ -629,7 +630,7 @@ const attachStandaloneIndexes = (
         const table = tables[index.on];
 
         if (!table) {
-            throw new Error(`defineRankIndex "${index.name}": unknown table "${index.on}"`);
+            throw new LunoraError("INTERNAL", `defineRankIndex "${index.name}": unknown table "${index.on}"`);
         }
 
         (table.rankIndexes as RankIndexDefinition[]).push(index);
@@ -652,19 +653,22 @@ const validateExternalSources = (tables: Record<string, TableDefinition>): void 
         }
 
         if (table.shardMode.kind === "global") {
-            throw new Error(
+            throw new LunoraError(
+                "INTERNAL",
                 `defineSchema: table "${name}" cannot be both .source() and .global() — a sourced table materializes into a shard DO's SQLite, a global table lives in the external tier`,
             );
         }
 
         if (table.shardMode.kind === "shardBy" && !source.tenantBy) {
-            throw new Error(
+            throw new LunoraError(
+                "INTERNAL",
                 `defineSchema: sourced + .shardBy() table "${name}" needs a \`tenantBy\` mapper — without it every tenant's DO would run the same unscoped query and replicate the whole multitenant table (a cross-tenant leak). Add \`tenantBy: (shardKey) => [shardKey]\` binding the shard key into the query's parameters.`,
             );
         }
 
         if (source.mode === "incremental") {
-            throw new Error(
+            throw new LunoraError(
+                "INTERNAL",
                 `defineSchema: table "${name}" uses \`mode: "incremental"\`, which is not yet implemented — only "full-pull" (the default) is supported. Remove \`mode\` or set it to "full-pull".`,
             );
         }

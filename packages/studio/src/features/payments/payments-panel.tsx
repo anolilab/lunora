@@ -1,5 +1,6 @@
 import type { ReactElement } from "react";
 
+import { ErrorAlert } from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
@@ -103,6 +104,7 @@ const PaymentsPanel = ({ limit = 100 }: PaymentsPanelProps): ReactElement => {
     const subscriptions = subscriptionsQuery.data?.rows ?? [];
     const events = eventsQuery.data?.rows ?? [];
     const error = subscriptionsQuery.error ?? eventsQuery.error;
+    const errorSource = subscriptionsQuery.error === null ? eventsQuery.errorSource : subscriptionsQuery.errorSource;
 
     const activeCount = subscriptions.filter((row) => ACTIVE_STATES.has(text(readField(row, "state")))).length;
 
@@ -125,7 +127,7 @@ const PaymentsPanel = ({ limit = 100 }: PaymentsPanelProps): ReactElement => {
                 </Card>
             </div>
 
-            {error === null ? undefined : <p className="text-sm text-destructive">{error}</p>}
+            {error === null ? undefined : <ErrorAlert error={errorSource} />}
 
             {subscriptions.length === 0 && !subscriptionsQuery.isLoading ? (
                 <EmptyState testId="payments-empty" title={t("No subscriptions yet")} />

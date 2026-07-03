@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import type { CallExpression, Expression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
@@ -1131,7 +1132,7 @@ const discoverSchema = (project: Project, schemaPath: string, projectRoot?: stri
     });
 
     if (!defineSchemaCall) {
-        throw new Error(`defineSchema() not found in ${schemaPath}`);
+        throw new LunoraError("INTERNAL", `defineSchema() not found in ${schemaPath}`);
     }
 
     const argument = defineSchemaCall.getArguments()[0];

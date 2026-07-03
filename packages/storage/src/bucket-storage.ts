@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/errors";
+
 import type { Storage } from "./types";
 
 /**
@@ -40,11 +42,11 @@ export const createBucketStorage = (buckets: Record<string, Storage>, options: {
     const [firstName] = names;
 
     if (firstName === undefined) {
-        throw new Error("@lunora/storage: createBucketStorage requires at least one bucket");
+        throw new LunoraError("INTERNAL", "@lunora/storage: createBucketStorage requires at least one bucket");
     }
 
     if (options.default !== undefined && !buckets[options.default]) {
-        throw new Error(`@lunora/storage: default bucket "${options.default}" is not in the bucket map (have: ${names.join(", ")})`);
+        throw new LunoraError("INTERNAL", `@lunora/storage: default bucket "${options.default}" is not in the bucket map (have: ${names.join(", ")})`);
     }
 
     // The bare `ctx.storage` is tagged `"default"` unless an explicit default
@@ -58,7 +60,7 @@ export const createBucketStorage = (buckets: Record<string, Storage>, options: {
     // strict index access types it `Storage | undefined`, so this both narrows
     // `defaultBinding` to `Storage` and guards the (unreachable) hole.
     if (defaultBinding === undefined) {
-        throw new Error(`@lunora/storage: default bucket "${defaultTag}" is not in the bucket map (have: ${names.join(", ")})`);
+        throw new LunoraError("INTERNAL", `@lunora/storage: default bucket "${defaultTag}" is not in the bucket map (have: ${names.join(", ")})`);
     }
 
     const addressable = [...new Set([defaultTag, ...names])];
@@ -71,7 +73,7 @@ export const createBucketStorage = (buckets: Record<string, Storage>, options: {
         const target = name === defaultTag ? defaultBinding : buckets[name];
 
         if (!target) {
-            throw new Error(`@lunora/storage: no bucket registered for "${name}". Known buckets: ${addressable.join(", ")}`);
+            throw new LunoraError("INTERNAL", `@lunora/storage: no bucket registered for "${name}". Known buckets: ${addressable.join(", ")}`);
         }
 
         return { ...target, bucket: (next: string) => make(next), bucketName: name };

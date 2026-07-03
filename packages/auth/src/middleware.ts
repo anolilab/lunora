@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/errors";
+
 import type { LunoraAuth } from "./create-auth";
 
 /**
@@ -103,12 +105,13 @@ const guardAuthApi = <Api extends Record<string, unknown>>(api: Api): Api => {
  * advisor lint — both treat a header-less `ctx.authApi.*` call as an
  * authorization bypass, so a call that trips the lint also trips this guard.
  */
-export class LunoraAuthHeadersError extends Error {
+export class LunoraAuthHeadersError extends LunoraError {
     /** The `ctx.authApi.&lt;method>` that was called without `headers`. */
     public readonly method: string;
 
     public constructor(method: string) {
         super(
+            "AUTH_HEADERS_MISSING",
             `@lunora/auth: ctx.authApi.${method}(…) was called without \`headers\`. ` +
                 "better-auth treats a header-less call as a trusted server-to-server " +
                 "invocation and skips session authorization entirely — an authorization " +
@@ -117,9 +120,9 @@ export class LunoraAuthHeadersError extends Error {
                 "If you genuinely intend an unauthenticated server-to-server call, opt " +
                 "out explicitly via ctx.authApi.withoutHeaders().<method>(…), or disable " +
                 "the guard for the whole middleware with withAuthPlugins(auth, { enforceHeaders: false }).",
+            { name: "LunoraAuthHeadersError" },
         );
 
-        this.name = "LunoraAuthHeadersError";
         this.method = method;
     }
 }

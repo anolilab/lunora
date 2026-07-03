@@ -5,6 +5,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 
+import { LunoraError } from "@lunora/errors";
 import { join } from "@visulima/path";
 import { downloadTemplate } from "giget";
 
@@ -29,7 +30,8 @@ const VALID_ITEM_NAME = /^[A-Za-z0-9][\w-]*$/u;
 /** Throw on any item name that isn't a safe single-segment identifier. */
 const assertSafeItemName = (name: string): void => {
     if (!VALID_ITEM_NAME.test(name)) {
-        throw new Error(
+        throw new LunoraError(
+            "INTERNAL",
             `invalid registry item name "${name}" — names must match ${VALID_ITEM_NAME.source} (letters, digits, "-", "_"; no path separators or "..")`,
         );
     }
@@ -142,7 +144,7 @@ const resolveItemDirectory = async (name: string, options: AddCommandOptions): P
         const directory = join(options.from, name);
 
         if (!existsSync(directory)) {
-            throw new Error(`registry item not found in local source: ${directory}`);
+            throw new LunoraError("INTERNAL", `registry item not found in local source: ${directory}`);
         }
 
         return { cleanup: () => {}, directory };
@@ -160,7 +162,7 @@ const resolveItemDirectory = async (name: string, options: AddCommandOptions): P
 const resolveRegistryRoot = async (options: AddCommandOptions): Promise<{ cleanup: () => void; root: string }> => {
     if (options.from !== undefined) {
         if (!existsSync(options.from)) {
-            throw new Error(`registry root not found: ${options.from}`);
+            throw new LunoraError("INTERNAL", `registry root not found: ${options.from}`);
         }
 
         return { cleanup: () => {}, root: options.from };
@@ -196,7 +198,7 @@ const resolvePlan = async (names: ReadonlyArray<string>, options: AddCommandOpti
         }
 
         if (inProgress.has(name)) {
-            throw new Error(`cyclic registry dependency detected at "${name}"`);
+            throw new LunoraError("INTERNAL", `cyclic registry dependency detected at "${name}"`);
         }
 
         inProgress.add(name);

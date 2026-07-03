@@ -295,7 +295,10 @@ describe("shardDO streaming queries", () => {
 
         shard.registered.set("metrics:boom", async function* boomGen() {
             yield 1;
-            throw Object.assign(new Error("kaboom"), { code: "FORBIDDEN" });
+            // A full LunoraError shape (code + numeric status) is the developer-facing
+            // error the redaction gate echoes; a code-only value would (correctly) be
+            // redacted now, since a bare `.code` also rides Node errors like `ENOENT`.
+            throw Object.assign(new Error("kaboom"), { code: "FORBIDDEN", status: 403 });
         });
 
         const ws = createFakeWebSocket();

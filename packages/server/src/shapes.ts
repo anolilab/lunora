@@ -20,6 +20,7 @@
  * Shapes are declared in `lunora/shapes.ts`.
  */
 
+import { LunoraError } from "@lunora/errors";
 import type { InferValidatorMap, ValidatorMap } from "@lunora/values";
 
 import { validateArgs } from "./functions";
@@ -82,11 +83,11 @@ export const defineShape = <Args extends ValidatorMap = ValidatorMap, Context = 
     definition: ShapeDefinition<Args, Context>,
 ): RegisteredShape<Args, Context> => {
     if (definition.table.trim() === "") {
-        throw new Error("defineShape: `table` must be a non-empty string");
+        throw new LunoraError("INTERNAL", "defineShape: `table` must be a non-empty string");
     }
 
     if (definition.columns?.length === 0) {
-        throw new Error("defineShape: `columns` must list at least one column when provided");
+        throw new LunoraError("INTERNAL", "defineShape: `columns` must list at least one column when provided");
     }
 
     const compileWhere = (context: unknown, rawArgs: Record<string, unknown>): WhereInput => {

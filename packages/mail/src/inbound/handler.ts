@@ -30,6 +30,8 @@
  *   `rejectOnError`).
  */
 /* eslint-enable jsdoc/check-indentation, jsdoc/no-multi-asterisks */
+import { LunoraError } from "@lunora/errors";
+
 import type { InboundEmail, RawInboundEmail } from "./parse";
 import type { DurableObjectJurisdiction, ShardNamespaceLike } from "./shard";
 import { applyJurisdiction } from "./shard";
@@ -146,7 +148,7 @@ const createInboundEmailHandler = <TEnv = Record<string, unknown>>(options: Inbo
                 const verified = await options.verify(parsed, context);
 
                 if (verified === false) {
-                    throw new Error("@lunora/mail/inbound: sender verification rejected the message");
+                    throw new LunoraError("INTERNAL", "@lunora/mail/inbound: sender verification rejected the message");
                 }
             }
 
@@ -259,7 +261,7 @@ const dispatchToLunoraFunction = <TEnv extends Record<string, unknown> = Record<
         const adminToken = options.adminToken ?? (typeof context.env["LUNORA_ADMIN_TOKEN"] === "string" ? context.env["LUNORA_ADMIN_TOKEN"] : undefined);
 
         if (adminToken === undefined || adminToken === "") {
-            throw new Error("@lunora/mail/inbound: missing LUNORA_ADMIN_TOKEN — cannot authorize inbound dispatch to the shard RPC.");
+            throw new LunoraError("INTERNAL", "@lunora/mail/inbound: missing LUNORA_ADMIN_TOKEN — cannot authorize inbound dispatch to the shard RPC.");
         }
 
         const envelope: RpcEnvelope = {
@@ -279,7 +281,7 @@ const dispatchToLunoraFunction = <TEnv extends Record<string, unknown> = Record<
         // A shard stub returns a Fetch `Response`; treat a non-2xx (or an error
         // envelope) as a dispatch failure so the message is rejected upstream.
         if (response.ok === false) {
-            throw new Error(`@lunora/mail/inbound: dispatch to \`${options.functionPath}\` failed (HTTP ${String(response.status ?? "?")}).`);
+            throw new LunoraError("INTERNAL", `@lunora/mail/inbound: dispatch to \`${options.functionPath}\` failed (HTTP ${String(response.status ?? "?")}).`);
         }
 
         const body: unknown = await response.json();
@@ -288,7 +290,7 @@ const dispatchToLunoraFunction = <TEnv extends Record<string, unknown> = Record<
             const { error } = body as { error?: unknown };
 
             if (error !== undefined && error !== null) {
-                throw new Error(`@lunora/mail/inbound: dispatch to \`${options.functionPath}\` returned an error: ${JSON.stringify(error)}`);
+                throw new LunoraError("INTERNAL", `@lunora/mail/inbound: dispatch to \`${options.functionPath}\` returned an error: ${JSON.stringify(error)}`);
             }
         }
     };

@@ -13,6 +13,8 @@
  * injected by the scaffold (it needs `cloudflare:email`), keeping this module
  * free of any Cloudflare import.
  */
+import { LunoraError } from "@lunora/errors";
+
 import type { MailboxSink } from "./capture-transport";
 import { createCaptureTransport } from "./capture-transport";
 import type { CloudflareSend } from "./cloudflare-transport";
@@ -51,7 +53,7 @@ const requireStringEnv = (env: MailEnv, name: string): string => {
     const value = env[name];
 
     if (typeof value !== "string" || value === "") {
-        throw new Error(`@lunora/mail: missing env var \`${name}\` — set it in .dev.vars (and \`wrangler secret put ${name}\` for secrets).`);
+        throw new LunoraError("INTERNAL", `@lunora/mail: missing env var \`${name}\` — set it in .dev.vars (and \`wrangler secret put ${name}\` for secrets).`);
     }
 
     return value;
@@ -136,7 +138,8 @@ const createMailerFromEnv = (env: MailEnv, options: FromEnvOptions = {}): Mailer
         return createMailer({ apiKey, from });
     }
 
-    throw new Error(
+    throw new LunoraError(
+        "INTERNAL",
         "@lunora/mail: no transport configured — provide `cloudflareSend` (a SEND_EMAIL binding) or RESEND_API_KEY, or run in a dev environment to capture.",
     );
 };

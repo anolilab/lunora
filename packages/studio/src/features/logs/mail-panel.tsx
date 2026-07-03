@@ -2,6 +2,7 @@ import { useLunora } from "@lunora/react";
 import type { ChangeEvent, MouseEvent, ReactElement } from "react";
 import { useMemo, useState } from "react";
 
+import { ErrorAlert } from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { EmptyState } from "../../components/ui/empty-state";
@@ -96,7 +97,13 @@ const MailPanel = ({ limit = 100 }: MailPanelProps): ReactElement => {
 
     // The inbox is a single root-shard table with no write-flush to subscribe to,
     // so it's a one-shot read kept fresh by the poll below.
-    const { data, error: readError, isLoading, refetch } = useAdminQuery<CapturedMailResult>(ADMIN_FUNCTIONS.getCapturedMail, { limit });
+    const {
+        data,
+        error: readError,
+        errorSource: readErrorSource,
+        isLoading,
+        refetch,
+    } = useAdminQuery<CapturedMailResult>(ADMIN_FUNCTIONS.getCapturedMail, { limit });
 
     // Errors from the clear/send-test actions, surfaced alongside the read error.
     const [actionError, setActionError] = useState<null | string>(null);
@@ -106,6 +113,8 @@ const MailPanel = ({ limit = 100 }: MailPanelProps): ReactElement => {
 
     const entries = useMemo<CapturedMail[]>(() => data?.entries ?? [], [data]);
     const error = readError ?? actionError;
+    // Prefer the read's raw error (carries hint/docsUrl); an action error is a plain message string.
+    const errorSource = readError === null ? actionError : readErrorSource;
 
     const clearInbox = async (): Promise<void> => {
         setActionError(null);
@@ -227,11 +236,7 @@ const MailPanel = ({ limit = 100 }: MailPanelProps): ReactElement => {
                 )}
             </div>
 
-            {error !== null && (
-                <p className="text-sm text-destructive" data-testid="mail-error" role="alert">
-                    {error}
-                </p>
-            )}
+            {error !== null && <ErrorAlert error={errorSource} testId="mail-error" />}
 
             {error === null && !isLoading && entries.length === 0 && (
                 <EmptyState

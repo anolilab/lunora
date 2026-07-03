@@ -1,4 +1,5 @@
 import type { DurableObjectStorage } from "@cloudflare/workers-types";
+import { toErrorBody } from "@lunora/errors";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
@@ -4482,45 +4483,21 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- cohesive DO instance method (groups with the request handlers); kept non-static so subclasses can override the error mapping
     private errorToResponse(error: unknown): Response {
-        // Structural duck-typing so this package does not need a runtime
-        // dependency on `@lunora/values` or `@lunora/runtime`. The shapes
-        // below are the public surface of those error types.
-        if (error instanceof ConflictError) {
-            return jsonResponse({ error: { code: error.code, message: error.message } }, error.status);
+        // Delegate the envelope + redaction to the shared `toErrorBody` so this
+        // edge applies the identical "internal-coded errors never echo their
+        // message" invariant as the runtime/streaming edges. A non-internal
+        // `LunoraError` (`ConflictError`, `NotFoundError`, `@lunora/server`'s
+        // `LunoraError`, …) is echoed with its hint/docsUrl + wire-encoded data;
+        // `isLunoraError` is structural, so this package takes no hard dep on the
+        // packages that throw these.
+        const { body, redacted, status } = toErrorBody(error, { encodeData: encodeWire, fallbackCode: "RPC_FAILED", redactedMessage: "internal error" });
+
+        if (redacted) {
+            // eslint-disable-next-line no-console -- server-side diagnostic for an internal/unhandled error
+            console.error("[@lunora/do] internal error:", error);
         }
 
-        if (error && typeof error === "object" && (error as { name?: string }).name === "ValidationError") {
-            const message = error instanceof Error ? error.message : "validation failed";
-
-            return jsonResponse({ error: { code: "VALIDATION_ERROR", message } }, 400);
-        }
-
-        if (error && typeof error === "object" && (error as { name?: string }).name === "LunoraError") {
-            const lunoraError = error as { code?: string; data?: unknown; message?: string; status?: number };
-            const status = typeof lunoraError.status === "number" ? lunoraError.status : 500;
-            const body: { code: string; data?: unknown; message: string } = {
-                code: lunoraError.code ?? "INTERNAL",
-                message: lunoraError.message ?? "internal error",
-            };
-
-            // Propagate an explicit app error's structured payload (wire-encoded so
-            // a `bigint`/`bytes` in `data` survives). Only this deliberate-error
-            // branch carries `data`; the generic fall-through below stays redacted.
-            if (lunoraError.data !== undefined) {
-                body.data = encodeWire(lunoraError.data);
-            }
-
-            return jsonResponse({ error: body }, status);
-        }
-
-        // Do NOT echo arbitrary error.message values to clients — an unhandled
-        // throw may carry SQL fragments, file paths, or internal identifiers. Log
-        // the raw error server-side and return a generic message (mirrors
-        // `@lunora/runtime`'s `toErrorResponse`).
-        // eslint-disable-next-line no-console -- server-side diagnostic for an unhandled handler error
-        console.error("[@lunora/do] unhandled RPC error:", error);
-
-        return jsonResponse({ error: { code: "RPC_FAILED", message: "internal error" } }, 500);
+        return jsonResponse({ error: body }, status);
     }
 
     /**
@@ -5851,7 +5828,7 @@ abstract class ShardDO {
      * 4. On normal completion send `{type:"complete"}`; on throw send
      * `{type:"error"}`. Either way drop the controller.
      */
-    // eslint-disable-next-line sonarjs/cognitive-complexity -- the stream lifecycle (ack → chunk pump → complete/error) plus the structured-vs-redacted error branch is the wire protocol and reads clearer inline than split across helpers sharing the controller + socket
+
     private async handleStream(ws: WebSocket, id: string, functionPath: string, args: Record<string, unknown>): Promise<void> {
         const iterable = this.executeStream(functionPath, args);
 
@@ -5913,25 +5890,20 @@ abstract class ShardDO {
                 ws.send(JSON.stringify({ id, type: "complete" }));
             }
         } catch (error: unknown) {
-            const { code } = error as { code?: string };
-            // A structured error (one carrying its own `code`, e.g. a thrown
-            // `LunoraError`) keeps its intentional, developer-facing message. A
-            // bare/unexpected throw is the generic catch-all: log the raw error
-            // server-side and send a redacted message so SQL fragments, file
-            // paths, or internal identifiers never reach the client.
-            const isStructured = typeof code === "string";
+            // Apply the shared redaction invariant: a non-internal `LunoraError`
+            // keeps its intentional, developer-facing message; an internal-coded
+            // or bare/unexpected throw is redacted so SQL fragments, file paths,
+            // or internal identifiers never reach the client.
+            const { body, redacted } = toErrorBody(error, { fallbackCode: "INTERNAL_SERVER_ERROR", redactedMessage: "internal error" });
 
-            if (!isStructured) {
-                // eslint-disable-next-line no-console -- server-side diagnostic for an unhandled stream error
+            if (redacted) {
+                // eslint-disable-next-line no-console -- server-side diagnostic for an internal/unhandled stream error
                 console.error("[@lunora/do] unhandled stream error:", error);
             }
 
-            const rawMessage = error instanceof Error ? error.message : String(error);
-            const message = isStructured ? rawMessage : "internal error";
-
             ws.send(
                 JSON.stringify({
-                    error: { code: isStructured ? code : "INTERNAL_SERVER_ERROR", message },
+                    error: { code: body.code, message: body.message },
                     id,
                     type: "error",
                 }),
@@ -6368,9 +6340,9 @@ abstract class ShardDO {
             // a structured error's `code` (e.g. the cross-shard-join guard).
             this.recordShapeError(`shape:seed:${subId}`, error);
 
-            const code = typeof (error as { code?: unknown }).code === "string" ? (error as { code: string }).code : "SHAPE_RESOLVE_FAILED";
+            const { body } = toErrorBody(error, { fallbackCode: "SHAPE_RESOLVE_FAILED", redactedMessage: "shape resolution failed" });
 
-            return { code, message: error instanceof Error ? error.message : "shape resolution failed" };
+            return { code: body.code, message: body.message };
         }
 
         if (!resolved) {
@@ -6394,9 +6366,9 @@ abstract class ShardDO {
         } catch (error) {
             this.recordShapeError(`shape:seed:${subId}`, error);
 
-            const code = typeof (error as { code?: unknown }).code === "string" ? (error as { code: string }).code : "SHAPE_SEED_FAILED";
+            const { body } = toErrorBody(error, { fallbackCode: "SHAPE_SEED_FAILED", redactedMessage: "shape seed failed" });
 
-            return { code, message: error instanceof Error ? error.message : "shape seed failed" };
+            return { code: body.code, message: body.message };
         }
     }
 

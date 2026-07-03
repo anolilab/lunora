@@ -15,6 +15,8 @@
  * / `Storage.getPresignedUrl`. For very large objects, `Storage.createMultipartUpload`
  * wraps R2's native multipart API.
  */
+import { LunoraError } from "@lunora/errors";
+
 import type { SignedUrlOptions } from "./types";
 
 const textEncoder = new TextEncoder();
@@ -133,11 +135,11 @@ export const buildSignedUrl = async (
     // already-expired URL that verify silently rejects) and enforce a ceiling
     // so a bogus value can't mint an effectively non-expiring URL.
     if (!Number.isFinite(expiresInSeconds) || expiresInSeconds <= 0) {
-        throw new Error("@lunora/storage: expiresInSeconds must be a positive finite number");
+        throw new LunoraError("INTERNAL", "@lunora/storage: expiresInSeconds must be a positive finite number");
     }
 
     if (expiresInSeconds > MAX_EXPIRES_IN_SECONDS) {
-        throw new Error(`@lunora/storage: expiresInSeconds must not exceed ${String(MAX_EXPIRES_IN_SECONDS)} (7 days)`);
+        throw new LunoraError("INTERNAL", `@lunora/storage: expiresInSeconds must not exceed ${String(MAX_EXPIRES_IN_SECONDS)} (7 days)`);
     }
 
     // contentType is a PUT-only pin: a GET URL has no request body to constrain,

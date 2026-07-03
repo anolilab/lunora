@@ -277,6 +277,9 @@ catalogs:
     '@commitlint/config-conventional':
       specifier: ^21.1.0
       version: 21.1.0
+    '@visulima/error':
+      specifier: 6.0.0-alpha.34
+      version: 6.0.0-alpha.34
     '@visulima/tabular':
       specifier: 4.0.0-alpha.14
       version: 4.0.0-alpha.14
@@ -651,6 +654,7 @@ overrides:
   '@lunora/db': workspace:*
   '@lunora/dispatch': workspace:*
   '@lunora/do': workspace:*
+  '@lunora/errors': workspace:*
   '@lunora/flags': workspace:*
   '@lunora/hyperdrive': workspace:*
   '@lunora/mail': workspace:*
@@ -1521,6 +1525,9 @@ importers:
 
   packages/advisor:
     dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@lunora/server':
         specifier: workspace:*
         version: link:../server
@@ -1552,6 +1559,9 @@ importers:
 
   packages/ai:
     dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       ai:
         specifier: catalog:ai
         version: 7.0.4(zod@4.4.3)
@@ -1635,6 +1645,9 @@ importers:
       '@better-auth/passkey':
         specifier: catalog:auth
         version: 1.6.22(@better-auth/core@1.6.22(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@cloudflare/workers-types@4.20260628.1)(@opentelemetry/api@1.9.1)(better-call@1.3.7(zod@4.4.3))(jose@6.2.3)(kysely@0.28.17)(nanostores@1.3.0))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-auth@1.6.22(1079843a700ef182d1fd520c029433f9))(better-call@1.3.7(zod@4.4.3))(nanostores@1.3.0)
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@lunora/server':
         specifier: workspace:*
         version: link:../server
@@ -1671,6 +1684,10 @@ importers:
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@26.0.1)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
   packages/bindings:
+    dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
     devDependencies:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
@@ -1698,6 +1715,10 @@ importers:
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@26.0.1)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
   packages/browser:
+    dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
     devDependencies:
       '@cloudflare/playwright':
         specifier: catalog:cloudflare
@@ -1750,6 +1771,9 @@ importers:
       '@lunora/d1':
         specifier: workspace:*
         version: link:../d1
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@lunora/seed':
         specifier: workspace:*
         version: link:../seed
@@ -1757,7 +1781,7 @@ importers:
         specifier: 3.0.0-alpha.32
         version: 3.0.0-alpha.32(@bomb.sh/tab@0.0.17(cac@6.7.14)(citty@0.2.2))(@visulima/pail@4.0.0-alpha.22(@opentelemetry/api@1.9.1)(@visulima/redact@3.0.0-alpha.14)(express@5.2.1)(hono@4.12.27)(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.1)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)))(github-slugger@2.0.0)
       '@visulima/error':
-        specifier: 6.0.0-alpha.34
+        specifier: catalog:prod
         version: 6.0.0-alpha.34
       '@visulima/fs':
         specifier: 5.0.0-alpha.32
@@ -1825,6 +1849,10 @@ importers:
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@26.0.1)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
   packages/client:
+    dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: catalog:cloudflare
@@ -1871,6 +1899,9 @@ importers:
 
   packages/cloudflare-access:
     dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       jose:
         specifier: catalog:auth
         version: 6.2.3
@@ -1911,6 +1942,9 @@ importers:
       '@lunora/container':
         specifier: workspace:*
         version: link:../container
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@lunora/queue':
         specifier: workspace:*
         version: link:../queue
@@ -1969,6 +2003,9 @@ importers:
       '@lunora/container':
         specifier: workspace:*
         version: link:../container
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@lunora/seed':
         specifier: workspace:*
         version: link:../seed
@@ -2017,6 +2054,10 @@ importers:
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@26.0.1)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
   packages/container:
+    dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
     devDependencies:
       '@cloudflare/containers':
         specifier: catalog:cloudflare
@@ -2051,6 +2092,9 @@ importers:
       '@lunora/do':
         specifier: workspace:*
         version: link:../do
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@lunora/sql-store':
         specifier: workspace:*
         version: link:../sql-store
@@ -2097,6 +2141,9 @@ importers:
       '@lunora/client':
         specifier: workspace:*
         version: link:../client
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
     devDependencies:
       '@tanstack/db':
         specifier: catalog:frontend
@@ -2127,6 +2174,10 @@ importers:
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@26.0.1)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
   packages/dispatch:
+    dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
     devDependencies:
       '@types/node':
         specifier: catalog:types
@@ -2152,6 +2203,9 @@ importers:
 
   packages/do:
     dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@visulima/redact':
         specifier: catalog:redact
         version: 3.0.0-alpha.14
@@ -2196,8 +2250,38 @@ importers:
         specifier: catalog:cloudflare
         version: 4.105.0(@cloudflare/workers-types@4.20260628.1)
 
+  packages/errors:
+    devDependencies:
+      '@codspeed/vitest-plugin':
+        specifier: catalog:test
+        version: 5.7.1(tinybench@2.9.0)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))(vitest@4.1.9)
+      '@types/node':
+        specifier: catalog:types
+        version: 26.0.1
+      '@visulima/packem':
+        specifier: catalog:build
+        version: 2.0.0-alpha.93(bffced2686306bb6226d43aebeb20a33)
+      '@vitest/coverage-v8':
+        specifier: catalog:test
+        version: 4.1.9(vitest@4.1.9)
+      esbuild:
+        specifier: catalog:build
+        version: 0.28.1
+      fallow:
+        specifier: catalog:lint
+        version: 2.102.0
+      typescript:
+        specifier: catalog:tsc
+        version: 6.0.3
+      vitest:
+        specifier: catalog:test
+        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@26.0.1)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
+
   packages/flags:
     dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@openfeature/server-sdk':
         specifier: catalog:flags
         version: 1.22.0(@openfeature/core@1.11.0)
@@ -2336,6 +2420,9 @@ importers:
 
   packages/mail:
     dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@react-email/render':
         specifier: catalog:mail
         version: 2.0.9(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -2385,6 +2472,9 @@ importers:
       '@lunora/client':
         specifier: workspace:*
         version: link:../client
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@modelcontextprotocol/sdk':
         specifier: catalog:mcp
         version: 1.29.0(zod@4.4.3)
@@ -2447,6 +2537,9 @@ importers:
 
   packages/payment:
     dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@lunora/server':
         specifier: workspace:*
         version: link:../server
@@ -2486,6 +2579,10 @@ importers:
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@26.0.1)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
   packages/queue:
+    dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
     devDependencies:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
@@ -2516,6 +2613,10 @@ importers:
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@26.0.1)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
   packages/ratelimit:
+    dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
     devDependencies:
       '@codspeed/vitest-plugin':
         specifier: catalog:test
@@ -2553,6 +2654,9 @@ importers:
       '@lunora/client':
         specifier: workspace:*
         version: link:../client
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@lunora/ratelimit':
         specifier: workspace:*
         version: link:../ratelimit
@@ -2619,6 +2723,10 @@ importers:
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@26.0.1)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
   packages/runtime:
+    dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: catalog:cloudflare
@@ -2665,6 +2773,9 @@ importers:
 
   packages/scheduler:
     dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       cron-parser:
         specifier: 5.6.1
         version: 5.6.1
@@ -2708,6 +2819,9 @@ importers:
       '@faker-js/faker':
         specifier: catalog:data
         version: 10.5.0
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
     devDependencies:
       '@lunora/server':
         specifier: workspace:*
@@ -2742,6 +2856,9 @@ importers:
 
   packages/server:
     dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@lunora/scheduler':
         specifier: workspace:*
         version: link:../scheduler
@@ -2785,6 +2902,9 @@ importers:
       '@lunora/client':
         specifier: workspace:*
         version: link:../client
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@lunora/ratelimit':
         specifier: workspace:*
         version: link:../ratelimit
@@ -2837,6 +2957,9 @@ importers:
       '@lunora/do':
         specifier: workspace:*
         version: link:../do
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       drizzle-orm:
         specifier: catalog:drizzle
         version: 0.45.2(@cloudflare/workers-types@4.20260628.1)(@electric-sql/pglite@0.5.3)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@26.0.1))(pg@8.21.0)(postgres@3.4.9)
@@ -2867,6 +2990,10 @@ importers:
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@26.0.1)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
   packages/storage:
+    dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: catalog:cloudflare
@@ -2928,6 +3055,9 @@ importers:
       '@lunora/client':
         specifier: workspace:*
         version: link:../client
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@lunora/react':
         specifier: workspace:*
         version: link:../react
@@ -3037,6 +3167,9 @@ importers:
       '@lunora/client':
         specifier: workspace:*
         version: link:../client
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@lunora/ratelimit':
         specifier: workspace:*
         version: link:../ratelimit
@@ -3077,6 +3210,9 @@ importers:
       '@lunora/do':
         specifier: workspace:*
         version: link:../do
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@lunora/mail':
         specifier: workspace:*
         version: link:../mail
@@ -3107,6 +3243,10 @@ importers:
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@26.0.1)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
   packages/values:
+    dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
     devDependencies:
       '@codspeed/vitest-plugin':
         specifier: catalog:test
@@ -3147,6 +3287,9 @@ importers:
       '@lunora/config':
         specifier: workspace:*
         version: link:../config
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@lunora/studio':
         specifier: workspace:*
         version: link:../studio
@@ -3190,6 +3333,9 @@ importers:
       '@lunora/client':
         specifier: workspace:*
         version: link:../client
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@lunora/ratelimit':
         specifier: workspace:*
         version: link:../ratelimit
@@ -3227,6 +3373,9 @@ importers:
 
   packages/workflow:
     dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@lunora/values':
         specifier: workspace:*
         version: link:../values

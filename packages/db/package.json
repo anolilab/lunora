@@ -68,7 +68,8 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/client": "1.0.0-alpha.16"
+        "@lunora/client": "1.0.0-alpha.16",
+        "@lunora/errors": "1.0.0-alpha.0"
     },
     "devDependencies": {
         "@tanstack/db": "catalog:frontend",

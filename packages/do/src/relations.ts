@@ -33,6 +33,8 @@
  * child sharded by its parent lives on one shard, so its ordering is exact too.
  */
 
+import { LunoraError } from "@lunora/errors";
+
 import type { TableDefinitionLike } from "./ctx-db";
 import type { OrderByInput, QueryArgs, QueryPage } from "./query-args";
 import { applySelect } from "./query-args";
@@ -167,7 +169,7 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
     const parentDefinition = schema.tables[tableName];
 
     if (!parentDefinition) {
-        throw new Error(`unknown table: ${tableName}`);
+        throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
     }
 
     const relationMap = parentDefinition.relationMap ?? {};
@@ -176,7 +178,7 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
         const relation = relationMap[name];
 
         if (!relation) {
-            throw new Error(`unknown relation "${name}" on table "${tableName}"`);
+            throw new LunoraError("INTERNAL", `unknown relation "${name}" on table "${tableName}"`);
         }
 
         // Backend routing is the injected `fetcher`/`counter`'s job, not the
@@ -414,7 +416,7 @@ const applyOnDelete = async (options: ApplyOnDeleteOptions): Promise<void> => {
     const { schema, tableName } = options;
 
     if (!schema.tables[tableName]) {
-        throw new Error(`unknown table: ${tableName}`);
+        throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
     }
 
     for (const [holderTable, holderDefinition] of Object.entries(schema.tables)) {

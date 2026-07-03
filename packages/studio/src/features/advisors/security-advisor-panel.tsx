@@ -79,7 +79,7 @@ const findingDetail = (t: TFunction, finding: SecurityFinding): string =>
 const SecurityAdvisorPanel = (): ReactElement => {
     const t = useT();
 
-    const { data, error } = useAdminQuery<SecurityAuditResult>(ADMIN_FUNCTIONS.getSecurityAudit, {});
+    const { data, error, errorSource } = useAdminQuery<SecurityAuditResult>(ADMIN_FUNCTIONS.getSecurityAudit, {});
 
     // `undefined` while the first read is in flight (renders the loading state);
     // once it resolves, `toFindings` normalises a non-array payload to empty.
@@ -98,7 +98,7 @@ const SecurityAdvisorPanel = (): ReactElement => {
                   };
               });
 
-    return <AdvisorView error={error} rows={rows} testId="lunora-security-advisor" />;
+    return <AdvisorView error={error} errorSource={errorSource} rows={rows} testId="lunora-security-advisor" />;
 };
 
 export default SecurityAdvisorPanel;

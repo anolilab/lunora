@@ -74,6 +74,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
+        "@lunora/errors": "1.0.0-alpha.0",
         "@openfeature/server-sdk": "catalog:flags"
     },
     "devDependencies": {

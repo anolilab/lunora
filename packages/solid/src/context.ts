@@ -1,4 +1,5 @@
 import type { LunoraClient } from "@lunora/client";
+import { LunoraError } from "@lunora/errors";
 import type { Context } from "solid-js";
 import { createContext, useContext } from "solid-js";
 
@@ -24,7 +25,7 @@ export const useLunora = (): LunoraClient => {
     const client = useContext(LunoraContext);
 
     if (!client) {
-        throw new Error("useLunora must be used inside <LunoraProvider />");
+        throw new LunoraError("INTERNAL", "useLunora must be used inside <LunoraProvider />");
     }
 
     return client;

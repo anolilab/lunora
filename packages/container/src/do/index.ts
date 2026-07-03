@@ -8,6 +8,7 @@
  */
 import type { StopParams } from "@cloudflare/containers";
 import { Container } from "@cloudflare/containers";
+import { LunoraError } from "@lunora/errors";
 
 import { parseDurationSeconds, resolveContainerEnvVars as resolveContainerEnvVariables } from "../define-container";
 import { emitContainerLifecycle } from "../lifecycle-event";
@@ -266,7 +267,8 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
                 const store = workerEnv[binding] as { get?: () => Promise<unknown> } | undefined;
 
                 if (store === undefined || typeof store.get !== "function") {
-                    throw new Error(
+                    throw new LunoraError(
+                        "INTERNAL",
                         `container "${this.lunoraName}": secretsStore env "${envName}" points at binding "${binding}", which is not a Secrets Store binding on the Worker env. Add a \`secrets_store_secrets\` entry binding "${binding}".`,
                     );
                 }
@@ -320,7 +322,8 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
         const port = check.port ?? this.lunoraDefaultPort;
 
         if (port === undefined) {
-            throw new Error(
+            throw new LunoraError(
+                "INTERNAL",
                 `container "${this.lunoraName}": readyOn check "${check.path}" has no port — set the check's \`port\` or the container \`defaultPort\`.`,
             );
         }
@@ -342,7 +345,8 @@ class LunoraContainer<Env = unknown> extends Container<Env> {
             }
 
             if (Date.now() >= deadline) {
-                throw new Error(
+                throw new LunoraError(
+                    "INTERNAL",
                     `container "${this.lunoraName}": readiness check "${check.path}" (port ${String(port)}) did not return ${String(expectedStatus)} within ${String(READINESS_TIMEOUT_MS)}ms`,
                 );
             }

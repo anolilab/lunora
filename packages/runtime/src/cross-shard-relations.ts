@@ -37,6 +37,8 @@
 // `@lunora/do` while reusing its canonical writer types (see the alias note).
 import type { DatabaseWriterLike } from "@lunora/do";
 
+import { LunoraError } from "./errors";
+
 /**
  * Reader / counter capabilities, typed against the SAME canonical
  * `DatabaseWriterLike` the `@lunora/d1` ctx-db derives its `crossShardReader` /
@@ -112,7 +114,7 @@ const fanOutRelation = async (options: CrossShardRelationOptions, body: Record<s
     );
 
     if (!response.ok) {
-        throw new Error(`cross-shard relation ${label} failed: worker returned ${String(response.status)}`);
+        throw new LunoraError(`cross-shard relation ${label} failed: worker returned ${String(response.status)}`);
     }
 
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- workers-types Response.json() is typed `unknown` under tsc (eslint's view sees `any`); the cast is required by `lint:types`
@@ -121,7 +123,7 @@ const fanOutRelation = async (options: CrossShardRelationOptions, body: Record<s
     if (typeof result.failed === "number" && result.failed > 0) {
         const reached = (typeof result.ok === "number" ? result.ok : 0) + result.failed;
 
-        throw new Error(
+        throw new LunoraError(
             `cross-shard relation ${label} failed on ${String(result.failed)} of ${String(reached)} shard(s) — refusing to return a partial result`,
         );
     }

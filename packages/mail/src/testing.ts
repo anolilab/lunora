@@ -9,6 +9,8 @@
  * Import from `@lunora/mail/testing` (a dev/test-only entry — it pulls in
  * nothing from the runtime bundle, just `fetch`).
  */
+import { LunoraError } from "@lunora/errors";
+
 import type { CapturedMail } from "./capture-transport";
 
 /** Reserved admin RPC path that reads the captured-mail inbox from the root shard. */
@@ -67,7 +69,7 @@ const listCapturedMail = async (options: InboxOptions): Promise<CapturedMail[]> 
     });
 
     if (!response.ok) {
-        throw new Error(`@lunora/mail/testing: getCapturedMail failed (HTTP ${String(response.status)})`);
+        throw new LunoraError("INTERNAL", `@lunora/mail/testing: getCapturedMail failed (HTTP ${String(response.status)})`);
     }
 
     const body = (await response.json()) as { result?: { entries?: CapturedMail[] } };
@@ -97,7 +99,8 @@ const waitForMail = async (options: WaitForMailOptions): Promise<CapturedMail> =
         }
 
         if (Date.now() >= deadline) {
-            throw new Error(
+            throw new LunoraError(
+                "INTERNAL",
                 `@lunora/mail/testing: no mail to "${options.to}"${options.subjectMatch === undefined ? "" : ` matching "${options.subjectMatch}"`} within ${String(timeoutMs)}ms`,
             );
         }
@@ -129,7 +132,10 @@ const extractLink = (mail: CapturedMail, options: { match?: string } = {}): stri
         }
     }
 
-    throw new Error(`@lunora/mail/testing: no link${options.match === undefined ? "" : ` containing "${options.match}"`} found in the captured message`);
+    throw new LunoraError(
+        "INTERNAL",
+        `@lunora/mail/testing: no link${options.match === undefined ? "" : ` containing "${options.match}"`} found in the captured message`,
+    );
 };
 
 export { extractLink, listCapturedMail, waitForMail };

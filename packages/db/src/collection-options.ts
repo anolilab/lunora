@@ -1,5 +1,6 @@
 /* eslint-disable no-underscore-dangle -- `_id` is the Lunora document-id field this binding keys rows by */
 import type { FunctionReference, LunoraClient, SubscriptionError } from "@lunora/client";
+import { LunoraError } from "@lunora/errors";
 import type { CollectionConfig } from "@tanstack/db";
 import { BTreeIndex } from "@tanstack/db";
 
@@ -155,7 +156,7 @@ export interface LunoraCollectionOptions<TRow extends Row> {
  */
 export const lunoraCollectionOptions = <TRow extends Row>(options: LunoraCollectionConfig<TRow>): LunoraCollectionOptions<TRow> => {
     if ((options.list === undefined) === (options.shape === undefined)) {
-        throw new Error("lunoraCollectionOptions: pass exactly one of `list` or `shape`");
+        throw new LunoraError("INTERNAL", "lunoraCollectionOptions: pass exactly one of `list` or `shape`");
     }
 
     const getKey = options.getKey ?? ((row: TRow) => row._id);

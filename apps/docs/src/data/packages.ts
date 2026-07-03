@@ -54,6 +54,21 @@ export const packages: PackageInfo[] = [
     {
         accentColor: categoryColors["Core Runtime"]!,
         category: "Core Runtime",
+        description:
+            "Unified error layer: one LunoraError + a central catalog of codes, statuses, and actionable hints, rendered across CLI, overlay, Studio, and the client.",
+        docsPath: "/docs/packages/errors",
+        features: [
+            "Central error catalog (code → status/hint/docsUrl)",
+            "Structural isLunoraError guard + invariant helpers",
+            "Hints surfaced in CLI, Studio, and the client SDK",
+        ],
+        name: "Errors",
+        npmName: "@lunora/errors",
+        slug: "errors",
+    },
+    {
+        accentColor: categoryColors["Core Runtime"]!,
+        category: "Core Runtime",
         description: "Unscoped umbrella — one install for the base packages (server, values, runtime, do, client) via subpaths, plus the lunora CLI bin.",
         docsPath: "/docs/packages/lunorash",
         features: ["One-install base bundle", "Subpath exports (lunorash/server, /client, …)", "Ships the lunora CLI bin"],
@@ -288,6 +303,17 @@ export const packages: PackageInfo[] = [
         name: "Browser",
         npmName: "@lunora/browser",
         slug: "browser",
+    },
+    {
+        accentColor: categoryColors["Add-ons"]!,
+        category: "Add-ons",
+        description:
+            "Cloudflare Access (Zero Trust) identity for Lunora — verify the Cf-Access-Jwt-Assertion JWT against your team JWKS and feed the verified identity into ctx.auth / RLS via a resolveIdentity adapter",
+        docsPath: "/docs/packages/cloudflare-access",
+        features: [],
+        name: "Cloudflare Access",
+        npmName: "@lunora/cloudflare-access",
+        slug: "cloudflare-access",
     },
     {
         accentColor: categoryColors["Add-ons"]!,

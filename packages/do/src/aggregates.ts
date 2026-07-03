@@ -29,6 +29,8 @@
  * via `backfillAggregateIndexes` from a one-shot in `runShardMigrations`.
  */
 
+import { LunoraError } from "@lunora/errors";
+
 import type { WhereInput } from "./where-types";
 
 /** Reducer applied by an aggregate index. */
@@ -98,22 +100,16 @@ interface GroupByEntry {
 }
 
 /**
- * Thrown when `count` runs in an RLS-restricted ctx. The structural shape
- * (`name: "LunoraError"`, `code`, `status`) lets the runtime's error mapper
- * route it without an `instanceof` check, so `@lunora/do` stays free of a
- * runtime dependency on `@lunora/server`. Status mirrors the
- * `COUNT_RLS_UNSUPPORTED` entry in the `LunoraErrorCode` taxonomy (422):
- * the operation is invalid in this context, not malformed.
+ * Thrown when `count` runs in an RLS-restricted ctx. A `LunoraError` subclass
+ * (`code: "COUNT_RLS_UNSUPPORTED"`, `status: 422`) recognised structurally by the
+ * runtime's error mapper (via `isLunoraError`), so `@lunora/do` needs no runtime
+ * dependency on `@lunora/server`. 422 = the operation is invalid in this context,
+ * not malformed.
  */
-class CountRlsUnsupportedError extends Error {
-    public readonly code: string = "COUNT_RLS_UNSUPPORTED";
-
-    public override readonly name = "LunoraError";
-
-    public readonly status: number = 422;
-
+class CountRlsUnsupportedError extends LunoraError {
     public constructor(table?: string) {
         super(
+            "COUNT_RLS_UNSUPPORTED",
             table === undefined
                 ? "count() is not supported in an RLS-restricted context"
                 : `count() is not supported on table "${table}" inside an RLS-restricted context`,

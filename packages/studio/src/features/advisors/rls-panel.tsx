@@ -1,5 +1,6 @@
 import type { ReactElement } from "react";
 
+import { ErrorAlert } from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
@@ -61,7 +62,7 @@ const RlsPanel = (): ReactElement => {
     const t = useT();
 
     // Deployment-wide metadata (root shard), so no shard selector is needed.
-    const { data, error } = useAdminQuery<RlsPoliciesResult>(ADMIN_FUNCTIONS.rlsPolicies, {});
+    const { data, error, errorSource } = useAdminQuery<RlsPoliciesResult>(ADMIN_FUNCTIONS.rlsPolicies, {});
 
     // `undefined` while the first read is in flight — `loaded` distinguishes that
     // from a resolved-but-empty deployment so the empty states only show once the
@@ -73,11 +74,7 @@ const RlsPanel = (): ReactElement => {
 
     return (
         <div className="flex flex-col gap-6" data-testid="lunora-rls-panel">
-            {error !== null && (
-                <p className="px-4 py-8 text-center text-sm text-destructive" data-testid="rls-error" role="alert">
-                    {error}
-                </p>
-            )}
+            {error !== null && <ErrorAlert error={errorSource} testId="rls-error" />}
 
             <section className="flex flex-col gap-2">
                 <Card className="overflow-hidden py-0">

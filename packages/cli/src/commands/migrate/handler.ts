@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 
 import { discoverMigrations, discoverSchema } from "@lunora/codegen";
+import { LunoraError } from "@lunora/errors";
 import { join } from "@visulima/path";
 import { Project } from "ts-morph";
 
@@ -87,14 +88,14 @@ const loadSnapshot = (path: string): SchemaSnapshot | undefined => {
 
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- parsed is untrusted file content cast to SchemaSnapshot; the version may be anything on disk
         if (parsed.version !== 1) {
-            throw new Error(`unsupported snapshot version: ${parsed.version as unknown as string}`);
+            throw new LunoraError("INTERNAL", `unsupported snapshot version: ${parsed.version as unknown as string}`);
         }
 
         return parsed;
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 
-        throw new Error(`failed to read ${path}: ${message}`, { cause: error });
+        throw new LunoraError("INTERNAL", `failed to read ${path}: ${message}`, { cause: error });
     }
 };
 

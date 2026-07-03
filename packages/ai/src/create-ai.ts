@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import type { EmbeddingModel, LanguageModel } from "ai";
 import { createWorkersAI } from "workers-ai-provider";
 
@@ -36,7 +37,7 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
     const { binding, defaultModel, gateway, provider } = options;
 
     if (!provider && !binding) {
-        throw new Error("@lunora/ai: createAi requires a `binding` (env.AI) or a pre-built `provider`");
+        throw new LunoraError("INTERNAL", "@lunora/ai: createAi requires a `binding` (env.AI) or a pre-built `provider`");
     }
 
     // A caller-supplied provider wins; otherwise construct one from the binding.
@@ -46,7 +47,7 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
     const model = (input?: ModelInput): LanguageModel => {
         if (input === undefined) {
             if (!defaultModel) {
-                throw new Error("@lunora/ai: no model supplied and no `defaultModel` configured — pass a model id or an AI SDK model");
+                throw new LunoraError("INTERNAL", "@lunora/ai: no model supplied and no `defaultModel` configured — pass a model id or an AI SDK model");
             }
 
             return workersai(defaultModel);
@@ -84,7 +85,8 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
         const modelId = input ?? defaultModel;
 
         if (!modelId) {
-            throw new Error(
+            throw new LunoraError(
+                "INTERNAL",
                 "@lunora/ai: no embedding model supplied and no `defaultModel` configured — pass an embedding model id or an AI SDK EmbeddingModel",
             );
         }
@@ -94,7 +96,10 @@ const createAi = (options: LunoraAiOptions): LunoraAi => {
 
     const run = async (modelId: string, inputs: Record<string, unknown>, runOptions?: Record<string, unknown>): Promise<unknown> => {
         if (!binding) {
-            throw new Error("@lunora/ai: ai.run requires the `binding` (env.AI) — it is unavailable when only a custom `provider` was supplied");
+            throw new LunoraError(
+                "INTERNAL",
+                "@lunora/ai: ai.run requires the `binding` (env.AI) — it is unavailable when only a custom `provider` was supplied",
+            );
         }
 
         return binding.run(modelId, inputs, runOptions);

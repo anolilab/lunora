@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 import { useMemo } from "react";
 
+import { ErrorAlert } from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
@@ -39,7 +40,12 @@ export const SettingsPanel = ({ initialShardKey }: SettingsPanelProps): ReactEle
 
     // Deployment config is static at runtime (it only changes on redeploy), so a
     // plain one-shot read with no live channel.
-    const { data: result, error, isLoading: loading } = useAdminQuery<SettingsResult>(ADMIN_FUNCTIONS.getSettings, {}, { shardKey: initialShardKey ?? "" });
+    const {
+        data: result,
+        error,
+        errorSource,
+        isLoading: loading,
+    } = useAdminQuery<SettingsResult>(ADMIN_FUNCTIONS.getSettings, {}, { shardKey: initialShardKey ?? "" });
 
     const deployRows = useMemo<{ label: string; value: string }[]>(() => {
         const deploy = result?.deploy;
@@ -89,11 +95,7 @@ export const SettingsPanel = ({ initialShardKey }: SettingsPanelProps): ReactEle
                 {t("View-only — values are masked. Edit vars, secrets, and bindings in wrangler or the Cloudflare dashboard.")}
             </p>
 
-            {error !== null && (
-                <p className="text-sm text-destructive" data-testid="set-error" role="alert">
-                    {error}
-                </p>
-            )}
+            {error !== null && <ErrorAlert error={errorSource} testId="set-error" />}
 
             {deployRows.length > 0 && (
                 <Card className="py-0" data-testid="set-deploy">

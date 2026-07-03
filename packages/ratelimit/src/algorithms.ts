@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/errors";
+
 import type { RateLimitConfig, RateLimitStatus, RateLimitValue } from "./types";
 
 /** Inputs to {@link evaluate}. */
@@ -87,7 +89,7 @@ const fixedWindow = (config: RateLimitConfig, prior: RateLimitValue | undefined,
     // caller would chase forever. Mirror the reserve path's `count <= capacity`
     // guard and surface caller misuse instead of a perpetual rejection.
     if (options.count > capacity) {
-        throw new Error(`@lunora/ratelimit: requested count ${String(options.count)} exceeds the limiter capacity ${String(capacity)}`);
+        throw new LunoraError("INTERNAL", `@lunora/ratelimit: requested count ${String(options.count)} exceeds the limiter capacity ${String(capacity)}`);
     }
 
     return { status: { ok: false, reason: "rate", retryAfter }, value: undefined };
@@ -146,7 +148,7 @@ const slidingWindow = (config: RateLimitConfig, prior: RateLimitValue | undefine
     // `retryAfter` would point at a window that also cannot satisfy it. Mirror
     // the reserve path's `count <= limit` guard and surface caller misuse.
     if (options.count > limit) {
-        throw new Error(`@lunora/ratelimit: requested count ${String(options.count)} exceeds the limiter capacity ${String(limit)}`);
+        throw new LunoraError("INTERNAL", `@lunora/ratelimit: requested count ${String(options.count)} exceeds the limiter capacity ${String(limit)}`);
     }
 
     return { status: { ok: false, reason: "rate", retryAfter: retryAfter() }, value: undefined };

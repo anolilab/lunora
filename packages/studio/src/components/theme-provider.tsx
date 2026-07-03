@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import type { ReactNode } from "react";
 import { createContext, use, useEffect, useState } from "react";
 
@@ -68,7 +69,7 @@ const useTheme = (): ThemeContextValue => {
     const context = use(ThemeContext);
 
     if (context === null) {
-        throw new Error("useTheme must be used within a <ThemeProvider>");
+        throw new LunoraError("INTERNAL", "useTheme must be used within a <ThemeProvider>");
     }
 
     return context;

@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/errors";
+
 import type { PersistedMutation, PersistenceAdapter } from "./types";
 
 /**
@@ -84,7 +86,7 @@ const createIndexedDbPersistence = (options: IndexedDbPersistenceOptions = {}): 
     const factory = options.indexedDB ?? (typeof indexedDB === "undefined" ? undefined : indexedDB);
 
     if (!factory) {
-        throw new Error("createIndexedDbPersistence: no IndexedDB available — pass `indexedDB` or use createInMemoryPersistence()");
+        throw new LunoraError("INTERNAL", "createIndexedDbPersistence: no IndexedDB available — pass `indexedDB` or use createInMemoryPersistence()");
     }
 
     const databaseName = options.databaseName ?? DEFAULT_DATABASE;

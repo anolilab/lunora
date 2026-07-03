@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/errors";
+
 import type { LunoraAuth } from "./create-auth";
 
 /**
@@ -226,13 +228,9 @@ interface CreateAuthAdminOptions {
  * surface that `code` so the runtime can map it onto an HTTP status and the
  * studio can show a meaningful message instead of a generic 500.
  */
-class LunoraAuthAdminError extends Error {
-    public readonly code: string;
-
+class LunoraAuthAdminError extends LunoraError {
     public constructor(message: string, code: string) {
-        super(message);
-        this.name = "LunoraAuthAdminError";
-        this.code = code;
+        super(code, message, { name: "LunoraAuthAdminError" });
     }
 }
 

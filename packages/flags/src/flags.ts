@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import type { Client, EvaluationContext, EvaluationDetails, FlagValue, Hook, Logger, Provider } from "@openfeature/server-sdk";
 import { ErrorCode, OpenFeature } from "@openfeature/server-sdk";
 
@@ -129,7 +130,7 @@ const resolveDetails = (
             return client.getStringDetails(flagKey, defaultValue as string, context);
         }
         default: {
-            throw new Error(`createFlags: unknown flag type "${type as string}"`);
+            throw new LunoraError("INTERNAL", `createFlags: unknown flag type "${type as string}"`);
         }
     }
 };

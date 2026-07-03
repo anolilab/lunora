@@ -10,6 +10,7 @@
  * the serializer without touching `document.body`.
  */
 
+import { LunoraError } from "@lunora/errors";
 import type { Edge, Node } from "@xyflow/react";
 import { getNodesBounds, getViewportForBounds } from "@xyflow/react";
 import { toBlob, toSvg } from "html-to-image";
@@ -108,7 +109,7 @@ const exportDiagramAsPng = async (viewportElement: HTMLElement, nodes: Node[], f
     });
 
     if (blob === null) {
-        throw new Error("html-to-image produced no blob");
+        throw new LunoraError("INTERNAL", "html-to-image produced no blob");
     }
 
     // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser-only file download; this file is studio-side only

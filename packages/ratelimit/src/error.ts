@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/errors";
+
 import type { RateLimitReason, RateLimitStatus } from "./types";
 
 const describe = (status: RateLimitStatus): string => {
@@ -9,19 +11,18 @@ const describe = (status: RateLimitStatus): string => {
 };
 
 /**
- * Thrown by `RateLimiter.limit` when called with `{ throws: true }`. The
- * `@lunora/ratelimit` middleware does not use this — it throws a structural
- * `LunoraError` instead — so this is for direct callers that prefer exceptions.
+ * Thrown by `RateLimiter.limit` when called with `{ throws: true }`. A
+ * `LunoraError` subclass (`code: "TOO_MANY_REQUESTS"`, `status: 429`); the
+ * `@lunora/ratelimit` middleware itself throws a bare structural `LunoraError`,
+ * so this is for direct callers that prefer exceptions. Keeps `reason`/`retryAfter`.
  */
-export default class RateLimitError extends Error {
-    public override readonly name = "RateLimitError";
-
+export default class RateLimitError extends LunoraError {
     public readonly reason: RateLimitReason | undefined;
 
     public readonly retryAfter: number;
 
     public constructor(status: RateLimitStatus, message?: string) {
-        super(message ?? describe(status));
+        super("TOO_MANY_REQUESTS", message ?? describe(status), { name: "RateLimitError" });
         this.reason = status.reason;
         this.retryAfter = status.retryAfter;
     }

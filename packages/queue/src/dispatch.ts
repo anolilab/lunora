@@ -5,6 +5,8 @@
  * this with the project's queue registry. Node-safe so it's unit-testable with
  * plain-object batches.
  */
+import { LunoraError } from "@lunora/errors";
+
 import { createQueueRunContext } from "./run-context";
 import type { MessageBatchLike, QueueDefinition } from "./types";
 
@@ -47,7 +49,7 @@ const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegist
         const known = Object.keys(registry);
         const suffix = known.length === 0 ? "no push queues are declared" : `known push queues: ${known.join(", ")}`;
 
-        throw new Error(`@lunora/queue: received a batch for queue "${batch.queue}" but no push handler is registered (${suffix})`);
+        throw new LunoraError("INTERNAL", `@lunora/queue: received a batch for queue "${batch.queue}" but no push handler is registered (${suffix})`);
     }
 
     const { handler } = entry.definition;

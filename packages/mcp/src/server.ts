@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { LunoraClient } from "@lunora/client";
+import { LunoraError } from "@lunora/errors";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -89,7 +90,7 @@ const resolveClient = (options: LunoraMcpServerOptions): LunoraClient => {
     }
 
     if (options.url === undefined) {
-        throw new Error("createLunoraMcpServer requires either a `client` or a `url`");
+        throw new LunoraError("INTERNAL", "createLunoraMcpServer requires either a `client` or a `url`");
     }
 
     const client = new LunoraClient({ fetch: options.fetch, url: options.url });

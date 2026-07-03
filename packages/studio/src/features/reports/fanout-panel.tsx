@@ -1,6 +1,7 @@
 import type { ReactElement, ReactNode } from "react";
 import { useState } from "react";
 
+import { ErrorAlert } from "../../components/error-alert";
 import { ShardInput } from "../../components/shard-input";
 import { Badge } from "../../components/ui/badge";
 import { Card } from "../../components/ui/card";
@@ -94,6 +95,7 @@ const FanoutPanel = ({ initialShardKey }: FanoutPanelProps): ReactElement => {
     const {
         data: result,
         error,
+        errorSource,
         refetch,
     } = useAdminQuery<FanoutMetricsResult>(ADMIN_FUNCTIONS.getFanoutMetrics, {}, { keepPreviousData: true, shardKey: debouncedShard });
 
@@ -124,11 +126,7 @@ const FanoutPanel = ({ initialShardKey }: FanoutPanelProps): ReactElement => {
                 )}
             </div>
 
-            {error !== null && (
-                <p className="text-sm text-destructive" data-testid="fanout-error" role="alert">
-                    {error}
-                </p>
-            )}
+            {error !== null && <ErrorAlert error={errorSource} testId="fanout-error" />}
 
             {error === null && isIdle && (
                 <EmptyState
