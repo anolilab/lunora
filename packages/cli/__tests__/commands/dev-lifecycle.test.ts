@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -325,6 +325,60 @@ describe("lunora dev lifecycle", () => {
     });
 
     describe("runDevBackground", () => {
+        it("spawns a real detached child through the default spawner (integration)", async () => {
+            expect.assertions(4);
+
+            const posix = process.platform !== "win32";
+
+            // No spawnDetached stub — the REAL default spawner runs. The child
+            // plays the daemon: logs a line, writes its own state record (as the
+            // wrangler daemon / vite plugin would), and stays alive past the wait.
+            const script = [
+                "const fs = require('node:fs');",
+                "console.log('child-alive');",
+                "fs.mkdirSync('.lunora', { recursive: true });",
+                "fs.writeFileSync('.lunora/dev.json', JSON.stringify({ mode: 'cli', pid: process.pid, startedAt: new Date().toISOString(), url: 'http://localhost:1' }));",
+                "setTimeout(() => {}, 30_000);",
+            ].join(" ");
+
+            const result = await runDevBackground({
+                command: { args: ["-e", script], command: process.execPath },
+                cwd: workdir,
+                json: false,
+                logger: recordingLogger().logger,
+                pollIntervalMs: 25,
+                probe: async () => true,
+                readyTimeoutMs: 15_000,
+            });
+
+            const state = readDevServerState(workdir);
+
+            try {
+                expect(result.code).toBe(0);
+                expect(state?.pid).toBeGreaterThan(0);
+
+                // The capture log received the child's stdout — created 0600 on
+                // POSIX (dev output can echo secrets).
+                const logPath = join(workdir, DEV_LOG_FILE);
+
+                expect(readFileSync(logPath, "utf8")).toContain("child-alive");
+
+                // eslint-disable-next-line no-bitwise -- extract the permission bits from st_mode
+                const mode = statSync(logPath).mode & 0o777;
+
+                // Windows has no POSIX permission bits — assert 0600 only there.
+                expect(posix ? mode : 0o600).toBe(0o600);
+            } finally {
+                if (state !== undefined) {
+                    try {
+                        process.kill(state.pid, "SIGKILL");
+                    } catch {
+                        /* already gone */
+                    }
+                }
+            }
+        }, 20_000);
+
         it("blocks until the state record + probe confirm readiness, then prints URL and pid", async () => {
             expect.assertions(4);
 
