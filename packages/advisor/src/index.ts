@@ -46,6 +46,7 @@ import mailInboundDispatchWithoutVerify from "./lints/static/mail-inbound-dispat
 import mailRecipientFromRequestInput from "./lints/static/mail-recipient-from-request-input";
 import maskUncoveredPiiColumn from "./lints/static/mask-uncovered-pii-column";
 import maskWeakHashStrategyOnPii from "./lints/static/mask-weak-hash-strategy-on-pii";
+import maskedRelationLeakViaWith from "./lints/static/masked-relation-leak-via-with";
 import mutatorFullRowReplace from "./lints/static/mutator-full-row-replace";
 import nondeterministicQueryMutation from "./lints/static/nondeterministic-query-mutation";
 import ownerFieldFromArgsNotAuth from "./lints/static/owner-field-from-args-not-auth";
@@ -66,6 +67,7 @@ import relationReferencesUnknownTable from "./lints/static/relation-references-u
 import rlsUncoveredTable from "./lints/static/rls-uncovered-table";
 import shapeTargetsGlobalTable from "./lints/static/shape-targets-global-table";
 import shapeUnknownTable from "./lints/static/shape-unknown-table";
+import softDeleteIncludeDeletedFromArgs from "./lints/static/soft-delete-include-deleted-from-args";
 import sqlInjectionRisk from "./lints/static/sql-injection-risk";
 import storageGenerateUploadUrlNoContentTypePin from "./lints/static/storage-generate-upload-url-no-content-type-pin";
 import storageKeyFromUserArgs from "./lints/static/storage-key-from-user-args";
@@ -147,6 +149,7 @@ export { default as mailInboundDispatchWithoutVerify } from "./lints/static/mail
 export { default as mailRecipientFromRequestInput } from "./lints/static/mail-recipient-from-request-input";
 export { default as maskUncoveredPiiColumn } from "./lints/static/mask-uncovered-pii-column";
 export { default as maskWeakHashStrategyOnPii } from "./lints/static/mask-weak-hash-strategy-on-pii";
+export { default as maskedRelationLeakViaWith } from "./lints/static/masked-relation-leak-via-with";
 export { default as mutatorFullRowReplace } from "./lints/static/mutator-full-row-replace";
 export { default as nondeterministicQueryMutation } from "./lints/static/nondeterministic-query-mutation";
 export { default as ownerFieldFromArgsNotAuth } from "./lints/static/owner-field-from-args-not-auth";
@@ -167,6 +170,7 @@ export { default as relationReferencesUnknownTable } from "./lints/static/relati
 export { default as rlsUncoveredTable } from "./lints/static/rls-uncovered-table";
 export { default as shapeTargetsGlobalTable } from "./lints/static/shape-targets-global-table";
 export { default as shapeUnknownTable } from "./lints/static/shape-unknown-table";
+export { default as softDeleteIncludeDeletedFromArgs } from "./lints/static/soft-delete-include-deleted-from-args";
 export { default as sqlInjectionRisk } from "./lints/static/sql-injection-risk";
 export { default as storageGenerateUploadUrlNoContentTypePin } from "./lints/static/storage-generate-upload-url-no-content-type-pin";
 export { default as storageKeyFromUserArgs } from "./lints/static/storage-key-from-user-args";
@@ -194,12 +198,14 @@ export type { AdvisorProcedureProtection } from "./procedure-protections";
 export type { AdvisorQueryRead } from "./queries";
 export type { AdvisorR2sqlCall } from "./r2sql-calls";
 export type { AdvisorRatelimitKeySelector } from "./ratelimit-key-selectors";
+export type { AdvisorRelationLoad } from "./relation-loads";
 export type { AdvisorRlsProcedure } from "./rls-procedures";
 export type { AdvisorIndex, AdvisorRelation, AdvisorSchema, AdvisorTable } from "./schema";
 export { fromServerSchema } from "./schema";
 export type { AdvisorSecretLiteral } from "./secrets";
 export type { AdvisorShape } from "./shapes";
 export type { AdvisorShardTraffic } from "./shard-traffic";
+export type { AdvisorSoftDeleteRead } from "./soft-delete-reads";
 export type { AdvisorSqlInterpolation } from "./sql-interpolation";
 export type { AdvisorStorageKeyAccess } from "./storage-key-accesses";
 export type { AdvisorStorageUpload } from "./storage-uploads";
@@ -286,6 +292,8 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     aiToolSideEffectPromptInjection,
     identityUndeclaredClaimTrusted,
     paymentWebhookWideTolerance,
+    softDeleteIncludeDeletedFromArgs,
+    maskedRelationLeakViaWith,
 ];
 
 /**

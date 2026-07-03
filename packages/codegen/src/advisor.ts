@@ -33,10 +33,12 @@ import type {
     QueryReadIR,
     R2sqlCallIR,
     RatelimitKeySelectorIR,
+    RelationLoadIR,
     RlsProcedureIR,
     SchemaIR,
     SecretLiteralIR,
     ShapeIR,
+    SoftDeleteReadIR,
     SqlInterpolationIR,
     StorageKeyAccessIR,
     StorageUploadIR,
@@ -107,6 +109,7 @@ const toAdvisorSchema = (schema: SchemaIR): AdvisorSchema => {
                     };
                 }),
                 shardKind: typeof table.shardMode === "string" ? table.shardMode : "shardBy",
+                softDelete: table.softDelete,
             };
         }),
     };
@@ -181,6 +184,8 @@ export const lintSchema = (
     aiToolSideEffects?: ReadonlyArray<AiToolSideEffectIR>,
     identityClaimReads?: ReadonlyArray<IdentityClaimReadIR>,
     paymentWebhooks?: ReadonlyArray<PaymentWebhookIR>,
+    softDeleteReads?: ReadonlyArray<SoftDeleteReadIR>,
+    relationLoads?: ReadonlyArray<RelationLoadIR>,
 ): Finding[] =>
     runAdvisor(
         {
@@ -215,10 +220,12 @@ export const lintSchema = (
             queries,
             r2sqlCalls,
             ratelimitKeySelectors,
+            relationLoads,
             rlsProcedures,
             schema: toAdvisorSchema(schema),
             secretLiterals,
             shapes: shapes === undefined ? undefined : toAdvisorShapes(shapes),
+            softDeleteReads,
             sqlInterpolations,
             storageKeyAccesses,
             storageUploads,

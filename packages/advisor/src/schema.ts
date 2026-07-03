@@ -83,6 +83,16 @@ export interface AdvisorTable {
      * that omits it leaves tier-sensitive lints to treat the table as local.
      */
     shardKind?: "global" | "root" | "shardBy";
+
+    /**
+     * Set when the table opted into `.softDelete()` — the marker column
+     * (`field`, default `deletedAt`) whose presence excludes a row from list
+     * reads unless `includeDeleted: true` is passed. Read by
+     * `soft_delete_include_deleted_from_args` to confirm a read's target actually
+     * soft-deletes before flagging an `includeDeleted` toggle on a public read.
+     * Optional — a feeder that doesn't track soft-delete omits it.
+     */
+    softDelete?: { field: string };
 }
 
 /**
@@ -196,6 +206,7 @@ export const fromServerSchema = (schema: Schema): AdvisorSchema => {
                 name,
                 optionalFields,
                 shardKind: table.shardMode.kind,
+                softDelete: table.softDeleteMode,
                 relations: Object.entries(table.relationMap).map(([accessor, relation]) => {
                     return {
                         field: relation.field,

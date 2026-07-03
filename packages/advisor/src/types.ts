@@ -31,11 +31,13 @@ import type { AdvisorProcedureProtection } from "./procedure-protections";
 import type { AdvisorQueryRead } from "./queries";
 import type { AdvisorR2sqlCall } from "./r2sql-calls";
 import type { AdvisorRatelimitKeySelector } from "./ratelimit-key-selectors";
+import type { AdvisorRelationLoad } from "./relation-loads";
 import type { AdvisorRlsProcedure } from "./rls-procedures";
 import type { AdvisorSchema } from "./schema";
 import type { AdvisorSecretLiteral } from "./secrets";
 import type { AdvisorShape } from "./shapes";
 import type { AdvisorShardTraffic } from "./shard-traffic";
+import type { AdvisorSoftDeleteRead } from "./soft-delete-reads";
 import type { AdvisorSqlInterpolation } from "./sql-interpolation";
 import type { AdvisorStorageKeyAccess } from "./storage-key-accesses";
 import type { AdvisorStorageUpload } from "./storage-uploads";
@@ -442,6 +444,16 @@ export interface LintContext {
     ratelimitKeySelectors?: ReadonlyArray<AdvisorRatelimitKeySelector>;
 
     /**
+     * `ctx.db.&lt;table>.findMany({ with: { &lt;rel> } })` relation-hydrating list reads
+     * — the `masked_relation_leak_via_with` input. Column masking is applied to a
+     * read's top-level rows but does not descend into `with`-hydrated relations,
+     * so a masked table surfaced only through a `with` on an unprotected public
+     * read is returned in the clear. Supplied by the codegen feeder; absent for
+     * runtime callers, where the lint finds nothing.
+     */
+    relationLoads?: ReadonlyArray<AdvisorRelationLoad>;
+
+    /**
      * Per-procedure RLS usage discovered in function bodies (the
      * `rls_uncovered_table` input). Carries whether each procedure's builder chain
      * includes `.use(rls(...))`, which tables the procedure reads/writes, and which
@@ -477,6 +489,16 @@ export interface LintContext {
      * accumulator. Absent for static callers, where the lint finds nothing.
      */
     shardTraffic?: ReadonlyArray<AdvisorShardTraffic>;
+
+    /**
+     * `ctx.db.&lt;table>.findMany({ includeDeleted })` list reads whose
+     * `includeDeleted` is a hardcoded `true` or derived from the handler's
+     * `args` — the `soft_delete_include_deleted_from_args` input. On a public
+     * read of a `.softDelete()` table this resurfaces soft-deleted rows to any
+     * caller (arg-derived) or every caller (hardcoded). Supplied by the codegen
+     * feeder; absent for runtime callers, where the lint finds nothing.
+     */
+    softDeleteReads?: ReadonlyArray<AdvisorSoftDeleteRead>;
 
     /**
      * `ctx.sql` tagged-template interpolations that splice an unparameterized

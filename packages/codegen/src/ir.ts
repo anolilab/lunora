@@ -1470,6 +1470,55 @@ export interface PaymentWebhookIR {
     toleranceSeconds?: number;
 }
 
+/**
+ * One `ctx.db.&lt;table>.findMany({ includeDeleted })` list read whose
+ * `includeDeleted` is either a hardcoded `true` or derived from the handler's
+ * `args` — the `soft_delete_include_deleted_from_args` lint input. The lint joins
+ * `table` against the schema's soft-delete tables and `visibility` against
+ * `.public()` before flagging. Structurally identical to `AdvisorSoftDeleteRead`
+ * so values pass straight through without conversion.
+ */
+export interface SoftDeleteReadIR {
+    /** Export binding name of the procedure performing the read. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** `true` when `includeDeleted` was derived from the handler's `args` (any caller can flip it). */
+    fromArgs: boolean;
+    /** `true` when `includeDeleted` was a hardcoded `true` literal (always resurfaces soft-deleted rows). */
+    hardcodedTrue: boolean;
+    /** 1-based line of the read call. */
+    line: number;
+    /** Table read, or `""` when the table-arg form's first argument wasn't a string literal. */
+    table: string;
+    /** `"internal"` for `internalQuery` / `internalMutation` / `internalAction`. */
+    visibility: "internal" | "public";
+}
+
+/**
+ * One `ctx.db.&lt;table>.findMany({ with: { &lt;rel> } })` relation-hydrating list read
+ * — the `masked_relation_leak_via_with` lint input. Column masking does not
+ * descend into `with`-hydrated relations, so a masked table surfaced only through
+ * a `with` on an unprotected parent read is returned in the clear. The lint
+ * resolves each relation accessor to its target table and joins it against the
+ * discovered mask evidence before flagging. Structurally identical to
+ * `AdvisorRelationLoad` so values pass straight through without conversion.
+ */
+export interface RelationLoadIR {
+    /** Export binding name of the procedure performing the read. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the read call. */
+    line: number;
+    /** Parent table the read targets, or `""` when the table-arg form's first argument wasn't a string literal. */
+    parentTable: string;
+    /** Relation accessor names named in the read's `with: { … }` map — matched against the parent table's declared relations. */
+    relations: string[];
+    /** `"internal"` for `internalQuery` / `internalMutation` / `internalAction`. */
+    visibility: "internal" | "public";
+}
+
 export interface ProjectIR {
     crons: ReadonlyArray<CronJobIR>;
     functions: ReadonlyArray<FunctionIR>;

@@ -46,10 +46,12 @@ import discoverQueries from "./discover-queries";
 import { discoverQueues } from "./discover-queues";
 import discoverR2sqlCalls from "./discover-r2sql-calls";
 import discoverRatelimitKeySelectors from "./discover-ratelimit-key-selectors";
+import discoverRelationLoads from "./discover-relation-loads";
 import discoverRlsProcedures, { discoverRlsMetadata } from "./discover-rls-procedures";
 import discoverSchema from "./discover-schema";
 import discoverSecrets from "./discover-secrets";
 import { discoverShapes } from "./discover-shapes";
+import discoverSoftDeleteReads from "./discover-soft-delete-reads";
 import discoverSqlInterpolation from "./discover-sql-interpolation";
 import discoverStorageKeyAccesses from "./discover-storage-key-accesses";
 import discoverStorageRulesMetadata from "./discover-storage-rules";
@@ -373,6 +375,8 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   discoverAiToolSideEffects(project, lunoraDirectory),
                   discoverIdentityClaimReads(project, lunoraDirectory),
                   discoverPaymentWebhooks(project, lunoraDirectory),
+                  discoverSoftDeleteReads(project, lunoraDirectory),
+                  discoverRelationLoads(project, lunoraDirectory),
               );
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,
