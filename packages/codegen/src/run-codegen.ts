@@ -47,6 +47,7 @@ import discoverQueries from "./discover-queries";
 import { discoverQueues } from "./discover-queues";
 import discoverR2sqlCalls from "./discover-r2sql-calls";
 import discoverRatelimitKeySelectors from "./discover-ratelimit-key-selectors";
+import discoverRawRowReturns from "./discover-raw-row-returns";
 import discoverRelationLoads from "./discover-relation-loads";
 import discoverRlsProcedures, { discoverRlsMetadata } from "./discover-rls-procedures";
 import discoverSchema from "./discover-schema";
@@ -379,6 +380,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   discoverPaymentWebhooks(project, lunoraDirectory),
                   discoverSoftDeleteReads(project, lunoraDirectory),
                   discoverRelationLoads(project, lunoraDirectory),
+                  discoverRawRowReturns(project, lunoraDirectory),
                   options.wranglerVariables,
               );
 

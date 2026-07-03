@@ -34,6 +34,7 @@ import type {
     QueryReadIR,
     R2sqlCallIR,
     RatelimitKeySelectorIR,
+    RawRowReturnIR,
     RelationLoadIR,
     RlsProcedureIR,
     SchemaIR,
@@ -189,6 +190,7 @@ export const lintSchema = (
     paymentWebhooks?: ReadonlyArray<PaymentWebhookIR>,
     softDeleteReads?: ReadonlyArray<SoftDeleteReadIR>,
     relationLoads?: ReadonlyArray<RelationLoadIR>,
+    rawRowReturns?: ReadonlyArray<RawRowReturnIR>,
     wranglerVariables?: ReadonlyArray<WranglerVariableIR>,
 ): Finding[] =>
     runAdvisor(
@@ -225,6 +227,7 @@ export const lintSchema = (
             queries,
             r2sqlCalls,
             ratelimitKeySelectors,
+            rawRowReturns,
             relationLoads,
             rlsProcedures,
             schema: toAdvisorSchema(schema),

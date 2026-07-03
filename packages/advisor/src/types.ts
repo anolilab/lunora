@@ -32,6 +32,7 @@ import type { AdvisorProcedureProtection } from "./procedure-protections";
 import type { AdvisorQueryRead } from "./queries";
 import type { AdvisorR2sqlCall } from "./r2sql-calls";
 import type { AdvisorRatelimitKeySelector } from "./ratelimit-key-selectors";
+import type { AdvisorRawRowReturn } from "./raw-row-returns";
 import type { AdvisorRelationLoad } from "./relation-loads";
 import type { AdvisorRlsProcedure } from "./rls-procedures";
 import type { AdvisorSchema } from "./schema";
@@ -452,6 +453,20 @@ export interface LintContext {
      * absent for runtime callers, where the lint finds nothing.
      */
     ratelimitKeySelectors?: ReadonlyArray<AdvisorRatelimitKeySelector>;
+
+    /* eslint-disable no-secrets/no-secrets -- the referenced lint rule id in the doc comment, not a credential */
+
+    /**
+     * `query` handlers that `return` the raw rows of a table (a `ctx.db` row read
+     * or `ctx.db.query(...)` fluent chain, returned directly or through one local
+     * `const` hop, with no hand-built projection) — the
+     * `output_projection_missing_on_public_read` input. The lint keeps only public
+     * queries with no `.output(...)`/mask on the chain, then joins `table` against
+     * the schema's PII-named columns before nudging. Supplied by the codegen
+     * feeder; absent for runtime callers, where the lint finds nothing.
+     */
+    /* eslint-enable no-secrets/no-secrets -- re-enable after the rawRowReturns doc block */
+    rawRowReturns?: ReadonlyArray<AdvisorRawRowReturn>;
 
     /**
      * `ctx.db.&lt;table>.findMany({ with: { &lt;rel> } })` relation-hydrating list reads

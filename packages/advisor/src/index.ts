@@ -50,6 +50,7 @@ import maskWeakHashStrategyOnPii from "./lints/static/mask-weak-hash-strategy-on
 import maskedRelationLeakViaWith from "./lints/static/masked-relation-leak-via-with";
 import mutatorFullRowReplace from "./lints/static/mutator-full-row-replace";
 import nondeterministicQueryMutation from "./lints/static/nondeterministic-query-mutation";
+import outputProjectionMissingOnPublicRead from "./lints/static/output-projection-missing-on-public-read";
 import ownerFieldFromArgsNotAuth from "./lints/static/owner-field-from-args-not-auth";
 import paymentCreateWithoutAuthorize from "./lints/static/payment-create-without-authorize";
 import paymentWebhookWideTolerance from "./lints/static/payment-webhook-wide-tolerance";
@@ -156,6 +157,7 @@ export { default as maskWeakHashStrategyOnPii } from "./lints/static/mask-weak-h
 export { default as maskedRelationLeakViaWith } from "./lints/static/masked-relation-leak-via-with";
 export { default as mutatorFullRowReplace } from "./lints/static/mutator-full-row-replace";
 export { default as nondeterministicQueryMutation } from "./lints/static/nondeterministic-query-mutation";
+export { default as outputProjectionMissingOnPublicRead } from "./lints/static/output-projection-missing-on-public-read";
 export { default as ownerFieldFromArgsNotAuth } from "./lints/static/owner-field-from-args-not-auth";
 export { default as paymentCreateWithoutAuthorize } from "./lints/static/payment-create-without-authorize";
 export { default as paymentWebhookWideTolerance } from "./lints/static/payment-webhook-wide-tolerance";
@@ -203,6 +205,7 @@ export type { AdvisorProcedureProtection } from "./procedure-protections";
 export type { AdvisorQueryRead } from "./queries";
 export type { AdvisorR2sqlCall } from "./r2sql-calls";
 export type { AdvisorRatelimitKeySelector } from "./ratelimit-key-selectors";
+export type { AdvisorRawRowReturn } from "./raw-row-returns";
 export type { AdvisorRelationLoad } from "./relation-loads";
 export type { AdvisorRlsProcedure } from "./rls-procedures";
 export type { AdvisorIndex, AdvisorRelation, AdvisorSchema, AdvisorTable } from "./schema";
@@ -301,6 +304,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     paymentWebhookWideTolerance,
     softDeleteIncludeDeletedFromArgs,
     maskedRelationLeakViaWith,
+    outputProjectionMissingOnPublicRead,
     plaintextSecretInWranglerVariables,
 ];
 

@@ -1546,6 +1546,38 @@ export interface RelationLoadIR {
     visibility: "internal" | "public";
 }
 
+/* eslint-disable no-secrets/no-secrets -- the referenced advisor lint rule id in the doc comment, not a credential */
+
+/**
+ * One `query` handler whose `return` hands back the raw rows of a table — the
+ * result of a `ctx.db.&lt;table>.findMany()` / `.findFirst()` / `.get()` read, or a
+ * `ctx.db.query("&lt;table>")…collect()` fluent chain — returned directly (or through
+ * one local `const` hop) with no hand-built projection. The
+ * `output_projection_missing_on_public_read` lint keeps only `visibility ===
+ * "public"` rows with no `.output(...)` / `.use(mask(...))` on the chain, then
+ * joins `table` against the schema and flags one whose columns are PII-named.
+ * Structurally identical to `AdvisorRawRowReturn` so values pass straight through
+ * without conversion.
+ */
+export interface RawRowReturnIR {
+    /** Export binding name of the query returning the raw rows. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the `return` (or concise-body) expression. */
+    line: number;
+    /** Table whose raw rows are returned, or `""` when the read's table wasn't a string literal. */
+    table: string;
+    /** `true` when the procedure's builder chain carries a `.use(mask(...))` step. */
+    usesMask: boolean;
+    /** `true` when the procedure's builder chain carries an `.output(...)` return-shape projection. */
+    usesOutput: boolean;
+    /** `"internal"` for `internalQuery`; `"public"` for `query`. */
+    visibility: "internal" | "public";
+}
+
+/* eslint-enable no-secrets/no-secrets -- re-enable after the RawRowReturnIR doc block */
+
 /**
  * One committed `wrangler.jsonc` `vars` entry whose value is a plaintext secret —
  * the `plaintext_secret_in_wrangler_vars` lint input. `vars` are baked into the
