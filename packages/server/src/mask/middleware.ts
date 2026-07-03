@@ -221,6 +221,73 @@ const maskPage = <Context>(page: QueryPage, columns: MaskColumns<Context>, base:
 };
 
 /**
+ * SECURITY (value oracle on the index path): `withIndex` / `withSearchIndex`
+ * constrain WHICH rows are fetched by a caller-supplied range/search over a
+ * column. If that column is masked, a caller can
+ * `query(table).withIndex("by_ssn", q => q.eq("ssn", guess)).first()` — or the
+ * search-index twin `q => q.search("email", term)` — and confirm / binary-search
+ * the exact value the mask is meant to hide. It is the same oracle
+ * `assertWhereAllowed` (below) closes on the `where` path, reached instead
+ * through the index builder.
+ *
+ * Unlike `where` (a plain object walked by `collectWhereFields`), the
+ * range/search is a builder CALLBACK (`q => q.eq("ssn", x)`), so the referenced
+ * fields aren't statically inspectable. Run the callback once against a
+ * recording proxy: its blanket `get` trap turns EVERY property access into a
+ * method that captures its first positional argument — the field name is ALWAYS
+ * the first argument of every builder method (`eq`/`gt`/`gte`/`lt`/`lte` on the
+ * index range, `eq`/`search` on the search filter) — and returns a fresh
+ * recorder so the chain (`q.eq(...).gt(...)`) keeps recording. Recording through
+ * a blanket trap rather than a fixed method allow-list FAILS CLOSED: a
+ * field-naming method added to the builder later still records its field with no
+ * change here. Then reject if any recorded field is masked, mirroring
+ * `assertWhereAllowed`'s message.
+ *
+ * The callback runs twice — here on the recorder, then on the real builder in
+ * `reader.withIndex`/`withSearchIndex`. The builder callbacks are pure (they
+ * only push into a fresh per-call stage; see `@lunora/do`'s `createRangeBuilder`
+ * / `createSearchBuilder`), so the dry pass is side-effect free. `withIndex`'s
+ * `range` is optional (a bare index scan) — with no callback there is no field
+ * to record and nothing to reject.
+ */
+const assertIndexFieldsAllowed = <Context>(
+    builderCallback: ((q: unknown) => unknown) | undefined,
+    columns: MaskColumns<Context>,
+    tableName: string,
+    method: string,
+): void => {
+    if (typeof builderCallback !== "function") {
+        return;
+    }
+
+    const referenced = new Set<string>();
+
+    const makeRecorder = (): unknown =>
+        new Proxy(
+            {},
+            {
+                get:
+                    () =>
+                    (field: unknown): unknown => {
+                        if (typeof field === "string") {
+                            referenced.add(field);
+                        }
+
+                        return makeRecorder();
+                    },
+            },
+        );
+
+    builderCallback(makeRecorder());
+
+    for (const field of referenced) {
+        if (field in columns) {
+            throw new LunoraError("MASK_UNSUPPORTED", `${method}() filtering "${tableName}" by masked column "${field}" is not supported`);
+        }
+    }
+};
+
+/**
  * A value glued onto `ctx.db` is a per-table facade entry when it carries the
  * `findMany` + `withSearchIndex` accessor pair (mirrors RLS's check). Used to
  * find the entries that need re-binding through the masked writer.
@@ -246,7 +313,7 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
      * refinement (`filter` / `order` / `withIndex` / `withSearchIndex`) returns a
      * reader that is still masked.
      */
-    const wrapReader = (reader: TableReaderLike, columns: MaskColumns<Context>): TableReaderLike => {
+    const wrapReader = (reader: TableReaderLike, columns: MaskColumns<Context>, tableName: string): TableReaderLike => {
         return {
             collect: async () => {
                 const rows = await reader.collect();
@@ -262,6 +329,7 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
                 wrapReader(
                     reader.filter((document) => predicate(maskRow(document, columns, context))),
                     columns,
+                    tableName,
                 ),
             first: async () => {
                 const row = await reader.first();
@@ -269,7 +337,7 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
                 // eslint-disable-next-line unicorn/no-null -- mirrors the reader's `null` empty sentinel
                 return row ? maskRow(row, columns, context) : null;
             },
-            order: (direction) => wrapReader(reader.order(direction), columns),
+            order: (direction) => wrapReader(reader.order(direction), columns, tableName),
             paginate: async (options) => maskPage(await reader.paginate(options), columns, context),
             take: async (limit) => {
                 const rows = await reader.take(limit);
@@ -282,8 +350,21 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
                 // eslint-disable-next-line unicorn/no-null -- mirrors the reader's `null` empty sentinel
                 return row ? maskRow(row, columns, context) : null;
             },
-            withIndex: (indexName, range) => wrapReader(reader.withIndex(indexName, range), columns),
-            withSearchIndex: (indexName, search) => wrapReader(reader.withSearchIndex(indexName, search), columns),
+            // SECURITY (value oracle): reject before delegating when the range /
+            // search references a masked column — an index range or search term
+            // over a masked column is the same value oracle as a masked-column
+            // `where`, so it must fail closed (see `assertIndexFieldsAllowed`).
+            // Reads over NON-masked columns pass through and still mask output.
+            withIndex: (indexName, range) => {
+                assertIndexFieldsAllowed(range, columns, tableName, "withIndex");
+
+                return wrapReader(reader.withIndex(indexName, range), columns, tableName);
+            },
+            withSearchIndex: (indexName, search) => {
+                assertIndexFieldsAllowed(search, columns, tableName, "withSearchIndex");
+
+                return wrapReader(reader.withSearchIndex(indexName, search), columns, tableName);
+            },
         };
     };
 
@@ -475,7 +556,7 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
             const reader = base.query(tableName);
             const columns = perTable.get(tableName);
 
-            return columns ? wrapReader(reader, columns) : reader;
+            return columns ? wrapReader(reader, columns, tableName) : reader;
         },
 
         async rankPage(tableName, indexName, options) {
