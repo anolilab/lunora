@@ -161,7 +161,17 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         };
 
         const checkNamespace = (namespace: string | undefined): void => {
-            if (namespace === undefined && !config.allowSharedNamespace) {
+            if (namespace !== undefined) {
+                return;
+            }
+
+            if (config.requireNamespace) {
+                throw new TypeError(
+                    `@lunora/ai/rag: index "${config.index}" requires a namespace (requireNamespace is set) — pass the tenant/shard key on index()/retrieve()/remove()`,
+                );
+            }
+
+            if (!config.allowSharedNamespace) {
                 warnSharedNamespace(config.index);
             }
         };
@@ -269,6 +279,8 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         };
 
         const remove = async (input: RemoveInput): Promise<void> => {
+            checkNamespace(input.namespace);
+
             const previous = await readHead(input.id);
 
             // Without a head record there is nothing reliable to delete; a

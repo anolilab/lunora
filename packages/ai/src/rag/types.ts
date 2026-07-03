@@ -121,6 +121,14 @@ export interface RagConfig {
     embeddingModel?: EmbeddingModelInput;
     /** The Vectorize index name (a `ctx.vectors` index binding key). */
     index: string;
+
+    /**
+     * Enforce tenant isolation: throw (instead of the one-time dev warning)
+     * when `index`/`retrieve`/`remove` run without a `namespace`. Recommended
+     * for every multi-tenant app — Vectorize indexes are account-global, and
+     * in metadata mode the leaked payload includes raw chunk text.
+     */
+    requireNamespace?: boolean;
     /** Chunk-text storage override — see {@link RagTextStore}. */
     textStore?: RagTextStore;
     /** Default retrieval depth. Default 5. Capped at 20 (metadata mode) / 100 (text-store mode). */
