@@ -1,17 +1,22 @@
 import type { AdvisorAdminRoute } from "./admin-routes";
+import type { AdvisorAiRawRun } from "./ai-raw-runs";
 import type { AdvisorArgumentDerivedFetch } from "./argument-derived-fetches";
 import type { AdvisorArgumentValidator } from "./argument-validators";
 import type { AdvisorAuthApiCall } from "./authapi-calls";
+import type { AdvisorBrowserUrlAccess } from "./browser-url-accesses";
 import type { AdvisorConfigCall } from "./config-calls";
+import type { AdvisorContainerKeyAccess } from "./container-key-accesses";
 import type { AdvisorContainer } from "./containers";
 import type { AdvisorHyperdriveCall } from "./hyperdrive-calls";
 import type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
 import type { AdvisorInsertWrite } from "./inserts";
 import type { AdvisorKvKeyAccess } from "./kv-key-accesses";
+import type { AdvisorMailRecipientAccess } from "./mail-recipient-accesses";
 import type { AdvisorMaskProcedure } from "./mask-procedures";
 import type { AdvisorMutatorWrite } from "./mutator-writes";
 import type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
 import type { AdvisorOwnerFieldWrite } from "./owner-field-writes";
+import type { AdvisorPrivilegedDispatch } from "./privileged-dispatches";
 import type { AdvisorProcedureProtection } from "./procedure-protections";
 import type { AdvisorQueryRead } from "./queries";
 import type { AdvisorR2sqlCall } from "./r2sql-calls";
@@ -23,6 +28,7 @@ import type { AdvisorShardTraffic } from "./shard-traffic";
 import type { AdvisorSqlInterpolation } from "./sql-interpolation";
 import type { AdvisorStorageKeyAccess } from "./storage-key-accesses";
 import type { AdvisorTableSample } from "./table-samples";
+import type { AdvisorVectorNamespaceAccess } from "./vector-namespace-accesses";
 import type { AdvisorWorkflow, AdvisorWorkflowCall } from "./workflows";
 
 /**
@@ -102,6 +108,17 @@ export interface LintContext {
     adminRoutes?: ReadonlyArray<AdvisorAdminRoute>;
 
     /**
+     * `ctx.ai.run(model, …)` calls whose model-id argument is derived from the
+     * handler's `args` with no server-side scoping — the `ai_raw_run_escape_hatch`
+     * input. `ctx.ai.run` is the raw Workers AI passthrough, so an arg-derived model
+     * id lets any caller select an arbitrary model, bypassing the typed
+     * `ctx.ai.model(...)` + AI-SDK layer's cap/schema (an arg-derived `inputs`
+     * argument is normal usage and is not recorded). Supplied by the codegen feeder;
+     * absent for runtime callers, where the lint finds nothing.
+     */
+    aiRawRuns?: ReadonlyArray<AdvisorAiRawRun>;
+
+    /**
      * `ctx.fetch(url, …)` calls inside actions whose URL argument is derived from
      * the handler's `args` — the `action_fetch_ssrf` input. `ctx.fetch` has no
      * host allowlist, so a URL built from request input is a server-side request
@@ -126,6 +143,18 @@ export interface LintContext {
     authApiCalls?: ReadonlyArray<AdvisorAuthApiCall>;
 
     /**
+     * `ctx.browser.&lt;method>(url, …)` calls whose navigation URL is derived from the
+     * handler's `args` with no server-side scoping — the
+     * `browser_user_url_without_allowlist` input. `@lunora/browser` blocks
+     * private/internal targets by default, but a request-supplied public URL can
+     * still be an open-proxy / SSRF vector; the lint suppresses findings when a
+     * `createBrowser` config-call is hardened with `allowedHosts` or `resolveDns`.
+     * Supplied by the codegen feeder; absent for runtime callers, where the lint
+     * finds nothing.
+     */
+    browserUrlAccesses?: ReadonlyArray<AdvisorBrowserUrlAccess>;
+
+    /**
      * Factory/constructor calls in `lunora/` whose config object literal a
      * security lint inspects for a present-or-absent key — the shared input for
      * the config-call security lints (payment authorize, inbound-mail verify,
@@ -133,6 +162,17 @@ export interface LintContext {
      * absent for runtime callers, where the config-call lints find nothing.
      */
     configCalls?: ReadonlyArray<AdvisorConfigCall>;
+
+    /**
+     * `ctx.containers.&lt;name>.get(key, …)` calls whose instance key is derived from
+     * the handler's `args` with no server-side scoping — the
+     * `container_instance_key_from_user_input` input. Each container definition's
+     * `.get(name)` accessor routes to one instance per key, so an arg-derived key lets
+     * any caller reach another tenant's container (cross-tenant IDOR). A key scoped by
+     * a server-trusted `ctx.*` value, or a fixed literal, is not recorded. Supplied by
+     * the codegen feeder; absent for runtime callers, where the lint finds nothing.
+     */
+    containerKeyAccesses?: ReadonlyArray<AdvisorContainerKeyAccess>;
 
     /**
      * Containers declared in `lunora/containers.ts` — the `container_*` lint
@@ -178,6 +218,17 @@ export interface LintContext {
     kvKeyAccesses?: ReadonlyArray<AdvisorKvKeyAccess>;
 
     /**
+     * `ctx.mail`/`ctx.email` `send`/`queue` calls whose `to`/`cc`/`bcc` recipient is
+     * derived from the handler's `args` with no server-side scoping — the
+     * `mail_recipient_from_request_input` input. A recipient taken straight from
+     * request input turns the deployment into an open relay / spam amplifier (any
+     * caller can direct mail to an arbitrary address). A recipient scoped by a
+     * server-trusted `ctx.*` value, or a fixed literal, is not recorded. Supplied by
+     * the codegen feeder; absent for runtime callers, where the lint finds nothing.
+     */
+    mailRecipientAccesses?: ReadonlyArray<AdvisorMailRecipientAccess>;
+
+    /**
      * Per-procedure column-masking usage discovered in function bodies (the
      * `mask_uncovered_pii_column` input). Carries whether each procedure's builder
      * chain includes `.use(mask(...))`, which `(table, column)` pairs its mask
@@ -217,6 +268,18 @@ export interface LintContext {
      * absent for runtime callers, where the lint finds nothing.
      */
     ownerFieldWrites?: ReadonlyArray<AdvisorOwnerFieldWrite>;
+
+    /**
+     * Payload-derived privileged dispatches — the `privileged_dispatch_unvalidated_payload`
+     * input. Each is a `ctx.run`/`context.run` back into a Lunora function from inside a
+     * `defineQueue` push handler or a `defineWorkflow` handler, whose args reference the
+     * handler's untrusted payload (`context.params` for a workflow, a `for (… of
+     * batch.messages)` body for a queue). Both handler kinds run under the system identity
+     * (RLS disabled), so the lint joins the resolved target against `rlsProcedures` and
+     * fires only when the target enforces a row policy. Supplied by the codegen feeder;
+     * absent for runtime callers, where the lint finds nothing.
+     */
+    privilegedDispatches?: ReadonlyArray<AdvisorPrivilegedDispatch>;
 
     /**
      * Per-procedure protective-middleware snapshots — the
@@ -323,6 +386,17 @@ export interface LintContext {
      * and shards. Absent for static callers, where the lint finds nothing.
      */
     tableScans?: ReadonlyArray<AdvisorTableScan>;
+
+    /**
+     * `ctx.vectors.&lt;method>(index, { namespace, … })` calls whose `namespace` is
+     * derived from the handler's `args` with no server-side scoping — the
+     * `vectors_namespace_from_user_input` input. A Vectorize namespace partitions one
+     * index into isolated sub-collections, so an arg-derived namespace lets any caller
+     * read or poison another tenant's vectors. A namespace scoped by a server-trusted
+     * `ctx.*` value, or a fixed literal, is not recorded. Supplied by the codegen
+     * feeder; absent for runtime callers, where the lint finds nothing.
+     */
+    vectorNamespaceAccesses?: ReadonlyArray<AdvisorVectorNamespaceAccess>;
 
     /**
      * `ctx.workflows.get("name")` call sites discovered in function bodies — the

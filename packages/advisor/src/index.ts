@@ -12,10 +12,13 @@ import hotShard from "./lints/runtime/hot-shard";
 import indexUtilization from "./lints/runtime/index-utilization";
 import actionFetchSsrf from "./lints/static/action-fetch-ssrf";
 import adminRouteWithoutGuard from "./lints/static/admin-route-without-guard";
+import aiRawRunEscapeHatch from "./lints/static/ai-raw-run-escape-hatch";
 import aiUnboundedGenerationPublic from "./lints/static/ai-unbounded-generation-public";
 import authApiCallWithoutHeaders from "./lints/static/auth-api-call-without-headers";
 import browserAllowPrivateTargets from "./lints/static/browser-allow-private-targets";
+import browserUserUrlWithoutAllowlist from "./lints/static/browser-user-url-without-allowlist";
 import circularFk from "./lints/static/circular-fk";
+import containerInstanceKeyFromUserInput from "./lints/static/container-instance-key-from-user-input";
 import containerOversizedInstance from "./lints/static/container-oversized-instance";
 import containerPublicInternet from "./lints/static/container-public-internet";
 import duplicateIndex from "./lints/static/duplicate-index";
@@ -27,12 +30,14 @@ import indexReferencesUnknownField from "./lints/static/index-references-unknown
 import insertManyUnsafeUserData from "./lints/static/insert-many-unsafe-user-data";
 import kvUnscopedUserKeyIdor from "./lints/static/kv-unscoped-user-key-idor";
 import mailInboundDispatchWithoutVerify from "./lints/static/mail-inbound-dispatch-without-verify";
+import mailRecipientFromRequestInput from "./lints/static/mail-recipient-from-request-input";
 import maskUncoveredPiiColumn from "./lints/static/mask-uncovered-pii-column";
 import mutatorFullRowReplace from "./lints/static/mutator-full-row-replace";
 import nondeterministicQueryMutation from "./lints/static/nondeterministic-query-mutation";
 import ownerFieldFromArgsNotAuth from "./lints/static/owner-field-from-args-not-auth";
 import paymentCreateWithoutAuthorize from "./lints/static/payment-create-without-authorize";
 import policyReferencesUnknownTable from "./lints/static/policy-references-unknown-table";
+import privilegedDispatchUnvalidatedPayload from "./lints/static/privileged-dispatch-unvalidated-payload";
 import privilegedFanoutFromPublicProcedure from "./lints/static/privileged-fanout-from-public-procedure";
 import publicArgumentUsesAny from "./lints/static/public-argument-uses-any";
 import publicMutationWithoutRatelimit from "./lints/static/public-mutation-without-ratelimit";
@@ -50,6 +55,7 @@ import unboundedStringArgument from "./lints/static/unbounded-string-argument";
 import unindexedForeignKey from "./lints/static/unindexed-foreign-key";
 import unindexedRelationTarget from "./lints/static/unindexed-relation-target";
 import userCreatingMutationWithoutCaptcha from "./lints/static/user-creating-mutation-without-captcha";
+import vectorsNamespaceFromUserInput from "./lints/static/vectors-namespace-from-user-input";
 import workflowDuplicateStepName from "./lints/static/workflow-duplicate-step-name";
 import workflowUnknownTarget from "./lints/static/workflow-unknown-target";
 import workflowUnused from "./lints/static/workflow-unused";
@@ -58,10 +64,13 @@ import type { Finding, Lint, LintContext, LintSource } from "./types";
 export type { AdvisorAdminRoute } from "./admin-routes";
 export type { AnalyticsMetricsOptions, AnalyticsMetricsSource, AnalyticsRuntimeMetrics } from "./ae-metrics";
 export { AE_METRIC_EVENTS, loadAnalyticsRuntimeMetrics } from "./ae-metrics";
+export type { AdvisorAiRawRun } from "./ai-raw-runs";
 export type { AdvisorArgumentDerivedFetch } from "./argument-derived-fetches";
 export type { AdvisorArgumentValidator } from "./argument-validators";
 export type { AdvisorAuthApiCall } from "./authapi-calls";
+export type { AdvisorBrowserUrlAccess } from "./browser-url-accesses";
 export type { AdvisorConfigCall } from "./config-calls";
+export type { AdvisorContainerKeyAccess } from "./container-key-accesses";
 export type { AdvisorContainer } from "./containers";
 export type { AdvisorHyperdriveCall } from "./hyperdrive-calls";
 export type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
@@ -72,10 +81,13 @@ export { default as hotShard } from "./lints/runtime/hot-shard";
 export { default as indexUtilization } from "./lints/runtime/index-utilization";
 export { default as actionFetchSsrf } from "./lints/static/action-fetch-ssrf";
 export { default as adminRouteWithoutGuard } from "./lints/static/admin-route-without-guard";
+export { default as aiRawRunEscapeHatch } from "./lints/static/ai-raw-run-escape-hatch";
 export { default as aiUnboundedGenerationPublic } from "./lints/static/ai-unbounded-generation-public";
 export { default as authApiCallWithoutHeaders } from "./lints/static/auth-api-call-without-headers";
 export { default as browserAllowPrivateTargets } from "./lints/static/browser-allow-private-targets";
+export { default as browserUserUrlWithoutAllowlist } from "./lints/static/browser-user-url-without-allowlist";
 export { default as circularFk } from "./lints/static/circular-fk";
+export { default as containerInstanceKeyFromUserInput } from "./lints/static/container-instance-key-from-user-input";
 export { default as containerOversizedInstance } from "./lints/static/container-oversized-instance";
 export { default as containerPublicInternet } from "./lints/static/container-public-internet";
 export { default as duplicateIndex } from "./lints/static/duplicate-index";
@@ -89,12 +101,14 @@ export { default as indexReferencesUnknownField } from "./lints/static/index-ref
 export { default as insertManyUnsafeUserData } from "./lints/static/insert-many-unsafe-user-data";
 export { default as kvUnscopedUserKeyIdor } from "./lints/static/kv-unscoped-user-key-idor";
 export { default as mailInboundDispatchWithoutVerify } from "./lints/static/mail-inbound-dispatch-without-verify";
+export { default as mailRecipientFromRequestInput } from "./lints/static/mail-recipient-from-request-input";
 export { default as maskUncoveredPiiColumn } from "./lints/static/mask-uncovered-pii-column";
 export { default as mutatorFullRowReplace } from "./lints/static/mutator-full-row-replace";
 export { default as nondeterministicQueryMutation } from "./lints/static/nondeterministic-query-mutation";
 export { default as ownerFieldFromArgsNotAuth } from "./lints/static/owner-field-from-args-not-auth";
 export { default as paymentCreateWithoutAuthorize } from "./lints/static/payment-create-without-authorize";
 export { default as policyReferencesUnknownTable } from "./lints/static/policy-references-unknown-table";
+export { default as privilegedDispatchUnvalidatedPayload } from "./lints/static/privileged-dispatch-unvalidated-payload";
 export { default as privilegedFanoutFromPublicProcedure } from "./lints/static/privileged-fanout-from-public-procedure";
 export { default as publicArgumentUsesAny } from "./lints/static/public-argument-uses-any";
 export { default as publicMutationWithoutRatelimit } from "./lints/static/public-mutation-without-ratelimit";
@@ -112,13 +126,16 @@ export { default as unboundedStringArgument } from "./lints/static/unbounded-str
 export { default as unindexedForeignKey } from "./lints/static/unindexed-foreign-key";
 export { default as unindexedRelationTarget } from "./lints/static/unindexed-relation-target";
 export { default as userCreatingMutationWithoutCaptcha } from "./lints/static/user-creating-mutation-without-captcha";
+export { default as vectorsNamespaceFromUserInput } from "./lints/static/vectors-namespace-from-user-input";
 export { default as workflowDuplicateStepName } from "./lints/static/workflow-duplicate-step-name";
 export { default as workflowUnknownTarget } from "./lints/static/workflow-unknown-target";
 export { default as workflowUnused } from "./lints/static/workflow-unused";
+export type { AdvisorMailRecipientAccess } from "./mail-recipient-accesses";
 export type { AdvisorMaskProcedure } from "./mask-procedures";
 export type { AdvisorMutatorWrite } from "./mutator-writes";
 export type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
 export type { AdvisorOwnerFieldWrite } from "./owner-field-writes";
+export type { AdvisorPrivilegedDispatch } from "./privileged-dispatches";
 export type { AdvisorProcedureProtection } from "./procedure-protections";
 export type { AdvisorQueryRead } from "./queries";
 export type { AdvisorR2sqlCall } from "./r2sql-calls";
@@ -132,6 +149,7 @@ export type { AdvisorSqlInterpolation } from "./sql-interpolation";
 export type { AdvisorStorageKeyAccess } from "./storage-key-accesses";
 export type { AdvisorTableSample } from "./table-samples";
 export type { Category, Facing, Finding, Level, Lint, LintContext, LintSource } from "./types";
+export type { AdvisorVectorNamespaceAccess } from "./vector-namespace-accesses";
 export type { AdvisorWorkflow, AdvisorWorkflowCall } from "./workflows";
 
 /**
@@ -184,6 +202,12 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     ownerFieldFromArgsNotAuth,
     storageKeyFromUserArgs,
     kvUnscopedUserKeyIdor,
+    containerInstanceKeyFromUserInput,
+    aiRawRunEscapeHatch,
+    vectorsNamespaceFromUserInput,
+    mailRecipientFromRequestInput,
+    browserUserUrlWithoutAllowlist,
+    privilegedDispatchUnvalidatedPayload,
 ];
 
 /**

@@ -7,10 +7,13 @@ import { Project } from "ts-morph";
 
 import { lintSchema } from "./advisor";
 import discoverAdminRoutes from "./discover-admin-routes";
+import discoverAiRawRuns from "./discover-ai-raw-runs";
 import discoverArgumentDerivedFetches from "./discover-argument-derived-fetches";
 import discoverArgumentValidators from "./discover-argument-validators";
 import discoverAuthApiCalls from "./discover-authapi-calls";
+import discoverBrowserUrlAccesses from "./discover-browser-url-accesses";
 import discoverConfigCalls from "./discover-config-calls";
+import discoverContainerKeyAccesses from "./discover-container-key-accesses";
 import { discoverContainers } from "./discover-containers";
 import discoverCrons from "./discover-crons";
 import { buildStudioFeatures, discoverFeatureUsage } from "./discover-feature-usage";
@@ -20,6 +23,7 @@ import discoverHttpRoutes from "./discover-http-routes";
 import { discoverIdentity } from "./discover-identity";
 import discoverInserts from "./discover-inserts";
 import discoverKvKeyAccesses from "./discover-kv-key-accesses";
+import discoverMailRecipientAccesses from "./discover-mail-recipient-accesses";
 import discoverMaskProcedures, { discoverMaskMetadata } from "./discover-mask-procedures";
 import discoverMigrations from "./discover-migrations";
 import discoverMutatorWrites from "./discover-mutator-writes";
@@ -27,6 +31,7 @@ import { discoverMutators } from "./discover-mutators";
 import discoverNondeterministicCalls from "./discover-nondeterministic-calls";
 import discoverOwnerFieldWrites from "./discover-owner-field-writes";
 import discoverPackageDependencies from "./discover-package-dependencies";
+import discoverPrivilegedDispatches from "./discover-privileged-dispatches";
 import discoverProcedureMiddleware from "./discover-procedure-middleware";
 import discoverQueries from "./discover-queries";
 import { discoverQueues } from "./discover-queues";
@@ -38,6 +43,7 @@ import { discoverShapes } from "./discover-shapes";
 import discoverSqlInterpolation from "./discover-sql-interpolation";
 import discoverStorageKeyAccesses from "./discover-storage-key-accesses";
 import discoverStorageRulesMetadata from "./discover-storage-rules";
+import discoverVectorNamespaceAccesses from "./discover-vector-namespace-accesses";
 import discoverWorkflowCalls from "./discover-workflow-calls";
 import { discoverWorkflows } from "./discover-workflows";
 import {
@@ -338,6 +344,12 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   discoverKvKeyAccesses(project, lunoraDirectory),
                   discoverOwnerFieldWrites(project, lunoraDirectory),
                   discoverStorageKeyAccesses(project, lunoraDirectory),
+                  discoverAiRawRuns(project, lunoraDirectory),
+                  discoverContainerKeyAccesses(project, lunoraDirectory),
+                  discoverMailRecipientAccesses(project, lunoraDirectory),
+                  discoverVectorNamespaceAccesses(project, lunoraDirectory),
+                  discoverBrowserUrlAccesses(project, lunoraDirectory),
+                  discoverPrivilegedDispatches(project, lunoraDirectory),
               );
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,

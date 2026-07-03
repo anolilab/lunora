@@ -1005,6 +1005,134 @@ export interface StorageKeyAccessIR {
 }
 
 /**
+ * One `ctx.containers.&lt;exportName>.get(name, …)` call whose instance key is derived
+ * from the handler's `args` with no server-side scoping — the
+ * `container_instance_key_from_user_input` lint input. Each container definition's
+ * `.get(name)` accessor routes to one instance per `name`, so a key taken straight from
+ * request input lets any caller reach another tenant's container (a cross-tenant IDOR). A
+ * fixed literal key, or one derived from a server-trusted identity (`${ctx.auth.userId}` —
+ * references `ctx`, so treated as scoped), is not recorded; only an arg-derived, unscoped
+ * key reaches here. `.any()`/`.pool()` take no key and are not sinks. Structurally
+ * identical to `AdvisorContainerKeyAccess`.
+ */
+export interface ContainerKeyAccessIR {
+    /** Export binding name of the procedure performing the `ctx.containers` access. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the `ctx.containers.*.get` call, or `0` when unknown. */
+    line: number;
+    /** The container accessor method invoked — always `get`. */
+    method: string;
+}
+
+/**
+ * One `ctx.ai.run(model, …)` call whose model-id argument is derived from the handler's
+ * `args` with no server-side scoping — the `ai_raw_run_escape_hatch` lint input.
+ * `ctx.ai.run` is the raw Workers AI binding passthrough, bypassing the typed
+ * `ctx.ai.model(...)` + AI-SDK layer (`generateText`/`streamText`/…) that caps output and
+ * enforces a schema, so an arg-derived model id lets any caller select an arbitrary model.
+ * A fixed literal model, or one scoped by a server-trusted `ctx.*` value, is not recorded;
+ * only an arg-derived, unscoped model id reaches here (an arg-derived `inputs` argument is
+ * normal usage and is never inspected). Structurally identical to `AdvisorAiRawRun`.
+ */
+export interface AiRawRunIR {
+    /** Export binding name of the procedure performing the `ctx.ai.run` call. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the `ctx.ai.run` call, or `0` when unknown. */
+    line: number;
+}
+
+/**
+ * One `ctx.vectors.&lt;method>(indexName, input)` call whose `input.namespace` is derived
+ * from the handler's `args` with no server-side scoping — the
+ * `vectors_namespace_from_user_input` lint input. A Vectorize namespace partitions one
+ * index into isolated sub-collections, so a namespace taken straight from request input
+ * lets any caller read or poison another tenant's vectors. A fixed literal namespace, or
+ * one prefixed with a server-trusted identity (`${ctx.auth.orgId}` — references `ctx`, so
+ * treated as scoped), is not recorded; only an arg-derived, unscoped namespace reaches
+ * here. Structurally identical to `AdvisorVectorNamespaceAccess`.
+ */
+export interface VectorNamespaceAccessIR {
+    /** Export binding name of the procedure performing the `ctx.vectors` access. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the `ctx.vectors` call, or `0` when unknown. */
+    line: number;
+    /** The `ctx.vectors` method invoked: `query` / `upsert` / `upsertMany`. */
+    method: string;
+}
+
+/**
+ * One `ctx.mail`/`ctx.email` `send`/`queue` call whose recipient field (`to`/`cc`/`bcc`)
+ * is derived from the handler's `args` with no server-side scoping — the
+ * `mail_recipient_from_request_input` lint input. A recipient taken straight from request
+ * input turns the deployment into an open relay / spam amplifier (any caller can direct
+ * mail to an arbitrary address). A fixed literal recipient, or one scoped by a
+ * server-trusted `ctx.*` value (e.g. `ctx.auth.user.email`), is not recorded; only an
+ * arg-derived, unscoped recipient reaches here. Structurally identical to
+ * `AdvisorMailRecipientAccess`.
+ */
+export interface MailRecipientAccessIR {
+    /** Export binding name of the procedure performing the `ctx.mail`/`ctx.email` call. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the `ctx.mail`/`ctx.email` call, or `0` when unknown. */
+    line: number;
+    /** The mailer method invoked: `send` / `queue`. */
+    method: string;
+}
+
+/**
+ * One `ctx.browser.&lt;method>(url, …)` call whose navigation URL (`arguments[0]`)
+ * is derived from the handler's `args` with no server-side scoping — the
+ * `browser_user_url_without_allowlist` lint input. The lint additionally
+ * cross-references `createBrowser` config-call evidence to suppress findings
+ * when the browser is hardened with an `allowedHosts` allowlist or
+ * `resolveDns`. Structurally identical to `AdvisorBrowserUrlAccess`.
+ */
+export interface BrowserUrlAccessIR {
+    /** Export binding name of the procedure performing the `ctx.browser` call. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the `ctx.browser` call, or `0` when unknown. */
+    line: number;
+    /** The browser method invoked: `content` / `pdf` / `scrape` / `screenshot`. */
+    method: string;
+}
+
+/**
+ * One payload-derived privileged dispatch — a `ctx.run`/`context.run` back into a
+ * Lunora function from inside a `defineQueue` push handler or a `defineWorkflow`
+ * handler, whose args reference the handler's untrusted payload (`context.params`
+ * for a workflow, a `for (… of batch.messages)` body for a queue) — the
+ * `privileged_dispatch_unvalidated_payload` lint input. Both handler kinds run
+ * under the **system identity** (RLS disabled), so forwarding attacker-influenced
+ * payload into the dispatch bypasses the target's row policy. The resolved
+ * `targetFile`/`targetExport` let the lint join RLS-procedure evidence and fire
+ * only for RLS-gated targets. Structurally identical to `AdvisorPrivilegedDispatch`.
+ */
+export interface PrivilegedDispatchIR {
+    /** `"queue"` for a `defineQueue` handler, `"workflow"` for a `defineWorkflow` handler. */
+    dispatchKind: "queue" | "workflow";
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** Export binding name of the handler performing the dispatch. */
+    handlerExport: string;
+    /** 1-based line of the dispatch call, or `0` when unknown. */
+    line: number;
+    /** Export name of the dispatched target (`send` in `api.messages.send`). */
+    targetExport: string;
+    /** File path of the dispatched target relative to `lunora/` (`messages` in `api.messages.send`). */
+    targetFile: string;
+}
+
+/**
  * One discovered `httpRoute.&lt;verb>("/admin/…")` route on an admin/privileged-looking
  * path, with whether its builder chain references an auth/admin guard — the
  * `admin_route_without_guard` lint input. Structurally identical to
