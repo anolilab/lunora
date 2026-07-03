@@ -76,11 +76,12 @@ const agentFromCall = (call: CallExpression, exportName: string): AgentIR => {
 };
 
 /**
- * Collect exported `defineAgent` declarations from one source file. The same
- * `lunora/agents.ts` also carries the destructured runtime-function re-export
- * (`export const { agentAppendMessage, … } = agentComponent().functions`); that
- * declaration's initializer is a property access, not a `CallExpression`, so it
- * is skipped by the guard below and only the `defineAgent()` calls are lifted.
+ * Collect exported `defineAgent` declarations from one source file. Apps never
+ * re-export the runtime component functions (codegen auto-registers them), but
+ * a hand-written `export const { agentAppendMessage } = agentComponent().functions`
+ * must not break discovery either — its initializer is a property access, not a
+ * `CallExpression`, so the guard below skips it and only `defineAgent()` calls
+ * are lifted.
  */
 const agentsFromSource = (source: SourceFile): AgentIR[] => {
     const agents: AgentIR[] = [];

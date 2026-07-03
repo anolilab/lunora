@@ -4,7 +4,7 @@ Durable AI agents for [Lunora](https://lunora.sh): `defineAgent` compiles a repl
 
 ```ts
 // lunora/agents.ts
-import { agentComponent, defineAgent, defineAgentTool } from "@lunora/agent";
+import { defineAgent, defineAgentTool } from "@lunora/agent";
 import { jsonSchema } from "@lunora/ai";
 
 export const support = defineAgent({
