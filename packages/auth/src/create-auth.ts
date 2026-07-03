@@ -58,7 +58,9 @@ const isHttpsBaseUrl = (baseURL: BetterAuthOptions["baseURL"]): boolean => {
  */
 const isExplicitHttpBaseUrl = (baseURL: BetterAuthOptions["baseURL"]): boolean => {
     if (typeof baseURL === "string") {
-        return baseURL.startsWith("http://");
+        // Scheme comparison is case-insensitive (RFC 3986): `HTTP://…` is
+        // still plain HTTP and must not slip through as "secure".
+        return baseURL.toLowerCase().startsWith("http://");
     }
 
     if (baseURL && typeof baseURL === "object") {
@@ -70,7 +72,7 @@ const isExplicitHttpBaseUrl = (baseURL: BetterAuthOptions["baseURL"]): boolean =
             return false;
         }
 
-        return typeof baseURL.fallback === "string" && baseURL.fallback.startsWith("http://");
+        return typeof baseURL.fallback === "string" && baseURL.fallback.toLowerCase().startsWith("http://");
     }
 
     return false;

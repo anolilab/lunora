@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { decorateResponse, enforceOrigin, handleCorsPreflight, resolveSecurity } from "../src/security-headers";
 
@@ -20,6 +20,25 @@ describe("resolveSecurity", () => {
         expect.hasAssertions();
 
         expect(() => resolveSecurity({ cors: { allowedOrigins: ["*"], allowCredentials: true } })).toThrow(/wildcard/i);
+    });
+
+    it("warns for a custom allowedOrigins predicate, with or without credentials", () => {
+        expect.assertions(3);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        // The predicate feeds the CSRF/WS origin trust even without credentials.
+        resolveSecurity({ cors: { allowedOrigins: () => true } });
+
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("predicate"));
+
+        warn.mockClear();
+        resolveSecurity({ cors: { allowCredentials: true, allowedOrigins: () => true } });
+
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("allowCredentials"));
+        expect(warn).toHaveBeenCalledTimes(1);
+
+        warn.mockRestore();
     });
 
     it("allows a wildcard origin without credentials", () => {
