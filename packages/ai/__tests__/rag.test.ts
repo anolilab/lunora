@@ -413,6 +413,21 @@ describe(defineRag, () => {
         }
     });
 
+    it("throws without a namespace when requireNamespace is set", async () => {
+        const { vectors } = memoryVectors();
+        const ctx = fakeCtx(vectors);
+        const docs = defineRag({ index: "docs", requireNamespace: true });
+        const rag = docs(ctx);
+
+        await expect(rag.index({ id: "doc-1", text: "hello" })).rejects.toThrow(/requires a namespace/u);
+        await expect(rag.retrieve("hello")).rejects.toThrow(/requires a namespace/u);
+        await expect(rag.remove({ id: "doc-1" })).rejects.toThrow(/requires a namespace/u);
+
+        // With the namespace supplied, the same calls go through.
+        await expect(rag.index({ id: "doc-1", namespace: "tenant-a", text: "hello" })).resolves.toMatchObject({ chunks: 1 });
+        await expect(rag.retrieve("hello", { namespace: "tenant-a" })).resolves.toBeDefined();
+    });
+
     it("indexes empty text as zero chunks", async () => {
         const { store, vectors } = memoryVectors();
         const ctx = fakeCtx(vectors);

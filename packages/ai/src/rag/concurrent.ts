@@ -10,6 +10,11 @@ export const INDEX_CONCURRENCY = 8;
  * Order-preserving bounded concurrent map: run `fn` over `items` with at most
  * `limit` in flight. Results land at their item's index. Inlined here (not a
  * dependency) — `@lunora/ai` stays free of `@lunora/bindings`.
+ *
+ * Deliberately does NOT cancel in-flight work on the first rejection: a failed
+ * `index()` may leave a partial vector set behind, and the (idempotent,
+ * deterministic-id) retry converges — cancellation would buy nothing but
+ * complexity in workerd.
  */
 export const concurrentMap = async <T, R>(
     items: ReadonlyArray<T>,
