@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 import { useState } from "react";
 
+import { ErrorAlert } from "../../components/error-alert";
 import { ShardInput } from "../../components/shard-input";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
@@ -98,6 +99,7 @@ const SubscriptionsPanel = ({ initialShardKey }: SubscriptionsPanelProps): React
     const {
         data: result,
         error,
+        errorSource,
         refetch,
     } = useAdminQuery<SubscriptionsResult>(ADMIN_FUNCTIONS.listSubscriptions, {}, { keepPreviousData: true, shardKey: debouncedShard });
 
@@ -119,11 +121,7 @@ const SubscriptionsPanel = ({ initialShardKey }: SubscriptionsPanelProps): React
                 )}
             </div>
 
-            {error !== null && (
-                <p className="text-sm text-destructive" data-testid="subs-error" role="alert">
-                    {error}
-                </p>
-            )}
+            {error !== null && <ErrorAlert error={errorSource} testId="subs-error" />}
 
             {error === null && result !== undefined && rows.length === 0 && (
                 <EmptyState

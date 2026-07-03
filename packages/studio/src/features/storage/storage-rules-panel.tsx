@@ -1,5 +1,6 @@
 import type { ReactElement } from "react";
 
+import { ErrorAlert } from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
@@ -38,7 +39,7 @@ const sortRules = (rules: StorageRuleMetadata[]): StorageRuleMetadata[] =>
 export const StorageRulesPanel = (): ReactElement => {
     const t = useT();
 
-    const { data, error } = useAdminQuery<StorageRulesResult>(ADMIN_FUNCTIONS.storageRules, {});
+    const { data, error, errorSource } = useAdminQuery<StorageRulesResult>(ADMIN_FUNCTIONS.storageRules, {});
 
     // `undefined` until the first read lands; `loaded` gates the empty state so it
     // only shows after a resolved-but-empty read, not during the initial load.
@@ -47,11 +48,7 @@ export const StorageRulesPanel = (): ReactElement => {
 
     return (
         <div className="flex flex-col gap-4" data-testid="lunora-storage-rules-panel">
-            {error !== null && (
-                <p className="text-sm text-destructive" data-testid="storage-rules-error" role="alert">
-                    {error}
-                </p>
-            )}
+            {error !== null && <ErrorAlert error={errorSource} testId="storage-rules-error" />}
 
             <p className="text-sm text-muted-foreground" data-testid="storage-rules-note">
                 {t("Storage rules are declared in code with defineStorageRule and gate ctx.storage access per bucket. This view is read-only.")}

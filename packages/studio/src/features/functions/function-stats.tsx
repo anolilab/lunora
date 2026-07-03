@@ -1,6 +1,7 @@
 import type { MouseEvent, ReactElement } from "react";
 import { useState } from "react";
 
+import { ErrorAlert } from "../../components/error-alert";
 import { LiveError } from "../../components/live-status";
 import { ShardInput } from "../../components/shard-input";
 import { Badge } from "../../components/ui/badge";
@@ -108,7 +109,7 @@ export const FunctionStatsPanel = ({ functions, initialShardKey }: FunctionStats
     // server push updates the table as mutations land; `liveError` holds a
     // rejection message (e.g. missing admin token) so the table can say why it
     // stopped updating.
-    const { data, error, liveError } = useAdminQuery<FunctionStatsResult>(
+    const { data, error, errorSource, liveError } = useAdminQuery<FunctionStatsResult>(
         ADMIN_FUNCTIONS.getFunctionStats,
         {},
         {
@@ -159,11 +160,7 @@ export const FunctionStatsPanel = ({ functions, initialShardKey }: FunctionStats
                 </div>
             </div>
 
-            {error !== null && (
-                <p className="text-sm text-destructive" data-testid="fs-error" role="alert">
-                    {error}
-                </p>
-            )}
+            {error !== null && <ErrorAlert error={errorSource} testId="fs-error" />}
 
             {stats !== null && sorted.length === 0 && error === null && (
                 <EmptyState

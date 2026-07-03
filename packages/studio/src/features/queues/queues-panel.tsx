@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 import { useMemo } from "react";
 
+import { ErrorAlert } from "../../components/error-alert";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
@@ -22,18 +23,14 @@ const QueuesPanel = (): ReactElement => {
     const t = useT();
 
     // Deployment-wide metadata (root shard), so no shard selector needed.
-    const { data, error } = useAdminQuery<QueuesResult>(ADMIN_FUNCTIONS.listQueues, {});
+    const { data, error, errorSource } = useAdminQuery<QueuesResult>(ADMIN_FUNCTIONS.listQueues, {});
 
     const loaded = data !== undefined;
     const queues = useMemo(() => (Array.isArray(data?.queues) ? [...data.queues].toSorted((a, b) => a.exportName.localeCompare(b.exportName)) : []), [data]);
 
     return (
         <div className="flex flex-col gap-6" data-testid="lunora-queues-panel">
-            {error !== null && (
-                <p className="text-sm text-destructive" data-testid="queues-error" role="alert">
-                    {error}
-                </p>
-            )}
+            {error !== null && <ErrorAlert error={errorSource} testId="queues-error" />}
 
             <p className="text-sm text-muted-foreground">
                 {t(
