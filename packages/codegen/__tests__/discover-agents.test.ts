@@ -226,7 +226,7 @@ describe("auto-registered agent runtime functions", () => {
     it("registers the runtime functions in the dispatch table, imported from @lunora/agent", () => {
         expect.assertions(8);
 
-        const content = emitFunctions([], [], false, [], [], discoverSupportAgent());
+        const content = emitFunctions({ agents: discoverSupportAgent(), functions: [] });
 
         expect(content).toContain('import { agentComponent } from "@lunora/agent/component";');
         expect(content).toContain("const lunoraAgentRuntimeFunctions = agentComponent().functions;");
@@ -235,13 +235,13 @@ describe("auto-registered agent runtime functions", () => {
             expect(content).toContain(`"agents:${name}": lunoraAgentRuntimeFunctions.${name} as unknown as RegisteredLunoraFunction,`);
         }
 
-        expect(emitFunctions([])).not.toContain("@lunora/agent");
+        expect(emitFunctions({ functions: [] })).not.toContain("@lunora/agent");
     });
 
     it("lets an app-registered agents:* function win over auto-registration", () => {
         expect.assertions(2);
 
-        const content = emitFunctions([appAgentsFunction("agentMessages")], [], false, [], [], discoverSupportAgent());
+        const content = emitFunctions({ agents: discoverSupportAgent(), functions: [appAgentsFunction("agentMessages")] });
 
         expect(content).not.toContain("lunoraAgentRuntimeFunctions.agentMessages");
         expect(content).toContain("lunoraAgentRuntimeFunctions.agentThread");
@@ -250,19 +250,19 @@ describe("auto-registered agent runtime functions", () => {
     it("exposes the public thread queries as typed api references", () => {
         expect.assertions(4);
 
-        const content = emitApi([], [], false, discoverSupportAgent());
+        const content = emitApi({ agents: discoverSupportAgent(), functions: [] });
 
         expect(content).toContain('agentMessages: FunctionReference<"query", { key: string; limit?: number }, Record<string, unknown>[]>;');
         expect(content).toContain('agentThread: FunctionReference<"query", { key: string }, Record<string, unknown> | undefined>;');
         // The internal mutations never surface on the api objects.
         expect(content).not.toContain("agentAppendMessage");
-        expect(emitApi([])).not.toContain("agentMessages");
+        expect(emitApi({ functions: [] })).not.toContain("agentMessages");
     });
 
     it("does not duplicate an api member the app already registered", () => {
         expect.assertions(1);
 
-        const content = emitApi([appAgentsFunction("agentMessages")], [], false, discoverSupportAgent());
+        const content = emitApi({ agents: discoverSupportAgent(), functions: [appAgentsFunction("agentMessages")] });
 
         expect(content.match(/agentMessages: FunctionReference/gu)).toHaveLength(1);
     });
@@ -270,7 +270,7 @@ describe("auto-registered agent runtime functions", () => {
     it("stays in sync with the runtime component (drift guard)", () => {
         expect.assertions(3);
 
-        const content = emitFunctions([], [], false, [], [], discoverSupportAgent());
+        const content = emitFunctions({ agents: discoverSupportAgent(), functions: [] });
         const emitted = [...content.matchAll(/"agents:(?<name>\w+)":/gu)]
             .map((match) => match.groups?.name)
             .toSorted((a, b) => String(a).localeCompare(String(b)));

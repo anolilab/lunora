@@ -737,12 +737,15 @@ const syntheticAgentApiFunctions = (agents: ReadonlyArray<AgentIR>, functions: R
  * server-side at dispatch, not in the reference. Splitting the *types* keeps
  * internal functions off the client-facing `api` surface.
  */
-const emitApi = (
-    functions: ReadonlyArray<FunctionIR>,
-    workflows: ReadonlyArray<WorkflowIR> = [],
-    useUmbrella = false,
-    agents: ReadonlyArray<AgentIR> = [],
-): string => {
+interface EmitApiOptions {
+    agents?: ReadonlyArray<AgentIR>;
+    functions: ReadonlyArray<FunctionIR>;
+    useUmbrella?: boolean;
+    workflows?: ReadonlyArray<WorkflowIR>;
+}
+
+const emitApi = (options: EmitApiOptions): string => {
+    const { agents = [], functions, useUmbrella = false, workflows = [] } = options;
     const base = baseSpecifiers(useUmbrella);
     const publicFunctions = [...functions.filter((definition) => definition.visibility !== "internal"), ...syntheticAgentApiFunctions(agents, functions)];
     const internalFunctions = functions.filter((definition) => definition.visibility === "internal");
@@ -1611,14 +1614,17 @@ const renderLifecycleManifest = (functions: ReadonlyArray<FunctionIR>): { connec
     return manifest;
 };
 
-const emitFunctions = (
-    functions: ReadonlyArray<FunctionIR>,
-    migrations: ReadonlyArray<MigrationIR> = [],
-    useUmbrella = false,
-    mutators: ReadonlyArray<MutatorIR> = [],
-    shapes: ReadonlyArray<ShapeIR> = [],
-    agents: ReadonlyArray<AgentIR> = [],
-): string => {
+interface EmitFunctionsOptions {
+    agents?: ReadonlyArray<AgentIR>;
+    functions: ReadonlyArray<FunctionIR>;
+    migrations?: ReadonlyArray<MigrationIR>;
+    mutators?: ReadonlyArray<MutatorIR>;
+    shapes?: ReadonlyArray<ShapeIR>;
+    useUmbrella?: boolean;
+}
+
+const emitFunctions = (options: EmitFunctionsOptions): string => {
+    const { agents = [], functions, migrations = [], mutators = [], shapes = [], useUmbrella = false } = options;
     const hasFunctions = functions.length > 0;
     const base = baseSpecifiers(useUmbrella);
     const { dispatchBody, importBlock, installBlock, migrationBody, mutatorPaths, shapeBody } = renderFunctionRegistry(functions, migrations, mutators, shapes);

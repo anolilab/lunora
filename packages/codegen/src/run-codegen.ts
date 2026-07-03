@@ -498,7 +498,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const emitStartedAt = timingEnabled ? performance.now() : 0;
 
     const dataModelContent = emitDataModel(schema, useUmbrella);
-    const apiContent = emitApi(functions, workflows, useUmbrella, agents);
+    const apiContent = emitApi({ agents, functions, useUmbrella, workflows });
     const serverContent = emitServer({
         agents,
         containers,
@@ -521,7 +521,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         useUmbrella,
         workflows,
     });
-    const functionsContent = emitFunctions(functions, migrations, useUmbrella, mutators, shapes, agents);
+    const functionsContent = emitFunctions({ agents, functions, migrations, mutators, shapes, useUmbrella });
     const shardContent = emitShard({
         advisories,
         agents,

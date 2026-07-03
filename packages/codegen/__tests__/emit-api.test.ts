@@ -17,7 +17,7 @@ describe("emitApi", () => {
             { bindingName: "WORKFLOW_DIGEST_PIPELINE", className: "DigestPipelineWorkflow", exportName: "digestPipeline", name: "digest-pipeline", steps: [] },
         ];
 
-        const rendered = emitApi([], workflows);
+        const rendered = emitApi({ functions: [], workflows });
 
         // Imports the workflow definitions so params can be inferred from `__params`.
         expect(rendered).toContain('import type * as lunoraWorkflowDefinitions from "../workflows.js";');
@@ -33,7 +33,7 @@ describe("emitApi", () => {
     it("omits the `workflows` block entirely when no workflows are declared", () => {
         expect.assertions(2);
 
-        const rendered = emitApi([]);
+        const rendered = emitApi({ functions: [] });
 
         expect(rendered).not.toContain("WorkflowsRef");
         expect(rendered).not.toContain("lunoraWorkflowDefinitions");
@@ -56,7 +56,7 @@ describe("emitApi", () => {
             },
         ];
 
-        const rendered = emitApi(functions);
+        const rendered = emitApi({ functions });
 
         expect(rendered).toContain('import("./dataModel.js").Doc_channels[]');
         expect(rendered).not.toContain('import("./_generated/dataModel.js")');
@@ -75,7 +75,7 @@ describe("emitApi", () => {
             },
         ];
 
-        const rendered = emitApi(functions);
+        const rendered = emitApi({ functions });
 
         expect(rendered).toContain('import("@lunora/server").LunoraContext');
     });
@@ -93,7 +93,7 @@ describe("emitApi", () => {
             },
         ];
 
-        const rendered = emitApi(functions);
+        const rendered = emitApi({ functions });
 
         expect(rendered).toContain('import("./dataModel.js").Doc_messages[]');
         expect(rendered).not.toContain('import("_generated/dataModel.js")');
@@ -117,7 +117,7 @@ describe("emitApi", () => {
             },
         ];
 
-        const rendered = emitApi(functions);
+        const rendered = emitApi({ functions });
 
         expect(rendered).toContain('import("./dataModel.js").Doc_messages[]');
         expect(rendered).not.toContain('import("../_generated/dataModel.js")');
@@ -141,7 +141,7 @@ describe("emitApi", () => {
             },
         ];
 
-        const rendered = emitApi(functions);
+        const rendered = emitApi({ functions });
 
         expect(rendered).toContain('"2fa": {');
         expect(rendered).toContain('verify: FunctionReference<"mutation"');
@@ -162,7 +162,7 @@ describe("emitApi", () => {
             },
         ];
 
-        const rendered = emitApi(functions);
+        const rendered = emitApi({ functions });
 
         expect(rendered).toContain('import("./dataModel.js").Doc_messages[]');
         expect(rendered).not.toContain('_generated/dataModel.js");');
@@ -186,7 +186,7 @@ describe("emitFunctions Caller types", () => {
             },
         ];
 
-        const rendered = emitFunctions(functions);
+        const rendered = emitFunctions({ functions });
 
         // eslint-disable-next-line no-secrets/no-secrets -- asserting on a generated TS type string, not a secret
         expect(rendered).toContain("watch: (args?: {}) => Promise<AsyncIterable<string>>;");
@@ -209,7 +209,7 @@ describe("emitFunctions Caller types", () => {
             },
         ];
 
-        const rendered = emitFunctions(functions);
+        const rendered = emitFunctions({ functions });
 
         expect(rendered).toContain('"2fa": {');
         expect(rendered).toContain('callRegistered(context, "2fa:verify"');
@@ -229,7 +229,7 @@ describe("emitFunctions Caller types", () => {
             },
         ];
 
-        const rendered = emitFunctions(functions);
+        const rendered = emitFunctions({ functions });
 
         expect(rendered).toContain("list: (args?: {}) => Promise<string>;");
     });
