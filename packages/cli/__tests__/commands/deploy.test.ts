@@ -756,6 +756,39 @@ export const backfillNames = defineMigration({
                 expect(argv.some((line) => line.includes("wrangler deploy"))).toBe(true);
             });
 
+            it("launches wrangler through npx (secret-push + deploy) when the project declares npm", async () => {
+                expect.assertions(5);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                // `detectPackageManager` reads the nearest package.json's `packageManager`.
+                writeFileSync(join(workdir, "package.json"), `{ "packageManager": "npm@10.9.0" }\n`, "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    interactive: true,
+                    logger,
+                    secretConfirm: () => Promise.resolve(true),
+                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    spawner,
+                });
+
+                expect(result.code).toBe(0);
+
+                // Every wrangler invocation now goes through `npx -- wrangler …`.
+                const secretPush = calls.find((call) => call.descriptor.args.includes("secret"));
+                const deploySpawn = calls.find((call) => call.descriptor.args.includes("deploy"));
+
+                // The secret value travels over stdin (`input`), never on argv.
+                expect(secretPush?.descriptor).toMatchObject({ args: ["--", "wrangler", "secret", "put", "LUNORA_ADMIN_TOKEN"], command: "npx" });
+                expect(typeof secretPush?.descriptor.input).toBe("string");
+                expect(secretPush?.descriptor.args).not.toContain(secretPush?.descriptor.input);
+
+                expect(deploySpawn?.descriptor).toMatchObject({ args: ["--", "wrangler", "deploy"], command: "npx" });
+            });
+
             it("aborts a non-interactive deploy when a required secret is missing on the target", async () => {
                 expect.assertions(3);
 

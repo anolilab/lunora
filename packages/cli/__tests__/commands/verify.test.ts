@@ -180,6 +180,26 @@ describe("lunora verify", () => {
             });
         });
 
+        it("routes tsc through npx when the project declares npm", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            writeFileSync(join(workdir, "tsconfig.json"), TSCONFIG, "utf8");
+            // `detectPackageManager` reads the nearest package.json's `packageManager`.
+            writeFileSync(join(workdir, "package.json"), `{ "packageManager": "npm@10.9.0" }\n`, "utf8");
+            const { logger } = recordingLogger();
+            const { calls, spawner } = createRecordingSpawner(0);
+
+            await runVerifyCommand({ cwd: workdir, logger, spawner });
+
+            expect(calls).toHaveLength(1);
+            expect(calls[0]?.descriptor).toMatchObject({
+                args: ["--", "tsc", "--noEmit", "-p", "tsconfig.json"],
+                command: "npx",
+                cwd: workdir,
+            });
+        });
+
         it("returns 1 with a type-error message when tsc exits non-zero", async () => {
             expect.assertions(3);
 

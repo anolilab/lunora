@@ -232,6 +232,26 @@ describe("lunora env", () => {
             expect(calls[0]?.descriptor.env).toBeUndefined();
         });
 
+        it("launches wrangler through npx when the project declares npm (secret stays on stdin)", async () => {
+            expect.assertions(4);
+
+            const { logger } = recordingLogger();
+
+            writeFileSync(join(workdir, ".dev.vars"), "FIRST=one\n", "utf8");
+            // `detectPackageManager` reads the nearest package.json's `packageManager`.
+            writeFileSync(join(workdir, "package.json"), `{ "packageManager": "npm@10.9.0" }\n`, "utf8");
+
+            const { calls, spawner } = createRecordingSpawner();
+
+            await runEnvCommand({ cwd: workdir, logger, spawner, subcommand: "push", yes: true });
+
+            expect(calls[0]?.descriptor.command).toBe("npx");
+            expect(calls[0]?.descriptor.args).toStrictEqual(["--", "wrangler", "secret", "put", "FIRST"]);
+            // The value still travels over stdin, never on argv.
+            expect(calls[0]?.descriptor.input).toBe("one");
+            expect(calls[0]?.descriptor.args).not.toContain("one");
+        });
+
         it("push --prod adds --env production", async () => {
             expect.assertions(2);
 

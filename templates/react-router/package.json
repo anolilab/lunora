@@ -12,7 +12,7 @@
         "preview": "vite preview",
         "codegen": "lunora codegen",
         "deploy": "react-router build && lunora deploy",
-        "typecheck": "react-router typegen && tsc"
+        "typecheck": "lunora codegen && react-router typegen && tsc"
     },
     "dependencies": {
         "@lunora/react": "^0.0.0",

@@ -111,5 +111,19 @@ const execArgsFor = (manager: PackageManager, command: string, args: ReadonlyArr
     return { args: ["exec", command, ...args], command: "pnpm" };
 };
 
+/** The shell command that runs a project script with `manager` (`pnpm dev`, `npm run dev`, …). */
+const runScriptCommand = (manager: PackageManager, script: string): string => {
+    if (manager === "npm") {
+        return `npm run ${script}`;
+    }
+
+    if (manager === "bun") {
+        return `bun run ${script}`;
+    }
+
+    // pnpm / yarn run scripts by bare name.
+    return `${manager} ${script}`;
+};
+
 export type { PackageManager, PackageManagerProbe };
-export { detectInstalledManagers, detectPackageManager, execArgsFor, installArgsFor };
+export { detectInstalledManagers, detectPackageManager, execArgsFor, installArgsFor, runScriptCommand };

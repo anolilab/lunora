@@ -9,12 +9,15 @@ Lunora `/_lunora/*` RPC layer behind the `virtual:lunora/worker` entry.
 
 ## Develop
 
+Install dependencies and start the dev server with your package manager
+(`npm`, `pnpm`, `yarn`, or `bun`):
+
 ```bash
-pnpm install
-pnpm dev
+<pm> install
+<pm> run dev
 ```
 
-`pnpm dev` runs Vite with the `@cloudflare/vite-plugin`, so your React Router
+The dev server runs Vite with the `@cloudflare/vite-plugin`, so your React Router
 app and the Lunora worker share the same origin on the local dev server.
 
 ## Build

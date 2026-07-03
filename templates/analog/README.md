@@ -85,9 +85,12 @@ ships `ShardDO` in the same `dist/analog/server/index.mjs` worker, and the
 
 ## Develop
 
+Install dependencies and start the dev server with your package manager
+(`npm`, `pnpm`, `yarn`, or `bun`):
+
 ```bash
-pnpm install
-pnpm dev          # vite dev server (AnalogJS)
+<pm> install
+<pm> run dev               # vite dev server (AnalogJS)
 ```
 
 > **Cloudflare bindings in dev.** `/_lunora/**` needs the Cloudflare runtime

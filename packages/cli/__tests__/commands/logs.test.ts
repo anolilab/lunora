@@ -1,3 +1,7 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import { runLogsCommand } from "../../src/commands/logs/handler";
@@ -18,6 +22,14 @@ const silentLogger = (): { errors: string[]; logger: Logger } => {
     };
 };
 
+/** A cwd whose nearest package.json declares npm, so `detectPackageManager` resolves npm. */
+const npmProjectCwd = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), "lunora-cli-logs-npm-"));
+    writeFileSync(join(dir, "package.json"), `{ "packageManager": "npm@10.9.0" }\n`, "utf8");
+
+    return dir;
+};
+
 describe("lunora logs", () => {
     it("spawns `pnpm exec wrangler tail`", async () => {
         expect.assertions(3);
@@ -33,6 +45,18 @@ describe("lunora logs", () => {
         const args = calls[0]?.descriptor.args.join(" ") ?? "";
 
         expect(args).toContain("wrangler tail");
+    });
+
+    it("launches wrangler through npx when the project declares npm", async () => {
+        expect.assertions(2);
+
+        const { calls, spawner } = createRecordingSpawner();
+        const { logger } = silentLogger();
+
+        await runLogsCommand({ cwd: npmProjectCwd(), logger, spawner });
+
+        expect(calls[0]?.descriptor.command).toBe("npx");
+        expect(calls[0]?.descriptor.args).toStrictEqual(["--", "wrangler", "tail"]);
     });
 
     it("forwards worker name, --env, --format, --status, and --search", async () => {
