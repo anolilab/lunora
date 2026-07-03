@@ -40,12 +40,14 @@ streamObject, streamText, tool` from the AI SDK — raw primitives, no loop.
 
 The durable machinery to reuse (`@lunora/workflow`,
 `packages/workflow/src/index.ts`):
+
 ```ts
 export { defineStep, isStepDefinition } from "./define-step";
 export { defineWorkflow, … } from "./define-workflow";
 export { branch, MAX_BRANCHES } from "./fan-out";   // child-DO fan-out (plans 076)
 export { createWorkflowContext } from "./create-workflow-context";   // ctx.run durable steps
 ```
+
 `@lunora/workflow` provides durable replayable steps over Cloudflare Workflows
 (`ctx.run`, `defineStep`/`runStep`), fan-out with child-DO isolation + saga
 (shipped, plans 075/076). Streaming to the client rides the existing WS
@@ -58,16 +60,17 @@ durably, with streaming and optional human-in-the-loop pauses.
 
 ## Commands you will need
 
-| Purpose | Command | Expected |
-|---|---|---|
-| Read ai index/create | `sed -n 1,40p packages/ai/src/index.ts` + `create-ai.ts` | current AI surface |
-| Read workflow exports | `sed -n 1,40p packages/workflow/src/index.ts` | durable-step machinery |
-| Read a step definition | `sed -n 1,60p packages/workflow/src/define-step.ts` | the durable-step contract |
-| Typecheck (if prototyping) | `pnpm --filter "@lunora/ai" run lint:types` | exit 0 |
+| Purpose                    | Command                                                  | Expected                  |
+| -------------------------- | -------------------------------------------------------- | ------------------------- |
+| Read ai index/create       | `sed -n 1,40p packages/ai/src/index.ts` + `create-ai.ts` | current AI surface        |
+| Read workflow exports      | `sed -n 1,40p packages/workflow/src/index.ts`            | durable-step machinery    |
+| Read a step definition     | `sed -n 1,60p packages/workflow/src/define-step.ts`      | the durable-step contract |
+| Typecheck (if prototyping) | `pnpm --filter "@lunora/ai" run lint:types`              | exit 0                    |
 
 ## Scope
 
 **In scope (spike deliverables)**:
+
 - A design document `plans/113-phase0-design.md` (create it) specifying: the
   `defineAgent({ model, tools, thread })` API; how the tool-loop runs as durable
   workflow steps (replay-safe — an LLM call and each tool call is a durable step
@@ -82,6 +85,7 @@ durably, with streaming and optional human-in-the-loop pauses.
   decisions.
 
 **Out of scope**:
+
 - A shipped, production `defineAgent` with streaming, HITL, cost caps, multi-tool
   orchestration, and codegen wiring. The spike defines the API and proves the
   loop; the build is a later plan (or a decision NOT to build, deferring to

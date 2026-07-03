@@ -20,8 +20,8 @@
 
 RAG ("AI on my data") is the single most common AI backend pattern, and Lunora
 already ships both halves — but only as a documented DIY recipe. `@lunora/ai`'s
-`create-ai.ts` literally says *"Pair `embed` with `@lunora/bindings/vectors` for
-RAG"*, and `@lunora/bindings/vectors` takes a caller-supplied `embed` function and
+`create-ai.ts` literally says _"Pair `embed` with `@lunora/bindings/vectors` for
+RAG"_, and `@lunora/bindings/vectors` takes a caller-supplied `embed` function and
 exposes a raw `query(indexName, {topK,…})`. So today the user hand-wires embed →
 upsert → query → context-assembly on every RAG app. Both facades (`ctx.ai`,
 `ctx.vectors`) are already codegen-wired onto ctx, so a helper that closes the
@@ -32,15 +32,18 @@ right shape (vs. leaving it a recipe) is a product call — hence a spike.
 ## Current state
 
 `packages/ai/src/create-ai.ts:15-22` documents the manual pairing:
+
 ```
  * … Pair `embed` with `@lunora/bindings/vectors` for RAG. …
 ```
+
 `@lunora/ai` re-exports the AI SDK primitives (`embed`, `embedMany`,
 `generateText`, `streamText`, `tool`, …) at `packages/ai/src/index.ts:8`, and
 `ctx.ai.model(...)`/`ctx.ai.embeddingModel(...)` resolve a Workers AI id or any
 AI SDK model.
 
 `@lunora/bindings/vectors` (`packages/bindings/src/vectors/create-vectors.ts`):
+
 - `toVector` (`:24-32`) calls a caller-supplied `input.embed(input.input)` to
   build a `VectorizeVector` for upsert.
 - `query(indexName, input)` (`:82-90`) runs a raw Vectorize query with a `topK`
@@ -56,15 +59,16 @@ codegen-wired onto ctx when used (`discover-feature-usage` PROBES include `ai` a
 
 ## Commands you will need
 
-| Purpose | Command | Expected |
-|---|---|---|
-| Read create-ai | `sed -n 1,60p packages/ai/src/create-ai.ts` | the pairing note + model helpers |
-| Read create-vectors | `sed -n 1,120p packages/bindings/src/vectors/create-vectors.ts` | upsert/query surface |
-| Typecheck (if prototyping in a package) | `pnpm --filter "@lunora/ai" run lint:types` | exit 0 |
+| Purpose                                 | Command                                                         | Expected                         |
+| --------------------------------------- | --------------------------------------------------------------- | -------------------------------- |
+| Read create-ai                          | `sed -n 1,60p packages/ai/src/create-ai.ts`                     | the pairing note + model helpers |
+| Read create-vectors                     | `sed -n 1,120p packages/bindings/src/vectors/create-vectors.ts` | upsert/query surface             |
+| Typecheck (if prototyping in a package) | `pnpm --filter "@lunora/ai" run lint:types`                     | exit 0                           |
 
 ## Scope
 
 **In scope (spike deliverables)**:
+
 - A design document `plans/111-phase0-design.md` (create it) specifying the RAG
   helper API: where it lives (a new `@lunora/rag`? a `@lunora/ai/rag` subpath? a
   `defineRag(...)` in `lunora/`?), the shape (`ctx.rag.index(...)` /
@@ -77,6 +81,7 @@ codegen-wired onto ctx when used (`discover-feature-usage` PROBES include `ai` a
 - Open questions for a maintainer decision.
 
 **Out of scope**:
+
 - A production-grade package with every chunking option, reranking, hybrid
   search, etc. The spike defines the API and proves the loop.
 - New Cloudflare bindings — the helper composes the two existing facades.
@@ -103,6 +108,7 @@ signatures the helper wraps.
 ### Step 2: Design the API
 
 Specify:
+
 - **Placement**: recommend one of `@lunora/rag` (new package), `@lunora/ai/rag`
   (subpath), or a `defineRag(...)` declaration discovered by codegen (like
   `defineSchema`) that wires `ctx.rag`. Weigh against the "scale invisibly" north
@@ -114,7 +120,7 @@ Specify:
   `ctx.vectors.query` (respecting the ceilings), assemble ranked context (return
   shape: ranked chunks + assembled string + source refs).
 - Where the embedding model is declared (per-call vs a `defineRag({ embeddingModel
-  })` declaration) so both sides use the same model.
+})` declaration) so both sides use the same model.
 
 **Verify**: the design doc has a concrete API surface with types.
 

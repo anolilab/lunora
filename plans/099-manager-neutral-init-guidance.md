@@ -46,8 +46,8 @@ template-fetch path threads the resolved manager (`packages/cli/src/commands/ini
 ```ts
 /** The shell command that runs a project script with `manager` (`pnpm dev`, `npm run dev`, …). */
 const runScriptCommand = (manager: PackageManager, script: string): string => {
-    if (manager === "npm")  return `npm run ${script}`;
-    if (manager === "bun")  return `bun run ${script}`;
+    if (manager === "npm") return `npm run ${script}`;
+    if (manager === "bun") return `bun run ${script}`;
     // … yarn / pnpm …
 };
 ```
@@ -57,25 +57,27 @@ There is also `installArgsFor` in `packages/cli/src/util/detect-package-manager.
 see its exact return shape before using it.
 
 Template READMEs hardcode pnpm, e.g. `templates/standalone/README.md:6-9`:
-```
+
+````
 ## Develop
 ​```bash
 pnpm install
 pnpm dev
 ​```
-```
+````
 
 ## Commands you will need
 
-| Purpose | Command | Expected |
-|---|---|---|
-| Typecheck | `pnpm --filter "@lunora/cli" run lint:types` | exit 0 |
-| Tests | `pnpm --filter "@lunora/cli" run test` | all pass |
-| Find hardcoded pnpm in READMEs | `grep -rn 'pnpm ' templates/*/README.md` | the lines to soften |
+| Purpose                        | Command                                      | Expected            |
+| ------------------------------ | -------------------------------------------- | ------------------- |
+| Typecheck                      | `pnpm --filter "@lunora/cli" run lint:types` | exit 0              |
+| Tests                          | `pnpm --filter "@lunora/cli" run test`       | all pass            |
+| Find hardcoded pnpm in READMEs | `grep -rn 'pnpm ' templates/*/README.md`     | the lines to soften |
 
 ## Scope
 
 **In scope**:
+
 - `packages/cli/src/commands/init/handler.ts` — the overlay next-steps block
   (~line 1013) and any sibling printed-guidance that hardcodes `pnpm`. Grep the
   file for `pnpm ` to find them all; convert each to use the resolved manager.
@@ -85,6 +87,7 @@ pnpm dev
   an assertion — see Test plan).
 
 **Out of scope**:
+
 - The subprocess-spawning commands (that is plan 096; do not re-do it here).
 - Any behavior change to scaffolding itself — only printed strings.
 
@@ -106,6 +109,7 @@ render step 1, so an npm user sees `npm install …` / `npm add`-equivalent, a b
 user `bun add …`, etc. Keep `lunora codegen` (bin, manager-neutral) as-is.
 
 Target shape (illustrative):
+
 ```ts
 logger.info(`  1. install the adapter:  ${installCommand(manager, [adapter, "@lunora/client", "@lunora/runtime", "@lunora/server"])}`);
 ```
@@ -126,6 +130,7 @@ only comments/spawn-descriptors (no user-facing `logger.*("… pnpm …")`).
 In each `templates/*/README.md`, replace the hardcoded `pnpm install` / `pnpm
 dev` fenced block with manager-neutral wording. Two acceptable forms — pick one
 and apply consistently:
+
 - Neutral prose: "Install dependencies and start the dev server with your
   package manager (`npm`, `pnpm`, `yarn`, or `bun`):" then a generic
   `<pm> install` / `<pm> run dev` note; **or**

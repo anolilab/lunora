@@ -21,9 +21,9 @@
 Lunora ships reactive client adapters for React, Vue, Solid, and Svelte — but not
 Angular. The shipped Analog (Angular) template hand-rolls a `LunoraService`
 bridging the vanilla `LunoraClient` to Angular signals, with a comment that says
-verbatim: *"there is no `@lunora/angular` adapter, so this service is the bridge…
+verbatim: _"there is no `@lunora/angular` adapter, so this service is the bridge…
 Swap this for a real `@lunora/angular` adapter once one ships; the component API…
-is deliberately small so the migration is mechanical."* This is a CRUD-minus-one
+is deliberately small so the migration is mechanical."_ This is a CRUD-minus-one
 on the adapter set and a promise already made in shipped code. The template's
 service is the reference implementation and the desired API.
 
@@ -31,6 +31,7 @@ service is the reference implementation and the desired API.
 
 The reference implementation (`templates/analog/src/app/lunora.service.ts`, 55
 lines — read it in full). Key surface:
+
 ```ts
 @Injectable({ providedIn: "root" })
 export class LunoraService {
@@ -51,6 +52,7 @@ export class LunoraService {
 
 The structurally closest existing adapters (signal/store based) — model the
 package after these, especially `@lunora/solid`:
+
 - `packages/solid/src/` — `context.ts`, `create-query.ts`, `create-mutation.ts`,
   `create-subscription.ts`, `create-connection-status.ts`, `create-presence.ts`,
   `create-paginated-query.ts`, `create-mutator.ts`, `create-rate-limit.ts`,
@@ -75,13 +77,13 @@ the repo memory `project-new-package-pnpm-overrides`.
 
 ## Commands you will need
 
-| Purpose | Command | Expected |
-|---|---|---|
+| Purpose              | Command                                                                                          | Expected                    |
+| -------------------- | ------------------------------------------------------------------------------------------------ | --------------------------- |
 | Scaffold the package | `vis generate lunora-package --name=angular --description='Angular reactive adapter for Lunora'` | creates `packages/angular/` |
-| Build (deps) | `pnpm --filter "@lunora/angular..." run build` | exit 0 |
-| Typecheck | `pnpm --filter "@lunora/angular" run lint:types` | exit 0 |
-| Test | `pnpm --filter "@lunora/angular" run test` | all pass |
-| Lint | `pnpm --filter "@lunora/angular" run lint:eslint` | exit 0 |
+| Build (deps)         | `pnpm --filter "@lunora/angular..." run build`                                                   | exit 0                      |
+| Typecheck            | `pnpm --filter "@lunora/angular" run lint:types`                                                 | exit 0                      |
+| Test                 | `pnpm --filter "@lunora/angular" run test`                                                       | all pass                    |
+| Lint                 | `pnpm --filter "@lunora/angular" run lint:eslint`                                                | exit 0                      |
 
 If install fails with a 404 on `@lunora/angular`, add it to `overrides` in
 `pnpm-workspace.yaml` and re-install.
@@ -89,6 +91,7 @@ If install fails with a 404 on `@lunora/angular`, add it to `overrides` in
 ## Scope
 
 **In scope**:
+
 - New `packages/angular/` package: an injectable Lunora client provider +
   signal-based `liveQuery` (query subscription), `mutate`, and — for parity —
   connection status and presence if cheap. Minimum viable surface: provider +
@@ -101,6 +104,7 @@ If install fails with a 404 on `@lunora/angular`, add it to `overrides` in
 - `__tests__/` for the adapter.
 
 **Out of scope**:
+
 - Full feature parity with React on day one (paginated/optimistic/auth can be a
   follow-up if the core lands clean — note it).
 - SSR/Analog-server-specific helpers beyond what the template needs.
@@ -127,6 +131,7 @@ package type-checks).
 ### Step 2: Implement the core adapter
 
 Lift the template's `LunoraService` into the package, generalizing:
+
 - A provider/injectable that owns one `LunoraClient` (configurable URL, defaulting
   to same-origin like the template).
 - `liveQuery(ref, args, { shardKey? })` → read-only `Signal`, torn down on

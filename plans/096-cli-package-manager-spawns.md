@@ -73,20 +73,20 @@ The **broken** call sites (each hardcodes `command: "pnpm"` with an `exec`-style
 args array). For each, the current args after `"exec"` are the real command +
 its flags:
 
-| File:line | Current descriptor (abridged) | Real command / args |
-|---|---|---|
-| `packages/cli/src/commands/deploy/handler.ts:449` | `spawner({ args, command: "pnpm", cwd, input: … })` where `args` starts `["exec","wrangler","secret","put", …]` | `wrangler secret put <name> …` |
-| `packages/cli/src/commands/deploy/handler.ts:990` | `{ args: buildWranglerDeployArgs(cwd, options), captureStdout, command: "pnpm", cwd, stdoutToStderr }` — `buildWranglerDeployArgs` returns `["exec","wrangler","deploy", …]` | `wrangler deploy …` |
-| `packages/cli/src/commands/verify/handler.ts:53` | `spawner({ args: ["exec", "tsc", "--noEmit", "-p", "tsconfig.json"], command: "pnpm", cwd })` | `tsc --noEmit -p tsconfig.json` |
-| `packages/cli/src/commands/env/handler.ts:266` | `{ args, command: "pnpm", cwd, input: entry.value }` — `args` starts `["exec","wrangler","secret","put", …]` | `wrangler secret put <name> …` |
-| `packages/cli/src/commands/logs/handler.ts:91` | `{ args, command: "pnpm", cwd }` — `args` starts `["exec","wrangler","tail", …]` | `wrangler tail …` |
-| `packages/cli/src/commands/analyze/handler.ts:136` | `{ args: ["exec","wrangler","deploy","--dry-run","--outdir",outdir], command: "pnpm", cwd }` | `wrangler deploy --dry-run …` |
-| `packages/cli/src/commands/containers/handler.ts:77` | `{ args, command: "pnpm", cwd }` — `args` starts `["exec","wrangler","containers", …]` | `wrangler containers …` |
-| `packages/cli/src/commands/deployments/handler.ts:122` | `{ args, command: "pnpm", cwd }` — `args` starts `["exec","wrangler", …]` | `wrangler …` |
-| `packages/cli/src/util/railpack.ts:71` | `{ args: ["exec","wrangler","containers","push",tag], command: "pnpm", cwd }` | `wrangler containers push <tag>` |
+| File:line                                              | Current descriptor (abridged)                                                                                                                                                | Real command / args              |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| `packages/cli/src/commands/deploy/handler.ts:449`      | `spawner({ args, command: "pnpm", cwd, input: … })` where `args` starts `["exec","wrangler","secret","put", …]`                                                              | `wrangler secret put <name> …`   |
+| `packages/cli/src/commands/deploy/handler.ts:990`      | `{ args: buildWranglerDeployArgs(cwd, options), captureStdout, command: "pnpm", cwd, stdoutToStderr }` — `buildWranglerDeployArgs` returns `["exec","wrangler","deploy", …]` | `wrangler deploy …`              |
+| `packages/cli/src/commands/verify/handler.ts:53`       | `spawner({ args: ["exec", "tsc", "--noEmit", "-p", "tsconfig.json"], command: "pnpm", cwd })`                                                                                | `tsc --noEmit -p tsconfig.json`  |
+| `packages/cli/src/commands/env/handler.ts:266`         | `{ args, command: "pnpm", cwd, input: entry.value }` — `args` starts `["exec","wrangler","secret","put", …]`                                                                 | `wrangler secret put <name> …`   |
+| `packages/cli/src/commands/logs/handler.ts:91`         | `{ args, command: "pnpm", cwd }` — `args` starts `["exec","wrangler","tail", …]`                                                                                             | `wrangler tail …`                |
+| `packages/cli/src/commands/analyze/handler.ts:136`     | `{ args: ["exec","wrangler","deploy","--dry-run","--outdir",outdir], command: "pnpm", cwd }`                                                                                 | `wrangler deploy --dry-run …`    |
+| `packages/cli/src/commands/containers/handler.ts:77`   | `{ args, command: "pnpm", cwd }` — `args` starts `["exec","wrangler","containers", …]`                                                                                       | `wrangler containers …`          |
+| `packages/cli/src/commands/deployments/handler.ts:122` | `{ args, command: "pnpm", cwd }` — `args` starts `["exec","wrangler", …]`                                                                                                    | `wrangler …`                     |
+| `packages/cli/src/util/railpack.ts:71`                 | `{ args: ["exec","wrangler","containers","push",tag], command: "pnpm", cwd }`                                                                                                | `wrangler containers push <tag>` |
 
 **Important structural note**: several sites build the `["exec","wrangler",…]`
-array *upstream* (e.g. `deploy`'s `buildWranglerDeployArgs`, `env`/`deployments`
+array _upstream_ (e.g. `deploy`'s `buildWranglerDeployArgs`, `env`/`deployments`
 build `args` before the descriptor). You must find where the `"exec"` /
 `"wrangler"` prefix is prepended and change the shape there, OR strip the
 `"exec"`/leading tokens and re-derive via `execArgsFor`. Read each file's arg
@@ -94,18 +94,19 @@ construction before editing — do NOT blindly string-replace.
 
 The two lines that log the command to the user (must reflect the real manager
 after the fix):
+
 - `logs/handler.ts:93` — `options.logger.info(\`tailing logs via ${descriptor.command} ${descriptor.args.join(" ")}\`)`
 - `analyze/handler.ts:139` — `logger.info(\`analyze: building via ${descriptor.command} ${descriptor.args.join(" ")}\`)`
 - `containers/handler.ts:79`, `deployments/handler.ts:124` — similar info logs.
 
 ## Commands you will need
 
-| Purpose | Command | Expected on success |
-|---|---|---|
-| Build the package (deps first) | `pnpm --filter "@lunora/cli..." run build` | exit 0 |
-| Typecheck | `pnpm --filter "@lunora/cli" run lint:types` | exit 0, no errors |
-| Tests | `pnpm --filter "@lunora/cli" run test` | all pass |
-| Lint | `pnpm --filter "@lunora/cli" run lint:eslint` | exit 0 |
+| Purpose                        | Command                                       | Expected on success |
+| ------------------------------ | --------------------------------------------- | ------------------- |
+| Build the package (deps first) | `pnpm --filter "@lunora/cli..." run build`    | exit 0              |
+| Typecheck                      | `pnpm --filter "@lunora/cli" run lint:types`  | exit 0, no errors   |
+| Tests                          | `pnpm --filter "@lunora/cli" run test`        | all pass            |
+| Lint                           | `pnpm --filter "@lunora/cli" run lint:eslint` | exit 0              |
 
 If the `...`-filter build fails to resolve deps in a fresh checkout, run
 `pnpm run build:packages` once first.
@@ -113,6 +114,7 @@ If the `...`-filter build fails to resolve deps in a fresh checkout, run
 ## Scope
 
 **In scope** (modify only these):
+
 - `packages/cli/src/commands/deploy/handler.ts`
 - `packages/cli/src/commands/verify/handler.ts`
 - `packages/cli/src/commands/env/handler.ts`
@@ -126,13 +128,14 @@ If the `...`-filter build fails to resolve deps in a fresh checkout, run
   assertions; see Test plan).
 
 **Out of scope** (do NOT touch):
+
 - `packages/cli/src/commands/dev/handler.ts` — already correct; it is the model.
 - `execArgsFor` / `detectPackageManager` themselves — they already handle all
   four managers correctly. Do not change their behavior.
 - The `installArgsFor` / `runScriptCommand` helpers — different concern.
 - Any `command: "railpack"` spawn (`railpack.ts:70` `build`) — railpack is its
   own binary, not run through a package manager. Only the `wrangler containers
-  push` spawn on line 71 changes.
+push` spawn on line 71 changes.
 
 ## Git workflow
 
@@ -150,6 +153,7 @@ descriptor with a manager-derived one. `cwd` is already in scope. Add
 (match the existing import path used by `dev/handler.ts`; verify relative depth).
 
 Target shape:
+
 ```ts
 const exec = execArgsFor(detectPackageManager(cwd), "tsc", ["--noEmit", "-p", "tsconfig.json"]);
 const result = await spawner({ args: exec.args, command: exec.command, cwd });

@@ -29,36 +29,41 @@ DO's single thread. Paging through a large shard table re-scans the whole
 ## Current state
 
 Server (`packages/do/src/introspect.ts:1008-1024`):
+
 ```ts
-    const predicate = buildTablePredicate(columns, needle, options.filters);
-    const order = buildOrderBy(options.orderBy, columns);
-    const whereSql = predicate === undefined ? "" : ` WHERE ${predicate.where}`;
-    const orderSql = order === undefined ? "" : ` ORDER BY ${order.sql}`;
-    const whereParams = predicate?.parameters ?? [];
-    const orderParams = order?.params ?? [];
-    const total =
-        predicate === undefined
-            ? countRows(sql, quoted)
-            : Number(sql.exec<{ c: number | bigint }>(`SELECT COUNT(*) AS c FROM ${quoted}${whereSql}`, ...whereParams).one().c);
-    const rawRows = sql.exec(`SELECT * FROM ${quoted}${whereSql}${orderSql} LIMIT ? OFFSET ?`, ...whereParams, ...orderParams, limit, offset).toArray();
-    return withReferences({ ...expandDocumentRows(columns, rawRows), total });
+const predicate = buildTablePredicate(columns, needle, options.filters);
+const order = buildOrderBy(options.orderBy, columns);
+const whereSql = predicate === undefined ? "" : ` WHERE ${predicate.where}`;
+const orderSql = order === undefined ? "" : ` ORDER BY ${order.sql}`;
+const whereParams = predicate?.parameters ?? [];
+const orderParams = order?.params ?? [];
+const total =
+    predicate === undefined
+        ? countRows(sql, quoted)
+        : Number(sql.exec<{ c: number | bigint }>(`SELECT COUNT(*) AS c FROM ${quoted}${whereSql}`, ...whereParams).one().c);
+const rawRows = sql.exec(`SELECT * FROM ${quoted}${whereSql}${orderSql} LIMIT ? OFFSET ?`, ...whereParams, ...orderParams, limit, offset).toArray();
+return withReferences({ ...expandDocumentRows(columns, rawRows), total });
 ```
 
 Client (`packages/studio/src/features/data/hooks/use-data-browser.tsx:308-325`):
+
 ```ts
-    const pageArgs = useMemo<Record<string, unknown>>(() => ({
+const pageArgs = useMemo<Record<string, unknown>>(
+    () => ({
         filters: toFilterClauses(filters),
         limit: pageSize,
-        offset,                                   // <-- offset is part of the args
+        offset, // <-- offset is part of the args
         orderBy: toOrderBy(sorting),
         search,
         table: selectedTable ?? "",
-    }), [filters, pageSize, offset, sorting, search, selectedTable]);
-    const pageQuery = useAdminQuery<TablePage>(ADMIN_FUNCTIONS.readTablePage, pageArgs, {
-        enabled: selectedTable !== null,
-        keepPreviousData: false,
-        // … live: true (the page read streams writes in)
-    });
+    }),
+    [filters, pageSize, offset, sorting, search, selectedTable],
+);
+const pageQuery = useAdminQuery<TablePage>(ADMIN_FUNCTIONS.readTablePage, pageArgs, {
+    enabled: selectedTable !== null,
+    keepPreviousData: false,
+    // … live: true (the page read streams writes in)
+});
 ```
 
 The read is `live` — a write into the table pushes a re-run, so a cached count
@@ -87,12 +92,12 @@ live query is cleaner.
 
 ## Commands you will need
 
-| Purpose | Command | Expected |
-|---|---|---|
-| Build do (deps) | `pnpm --filter "@lunora/do..." run build` | exit 0 |
-| Typecheck do | `pnpm --filter "@lunora/do" run lint:types` | exit 0 |
-| Test do | `pnpm --filter "@lunora/do" run test -- introspect` | all pass |
-| Typecheck studio | `pnpm --filter "@lunora/studio" run lint:types` | exit 0 |
+| Purpose          | Command                                             | Expected |
+| ---------------- | --------------------------------------------------- | -------- |
+| Build do (deps)  | `pnpm --filter "@lunora/do..." run build`           | exit 0   |
+| Typecheck do     | `pnpm --filter "@lunora/do" run lint:types`         | exit 0   |
+| Test do          | `pnpm --filter "@lunora/do" run test -- introspect` | all pass |
+| Typecheck studio | `pnpm --filter "@lunora/studio" run lint:types`     | exit 0   |
 
 **Do NOT run the studio Vitest suite** — jsdom component tests SIGTERM/hang in
 this sandbox (see the repo memory). Verify studio changes with `lint:types` +
@@ -101,6 +106,7 @@ this sandbox (see the repo memory). Verify studio changes with `lint:types` +
 ## Scope
 
 **In scope**:
+
 - `packages/do/src/introspect.ts` — `readTablePage` gains `skipCount` and skips
   the COUNT when set; the admin RPC arg schema for `readTablePage` (find where its
   args are validated — grep for `readTablePage` in `packages/do/src` and the admin
@@ -112,6 +118,7 @@ this sandbox (see the repo memory). Verify studio changes with `lint:types` +
   its consumers in the data feature.
 
 **Out of scope**:
+
 - Changing the search predicate from `CAST … LIKE` to something indexable — that
   is a separate, larger change (would need FTS or per-column typed search). Note
   it as a follow-up.
@@ -141,11 +148,12 @@ assert the COUNT query wasn't issued).
 ### Step 2: Client — separate predicate-keyed count query
 
 In `use-data-browser.tsx`:
+
 - Build `countArgs` = `pageArgs` **without** `offset` (and without `limit` if the
   count ignores it — it does). Memoize on `[filters, sorting?, search,
-  selectedTable]` (drop `offset`, `pageSize`).
+selectedTable]` (drop `offset`, `pageSize`).
 - Add a second `useAdminQuery<{ total: number }>(ADMIN_FUNCTIONS.readTableCount
-  ?? readTablePage-with-count, countArgs, { enabled, live: true, shardKey })`.
+?? readTablePage-with-count, countArgs, { enabled, live: true, shardKey })`.
   Prefer reusing `readTablePage` with `skipCount: false` + `limit: 0`/`offset: 0`
   purely for the count IF that returns the total cheaply; otherwise consider a
   dedicated `readTableCount` admin fn. Reusing `readTablePage` avoids a new admin
@@ -171,8 +179,8 @@ count query, so it refetches — correct.
 ## Test plan
 
 - Server: in the introspect test file, add:
-  - `skipCount: true` → page rows returned, `total` undefined/absent, COUNT not run.
-  - default (no `skipCount`) → `total` present (regression — unchanged behavior).
+    - `skipCount: true` → page rows returned, `total` undefined/absent, COUNT not run.
+    - default (no `skipCount`) → `total` present (regression — unchanged behavior).
 - Client: no runnable jsdom test in this sandbox. Instead, verify via
   `lint:types` that the count query and page query type-check, and manually
   reason about the invalidation (documented in the PR). If a non-jsdom unit test

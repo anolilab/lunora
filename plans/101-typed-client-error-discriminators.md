@@ -39,18 +39,22 @@ Server error codes (`packages/server/src/error.ts:13-54`) — the full set:
 `LunoraError`.
 
 Client error surface today (`packages/client/src/errors.ts`, entire file):
+
 ```ts
 const CONFLICT_ERROR_CODE = "CONFLICT";
 const isConflictError = (error: unknown): error is Error & { code: "CONFLICT" } =>
     error instanceof Error && (error as Error & { code?: unknown }).code === CONFLICT_ERROR_CODE;
 export { CONFLICT_ERROR_CODE, isConflictError };
 ```
+
 Re-exported at `packages/client/src/index.ts:6`:
+
 ```ts
 export { CONFLICT_ERROR_CODE, isConflictError } from "./errors";
 ```
 
 The client error type (`packages/client/src/lunora-client.ts:463-475`):
+
 ```ts
 /** An `Error` carrying the server's machine-readable `code` and (for a `LunoraError`) structured `data`. The client's public error contract for RPC/batch failures. */
 type LunoraClientError = Error & { code?: string; data?: unknown };
@@ -61,12 +65,14 @@ const reconstructError = (errorBody: { code?: string; data?: unknown; message?: 
     return error;
 };
 ```
+
 `LunoraClientError` is exported at `lunora-client.ts:4566`.
 
 React (`packages/react/src/index.ts`) re-exports no error helpers; `useMutation`
 types `error: Error | null` (`packages/react/src/use-mutation.ts:17`).
 
 **Convention notes**:
+
 - The client is framework-neutral and dependency-free; `@lunora/server` is a
   server package. **Do NOT** import `@lunora/server` into `@lunora/client` (wrong
   dependency direction / would pull the server into the browser bundle). Define
@@ -77,19 +83,20 @@ types `error: Error | null` (`packages/react/src/use-mutation.ts:17`).
 
 ## Commands you will need
 
-| Purpose | Command | Expected |
-|---|---|---|
-| Build (deps) | `pnpm --filter "@lunora/react..." run build` | exit 0 |
-| Typecheck client | `pnpm --filter "@lunora/client" run lint:types` | exit 0 |
-| Typecheck react | `pnpm --filter "@lunora/react" run lint:types` | exit 0 |
-| Test client | `pnpm --filter "@lunora/client" run test` | all pass |
-| Lint | `pnpm --filter "@lunora/client" run lint:eslint` | exit 0 |
+| Purpose          | Command                                          | Expected |
+| ---------------- | ------------------------------------------------ | -------- |
+| Build (deps)     | `pnpm --filter "@lunora/react..." run build`     | exit 0   |
+| Typecheck client | `pnpm --filter "@lunora/client" run lint:types`  | exit 0   |
+| Typecheck react  | `pnpm --filter "@lunora/react" run lint:types`   | exit 0   |
+| Test client      | `pnpm --filter "@lunora/client" run test`        | all pass |
+| Lint             | `pnpm --filter "@lunora/client" run lint:eslint` | exit 0   |
 
 ## Scope
 
 **In scope**:
+
 - `packages/client/src/errors.ts` — add discriminators + a client-safe code union
-  + a typed `getErrorCode`.
+    - a typed `getErrorCode`.
 - `packages/client/src/index.ts` — export the new helpers/types.
 - `packages/client/src/lunora-client.ts` — tighten `LunoraClientError["code"]` to
   the new union (keep `data` accessor typed helpers rather than widening the base
@@ -99,6 +106,7 @@ types `error: Error | null` (`packages/react/src/use-mutation.ts:17`).
 - New test file `packages/client/__tests__/errors.test.ts`.
 
 **Out of scope**:
+
 - `@lunora/vue` / `@lunora/solid` / `@lunora/svelte` re-exports — do them in a
   follow-up if desired, but keep this plan to client + react to bound risk. (Note
   the follow-up in the index.)
@@ -120,12 +128,13 @@ observe (mirror the server list; you may omit purely server-internal ones if
 justified, but include at minimum `CONFLICT`, `FORBIDDEN`, `UNAUTHORIZED`,
 `TOO_MANY_REQUESTS`, `BAD_REQUEST`, `NOT_FOUND`, `UNPROCESSABLE`,
 `INTERNAL_SERVER_ERROR`). Add:
+
 - `type LunoraErrorCode = "CONFLICT" | "FORBIDDEN" | …;`
 - `getErrorCode(error: unknown): LunoraErrorCode | undefined` — structural read
   of `.code` narrowed to the union (unknown strings → return the raw string typed
   as the union? No — return `undefined` for unrecognized, OR return the raw
   string widened; pick: return the `.code` value typed `LunoraErrorCode |
-  undefined`, returning it only when it matches the union, else `undefined`. Keep
+undefined`, returning it only when it matches the union, else `undefined`. Keep
   it simple and total.)
 - `isForbiddenError`, `isUnauthorizedError`, `isRateLimitedError` — each an
   `error is Error & { code: "<CODE>" }` guard mirroring `isConflictError`.
@@ -156,8 +165,8 @@ access path).
   `export { … } from "./errors"` line and export the `LunoraErrorCode` type.
 - `packages/react/src/index.ts`: re-export the error helpers + type from
   `@lunora/client` (`export { getErrorCode, getRetryAfterMs, isConflictError,
-  isForbiddenError, isRateLimitedError, isUnauthorizedError } from
-  "@lunora/client"; export type { LunoraErrorCode } from "@lunora/client";`).
+isForbiddenError, isRateLimitedError, isUnauthorizedError } from
+"@lunora/client"; export type { LunoraErrorCode } from "@lunora/client";`).
   Match the file's existing re-export style.
 
 **Verify**: `pnpm --filter "@lunora/react" run lint:types` → exit 0.
@@ -174,13 +183,13 @@ undefined), and `getRetryAfterMs` (present number, missing, non-number).
 
 - `packages/client/__tests__/errors.test.ts` — model after any existing small
   unit test in `packages/client/__tests__` for structure. Cases:
-  - `isForbiddenError` true for `{ code: "FORBIDDEN" }`, false otherwise.
-  - `isRateLimitedError` true for `{ code: "TOO_MANY_REQUESTS" }`.
-  - `getRetryAfterMs` returns the number from `{ data: { retryAfterMs: 1500 } }`,
-    `undefined` when absent/non-number.
-  - `getErrorCode` returns the union member for a known code, `undefined` for an
-    unknown string and for a non-Error.
-  - `isConflictError` unchanged (regression).
+    - `isForbiddenError` true for `{ code: "FORBIDDEN" }`, false otherwise.
+    - `isRateLimitedError` true for `{ code: "TOO_MANY_REQUESTS" }`.
+    - `getRetryAfterMs` returns the number from `{ data: { retryAfterMs: 1500 } }`,
+      `undefined` when absent/non-number.
+    - `getErrorCode` returns the union member for a known code, `undefined` for an
+      unknown string and for a non-Error.
+    - `isConflictError` unchanged (regression).
 - Verification: `pnpm --filter "@lunora/client" run test` → all pass.
 
 ## Done criteria

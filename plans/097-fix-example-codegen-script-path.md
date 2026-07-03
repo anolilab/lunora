@@ -43,6 +43,7 @@ Verified on disk: `examples/todo-app/node_modules/lunorash` is a symlink to
 **not** exist.
 
 The six files:
+
 - `examples/todo-app/package.json`
 - `examples/auth-playground/package.json`
 - `examples/blog/package.json`
@@ -62,10 +63,10 @@ would use).
 
 ## Commands you will need
 
-| Purpose | Command | Expected |
-|---|---|---|
-| Confirm the symlink | `ls -l examples/todo-app/node_modules/lunorash` | points to `packages/lunora` |
-| Confirm current form | `grep -n '"codegen"' examples/*/package.json` | six matches on the old path |
+| Purpose              | Command                                         | Expected                    |
+| -------------------- | ----------------------------------------------- | --------------------------- |
+| Confirm the symlink  | `ls -l examples/todo-app/node_modules/lunorash` | points to `packages/lunora` |
+| Confirm current form | `grep -n '"codegen"' examples/*/package.json`   | six matches on the old path |
 
 ## Scope
 
@@ -124,7 +125,7 @@ Step 2 plus the smoke run in Step 3.
 ## STOP conditions
 
 - The drift check shows an example already fixed or using a third form — reconcile, don't blindly overwrite.
-- The smoke run fails with a *different* error that suggests the bin form is wrong for examples (e.g. `lunora: command not found` because the bin isn't linked in examples) — fall back to the explicit `node_modules/lunorash/dist/bin.mjs` form and note it.
+- The smoke run fails with a _different_ error that suggests the bin form is wrong for examples (e.g. `lunora: command not found` because the bin isn't linked in examples) — fall back to the explicit `node_modules/lunorash/dist/bin.mjs` form and note it.
 
 ## Maintenance notes
 

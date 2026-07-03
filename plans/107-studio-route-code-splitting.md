@@ -39,12 +39,12 @@ static asset:
   `keepNames: true`, `format: "esm"`, **no `splitting`, no `outdir`**. It emits
   one file.
 - Three hosts serve exactly `/studio.js` + `/styles.css`:
-  - `packages/cli/src/util/studio-server.ts:197` — `if (pathname !== "/studio.js"
-    && pathname !== "/styles.css") return false;` (only those two paths served).
-  - `packages/vite/src/studio-plugin.ts:29-31` — `STUDIO_SCRIPT_PATH =
-    "/__lunora/studio.js"`, `STUDIO_STYLE_PATH = "/__lunora/styles.css"`.
-  - `packages/config/src/studio-host/assets.ts:17-31` — `loadStudioAssets` reads
-    exactly `@lunora/studio/standalone/studio.js` + `styles.css` into buffers.
+    - `packages/cli/src/util/studio-server.ts:197` — `if (pathname !== "/studio.js"
+&& pathname !== "/styles.css") return false;` (only those two paths served).
+    - `packages/vite/src/studio-plugin.ts:29-31` — `STUDIO_SCRIPT_PATH =
+"/__lunora/studio.js"`, `STUDIO_STYLE_PATH = "/__lunora/styles.css"`.
+    - `packages/config/src/studio-host/assets.ts:17-31` — `loadStudioAssets` reads
+      exactly `@lunora/studio/standalone/studio.js` + `styles.css` into buffers.
 
 **Consequence**: adding `React.lazy` boundaries in `studio.tsx` alone does
 **nothing** for load time unless esbuild also emits separate chunks AND the hosts
@@ -60,6 +60,7 @@ paths. That is the bulk of the work and the risk.
 
 Eager imports + panels map (`packages/studio/src/app/studio.tsx:41-92`,
 `1012-1085`):
+
 ```ts
 import { AnalyticsPanel } from "../features/analytics/analytics-panel";
 // … ~35 static panel imports …
@@ -73,6 +74,7 @@ import { AnalyticsPanel } from "../features/analytics/analytics-panel";
     const indexRoute = createRoute({ component: () => panels.home, getParentRoute: () => rootRoute, path: "/" });
     const tabRoutes = TABS.map((tab) => createRoute({ component: () => panels[tab], getParentRoute: () => rootRoute, path: `/${tab}` }));
 ```
+
 No `React.lazy`/dynamic `import()` anywhere in `app/*.tsx` (confirmed). Heavy
 deps: `@xyflow/react`, `recharts` (`packages/studio/package.json:87,92`). Router
 is `@tanstack/react-router`.
@@ -100,14 +102,14 @@ the hosts can serve a chunk directory. If the spike fails, STOP.
 
 ## Commands you will need
 
-| Purpose | Command | Expected |
-|---|---|---|
-| Build studio | `pnpm --filter "@lunora/studio" run build` | exit 0; emits standalone output |
-| Typecheck studio | `pnpm --filter "@lunora/studio" run lint:types` | exit 0 |
-| Typecheck cli | `pnpm --filter "@lunora/cli" run lint:types` | exit 0 |
-| Typecheck vite | `pnpm --filter "@lunora/vite" run lint:types` | exit 0 |
-| Typecheck config | `pnpm --filter "@lunora/config" run lint:types` | exit 0 |
-| Lint studio | `pnpm --filter "@lunora/studio" run lint:eslint` | exit 0 |
+| Purpose          | Command                                          | Expected                        |
+| ---------------- | ------------------------------------------------ | ------------------------------- |
+| Build studio     | `pnpm --filter "@lunora/studio" run build`       | exit 0; emits standalone output |
+| Typecheck studio | `pnpm --filter "@lunora/studio" run lint:types`  | exit 0                          |
+| Typecheck cli    | `pnpm --filter "@lunora/cli" run lint:types`     | exit 0                          |
+| Typecheck vite   | `pnpm --filter "@lunora/vite" run lint:types`    | exit 0                          |
+| Typecheck config | `pnpm --filter "@lunora/config" run lint:types`  | exit 0                          |
+| Lint studio      | `pnpm --filter "@lunora/studio" run lint:eslint` | exit 0                          |
 
 **Do NOT run the studio Vitest suite** (jsdom hang in this sandbox). Verify via
 build + `lint:types` + `lint:eslint`, and by inspecting the emitted
@@ -116,6 +118,7 @@ build + `lint:types` + `lint:eslint`, and by inspecting the emitted
 ## Scope
 
 **In scope**:
+
 - `packages/studio/src/app/studio.tsx` — convert the eager `panels` element map
   to route-level lazy components with a `Suspense` fallback; keep `home` eager.
 - `packages/studio/scripts/build-standalone.mjs` — `splitting: true` + `outdir`
@@ -130,6 +133,7 @@ build + `lint:types` + `lint:eslint`, and by inspecting the emitted
   (or expose a directory root the hosts serve from).
 
 **Out of scope**:
+
 - Splitting the Home panel or the shell — Home stays eager (synchronous first
   paint, per the existing `indexRoute` comment).
 - Rewriting the studio to be served through Vite's own bundler (too large).
@@ -149,8 +153,9 @@ build + `lint:types` + `lint:eslint`, and by inspecting the emitted
 ### Step 1: SPIKE — prove chunk-directory serving is viable
 
 Before touching `studio.tsx`, do a minimal proof:
+
 1. In `build-standalone.mjs`, switch to `splitting: true` + `outdir:
-   "dist/standalone"` (keep the synthetic entry). Build. Inspect
+"dist/standalone"` (keep the synthetic entry). Build. Inspect
    `packages/studio/dist/standalone/` — confirm esbuild emits a primary entry +
    `chunk-*.js` files, all ESM.
 2. Confirm the entry file references the chunks by **relative** path (esbuild does
@@ -195,6 +200,7 @@ loaded by the Home route (inspect chunk contents or the entry's static imports).
 
 For each host, replace the two-exact-path check with directory serving under the
 standalone root:
+
 - Resolve requested pathname to a file under the standalone dir; **reject path
   traversal** (`..`, absolute escapes) — normalize and confirm the resolved path
   stays within the dir. Return 404 for anything outside.
@@ -228,13 +234,13 @@ chunks; hosts' `lint:types` pass.
 ## Test plan
 
 - No jsdom component tests (sandbox hang). The gates are:
-  - `pnpm --filter "@lunora/studio" run build` succeeds and emits `studio.js` +
-    `chunk-*.js`.
-  - Static analysis / chunk inspection: `@xyflow/react` and `recharts` are NOT in
-    the Home-path chunk.
-  - Host `lint:types` pass; a traversal-safety unit test for the new
-    directory-serving path handler if one is extractable as a pure function
-    (recommended — test that `../etc/passwd`-style requests are rejected).
+    - `pnpm --filter "@lunora/studio" run build` succeeds and emits `studio.js` +
+      `chunk-*.js`.
+    - Static analysis / chunk inspection: `@xyflow/react` and `recharts` are NOT in
+      the Home-path chunk.
+    - Host `lint:types` pass; a traversal-safety unit test for the new
+      directory-serving path handler if one is extractable as a pure function
+      (recommended — test that `../etc/passwd`-style requests are rejected).
 - If the CLI studio-server has existing tests
   (`packages/cli/__tests__/util/`), add a case: a request for a `chunk-*.js`
   under the standalone dir is served; a traversal request is rejected (404/403).

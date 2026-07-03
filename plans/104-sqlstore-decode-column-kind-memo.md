@@ -28,6 +28,7 @@ definition removes the per-row recomputation on the hot read path.
 ## Current state
 
 `packages/sql-store/src/ctx-db.ts:359-376`:
+
 ```ts
 const decodeGlobalRow = (definition: TableDefinitionLike, row: Record<string, unknown>): Record<string, unknown> => {
     const decoded: Record<string, unknown> = {};
@@ -43,11 +44,12 @@ const decodeGlobalRow = (definition: TableDefinitionLike, row: Record<string, un
 ```
 
 Called per row via `decodeRow` → `decodeRows` (`ctx-db.ts:587-594`):
+
 ```ts
 const decodeRows = (definition: TableDefinitionLike, rows: ReadonlyArray<Record<string, unknown>>): Record<string, unknown>[] => {
     const documents: Record<string, unknown>[] = [];
     for (const row of rows) {
-        const decoded = decodeRow(definition, row);   // decodeRow → decodeGlobalRow
+        const decoded = decodeRow(definition, row); // decodeRow → decodeGlobalRow
         if (decoded) documents.push(decoded);
     }
     return documents;
@@ -56,6 +58,7 @@ const decodeRows = (definition: TableDefinitionLike, rows: ReadonlyArray<Record<
 
 `effectiveColumnKind` (`packages/sql-store/src/value-codec.ts:71-79`) is pure over
 the (immutable) validator:
+
 ```ts
 export const effectiveColumnKind = (validator: ValidatorLike): string | undefined => {
     if (validator.kind !== "optional") return validator.kind;
@@ -73,22 +76,24 @@ definition object (safe to key a `WeakMap` on).
 
 ## Commands you will need
 
-| Purpose | Command | Expected |
-|---|---|---|
-| Build (deps) | `pnpm --filter "@lunora/sql-store..." run build` | exit 0 |
-| Typecheck | `pnpm --filter "@lunora/sql-store" run lint:types` | exit 0 |
-| Test | `pnpm --filter "@lunora/sql-store" run test` | all pass |
-| Lint | `pnpm --filter "@lunora/sql-store" run lint:eslint` | exit 0 |
+| Purpose      | Command                                             | Expected |
+| ------------ | --------------------------------------------------- | -------- |
+| Build (deps) | `pnpm --filter "@lunora/sql-store..." run build`    | exit 0   |
+| Typecheck    | `pnpm --filter "@lunora/sql-store" run lint:types`  | exit 0   |
+| Test         | `pnpm --filter "@lunora/sql-store" run test`        | all pass |
+| Lint         | `pnpm --filter "@lunora/sql-store" run lint:eslint` | exit 0   |
 
 ## Scope
 
 **In scope**:
+
 - `packages/sql-store/src/ctx-db.ts` — add a memoized `field → kind` derivation
   and use it in `decodeGlobalRow`.
 - The existing sql-store decode test(s) (regression + a note; likely no new test
   needed beyond confirming identical output — see Test plan).
 
 **Out of scope**:
+
 - `effectiveColumnKind` itself (`value-codec.ts`) — leave the function as-is; only
   its call frequency changes.
 - The encode path.
@@ -107,6 +112,7 @@ definition object (safe to key a `WeakMap` on).
 
 Add a module-level `WeakMap<TableDefinitionLike, [string, string | undefined][]>`
 (field → effective kind) and a helper:
+
 ```ts
 const columnKindCache = new WeakMap<TableDefinitionLike, [string, string | undefined][]>();
 const columnKinds = (definition: TableDefinitionLike): [string, string | undefined][] => {
@@ -118,6 +124,7 @@ const columnKinds = (definition: TableDefinitionLike): [string, string | undefin
     return kinds;
 };
 ```
+
 Place it near `tableColumns` for consistency.
 
 **Verify**: `pnpm --filter "@lunora/sql-store" run lint:types` → exit 0.
@@ -137,6 +144,7 @@ const decodeGlobalRow = (definition: TableDefinitionLike, row: Record<string, un
     return decoded;
 };
 ```
+
 Output must be identical to before.
 
 **Verify**: `pnpm --filter "@lunora/sql-store" run test` → all pass (existing

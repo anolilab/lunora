@@ -39,6 +39,7 @@ plus `registry/index.json`, `registry/schema/` (the item schema), and
 
 The `storage` item manifest is the closest structural exemplar
 (`registry/storage/registry.json`) — copy its shape:
+
 ```json
 {
     "$schema": "../schema/registry-item.schema.json",
@@ -48,12 +49,12 @@ The `storage` item manifest is the closest structural exemplar
     "docs": "… step-by-step wiring the user must do after add …",
     "requires": [],
     "deps": { "@lunora/storage": "workspace:*", "@lunora/server": "workspace:*", "@lunora/ratelimit": "workspace:*" },
-    "bindings": [ { "path": ["r2_buckets"], "value": [ { "binding": "UPLOADS", "bucket_name": "replace-me-uploads" } ] } ],
+    "bindings": [{ "path": ["r2_buckets"], "value": [{ "binding": "UPLOADS", "bucket_name": "replace-me-uploads" }] }],
     "envVars": [
         { "name": "STORAGE_SIGNING_SECRET", "description": "…", "secret": true },
         { "name": "STORAGE_PUBLIC_BASE_URL", "description": "…", "value": "http://localhost:8787/storage", "secret": false }
     ],
-    "files": [ { "from": "storage.ts", "to": "lunora/storage/index.ts", "merge": "create-or-skip" } ]
+    "files": [{ "from": "storage.ts", "to": "lunora/storage/index.ts", "merge": "create-or-skip" }]
 }
 ```
 
@@ -75,15 +76,16 @@ to learn exactly how `registry.json` fields (`deps`, `bindings`, `envVars`,
 
 ## Commands you will need
 
-| Purpose | Command | Expected |
-|---|---|---|
+| Purpose              | Command                                             | Expected       |
+| -------------------- | --------------------------------------------------- | -------------- |
 | Validate item schema | inspect `registry/schema/registry-item.schema.json` | field contract |
-| CLI test | `pnpm --filter "@lunora/cli" run test` | all pass |
-| CLI typecheck | `pnpm --filter "@lunora/cli" run lint:types` | exit 0 |
+| CLI test             | `pnpm --filter "@lunora/cli" run test`              | all pass       |
+| CLI typecheck        | `pnpm --filter "@lunora/cli" run lint:types`        | exit 0         |
 
 ## Scope
 
 **In scope**:
+
 - New `registry/payment/` directory: `registry.json` + the scaffolded source
   file(s) (`payment.ts` → `lunora/payment/index.ts`, promoted/adapted from
   `examples/payment-demo/lunora/billing.ts`), plus a `README.md` if peers have one.
@@ -92,6 +94,7 @@ to learn exactly how `registry.json` fields (`deps`, `bindings`, `envVars`,
 - If `lunora add` has a fixture/test list of known items, add `payment` there.
 
 **Out of scope**:
+
 - `ai` / `workflow` / `queue` / `scheduler` / `container` / `flags` items — this
   plan ships **payment** and establishes the pattern; the others are follow-ups
   noted in the index.
@@ -138,14 +141,15 @@ exist).
 ### Step 3: Author `registry/payment/registry.json`
 
 Mirror `storage`'s manifest:
+
 - `deps`: `@lunora/payment`, `@lunora/server` (+ any the demo imports).
 - `envVars`: the Stripe (and/or Polar) secrets the demo needs — mark `secret:
-  true`, with `openssl`-style generation hints where relevant; **never** put a
+true`, with `openssl`-style generation hints where relevant; **never** put a
   real key value (the audit rule: reference credential type only).
 - `bindings`: whatever `createShardDO({ payment })` + the webhook route require
   (read the demo's `wrangler.jsonc`).
 - `files`: `[{ "from": "payment.ts", "to": "lunora/payment/index.ts", "merge":
-  "create-or-skip" }]`.
+"create-or-skip" }]`.
 - `docs`: the post-add wiring steps (register the webhook route, set secrets, run
   codegen) — concrete, like storage's `docs`.
 

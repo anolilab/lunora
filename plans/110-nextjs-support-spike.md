@@ -19,19 +19,21 @@
 
 ## Why this matters
 
-`lunora init` offers a `next` template, but choosing it prints *"template 'next'
-is not yet available — re-run with `--vite react` or `-t standalone`"* and exits
+`lunora init` offers a `next` template, but choosing it prints _"template 'next'
+is not yet available — re-run with `--vite react` or `-t standalone`"_ and exits
+
 1. There is no `packages/next` and no `templates/next`. Next.js is the largest
-React meta-framework and the most common thing a Convex/Supabase-shaped audience
-already runs, so a warned-on no-op at the top of the funnel (`lunora init`) is a
-visible broken promise. Every other meta-framework ships both a template and a
-single-worker composition path (Nuxt, Astro), so the pattern to copy exists — but
-OpenNext-on-Cloudflare composition is fiddlier than Nitro's clean server-route
-seam, which is why this is a spike first.
+   React meta-framework and the most common thing a Convex/Supabase-shaped audience
+   already runs, so a warned-on no-op at the top of the funnel (`lunora init`) is a
+   visible broken promise. Every other meta-framework ships both a template and a
+   single-worker composition path (Nuxt, Astro), so the pattern to copy exists — but
+   OpenNext-on-Cloudflare composition is fiddlier than Nitro's clean server-route
+   seam, which is why this is a spike first.
 
 ## Current state
 
 The no-op (`packages/cli/src/commands/init/handler.ts:1348-1352`):
+
 ```ts
 const scaffoldTemplatePath = async (options, templateType, name, target) => {
     if (templateType === "next") {
@@ -40,15 +42,18 @@ const scaffoldTemplatePath = async (options, templateType, name, target) => {
     }
     // …
 ```
+
 `"next"` is already in the `Template` union (`init/handler.ts:62`).
 
 The composition pattern to copy — Nuxt mounts Lunora inside Nitro as a server
 route (`packages/nuxt/src/module.ts:47,65`):
+
 ```ts
-        prefix: "/_lunora",
-        // …
-        addServerHandler({ /* forwards RPC / WebSocket / admin to the project's ShardDO worker */ });
+prefix: ("/_lunora",
+    // …
+    addServerHandler({/* forwards RPC / WebSocket / admin to the project's ShardDO worker */}));
 ```
+
 `@lunora/nuxt`'s module (read it in full) forwards every `/_lunora/**` request
 (RPC + WebSocket + admin) into the project's Lunora worker and ships `ShardDO`
 through the project-root `exports.cloudflare.ts`. `@lunora/astro`
@@ -63,15 +68,16 @@ inside (or alongside) the OpenNext worker, not a Nitro server route.
 
 ## Commands you will need
 
-| Purpose | Command | Expected |
-|---|---|---|
-| Read the nuxt module | `sed -n 1,120p packages/nuxt/src/module.ts` | the composition seam |
-| Read the astro integration | `ls packages/astro/src && sed -n 1,80p packages/astro/src/index.ts` | second composition example |
-| Typecheck (if a package is created) | `pnpm --filter "@lunora/next" run lint:types` | exit 0 |
+| Purpose                             | Command                                                             | Expected                   |
+| ----------------------------------- | ------------------------------------------------------------------- | -------------------------- |
+| Read the nuxt module                | `sed -n 1,120p packages/nuxt/src/module.ts`                         | the composition seam       |
+| Read the astro integration          | `ls packages/astro/src && sed -n 1,80p packages/astro/src/index.ts` | second composition example |
+| Typecheck (if a package is created) | `pnpm --filter "@lunora/next" run lint:types`                       | exit 0                     |
 
 ## Scope
 
 **In scope (spike deliverables)**:
+
 - A design document `plans/110-phase0-design.md` (create it) covering: how
   `/_lunora/*` (RPC + WebSocket + admin) mounts inside a Next.js app deployed via
   OpenNext-on-Cloudflare; where `ShardDO` is exported; how the WebSocket upgrade
@@ -87,6 +93,7 @@ inside (or alongside) the OpenNext worker, not a Nitro server route.
   what unblocks it.
 
 **Out of scope**:
+
 - A production-grade, all-features `@lunora/next` (auth, all bindings, SSR data
   helpers). The spike defines the API and proves the seam; the full build is a
   follow-up plan informed by this.

@@ -31,6 +31,7 @@ Only `templates/react-router` ships a `typecheck` script today (verified:
 `grep -n '"typecheck"' templates/*/package.json` returns exactly one match).
 
 `templates/react-router/package.json`:
+
 ```json
 "dev": "vite",
 "build": "lunora codegen && react-router build",
@@ -44,10 +45,10 @@ runs. `build` runs `lunora codegen` first; `typecheck` omits it.
 
 ## Commands you will need
 
-| Purpose | Command | Expected |
-|---|---|---|
-| Find typecheck scripts | `grep -n '"typecheck"' templates/*/package.json` | one match (react-router) |
-| Find build scripts (for ordering reference) | `grep -n '"build"' templates/*/package.json` | build runs `lunora codegen` first |
+| Purpose                                     | Command                                          | Expected                          |
+| ------------------------------------------- | ------------------------------------------------ | --------------------------------- |
+| Find typecheck scripts                      | `grep -n '"typecheck"' templates/*/package.json` | one match (react-router)          |
+| Find build scripts (for ordering reference) | `grep -n '"build"' templates/*/package.json`     | build runs `lunora codegen` first |
 
 ## Scope
 
@@ -71,6 +72,7 @@ non-template file.
 ### Step 1: Prefix codegen
 
 Change `templates/react-router/package.json`:
+
 ```json
 "typecheck": "lunora codegen && react-router typegen && tsc"
 ```

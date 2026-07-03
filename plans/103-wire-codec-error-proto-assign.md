@@ -37,32 +37,35 @@ aligning.
 ## Current state
 
 Error decode branch (`shared/wire-codec.ts:353-370`):
+
 ```ts
-                    const Ctor = (Object.hasOwn(ERROR_CTORS, name) ? ERROR_CTORS[name] : undefined) ?? Error;
-                    const error = new Ctor(message) as Error & Record<string, unknown>;
-                    if (error.name !== name) {
-                        Object.defineProperty(error, "name", { configurable: true, value: name, writable: true });
-                    }
-                    Object.assign(error, decodeWire(value[4], depth + 1) as Record<string, unknown>);   // <-- line 361
-                    if (value.length > 5) {
-                        Object.defineProperty(error, "cause", { configurable: true, value: decodeWire(value[5], depth + 1), writable: true });
-                    }
-                    return error;
+const Ctor = (Object.hasOwn(ERROR_CTORS, name) ? ERROR_CTORS[name] : undefined) ?? Error;
+const error = new Ctor(message) as Error & Record<string, unknown>;
+if (error.name !== name) {
+    Object.defineProperty(error, "name", { configurable: true, value: name, writable: true });
+}
+Object.assign(error, decodeWire(value[4], depth + 1) as Record<string, unknown>); // <-- line 361
+if (value.length > 5) {
+    Object.defineProperty(error, "cause", { configurable: true, value: decodeWire(value[5], depth + 1), writable: true });
+}
+return error;
 ```
 
 The object branch that does it correctly (`shared/wire-codec.ts:410-426`):
+
 ```ts
-    const source = value as Record<string, unknown>;
-    const result: Record<string, unknown> = {};
-    for (const key of Object.keys(source)) {
-        const decoded = decodeWire(source[key], depth + 1);
-        if (key === UNSAFE_KEY) {   // UNSAFE_KEY = "__proto__" (line 86)
-            Object.defineProperty(result, key, { configurable: true, enumerable: true, value: decoded, writable: true });
-        } else {
-            result[key] = decoded;
-        }
+const source = value as Record<string, unknown>;
+const result: Record<string, unknown> = {};
+for (const key of Object.keys(source)) {
+    const decoded = decodeWire(source[key], depth + 1);
+    if (key === UNSAFE_KEY) {
+        // UNSAFE_KEY = "__proto__" (line 86)
+        Object.defineProperty(result, key, { configurable: true, enumerable: true, value: decoded, writable: true });
+    } else {
+        result[key] = decoded;
     }
-    return result;
+}
+return result;
 ```
 
 `UNSAFE_KEY = "__proto__"` is defined at `shared/wire-codec.ts:86`.
@@ -74,11 +77,11 @@ notes) — it is dependency-free and imported by relative path.
 
 ## Commands you will need
 
-| Purpose | Command | Expected |
-|---|---|---|
+| Purpose            | Command                                                 | Expected |
+| ------------------ | ------------------------------------------------------- | -------- |
 | Run the codec test | `pnpm --filter "@lunora/client" run test -- wire-codec` | all pass |
-| Typecheck client | `pnpm --filter "@lunora/client" run lint:types` | exit 0 |
-| Build (deps) | `pnpm --filter "@lunora/client..." run build` | exit 0 |
+| Typecheck client   | `pnpm --filter "@lunora/client" run lint:types`         | exit 0   |
+| Build (deps)       | `pnpm --filter "@lunora/client..." run build`           | exit 0   |
 
 (The codec lives in `shared/` but is verified through a consumer — `@lunora/client`
 inlines it and has the test suite.)
@@ -86,10 +89,12 @@ inlines it and has the test suite.)
 ## Scope
 
 **In scope**:
+
 - `shared/wire-codec.ts` — the error decode branch's property-merge (line ~361).
 - `packages/client/__tests__/wire-codec.test.ts` — add a regression test.
 
 **Out of scope**:
+
 - The object branch (already correct).
 - The encode path.
 - Any consumer package source — the fix is inline in `shared/` and picked up by
@@ -127,6 +132,7 @@ from the expected `Error.prototype` (or the ctor's prototype)?
 Replace the `Object.assign(error, decodeWire(value[4], …))` with a key-wise merge
 that mirrors the object branch's `UNSAFE_KEY` handling. Extract a small shared
 helper if clean (e.g. `assignDecodedProps(target, source)`), or inline:
+
 ```ts
 const props = decodeWire(value[4], depth + 1) as Record<string, unknown>;
 for (const key of Object.keys(props)) {
@@ -137,6 +143,7 @@ for (const key of Object.keys(props)) {
     }
 }
 ```
+
 Note: `decodeWire(value[4])` already recursed, so `props` values are decoded —
 do not re-decode. (The object branch decodes per-key; here `value[4]` is decoded
 once as a whole. Confirm `value[4]` is the props object and that decoding it
@@ -157,12 +164,12 @@ including pre-existing error-roundtrip cases.
 ## Test plan
 
 - Add to `packages/client/__tests__/wire-codec.test.ts`:
-  - Regression: a wire error payload with `__proto__` in its props does not swap
-    the decoded error's prototype (asserts `Object.getPrototypeOf(decoded) ===`
-    the expected prototype), and the `__proto__` value is present as an own data
-    property.
-  - A wire error with normal custom props (`code`, `data`) still reconstructs
-    them onto the error (regression).
+    - Regression: a wire error payload with `__proto__` in its props does not swap
+      the decoded error's prototype (asserts `Object.getPrototypeOf(decoded) ===`
+      the expected prototype), and the `__proto__` value is present as an own data
+      property.
+    - A wire error with normal custom props (`code`, `data`) still reconstructs
+      them onto the error (regression).
 - Verification: `pnpm --filter "@lunora/client" run test -- wire-codec` → all pass.
 
 ## Done criteria

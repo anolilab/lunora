@@ -27,13 +27,14 @@ would do: O(files × features × nodes) instead of O(files × nodes).
 **Leverage caveat (read before starting)**: prior measurement (Wave 3 plan 063)
 showed warm dev-loop codegen is ~18–20ms total and the fresh-run cost is
 dominated by ts-morph Project construction, not this traversal. So this is a
-*modest* cleanup, not a hot-path win. It is worth doing as a clean, semantics-
+_modest_ cleanup, not a hot-path win. It is worth doing as a clean, semantics-
 preserving refactor covered by golden tests, but do not over-invest, and do not
 claim a large speedup.
 
 ## Current state
 
 `packages/codegen/src/discover-feature-usage.ts:126-147` — per-call double walk:
+
 ```ts
 const readsContextProperty = (sourceFile: SourceFile, property: string): boolean => {
     const reachesContext = (receiver: Node): boolean => Node.isIdentifier(receiver) && receiver.getText() === "ctx";
@@ -52,25 +53,31 @@ const readsContextProperty = (sourceFile: SourceFile, property: string): boolean
 
 The per-file loop (`discover-feature-usage.ts:179-195`) calls it inside a
 per-feature loop:
+
 ```ts
-    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
-        const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-        const importSpecifiers = new Set(sourceFile.getImportDeclarations().map((d) => d.getModuleSpecifierValue()));
-        for (const key of keys) {                           // ~15 feature keys
-            if (usage[key]) continue;
-            const probe = PROBES[key];
-            if (importSpecifiers.has(probe.moduleSpecifier)) { usage[key] = true; continue; }
-            if (probe.contextProperty !== undefined && readsContextProperty(sourceFile, probe.contextProperty)) {
-                usage[key] = true;
-            }
+for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
+    const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
+    const importSpecifiers = new Set(sourceFile.getImportDeclarations().map((d) => d.getModuleSpecifierValue()));
+    for (const key of keys) {
+        // ~15 feature keys
+        if (usage[key]) continue;
+        const probe = PROBES[key];
+        if (importSpecifiers.has(probe.moduleSpecifier)) {
+            usage[key] = true;
+            continue;
         }
-        if (keys.every((key) => usage[key])) break;
+        if (probe.contextProperty !== undefined && readsContextProperty(sourceFile, probe.contextProperty)) {
+            usage[key] = true;
+        }
     }
+    if (keys.every((key) => usage[key])) break;
+}
 ```
 
 `PROBES` (`discover-feature-usage.ts:66+`) maps each feature key to
 `{ contextProperty, moduleSpecifier }`. `readsContextProperty` semantics to
 preserve exactly:
+
 - direct: `ctx.<property>` (a `PropertyAccessExpression` named `<property>` whose
   receiver is the `ctx` identifier).
 - destructured: `const { <property> } = ctx` (an object-binding-pattern var
@@ -80,22 +87,24 @@ preserve exactly:
 
 ## Commands you will need
 
-| Purpose | Command | Expected |
-|---|---|---|
-| Build (deps) | `pnpm --filter "@lunora/codegen..." run build` | exit 0 |
-| Typecheck | `pnpm --filter "@lunora/codegen" run lint:types` | exit 0 |
-| Test (golden) | `pnpm --filter "@lunora/codegen" run test` | all pass |
-| Lint | `pnpm --filter "@lunora/codegen" run lint:eslint` | exit 0 |
+| Purpose       | Command                                           | Expected |
+| ------------- | ------------------------------------------------- | -------- |
+| Build (deps)  | `pnpm --filter "@lunora/codegen..." run build`    | exit 0   |
+| Typecheck     | `pnpm --filter "@lunora/codegen" run lint:types`  | exit 0   |
+| Test (golden) | `pnpm --filter "@lunora/codegen" run test`        | all pass |
+| Lint          | `pnpm --filter "@lunora/codegen" run lint:eslint` | exit 0   |
 
 ## Scope
 
 **In scope**:
+
 - `packages/codegen/src/discover-feature-usage.ts` — replace the per-feature
   double-walk with a single per-file traversal that collects the set of
   context-property names read (direct + destructured), then resolves each
   `PROBES` entry against that set + the import-specifier set.
 
 **Out of scope**:
+
 - `PROBES` contents / feature list.
 - Any other codegen discovery pass.
 - ts-morph Project construction (the actual dominant cost — not this plan).
@@ -112,8 +121,9 @@ preserve exactly:
 
 Add a helper that walks each source file once (a single `forEachDescendant`, or
 one `getDescendantsOfKind(PropertyAccessExpression)` + one
-`getDescendantsOfKind(VariableDeclaration)` — two walks total *per file*, not per
+`getDescendantsOfKind(VariableDeclaration)` — two walks total _per file_, not per
 feature) and returns `Set<string>` of context-property names read:
+
 ```ts
 const contextPropertiesRead = (sourceFile: SourceFile): Set<string> => {
     const reachesContext = (receiver: Node): boolean => Node.isIdentifier(receiver) && receiver.getText() === "ctx";
@@ -133,6 +143,7 @@ const contextPropertiesRead = (sourceFile: SourceFile): Set<string> => {
     return names;
 };
 ```
+
 This preserves the exact matching semantics of `readsContextProperty` (direct +
 destructured, no parameter-position).
 
@@ -141,14 +152,19 @@ destructured, no parameter-position).
 ### Step 2: Rewire the per-file loop
 
 Compute `const props = contextPropertiesRead(sourceFile)` once per file, then:
+
 ```ts
-        for (const key of keys) {
-            if (usage[key]) continue;
-            const probe = PROBES[key];
-            if (importSpecifiers.has(probe.moduleSpecifier)) { usage[key] = true; continue; }
-            if (probe.contextProperty !== undefined && props.has(probe.contextProperty)) usage[key] = true;
-        }
+for (const key of keys) {
+    if (usage[key]) continue;
+    const probe = PROBES[key];
+    if (importSpecifiers.has(probe.moduleSpecifier)) {
+        usage[key] = true;
+        continue;
+    }
+    if (probe.contextProperty !== undefined && props.has(probe.contextProperty)) usage[key] = true;
+}
 ```
+
 Remove `readsContextProperty` (now unused) or keep it only if referenced
 elsewhere (grep first).
 

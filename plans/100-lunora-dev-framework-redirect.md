@@ -17,11 +17,11 @@
 ## Why this matters
 
 In a Vite/meta-framework project (react-router, tanstack-start, nuxt, …) the
-`@lunora/vite` plugin runs the worker *inside* Vite, so the template's dev script
+`@lunora/vite` plugin runs the worker _inside_ Vite, so the template's dev script
 is `vite`/`nuxt dev`, not `lunora dev`. A user who types `lunora dev` out of
 habit gets a bare `wrangler dev` of the worker — no frontend, no HMR, possibly a
 non-standalone entry — a confusing "why is my app blank" with no hint. `lunora
-dev` is *intentionally* wrangler-only (a project may not use Vite), so the fix is
+dev` is _intentionally_ wrangler-only (a project may not use Vite), so the fix is
 a one-line redirect **hint**, not a behavior change: detect a framework and tell
 the user to run their framework dev script instead.
 
@@ -48,10 +48,12 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
 ```
 
 The detector is available (`packages/config/src/detect-framework.ts:79,96`):
+
 ```ts
 const detectFramework = (root: string): FrameworkDetection => { … };
 export { detectFramework };
 ```
+
 It returns `{ framework, class }` where `framework: "none"` / class `"C"` means
 standalone (no framework). Read the file's top comment (lines ~5-48) for the full
 `FrameworkClass` semantics and the exact `FrameworkDetection` shape before using
@@ -60,20 +62,22 @@ already imports config helpers — e.g. `detectPackageManager` sibling utils).
 
 ## Commands you will need
 
-| Purpose | Command | Expected |
-|---|---|---|
-| Typecheck | `pnpm --filter "@lunora/cli" run lint:types` | exit 0 |
-| Tests | `pnpm --filter "@lunora/cli" run test` | all pass |
+| Purpose        | Command                                           | Expected         |
+| -------------- | ------------------------------------------------- | ---------------- |
+| Typecheck      | `pnpm --filter "@lunora/cli" run lint:types`      | exit 0           |
+| Tests          | `pnpm --filter "@lunora/cli" run test`            | all pass         |
 | Find dev tests | `ls packages/cli/__tests__/commands/ \| grep dev` | a `dev*.test.ts` |
 
 ## Scope
 
 **In scope**:
+
 - `packages/cli/src/commands/dev/handler.ts` — add framework detection + a
   redirect-hint log; keep the wrangler plan unchanged (still runs).
 - The dev command's test file (add a case).
 
 **Out of scope**:
+
 - Changing `planDevCommand` to actually spawn Vite / block wrangler. The command
   must still run `wrangler dev` (by design). This plan only adds a printed hint.
 - `detect-framework.ts` itself.
@@ -94,7 +98,7 @@ options; prefer (a):
 (a) Call `detectFramework(cwd)` inside `planDevCommand`, and when it returns a
 non-standalone framework (class `A`/`B`, i.e. `framework !== "none"`), add a
 `hint` field to the returned `DevCommandPlan` (e.g. `frameworkHint?: string`).
-The *runner* (the async caller that consumes the plan and logs) prints the hint
+The _runner_ (the async caller that consumes the plan and logs) prints the hint
 before/around spawning wrangler. This keeps `planDevCommand` pure and testable on
 the hint value.
 
@@ -102,9 +106,11 @@ the hint value.
 and print directly. Only do this if (a) forces an awkward plan-shape change.
 
 Hint text (single line, actionable):
+
 ```
 this project uses <framework> — the worker runs inside Vite there. run `<pm> run dev` (e.g. `vite`) for the full app; `lunora dev` starts only the worker.
 ```
+
 Use the already-resolved `manager` to render `<pm> run dev` via `runScriptCommand`
 (exported from init util) or an inline equivalent.
 
@@ -132,8 +138,8 @@ from), matching existing dev-test mocking style.
 ## Test plan
 
 - New case(s) in the dev command test file:
-  - framework project → plan has the redirect hint / runner logs it.
-  - standalone project → no hint (byte-identical to today's behavior).
+    - framework project → plan has the redirect hint / runner logs it.
+    - standalone project → no hint (byte-identical to today's behavior).
 - The wrangler plan (args/command) must be unchanged in both cases — assert the
   `wrangler` descriptor is still present and correct.
 - Verification: `pnpm --filter "@lunora/cli" run test` → all pass.
