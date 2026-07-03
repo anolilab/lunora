@@ -72,19 +72,54 @@ const { object } = await generateObject({
 });
 ```
 
-## RAG with `@lunora/bindings/vectors`
+## RAG — `defineRag` (`@lunora/ai/rag`)
 
-Embed with the AI SDK, store and search with [`@lunora/bindings/vectors`](/docs/packages/bindings):
+`defineRag` composes `ctx.ai` (embeddings) with `ctx.vectors` (Vectorize) into a
+declared index → retrieve pipeline: chunk → embed → upsert on the write side,
+embed → query → assemble on the read side. It's a thin library over the two
+facades every action already has — no new binding, no codegen.
 
 ```ts
-import { embed } from "@lunora/ai";
+// lunora/rag.ts
+import { defineRag } from "@lunora/ai/rag";
 
-const { embedding } = await embed({
-    model: ctx.ai.embeddingModel("@cf/baai/bge-base-en-v1.5"),
-    value: text,
+export const docs = defineRag({
+    embeddingModel: "@cf/baai/bge-base-en-v1.5", // declared once → index + retrieve embed identically
+    index: "docs", // a ctx.vectors index binding key
 });
-await ctx.vectors.upsert("docs-body", { id, input: text, embed: async () => embedding });
 ```
+
+```ts
+// inside an action:
+import { docs } from "@/lunora/rag";
+
+await docs(ctx).index({ id: doc._id, metadata: { title: doc.title }, namespace: ctx.shardKey, text: doc.body });
+
+const { chunks, context, sources } = await docs(ctx).retrieve(question, { namespace: ctx.shardKey, topK: 5 });
+// `context` is prompt-ready; `chunks` are ranked; `sources` are deduped refs.
+```
+
+What you get beyond the manual loop:
+
+- **Deterministic chunk ids** (`${sourceId}#${n}`) — re-indexing a source replaces
+  its chunks; shrinking documents have stale trailing chunks deleted automatically.
+- **Content-hash short-circuit** — re-indexing unchanged text skips chunking,
+  embedding, and every write (`{ unchanged: true }`), so periodic re-syncs are free.
+- **Tenant isolation** — thread `namespace` (your shard/tenant key) through both
+  sides; a namespace-less call gets a one-time dev warning (Vectorize indexes are
+  account-global). Suppress for single-tenant apps with `allowSharedNamespace`.
+- **Ranking controls** — `minScore` threshold, per-source `importance` weighting
+  (0–1, multiplied into scores), and `chunkContext: { before, after }` to stitch
+  neighbouring chunks around each match ("embed small, retrieve big").
+- **`asTool()`** — expose retrieval as an AI SDK tool so a model can decide to
+  search the index itself: `tools: { searchDocs: docs(ctx).asTool() }`.
+
+Chunk text lives in vector metadata by default (`returnMetadata: "all"`, `topK`
+capped at 20 by Vectorize, ~10 KiB metadata per vector). For long documents or
+deeper retrieval, supply a `textStore` (`{ put, getMany, remove? }` — a DO table,
+KV, …): text moves out of metadata and the `topK` ceiling lifts to 100. The
+default chunker is a fixed 1000-char window with 200 overlap; pass `chunk` for
+token/sentence/semantic strategies.
 
 ## Outside an action
 

@@ -10,6 +10,8 @@
         "inference",
         "llm",
         "lunora",
+        "rag",
+        "retrieval",
         "workers",
         "workers-ai"
     ],
@@ -40,6 +42,10 @@
         ".": {
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
+        },
+        "./rag": {
+            "types": "./dist/rag/index.d.ts",
+            "import": "./dist/rag/index.mjs"
         },
         "./package.json": "./package.json"
     },
