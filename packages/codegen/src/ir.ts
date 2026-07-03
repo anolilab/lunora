@@ -1406,6 +1406,70 @@ export interface FlagSecurityDefaultIR {
 
 /* eslint-enable no-secrets/no-secrets -- re-enable after the FlagSecurityDefaultIR doc block */
 
+/**
+ * One `generateText` / `streamText` call in `lunora/` whose `tools` reach a
+ * privileged side effect (a DB write, function dispatch, or outbound
+ * fetch/mail/queue send). `userInputDerived` records whether the model input
+ * (`prompt`/`messages`/`system`) flows from the handler's `args`; the
+ * `ai_tool_side_effect_prompt_injection` lint fires only when it does.
+ * Structurally identical to `AdvisorAiToolSideEffect`.
+ */
+export interface AiToolSideEffectIR {
+    /** Export binding name of the procedure performing the call. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the generation call, or `0` when unknown. */
+    line: number;
+    /** The generation entrypoint invoked. */
+    method: "generateText" | "streamText";
+    /** The privileged side-effect sink a model-callable tool reaches (`ctx.db.insert`, `ctx.run`, `ctx.fetch`, …). */
+    sideEffect: string;
+    /** `true` when a model-input option is derived from the handler's `args` (a bare `args.x`, or a name destructured from `args`). */
+    userInputDerived: boolean;
+}
+
+/**
+ * One `&lt;receiver>.identity.&lt;key>` claim read in `lunora/`, where `&lt;receiver>` is
+ * an RLS/mask policy `auth` (or `ctx.auth`/`context.auth`). `declared` records
+ * whether `&lt;key>` is in the app's `defineIdentity({ ... })` contract (or the
+ * always-present `userId`); the `identity_undeclared_claim_trusted` lint fires on
+ * the undeclared reads. Emitted only when a resolvable identity contract exists.
+ * Structurally identical to `AdvisorIdentityClaimRead`.
+ */
+export interface IdentityClaimReadIR {
+    /** `true` when `key` is a declared claim (in the `defineIdentity` contract, or the always-present `userId`). */
+    declared: boolean;
+    /** Export binding name of the enclosing declaration (`&lt;module>` at file scope). */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** The claim key read off the identity bag. */
+    key: string;
+    /** 1-based line of the read, or `0` when unknown. */
+    line: number;
+}
+
+/**
+ * One payment webhook-adapter construction in `lunora/` (`createStripeAdapter` /
+ * `createPolarAdapter`). `toleranceSeconds` carries the statically-known
+ * `webhookToleranceSeconds` replay window when it is a plain numeric literal; the
+ * payment-webhook wide-tolerance lint fires when it exceeds a conservative
+ * ceiling. Structurally identical to `AdvisorPaymentWebhook`.
+ */
+export interface PaymentWebhookIR {
+    /** The adapter factory invoked. */
+    callee: "createPolarAdapter" | "createStripeAdapter";
+    /** Export binding name of the enclosing declaration (`&lt;module>` at file scope). */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the construction, or `0` when unknown. */
+    line: number;
+    /** Statically-known `webhookToleranceSeconds` literal, when present and a plain numeric literal. */
+    toleranceSeconds?: number;
+}
+
 export interface ProjectIR {
     crons: ReadonlyArray<CronJobIR>;
     functions: ReadonlyArray<FunctionIR>;

@@ -8,6 +8,7 @@ import { Project } from "ts-morph";
 import { lintSchema } from "./advisor";
 import discoverAdminRoutes from "./discover-admin-routes";
 import discoverAiRawRuns from "./discover-ai-raw-runs";
+import discoverAiToolSideEffects from "./discover-ai-tool-side-effects";
 import discoverArgumentDerivedFetches from "./discover-argument-derived-fetches";
 import discoverArgumentValidators from "./discover-argument-validators";
 import discoverAuthConfig from "./discover-auth-config";
@@ -26,6 +27,7 @@ import { discoverFunctions, listLunoraSourceFiles } from "./discover-functions";
 import discoverHttpActionGuards from "./discover-http-action-guards";
 import discoverHttpRoutes from "./discover-http-routes";
 import { discoverIdentity } from "./discover-identity";
+import discoverIdentityClaimReads from "./discover-identity-claim-reads";
 import discoverImageDeliveryUrlAccesses from "./discover-image-delivery-url-accesses";
 import discoverInserts from "./discover-inserts";
 import discoverKvKeyAccesses from "./discover-kv-key-accesses";
@@ -37,6 +39,7 @@ import { discoverMutators } from "./discover-mutators";
 import discoverNondeterministicCalls from "./discover-nondeterministic-calls";
 import discoverOwnerFieldWrites from "./discover-owner-field-writes";
 import discoverPackageDependencies from "./discover-package-dependencies";
+import discoverPaymentWebhooks from "./discover-payment-webhooks";
 import discoverPrivilegedDispatches from "./discover-privileged-dispatches";
 import discoverProcedureMiddleware from "./discover-procedure-middleware";
 import discoverQueries from "./discover-queries";
@@ -367,6 +370,9 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   discoverHttpActionGuards(project, lunoraDirectory),
                   discoverFailOpenGuards(project, lunoraDirectory),
                   discoverFlagSecurityDefaults(project, lunoraDirectory),
+                  discoverAiToolSideEffects(project, lunoraDirectory),
+                  discoverIdentityClaimReads(project, lunoraDirectory),
+                  discoverPaymentWebhooks(project, lunoraDirectory),
               );
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,

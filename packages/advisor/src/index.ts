@@ -13,6 +13,7 @@ import indexUtilization from "./lints/runtime/index-utilization";
 import actionFetchSsrf from "./lints/static/action-fetch-ssrf";
 import adminRouteWithoutGuard from "./lints/static/admin-route-without-guard";
 import aiRawRunEscapeHatch from "./lints/static/ai-raw-run-escape-hatch";
+import aiToolSideEffectPromptInjection from "./lints/static/ai-tool-side-effect-prompt-injection";
 import aiUnboundedGenerationPublic from "./lints/static/ai-unbounded-generation-public";
 import allowUnauthenticatedShardAccessEnabled from "./lints/static/allow-unauthenticated-shard-access-enabled";
 import authApiCallWithoutHeaders from "./lints/static/auth-api-call-without-headers";
@@ -36,6 +37,7 @@ import flagGatesSecurityWithUnsafeDefault from "./lints/static/flag-gates-securi
 import hardcodedSecret from "./lints/static/hardcoded-secret";
 import httpActionMissingAuthGuard from "./lints/static/http-action-missing-auth-guard";
 import hyperdriveOutsideAction from "./lints/static/hyperdrive-outside-action";
+import identityUndeclaredClaimTrusted from "./lints/static/identity-undeclared-claim-trusted";
 import imagesUrlSourceFromUserInput from "./lints/static/images-url-source-from-user-input";
 import indexReferencesUnknownField from "./lints/static/index-references-unknown-field";
 import insertManyUnsafeUserData from "./lints/static/insert-many-unsafe-user-data";
@@ -48,6 +50,7 @@ import mutatorFullRowReplace from "./lints/static/mutator-full-row-replace";
 import nondeterministicQueryMutation from "./lints/static/nondeterministic-query-mutation";
 import ownerFieldFromArgsNotAuth from "./lints/static/owner-field-from-args-not-auth";
 import paymentCreateWithoutAuthorize from "./lints/static/payment-create-without-authorize";
+import paymentWebhookWideTolerance from "./lints/static/payment-webhook-wide-tolerance";
 import policyReferencesUnknownTable from "./lints/static/policy-references-unknown-table";
 import privilegedDispatchUnvalidatedPayload from "./lints/static/privileged-dispatch-unvalidated-payload";
 import privilegedFanoutFromPublicProcedure from "./lints/static/privileged-fanout-from-public-procedure";
@@ -84,6 +87,7 @@ export type { AdvisorAdminRoute } from "./admin-routes";
 export type { AnalyticsMetricsOptions, AnalyticsMetricsSource, AnalyticsRuntimeMetrics } from "./ae-metrics";
 export { AE_METRIC_EVENTS, loadAnalyticsRuntimeMetrics } from "./ae-metrics";
 export type { AdvisorAiRawRun } from "./ai-raw-runs";
+export type { AdvisorAiToolSideEffect } from "./ai-tool-side-effects";
 export type { AdvisorArgumentDerivedFetch } from "./argument-derived-fetches";
 export type { AdvisorArgumentValidator } from "./argument-validators";
 export type { AdvisorAuthConfig } from "./auth-config";
@@ -97,6 +101,7 @@ export type { AdvisorFailOpenGuard } from "./fail-open-guards";
 export type { AdvisorFlagSecurityDefault } from "./flag-security-defaults";
 export type { AdvisorHttpActionGuard } from "./http-action-guards";
 export type { AdvisorHyperdriveCall } from "./hyperdrive-calls";
+export type { AdvisorIdentityClaimRead } from "./identity-claim-reads";
 export type { AdvisorImageDeliveryUrlAccess } from "./image-delivery-url-accesses";
 export type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
 export type { AdvisorInsertWrite } from "./inserts";
@@ -107,6 +112,7 @@ export { default as indexUtilization } from "./lints/runtime/index-utilization";
 export { default as actionFetchSsrf } from "./lints/static/action-fetch-ssrf";
 export { default as adminRouteWithoutGuard } from "./lints/static/admin-route-without-guard";
 export { default as aiRawRunEscapeHatch } from "./lints/static/ai-raw-run-escape-hatch";
+export { default as aiToolSideEffectPromptInjection } from "./lints/static/ai-tool-side-effect-prompt-injection";
 export { default as aiUnboundedGenerationPublic } from "./lints/static/ai-unbounded-generation-public";
 export { default as allowUnauthenticatedShardAccessEnabled } from "./lints/static/allow-unauthenticated-shard-access-enabled";
 export { default as authApiCallWithoutHeaders } from "./lints/static/auth-api-call-without-headers";
@@ -132,6 +138,7 @@ export { default as flagGatesSecurityWithUnsafeDefault } from "./lints/static/fl
 export { default as hardcodedSecret } from "./lints/static/hardcoded-secret";
 export { default as httpActionMissingAuthGuard } from "./lints/static/http-action-missing-auth-guard";
 export { default as hyperdriveOutsideAction } from "./lints/static/hyperdrive-outside-action";
+export { default as identityUndeclaredClaimTrusted } from "./lints/static/identity-undeclared-claim-trusted";
 export { default as imagesUrlSourceFromUserInput } from "./lints/static/images-url-source-from-user-input";
 export { default as indexReferencesUnknownField } from "./lints/static/index-references-unknown-field";
 export { default as insertManyUnsafeUserData } from "./lints/static/insert-many-unsafe-user-data";
@@ -144,6 +151,7 @@ export { default as mutatorFullRowReplace } from "./lints/static/mutator-full-ro
 export { default as nondeterministicQueryMutation } from "./lints/static/nondeterministic-query-mutation";
 export { default as ownerFieldFromArgsNotAuth } from "./lints/static/owner-field-from-args-not-auth";
 export { default as paymentCreateWithoutAuthorize } from "./lints/static/payment-create-without-authorize";
+export { default as paymentWebhookWideTolerance } from "./lints/static/payment-webhook-wide-tolerance";
 export { default as policyReferencesUnknownTable } from "./lints/static/policy-references-unknown-table";
 export { default as privilegedDispatchUnvalidatedPayload } from "./lints/static/privileged-dispatch-unvalidated-payload";
 export { default as privilegedFanoutFromPublicProcedure } from "./lints/static/privileged-fanout-from-public-procedure";
@@ -180,6 +188,7 @@ export type { AdvisorMaskStrategy } from "./mask-strategies";
 export type { AdvisorMutatorWrite } from "./mutator-writes";
 export type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
 export type { AdvisorOwnerFieldWrite } from "./owner-field-writes";
+export type { AdvisorPaymentWebhook } from "./payment-webhooks";
 export type { AdvisorPrivilegedDispatch } from "./privileged-dispatches";
 export type { AdvisorProcedureProtection } from "./procedure-protections";
 export type { AdvisorQueryRead } from "./queries";
@@ -274,6 +283,9 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     httpActionMissingAuthGuard,
     ratelimitMiddlewareFailOpen,
     flagGatesSecurityWithUnsafeDefault,
+    aiToolSideEffectPromptInjection,
+    identityUndeclaredClaimTrusted,
+    paymentWebhookWideTolerance,
 ];
 
 /**

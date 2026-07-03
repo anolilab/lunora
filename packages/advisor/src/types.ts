@@ -1,5 +1,6 @@
 import type { AdvisorAdminRoute } from "./admin-routes";
 import type { AdvisorAiRawRun } from "./ai-raw-runs";
+import type { AdvisorAiToolSideEffect } from "./ai-tool-side-effects";
 import type { AdvisorArgumentDerivedFetch } from "./argument-derived-fetches";
 import type { AdvisorArgumentValidator } from "./argument-validators";
 import type { AdvisorAuthConfig } from "./auth-config";
@@ -13,6 +14,7 @@ import type { AdvisorFailOpenGuard } from "./fail-open-guards";
 import type { AdvisorFlagSecurityDefault } from "./flag-security-defaults";
 import type { AdvisorHttpActionGuard } from "./http-action-guards";
 import type { AdvisorHyperdriveCall } from "./hyperdrive-calls";
+import type { AdvisorIdentityClaimRead } from "./identity-claim-reads";
 import type { AdvisorImageDeliveryUrlAccess } from "./image-delivery-url-accesses";
 import type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
 import type { AdvisorInsertWrite } from "./inserts";
@@ -23,6 +25,7 @@ import type { AdvisorMaskStrategy } from "./mask-strategies";
 import type { AdvisorMutatorWrite } from "./mutator-writes";
 import type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
 import type { AdvisorOwnerFieldWrite } from "./owner-field-writes";
+import type { AdvisorPaymentWebhook } from "./payment-webhooks";
 import type { AdvisorPrivilegedDispatch } from "./privileged-dispatches";
 import type { AdvisorProcedureProtection } from "./procedure-protections";
 import type { AdvisorQueryRead } from "./queries";
@@ -126,6 +129,16 @@ export interface LintContext {
      * absent for runtime callers, where the lint finds nothing.
      */
     aiRawRuns?: ReadonlyArray<AdvisorAiRawRun>;
+
+    /**
+     * `generateText` / `streamText` calls whose model-callable `tools` reach a
+     * privileged side effect (DB write / function dispatch / outbound
+     * fetch/mail/queue) — the `ai_tool_side_effect_prompt_injection` input. Each
+     * row's `userInputDerived` says whether the model input flows from `args`; the
+     * lint fires only when it does. Supplied by the codegen feeder; absent for
+     * runtime callers, where the lint finds nothing.
+     */
+    aiToolSideEffects?: ReadonlyArray<AdvisorAiToolSideEffect>;
 
     /**
      * `ctx.fetch(url, …)` calls inside actions whose URL argument is derived from
@@ -254,6 +267,17 @@ export interface LintContext {
     hyperdriveCalls?: ReadonlyArray<AdvisorHyperdriveCall>;
 
     /**
+     * `&lt;receiver>.identity.&lt;key>` claim reads (RLS/mask policy `auth`, or
+     * `ctx.auth`/`context.auth`) — the `identity_undeclared_claim_trusted` input.
+     * `defineIdentity` validates only declared claims and forwards undeclared ones
+     * verbatim, so each row's `declared` flag says whether `key` is in the contract
+     * (or the always-present `userId`); the lint fires on the undeclared reads.
+     * Supplied by the codegen feeder — and only when a resolvable `defineIdentity`
+     * contract exists; absent for runtime callers, where the lint finds nothing.
+     */
+    identityClaimReads?: ReadonlyArray<AdvisorIdentityClaimRead>;
+
+    /**
      * `buildImageDeliveryUrl({ key, … })` calls (`@lunora/bindings/images`) whose
      * `key` — the CDN transform's source image, an absolute URL or an
      * origin-relative key — is derived from the handler's `args` with no
@@ -357,6 +381,16 @@ export interface LintContext {
      * absent for runtime callers, where the lint finds nothing.
      */
     ownerFieldWrites?: ReadonlyArray<AdvisorOwnerFieldWrite>;
+
+    /**
+     * Payment webhook-adapter constructions (`createStripeAdapter` /
+     * `createPolarAdapter`) — the payment-webhook wide-tolerance lint's input. Each row's
+     * `toleranceSeconds` is the statically-known `webhookToleranceSeconds` replay
+     * window (default 300s); the lint fires only above a conservative ceiling, where
+     * the endpoint would accept stale, replayable signed payloads. Supplied by the
+     * codegen feeder; absent for runtime callers, where the lint finds nothing.
+     */
+    paymentWebhooks?: ReadonlyArray<AdvisorPaymentWebhook>;
 
     /**
      * Payload-derived privileged dispatches — the `privileged_dispatch_unvalidated_payload`
