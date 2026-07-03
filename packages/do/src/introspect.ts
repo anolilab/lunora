@@ -607,7 +607,13 @@ interface TablePage {
      */
     refs?: Record<string, string>;
     rows: Record<string, unknown>[];
-    total: number;
+
+    /**
+     * Total rows matching the predicate. Absent when the read passed
+     * `skipCount: true` (the caller sources the count from a separate,
+     * predicate-keyed read instead of recomputing it per page).
+     */
+    total?: number;
 }
 
 /** Comparison a {@link FilterClause} applies. `contains` is a case-sensitive substring (LIKE); the rest are direct SQL comparisons. */
@@ -670,6 +676,15 @@ interface ReadTablePageOptions {
      * Empty/whitespace is treated as no filter.
      */
     search?: string;
+
+    /**
+     * Skip the `SELECT COUNT(*)` and return the page with `total` absent. The
+     * data browser splits the row count into a separate predicate-keyed read (one
+     * that excludes `offset`), so paging never re-counts; the page read passes
+     * this to avoid recomputing the same total per offset. Unset → the COUNT runs
+     * (today's behavior) and `total` is populated.
+     */
+    skipCount?: boolean;
     table: string;
 }
 
@@ -986,7 +1001,7 @@ const readTablePage = (sql: SqlExec, options: ReadTablePageOptions): TablePage =
     const needle = options.search?.trim() ?? "";
 
     // Echo only the refs whose column actually surfaces (a UI links those cells).
-    const withReferences = (page: { columns: string[]; rows: Record<string, unknown>[]; total: number }): TablePage => {
+    const withReferences = (page: { columns: string[]; rows: Record<string, unknown>[]; total?: number }): TablePage => {
         if (options.refs === undefined) {
             return page;
         }
@@ -1015,10 +1030,18 @@ const readTablePage = (sql: SqlExec, options: ReadTablePageOptions): TablePage =
     const whereParams = predicate?.parameters ?? [];
     const orderParams = order?.params ?? [];
 
-    const total =
-        predicate === undefined
-            ? countRows(sql, quoted)
-            : Number(sql.exec<{ c: number | bigint }>(`SELECT COUNT(*) AS c FROM ${quoted}${whereSql}`, ...whereParams).one().c);
+    // `skipCount` omits the COUNT entirely (the caller sources `total` from a
+    // separate, predicate-keyed read so paging never re-counts). Otherwise the
+    // COUNT reflects the filtered set so pagination stays honest.
+    let total: number | undefined;
+
+    if (!options.skipCount) {
+        total =
+            predicate === undefined
+                ? countRows(sql, quoted)
+                : Number(sql.exec<{ c: number | bigint }>(`SELECT COUNT(*) AS c FROM ${quoted}${whereSql}`, ...whereParams).one().c);
+    }
+
     const rawRows = sql.exec(`SELECT * FROM ${quoted}${whereSql}${orderSql} LIMIT ? OFFSET ?`, ...whereParams, ...orderParams, limit, offset).toArray();
 
     return withReferences({ ...expandDocumentRows(columns, rawRows), total });

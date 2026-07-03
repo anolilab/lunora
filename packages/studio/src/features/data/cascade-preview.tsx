@@ -127,9 +127,12 @@ const fetchRelatedRows = async (
             .map((r) => extractRowId(r))
             .filter(Boolean)
             .slice(0, MAX_ROWS_PER_TABLE);
-        const capNote = page.total > MAX_ROWS_PER_TABLE ? `showing first ${MAX_ROWS_PER_TABLE.toString()} of ${page.total.toString()}` : undefined;
+        // This read runs the COUNT (no `skipCount`), so `total` is present; the
+        // `?? 0` only satisfies the now-optional `TablePage.total` type.
+        const total = page.total ?? 0;
+        const capNote = total > MAX_ROWS_PER_TABLE ? `showing first ${MAX_ROWS_PER_TABLE.toString()} of ${total.toString()}` : undefined;
 
-        return { capNote, rowCount: page.total, rowIds };
+        return { capNote, rowCount: total, rowIds };
     } catch {
         return { capNote: "count unavailable", rowCount: 0, rowIds: [] };
     }
