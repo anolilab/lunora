@@ -37,6 +37,7 @@
  * coordination across them).
  */
 
+import { LunoraError } from "./errors";
 import type { ShardRegistry } from "./query-coordinator";
 import type { DurableObjectJurisdiction, ShardNamespaceLike } from "./resolve-shard";
 import { applyJurisdiction } from "./resolve-shard";
@@ -165,7 +166,7 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
             const response = await get(`/list?table=${encodeURIComponent(table)}`);
 
             if (!response.ok) {
-                throw new Error(`shard registry /list returned ${String(response.status)}`);
+                throw new LunoraError(`shard registry /list returned ${String(response.status)}`);
             }
 
             const { shardKeys } = await decodeJson<{ shardKeys: ReadonlyArray<string> }>(response);
@@ -181,7 +182,7 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
             const response = await post("/register", { shardKey, table });
 
             if (!response.ok) {
-                throw new Error(`shard registry /register returned ${String(response.status)}`);
+                throw new LunoraError(`shard registry /register returned ${String(response.status)}`);
             }
 
             // Bust the local cache so the next listShardKeys reflects the
@@ -194,7 +195,7 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
             const response = await get("/snapshot");
 
             if (!response.ok) {
-                throw new Error(`shard registry /snapshot returned ${String(response.status)}`);
+                throw new LunoraError(`shard registry /snapshot returned ${String(response.status)}`);
             }
 
             const { tables } = await decodeJson<{ tables: Record<string, ReadonlyArray<string>> }>(response);
@@ -206,7 +207,7 @@ const createDynamicShardRegistry = (options: DynamicShardRegistryOptions): Dynam
             const response = await post("/unregister", { shardKey, table });
 
             if (!response.ok) {
-                throw new Error(`shard registry /unregister returned ${String(response.status)}`);
+                throw new LunoraError(`shard registry /unregister returned ${String(response.status)}`);
             }
 
             cache.delete(table);

@@ -67,7 +67,19 @@ describe("lunoraError", () => {
         const response = toErrorResponse(conflict);
 
         expect(response.status).toBe(409);
-        await expect(response.json()).resolves.toEqual({ error: { code: "CONFLICT", message: "stale version" } });
+        // The runtime edge now attaches the code's catalog hint (matchObject
+        // ignores the extra `hint` key added for `CONFLICT`).
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "CONFLICT", message: "stale version" } });
+    });
+
+    it("attaches the catalog hint for a non-internal code", async () => {
+        expect.assertions(1);
+
+        const response = toErrorResponse(new LunoraError("boom", { code: "CONFLICT", status: 409 }));
+
+        // `expect.anything()` matches the (defined) `hint` array without pinning
+        // its exact contents to the catalog.
+        await expect(response.json()).resolves.toMatchObject({ error: { hint: expect.anything() } });
     });
 
     it("toErrorResponse maps a structural LunoraError shape (name + code + status) to its status", async () => {

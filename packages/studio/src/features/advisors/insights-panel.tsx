@@ -409,7 +409,9 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
 
     const toolbar = <ShardInput onChange={setShardKey} testId="in-shard-input" value={shardKey} />;
 
-    return <AdvisorView error={error} rows={rows} testId="lunora-insights" toolbar={toolbar} />;
+    return (
+        <AdvisorView error={error} errorSource={error === null ? undefined : metricsQuery.errorSource} rows={rows} testId="lunora-insights" toolbar={toolbar} />
+    );
 };
 
 export type { InsightsPanelProps };

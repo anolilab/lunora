@@ -8,6 +8,8 @@
  *
  * Node-safe (structural types, injectable `fetch`) so it's unit-testable.
  */
+import { LunoraError } from "@lunora/errors";
+
 import type { ArgsOf, DispatchRunFunction, FunctionReference, RunFunctionOptions } from "./types";
 
 /** The reserved worker endpoint that re-dispatches a server-initiated function call to its shard. */
@@ -55,13 +57,13 @@ export const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRu
         const origin = options.env.LUNORA_ORIGIN_URL;
 
         if (typeof origin !== "string" || origin.length === 0) {
-            throw new Error(`${label}: \`LUNORA_ORIGIN_URL\` must be set on the Worker env so a handler can call back into Lunora functions`);
+            throw new LunoraError("INTERNAL", `${label}: \`LUNORA_ORIGIN_URL\` must be set on the Worker env so a handler can call back into Lunora functions`);
         }
 
         const token = options.env.LUNORA_ADMIN_TOKEN;
 
         if (typeof token !== "string" || token.length === 0) {
-            throw new Error(`${label}: \`LUNORA_ADMIN_TOKEN\` must be set on the Worker env to authenticate function dispatch`);
+            throw new LunoraError("INTERNAL", `${label}: \`LUNORA_ADMIN_TOKEN\` must be set on the Worker env to authenticate function dispatch`);
         }
 
         const url = `${trimTrailingSlashes(origin)}${SCHEDULER_DISPATCH_PATH}`;
@@ -72,7 +74,7 @@ export const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRu
         });
 
         if (!response.ok) {
-            throw new Error(`${label}: function dispatch failed (${String(response.status)}): ${await response.text()}`);
+            throw new LunoraError("INTERNAL", `${label}: function dispatch failed (${String(response.status)}): ${await response.text()}`);
         }
 
         const text = await response.text();

@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/errors";
+
 import type { Mailer, SendOptions } from "./types";
 
 /** Serializable representation of a `SendOptions` payload — drops the `react` field. */
@@ -50,7 +52,7 @@ export const toQueuedPayload = (options: SendOptions): QueuedSend => {
  */
 export const consumeQueuedSend = async (mailer: Mailer, payload: unknown): Promise<{ id: string }> => {
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-        throw new Error("@lunora/mail: queue message body must be an object");
+        throw new LunoraError("INTERNAL", "@lunora/mail: queue message body must be an object");
     }
 
     const candidate = payload as Record<string, unknown>;
@@ -67,7 +69,7 @@ export const consumeQueuedSend = async (mailer: Mailer, payload: unknown): Promi
     const recipientIsStringArray = Array.isArray(candidate.to) && candidate.to.every((value) => typeof value === "string");
 
     if (!recipientIsString && !recipientIsStringArray) {
-        throw new Error("@lunora/mail: queue message `to` must be a string or string[]");
+        throw new LunoraError("INTERNAL", "@lunora/mail: queue message `to` must be a string or string[]");
     }
 
     const assertOptionalString = (field: string, value: unknown): string | undefined => {

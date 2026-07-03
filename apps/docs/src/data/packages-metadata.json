@@ -69,6 +69,11 @@
         "description": "ShardDO (SQLite, OCC, hibernated WebSocket subscriptions) and SessionDO.",
         "features": ["SQLite-backed ShardDO", "Optimistic concurrency control", "Hibernated WebSocket subscriptions"]
     },
+    "errors": {
+        "displayName": "Errors",
+        "description": "Unified error layer: one LunoraError + a central catalog of codes, statuses, and actionable hints, rendered across CLI, overlay, Studio, and the client.",
+        "features": ["Central error catalog (code → status/hint/docsUrl)", "Structural isLunoraError guard + invariant helpers", "Hints surfaced in CLI, Studio, and the client SDK"]
+    },
     "flags": {
         "displayName": "Flags",
         "description": "OpenFeature feature flags: ctx.flags + useFlag, with a first-class Cloudflare Flagship provider and any OpenFeature provider pluggable.",

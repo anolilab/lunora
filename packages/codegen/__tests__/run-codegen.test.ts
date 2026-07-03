@@ -1456,6 +1456,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 studioFeatures: {
                     analytics: false,
                     auth: false,
+                    containers: false,
                     flags: false,
                     kv: false,
                     mail: false,

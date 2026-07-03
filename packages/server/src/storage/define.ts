@@ -7,6 +7,8 @@
  * `definePermission` / `defineRole` (re-exported from `../rls`) — the capability
  * layer is shared.
  */
+import { LunoraError } from "@lunora/errors";
+
 import type { DefineStorageRuleInput, StorageRule } from "./types";
 
 export const defineStorageRule = <Context = unknown>(input: DefineStorageRuleInput<Context>): StorageRule<Context> => {
@@ -36,7 +38,8 @@ export const defineStorageRules = <Context = unknown>(rules: ReadonlyArray<Stora
         const whens = seenWhenByKey.get(key) ?? new Set<StorageRule<Context>["when"]>();
 
         if (whens.has(rule.when)) {
-            throw new Error(
+            throw new LunoraError(
+                "INTERNAL",
                 `defineStorageRules: duplicate rule for (bucket "${rule.bucket}", on "${rule.on}"${rule.prefix === undefined ? "" : `, prefix "${rule.prefix}"`}) — ` +
                     "the same decision function is registered more than once. Multiple distinct rules per (bucket, on) are allowed (they OR); remove the duplicate.",
             );

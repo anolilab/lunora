@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/errors";
+
 import type { CachedQuery, QueryCacheAdapter } from "./types";
 
 /** A stored read-cache row: the {@link CachedQuery} plus its primary key. */
@@ -124,7 +126,7 @@ const createIndexedDbQueryCache = (options: IndexedDbQueryCacheOptions = {}): Qu
     const factory = options.indexedDB ?? (typeof indexedDB === "undefined" ? undefined : indexedDB);
 
     if (!factory) {
-        throw new Error("createIndexedDbQueryCache: no IndexedDB available — pass `indexedDB` or use createInMemoryQueryCache()");
+        throw new LunoraError("INTERNAL", "createIndexedDbQueryCache: no IndexedDB available — pass `indexedDB` or use createInMemoryQueryCache()");
     }
 
     const databaseName = options.databaseName ?? DEFAULT_DATABASE;

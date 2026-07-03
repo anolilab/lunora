@@ -14,6 +14,8 @@
  * Non-JS containers can implement the same one-line contract directly.
  */
 
+import { LunoraError } from "@lunora/errors";
+
 /** The RPC path the Lunora Worker exposes. */
 const RPC_PATH = "/_lunora/rpc";
 
@@ -41,14 +43,10 @@ interface ContainerBridgeOptions {
     token?: string;
 }
 
-/** Thrown when a Lunora function returns an error envelope. Carries the wire `code`. */
-class ContainerBridgeError extends Error {
-    public readonly code: string;
-
+/** Thrown when a Lunora function returns an error envelope. A `LunoraError` subclass carrying the wire `code`. */
+class ContainerBridgeError extends LunoraError {
     public constructor(code: string, message: string) {
-        super(message);
-        this.name = "ContainerBridgeError";
-        this.code = code;
+        super(code, message, { name: "ContainerBridgeError" });
     }
 }
 
@@ -125,7 +123,10 @@ const parseResponseBody = async (response: BridgeResponse, functionPath: string)
             throw statusError(functionPath, response);
         }
 
-        throw new Error(`createContainerBridge: request to "${functionPath}" returned a non-JSON response (status ${String(response.status)})`);
+        throw new LunoraError(
+            "INTERNAL",
+            `createContainerBridge: request to "${functionPath}" returned a non-JSON response (status ${String(response.status)})`,
+        );
     }
 };
 
@@ -190,7 +191,8 @@ const createContainerBridge = (options: ContainerBridgeOptions): ContainerBridge
                 detail = String(error);
             }
 
-            throw new Error(
+            throw new LunoraError(
+                "INTERNAL",
                 `createContainerBridge: request to "${functionPath}" returned a malformed error envelope (status ${String(response.status)}): ${detail}`,
             );
         }

@@ -18,6 +18,8 @@
  * Node-safe (structural types plus an injectable `fetch`) so it unit-tests
  * without the network.
  */
+import { LunoraError } from "@lunora/errors";
+
 import type { WorkflowInstanceStatus } from "./types";
 
 const API_BASE = "https://api.cloudflare.com/client/v4/accounts";
@@ -139,13 +141,9 @@ export interface WorkflowInstancePage {
 }
 
 /** Thrown when the REST API responds non-2xx or `success: false`; carries the status plus body for the caller to surface. */
-export class WorkflowsRestError extends Error {
-    public readonly status: number;
-
+export class WorkflowsRestError extends LunoraError {
     public constructor(status: number, body: string) {
-        super(`Cloudflare Workflows REST API returned ${String(status)}: ${body}`);
-        this.name = "WorkflowsRestError";
-        this.status = status;
+        super("WORKFLOWS_REST_ERROR", `Cloudflare Workflows REST API returned ${String(status)}: ${body}`, { name: "WorkflowsRestError", status });
     }
 }
 

@@ -1,5 +1,6 @@
 import type { ReactElement } from "react";
 
+import { ErrorAlert } from "../../components/error-alert";
 import { LiveError } from "../../components/live-status";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -149,7 +150,7 @@ export const PermissionsMatrix = ({ onProbe }: PermissionsMatrixProps = {}): Rea
     const advisories: AdvisoriesResult | null = advisoriesQuery.data ?? null;
 
     // Only a failed policies read blanks the matrix; masks/advisories degrade silently.
-    const { error, liveError } = policiesQuery;
+    const { error, errorSource, liveError } = policiesQuery;
 
     const rows = policies === null ? [] : buildRows(policies, maskColumns, uncoveredTables(advisories));
 
@@ -159,11 +160,7 @@ export const PermissionsMatrix = ({ onProbe }: PermissionsMatrixProps = {}): Rea
                 <LiveError message={liveError} prefix="pm" />
             </div>
 
-            {error !== null && (
-                <p className="text-sm text-destructive" data-testid="pm-error" role="alert">
-                    {error}
-                </p>
-            )}
+            {error !== null && <ErrorAlert error={errorSource} testId="pm-error" />}
 
             {policies !== null && rows.length === 0 ? (
                 <EmptyState

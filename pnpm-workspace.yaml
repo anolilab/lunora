@@ -21,6 +21,7 @@ overrides:
   # never clobbers it; published tarballs are unaffected (overrides are install-time).
   "@lunora/advisor": "workspace:*"
   "@lunora/ai": "workspace:*"
+  "@lunora/angular": "workspace:*"
   "@lunora/astro": "workspace:*"
   "@lunora/auth": "workspace:*"
   "@lunora/bindings": "workspace:*"
@@ -35,6 +36,7 @@ overrides:
   "@lunora/db": "workspace:*"
   "@lunora/dispatch": "workspace:*"
   "@lunora/do": "workspace:*"
+  "@lunora/errors": "workspace:*"
   "@lunora/flags": "workspace:*"
   "@lunora/hyperdrive": "workspace:*"
   "@lunora/mail": "workspace:*"
@@ -150,6 +152,7 @@ catalogs:
     cz-conventional-changelog: ^3.3.0
     "@visulima/vis": 1.0.0-alpha.43
     "@visulima/tabular": 4.0.0-alpha.14
+    "@visulima/error": 6.0.0-alpha.34
   test:
     "@codspeed/vitest-plugin": 5.7.1
     "@vitest/coverage-v8": 4.1.9
@@ -516,6 +519,7 @@ minimumReleaseAgeExclude:
   - '@visulima/vis-binding-win32-x64-msvc@1.0.0-alpha.43'
   - '@visulima/vis@1.0.0-alpha.43'
   - '@visulima/email@1.0.0-alpha.41'
+  - '@visulima/find-ai-runner@1.0.0-alpha.9'
   - esbuild@0.28.1
   - js-yaml@4.1.2
   - '@opentelemetry/core@2.8.0'

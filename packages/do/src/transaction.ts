@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/errors";
+
 /**
  * Why a {@link ConflictError} fired. `occ` is the true write-contention signal —
  * a compare-and-swap that touched zero rows because a concurrent write committed
@@ -13,24 +15,17 @@ export type ConflictKind = "conflict" | "occ" | "restrict" | "trigger" | "unique
  * Thrown by mutation handlers when an optimistic-concurrency check fails (or a
  * related write guard trips — see {@link ConflictKind}).
  *
- * The runtime maps this to a 409 response so clients can decide whether to
- * refetch + retry or surface the conflict. `code` / `status` / `kind` are
- * declared as own properties (not just inherited prototype state) so structural
- * callers across packages — which deliberately avoid taking a hard runtime
- * dependency on `@lunora/do` — can recognise the shape without an `instanceof`
- * check.
+ * A `LunoraError` subclass (`code: "CONFLICT"`, `status: 409`) so the runtime/DO
+ * transport mappers recognise it structurally (via `isLunoraError`) — structural
+ * callers across packages still avoid a hard `instanceof` dependency on
+ * `@lunora/do`. `kind` is kept as an own property for the metrics layer.
  */
-export class ConflictError extends Error {
-    public readonly code: string = "CONFLICT";
-
+export class ConflictError extends LunoraError {
     /** Why the conflict fired; `occ` is the contention signal the metrics layer counts. */
     public readonly kind: ConflictKind;
 
-    public readonly status: number = 409;
-
     public constructor(message: string = "Optimistic concurrency conflict", kind: ConflictKind = "conflict") {
-        super(message);
-        this.name = "ConflictError";
+        super("CONFLICT", message, { name: "ConflictError" });
         this.kind = kind;
     }
 }

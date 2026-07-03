@@ -11,6 +11,8 @@
  * missing-id / non-scalar-id handling.
  */
 
+import { LunoraError } from "@lunora/errors";
+
 import type { DatabaseWriterLike, SqlExec } from "./ctx-db";
 import type { MaterializeResult } from "./external-source-materialize";
 import { runExternalSourceTick } from "./external-source-materialize";
@@ -50,7 +52,7 @@ const liftSourceId = (
     const idValue = row[idColumn];
 
     if (idValue === undefined || idValue === null) {
-        throw new Error(`external-source: row is missing id column "${idColumn}"`);
+        throw new LunoraError("INTERNAL", `external-source: row is missing id column "${idColumn}"`);
     }
 
     if (typeof idValue !== "string" && typeof idValue !== "number" && typeof idValue !== "bigint") {

@@ -1,3 +1,4 @@
+import { toErrorBody } from "@lunora/errors";
 import type { Infer, Validator, ValidatorKind } from "@lunora/values";
 import { ValidationError } from "@lunora/values";
 import type { Context } from "hono";
@@ -369,24 +370,6 @@ type LooseStreamHandler = (options: {
 }) => AsyncGenerator<unknown, void, void> | AsyncIterable<unknown>;
 
 /**
- * Structural match for a {@link LunoraError} that survives cross-package class
- * identity. A handler may throw a `LunoraError` minted by a different copy of
- * `@lunora/server` (duplicated in the dep graph), so `instanceof` is unreliable
- * — key off the public shape (`name === "LunoraError"` + string `code`) the way
- * `@lunora/runtime`'s `toErrorResponse` does. Only such known-safe errors get
- * their `code`/`message` echoed to the client.
- */
-const isLunoraErrorLike = (error: unknown): error is { code: string; message: string } => {
-    if (!error || typeof error !== "object") {
-        return false;
-    }
-
-    const candidate = error as { code?: unknown; message?: unknown; name?: unknown };
-
-    return candidate.name === "LunoraError" && typeof candidate.code === "string" && typeof candidate.message === "string";
-};
-
-/**
  * Format one SSE frame. Each frame ends with `\n\n`, the spec-required
  * separator. `event:` is omitted for `data` (the default event name); we use
  * named events only for the terminal sentinels (`complete`, `error`).
@@ -473,22 +456,20 @@ const buildStreamHandler =
 
                     controller.enqueue(encoder.encode(sseFrame({}, "complete")));
                 } catch (error: unknown) {
-                    // Mirror `@lunora/runtime`'s `toErrorResponse` policy: only a
-                    // known-safe LunoraError-shaped value gets its `code`/`message`
-                    // echoed to the client. Everything else (which may carry stack
-                    // traces, file paths, or internal identifiers in `.message`) is
-                    // logged server-side and replaced with a generic frame.
-                    let payload: { code: string; message: string };
+                    // Mirror the shared `toErrorBody` redaction policy: only a
+                    // non-internal LunoraError-shaped value gets its `code`/`message`
+                    // echoed to the client. An internal-coded or unrecognized throw
+                    // (which may carry stack traces, file paths, or internal
+                    // identifiers in `.message`) is logged server-side and replaced
+                    // with a generic frame.
+                    const { body, redacted } = toErrorBody(error, { fallbackCode: "INTERNAL_SERVER_ERROR", redactedMessage: "Internal error" });
 
-                    if (isLunoraErrorLike(error)) {
-                        payload = { code: error.code, message: error.message };
-                    } else {
+                    if (redacted) {
                         // eslint-disable-next-line no-console -- log internal errors server-side; never echo raw details to the client
                         console.error("[lunora] unhandled stream handler error:", error);
-                        payload = { code: "INTERNAL_SERVER_ERROR", message: "Internal error" };
                     }
 
-                    controller.enqueue(encoder.encode(sseFrame(payload, "error")));
+                    controller.enqueue(encoder.encode(sseFrame({ code: body.code, message: body.message }, "error")));
                 } finally {
                     request.signal.removeEventListener("abort", onAbort);
                     controller.close();

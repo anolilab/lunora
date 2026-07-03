@@ -13,6 +13,8 @@
  * read panel and `@lunora/advisor`'s runtime lints can import one client.
  */
 
+import { LunoraError } from "@lunora/errors";
+
 /** Shape of the AE SQL-API JSON body (the fields we read). */
 interface RawSqlResponse {
     data?: Record<string, unknown>[];
@@ -56,14 +58,10 @@ export interface AnalyticsSqlResult {
     rows: Record<string, unknown>[];
 }
 
-/** Thrown when the SQL API responds with a non-2xx status; carries the status + body for the caller to surface. */
-export class AnalyticsSqlError extends Error {
-    public readonly status: number;
-
+/** Thrown when the SQL API responds with a non-2xx status; a `LunoraError` subclass carrying the HTTP `status` + body for the caller to surface. */
+export class AnalyticsSqlError extends LunoraError {
     public constructor(status: number, body: string) {
-        super(`Analytics Engine SQL API returned ${String(status)}: ${body}`);
-        this.name = "AnalyticsSqlError";
-        this.status = status;
+        super("ANALYTICS_SQL_ERROR", `Analytics Engine SQL API returned ${String(status)}: ${body}`, { name: "AnalyticsSqlError", status });
     }
 }
 

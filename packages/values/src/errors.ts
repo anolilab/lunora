@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/errors";
+
 /** Max characters of a stringified primitive surfaced in `received`. */
 const MAX_DESCRIBED_LENGTH = 80;
 
@@ -9,8 +11,13 @@ export type ValidationPath = ReadonlyArray<number | string>;
  * Thrown by `validator.parse` (or returned inside `safeParse`) when input does
  * not match the validator's shape. `path` walks from the root to the offending
  * value, e.g. `["users", 0, "email"]`.
+ *
+ * A `LunoraError` subclass: carries `code: "VALIDATION_ERROR"` and `status: 400`
+ * so the runtime/DO transport mappers surface it structurally (a request that
+ * fails validation is a 400), while keeping the `name: "ValidationError"` and the
+ * `path`/`expected`/`received` diagnostics.
  */
-export class ValidationError extends Error {
+export class ValidationError extends LunoraError {
     public readonly path: ValidationPath;
 
     public readonly expected: string;
@@ -18,8 +25,7 @@ export class ValidationError extends Error {
     public readonly received: string;
 
     public constructor(message: string, options: { expected: string; path: ValidationPath; received: string }) {
-        super(message);
-        this.name = "ValidationError";
+        super("VALIDATION_ERROR", message, { name: "ValidationError" });
         this.path = options.path;
         this.expected = options.expected;
         this.received = options.received;

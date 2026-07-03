@@ -3,6 +3,7 @@ import { observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
 import type { ChangeEvent, ReactElement } from "react";
 import { useMemo, useRef, useState } from "react";
 
+import { ErrorAlert } from "../../components/error-alert";
 import { LiveError } from "../../components/live-status";
 import { ShardInput } from "../../components/shard-input";
 import { Badge } from "../../components/ui/badge";
@@ -82,7 +83,11 @@ const AuditPanel = ({ initialShardKey }: AuditPanelProps): ReactElement => {
     // streams each server write-flush into the cache so new entries appear without
     // a manual refresh; `liveError` holds a rejection message (e.g. missing admin
     // token) so the panel can say why it stopped updating.
-    const { data, error, isLoading, liveError } = useAdminQuery<AuditLogResult>(ADMIN_FUNCTIONS.getAuditLog, {}, { live: true, shardKey: debouncedShard });
+    const { data, error, errorSource, isLoading, liveError } = useAdminQuery<AuditLogResult>(
+        ADMIN_FUNCTIONS.getAuditLog,
+        {},
+        { live: true, shardKey: debouncedShard },
+    );
 
     const entries = useMemo<AuditEntry[]>(() => data?.entries ?? [], [data]);
 
@@ -145,11 +150,7 @@ const AuditPanel = ({ initialShardKey }: AuditPanelProps): ReactElement => {
                 />
             </div>
 
-            {error !== null && (
-                <p className="text-sm text-destructive" data-testid="au-error" role="alert">
-                    {error}
-                </p>
-            )}
+            {error !== null && <ErrorAlert error={errorSource} testId="au-error" />}
 
             {error === null && !isLoading && filtered.length === 0 && (
                 <EmptyState

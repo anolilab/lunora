@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/errors";
+
 import type { Middleware, MiddlewareNext } from "./types";
 
 /**
@@ -21,7 +23,7 @@ const runMiddlewareChain = async (
 
     const dispatch = async (index: number, context: unknown): Promise<unknown> => {
         if (index <= lastIndex) {
-            throw new Error("middleware next() called multiple times");
+            throw new LunoraError("INTERNAL", "middleware next() called multiple times");
         }
 
         lastIndex = index;

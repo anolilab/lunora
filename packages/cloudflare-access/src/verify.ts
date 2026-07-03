@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import type { JWTVerifyGetKey } from "jose";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 
@@ -32,7 +33,7 @@ const accessIssuer = (teamDomain: string): string => {
     const trimmed = stripTrailingSlashes(teamDomain.trim().replace(SCHEME_PREFIX, ""));
 
     if (trimmed.length === 0) {
-        throw new Error('@lunora/cloudflare-access: `teamDomain` is required (e.g. "acme" or "acme.cloudflareaccess.com")');
+        throw new LunoraError("INTERNAL", '@lunora/cloudflare-access: `teamDomain` is required (e.g. "acme" or "acme.cloudflareaccess.com")');
     }
 
     // A bare name (no dot) is the team subdomain; expand to the full host. Parse
@@ -95,7 +96,8 @@ const verifyAccessJwt = async (token: string, options: VerifyAccessJwtOptions): 
     );
 
     if (audiences.length === 0) {
-        throw new Error(
+        throw new LunoraError(
+            "INTERNAL",
             "@lunora/cloudflare-access: `aud` is required and must be a non-empty Access AUD tag — refusing to verify a token without an audience to scope it to your application",
         );
     }

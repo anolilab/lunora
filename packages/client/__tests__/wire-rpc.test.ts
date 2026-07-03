@@ -80,4 +80,23 @@ describe("structured error propagation (087)", () => {
         expect(error.code).toBe("RPC_FAILED");
         expect(error.data).toBeUndefined();
     });
+
+    it("restores the server's actionable hint + docsUrl onto the thrown error", async () => {
+        expect.assertions(3);
+
+        const fetchMock = vi.fn<typeof fetch>(async () =>
+            jsonResponse(
+                { error: { code: "CONFLICT", docsUrl: "https://lunora.sh/docs/errors", hint: ["Re-read the row and retry."], message: "stale" } },
+                { status: 409 },
+            ),
+        );
+
+        const error = (await client(fetchMock)
+            .mutation(fnRef("docs:write"), {})
+            .catch((error_: unknown) => error_)) as { code?: string; docsUrl?: string; hint?: string[] };
+
+        expect(error.code).toBe("CONFLICT");
+        expect(error.hint).toStrictEqual(["Re-read the row and retry."]);
+        expect(error.docsUrl).toBe("https://lunora.sh/docs/errors");
+    });
 });

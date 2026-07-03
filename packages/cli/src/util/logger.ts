@@ -54,16 +54,86 @@ interface PailReporter {
 
 type PailReporterConstructor = new () => PailReporter;
 
+/**
+ * Lazily-constructed pail instance. Building it (plus its Pretty/Json reporter)
+ * is deferred until the first `createLogger()` / `getPail()` call so that merely
+ * importing this module stays side-effect-free (`package.json` declares
+ * `sideEffects:false`) — `lunora --help` / `-v` never pay the construction cost.
+ */
+let sharedPail: PailLogger | undefined;
+
+/**
+ * Programmatically forced JSON mode (`lunora dev --json` / agent auto-detect),
+ * OR-ed with the `LUNORA_LOG_JSON` env flag. Module-level because the pail
+ * instance is a lazily-built singleton.
+ */
+let jsonForced = false;
+
+/** Reporters installed via {@link configureLogHandlers}; `undefined` = default selection. */
+let configuredReporters: PailReporter[] | undefined;
+
 const wantJson = (): boolean => {
+    if (jsonForced) {
+        return true;
+    }
+
     const flag = process.env.LUNORA_LOG_JSON;
 
     return flag === "1" || flag === "true";
 };
 
-const buildReporter = (): PailReporter => {
-    const Reporter: PailReporterConstructor = (wantJson() ? JsonReporter : LunoraReporter) as PailReporterConstructor;
+/** Instantiate a reporter class through the local {@link PailReporterConstructor} typing (see its packaging-bug note). */
+const constructReporter = (Reporter: unknown): PailReporter => new (Reporter as PailReporterConstructor)();
 
-    return new Reporter();
+const buildReporters = (): PailReporter[] => {
+    // Forced JSON (`--json` / agent auto-detect) is a machine-readability
+    // contract — it must win even over an explicitly configured reporter set,
+    // or automation parsing stdout breaks.
+    if (jsonForced) {
+        return [constructReporter(JsonReporter)];
+    }
+
+    if (configuredReporters !== undefined && configuredReporters.length > 0) {
+        return configuredReporters;
+    }
+
+    return [constructReporter(wantJson() ? JsonReporter : LunoraReporter)];
+};
+
+/**
+ * Switch every subsequent log line to machine-readable JSON (pail's
+ * `JsonReporter`), equivalent to `LUNORA_LOG_JSON=1`. Safe to call at any
+ * point: the shared pail is dropped so the next log call rebuilds it with the
+ * JSON reporter. Used by `lunora dev --json` and the AI-agent auto-detection.
+ */
+const forceJsonLogging = (): void => {
+    if (jsonForced) {
+        return;
+    }
+
+    jsonForced = true;
+    sharedPail = undefined;
+};
+
+/**
+ * Composable log handlers, mirroring the reporter primitives the logger is
+ * built from. `compose` maps directly onto pail's `reporters: [...]` array, so
+ * e.g. `configureLogHandlers(logHandlers.compose(logHandlers.console(), logHandlers.json()))`
+ * keeps human-readable output while also emitting structured JSON lines.
+ */
+const logHandlers = {
+    compose: (...reporters: PailReporter[]): PailReporter[] => reporters,
+    console: (): PailReporter => constructReporter(LunoraReporter),
+    json: (): PailReporter => constructReporter(JsonReporter),
+};
+
+/**
+ * Install a custom reporter set (see {@link logHandlers}). Replaces the
+ * default console-or-JSON selection; the shared pail is rebuilt on next use.
+ */
+const configureLogHandlers = (reporters: PailReporter | PailReporter[]): void => {
+    configuredReporters = Array.isArray(reporters) ? reporters : [reporters];
+    sharedPail = undefined;
 };
 
 /**
@@ -78,17 +148,9 @@ const STEP_LOG_TYPES = Object.fromEntries(STEP_BADGE_NAMES.map((name) => [name, 
     { label: string; logLevel: "informational" }
 >;
 
-/**
- * Lazily-constructed pail instance. Building it (plus its Pretty/Json reporter)
- * is deferred until the first `createLogger()` / `getPail()` call so that merely
- * importing this module stays side-effect-free (`package.json` declares
- * `sideEffects:false`) — `lunora --help` / `-v` never pay the construction cost.
- */
-let sharedPail: PailLogger | undefined;
-
 const getPail = (): PailLogger => {
     sharedPail ??= createPail({
-        reporters: [buildReporter()],
+        reporters: buildReporters(),
         scope: ["lunora"],
         stderr: process.stderr,
         stdout: process.stdout,
@@ -174,5 +236,5 @@ const logStep = (type: StepBadgeName, message: string): void => {
     (getPail() as unknown as Record<StepBadgeName, (message: string) => void>)[type](message);
 };
 
-export type { Logger };
-export { createLogger, createStderrLogger, getPail, logStep, pail };
+export type { Logger, PailReporter };
+export { configureLogHandlers, createLogger, createStderrLogger, forceJsonLogging, getPail, logHandlers, logStep, pail };

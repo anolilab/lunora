@@ -155,7 +155,7 @@ interface AuthRouteDescriptor {
 
 const AUTH_BASE = "/_lunora/admin/auth";
 
-/** HTTP status for an `authAdmin` error code; everything else falls back to 400. */
+/** HTTP status for a known client-input `authAdmin` error code; an unmapped code is a backend failure and reads 500. */
 const AUTH_ADMIN_ERROR_STATUS: Record<string, number> = {
     PASSWORD_TOO_LONG: 400,
     PASSWORD_TOO_SHORT: 400,
@@ -445,7 +445,10 @@ const buildAuthAdminRoutes = (deps: AuthAdminRouteDeps): Record<string, (request
             // eslint-disable-next-line no-console -- server-side diagnostic for a swallowed backend error
             console.error("[lunora] auth admin operation failed:", error);
 
-            throw new LunoraError("auth admin operation failed", { code, status: AUTH_ADMIN_ERROR_STATUS[code] ?? 400 });
+            // An unmapped code is an unexpected backend/DB failure, not client
+            // input — reporting it as 400 would hide operational incidents from
+            // admin tooling. Extend AUTH_ADMIN_ERROR_STATUS for new 4xx codes.
+            throw new LunoraError("auth admin operation failed", { code, status: AUTH_ADMIN_ERROR_STATUS[code] ?? 500 });
         }
     };
 

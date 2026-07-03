@@ -5,6 +5,8 @@
  * additionally validates the set (duplicate detection). The runtime work happens
  * in {@link ./middleware}.
  */
+import { LunoraError } from "@lunora/errors";
+
 import type { DefinePolicyInput, Permission, Policy, Role, TypedDefinePolicyInput } from "./types";
 
 export const definePolicy = <Context = unknown>(input: DefinePolicyInput<Context>): Policy<Context> => {
@@ -68,7 +70,8 @@ export const definePolicies = <Context = unknown>(policies: ReadonlyArray<Policy
         const whens = seenWhenByKey.get(key) ?? new Set<Policy<Context>["when"]>();
 
         if (whens.has(policy.when)) {
-            throw new Error(
+            throw new LunoraError(
+                "INTERNAL",
                 `definePolicies: duplicate policy for (table "${policy.table}", on "${policy.on}") — the same decision function is registered more than once. ` +
                     "Multiple distinct policies per (table, on) are allowed (reads OR, writes AND); remove the duplicate.",
             );

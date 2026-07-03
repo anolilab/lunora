@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 import { useMemo, useState } from "react";
 
+import { ErrorAlert } from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
@@ -72,7 +73,7 @@ const FlagsPanel = ({ initialShardKey = "" }: FlagsPanelProps): ReactElement => 
     // in-progress / malformed edit keeps the last good evaluation on screen.
     const args = useMemo(() => (context === undefined ? {} : { context }), [context]);
 
-    const { data, error, liveError } = useAdminQuery<FlagsResult>(ADMIN_FUNCTIONS.listFlags, args, { live: true, shardKey: initialShardKey });
+    const { data, error, errorSource, liveError } = useAdminQuery<FlagsResult>(ADMIN_FUNCTIONS.listFlags, args, { live: true, shardKey: initialShardKey });
 
     const loaded = data !== undefined;
     const configured = data?.configured ?? false;
@@ -141,11 +142,7 @@ const FlagsPanel = ({ initialShardKey = "" }: FlagsPanelProps): ReactElement => 
 
     return (
         <div className="flex flex-col gap-6" data-testid="lunora-flags-panel">
-            {error !== null && (
-                <p className="text-sm text-destructive" data-testid="flags-error" role="alert">
-                    {error}
-                </p>
-            )}
+            {error !== null && <ErrorAlert error={errorSource} testId="flags-error" />}
 
             <p className="text-sm text-muted-foreground">
                 {t(

@@ -22,6 +22,8 @@
  * Everything here is pure (no I/O) so it is unit-testable; the CLI owns reading
  * and writing the baseline file.
  */
+import { LunoraError } from "@lunora/errors";
+
 import type { SchemaIR, TableIR, ValidatorIR } from "./ir";
 
 /** Current snapshot format version. Bumped if the structural shape below changes. */
@@ -199,8 +201,10 @@ const serializeSchemaSnapshot = (snapshot: SchemaSnapshot): string => `${JSON.st
  * treat a corrupt baseline as a hard error rather than silently degrading to a
  * "first capture" that would mask drift and then overwrite the bad file.
  */
-class SchemaSnapshotParseError extends Error {
-    public override readonly name = "SchemaSnapshotParseError";
+class SchemaSnapshotParseError extends LunoraError {
+    public constructor(message: string) {
+        super("SCHEMA_SNAPSHOT_PARSE", message, { name: "SchemaSnapshotParseError" });
+    }
 }
 
 /** True when `value` is a non-null object (the shape every snapshot sub-record must have). */

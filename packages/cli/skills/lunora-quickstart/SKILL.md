@@ -31,9 +31,12 @@ Set up a working Lunora project as fast as possible.
    Lunora into the current project.
 4. Run `lunora codegen` to generate `lunora/_generated/` and typecheck the
    schema + functions. This is the agent's feedback loop.
-5. Start the dev loop with `lunora dev` (ask the user to run it locally, or
-   start it in the background for cloud/headless agents — it is long-running and
-   does not exit).
+5. Start the dev loop. As an agent, run `lunora dev --background` — it starts
+   the server as a managed detached process, blocks until it accepts requests,
+   prints the URL + PID, and returns (under a detected AI agent, plain
+   `lunora dev` does this automatically, with JSON logs). Never leave a bare
+   `lunora dev` running in your own shell — it is long-running and does not
+   exit.
 6. Verify a query/mutation round-trip works end to end.
 
 ## Path 1: New Project (Recommended)
@@ -87,7 +90,23 @@ not exit, so:
 
 - **Local development (user at the keyboard):** ask the user to run `lunora dev`
   in a terminal.
-- **Cloud or headless agents:** start `lunora dev` in the background.
+- **Agents:** run `lunora dev --background`. It detaches the server, waits until
+  it answers HTTP, prints `Dev server running at <url> (pid <n>)`, and exits —
+  no orphaned shell, no PID bookkeeping. When Lunora detects an AI agent
+  (Claude Code, Cursor, Codex, …), plain `lunora dev` flips into this mode
+  automatically with JSON logs; `LUNORA_AGENT_MODE=0` opts out.
+
+Manage the running server afterwards:
+
+```bash
+lunora dev status --json   # machine-readable: url, pid, uptime, logFile
+lunora dev logs --lines 50 # tail the captured output (.lunora/dev.log)
+lunora dev stop            # idempotent — succeeds even if nothing runs
+```
+
+A second `lunora dev` never double-starts: it reports the existing instance
+(`.lunora/dev.json` is the lockfile). Probe readiness or liveness at
+`GET /_lunora/status` (`{"ok":true}`).
 
 Vite serves on `http://localhost:5173` by default; the Worker is served on the
 same origin via `@cloudflare/vite-plugin`.
@@ -236,5 +255,6 @@ ids, `.dev.vars` secrets, and container exports.
 - [ ] New project: scaffolded with `lunora init --template <t>`.
 - [ ] Existing app: ran `lunora init --here` and wired `LunoraProvider`.
 - [ ] Ran `lunora codegen`: `lunora/_generated/` exists and typecheck is clean.
-- [ ] `lunora dev` is running — user terminal, or background for cloud agents.
+- [ ] Dev server is running — user terminal, or `lunora dev --background`
+      (check with `lunora dev status`).
 - [ ] Verified a query/mutation round-trip re-renders the client live.

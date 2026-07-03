@@ -6,6 +6,8 @@
  * Node-safe (structural binding type) so it's exercised by unit tests with
  * plain-object doubles.
  */
+import { LunoraError } from "@lunora/errors";
+
 import type { Secrets, SecretsStoreSecretLike } from "./types";
 
 /**
@@ -64,7 +66,8 @@ export const createSecrets = (env: Record<string, unknown>): Secrets => {
             const binding = env[name];
 
             if (!isSecretBinding(binding)) {
-                throw new Error(
+                throw new LunoraError(
+                    "INTERNAL",
                     `ctx.secrets: no Secrets Store binding named "${name}". Add a \`secrets_store_secrets[]\` entry (binding "${name}", pointing at your store + secret) to wrangler.jsonc — \`ctx.secrets\` reads a Secrets Store binding, not a plain \`.dev.vars\` value.`,
                 );
             }

@@ -38,6 +38,7 @@
  * an untyped bag — fully backward compatible.
  */
 
+import { LunoraError } from "@lunora/errors";
 import type { InferValidatorMap, ValidatorMap } from "@lunora/values";
 import { parseValidatorMap, ValidationError } from "@lunora/values";
 
@@ -141,7 +142,7 @@ export const defineIdentity = <A extends ValidatorMap>(
     const userIdValidator = map["userId"];
 
     if (userIdValidator === undefined || NON_STRING_USER_ID_KINDS.has(userIdValidator.kind)) {
-        throw new Error("defineIdentity: the claim map must declare a required string `userId` validator (e.g. `v.string()` or `v.id(...)`)");
+        throw new LunoraError("INTERNAL", "defineIdentity: the claim map must declare a required string `userId` validator (e.g. `v.string()` or `v.id(...)`)");
     }
 
     const onInvalid: IdentityRejectMode = options.onInvalid ?? "anonymous";

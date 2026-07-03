@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 
 import type { WranglerConfig } from "@lunora/config";
 import { readWranglerJsonc, validateWranglerProject } from "@lunora/config";
+import { LunoraError } from "@lunora/errors";
 import type { Plugin } from "vite";
 
 import { lunoraLine } from "./log";
@@ -72,7 +73,8 @@ const wranglerValidatorPlugin = (options: ResolvedLunoraPluginOptions): Plugin =
             });
 
             if (!result.wranglerPath) {
-                throw new Error(
+                throw new LunoraError(
+                    "INTERNAL",
                     [
                         "[lunora] wrangler.jsonc not found.",
                         `  searched in: ${options.projectRoot}`,

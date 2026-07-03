@@ -1,6 +1,7 @@
 "use client";
 
 import type { LunoraClient } from "@lunora/client";
+import { LunoraError } from "@lunora/errors";
 import { QueryClient, QueryClientContext, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement, ReactNode } from "react";
 import { createContext, use, useState } from "react";
@@ -58,7 +59,7 @@ const LunoraProvider = ({ children, client, queryClient }: LunoraProviderProps):
         // The useState branch always produces a client when we need one, so
         // this is unreachable; the throw makes the type narrow for downstream
         // code without an `as`.
-        throw new Error("LunoraProvider: failed to resolve a QueryClient");
+        throw new LunoraError("INTERNAL", "LunoraProvider: failed to resolve a QueryClient");
     }
 
     const content = <LunoraContext value={client}>{children}</LunoraContext>;
@@ -79,7 +80,7 @@ const useLunora = (): LunoraClient => {
     const client = use(LunoraContext);
 
     if (!client) {
-        throw new Error("useLunora must be used inside <LunoraProvider />");
+        throw new LunoraError("INTERNAL", "useLunora must be used inside <LunoraProvider />");
     }
 
     return client;

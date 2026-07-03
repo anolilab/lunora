@@ -3,6 +3,8 @@
  * bindings. Node-safe (structural binding types), so it's exercised by unit
  * tests with plain-object doubles.
  */
+import { LunoraError } from "@lunora/errors";
+
 import type { LunoraWorkflowsOptions, WorkflowBindingLike, WorkflowCreateOptions, WorkflowHandle, WorkflowInstanceLike, Workflows } from "./types";
 
 /** Wrap a single Cloudflare `Workflow` binding in the {@link WorkflowHandle} surface. */
@@ -31,7 +33,7 @@ const createWorkflows = (options: LunoraWorkflowsOptions): Workflows => {
                 const known = Object.keys(bindings);
                 const suffix = known.length === 0 ? "no workflows are declared" : `known workflows: ${known.join(", ")}`;
 
-                throw new Error(`@lunora/workflow: no workflow named "${name}" (${suffix})`);
+                throw new LunoraError("INTERNAL", `@lunora/workflow: no workflow named "${name}" (${suffix})`);
             }
 
             return handleFor(binding) as WorkflowHandle<Params>;

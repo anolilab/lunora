@@ -2,6 +2,7 @@
 import { DatabaseSync } from "node:sqlite";
 
 import type { SqlCursor, SqlExec } from "@lunora/do";
+import { LunoraError } from "@lunora/errors";
 
 /**
  * Adapts Node's built-in `node:sqlite` engine to the {@link SqlExec} surface
@@ -27,7 +28,7 @@ const createSqlExec = (): { close: () => void; sql: SqlExec } => {
         return {
             one() {
                 if (rows.length !== 1) {
-                    throw new Error(`expected exactly one row, received ${String(rows.length)}`);
+                    throw new LunoraError("INTERNAL", `expected exactly one row, received ${String(rows.length)}`);
                 }
 
                 const [only] = rows;

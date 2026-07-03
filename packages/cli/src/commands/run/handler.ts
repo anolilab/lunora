@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/errors";
+
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
@@ -40,7 +42,7 @@ const parseArgsJson = (raw: string | undefined): unknown => {
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 
-        throw new Error(`failed to parse --args as JSON: ${message}`, { cause: error });
+        throw new LunoraError("INTERNAL", `failed to parse --args as JSON: ${message}`, { cause: error });
     }
 };
 

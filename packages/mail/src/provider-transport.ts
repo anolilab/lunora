@@ -7,6 +7,8 @@
  * drifting) per provider. Each transport supplies only its provider instance
  * and its recipient policy.
  */
+import { LunoraError } from "@lunora/errors";
+
 import { toAddress, toAddressList } from "./address";
 import type { SendPayload } from "./types";
 
@@ -68,7 +70,7 @@ const requireRecipients = (to: SendPayload["to"]): { first: ProviderAddress; lis
     const [first] = list ?? [];
 
     if (!list || first === undefined) {
-        throw new Error("@lunora/mail: at least one recipient is required");
+        throw new LunoraError("INTERNAL", "@lunora/mail: at least one recipient is required");
     }
 
     return { first, list };
@@ -99,7 +101,7 @@ const interpretSendResult = (result: ProviderSendResult): { id: string } => {
         // eslint-disable-next-line no-console -- intentional server-side log of the redacted provider error before throwing a generic message
         console.error(`@lunora/mail: send failed: ${reasonOf(result.error)}`);
 
-        throw new Error("@lunora/mail: send failed");
+        throw new LunoraError("INTERNAL", "@lunora/mail: send failed");
     }
 
     return { id: result.data.messageId };

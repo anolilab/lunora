@@ -1,4 +1,5 @@
 import { FlagshipServerProvider } from "@cloudflare/flagship/server";
+import { LunoraError } from "@lunora/errors";
 
 import type { FlagsProviderFactory } from "../types";
 
@@ -73,7 +74,8 @@ const flagshipProvider = (options: FlagshipProviderOptions): FlagsProviderFactor
             const binding = env[bindingName];
 
             if (binding === undefined || binding === null) {
-                throw new Error(
+                throw new LunoraError(
+                    "INTERNAL",
                     `flagshipProvider: no binding "${bindingName}" found on env. Add a \`flagship\` binding to wrangler.jsonc, ` +
                         `e.g. { "flagship": [{ "binding": "${bindingName}", "app_id": "your-app-id" }] }.`,
                 );

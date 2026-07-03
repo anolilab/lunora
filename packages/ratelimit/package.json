@@ -1,6 +1,6 @@
 {
     "name": "@lunora/ratelimit",
-    "version": "1.0.0-alpha.3",
+    "version": "1.0.0-alpha.4",
     "description": "Rate limiting: token-bucket / fixed-window / sliding-window algorithms, deny list, sharding, pluggable stores, and procedure middleware",
     "keywords": [
         "cloudflare",
@@ -60,10 +60,13 @@
         "fallow:dead-code": "fallow dead-code",
         "fallow:health": "fallow health --score"
     },
+    "dependencies": {
+        "@lunora/errors": "1.0.0-alpha.1"
+    },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/server": "1.0.0-alpha.5",
-        "@lunora/values": "1.0.0-alpha.3",
+        "@lunora/server": "1.0.0-alpha.14",
+        "@lunora/values": "1.0.0-alpha.4",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

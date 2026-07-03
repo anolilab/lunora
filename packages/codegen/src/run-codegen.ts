@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
 
 import type { Finding } from "@lunora/advisor";
+import { LunoraError } from "@lunora/errors";
 import { Project } from "ts-morph";
 
 import { lintSchema } from "./advisor";
@@ -273,7 +274,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const schemaPath = join(lunoraDirectory, "schema.ts");
 
     if (!existsSync(schemaPath)) {
-        throw new Error(`schema.ts not found at ${schemaPath}`);
+        throw new LunoraError("INTERNAL", `schema.ts not found at ${schemaPath}`);
     }
 
     // Reuse an injected Project (the caller owns refreshing its source files
@@ -448,6 +449,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // studio hides only pages whose backing package the app genuinely never wires.
     const dependencies = discoverPackageDependencies(options.projectRoot);
     const studioFeatures = buildStudioFeatures(featureUsage, {
+        containerCount: containers.length,
         cronCount: crons.length,
         dependencies,
         queueCount: queues.length,

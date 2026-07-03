@@ -83,7 +83,7 @@ const lunora = (options: LunoraIntegrationOptions = {}): AstroIntegrationLike =>
                 // resolved entry) so the integration is safe to add before that
                 // wiring lands.
                 if (serverEntry.length === 0) {
-                    throw new Error("@lunora/astro: `serverEntry` must be a non-empty path.");
+                    throw new TypeError("@lunora/astro: `serverEntry` must be a non-empty path.");
                 }
             },
         },

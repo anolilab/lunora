@@ -2,6 +2,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import type { ChangeEvent, CSSProperties, ReactElement } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { ErrorAlert } from "../../components/error-alert";
 import { LiveError } from "../../components/live-status";
 import { ShardInput } from "../../components/shard-input";
 import { Badge } from "../../components/ui/badge";
@@ -418,7 +419,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
     );
 
     const activeQuery = view === "requests" ? requestsQuery : errorsQuery;
-    const { error, isLoading: activeLoading, liveError } = activeQuery;
+    const { error, errorSource, isLoading: activeLoading, liveError } = activeQuery;
 
     // Coerce each view's resolved payload into its entries array (a one-shot read
     // or live push without an `entries` array yields `[]`); an unloaded gated
@@ -678,11 +679,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
                 </div>
             )}
 
-            {readout === "error" && (
-                <p className="text-sm text-destructive" data-testid="lg-error" role="alert">
-                    {error}
-                </p>
-            )}
+            {readout === "error" && <ErrorAlert error={errorSource} testId="lg-error" />}
 
             {readout === "empty" && (
                 <EmptyState

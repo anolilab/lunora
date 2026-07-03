@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
+import { LunoraError } from "@lunora/errors";
 import type { Plugin } from "vite";
 
 import type { DetectedFramework } from "./detect-framework";
@@ -155,7 +156,7 @@ const buildWorkerEntrySource = (
     const wiring = CLASS_A_WIRING[framework];
 
     if (wiring === undefined) {
-        throw new Error(`[lunora] no class-A worker wiring for framework "${framework}"`);
+        throw new LunoraError("INTERNAL", `[lunora] no class-A worker wiring for framework "${framework}"`);
     }
 
     // Umbrella-aware runtime import (see `projectUsesUmbrella`): the generated

@@ -5,8 +5,14 @@ import type { ContainerLogStreamHandle } from "@lunora/config";
 import {
     AGENT_RULES_HINT,
     claimAgentRulesHint,
+    claimDevServerState,
+    clearDevServerState,
     detectAgentRules,
+    detectAiAgent,
     detectFramework,
+    DEV_DAEMON_ENV,
+    DEV_HANDOFF_ENV,
+    DEV_LOG_FILE_ENV,
     DEV_VARS_EXAMPLE_FILE,
     DEV_VARS_FILE,
     discoverContainerInfo,
@@ -18,9 +24,11 @@ import {
     isInteractive,
     materializeRemoteWranglerConfig,
     packageNamesFromBindings,
+    readLiveDevServerState,
     readProjectRemotePreference,
     resolveRemoteEnabled,
     streamContainerLogs,
+    updateDevServerState,
 } from "@lunora/config";
 
 import type { ApiSpec } from "../../util/api-spec";
@@ -31,16 +39,22 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { detectPackageManager, execArgsFor, runScriptCommand } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
+import { forceJsonLogging } from "../../util/logger";
 import type { SpawnDescriptor } from "../../util/spawn";
+import { spawnShellCompat } from "../../util/spawn";
 import type { StudioServerHandle } from "../../util/studio-server";
 import { startStudioServer } from "../../util/studio-server";
 import { createTuiConfirm } from "../../util/tui-prompts";
 import type { DevOptions } from "./index";
+import type { DevFlavor } from "./lifecycle";
+import { detectDevFlavor, reportExistingServer, runLifecycleSubcommand, startBackground, viteDevCommand } from "./lifecycle";
 
 /** Default port the embedded studio server listens on (the URL you open). */
 const DEFAULT_STUDIO_PORT = 6173;
 /** Default port `wrangler dev` serves the worker on. */
 const DEFAULT_WORKER_PORT = 8787;
+/** Default port Vite serves on — the state record carries the real resolved URL. */
+const DEFAULT_VITE_PORT = 5173;
 /** Grace period after the first SIGINT before we force-kill the worker. */
 const SIGINT_GRACE_MS = 5000;
 
@@ -66,6 +80,8 @@ interface DevCommandOptions {
     ensureExample?: typeof ensureDevVarsExample;
     /** Injection seam for tests — defaults to the real empty-secret/admin-token filler. */
     fillSecrets?: typeof fillDevSecrets;
+    /** Dev flavor override (tests / callers that already detected it) — defaults to {@link detectDevFlavor}. */
+    flavor?: DevFlavor;
     logger: Logger;
     /** Injection seam for tests — defaults to the real remote-config materializer. */
     materializeRemote?: typeof materializeRemoteWranglerConfig;
@@ -103,13 +119,17 @@ interface DevRemotePlan {
 
 interface DevCommandPlan {
     codegenEnabled: boolean;
+    /** Which stack the child runs — see {@link DevFlavor}. */
+    flavor: DevFlavor;
 
     /**
-     * One-line redirect hint printed when a Vite/meta-framework is detected: in
-     * those projects the worker runs *inside* Vite, so the user should run their
-     * framework dev script for the full app. `undefined` for a standalone project
-     * (no framework) — `lunora dev` is the right command there. Purely
-     * informational: the wrangler spawn runs regardless.
+     * One-line redirect hint printed when a meta-framework is detected on the
+     * wrangler flavor: without `@lunora/vite` in the dependencies the worker
+     * still runs *inside* the framework's dev server, so the user should run
+     * their framework dev script for the full app. `undefined` for the vite
+     * flavor (`lunora dev` already runs the project's dev script there) and
+     * for a standalone project. Purely informational: the wrangler spawn runs
+     * regardless.
      */
     frameworkHint?: string;
     /** The remote-binding decision: which D1/KV/R2 bindings hit the deployed worker. */
@@ -118,7 +138,7 @@ interface DevCommandPlan {
     studioPort: number;
     workerOrigin: string;
     workerPort: number;
-    /** The single child process `lunora dev` spawns: `wrangler dev`. */
+    /** The single child process `lunora dev` spawns: `wrangler dev` (or `vite dev` for the vite flavor). */
     wrangler: SpawnDescriptor & { tag: string };
 }
 
@@ -153,24 +173,58 @@ const resolveRemotePlan = (options: DevCommandOptions, cwd: string): { args: str
 };
 
 /**
- * Plan `lunora dev`: it runs the worker via `wrangler dev` and nothing else as a
- * child process. Vite is intentionally NOT spawned — a project may not use Vite,
- * and when it does, the `@lunora/vite` plugin already runs the worker inside
- * Vite, so the user runs `vite` themselves. Pure + synchronous so it's unit-testable.
+ * Plan `lunora dev`. Wrangler flavor: the worker runs via `wrangler dev` and
+ * nothing else as a child process. Vite flavor (`@lunora/vite` declared): the
+ * plugin already runs the worker inside the Vite dev server, so the one child
+ * is the project's own dev script (`vite dev`, `astro dev`, …) and every CLI
+ * sibling is disabled. Pure + synchronous so it's unit-testable.
  */
 const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
     const cwd = options.cwd ?? process.cwd();
-    const workerPort = options.workerPort ?? DEFAULT_WORKER_PORT;
     const manager = detectPackageManager(cwd);
-    // In a Vite/meta-framework project the `@lunora/vite` plugin runs the worker
-    // inside Vite, so `lunora dev` (wrangler-only) gives just the worker — no
-    // frontend, no HMR. Detect the framework and surface a one-line redirect hint;
-    // the wrangler spawn still runs regardless (this is a hint, not a redirect).
+    const flavor = options.flavor ?? detectDevFlavor(cwd);
+
+    if (flavor === "vite") {
+        // `@lunora/vite` already runs the worker + studio + codegen (and remote
+        // bindings, dev vars, container logs) inside the Vite dev server — the
+        // CLI's own siblings would duplicate them, so they're all disabled and
+        // the one child is the project's own dev server. Remote mode is
+        // forwarded as env (`LUNORA_REMOTE=1`) for the plugin's remote-bindings
+        // handling; no temp wrangler config is materialized here. The Vite
+        // plugin writes the authoritative `.lunora/dev.json` (real resolved URL
+        // + Vite's PID) once the server listens; `workerOrigin` is only the
+        // pre-listen default.
+        const exec = viteDevCommand(cwd);
+
+        return {
+            codegenEnabled: false,
+            flavor,
+            remote: { bindings: [], cleanup: () => {}, enabled: options.remote === true },
+            studioEnabled: false,
+            studioPort: options.port ?? DEFAULT_STUDIO_PORT,
+            workerOrigin: `http://localhost:${String(DEFAULT_VITE_PORT)}`,
+            workerPort: DEFAULT_VITE_PORT,
+            wrangler: {
+                args: exec.args,
+                command: exec.command,
+                cwd,
+                ...(options.remote === true ? { env: { LUNORA_REMOTE: "1" } } : {}),
+                tag: "vite",
+            },
+        };
+    }
+
+    // In a meta-framework project WITHOUT `@lunora/vite` (wrangler flavor, so
+    // the vite branch above didn't take it) the worker still runs inside the
+    // framework's dev server, so `lunora dev` (wrangler-only) gives just the
+    // worker — no frontend, no HMR. Surface a one-line redirect hint; the
+    // wrangler spawn still runs regardless (this is a hint, not a redirect).
     const detection = detectFramework(cwd);
     const frameworkHint =
         detection.framework === "none"
             ? undefined
             : `this project uses ${detection.framework} — the worker runs inside Vite there. run \`${runScriptCommand(manager, "dev")}\` for the full app (frontend + HMR); \`lunora dev\` starts only the worker.`;
+    const workerPort = options.workerPort ?? DEFAULT_WORKER_PORT;
     const remote = resolveRemotePlan(options, cwd);
     // `--var WORKER_ENV:development` flags the worker as a dev deployment so the
     // runtime streams every RPC dispatch summary to the terminal by default
@@ -183,6 +237,7 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
 
     return {
         codegenEnabled: options.codegen !== false,
+        flavor,
         frameworkHint,
         remote: remote.plan,
         studioEnabled: options.studio !== false,
@@ -262,9 +317,13 @@ const pipeChildOutput = (child: ChildProcess, tag: string, logger: Logger): void
 
 /** Real worker spawner: runs the descriptor as a child and pipes its output through the logger. */
 const defaultWorkerSpawner: WorkerSpawner = (descriptor, logger) => {
-    const child = nodeSpawn(descriptor.command, [...descriptor.args], {
+    // Windows can't spawn the package-manager .cmd shims without a shell — see
+    // spawnShellCompat. POSIX passes through untouched.
+    const exec = spawnShellCompat(descriptor.command, descriptor.args);
+    const child = nodeSpawn(exec.command, exec.args, {
         cwd: descriptor.cwd ?? process.cwd(),
-        env: process.env,
+        env: descriptor.env ? { ...process.env, ...descriptor.env } : process.env,
+        shell: exec.shell,
         stdio: ["inherit", "pipe", "pipe"],
     });
 
@@ -461,6 +520,68 @@ const offerDevVariablesScaffold = async (options: DevCommandOptions, cwd: string
 };
 
 /**
+ * Wrangler-flavor extras once the worker child is spawned: tail the dev
+ * containers' Docker logs and print the banner. Skipped for the vite flavor,
+ * where the plugin stack owns both. (The `.lunora/dev.json` record is claimed
+ * earlier, before any sibling starts — see the claim in {@link runDevCommand}.)
+ * Returns the container-log disposer for the caller's teardown set.
+ */
+const afterWorkerSpawn = (plan: DevCommandPlan, cwd: string, logger: Logger, studioUrl: string | undefined): ContainerLogStreamHandle | undefined => {
+    if (plan.flavor !== "wrangler") {
+        return undefined;
+    }
+
+    // Backfill the studio URL onto the record claimed before the siblings
+    // started (it wasn't known at claim time).
+    if (studioUrl !== undefined) {
+        updateDevServerState(cwd, { studioUrl });
+    }
+
+    let containerLogs: ContainerLogStreamHandle | undefined;
+
+    // Tail the local dev containers' own stdout/stderr (no-op when the project
+    // declares none). Best-effort — a Docker hiccup must not break dev.
+    try {
+        containerLogs = startContainerLogStreaming(cwd, logger);
+    } catch {
+        /* never fatal */
+    }
+
+    printBanner(logger, plan, studioUrl);
+
+    return containerLogs;
+};
+
+/**
+ * Atomically claim `.lunora/dev.json` for a starting dev server. Closes the
+ * check-then-write race where two simultaneous starts both pass the
+ * read-based lock check. For the wrangler flavor this record is final; for
+ * the vite flavor it is *provisional* — the pre-listen default URL under this
+ * CLI's PID — and `@lunora/vite`'s dev-state plugin supersedes it with the
+ * authoritative URL + Vite's PID (see {@link DEV_HANDOFF_ENV}). A daemon
+ * re-invocation likewise supersedes the provisional record its background
+ * parent claimed before spawning it. Returns the live incumbent on a lost
+ * claim.
+ */
+const claimStartRecord = (plan: DevCommandPlan, cwd: string): { pid: number; url: string } | undefined => {
+    const handoffPid = Number(process.env[DEV_HANDOFF_ENV]);
+    const claim = claimDevServerState(
+        cwd,
+        {
+            background: process.env[DEV_DAEMON_ENV] === "1",
+            logFile: process.env[DEV_LOG_FILE_ENV],
+            mode: "cli",
+            pid: process.pid,
+            startedAt: new Date().toISOString(),
+            url: plan.workerOrigin,
+        },
+        Number.isInteger(handoffPid) && handoffPid > 0 ? { supersedePid: handoffPid } : undefined,
+    );
+
+    return claim.ok ? undefined : claim.existing;
+};
+
+/**
  * Start codegen watch + the studio server, spawn `wrangler dev`, print the
  * banner, and resolve when the worker exits or the user interrupts — tearing
  * down the sibling servers either way. The three side-effecting pieces (worker,
@@ -475,9 +596,40 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
     const handles: Teardown = { remoteCleanup: plan.remote.cleanup };
 
     try {
+        // Lockfile check: a live `.lunora/dev.json` means a dev server is
+        // already running — report it and succeed (idempotent start) instead of
+        // spawning a conflicting sibling. A stale record (dead PID) was already
+        // cleared by the read.
+        const existing = readLiveDevServerState(cwd);
+
+        if (existing !== undefined && existing.pid !== process.pid) {
+            reportExistingServer(logger, existing);
+
+            return { code: 0, plan };
+        }
+
+        // Atomically claim the record before ANY sibling starts (see
+        // claimStartRecord); a lost claim means another start won the race.
+        const incumbent = claimStartRecord(plan, cwd);
+
+        if (incumbent !== undefined) {
+            reportExistingServer(logger, incumbent);
+
+            return { code: 0, plan };
+        }
+
+        if (plan.flavor === "vite") {
+            // Hand the provisional record down so the dev-state plugin inside
+            // the Vite child may supersede it (and only it) with the
+            // authoritative resolved URL + Vite's own PID.
+            plan.wrangler.env = { ...plan.wrangler.env, [DEV_HANDOFF_ENV]: String(process.pid) };
+        }
+
         await offerDevVariablesScaffold(options, cwd);
 
-        logger.info("starting wrangler dev + studio");
+        logger.info(
+            plan.flavor === "vite" ? "starting vite dev (worker + studio + codegen run inside Vite via @lunora/vite)" : "starting wrangler dev + studio",
+        );
 
         if (plan.codegenEnabled) {
             handles.codegen = (options.startCodegen ?? startCodegenWatch)({ apiSpec: options.apiSpec, logger, projectRoot: cwd });
@@ -511,15 +663,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
 
         const worker = (options.startWorker ?? defaultWorkerSpawner)(plan.wrangler, logger);
 
-        // Tail the local dev containers' own stdout/stderr (no-op when the project
-        // declares none). Best-effort — a Docker hiccup must not break dev.
-        try {
-            handles.containerLogs = startContainerLogStreaming(cwd, logger);
-        } catch {
-            /* never fatal */
-        }
-
-        printBanner(logger, plan, studioUrl);
+        handles.containerLogs = afterWorkerSpawn(plan, cwd, logger, studioUrl);
         printAgentRulesHint(logger, cwd);
 
         let sigintCount = 0;
@@ -559,13 +703,67 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
     } finally {
         // Always shut the siblings down + unlink the remote temp config, whether
         // the worker exited cleanly, the user interrupted, or startup threw.
+        // The state record is only cleared while it still carries THIS process's
+        // PID (the guard makes the vite flavor — where Vite's plugin owns the
+        // record — and the already-running early return no-ops).
+        clearDevServerState(cwd, process.pid);
         await teardown(handles);
     }
 };
 
 /** `lunora dev` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(({ cwd, logger, options }) =>
-    runDevCommand({
+const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ argument, cwd, logger, options }) => {
+    const json = options.json === true;
+
+    // `stop` / `status` / `logs` route to their lifecycle commands; `undefined`
+    // means no subcommand — fall through to the start flow below.
+    const dispatched = runLifecycleSubcommand({ cwd, json, lines: options.lines, logger, subcommand: argument[0] });
+
+    if (dispatched !== undefined) {
+        return dispatched;
+    }
+
+    // A daemon re-invocation IS the background server: it must run the plain
+    // foreground path below (and never re-detect an agent and recurse).
+    const isDaemon = process.env[DEV_DAEMON_ENV] === "1";
+    const agent = isDaemon ? undefined : detectAiAgent();
+    const jsonLogs = json || agent !== undefined;
+
+    if (jsonLogs) {
+        // Safe pre-first-log-line: the shared pail rebuilds with the JSON reporter.
+        forceJsonLogging();
+    }
+
+    if (agent !== undefined && options.background !== true) {
+        logger.info(
+            `AI agent detected (${agent.name} via ${agent.variable}) — starting the dev server in background mode with JSON logs. Set LUNORA_AGENT_MODE=0 to opt out.`,
+        );
+    }
+
+    // Remote-binding mode obeys a clear precedence: an explicit `--remote`
+    // flag wins, then `LUNORA_REMOTE` in the environment, then the `remote`
+    // key in the project's `lunora.json` (a project default). See
+    // `resolveRemoteEnabled` in @lunora/config.
+    const remote = resolveRemoteEnabled({
+        configPreference: readProjectRemotePreference(cwd),
+        envValue: process.env["LUNORA_REMOTE"],
+        flag: options.remote,
+    });
+
+    if (!isDaemon && (options.background === true || agent !== undefined)) {
+        // Idempotent start: a live server means success, not a conflict.
+        const existing = readLiveDevServerState(cwd);
+
+        if (existing !== undefined) {
+            reportExistingServer(logger, existing);
+
+            return { code: 0 };
+        }
+
+        return startBackground({ cwd, jsonLogs, logger, options, remote });
+    }
+
+    return runDevCommand({
         apiSpec: parseApiSpec(options.apiSpec),
         // cerebro parses `--no-codegen`/`--no-studio` as the negation of the
         // `codegen`/`studio` booleans (runtime key drops the `no-` prefix), so a
@@ -574,20 +772,16 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(({ cwd, lo
         cwd,
         logger,
         port: options.port,
-        // Remote-binding mode obeys a clear precedence: an explicit `--remote`
-        // flag wins, then `LUNORA_REMOTE` in the environment, then the `remote`
-        // key in the project's `lunora.json` (a project default). See
-        // `resolveRemoteEnabled` in @lunora/config.
-        remote: resolveRemoteEnabled({
-            configPreference: readProjectRemotePreference(cwd),
-            envValue: process.env["LUNORA_REMOTE"],
-            flag: options.remote,
-        }),
+        remote,
         studio: options.studio === false ? false : undefined,
         workerPort: options.workerPort,
-    }),
-);
+    });
+});
 
 export { execute };
 export type { DevCommandOptions, DevCommandPlan, DevRemotePlan, WorkerProcess, WorkerSpawner };
+// `DevFlavor` / `detectDevFlavor` live in `./lifecycle`; re-exported here so the
+// planning surface (`planDevCommand` and friends) stays importable from one module.
+export type { DevFlavor } from "./lifecycle";
+export { detectDevFlavor } from "./lifecycle";
 export { planDevCommand, resolveRemotePlan, runDevCommand };

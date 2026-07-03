@@ -3,6 +3,8 @@
  * test directly. Rejects path traversal on both `from` and `to`, and newlines in
  * env-var values (which would corrupt the line-oriented `.dev.vars`).
  */
+import { LunoraError } from "@lunora/errors";
+
 import type { RegistryBinding, RegistryFile, RegistryManifest } from "./types";
 
 /** A CR or LF — illegal in a `.dev.vars` value (it would inject a spurious line). */
@@ -29,18 +31,19 @@ const VALID_ITEM_NAME = /^[A-Za-z0-9][\w-]*$/u;
 /** Validate + narrow a parsed JSON value into a {@link RegistryManifest}. */
 const parseManifest = (raw: unknown, itemName: string): RegistryManifest => {
     if (typeof raw !== "object" || raw === null) {
-        throw new Error(`registry.json for "${itemName}" is not an object`);
+        throw new LunoraError("INTERNAL", `registry.json for "${itemName}" is not an object`);
     }
 
     const record = raw as Record<string, unknown>;
     const { name } = record;
 
     if (typeof name !== "string" || name.length === 0) {
-        throw new Error(`registry.json for "${itemName}" is missing a string "name"`);
+        throw new LunoraError("INTERNAL", `registry.json for "${itemName}" is missing a string "name"`);
     }
 
     if (!VALID_ITEM_NAME.test(name)) {
-        throw new Error(
+        throw new LunoraError(
+            "INTERNAL",
             `registry.json for "${itemName}": name "${name}" must match ${VALID_ITEM_NAME.source} (letters, digits, "-", "_"; no path separators, "..", or code)`,
         );
     }
@@ -53,7 +56,7 @@ const parseManifest = (raw: unknown, itemName: string): RegistryManifest => {
 
     const files: RegistryFile[] = filesRaw.map((entry, index) => {
         if (typeof entry !== "object" || entry === null) {
-            throw new Error(`registry.json "${itemName}": files[${String(index)}] is not an object`);
+            throw new LunoraError("INTERNAL", `registry.json "${itemName}": files[${String(index)}] is not an object`);
         }
 
         const fileRecord = entry as Record<string, unknown>;
@@ -66,7 +69,7 @@ const parseManifest = (raw: unknown, itemName: string): RegistryManifest => {
         }
 
         if (merge !== "create-or-skip" && merge !== "schema-extension") {
-            throw new Error(`registry.json "${itemName}": files[${String(index)}].merge must be "create-or-skip" or "schema-extension"`);
+            throw new LunoraError("INTERNAL", `registry.json "${itemName}": files[${String(index)}].merge must be "create-or-skip" or "schema-extension"`);
         }
 
         // Reject path traversal on BOTH sides. `to` must stay inside the project;
@@ -78,7 +81,10 @@ const parseManifest = (raw: unknown, itemName: string): RegistryManifest => {
             ["to", to],
         ] as const) {
             if (value.includes("..") || value.startsWith("/")) {
-                throw new Error(`registry.json "${itemName}": files[${String(index)}].${field} "${value}" must be a relative path without ".."`);
+                throw new LunoraError(
+                    "INTERNAL",
+                    `registry.json "${itemName}": files[${String(index)}].${field} "${value}" must be a relative path without ".."`,
+                );
             }
         }
 
@@ -116,7 +122,8 @@ const parseManifest = (raw: unknown, itemName: string): RegistryManifest => {
                   // newline or `=` (or any non-identifier char) would inject/overwrite
                   // an unrelated key. Enforce a strict env-var identifier shape.
                   if (!VALID_ENV_NAME.test(entry.name)) {
-                      throw new Error(
+                      throw new LunoraError(
+                          "INTERNAL",
                           `registry.json "${itemName}": envVars["${entry.name}"].name must match ${VALID_ENV_NAME.source} (letters, digits, underscore; no "=" or newline)`,
                       );
                   }
@@ -124,14 +131,14 @@ const parseManifest = (raw: unknown, itemName: string): RegistryManifest => {
                   // `.dev.vars` is line-oriented; a newline in a value would inject a
                   // spurious key. Reject at parse time, before anything is written.
                   if (hasValue && NEWLINE_PRESENT.test(entry.value as string)) {
-                      throw new Error(`registry.json "${itemName}": envVars["${entry.name}"].value must not contain a newline`);
+                      throw new LunoraError("INTERNAL", `registry.json "${itemName}": envVars["${entry.name}"].value must not contain a newline`);
                   }
 
                   // The description is written verbatim as a `# ...` comment line into
                   // `.dev.vars` (see `applyEnvVariables`); a newline would break out of
                   // the comment and inject a real `KEY=value` line. Reject it too.
                   if (typeof entry.description === "string" && NEWLINE_PRESENT.test(entry.description)) {
-                      throw new Error(`registry.json "${itemName}": envVars["${entry.name}"].description must not contain a newline`);
+                      throw new LunoraError("INTERNAL", `registry.json "${itemName}": envVars["${entry.name}"].description must not contain a newline`);
                   }
 
                   return {

@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 
 import { describeValue, formatPath, ValidationError } from "./errors";
@@ -660,7 +661,7 @@ const record = <K extends Validator<string>, V extends Validator>(
 
 const union = <Vs extends ReadonlyArray<Validator>>(...members: Vs): ColumnValidator<Infer<Vs[number]>, Infer<Vs[number]>> => {
     if (members.length === 0) {
-        throw new Error("v.union requires at least one member");
+        throw new LunoraError("INTERNAL", "v.union requires at least one member");
     }
 
     const memberInternals = members.map((member) => toInternal(member));
@@ -781,7 +782,7 @@ const from = <S extends StandardSchemaV1>(schema: S): ColumnValidator<InferStand
     const props = (schema as { "~standard"?: { validate?: unknown; version?: number } })["~standard"];
 
     if (props?.version !== 1 || typeof props.validate !== "function") {
-        throw new Error('@lunora/values: v.from() expects a Standard Schema v1 object (missing or invalid "~standard")');
+        throw new LunoraError("INTERNAL", '@lunora/values: v.from() expects a Standard Schema v1 object (missing or invalid "~standard")');
     }
 
     const validate = props.validate as StandardSchemaV1["~standard"]["validate"];

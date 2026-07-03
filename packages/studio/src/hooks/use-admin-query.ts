@@ -64,6 +64,8 @@ interface AdminQueryResult<T> {
     readonly data: T | undefined;
     /** The read error message, or `null`. Normalised from the thrown value. */
     readonly error: null | string;
+    /** The raw thrown value (a `LunoraClientError` carries `hint`/`docsUrl`), or `undefined`. Lets a panel render the actionable fix via the `ErrorAlert` component. */
+    readonly errorSource: unknown;
     /** `true` only on the very first load (no cached data yet). */
     readonly isLoading: boolean;
 
@@ -167,6 +169,7 @@ function useClientQuery<T>(queryKey: QueryKey, queryFunction: () => Promise<T>, 
     return {
         data: query.data,
         error: query.error ? errorMessage(query.error) : query.error,
+        errorSource: query.error ?? undefined,
         isLoading: query.isLoading,
         liveError: undefined,
         refetch: (): void => {

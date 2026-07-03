@@ -1,5 +1,8 @@
 import { spawn as nodeSpawn } from "node:child_process";
 
+/** Matches any character that would make cmd.exe re-split an unquoted argument. */
+const NEEDS_CMD_QUOTING = /\s/;
+
 export interface SpawnDescriptor {
     args: ReadonlyArray<string>;
 
@@ -42,6 +45,32 @@ export interface SpawnResult {
  */
 export type Spawner = (descriptor: SpawnDescriptor) => Promise<SpawnResult>;
 
+/**
+ * Map a command + args onto what `child_process.spawn` can actually execute on
+ * this platform. On Windows the package-manager CLIs (`pnpm`, `npx`, `yarn`,
+ * `bun`) are `.cmd`/`.ps1` shims that `spawn()` cannot start without a shell —
+ * since Node's CVE-2024-27980 hardening the call fails outright (`EINVAL`, or
+ * `ENOENT` for the extensionless name) and the child never gets a PID. Node
+ * itself (`process.execPath`) is a real executable and needs no shell. With
+ * `shell: true` Node joins command + args verbatim for cmd.exe, so arguments
+ * containing whitespace (e.g. a `--config` temp path under a spaced user
+ * dir) are double-quoted here; everything else passes through untouched.
+ * POSIX platforms return the input unchanged.
+ */
+export const spawnShellCompat = (
+    command: string,
+    args: ReadonlyArray<string>,
+    platform: NodeJS.Platform = process.platform,
+): { args: string[]; command: string; shell: boolean } => {
+    if (platform !== "win32" || command === process.execPath) {
+        return { args: [...args], command, shell: false };
+    }
+
+    const quote = (value: string): string => (NEEDS_CMD_QUOTING.test(value) ? `"${value}"` : value);
+
+    return { args: args.map((argument) => quote(argument)), command: quote(command), shell: true };
+};
+
 export const defaultSpawner: Spawner = (descriptor) =>
     new Promise<SpawnResult>((resolve, reject) => {
         const hasInput = typeof descriptor.input === "string";
@@ -59,9 +88,11 @@ export const defaultSpawner: Spawner = (descriptor) =>
         } else if (descriptor.stdoutToStderr) {
             stdout = 2;
         }
-        const child = nodeSpawn(descriptor.command, [...descriptor.args], {
+        const exec = spawnShellCompat(descriptor.command, descriptor.args);
+        const child = nodeSpawn(exec.command, exec.args, {
             cwd: descriptor.cwd ?? process.cwd(),
             env: descriptor.env ? { ...process.env, ...descriptor.env } : process.env,
+            shell: exec.shell,
             stdio: [hasInput ? "pipe" : "inherit", stdout, "inherit"],
         });
 

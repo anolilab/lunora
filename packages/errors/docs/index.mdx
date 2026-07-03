@@ -1,0 +1,50 @@
+---
+title: "@lunora/errors"
+description: The unified error layer — LunoraError, the error catalog, isLunoraError, invariant/unreachable, and the CLI renderer.
+---
+
+`@lunora/errors` is the single source of truth for how Lunora throws and surfaces
+errors. It provides one `LunoraError` base (built on `@visulima/error`) plus a
+central catalog mapping each machine `code` to its transport `status`, a human
+`title`, and — where useful — an actionable Markdown `hint` and `docsUrl`. Those
+hints render consistently in the CLI, the Vite error overlay, the Studio UI, and
+the client SDK.
+
+```ts
+import { LunoraError, isLunoraError } from "@lunora/errors";
+
+throw new LunoraError("NOT_FOUND", `no message with id ${id}`);
+
+if (isLunoraError(error)) {
+    // error.code, error.status, error.hint, error.data are all typed
+}
+```
+
+## The catalog
+
+`ERROR_CATALOG` keys the well-known codes (`BAD_REQUEST`, `FORBIDDEN`,
+`NOT_FOUND`, `CONFLICT`, `NOT_UNIQUE`, `VALIDATION_ERROR`, `TOO_MANY_REQUESTS`,
+`RLS_REQUIRED`, `INTERNAL`, …) to `{ status, title, hint?, docsUrl? }`. Passing a
+`code` to `new LunoraError(code)` fills those defaults in; explicit options
+override them.
+
+## Structural matching
+
+`isLunoraError(error)` recognizes any error carrying the transport shape (a
+string `code` + numeric `status`) — including errors rebuilt from the wire, where
+`instanceof` can't be trusted. The runtime and Durable Object mappers use it to
+choose the response status.
+
+## Invariants
+
+`invariant(condition, message)` and `unreachable(message)` throw an `INTERNAL`
+`LunoraError`, so even "should never happen" assertions participate in the layer
+(redacted to a generic message on the wire, rich in logs).
+
+## Rendering
+
+`LunoraError` mirrors `@visulima/error`'s error model (`type: "VisulimaError"`
+plus `hint`/`title`/`loc`), so `@visulima/error`'s `renderError` renders it — hint
+and all — directly. The CLI does this in `@lunora/cli`'s `renderLunoraError` util;
+`@lunora/errors` itself is **zero-dependency** so its class/catalog tree-shakes
+cleanly into browser and workerd bundles.

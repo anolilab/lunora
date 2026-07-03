@@ -13,6 +13,7 @@
  * table (everything else). The binding is identical regardless of which writer
  * is passed — that's the whole point.
  */
+import { LunoraError } from "@lunora/errors";
 
 /**
  * Structural detector for `@lunora/do`'s `ConflictError(kind: "unique")`. The
@@ -34,14 +35,14 @@ const buildUpsertWhere = (tableName: string, target: ReadonlyArray<string> | str
     const fields = typeof target === "string" ? [target] : target;
 
     if (fields.length === 0) {
-        throw new Error(`ctx.db.${tableName}.upsert: "target" must name at least one field`);
+        throw new LunoraError("INTERNAL", `ctx.db.${tableName}.upsert: "target" must name at least one field`);
     }
 
     const where: Record<string, unknown> = {};
 
     for (const field of fields) {
         if (!(field in create)) {
-            throw new Error(`ctx.db.${tableName}.upsert: target field "${field}" is missing from the create document`);
+            throw new LunoraError("INTERNAL", `ctx.db.${tableName}.upsert: target field "${field}" is missing from the create document`);
         }
 
         where[field] = create[field];
@@ -222,7 +223,7 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
         // the writer's `{ id, patch }` shape.
         deleteMany: (ids, options) => {
             if (writer.deleteMany === undefined) {
-                throw new Error(`ctx.db.${tableName}.deleteMany is unavailable: this writer has no batch delete`);
+                throw new LunoraError("INTERNAL", `ctx.db.${tableName}.deleteMany is unavailable: this writer has no batch delete`);
             }
 
             return writer.deleteMany(ids, options, tableName);
@@ -240,7 +241,7 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
         insert,
         insertMany: (documents, options) => {
             if (writer.insertMany === undefined) {
-                throw new Error(`ctx.db.${tableName}.insertMany is unavailable: this writer has no batch insert`);
+                throw new LunoraError("INTERNAL", `ctx.db.${tableName}.insertMany is unavailable: this writer has no batch insert`);
             }
 
             return writer.insertMany(tableName, documents, options);
@@ -248,7 +249,7 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
         patch: (id, patch) => writer.patch(id, patch, tableName),
         patchMany: (patches, options) => {
             if (writer.patchMany === undefined) {
-                throw new Error(`ctx.db.${tableName}.patchMany is unavailable: this writer has no batch patch`);
+                throw new LunoraError("INTERNAL", `ctx.db.${tableName}.patchMany is unavailable: this writer has no batch patch`);
             }
 
             return writer.patchMany(
@@ -264,7 +265,7 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
         replace: (id, document) => writer.replace(id, document, tableName),
         restore: async (id) => {
             if (!writer.restore) {
-                throw new Error(`ctx.db.${tableName}.restore is unavailable: this writer has no restore (is the table .softDelete()?)`);
+                throw new LunoraError("INTERNAL", `ctx.db.${tableName}.restore is unavailable: this writer has no restore (is the table .softDelete()?)`);
             }
 
             await writer.restore(id, tableName);
@@ -303,7 +304,7 @@ export const bindOrm = (facade: Record<string, FacadeEntry>): OrmLike => {
         const bound = facade[table];
 
         if (!bound) {
-            throw new Error(`unknown table: ${table}`);
+            throw new LunoraError("INTERNAL", `unknown table: ${table}`);
         }
 
         return bound;

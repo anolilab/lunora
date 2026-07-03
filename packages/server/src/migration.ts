@@ -13,6 +13,7 @@
  * builder's `__lunoraProcedure` brand) and emit them into a `LUNORA_MIGRATIONS`
  * registry the DO and CLI look migrations up by id.
  */
+import { LunoraError } from "@lunora/errors";
 
 /** A document handed to a migration transform: the stored row including `_id`/`_creationTime`. */
 export type MigrationDocument = Record<string, unknown>;
@@ -47,7 +48,7 @@ export interface RegisteredMigration extends MigrationDefinition {
 /** Declare an online data migration. See the module docs for runtime semantics. */
 export const defineMigration = (definition: MigrationDefinition): RegisteredMigration => {
     if (definition.id.trim() === "") {
-        throw new Error("defineMigration: `id` must be a non-empty string");
+        throw new LunoraError("INTERNAL", "defineMigration: `id` must be a non-empty string");
     }
 
     return { __lunoraMigration: true, ...definition };

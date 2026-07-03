@@ -1,3 +1,5 @@
+import { isLunoraError } from "@lunora/errors";
+
 import type { BatchEntry } from "../../../shared/batch-wire";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
@@ -8,7 +10,7 @@ import { groupBatchCallsByShard } from "./batch";
 import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit } from "./body-readers";
 import { buildDataMovementAdminRoutes } from "./data-movement-admin-routes";
 import type { FunctionArgumentDescriptor } from "./describe-args";
-import { isStructuralConflictError, isStructuralLunoraError, LunoraError, toErrorResponse } from "./errors";
+import { LunoraError, toErrorResponse } from "./errors";
 import type { ExportRow } from "./export-stream";
 import { collectKnownTables, streamExportRows } from "./export-stream";
 import type { IdentityContractLike, ResolvedIdentity } from "./identity-resolvers";
@@ -453,15 +455,19 @@ interface WorkerOptions {
     /**
      * Opt into an authorization-open posture for sharded and fan-out access.
      *
-     * By default (this flag unset/`false`) the runtime FAILS CLOSED: when
-     * neither {@link WorkerOptions.authorizeShard} nor {@link WorkerOptions.authorizeFanOut}
-     * is configured, naming a non-default shard (a potential cross-tenant hop)
-     * or sending a fan-out envelope is rejected with a `403`
-     * (`FORBIDDEN_SHARD`/`FORBIDDEN_FANOUT`). Set this to `true` to allow such
-     * requests from any caller (including unauthenticated ones) — appropriate
-     * only when every table is protected by per-row RLS. The runtime then emits
-     * a single `console.warn` so the open posture stays visible in logs. Has no
-     * effect once an `authorize*` callback is configured (those gate directly).
+     * By default (this flag unset/`false`) the runtime FAILS CLOSED per
+     * operation: naming a non-default shard (a potential cross-tenant hop) is
+     * rejected with a `403` (`FORBIDDEN_SHARD`) unless
+     * {@link WorkerOptions.authorizeShard} is configured, and a fan-out
+     * envelope is rejected (`FORBIDDEN_FANOUT`) unless
+     * {@link WorkerOptions.authorizeFanOut} is. Set this to `true` to allow
+     * such requests from any caller (including unauthenticated ones) —
+     * appropriate only when every table is protected by per-row RLS. The
+     * runtime then emits a single `console.warn` so the open posture stays
+     * visible in logs. The flag is consulted per operation: it has no effect
+     * on an operation whose own `authorize*` callback is configured (that
+     * callback gates directly), but configuring only one of the two callbacks
+     * does NOT cover the other operation.
      *
      * NOTE: this is a behaviour change from earlier alphas, where the same
      * situation was warn-once-then-allow. Apps that relied on client-chosen
@@ -917,6 +923,16 @@ const ADMIN_PATH_PREFIX = "/_lunora/admin/";
 /** The lone cross-shard admin route that sits outside {@link ADMIN_PATH_PREFIX}. */
 const MIGRATE_PATH = "/_lunora/migrate";
 
+/**
+ * Public, unauthenticated health probe (`GET /_lunora/status`). Dev tooling and
+ * AI agents poll it to confirm the worker is up and routing (the CLI's
+ * `lunora dev --background` blocks on it before detaching). Deliberately
+ * static and secret-free, and the body is a bare `{"ok":true}` — no framework
+ * name or version — so a production deployment doesn't hand scanners a
+ * stronger fingerprint than the path shape already implies.
+ */
+const STATUS_PATH = "/_lunora/status";
+
 /** True for the admin routes the async `adminGate` may authorize — everything under `/_lunora/admin/` plus `/_lunora/migrate`. */
 const isAdminPath = (pathname: string): boolean => pathname.startsWith(ADMIN_PATH_PREFIX) || pathname === MIGRATE_PATH;
 // The cross-shard orchestration (`migrate` / `rank` / `rankpage` / `shard-traffic`)
@@ -996,9 +1012,9 @@ const buildErrorEvent = (
     error: unknown,
     extra: { fanOut?: { table: string }; shardKey?: string },
 ): ObservabilityEvent => {
-    const mappable = error instanceof LunoraError || isStructuralLunoraError(error) || isStructuralConflictError(error);
-    const code = mappable ? (error as { code: string }).code : "INTERNAL_SERVER_ERROR";
-    const status = mappable ? (error as { status: number }).status : 500;
+    const mappable = isLunoraError(error);
+    const code = mappable ? error.code : "INTERNAL_SERVER_ERROR";
+    const status = mappable ? error.status : 500;
     const message = error instanceof Error ? error.message : String(error);
 
     return {
@@ -3013,6 +3029,15 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const customRoutes = options.routes !== undefined && Object.keys(options.routes).length > 0 ? options.routes : undefined;
 
     const internalRoutes: Record<string, InternalRoute> = {
+        [STATUS_PATH]: (request) => {
+            // Health probes are reads; anything else on this path is a scanner
+            // or a mistake — refuse rather than answer 200 to arbitrary verbs.
+            if (request.method !== "GET" && request.method !== "HEAD") {
+                return new Response(undefined, { headers: { allow: "GET, HEAD" }, status: 405 });
+            }
+
+            return Response.json({ ok: true }, { headers: { "cache-control": "no-store" } });
+        },
         [WS_PATH]: (request, env, url) => handleWebSocketUpgrade(request, env, url),
         [RPC_PATH]: (request, env, _url, context) => handleRpc(request, env, context),
         [RPC_BATCH_PATH]: (request, env, _url, context) => handleBatchRpc(request, env, context),
@@ -3342,7 +3367,7 @@ const resolveLunoraOptions = (options: LunoraHandlerOptions, env: unknown): Fram
     const shardDO = options.shardDO ?? (env as { SHARD?: ShardNamespaceLike } | undefined)?.SHARD;
 
     if (!shardDO) {
-        throw new Error(
+        throw new LunoraError(
             "@lunora/runtime: no shard Durable Object namespace found. Bind `SHARD` in wrangler.jsonc, or pass `createLunoraHandler({ shardDO: env.MY_SHARD })`.",
         );
     }

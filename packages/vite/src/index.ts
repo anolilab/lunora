@@ -5,6 +5,7 @@ import type { Plugin } from "vite";
 import agentRulesHintPlugin from "./agent-rules-hint-plugin";
 import codegenPlugin from "./codegen-plugin";
 import containerLogsPlugin from "./container-logs-plugin";
+import devStatePlugin from "./dev-state-plugin";
 import devVariablesPlugin from "./dev-variables-plugin";
 import { createCommandProbe, withDevWorkerEnv } from "./dev-worker-env";
 import { frameworkComposePlugin } from "./framework-compose-plugin";
@@ -111,6 +112,9 @@ const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
         devVariablesPlugin(resolved),
         codegenPlugin(resolved),
         logStreamPlugin(),
+        // Registers the running dev server in `.lunora/dev.json` so
+        // `lunora dev --background|stop|status|logs` manage Vite projects too.
+        devStatePlugin(resolved),
         agentRulesHintPlugin(resolved),
     ];
 
@@ -162,6 +166,7 @@ export type { ReconcileResult } from "./cron-sync";
 export { reconcileWranglerCrons } from "./cron-sync";
 export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./detect-framework";
 export { detectFramework } from "./detect-framework";
+export { default as devStatePlugin } from "./dev-state-plugin";
 export { default as devVariablesPlugin } from "./dev-variables-plugin";
 export { createCommandProbe, DEV_WORKER_ENV_VALUE, DEV_WORKER_ENV_VAR, withDevWorkerEnv } from "./dev-worker-env";
 // Class-A composition surface. `LUNORA_WORKER_VIRTUAL_ID` is the virtual entry a

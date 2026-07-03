@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import type { BetterAuthOptions } from "better-auth";
 import { betterAuth } from "better-auth";
 
@@ -58,7 +59,9 @@ const isHttpsBaseUrl = (baseURL: BetterAuthOptions["baseURL"]): boolean => {
  */
 const isExplicitHttpBaseUrl = (baseURL: BetterAuthOptions["baseURL"]): boolean => {
     if (typeof baseURL === "string") {
-        return baseURL.startsWith("http://");
+        // Scheme comparison is case-insensitive (RFC 3986): `HTTP://…` is
+        // still plain HTTP and must not slip through as "secure".
+        return baseURL.toLowerCase().startsWith("http://");
     }
 
     if (baseURL && typeof baseURL === "object") {
@@ -70,7 +73,7 @@ const isExplicitHttpBaseUrl = (baseURL: BetterAuthOptions["baseURL"]): boolean =
             return false;
         }
 
-        return typeof baseURL.fallback === "string" && baseURL.fallback.startsWith("http://");
+        return typeof baseURL.fallback === "string" && baseURL.fallback.toLowerCase().startsWith("http://");
     }
 
     return false;
@@ -108,7 +111,7 @@ const hardenAuthOptions = (options: BetterAuthOptions): BetterAuthOptions => {
         // `http://` spikes keep the soft warning so a quick prototype isn't
         // blocked.
         if (isHttpsBaseUrl(options.baseURL)) {
-            throw new Error(message);
+            throw new LunoraError("INTERNAL", message);
         }
 
         // eslint-disable-next-line no-console
@@ -283,7 +286,8 @@ export const createAuth = (options: LunoraAuthOptions): LunoraAuth => {
     // misconfigured, so fail loudly at construction time rather than at the
     // first sign-in attempt.
     if (!options.secret || options.secret.trim() === "") {
-        throw new Error(
+        throw new LunoraError(
+            "INTERNAL",
             "@lunora/auth: `secret` is required. Set AUTH_SECRET locally in .dev.vars " +
                 '(`lunora env set AUTH_SECRET "$(openssl rand -hex 32)"`), and in production ' +
                 "with `wrangler secret put AUTH_SECRET`.",

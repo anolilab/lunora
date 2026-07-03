@@ -1,4 +1,5 @@
 import type { LunoraClient } from "@lunora/client";
+import { LunoraError } from "@lunora/errors";
 import type { App, InjectionKey } from "vue";
 import { inject, provide } from "vue";
 
@@ -47,7 +48,10 @@ export const useLunora = (): LunoraClient => {
     const client = inject(LUNORA_INJECTION_KEY, undefined);
 
     if (!client) {
-        throw new Error("useLunora(): no LunoraClient provided — call app.use(createLunora(client)) or provideLunora(client) in a parent setup().");
+        throw new LunoraError(
+            "INTERNAL",
+            "useLunora(): no LunoraClient provided — call app.use(createLunora(client)) or provideLunora(client) in a parent setup().",
+        );
     }
 
     return client;

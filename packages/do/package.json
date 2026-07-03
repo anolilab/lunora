@@ -1,6 +1,6 @@
 {
     "name": "@lunora/do",
-    "version": "1.0.0-alpha.20",
+    "version": "1.0.0-alpha.22",
     "description": "Lunora Durable Objects: ShardDO (SQLite, OCC, hibernated WebSocket subscriptions) and SessionDO",
     "keywords": [
         "cloudflare",
@@ -61,6 +61,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
+        "@lunora/errors": "1.0.0-alpha.1",
         "@visulima/redact": "catalog:redact",
         "drizzle-orm": "catalog:drizzle"
     },
@@ -68,7 +69,7 @@
         "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/bindings": "1.0.0-alpha.3",
+        "@lunora/bindings": "1.0.0-alpha.4",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

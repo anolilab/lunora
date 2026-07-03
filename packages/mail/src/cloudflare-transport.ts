@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import { cloudflareEmailProvider } from "@visulima/email/providers/cloudflare-email";
 
 import type { ProviderSendResult } from "./provider-transport";
@@ -52,7 +53,7 @@ const createCloudflareTransport = (options: CloudflareTransportOptions): MailTra
             const hasBcc = payload.bcc !== undefined && payload.bcc.length > 0;
 
             if (hasCc || hasBcc) {
-                throw new Error("@lunora/mail: Cloudflare Email Workers does not support cc/bcc — fan out one send per recipient instead");
+                throw new LunoraError("INTERNAL", "@lunora/mail: Cloudflare Email Workers does not support cc/bcc — fan out one send per recipient instead");
             }
 
             // Single-recipient binding: reject (don't silently truncate) a multi-recipient
@@ -60,7 +61,8 @@ const createCloudflareTransport = (options: CloudflareTransportOptions): MailTra
             const { first, list } = requireRecipients(payload.to);
 
             if (list.length > 1) {
-                throw new Error(
+                throw new LunoraError(
+                    "INTERNAL",
                     `@lunora/mail: Cloudflare Email Workers is single-recipient but received ${String(list.length)} \`to\` addresses — fan out one send per recipient instead`,
                 );
             }

@@ -17,6 +17,8 @@
  * `httpDispatcher` is the default dispatcher (POSTs each job to the Worker's
  * `/_lunora/scheduler/dispatch` endpoint, authenticated with the admin bearer).
  */
+import { LunoraError } from "@lunora/errors";
+
 import type {
     ArgsOf,
     FunctionReference,
@@ -50,7 +52,7 @@ const createQueueWorkpool = (options: QueueWorkpoolOptions): QueueWorkpool => {
     // Defensive runtime guard: required by the type, but JS callers can omit it.
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the required type
     if (!options.queue) {
-        throw new Error("@lunora/scheduler: `queue` (a Cloudflare Queue binding) is required");
+        throw new LunoraError("INTERNAL", "@lunora/scheduler: `queue` (a Cloudflare Queue binding) is required");
     }
 
     const enqueue = async <F extends FunctionReference>(function_: F, args: ArgsOf<F>, enqueueOptions: QueueEnqueueOptions = {}): Promise<void> => {
@@ -95,7 +97,7 @@ const createQueueConsumer =
             batch.messages.map(async (message) => {
                 try {
                     if (!isQueueJob(message.body)) {
-                        throw new Error("@lunora/scheduler: queue message body is not a QueueJob (missing functionPath)");
+                        throw new LunoraError("INTERNAL", "@lunora/scheduler: queue message body is not a QueueJob (missing functionPath)");
                     }
 
                     await options.dispatch(message.body);
@@ -131,7 +133,7 @@ const httpDispatcher = (options: HttpDispatcherOptions): QueueDispatch => {
         });
 
         if (!response.ok) {
-            throw new Error(`@lunora/scheduler: queue dispatch failed (${response.status.toString()}): ${await response.text()}`);
+            throw new LunoraError("INTERNAL", `@lunora/scheduler: queue dispatch failed (${response.status.toString()}): ${await response.text()}`);
         }
     };
 };

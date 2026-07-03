@@ -17,6 +17,8 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { LunoraError } from "@lunora/errors";
+
 import resolveAdminBaseUrl from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
@@ -114,7 +116,9 @@ const readManifest = async (directory: string): Promise<BackupManifestEntry[]> =
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 
-        throw new Error(`backup: ${path} exists but is not valid JSON (${message}) — refusing to overwrite it; fix or remove it manually`, { cause: error });
+        throw new LunoraError("INTERNAL", `backup: ${path} exists but is not valid JSON (${message}) — refusing to overwrite it; fix or remove it manually`, {
+            cause: error,
+        });
     }
 
     if (!Array.isArray(parsed)) {
