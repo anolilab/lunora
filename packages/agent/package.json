@@ -41,6 +41,14 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./component": {
+            "types": "./dist/component.d.ts",
+            "import": "./dist/component.mjs"
+        },
+        "./naming": {
+            "types": "./dist/naming.d.ts",
+            "import": "./dist/naming.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {

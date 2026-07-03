@@ -29,7 +29,7 @@ Codegen auto-registers the agent runtime functions (`agents:agentMessages`, …)
 export default defineSchema({ ... }).extend(agentExtension);
 
 // start a run from a mutation/action:
-const { id } = await ctx.agents.support.run({ input: message, threadKey });
+const { id } = await ctx.agents.support.run({ input: message, owner: ctx.auth.userId, threadKey });
 
 // watch it live from the client (every turn, tool call, and reply streams in):
 useSubscription(api.agents.agentMessages, { key: threadKey });
@@ -40,6 +40,7 @@ useSubscription(api.agents.agentMessages, { key: threadKey });
 - A **completed** step is memoized by Cloudflare Workflows — a resumed run never re-executes a finished tool call (no double-charged card).
 - A **failed** step is retried at-least-once — side-effecting tools receive their deterministic step name as `ctx.idempotencyKey` to dedupe on.
 - Message writes are keyed and idempotent — replays never duplicate the thread.
+- Owned threads (`owner: ctx.auth.userId`) are readable only by their owner — a mismatch looks like a missing thread.
 - The 10-minute action ceiling doesn't exist here: slow tools and long loops are just workflow steps.
 
 See the package docs for the full API.

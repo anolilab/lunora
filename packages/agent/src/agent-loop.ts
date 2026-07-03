@@ -147,7 +147,12 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
 
     // Thread bootstrap + user turn. Both are idempotent by themselves (get-or-
     // create; keyed append), so they run outside step.do — a replay converges.
-    await run(ensureThread, { agent: exportName, key: params.threadKey, ...(params.title === undefined ? {} : { title: params.title }) });
+    await run(ensureThread, {
+        agent: exportName,
+        key: params.threadKey,
+        ...(params.owner === undefined ? {} : { owner: params.owner }),
+        ...(params.title === undefined ? {} : { title: params.title }),
+    });
     await persist({ content: params.input, messageKey: `${instanceId}:user`, role: "user" });
 
     // Memory step: dispatch the configured retrieval action once per run and

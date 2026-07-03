@@ -44,7 +44,9 @@ const agentExtension: SchemaExtension = defineSchemaExtension(AGENT_EXTENSION_KE
             // Drives the ordered thread read (the live subscription).
             .index("byThread", ["threadKey", "seq"])
             // Drives the idempotent-persist lookup; unique = the dedup guarantee.
-            .index("byMessageKey", ["threadKey", "messageKey"], { unique: true }),
+            .index("byMessageKey", ["threadKey", "messageKey"], { unique: true })
+            // See the threads table for why the agent tables are `.public()`.
+            .public(),
         [THREADS_BARE_TABLE]: defineTable({
             agent: v.string(),
             createdAt: v.number(),
@@ -52,12 +54,28 @@ const agentExtension: SchemaExtension = defineSchemaExtension(AGENT_EXTENSION_KE
             key: v.string(),
             // Next message seq — incremented on every append (see above).
             messageCount: v.number(),
+
+            /**
+             * Verified identity of the thread owner (pass `ctx.auth.userId`
+             * when starting a run). When set, the public queries only answer
+             * for a caller with that identity; when absent the thread is
+             * readable by anyone who knows its key (single-tenant/anonymous
+             * apps). First writer wins — a later run may not change it.
+             */
+            owner: v.optional(v.string()),
             status: v.union(v.literal("idle"), v.literal("running"), v.literal("error")),
             title: v.optional(v.string()),
             updatedAt: v.number(),
         })
             .index("byKey", ["key"], { unique: true })
-            .index("byAgent", ["agent"]),
+            .index("byAgent", ["agent"])
+            // RLS-exempt on purpose: under `.rls("required")` these tables are
+            // written by the workflow's dispatched internal mutations and read
+            // by the public queries, none of which can engage app RLS policies
+            // (they're package code auto-registered by codegen). Access control
+            // is enforced IN the functions instead — owner-scoped reads above,
+            // internal-only writes.
+            .public(),
     },
 });
 
@@ -110,6 +128,7 @@ export const agentComponent = (): AgentComponent => {
         .input({
             agent: v.string(),
             key: v.string(),
+            owner: v.optional(v.string()),
             title: v.optional(v.string()),
         })
         .mutation(async ({ args, ctx: context }): Promise<{ created: boolean }> => {
@@ -120,6 +139,16 @@ export const agentComponent = (): AgentComponent => {
                 .first();
 
             if (existing) {
+                // The owner is immutable: a run started for a different
+                // identity must not attach its messages to (or reopen) someone
+                // else's thread. `undefined` continues an ownerless thread.
+                if (existing["owner"] !== args.owner && args.owner !== undefined) {
+                    throw new Error(`@lunora/agent: thread "${args.key}" belongs to another owner`);
+                }
+
+                // Replay note: a resumed workflow re-runs this (it sits outside
+                // step.do) — resetting status/error to "running" is idempotent
+                // and correct, since a resume means the run IS active again.
                 await context.db.patch(existing["_id"] as never, { error: undefined, status: "running", updatedAt: now });
 
                 return { created: false };
@@ -131,6 +160,7 @@ export const agentComponent = (): AgentComponent => {
                 key: args.key,
                 messageCount: 0,
                 status: "running",
+                ...(args.owner === undefined ? {} : { owner: args.owner }),
                 ...(args.title === undefined ? {} : { title: args.title }),
                 updatedAt: now,
             });
@@ -215,6 +245,26 @@ export const agentComponent = (): AgentComponent => {
             });
         });
 
+    /**
+     * Owner gate for the public reads: an owned thread only answers for a
+     * caller whose verified identity matches; an ownerless thread is open (the
+     * app chose no identity). A mismatch is indistinguishable from a missing
+     * thread, so key-guessing leaks nothing — not even existence.
+     */
+    const readableThread = (thread: Record<string, unknown> | null, auth: { userId?: string | null }): Record<string, unknown> | undefined => {
+        if (!thread) {
+            return undefined;
+        }
+
+        const { owner } = thread as { owner?: string };
+
+        if (owner !== undefined && owner !== (auth.userId ?? undefined)) {
+            return undefined;
+        }
+
+        return thread;
+    };
+
     // KEEP IN SYNC: the arg/return TYPES of the two public queries below are
     // mirrored by hand into codegen's `syntheticAgentApiFunctions` (emit.ts) —
     // codegen cannot statically read this package's types, and only the arg
@@ -226,7 +276,7 @@ export const agentComponent = (): AgentComponent => {
             .withIndex("byKey", (q) => q.eq("key", args.key))
             .first();
 
-        return thread ?? undefined;
+        return readableThread(thread, context.auth);
     });
 
     // The live thread view: subscribe to `agents:agentMessages` and every
@@ -235,6 +285,17 @@ export const agentComponent = (): AgentComponent => {
     const agentMessages = query
         .input({ key: v.string(), limit: v.optional(v.number()) })
         .query(async ({ args, ctx: context }): Promise<Record<string, unknown>[]> => {
+            const thread = await context.db
+                .query(THREADS_TABLE)
+                .withIndex("byKey", (q) => q.eq("key", args.key))
+                .first();
+
+            // Same gate as agentThread: an owned thread's history only answers
+            // for its owner; unknown and forbidden are both the empty thread.
+            if (readableThread(thread, context.auth) === undefined) {
+                return [];
+            }
+
             const rows = await context.db
                 .query(MESSAGES_TABLE)
                 .withIndex("byThread", (q) => q.eq("threadKey", args.key))

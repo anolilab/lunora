@@ -1,5 +1,7 @@
 import type { Finding } from "@lunora/advisor";
-import { agentComponent } from "@lunora/agent";
+// The /component subpath avoids the package barrel (which pulls the agent
+// runtime + AI SDK into the codegen process just to enumerate function names).
+import { agentComponent } from "@lunora/agent/component";
 import type {
     AdvisoryFinding,
     MaskPoliciesResult,
@@ -680,7 +682,7 @@ const renderAgentFunctionRegistry = (
     }
 
     return {
-        importLine: 'import { agentComponent } from "@lunora/agent";\n',
+        importLine: 'import { agentComponent } from "@lunora/agent/component";\n',
         lines: names.map((name) => `    "agents:${name}": lunoraAgentRuntimeFunctions.${name} as unknown as RegisteredLunoraFunction,`).join("\n"),
         prelude:
             "\n/**\n * The `@lunora/agent` runtime component — auto-registered because `lunora/agents.ts`\n * declares agents. The durable loop dispatches the internal mutations; clients\n * subscribe to the public queries (`agents:agentMessages` is the live thread view).\n */\nconst lunoraAgentRuntimeFunctions = agentComponent().functions;\n",
@@ -1377,7 +1379,16 @@ ${queues.map((queue) => `    readonly ${queue.exportName}: QueueProducer<QueueBo
 
 /** This project's declared agents, addressable from \`ctx.agents\` by their \`lunora/agents.ts\` export name. */
 export interface LunoraAgents {
-${agents.map((agent) => `    readonly ${agent.exportName}: AgentHandle;`).join("\n")}
+${agents
+    .map((agent) => {
+        // Defense-in-depth: discovery already guarantees a plain identifier
+        // (Node.isIdentifier on the export name), but this string lands in
+        // generated source, so refuse anything else here too.
+        assertIdentifier(agent.exportName, `agent export "${agent.exportName}"`);
+
+        return `    readonly ${agent.exportName}: AgentHandle;`;
+    })
+    .join("\n")}
 }`
         : "";
     const agentsContextField = hasAgents ? `\n    readonly agents: LunoraAgents;` : "";

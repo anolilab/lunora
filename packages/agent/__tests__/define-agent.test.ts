@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { agentBindingName, agentClassName, agentDefaultName, defineAgent, defineAgentTool, isAgentDefinition } from "../src/define-agent";
+import { defineAgent, defineAgentTool, isAgentDefinition } from "../src/define-agent";
+import { agentBindingName, agentClassName, agentDefaultName } from "../src/naming";
 
 const MODEL_PATTERN = /model/u;
 const MAX_TURNS_PATTERN = /maxTurns/u;

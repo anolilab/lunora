@@ -342,6 +342,23 @@ describe(runAgentLoop, () => {
         expect(shown.some((message) => message.role === "system" && String(message.content).includes("Lunora runs on Durable Objects."))).toBe(true);
     });
 
+    it("forwards the run owner to the thread bootstrap", async () => {
+        const agent = defineAgent({ model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+        const runtime = memoryRuntime();
+
+        await runAgentLoop(
+            loopDefaults(agent, {
+                generate: scriptedGenerate([finalTurn("hi")]),
+                params: { input: "hello", owner: "user-a", threadKey: "thread-1" },
+                run: runtime.run,
+            }),
+        );
+
+        const bootstrap = runtime.dispatches.find((dispatch) => dispatch.path === DEFAULT_AGENT_FUNCTION_PATHS.ensureThread);
+
+        expect(bootstrap?.args).toMatchObject({ agent: "support", key: "thread-1", owner: "user-a" });
+    });
+
     it("stops at maxTurns and marks the thread errored", async () => {
         const agent = defineAgent({
             maxTurns: 2,

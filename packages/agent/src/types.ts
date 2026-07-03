@@ -125,6 +125,16 @@ export interface AgentDefinition extends AgentConfig {
 export interface AgentRunInput {
     /** The user message that starts (or continues) the thread. */
     input: string;
+
+    /**
+     * Verified identity of the thread owner — pass `ctx.auth.userId` from the
+     * mutation/action starting the run. An owned thread's public queries
+     * (`agents:agentThread` / `agents:agentMessages`) only answer for this
+     * identity; omitting it leaves the thread readable by anyone who knows the
+     * key (only appropriate for single-tenant/anonymous apps). Immutable after
+     * the first run.
+     */
+    owner?: string;
     /** The thread key — reuse to continue a conversation. */
     threadKey: string;
     /** Optional thread title, set on first creation. */

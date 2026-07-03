@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { agentComponent, agentExtension } from "../src/component";
 
 const UNKNOWN_THREAD_PATTERN = /unknown thread/u;
+const ANOTHER_OWNER_PATTERN = /another owner/u;
 
 interface FakeRow extends Record<string, unknown> {
     _id: string;
@@ -39,7 +40,7 @@ const makeIndexQuery = (candidates: FakeRow[], build: (q: unknown) => unknown): 
     };
 };
 
-const fakeDatabase = (): { ctx: { db: unknown }; rows: Map<string, FakeRow[]> } => {
+const fakeDatabase = (auth?: { userId?: string }): { ctx: { auth: { userId?: string }; db: unknown }; rows: Map<string, FakeRow[]> } => {
     const rows = new Map<string, FakeRow[]>();
     let nextId = 0;
 
@@ -88,7 +89,7 @@ const fakeDatabase = (): { ctx: { db: unknown }; rows: Map<string, FakeRow[]> } 
         },
     };
 
-    return { ctx: { db: database }, rows };
+    return { ctx: { auth: auth ?? {}, db: database }, rows };
 };
 
 const callMutation = async <R>(
@@ -179,5 +180,62 @@ describe(agentComponent, () => {
 
         expect(thread["status"]).toBe("error");
         expect(thread["error"]).toBe("boom");
+    });
+});
+
+describe("thread ownership", () => {
+    it("stamps the owner on creation and keeps it immutable", async () => {
+        const { functions } = agentComponent();
+        const { ctx, rows } = fakeDatabase();
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", key: "t-1", owner: "user-a" });
+
+        expect(rows.get("agent_threads")?.[0]?.["owner"]).toBe("user-a");
+
+        // Same owner (or no owner) continues; a different owner is refused.
+        await expect(callMutation(functions.agentEnsureThread, ctx, { agent: "support", key: "t-1", owner: "user-a" })).resolves.toStrictEqual({
+            created: false,
+        });
+        await expect(callMutation(functions.agentEnsureThread, ctx, { agent: "support", key: "t-1", owner: "user-b" })).rejects.toThrow(ANOTHER_OWNER_PATTERN);
+    });
+
+    it("answers owned-thread reads only for the owner", async () => {
+        const { functions } = agentComponent();
+        const owner = fakeDatabase({ userId: "user-a" });
+
+        await callMutation(functions.agentEnsureThread, owner.ctx, { agent: "support", key: "t-1", owner: "user-a" });
+        await callMutation(functions.agentAppendMessage, owner.ctx, { content: "hi", messageKey: "k1", role: "user", threadKey: "t-1" });
+
+        // The owner sees the thread + messages.
+        await expect(callMutation(functions.agentThread, owner.ctx, { key: "t-1" })).resolves.toMatchObject({ key: "t-1" });
+        await expect(callMutation(functions.agentMessages, owner.ctx, { key: "t-1" })).resolves.toHaveLength(1);
+
+        // A stranger (and an anonymous caller) gets "does not exist" shapes —
+        // an owned thread leaks nothing, not even existence.
+        const strangerContext = { ...owner.ctx, auth: { userId: "user-b" } };
+        const anonymousContext = { ...owner.ctx, auth: {} };
+
+        await expect(callMutation(functions.agentThread, strangerContext, { key: "t-1" })).resolves.toBeUndefined();
+        await expect(callMutation(functions.agentMessages, strangerContext, { key: "t-1" })).resolves.toStrictEqual([]);
+        await expect(callMutation(functions.agentThread, anonymousContext, { key: "t-1" })).resolves.toBeUndefined();
+        await expect(callMutation(functions.agentMessages, anonymousContext, { key: "t-1" })).resolves.toStrictEqual([]);
+    });
+
+    it("leaves ownerless threads open (single-tenant/anonymous apps)", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase({ userId: "user-b" });
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", key: "t-open" });
+
+        await expect(callMutation(functions.agentThread, ctx, { key: "t-open" })).resolves.toMatchObject({ key: "t-open" });
+    });
+
+    it("marks both tables RLS-exempt so secure-by-default apps keep working", () => {
+        // Under .rls("required") the auto-registered functions can never engage
+        // app RLS policies — access control lives in the functions (owner gate,
+        // internal-only mutations), so the tables opt out of table-level RLS.
+        for (const table of Object.values(agentExtension.tables)) {
+            expect((table as { isPublic?: boolean }).isPublic).toBe(true);
+        }
     });
 });
