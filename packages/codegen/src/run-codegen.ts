@@ -392,6 +392,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // studio hides only pages whose backing package the app genuinely never wires.
     const dependencies = discoverPackageDependencies(options.projectRoot);
     const studioFeatures = buildStudioFeatures(featureUsage, {
+        containerCount: containers.length,
         cronCount: crons.length,
         dependencies,
         queueCount: queues.length,

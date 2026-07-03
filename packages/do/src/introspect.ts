@@ -407,6 +407,8 @@ interface StudioFeaturesResult {
     analytics: boolean;
     /** `@lunora/auth` is a declared dependency (backs the Users / Sessions / Organizations / Configuration pages). */
     auth: boolean;
+    /** `@lunora/container` / `ctx.containers` is used, the app declares containers, or it is a declared dependency. */
+    containers: boolean;
     /** `@lunora/flags` / `ctx.flags` is used, or it is a declared dependency. */
     flags: boolean;
     /** `@lunora/bindings/kv` / `ctx.kv` is used, or it is a declared dependency. */

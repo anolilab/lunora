@@ -39,7 +39,20 @@ import createSqliteExec from "./_helpers/node-sqlite";
  * `StudioFeaturesResult` without updating this tuple — and there if the studio
  * copy drifts — forcing both packages to move together.
  */
-const STUDIO_FEATURE_KEYS = ["analytics", "auth", "flags", "kv", "mail", "payments", "queues", "scheduler", "storage", "vectors", "workflows"] as const;
+const STUDIO_FEATURE_KEYS = [
+    "analytics",
+    "auth",
+    "containers",
+    "flags",
+    "kv",
+    "mail",
+    "payments",
+    "queues",
+    "scheduler",
+    "storage",
+    "vectors",
+    "workflows",
+] as const;
 
 /** `true` only when `Keys` and `Canonical` are mutually assignable (the exact same key set). */
 type KeysMatch<Keys extends string, Canonical extends string> = [Keys] extends [Canonical] ? ([Canonical] extends [Keys] ? true : never) : never;
@@ -400,6 +413,7 @@ describe("shardDO admin introspection", () => {
             result: {
                 analytics: false,
                 auth: false,
+                containers: false,
                 flags: false,
                 kv: false,
                 mail: false,
@@ -418,6 +432,7 @@ describe("shardDO admin introspection", () => {
             protected override studioFeatures(): {
                 analytics: boolean;
                 auth: boolean;
+                containers: boolean;
                 flags: boolean;
                 kv: boolean;
                 mail: boolean;
@@ -431,6 +446,7 @@ describe("shardDO admin introspection", () => {
                 return {
                     analytics: false,
                     auth: false,
+                    containers: true,
                     flags: true,
                     kv: false,
                     mail: false,
@@ -451,6 +467,7 @@ describe("shardDO admin introspection", () => {
             result: {
                 analytics: false,
                 auth: false,
+                containers: true,
                 flags: true,
                 kv: false,
                 mail: false,
@@ -505,6 +522,7 @@ describe("shardDO admin introspection", () => {
         expect([...STUDIO_FEATURE_KEYS]).toStrictEqual([
             "analytics",
             "auth",
+            "containers",
             "flags",
             "kv",
             "mail",

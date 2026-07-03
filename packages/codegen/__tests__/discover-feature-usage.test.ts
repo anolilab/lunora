@@ -15,6 +15,7 @@ const ALL_OFF: FeatureUsage = {
     ai: false,
     analytics: false,
     browser: false,
+    container: false,
     flags: false,
     hyperdrive: false,
     images: false,
@@ -30,6 +31,7 @@ const ALL_OFF: FeatureUsage = {
 };
 
 const NO_SIGNALS = {
+    containerCount: 0,
     cronCount: 0,
     dependencies: new Set<string>(),
     queueCount: 0,
@@ -204,6 +206,24 @@ describe("discover-feature-usage", () => {
         expect(discoverFeatureUsage(newProject(), workdir).storage).toBe(true);
     });
 
+    it("detects containers via either the `@lunora/container` import or a `ctx.containers` read", () => {
+        expect.assertions(2);
+
+        // `lunora/containers.ts` importing `defineContainer` from `@lunora/container`.
+        writeSource(
+            "containers.ts",
+            `import { defineContainer } from "@lunora/container";\nexport const transcoder = defineContainer({ image: "./Dockerfile" });`,
+        );
+        const viaImport = discoverFeatureUsage(newProject(), workdir);
+
+        rmSync(join(workdir, "containers.ts"));
+        writeSource("proxy.ts", `export const scale = async (ctx) => ctx.containers.get("transcoder");`);
+        const viaContext = discoverFeatureUsage(newProject(), workdir);
+
+        expect(viaImport.container).toBe(true);
+        expect(viaContext.container).toBe(true);
+    });
+
     it("detects scheduler via either the package import or `ctx.scheduler`", () => {
         expect.assertions(2);
 
@@ -235,6 +255,7 @@ describe("discover-feature-usage", () => {
             expect(buildStudioFeatures(ALL_OFF, NO_SIGNALS)).toStrictEqual({
                 analytics: false,
                 auth: false,
+                containers: false,
                 flags: false,
                 kv: false,
                 mail: false,
@@ -257,6 +278,7 @@ describe("discover-feature-usage", () => {
             expect.assertions(4);
 
             const result = buildStudioFeatures(ALL_OFF, {
+                containerCount: 0,
                 cronCount: 1,
                 dependencies: new Set<string>(),
                 queueCount: 0,
@@ -281,6 +303,14 @@ describe("discover-feature-usage", () => {
             const result = buildStudioFeatures(ALL_OFF, { ...NO_SIGNALS, dependencies: new Set(["@lunora/mail", "@lunora/payment"]) });
 
             expect(result).toMatchObject({ mail: true, payments: true });
+        });
+
+        it("shows the containers page from code usage, a declared container, or an @lunora/container dependency", () => {
+            expect.assertions(3);
+
+            expect(buildStudioFeatures({ ...ALL_OFF, container: true }, NO_SIGNALS).containers).toBe(true);
+            expect(buildStudioFeatures(ALL_OFF, { ...NO_SIGNALS, containerCount: 1 }).containers).toBe(true);
+            expect(buildStudioFeatures(ALL_OFF, { ...NO_SIGNALS, dependencies: new Set(["@lunora/container"]) }).containers).toBe(true);
         });
 
         it("shows the flags page from a ctx.flags read or an @lunora/flags dependency", () => {
