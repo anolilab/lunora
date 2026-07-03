@@ -20,6 +20,6 @@ export interface AdvisorHttpHeaderWrite {
     headerName: string;
     /** 1-based line of the request-tainted header value. */
     line: number;
-    /** How the header was written: `response-init` / `headers-ctor` / `headers-set` / `headers-append`. */
-    via: string;
+    /** How the header was written. */
+    via: "headers-append" | "headers-ctor" | "headers-set" | "response-init";
 }

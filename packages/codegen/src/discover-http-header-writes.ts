@@ -1,8 +1,9 @@
-import type { ArrowFunction, CallExpression, FunctionExpression, NewExpression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
+import type { CallExpression, NewExpression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { enclosingExportName, isRequestInputDerived, referencesRequestInput, singleHopInitializer } from "./argument-taint";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
+import type { InspectableHandler } from "./discover-functions";
+import { inlineHandler, listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 import type { HttpHeaderWriteIR } from "./ir";
 
 /**
@@ -17,13 +18,6 @@ const SANITIZER_CALLEES = new Set(["btoa", "encodeURI", "encodeURIComponent", "i
 
 /** The `Headers` mutation methods whose second argument is a header value. */
 const HEADER_MUTATORS = new Set(["append", "set"]);
-
-/** A function whose body we can inspect — an inline arrow or function expression handler. */
-type InspectableHandler = ArrowFunction | FunctionExpression;
-
-/** The inline arrow/function-expression handler at `argument`, or `undefined` when it isn't one. */
-const inlineHandler = (argument: TsNode | undefined): InspectableHandler | undefined =>
-    argument !== undefined && (Node.isArrowFunction(argument) || Node.isFunctionExpression(argument)) ? argument : undefined;
 
 /** The simple name of a call/new callee: the identifier text, or the member name of a property access. */
 const calleeName = (callee: TsNode): string => {
@@ -117,7 +111,7 @@ interface CollectContext {
  * Shorthand properties resolve to the identifier value; a spread of a `const base =
  * {...}` object is followed one hop.
  */
-const collectFromHeadersObject = (headersObject: ObjectLiteralExpression, via: string, context: CollectContext): void => {
+const collectFromHeadersObject = (headersObject: ObjectLiteralExpression, via: HttpHeaderWriteIR["via"], context: CollectContext): void => {
     for (const property of headersObject.getProperties()) {
         if (Node.isPropertyAssignment(property)) {
             const valueNode = property.getInitializer();
@@ -215,7 +209,8 @@ const collectFromCallExpression = (call: CallExpression, context: CollectContext
                 file: context.relativePath,
                 headerName: staticHeaderName(call.getArguments()[0]),
                 line: valueNode.getStartLineNumber(),
-                via: `headers-${method}`,
+                // `method` is guarded to the two `HEADER_MUTATORS` above, so this covers every case.
+                via: method === "set" ? "headers-set" : "headers-append",
             });
         }
     }

@@ -1,23 +1,21 @@
-import type { ArrowFunction, CallExpression, FunctionExpression, Node as TsNode, Project } from "ts-morph";
+import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { singleHopInitializer } from "./argument-taint";
-import { classifyProcedureCall, listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
+import type { InspectableHandler } from "./discover-functions";
+import {
+    chainHasStep,
+    chainUsesWrappedCall,
+    classifyProcedureCall,
+    isDatabaseAccessor,
+    listLunoraSourceFiles,
+    lunoraRelativePath,
+    procedureHandler,
+} from "./discover-functions";
 import type { RawRowReturnIR } from "./ir";
 
 /** `ctx.db` read methods that hand back a whole row (or array of rows): the by-id `get` and the `findFirst`/`findMany` family. */
 const ROW_READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany", "get"]);
-
-/** A function whose body we can inspect for its return shape — an inline arrow or function expression handler. */
-type InspectableHandler = ArrowFunction | FunctionExpression;
-
-/** The inline arrow/function-expression handler at `argument`, or `undefined` when it isn't one. */
-const inlineHandler = (argument: TsNode | undefined): InspectableHandler | undefined =>
-    argument !== undefined && (Node.isArrowFunction(argument) || Node.isFunctionExpression(argument)) ? argument : undefined;
-
-/** True when `receiver` is the database accessor: `ctx.db` (property named `db`) or a bare `db`. */
-const isDatabaseAccessor = (receiver: TsNode): boolean =>
-    (Node.isPropertyAccessExpression(receiver) && receiver.getName() === "db") || (Node.isIdentifier(receiver) && receiver.getText() === "db");
 
 /**
  * The table a direct `ctx.db` row read addresses, or `undefined` when `call` isn't
@@ -147,85 +145,6 @@ const handlerReturnExpressions = (handler: InspectableHandler): TsNode[] => {
     return expressions;
 };
 
-/** True when the builder chain rooted at `receiver` carries a step whose method name is `method` (`.output(...)` / `.use(...)`). */
-const chainHasStep = (receiver: TsNode, method: string): boolean => {
-    let node: TsNode = receiver;
-
-    while (Node.isCallExpression(node)) {
-        const callee = node.getExpression();
-
-        if (!Node.isPropertyAccessExpression(callee)) {
-            break;
-        }
-
-        if (callee.getName() === method) {
-            return true;
-        }
-
-        node = callee.getExpression();
-    }
-
-    return false;
-};
-
-/** The simple name of a call's callee — a bare identifier's text or a property access's member name, else `""`. */
-const calleeName = (callee: TsNode): string => {
-    if (Node.isIdentifier(callee)) {
-        return callee.getText();
-    }
-
-    return Node.isPropertyAccessExpression(callee) ? callee.getName() : "";
-};
-
-/** True when `argument` is a `mask(...)` / `x.mask(...)` call. */
-const isMaskCall = (argument: TsNode | undefined): boolean =>
-    argument !== undefined && Node.isCallExpression(argument) && calleeName(argument.getExpression()) === "mask";
-
-/** True when the builder chain carries a `.use(mask(...))` step — a `.use(...)` whose first argument is a call to `mask`. */
-const chainUsesMask = (receiver: TsNode): boolean => {
-    let node: TsNode = receiver;
-
-    while (Node.isCallExpression(node)) {
-        const callee = node.getExpression();
-
-        if (!Node.isPropertyAccessExpression(callee)) {
-            break;
-        }
-
-        if (callee.getName() === "use" && isMaskCall(node.getArguments()[0])) {
-            return true;
-        }
-
-        node = callee.getExpression();
-    }
-
-    return false;
-};
-
-/**
- * The inline handler function of a classified procedure call, or `undefined` when
- * it isn't inspectable. The terminal call's first argument is either the handler
- * function directly (`query(async ({ ctx }) => …)` / `c.use(…).query(handler)`) or
- * an object literal carrying it under a `handler` property (`query({ args, handler
- * })`) — both surface forms are handled.
- */
-const procedureHandler = (initializer: CallExpression): InspectableHandler | undefined => {
-    const argument = initializer.getArguments()[0];
-    const direct = inlineHandler(argument);
-
-    if (direct !== undefined) {
-        return direct;
-    }
-
-    if (argument === undefined || !Node.isObjectLiteralExpression(argument)) {
-        return undefined;
-    }
-
-    const property = argument.getProperty("handler");
-
-    return property !== undefined && Node.isPropertyAssignment(property) ? inlineHandler(property.getInitializer()) : undefined;
-};
-
 /** Reduce one exported `query` declaration to the raw-row-return rows its handler produces (deduped by table). */
 const rawRowReturnsInDeclaration = (declaration: TsNode, relativePath: string): RawRowReturnIR[] => {
     if (!Node.isVariableDeclaration(declaration)) {
@@ -252,7 +171,7 @@ const rawRowReturnsInDeclaration = (declaration: TsNode, relativePath: string): 
     }
 
     const usesOutput = classified.receiver !== undefined && chainHasStep(classified.receiver, "output");
-    const usesMask = classified.receiver !== undefined && chainUsesMask(classified.receiver);
+    const usesMask = classified.receiver !== undefined && chainUsesWrappedCall(classified.receiver, "use", "mask");
 
     const seen = new Set<string>();
     const rows: RawRowReturnIR[] = [];
