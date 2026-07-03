@@ -1,9 +1,11 @@
 # Plan 114: Unified error layer — `@lunora/errors` on `@visulima/error`
 
-> **Executor instructions**: Phases 1, 2, 4a, 4b, and the Phase-3 **class
-> collapse** are DONE and committed on `feat/unified-error-layer`. What remains is
-> optional: the rest of the Studio panels (4c) and the raw `throw new Error(...)`
-> site migration (Phase 3, non-blocking). Follow step by step; run each verify.
+> **Status**: Phases 1, 2, 3 (class collapse + raw throw-site migration), 4a, 4b,
+> and 4c (all query-backed Studio panels) are DONE and committed on
+> `feat/unified-error-layer` — full repo green (build 41, lint:types 83,
+> lint:eslint 118, test 66; 0 failures). The only deferred item is surfacing hints
+> in the Studio panels that flatten their error into local `useState` strings (a
+> state-shape refactor; see Phase 4c).
 
 ## Status
 
