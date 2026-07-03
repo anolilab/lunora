@@ -35,6 +35,7 @@ overrides:
   "@lunora/db": "workspace:*"
   "@lunora/dispatch": "workspace:*"
   "@lunora/do": "workspace:*"
+  "@lunora/errors": "workspace:*"
   "@lunora/flags": "workspace:*"
   "@lunora/hyperdrive": "workspace:*"
   "@lunora/mail": "workspace:*"
@@ -150,6 +151,7 @@ catalogs:
     cz-conventional-changelog: ^3.3.0
     "@visulima/vis": 1.0.0-alpha.43
     "@visulima/tabular": 4.0.0-alpha.14
+    "@visulima/error": 6.0.0-alpha.34
   test:
     "@codspeed/vitest-plugin": 5.7.1
     "@vitest/coverage-v8": 4.1.9

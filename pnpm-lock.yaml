@@ -277,6 +277,9 @@ catalogs:
     '@commitlint/config-conventional':
       specifier: ^21.1.0
       version: 21.1.0
+    '@visulima/error':
+      specifier: 6.0.0-alpha.34
+      version: 6.0.0-alpha.34
     '@visulima/tabular':
       specifier: 4.0.0-alpha.14
       version: 4.0.0-alpha.14
@@ -651,6 +654,7 @@ overrides:
   '@lunora/db': workspace:*
   '@lunora/dispatch': workspace:*
   '@lunora/do': workspace:*
+  '@lunora/errors': workspace:*
   '@lunora/flags': workspace:*
   '@lunora/hyperdrive': workspace:*
   '@lunora/mail': workspace:*
@@ -1750,6 +1754,9 @@ importers:
       '@lunora/d1':
         specifier: workspace:*
         version: link:../d1
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@lunora/seed':
         specifier: workspace:*
         version: link:../seed
@@ -1757,7 +1764,7 @@ importers:
         specifier: 3.0.0-alpha.32
         version: 3.0.0-alpha.32(@bomb.sh/tab@0.0.17(cac@6.7.14)(citty@0.2.2))(@visulima/pail@4.0.0-alpha.22(@opentelemetry/api@1.9.1)(@visulima/redact@3.0.0-alpha.14)(express@5.2.1)(hono@4.12.27)(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.1)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)))(github-slugger@2.0.0)
       '@visulima/error':
-        specifier: 6.0.0-alpha.34
+        specifier: catalog:prod
         version: 6.0.0-alpha.34
       '@visulima/fs':
         specifier: 5.0.0-alpha.32
@@ -2195,6 +2202,37 @@ importers:
       wrangler:
         specifier: catalog:cloudflare
         version: 4.105.0(@cloudflare/workers-types@4.20260628.1)
+
+  packages/errors:
+    dependencies:
+      '@visulima/error':
+        specifier: catalog:prod
+        version: 6.0.0-alpha.34
+    devDependencies:
+      '@codspeed/vitest-plugin':
+        specifier: catalog:test
+        version: 5.7.1(tinybench@2.9.0)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))(vitest@4.1.9)
+      '@types/node':
+        specifier: catalog:types
+        version: 26.0.1
+      '@visulima/packem':
+        specifier: catalog:build
+        version: 2.0.0-alpha.93(bffced2686306bb6226d43aebeb20a33)
+      '@vitest/coverage-v8':
+        specifier: catalog:test
+        version: 4.1.9(vitest@4.1.9)
+      esbuild:
+        specifier: catalog:build
+        version: 0.28.1
+      fallow:
+        specifier: catalog:lint
+        version: 2.102.0
+      typescript:
+        specifier: catalog:tsc
+        version: 6.0.3
+      vitest:
+        specifier: catalog:test
+        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@26.0.1)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
   packages/flags:
     dependencies:

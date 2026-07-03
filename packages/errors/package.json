@@ -1,17 +1,14 @@
 {
-    "name": "@lunora/cli",
-    "version": "1.0.0-alpha.57",
-    "description": "The Lunora CLI: init, dev, deploy, codegen, run, reset, and migrate commands",
+    "name": "@lunora/errors",
+    "version": "1.0.0-alpha.0",
+    "description": "Unified error layer for Lunora: one LunoraError base + a central catalog of codes, statuses, and actionable hints, rendered across CLI, overlay, Studio, and the client",
     "keywords": [
-        "agent-skills",
-        "cli",
         "cloudflare",
-        "codegen",
-        "deploy",
         "durable-objects",
+        "error",
+        "error-handling",
+        "hints",
         "lunora",
-        "tanstack-intent",
-        "vite",
         "workers"
     ],
     "homepage": "https://lunora.sh",
@@ -24,26 +21,27 @@
     "repository": {
         "type": "git",
         "url": "git+https://github.com/anolilab/lunora.git",
-        "directory": "packages/cli"
-    },
-    "bin": {
-        "lunora": "./dist/bin.mjs"
+        "directory": "packages/errors"
     },
     "files": [
         "./dist",
-        "__assets__",
-        "skills",
         "README.md",
-        "LICENSE.md"
+        "LICENSE.md",
+        "__assets__"
     ],
     "type": "module",
     "sideEffects": false,
+    "main": "./dist/index.mjs",
     "module": "./dist/index.mjs",
     "types": "./dist/index.d.ts",
     "exports": {
         ".": {
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
+        },
+        "./render": {
+            "types": "./dist/render/index.d.ts",
+            "import": "./dist/render/index.mjs"
         },
         "./package.json": "./package.json"
     },
@@ -58,7 +56,6 @@
         "lint:prettier": "prettier --check .",
         "lint:prettier:fix": "prettier --write .",
         "lint:types": "tsc --noEmit",
-        "test:bench": "vitest bench --run --config vitest.bench.config.ts",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
         "fallow:audit": "fallow audit",
@@ -66,32 +63,11 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@bomb.sh/tab": "0.0.17",
-        "@lunora/codegen": "1.0.0-alpha.28",
-        "@lunora/config": "1.0.0-alpha.45",
-        "@lunora/container": "1.0.0-alpha.5",
-        "@lunora/d1": "1.0.0-alpha.21",
-        "@lunora/seed": "1.0.0-alpha.13",
-        "@visulima/cerebro": "3.0.0-alpha.32",
-        "@lunora/errors": "1.0.0-alpha.0",
-        "@visulima/error": "catalog:prod",
-        "@visulima/fs": "5.0.0-alpha.32",
-        "@visulima/pail": "4.0.0-alpha.22",
-        "@visulima/path": "3.0.0-alpha.13",
-        "@visulima/spinner": "1.0.0-alpha.4",
-        "@visulima/tui": "1.0.0-alpha.26",
-        "cfonts": "^3.3.1",
-        "giget": "3.3.0",
-        "jsonc-parser": "catalog:vite",
-        "magic-string": "^0.30.21",
-        "react": "catalog:frontend",
-        "react-reconciler": "^0.33.0",
-        "ts-morph": "catalog:tooling"
+        "@visulima/error": "catalog:prod"
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
         "@types/node": "catalog:types",
-        "@types/react": "catalog:frontend",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",

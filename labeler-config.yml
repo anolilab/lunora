@@ -46,6 +46,9 @@
 "package: do":
     - changed-files:
           - any-glob-to-any-file: "packages/do/**/*"
+"package: errors":
+    - changed-files:
+          - any-glob-to-any-file: "packages/errors/**/*"
 "package: flags":
     - changed-files:
           - any-glob-to-any-file: "packages/flags/**/*"
