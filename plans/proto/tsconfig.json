@@ -1,0 +1,14 @@
+{
+    // Type-check only (spike prototypes; the real build is per-package packem).
+    "extends": "../../tsconfig.base.json",
+    "compilerOptions": {
+        "noEmit": true,
+        "types": ["node"],
+        // Spike-only relaxation: the prototype SOURCE modules (rag.ts, agent-loop.ts,
+        // compose-next-worker.ts) pass the repo's strict base as-is; this only silences
+        // `noUncheckedIndexedAccess` on positional `messages[1]` / `chunks[0]` test
+        // assertions, so the tests stay readable without `!` noise everywhere.
+        "noUncheckedIndexedAccess": false
+    },
+    "include": ["**/*.ts", "../../packages/bindings/src/vectors/create-vectors.ts", "../../packages/bindings/src/vectors/types.ts"]
+}
