@@ -1,5 +1,6 @@
 /* eslint-disable import/exports-last -- a types-heavy module: public types are declared next to the helpers they build on */
 import type { LunoraClient } from "@lunora/client";
+import { LunoraError } from "@lunora/errors";
 import type { Collection, Transaction } from "@tanstack/db";
 import { createTransaction } from "@tanstack/db";
 
@@ -141,7 +142,10 @@ export const bindMutators = <M extends AnyMutatorMap>(client: LunoraClient, cont
                 }
 
                 if (attempt >= maxReissues) {
-                    throw new Error(`lunora: custom mutator "${serverRef}" could not claim a fresh client sequence after ${String(maxReissues)} attempts`);
+                    throw new LunoraError(
+                        "INTERNAL",
+                        `lunora: custom mutator "${serverRef}" could not claim a fresh client sequence after ${String(maxReissues)} attempts`,
+                    );
                 }
 
                 // The DO swallowed this push as a replay (a stale `clientSeq` after

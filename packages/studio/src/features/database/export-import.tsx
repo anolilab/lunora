@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import { useLunora } from "@lunora/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useState } from "react";
@@ -45,13 +46,13 @@ const parseNdjson = (text: string): ExportRow[] => {
         const parsed = JSON.parse(line) as unknown;
 
         if (typeof parsed !== "object" || parsed === null) {
-            throw new Error(`line ${(index + 1).toString()}: expected a { table, doc } object`);
+            throw new LunoraError("INTERNAL", `line ${(index + 1).toString()}: expected a { table, doc } object`);
         }
 
         const row = parsed as Record<string, unknown>;
 
         if (typeof row.table !== "string" || typeof row.doc !== "object" || row.doc === null || Array.isArray(row.doc)) {
-            throw new Error(`line ${(index + 1).toString()}: expected a { table, doc } object`);
+            throw new LunoraError("INTERNAL", `line ${(index + 1).toString()}: expected a { table, doc } object`);
         }
 
         rows.push(row as unknown as ExportRow);

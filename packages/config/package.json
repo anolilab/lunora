@@ -66,6 +66,7 @@
     "dependencies": {
         "@lunora/codegen": "1.0.0-alpha.28",
         "@lunora/container": "1.0.0-alpha.5",
+        "@lunora/errors": "1.0.0-alpha.0",
         "@lunora/seed": "1.0.0-alpha.13",
         "@visulima/colorize": "2.0.0-alpha.14",
         "dockerode": "catalog:tooling",

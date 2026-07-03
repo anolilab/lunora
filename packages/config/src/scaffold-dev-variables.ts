@@ -2,6 +2,8 @@ import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { LunoraError } from "@lunora/errors";
+
 import {
     DEV_VARS_EXAMPLE_FILE,
     DEV_VARS_FILE,
@@ -394,7 +396,7 @@ const appendDevVariables = (path: string, buildAdditions: (existing: string) => 
         }
     }
 
-    throw new Error(`Failed to append to ${path} after ${String(APPEND_MAX_ATTEMPTS)} attempts — a concurrent writer kept winning the race.`);
+    throw new LunoraError("INTERNAL", `Failed to append to ${path} after ${String(APPEND_MAX_ATTEMPTS)} attempts — a concurrent writer kept winning the race.`);
 };
 
 /**

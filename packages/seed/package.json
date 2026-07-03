@@ -61,7 +61,8 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@faker-js/faker": "catalog:data"
+        "@faker-js/faker": "catalog:data",
+        "@lunora/errors": "1.0.0-alpha.0"
     },
     "devDependencies": {
         "@lunora/server": "1.0.0-alpha.13",

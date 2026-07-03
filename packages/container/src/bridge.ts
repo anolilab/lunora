@@ -123,7 +123,10 @@ const parseResponseBody = async (response: BridgeResponse, functionPath: string)
             throw statusError(functionPath, response);
         }
 
-        throw new Error(`createContainerBridge: request to "${functionPath}" returned a non-JSON response (status ${String(response.status)})`);
+        throw new LunoraError(
+            "INTERNAL",
+            `createContainerBridge: request to "${functionPath}" returned a non-JSON response (status ${String(response.status)})`,
+        );
     }
 };
 
@@ -188,7 +191,8 @@ const createContainerBridge = (options: ContainerBridgeOptions): ContainerBridge
                 detail = String(error);
             }
 
-            throw new Error(
+            throw new LunoraError(
+                "INTERNAL",
                 `createContainerBridge: request to "${functionPath}" returned a malformed error envelope (status ${String(response.status)}): ${detail}`,
             );
         }

@@ -79,6 +79,7 @@
         "@lunora/advisor": "1.0.0-alpha.15",
         "@lunora/bindings": "1.0.0-alpha.3",
         "@lunora/client": "1.0.0-alpha.16",
+        "@lunora/errors": "1.0.0-alpha.0",
         "@lunora/react": "1.0.0-alpha.18",
         "@tanstack/react-query": "catalog:frontend",
         "@tanstack/react-router": "catalog:frontend",

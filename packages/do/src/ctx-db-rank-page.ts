@@ -20,6 +20,7 @@
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-rank-page" mirrors its parent "ctx-db.ts" (the established public module name); `doc`/`docs` is the domain term for a stored document throughout the DO/D1 ORM. */
 
+import { LunoraError } from "@lunora/errors";
 import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
@@ -254,13 +255,13 @@ const computeRankPage = (deps: RankPageDeps, tableName: string, indexName: strin
     const definition = schema.tables[tableName];
 
     if (!definition) {
-        throw new Error(`unknown table: ${tableName}`);
+        throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
     }
 
     const index = definition.rankIndexes?.find((i) => i.name === indexName);
 
     if (!index) {
-        throw new Error(`unknown rankIndex "${indexName}" on table "${tableName}"`);
+        throw new LunoraError("INTERNAL", `unknown rankIndex "${indexName}" on table "${tableName}"`);
     }
 
     // Refuse a shard-local page when the partition spans shards (the

@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/errors";
+
 import type { FunctionReference } from "./types";
 import { assertValidCronExpression } from "./validate-cron";
 
@@ -31,7 +33,7 @@ const createCronTrigger = (options: CronTriggerOptions): CronTriggerSnippet => {
     // Defensive runtime guard: both are required by the type, but JS callers can omit them.
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the required type
     if (!options.schedule || !options.fn) {
-        throw new Error("@lunora/scheduler: createCronTrigger() requires `schedule` and `fn`");
+        throw new LunoraError("INTERNAL", "@lunora/scheduler: createCronTrigger() requires `schedule` and `fn`");
     }
 
     assertValidCronExpression(options.schedule);

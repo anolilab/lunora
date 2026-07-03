@@ -13,6 +13,7 @@
  * which ships its own `hydratePreloaded(preloaded)` for the SSR-seed → live
  * handoff. This package owns the server/composition half only.
  */
+import { LunoraError } from "@lunora/errors";
 
 /**
  * Structural subset of Astro's `AstroIntegration`. Declared locally (rather than
@@ -83,7 +84,7 @@ const lunora = (options: LunoraIntegrationOptions = {}): AstroIntegrationLike =>
                 // resolved entry) so the integration is safe to add before that
                 // wiring lands.
                 if (serverEntry.length === 0) {
-                    throw new Error("@lunora/astro: `serverEntry` must be a non-empty path.");
+                    throw new LunoraError("INTERNAL", "@lunora/astro: `serverEntry` must be a non-empty path.");
                 }
             },
         },

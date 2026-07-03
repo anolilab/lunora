@@ -61,6 +61,7 @@
     },
     "dependencies": {
         "@lunora/do": "1.0.0-alpha.21",
+        "@lunora/errors": "1.0.0-alpha.0",
         "@lunora/mail": "1.0.0-alpha.5",
         "@lunora/server": "1.0.0-alpha.13"
     },

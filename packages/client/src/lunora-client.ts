@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/errors";
+
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { stableStringify } from "../../../shared/stable-key";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
@@ -922,7 +924,7 @@ class LunoraClient {
         // rather than send a poisoned header. `undefined` is the valid "no seq"
         // signal (rides the idempotency path) and is left untouched.
         if (clientSeq !== undefined && (!Number.isInteger(clientSeq) || clientSeq <= 0)) {
-            throw new Error(`callMutator: clientSeq must be a positive integer, got ${String(clientSeq)}`);
+            throw new LunoraError("INTERNAL", `callMutator: clientSeq must be a positive integer, got ${String(clientSeq)}`);
         }
 
         const bucket = options?.shardKey ?? "";
@@ -1293,7 +1295,7 @@ class LunoraClient {
 
     public async query<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options: { shardKey?: string } = {}): Promise<ReturnOf<F>> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         return (await this.rpc(function_.__lunoraRef, args as Record<string, unknown>, options.shardKey, { attachBookmark: true })) as ReturnOf<F>;
@@ -1315,11 +1317,11 @@ class LunoraClient {
      */
     public async batch(calls: ReadonlyArray<{ args?: Record<string, unknown>; fn: FunctionReference; shardKey?: string }>): Promise<BatchSlot[]> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         if (!this.fetchImpl) {
-            throw new Error("LunoraClient: no `fetch` implementation available");
+            throw new LunoraError("INTERNAL", "LunoraClient: no `fetch` implementation available");
         }
 
         if (calls.length === 0) {
@@ -1352,7 +1354,7 @@ class LunoraClient {
         try {
             body = await response.json();
         } catch {
-            throw new Error(`LunoraClient: batch response was not JSON (status ${response.status.toString()})`);
+            throw new LunoraError("INTERNAL", `LunoraClient: batch response was not JSON (status ${response.status.toString()})`);
         }
 
         // A whole-batch rejection (bad request, method, or a per-entry authorization
@@ -1364,7 +1366,7 @@ class LunoraClient {
                 throw reconstructError(body.error);
             }
 
-            throw new Error(`LunoraClient: batch request failed (status ${response.status.toString()})`);
+            throw new LunoraError("INTERNAL", `LunoraClient: batch request failed (status ${response.status.toString()})`);
         }
 
         return demuxBatchResults(body.results ?? [], calls.length);
@@ -1386,7 +1388,7 @@ class LunoraClient {
         options: MutationCallOptions<unknown, unknown, ArgsOf<F>> = {},
     ): Promise<ReturnOf<F>> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const argsRecord = args as Record<string, unknown>;
@@ -1463,7 +1465,7 @@ class LunoraClient {
 
     public async action<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options: { shardKey?: string } = {}): Promise<ReturnOf<F>> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         return (await this.rpc(function_.__lunoraRef, args as Record<string, unknown>, options.shardKey)) as ReturnOf<F>;
@@ -1483,7 +1485,7 @@ class LunoraClient {
      */
     public async shardTraffic(table: string): Promise<ShardTrafficResult> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const body = (await this.adminFetch(SHARD_TRAFFIC_PATH, "POST", { table })) as Partial<ShardTrafficResult>;
@@ -1502,7 +1504,7 @@ class LunoraClient {
      */
     public async listScheduledJobs(): Promise<ScheduleRecord[]> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const body = (await this.adminFetch(SCHEDULED_PATH, "GET")) as { records?: ScheduleRecord[] };
@@ -1521,7 +1523,7 @@ class LunoraClient {
      */
     public async schedulerStatus(): Promise<SchedulerStatus> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const body = (await this.adminFetch(SCHEDULED_STATUS_PATH, "GET")) as Partial<SchedulerStatus>;
@@ -1536,7 +1538,7 @@ class LunoraClient {
     /** Cancel a pending scheduled job by id. Returns whether a job was removed. */
     public async cancelScheduledJob(id: string): Promise<{ cancelled: boolean }> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const body = (await this.adminFetch(SCHEDULED_CANCEL_PATH, "POST", { id })) as { cancelled?: boolean };
@@ -1554,7 +1556,7 @@ class LunoraClient {
      */
     public async listDeadJobs(): Promise<ScheduleRecord[]> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const body = (await this.adminFetch(SCHEDULED_DEAD_PATH, "GET")) as { records?: ScheduleRecord[] };
@@ -1569,7 +1571,7 @@ class LunoraClient {
      */
     public async retryDeadJob(id: string): Promise<{ retried: boolean }> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const body = (await this.adminFetch(SCHEDULED_DEAD_RETRY_PATH, "POST", { id })) as { retried?: boolean };
@@ -1584,7 +1586,7 @@ class LunoraClient {
      */
     public async removeDeadJob(id: string): Promise<{ removed: boolean }> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const body = (await this.adminFetch(SCHEDULED_DEAD_CANCEL_PATH, "POST", { id })) as { removed?: boolean };
@@ -1610,7 +1612,7 @@ class LunoraClient {
         status?: WorkflowInstanceStatus;
     }): Promise<WorkflowInstancePage> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const query = new URLSearchParams({ name: options.name });
@@ -1641,7 +1643,7 @@ class LunoraClient {
     /** Read one workflow instance with its step timeline (`/_lunora/admin/workflows/instance`). */
     public async getWorkflowInstance(options: { id: string; name: string }): Promise<WorkflowInstanceDetail> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const query = new URLSearchParams({ id: options.id, name: options.name });
@@ -1663,7 +1665,7 @@ class LunoraClient {
     /** Pause / resume / terminate a workflow instance (`/_lunora/admin/workflows/status`). Needs an Edit-scoped Cloudflare token. */
     public async setWorkflowInstanceStatus(options: { action: WorkflowInstanceAction; id: string; name: string }): Promise<{ status: WorkflowInstanceStatus }> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const body = (await this.adminFetch(WORKFLOWS_STATUS_PATH, "POST", { action: options.action, id: options.id, name: options.name })) as {
@@ -1683,7 +1685,7 @@ class LunoraClient {
      */
     public subscribeScheduledJobs(onJobs: (jobs: ScheduleRecord[]) => void): Unsubscribe {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         if (this.WebSocketImpl === undefined) {
@@ -1763,7 +1765,7 @@ class LunoraClient {
      */
     public async listFunctions(): Promise<FunctionDescriptor[]> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const body = (await this.adminFetch(FUNCTIONS_PATH, "GET")) as { functions?: FunctionDescriptor[] };
@@ -1782,7 +1784,7 @@ class LunoraClient {
      */
     public async getCronJobs(): Promise<CronJobInfo[]> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const body = (await this.adminFetch(CRON_JOBS_PATH, "GET")) as { jobs?: CronJobInfo[] };
@@ -1801,7 +1803,7 @@ class LunoraClient {
      */
     public async runCronJob(name: string): Promise<{ name: string; ran: boolean }> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const body = (await this.adminFetch(CRON_JOBS_RUN_PATH, "POST", { name })) as { name?: string; ran?: boolean };
@@ -1819,7 +1821,7 @@ class LunoraClient {
      */
     public async fetchOpenApi(): Promise<Record<string, unknown>> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         return (await this.adminFetch(OPENAPI_PATH, "GET")) as Record<string, unknown>;
@@ -1837,7 +1839,7 @@ class LunoraClient {
      */
     public async fetchOpenRpc(): Promise<Record<string, unknown>> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         return (await this.adminFetch(OPENRPC_PATH, "GET")) as Record<string, unknown>;
@@ -1854,7 +1856,7 @@ class LunoraClient {
      */
     public async listStorageObjects(options: { bucket?: string; cursor?: string; limit?: number; prefix?: string } = {}): Promise<StorageListPage> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const params = new URLSearchParams();
@@ -1890,7 +1892,7 @@ class LunoraClient {
      */
     public async deleteStorageObject(key: string, options?: { bucket?: string }): Promise<{ deleted: boolean; key: string }> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const path = `${STORAGE_PATH}?key=${encodeURIComponent(key)}${bucketQuery(options?.bucket)}`;
@@ -1907,7 +1909,7 @@ class LunoraClient {
      */
     public async listStorageBuckets(): Promise<string[]> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const body = (await this.adminFetch(STORAGE_BUCKETS_PATH, "GET")) as { buckets?: string[] };
@@ -1929,7 +1931,7 @@ class LunoraClient {
         key: string;
     }): Promise<{ etag?: string; key: string }> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const path = `${STORAGE_PATH}?key=${encodeURIComponent(options.key)}${bucketQuery(options.bucket)}`;
@@ -1951,7 +1953,7 @@ class LunoraClient {
      */
     public async signedStorageUrl(key: string, options?: { bucket?: string; expiresInSeconds?: number }): Promise<string> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const expiresInSeconds = options?.expiresInSeconds;
@@ -1976,7 +1978,7 @@ class LunoraClient {
      */
     public async listGlobalTables(): Promise<GlobalTableInfo[]> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         return (await this.adminFetch(GLOBAL_TABLES_PATH, "GET")) as GlobalTableInfo[];
@@ -1990,7 +1992,7 @@ class LunoraClient {
      */
     public async readGlobalTablePage(options: { filters?: GlobalFilterClause[]; limit?: number; offset?: number; table: string }): Promise<GlobalTablePage> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const params = new URLSearchParams({ table: options.table });
@@ -2019,7 +2021,7 @@ class LunoraClient {
      */
     public async facetGlobalColumn(options: { column: string; filters?: GlobalFilterClause[]; limit?: number; table: string }): Promise<GlobalFacetResult> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const params = new URLSearchParams({ column: options.column, table: options.table });
@@ -2048,7 +2050,7 @@ class LunoraClient {
      */
     public async listVectorIndexes(): Promise<VectorIndexSummary[]> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const body = (await this.adminFetch(VECTOR_INDEXES_PATH, "GET")) as { indexes?: VectorIndexSummary[] };
@@ -2065,7 +2067,7 @@ class LunoraClient {
      */
     public async queryVectorIndex(options: { name: string; text: string; topK?: number }): Promise<VectorQueryMatch[]> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const body = (await this.adminFetch(VECTOR_QUERY_PATH, "POST", options)) as { matches?: VectorQueryMatch[] };
@@ -2182,7 +2184,7 @@ class LunoraClient {
         } = {},
     ): Promise<AuthPage<AuthUser>> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const path = withQuery(AUTH_USERS_PATH, {
@@ -2329,7 +2331,7 @@ class LunoraClient {
     /** List auth sessions, paged and optionally filtered to one user. */
     public async listAuthSessions(options: { limit?: number; offset?: number; userId?: string } = {}): Promise<AuthPage<AuthSession>> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const params = new URLSearchParams();
@@ -2360,7 +2362,7 @@ class LunoraClient {
         options: { onCheckpoint?: (watermark: SyncWatermark) => void; onError?: SubscriptionErrorCallback; shardKey?: string } = {},
     ): Unsubscribe {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const argsRecord = (args ?? {}) as Record<string, unknown>;
@@ -2465,7 +2467,7 @@ class LunoraClient {
         options: { onCheckpoint?: (watermark: SyncWatermark) => void; onError?: SubscriptionErrorCallback; shardKey?: string } = {},
     ): Unsubscribe {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         this.nextShapeId += 1;
@@ -2520,11 +2522,11 @@ class LunoraClient {
         options: { maxBuffer?: number; shardKey?: string } = {},
     ): StreamIterable<ReturnOf<F>> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         if (this.WebSocketImpl === undefined) {
-            throw new Error("LunoraClient: streams require a WebSocket implementation");
+            throw new LunoraError("INTERNAL", "LunoraClient: streams require a WebSocket implementation");
         }
 
         this.nextStreamId += 1;
@@ -3188,7 +3190,7 @@ class LunoraClient {
         } = {},
     ): Promise<unknown> {
         if (!this.fetchImpl) {
-            throw new Error("LunoraClient: no `fetch` implementation available");
+            throw new LunoraError("INTERNAL", "LunoraClient: no `fetch` implementation available");
         }
 
         const headers = this.rpcRequestHeaders(flags);
@@ -3217,7 +3219,7 @@ class LunoraClient {
         } catch {
             const statusText = response.statusText ? ` ${response.statusText}` : "";
 
-            throw new Error(`LunoraClient: response was not JSON (status ${response.status.toString()}${statusText})`);
+            throw new LunoraError("INTERNAL", `LunoraClient: response was not JSON (status ${response.status.toString()}${statusText})`);
         }
 
         if ("error" in body) {
@@ -3232,7 +3234,7 @@ class LunoraClient {
         if (!response.ok) {
             const statusText = response.statusText ? ` ${response.statusText}` : "";
 
-            throw new Error(`LunoraClient: request failed (status ${response.status.toString()}${statusText})`);
+            throw new LunoraError("INTERNAL", `LunoraClient: request failed (status ${response.status.toString()}${statusText})`);
         }
 
         flags.onMutationAck?.(body.lastMutationId);
@@ -3254,7 +3256,7 @@ class LunoraClient {
         contentType?: string,
     ): Promise<unknown> {
         if (!this.fetchImpl) {
-            throw new Error("LunoraClient: no `fetch` implementation available");
+            throw new LunoraError("INTERNAL", "LunoraClient: no `fetch` implementation available");
         }
 
         const headers: Record<string, string> = {};
@@ -3295,7 +3297,7 @@ class LunoraClient {
         } catch {
             const statusText = response.statusText ? ` ${response.statusText}` : "";
 
-            throw new Error(`LunoraClient: response was not JSON (status ${response.status.toString()}${statusText})`);
+            throw new LunoraError("INTERNAL", `LunoraClient: response was not JSON (status ${response.status.toString()}${statusText})`);
         }
 
         // Untrusted server payload: narrow before inspecting for an error envelope.
@@ -3312,7 +3314,7 @@ class LunoraClient {
         if (!response.ok) {
             const statusText = response.statusText ? ` ${response.statusText}` : "";
 
-            throw new Error(`LunoraClient: admin request failed (status ${response.status.toString()}${statusText})`);
+            throw new LunoraError("INTERNAL", `LunoraClient: admin request failed (status ${response.status.toString()}${statusText})`);
         }
 
         return body;

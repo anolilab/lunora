@@ -17,6 +17,8 @@
  * `Headers`/`URL`, so it unit-tests under plain Node without workerd.
  */
 
+import { LunoraError } from "./errors";
+
 /** Per-header overrides for {@link SecurityHeadersOptions}. `false` omits the header. */
 interface SecurityHeadersOptions {
     /**
@@ -256,7 +258,7 @@ const resolveCors = (input: CorsOptions | false | undefined): ResolvedCors => {
         const originsList = origins;
 
         if (originsList.includes("*") && allowCredentials) {
-            throw new Error(
+            throw new LunoraError(
                 '@lunora/runtime: security.cors cannot combine a wildcard origin ("*") with allowCredentials: true — browsers reject it and it defeats the allowlist.',
             );
         }

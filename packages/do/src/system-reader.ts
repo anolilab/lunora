@@ -29,6 +29,7 @@
  * the studio / introspection use cases without re-implementing the query
  * planner against a remote source.
  */
+import { LunoraError } from "@lunora/errors";
 
 /* eslint-disable unicorn/prevent-abbreviations -- `Doc`/`SystemDoc`/`ScheduledFunctionDoc` are the deliberate public API names for `ctx.db.system` (they mirror Convex's `Doc` naming and the spec the consuming `@lunora/server` types re-export); `doc`/`docs` is the domain term for a stored document throughout the DO ORM (see ctx-db.ts). Renaming would break the documented surface. */
 
@@ -219,7 +220,7 @@ const toStorageMetadata = (object: Record<string, unknown>): StorageMetadata => 
 const createSystemReader = (options: SystemReaderOptions = {}): SystemDatabaseReader => {
     const requireScheduler = (): SystemReaderSchedulerLike => {
         if (!options.scheduler) {
-            throw new Error('ctx.db.system.query("_scheduled_functions"): no scheduler configured. Pass `scheduler` to createShardDO().');
+            throw new LunoraError("INTERNAL", 'ctx.db.system.query("_scheduled_functions"): no scheduler configured. Pass `scheduler` to createShardDO().');
         }
 
         return options.scheduler;
@@ -227,7 +228,7 @@ const createSystemReader = (options: SystemReaderOptions = {}): SystemDatabaseRe
 
     const requireStorage = (): SystemReaderStorageLike => {
         if (!options.storage) {
-            throw new Error('ctx.db.system.query("_storage"): no storage configured. Pass `storage` to createShardDO().');
+            throw new LunoraError("INTERNAL", 'ctx.db.system.query("_storage"): no storage configured. Pass `storage` to createShardDO().');
         }
 
         return options.storage;

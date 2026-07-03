@@ -272,7 +272,7 @@ const CLIENT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a
  */
 const assertValidClientId = (clientId: string): void => {
     if (!CLIENT_ID_PATTERN.test(clientId)) {
-        throw new Error(`invalid clientId ${JSON.stringify(clientId)}: a client-supplied row id must be a UUID`);
+        throw new LunoraError("INTERNAL", `invalid clientId ${JSON.stringify(clientId)}: a client-supplied row id must be a UUID`);
     }
 };
 
@@ -786,7 +786,7 @@ const createSearchBuilder = (search: SearchStage, tableName: string): SearchFilt
     const builder: SearchFilterBuilderLike = {
         eq: (field, value) => {
             if (!search.definition.filterFields?.includes(field)) {
-                throw new Error(`field "${field}" is not a filter field of search index "${search.indexName}" on table "${tableName}"`);
+                throw new LunoraError("INTERNAL", `field "${field}" is not a filter field of search index "${search.indexName}" on table "${tableName}"`);
             }
 
             search.filters.push({ field, value });
@@ -795,7 +795,10 @@ const createSearchBuilder = (search: SearchStage, tableName: string): SearchFilt
         },
         search: (field, query) => {
             if (field !== search.definition.field) {
-                throw new Error(`search index "${search.indexName}" on table "${tableName}" indexes "${search.definition.field}", not "${field}"`);
+                throw new LunoraError(
+                    "INTERNAL",
+                    `search index "${search.indexName}" on table "${tableName}" indexes "${search.definition.field}", not "${field}"`,
+                );
             }
 
             // Mutate the caller-owned stage in place (same object the query
@@ -1153,7 +1156,7 @@ const NUL_CHARACTER = String.fromCodePoint(0);
  */
 const normalizeIdStructurally = (schema: SchemaLike, tableName: string, id: string): null | string => {
     if (!schema.tables[tableName]) {
-        throw new Error(`unknown table: ${tableName}`);
+        throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
     }
 
     // Reject empties and any id carrying whitespace or a NUL byte — no minter in
@@ -1170,7 +1173,7 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
     const tableDefinition = schema.tables[tableName];
 
     if (!tableDefinition) {
-        throw new Error(`unknown table: ${tableName}`);
+        throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
     }
 
     // Soft delete: the fluent reader (`ctx.db.query(table)...`) always hides
@@ -1191,7 +1194,7 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
         const { search } = stage;
 
         if (!search) {
-            throw new Error("runSearchFetch called without a staged search");
+            throw new LunoraError("INTERNAL", "runSearchFetch called without a staged search");
         }
 
         const filtered = stage.inMemoryFilters.length > 0;
@@ -1303,7 +1306,7 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
         // eslint-disable-next-line @typescript-eslint/require-await -- TableReaderLike returns Promises (the D1 twin awaits real I/O); the DO impl is synchronous over local SQLite
         async paginate(options) {
             if (stage.search) {
-                throw new Error("pagination is not supported on search queries; use .take(n) or .collect()");
+                throw new LunoraError("INTERNAL", "pagination is not supported on search queries; use .take(n) or .collect()");
             }
 
             return paginateStage(sql, tableName, stage, options, scopeCondition);
@@ -1329,7 +1332,7 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
             const definition = tableDefinition.indexes.find((index) => index.name === indexName);
 
             if (!definition) {
-                throw new Error(`unknown index "${indexName}" on table "${tableName}"`);
+                throw new LunoraError("INTERNAL", `unknown index "${indexName}" on table "${tableName}"`);
             }
 
             onIndexUse(tableName, indexName, "index");
@@ -1346,7 +1349,7 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
             const definition = (tableDefinition.searchIndexes ?? []).find((index) => index.name === indexName);
 
             if (!definition) {
-                throw new Error(`unknown search index "${indexName}" on table "${tableName}"`);
+                throw new LunoraError("INTERNAL", `unknown search index "${indexName}" on table "${tableName}"`);
             }
 
             onIndexUse(tableName, indexName, "search");
@@ -1364,7 +1367,7 @@ const buildReader = (sql: SqlExec, schema: SchemaLike, tableName: string, onInde
             search(createSearchBuilder(searchStage, tableName));
 
             if (!searchStage.hasQuery) {
-                throw new Error(`search index "${indexName}" on table "${tableName}" requires a .search(field, query) call`);
+                throw new LunoraError("INTERNAL", `search index "${indexName}" on table "${tableName}" requires a .search(field, query) call`);
             }
 
             return reader;
@@ -1460,7 +1463,10 @@ const applyOnUpdate = (
 const assertNoExplicitUndefined = (op: "patch" | "replace", document: Record<string, unknown>): void => {
     for (const field of Object.keys(document)) {
         if (document[field] === undefined) {
-            throw new Error(`Cannot ${op} field '${field}' to undefined — use null to clear a nullable field, or omit the key to leave it unchanged.`);
+            throw new LunoraError(
+                "INTERNAL",
+                `Cannot ${op} field '${field}' to undefined — use null to clear a nullable field, or omit the key to leave it unchanged.`,
+            );
         }
     }
 };
@@ -1630,7 +1636,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const routeBackend = (table: string, op: "cascade" | "relation load"): DatabaseWriterLike => {
         if (isGlobalTable(table)) {
             if (!globalDb) {
-                throw new Error(`cross-backend ${op} for global table '${table}' requires a globalDb writer — pass one to createShardCtxDb({ globalDb })`);
+                throw new LunoraError(
+                    "INTERNAL",
+                    `cross-backend ${op} for global table '${table}' requires a globalDb writer — pass one to createShardCtxDb({ globalDb })`,
+                );
             }
 
             return globalDb;
@@ -1663,7 +1672,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         }
 
         if (!globalDb) {
-            throw new Error(`${op} on global table '${tableName}' requires a globalDb writer — pass one to createShardCtxDb({ globalDb })`);
+            throw new LunoraError("INTERNAL", `${op} on global table '${tableName}' requires a globalDb writer — pass one to createShardCtxDb({ globalDb })`);
         }
 
         return globalDb;
@@ -1782,7 +1791,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         const definition = schema.tables[relationTable];
 
         if (!definition) {
-            throw new Error(`unknown table: ${relationTable}`);
+            throw new LunoraError("INTERNAL", `unknown table: ${relationTable}`);
         }
 
         // Register a scan dependency — any insert/delete in the child table can
@@ -2017,7 +2026,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const definition = schema.tables[tableName];
 
             if (!definition) {
-                throw new Error(`unknown table: ${tableName}`);
+                throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
             }
 
             // Reject an off-allowlist `op` up front (it's a compile-time-only
@@ -2036,7 +2045,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             }
 
             if (!aggOptions.field) {
-                throw new Error(`aggregate(${tableName}, { op: "${aggOptions.op}" }): "field" is required for non-count reducers`);
+                throw new LunoraError("INTERNAL", `aggregate(${tableName}, { op: "${aggOptions.op}" }): "field" is required for non-count reducers`);
             }
 
             onRead(tableName, SCAN_DEP);
@@ -2109,7 +2118,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const definition = schema.tables[tableName];
 
             if (!definition) {
-                throw new Error(`unknown table: ${tableName}`);
+                throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
             }
 
             const countOptions = normalizeCountArgument(whereOrOptions);
@@ -2372,7 +2381,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const findManyDefinition = schema.tables[tableName];
 
             if (!findManyDefinition) {
-                throw new Error(`unknown table: ${tableName}`);
+                throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
             }
 
             // A query with no `where` and no `baseWhere` is a true full-table
@@ -2562,7 +2571,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const definition = schema.tables[tableName];
 
             if (!definition) {
-                throw new Error(`unknown table: ${tableName}`);
+                throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
             }
 
             onRead(tableName, SCAN_DEP);
@@ -2573,7 +2582,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             aggregateSqlFunction(agg.op);
 
             if (agg.op !== "count" && !agg.field) {
-                throw new Error(`groupBy(${tableName}, { agg: { op: "${agg.op}" } }): "field" is required for non-count reducers`);
+                throw new LunoraError("INTERNAL", `groupBy(${tableName}, { agg: { op: "${agg.op}" } }): "field" is required for non-count reducers`);
             }
 
             // Soft delete: group over LIVE rows only; AND the scope in and force
@@ -2653,7 +2662,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 const { field } = agg;
 
                 if (field === undefined) {
-                    throw new Error(`groupBy(${tableName}, { agg: { op: "${agg.op}" } }): "field" is required for non-count reducers`);
+                    throw new LunoraError("INTERNAL", `groupBy(${tableName}, { agg: { op: "${agg.op}" } }): "field" is required for non-count reducers`);
                 }
 
                 select.push(dsql`${dsql.raw(aggregateSqlFunction(agg.op))}(${jsonPathSql(field)}) AS value`);
@@ -2710,7 +2719,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const definition = schema.tables[tableName];
 
             if (!definition) {
-                throw new Error(`unknown table: ${tableName}`);
+                throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
             }
 
             const withDefaults = applyInsertDefaults(definition, document, auth);
@@ -2801,7 +2810,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const definition = schema.tables[tableName];
 
             if (!definition) {
-                throw new Error(`unknown table: ${tableName}`);
+                throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
             }
 
             // Backfill the counters once against the pre-insert snapshot (same
@@ -2884,14 +2893,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     return;
                 }
 
-                throw new Error(`document not found: ${id}`);
+                throw new LunoraError("INTERNAL", `document not found: ${id}`);
             }
 
             const { docJson: existingJson, row: existing, tableName } = located;
             const tableDefinition = schema.tables[tableName];
 
             if (!tableDefinition) {
-                throw new Error(`unknown table: ${tableName}`);
+                throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
             }
 
             onRead(tableName, id);
@@ -2998,13 +3007,13 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const definition = schema.tables[tableName];
 
             if (!definition) {
-                throw new Error(`unknown table: ${tableName}`);
+                throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
             }
 
             const index = definition.rankIndexes?.find((i) => i.name === indexName);
 
             if (!index) {
-                throw new Error(`unknown rankIndex "${indexName}" on table "${tableName}"`);
+                throw new LunoraError("INTERNAL", `unknown rankIndex "${indexName}" on table "${tableName}"`);
             }
 
             // Refuse a shard-local rank when the partition spans shards (a
@@ -3091,7 +3100,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // with a clear message instead of routing into a non-existent
             // `globalDb.rankBefore` (which would throw an opaque TypeError).
             if (isGlobalTable(tableName)) {
-                throw new Error(
+                throw new LunoraError(
+                    "INTERNAL",
                     `rankBefore is not supported on the global (.global()) table '${tableName}' — cross-shard rank cursors apply only to sharded tables`,
                 );
             }
@@ -3099,13 +3109,13 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const definition = schema.tables[tableName];
 
             if (!definition) {
-                throw new Error(`unknown table: ${tableName}`);
+                throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
             }
 
             const index = definition.rankIndexes?.find((i) => i.name === indexName);
 
             if (!index) {
-                throw new Error(`unknown rankIndex "${indexName}" on table "${tableName}"`);
+                throw new LunoraError("INTERNAL", `unknown rankIndex "${indexName}" on table "${tableName}"`);
             }
 
             // Same RLS coupling-seam as rank()/count(): a restricted-count ctx
@@ -3193,13 +3203,13 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     return;
                 }
 
-                throw new Error(`document not found: ${id}`);
+                throw new LunoraError("INTERNAL", `document not found: ${id}`);
             }
 
             const field = schema.tables[located.tableName]?.softDeleteMode?.field;
 
             if (!field) {
-                throw new Error(`ctx.db.restore: table "${located.tableName}" is not a .softDelete() table`);
+                throw new LunoraError("INTERNAL", `ctx.db.restore: table "${located.tableName}" is not a .softDelete() table`);
             }
 
             // Only an actually-soft-deleted row needs its rank entry rebuilt below
@@ -3241,14 +3251,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     return;
                 }
 
-                throw new Error(`document not found: ${id}`);
+                throw new LunoraError("INTERNAL", `document not found: ${id}`);
             }
 
             const { docJson: existingJson, row: previous, tableName } = located;
             const tableDefinition = schema.tables[tableName];
 
             if (!tableDefinition) {
-                throw new Error(`unknown table: ${tableName}`);
+                throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
             }
 
             // Reject explicit `undefined` values: the spread + JSON.stringify below

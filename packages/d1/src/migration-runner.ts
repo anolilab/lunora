@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import { sql } from "drizzle-orm";
 
 import type { D1DatabaseLike } from "./d1-client";
@@ -136,7 +137,8 @@ const assertSingleStatement = (migration: Migration): void => {
         }
 
         if (seenStatement && character !== undefined && !WHITESPACE_RE.test(character)) {
-            throw new Error(
+            throw new LunoraError(
+                "INTERNAL",
                 `Migration "${migration.name}" (v${String(migration.version)}) contains more than one SQL statement. Split it into separate migrations — batch() runs them atomically.`,
             );
         }
@@ -233,7 +235,7 @@ class MigrationRunner {
         // hex string (asserted below) and `created_at` is a numeric clock
         // reading. The hash assertion guarantees no quote/escape can slip in.
         if (!SHA256_HEX_RE.test(hash)) {
-            throw new Error(`migration "${migration.name}" produced a non-hex hash; refusing to inline into SQL`);
+            throw new LunoraError("INTERNAL", `migration "${migration.name}" produced a non-hex hash; refusing to inline into SQL`);
         }
 
         const trackingInsertSql = `INSERT INTO ${TRACKING_TABLE_NAME} (hash, created_at) VALUES ('${hash}', ${String(Date.now())})`;
@@ -248,7 +250,7 @@ class MigrationRunner {
 
         for (const m of this.migrations) {
             if (seen.has(m.version)) {
-                throw new Error(`Duplicate migration version ${String(m.version)}`);
+                throw new LunoraError("INTERNAL", `Duplicate migration version ${String(m.version)}`);
             }
 
             seen.add(m.version);
@@ -266,7 +268,10 @@ class MigrationRunner {
             const previousVersion = seen.get(m.sql);
 
             if (previousVersion !== undefined) {
-                throw new Error(`Migrations ${String(previousVersion)} and ${String(m.version)} have identical SQL — bump the content, not just the version.`);
+                throw new LunoraError(
+                    "INTERNAL",
+                    `Migrations ${String(previousVersion)} and ${String(m.version)} have identical SQL — bump the content, not just the version.`,
+                );
             }
 
             seen.set(m.sql, m.version);

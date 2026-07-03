@@ -8,6 +8,7 @@ import type {
     StudioFeaturesResult,
     WorkflowsResult,
 } from "@lunora/do";
+import { LunoraError } from "@lunora/errors";
 
 import compileArgsValidator from "./compile-validator";
 import type {
@@ -95,7 +96,7 @@ const IMPORT_PATH_RE = /^[\w./-]+$/u;
 
 const assertIdentifier = (value: string, context: string): void => {
     if (!IDENTIFIER_RE.test(value)) {
-        throw new Error(`@lunora/codegen: ${context} is not a valid JS identifier: ${JSON.stringify(value)}`);
+        throw new LunoraError("INTERNAL", `@lunora/codegen: ${context} is not a valid JS identifier: ${JSON.stringify(value)}`);
     }
 };
 
@@ -137,7 +138,10 @@ const literalToType = (value: string | undefined): string => {
     }
 
     if (!LITERAL_VALUE_RE.test(value)) {
-        throw new Error(`@lunora/codegen: v.literal() argument is not a parseable string/number/boolean/null literal: ${JSON.stringify(value)}`);
+        throw new LunoraError(
+            "INTERNAL",
+            `@lunora/codegen: v.literal() argument is not a parseable string/number/boolean/null literal: ${JSON.stringify(value)}`,
+        );
     }
 
     return value;
@@ -819,7 +823,7 @@ const renderFunctionRegistry = (
     const importLines = [...aliasByPath.entries()]
         .map(([filePath, alias]) => {
             if (!IMPORT_PATH_RE.test(filePath)) {
-                throw new Error(`@lunora/codegen: refusing to emit import for unsafe file path: ${JSON.stringify(filePath)}`);
+                throw new LunoraError("INTERNAL", `@lunora/codegen: refusing to emit import for unsafe file path: ${JSON.stringify(filePath)}`);
             }
 
             return `import * as ${alias} from "../${filePath}.js";`;

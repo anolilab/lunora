@@ -13,6 +13,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import { LunoraError } from "@lunora/errors";
 import { dirname, join } from "@visulima/path";
 
 import type { Logger } from "./logger";
@@ -119,7 +120,7 @@ const resolveVersionRef = (version: string): string => {
 const resolveSourceRef = (ref: string | undefined): string => {
     if (ref !== undefined && ref.length > 0) {
         if (!isSafeRef(ref)) {
-            throw new Error(`invalid --ref "${ref}" — a ref may contain letters, digits, ".", "_", "-", "/", "@" and must not contain "..".`);
+            throw new LunoraError("INTERNAL", `invalid --ref "${ref}" — a ref may contain letters, digits, ".", "_", "-", "/", "@" and must not contain "..".`);
         }
 
         return ref;

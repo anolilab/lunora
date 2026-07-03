@@ -12,6 +12,8 @@
  * - **Images delivery variant** — `&lt;baseUrl>/&lt;imageId>/&lt;variant>`, the
  * hosted-Images delivery form (a named variant like `public`/`thumbnail`).
  */
+import { LunoraError } from "@lunora/errors";
+
 import type { TransformOptions } from "./types";
 
 const ABSOLUTE_URL_RE = /^[a-z][a-z\d+\-.]*:\/\//i;
@@ -42,7 +44,8 @@ const serializeTransform = (transform: TransformOptions): string =>
             // instead of emitting a wrong transform. Colors must use the hex
             // form (e.g. `%23RRGGBB`), not `rgb(r,g,b)`.
             if (serialized.includes(",") || serialized.includes("=")) {
-                throw new Error(
+                throw new LunoraError(
+                    "INTERNAL",
                     `@lunora/bindings/images: transform option \`${key}\` value \`${serialized}\` contains a \`,\` or \`=\`, which the /cdn-cgi/image/ option list cannot represent` +
                         " (these are the option/key-value separators). For colors, use the hex form (e.g. `#RRGGBB`/`%23RRGGBB`) instead of `rgb(r,g,b)`.",
                 );
@@ -98,7 +101,7 @@ export const buildImageDeliveryUrl = (options: ImageDeliveryUrlOptions): string 
     }
 
     if (options.key === undefined) {
-        throw new Error("@lunora/bindings/images: buildImageDeliveryUrl requires either `imageId` or `key`");
+        throw new LunoraError("INTERNAL", "@lunora/bindings/images: buildImageDeliveryUrl requires either `imageId` or `key`");
     }
 
     const optionString = options.transform === undefined ? "" : serializeTransform(options.transform);

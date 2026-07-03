@@ -29,6 +29,8 @@
  * wrangler.jsonc schedule array and a dispatcher map the runtime's
  * `scheduled()` handler consumes — the user never edits wrangler by hand.
  */
+import { LunoraError } from "@lunora/errors";
+
 import type { CronTarget, CronTargetArgs } from "./types";
 import { isWorkflowReference } from "./types";
 import { assertValidCronExpression } from "./validate-cron";
@@ -102,7 +104,10 @@ const WEEKDAY_INDEX: Record<WeeklySchedule["dayOfWeek"], number> = {
 /** Validate an integer in `[min, max]` and return it as a cron field string. */
 const field = (value: number, label: string, min: number, max: number): string => {
     if (!Number.isInteger(value) || value < min || value > max) {
-        throw new Error(`@lunora/scheduler: cronJobs ${label} must be an integer in [${min.toFixed(0)}, ${max.toFixed(0)}], got ${String(value)}`);
+        throw new LunoraError(
+            "INTERNAL",
+            `@lunora/scheduler: cronJobs ${label} must be an integer in [${min.toFixed(0)}, ${max.toFixed(0)}], got ${String(value)}`,
+        );
     }
 
     return value.toFixed(0);
@@ -117,7 +122,7 @@ const compileInterval = (schedule: IntervalSchedule): string => {
     const units = (["seconds", "minutes", "hours"] as const).filter((unit) => schedule[unit] !== undefined);
 
     if (units.length !== 1) {
-        throw new Error(`@lunora/scheduler: interval schedule must specify exactly one of { seconds, minutes, hours }`);
+        throw new LunoraError("INTERNAL", `@lunora/scheduler: interval schedule must specify exactly one of { seconds, minutes, hours }`);
     }
 
     const unit = units[0] as "hours" | "minutes" | "seconds";
@@ -145,7 +150,7 @@ const compileWeekly = (schedule: WeeklySchedule): string => {
     const index = WEEKDAY_INDEX[schedule.dayOfWeek] as number | undefined;
 
     if (index === undefined) {
-        throw new Error(`@lunora/scheduler: weekly schedule has invalid dayOfWeek "${schedule.dayOfWeek}"`);
+        throw new LunoraError("INTERNAL", `@lunora/scheduler: weekly schedule has invalid dayOfWeek "${schedule.dayOfWeek}"`);
     }
 
     const minute = field(schedule.minuteUTC, "weekly.minuteUTC", 0, 59);
@@ -189,7 +194,7 @@ const compileCronSchedule = (kind: CronScheduleKind, schedule: DailySchedule | I
             return compileWeekly(schedule as WeeklySchedule);
         }
         default: {
-            throw new Error(`@lunora/scheduler: unknown cron schedule kind "${String(kind)}"`);
+            throw new LunoraError("INTERNAL", `@lunora/scheduler: unknown cron schedule kind "${String(kind)}"`);
         }
     }
 };
@@ -229,11 +234,11 @@ const cronJobs = (): CronJobsBuilder => {
 
     const register = (name: string, cron: string, target: CronTarget, args: Record<string, unknown> | undefined): void => {
         if (typeof name !== "string" || name.trim() === "") {
-            throw new Error(`@lunora/scheduler: cron job name must be a non-empty string`);
+            throw new LunoraError("INTERNAL", `@lunora/scheduler: cron job name must be a non-empty string`);
         }
 
         if (seen.has(name)) {
-            throw new Error(`@lunora/scheduler: duplicate cron job name "${name}" — names must be unique within one cronJobs()`);
+            throw new LunoraError("INTERNAL", `@lunora/scheduler: duplicate cron job name "${name}" — names must be unique within one cronJobs()`);
         }
 
         // Workflow target — starts a durable workflow INSTANCE per fire (args ⇒
@@ -251,7 +256,10 @@ const cronJobs = (): CronJobsBuilder => {
 
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the required type
         if (!target || typeof target.__lunoraRef !== "string") {
-            throw new Error(`@lunora/scheduler: cron job "${name}" requires a function reference (e.g. internal.email.digest) or a workflow reference`);
+            throw new LunoraError(
+                "INTERNAL",
+                `@lunora/scheduler: cron job "${name}" requires a function reference (e.g. internal.email.digest) or a workflow reference`,
+            );
         }
 
         assertValidCronExpression(cron, `cron expression for job "${name}"`);

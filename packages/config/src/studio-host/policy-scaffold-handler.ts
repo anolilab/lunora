@@ -22,6 +22,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { isAbsolute, relative } from "node:path";
 
 import { CodegenDiagnosticError, runCodegen } from "@lunora/codegen";
+import { LunoraError } from "@lunora/errors";
 
 import join from "../path";
 import type { DestructivePolicyEdit, PolicyEdit, PolicyScaffoldFailureReason, ScaffoldPolicyEdit, WireRlsEdit } from "../schema-edit/policy-scaffold";
@@ -216,7 +217,7 @@ const handlePolicyScaffoldRequest = (request: PolicyScaffoldRequest): PolicyScaf
     // destructive branch above, leaving only the two additive kinds handled
     // here. Throw rather than guess so a future additive kind that forgets its
     // branch fails loudly instead of silently masquerading as destructive.
-    throw new Error(`unhandled additive policy edit kind: ${String((edit as { kind?: unknown }).kind)}`);
+    throw new LunoraError("INTERNAL", `unhandled additive policy edit kind: ${String((edit as { kind?: unknown }).kind)}`);
 };
 
 export type { PolicyScaffoldBody, PolicyScaffoldRequest, PolicyScaffoldResponse, WirePolicyEdit };

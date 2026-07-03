@@ -1,4 +1,5 @@
 import type { FunctionDescriptor, FunctionReference, LunoraClient } from "@lunora/client";
+import { LunoraError } from "@lunora/errors";
 
 /**
  * The tool surface this MCP server exposes. Each tool maps onto a method the
@@ -107,7 +108,7 @@ const readFunctionPath = (input: Record<string, unknown>): string => {
     const { functionPath } = input;
 
     if (typeof functionPath !== "string" || functionPath.length === 0) {
-        throw new Error('"functionPath" is required and must be a non-empty string');
+        throw new LunoraError("INTERNAL", '"functionPath" is required and must be a non-empty string');
     }
 
     return functionPath;

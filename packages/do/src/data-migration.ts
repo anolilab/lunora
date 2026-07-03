@@ -24,6 +24,8 @@
  * rows or the state table.
  */
 
+import { LunoraError } from "@lunora/errors";
+
 import type { DatabaseWriterLike, SqlCursor, SqlExec } from "./ctx-db";
 
 /** Reserved table the per-shard runner tracks migration progress in. Auto-hidden from the data browser by the `__lunora` prefix. */
@@ -377,7 +379,7 @@ const runDataMigration = async (options: RunDataMigrationOptions): Promise<Migra
     const transform = direction === "up" ? migration.up : migration.down;
 
     if (!transform) {
-        throw new Error(`data migration "${migration.id}" has no \`${direction}\` transform`);
+        throw new LunoraError("INTERNAL", `data migration "${migration.id}" has no \`${direction}\` transform`);
     }
 
     // eslint-disable-next-line unicorn/no-null -- keyset cursor: null is the "start of table" sentinel and the value bound to the SQLite cursor column

@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import type { BetterAuthOptions } from "better-auth";
 import { betterAuth } from "better-auth";
 
@@ -108,7 +109,7 @@ const hardenAuthOptions = (options: BetterAuthOptions): BetterAuthOptions => {
         // `http://` spikes keep the soft warning so a quick prototype isn't
         // blocked.
         if (isHttpsBaseUrl(options.baseURL)) {
-            throw new Error(message);
+            throw new LunoraError("INTERNAL", message);
         }
 
         // eslint-disable-next-line no-console
@@ -283,7 +284,8 @@ export const createAuth = (options: LunoraAuthOptions): LunoraAuth => {
     // misconfigured, so fail loudly at construction time rather than at the
     // first sign-in attempt.
     if (!options.secret || options.secret.trim() === "") {
-        throw new Error(
+        throw new LunoraError(
+            "INTERNAL",
             "@lunora/auth: `secret` is required. Set AUTH_SECRET locally in .dev.vars " +
                 '(`lunora env set AUTH_SECRET "$(openssl rand -hex 32)"`), and in production ' +
                 "with `wrangler secret put AUTH_SECRET`.",

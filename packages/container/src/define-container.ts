@@ -5,6 +5,8 @@
  * names, binding names, and wrangler image fields from the exact same logic
  * the runtime uses.
  */
+import { LunoraError } from "@lunora/errors";
+
 import type { ContainerConfig, ContainerDefinition, ContainerImageSource, NormalizedContainerImage } from "./types";
 
 const NAMED_INSTANCE_TYPES = new Set(["basic", "lite", "standard-1", "standard-2", "standard-3", "standard-4"]);
@@ -378,7 +380,8 @@ const resolveContainerEnvVariables = (definition: ContainerDefinition, workerEnv
         if (typeof value !== "string") {
             const label = exportName === undefined ? "container" : `container "${exportName}"`;
 
-            throw new Error(
+            throw new LunoraError(
+                "INTERNAL",
                 `${label}: declared secret "${secret}" is not set on the Worker environment. Add it to .dev.vars for local dev and run \`wrangler secret put ${secret}\` for production.`,
             );
         }

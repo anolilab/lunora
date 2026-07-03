@@ -61,6 +61,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
+        "@lunora/errors": "1.0.0-alpha.0",
         "cron-parser": "5.6.1"
     },
     "devDependencies": {

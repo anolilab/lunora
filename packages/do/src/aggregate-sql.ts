@@ -11,6 +11,8 @@
  * that both backends enforce the same allowlist.
  */
 
+import { LunoraError } from "@lunora/errors";
+
 import type { RestrictableQueryOptions } from "./aggregates";
 import type { SchedulerLike } from "./triggers";
 import type { WhereInput } from "./where-types";
@@ -93,7 +95,7 @@ export const aggregateSqlFunction = (op: string): string => {
     const sqlFunction = AGGREGATE_SQL_FUNCTION[op];
 
     if (sqlFunction === undefined) {
-        throw new Error(`unknown aggregate op "${op}": expected one of ${Object.keys(AGGREGATE_SQL_FUNCTION).join(", ")}`);
+        throw new LunoraError("INTERNAL", `unknown aggregate op "${op}": expected one of ${Object.keys(AGGREGATE_SQL_FUNCTION).join(", ")}`);
     }
 
     return sqlFunction;
@@ -106,9 +108,9 @@ export const aggregateSqlFunction = (op: string): string => {
  */
 export const throwingScheduler: SchedulerLike = {
     runAfter: () => {
-        throw new Error("ctx.scheduler: no scheduler configured for triggers. Pass `scheduler` to the ctx-db factory.");
+        throw new LunoraError("INTERNAL", "ctx.scheduler: no scheduler configured for triggers. Pass `scheduler` to the ctx-db factory.");
     },
     runAt: () => {
-        throw new Error("ctx.scheduler: no scheduler configured for triggers. Pass `scheduler` to the ctx-db factory.");
+        throw new LunoraError("INTERNAL", "ctx.scheduler: no scheduler configured for triggers. Pass `scheduler` to the ctx-db factory.");
     },
 };

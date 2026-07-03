@@ -3344,7 +3344,7 @@ const resolveLunoraOptions = (options: LunoraHandlerOptions, env: unknown): Fram
     const shardDO = options.shardDO ?? (env as { SHARD?: ShardNamespaceLike } | undefined)?.SHARD;
 
     if (!shardDO) {
-        throw new Error(
+        throw new LunoraError(
             "@lunora/runtime: no shard Durable Object namespace found. Bind `SHARD` in wrangler.jsonc, or pass `createLunoraHandler({ shardDO: env.MY_SHARD })`.",
         );
     }

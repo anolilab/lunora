@@ -1,5 +1,6 @@
 "use client";
 
+import { LunoraError } from "@lunora/errors";
 import { motion, useReducedMotion } from "motion/react";
 import type { ComponentProps, ReactNode } from "react";
 import { createContext, use, useId, useRef, useState } from "react";
@@ -79,7 +80,7 @@ function useBarChart() {
     const context = use(BarChartContext);
 
     if (!context) {
-        throw new Error("Bar chart parts (<Bar />, <XAxis />, …) must be used within <EvilBarChart />");
+        throw new LunoraError("INTERNAL", "Bar chart parts (<Bar />, <XAxis />, …) must be used within <EvilBarChart />");
     }
 
     return context;

@@ -8,6 +8,7 @@
  */
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { createDispatchLogger, createDispatchRunner } from "@lunora/dispatch";
+import { LunoraError } from "@lunora/errors";
 
 import { workflowBindingName } from "./define-workflow";
 import type { NativeNonRetryableErrorConstructor } from "./errors";
@@ -43,7 +44,8 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
         const binding = options.env[bindingName] as WorkflowBindingLike | undefined;
 
         if (!binding || typeof binding.create !== "function" || typeof binding.get !== "function") {
-            throw new Error(
+            throw new LunoraError(
+                "INTERNAL",
                 `@lunora/workflow: cannot spawn child workflow "${workflow}" — no Workflow binding "${bindingName}" on env (is it declared in lunora/workflows.ts?)`,
             );
         }

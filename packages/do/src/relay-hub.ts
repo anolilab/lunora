@@ -21,6 +21,8 @@
 
 /* eslint-disable max-classes-per-file -- the role-split is three cohesive collaborators by design: a shared RelayLink base plus the OwnerRelay and RelayMember role classes. */
 
+import { LunoraError } from "@lunora/errors";
+
 import type { SqlExec } from "./ctx-db";
 import type { MaskPoliciesResult, RlsPoliciesResult } from "./introspect";
 import { stableStringify } from "./reactive-cache";
@@ -115,7 +117,7 @@ const RELAY_MULTICAST_IDENTITY: SubscriptionIdentity = {};
 
 /** Exhaustiveness guard for the {@link OwnerRelayFrame} dispatch — an unhandled member is a compile error here, and an impossible runtime frame throws rather than silently mis-routing. */
 const assertNeverFrame = (frame: never): never => {
-    throw new Error(`unhandled relay frame: ${JSON.stringify(frame)}`);
+    throw new LunoraError("INTERNAL", `unhandled relay frame: ${JSON.stringify(frame)}`);
 };
 
 /** Minimal Durable Object stub surface the relay tier needs to POST a control frame to a sibling. */

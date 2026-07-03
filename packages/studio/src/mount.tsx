@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 
@@ -25,7 +26,7 @@ export const mountStudio = (options: MountStudioOptions = {}): Root => {
     const element = typeof container === "string" ? document.querySelector(container) : container;
 
     if (element === null) {
-        throw new Error(`mountStudio: container ${typeof container === "string" ? container : "element"} not found`);
+        throw new LunoraError("INTERNAL", `mountStudio: container ${typeof container === "string" ? container : "element"} not found`);
     }
 
     const root = createRoot(element);

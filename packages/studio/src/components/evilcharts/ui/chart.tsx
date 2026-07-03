@@ -1,5 +1,6 @@
 "use client";
 
+import { LunoraError } from "@lunora/errors";
 import * as React from "react";
 import * as RechartsPrimitive from "recharts";
 
@@ -29,7 +30,8 @@ function validateChartConfigColors(config: ChartConfig): void {
             const hasValidThemeKey = VALID_THEME_KEYS.some((themeKey) => value.colors?.[themeKey] !== undefined);
 
             if (!hasValidThemeKey) {
-                throw new Error(
+                throw new LunoraError(
+                    "INTERNAL",
                     `[EvilCharts] Invalid chart config for "${key}": colors object must have at least one theme key (${VALID_THEME_KEYS.join(", ")}). Received empty object or invalid keys.`,
                 );
             }
@@ -56,7 +58,7 @@ export function useChart() {
     const context = React.useContext(ChartContext);
 
     if (!context) {
-        throw new Error("useChart must be used within a <ChartContainer />");
+        throw new LunoraError("INTERNAL", "useChart must be used within a <ChartContainer />");
     }
 
     return context;

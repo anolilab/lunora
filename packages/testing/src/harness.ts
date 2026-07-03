@@ -1,5 +1,6 @@
 import type { SchemaLike } from "@lunora/do";
 import { createShardCtxDb, runShardMigrations } from "@lunora/do";
+import { LunoraError } from "@lunora/errors";
 import type {
     ActionCtx,
     ArgsValidator,
@@ -218,7 +219,7 @@ const registeredFunctionVisibility = (value: unknown): "internal" | "public" =>
  * functions that never reach for it still run.
  */
 const unavailable = (surface: string): never => {
-    throw new Error(`ctx.${surface} is not available in the in-memory @lunora/testing harness (v1)`);
+    throw new LunoraError("INTERNAL", `ctx.${surface} is not available in the in-memory @lunora/testing harness (v1)`);
 };
 
 /**
@@ -522,14 +523,20 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
     const { controls: schedulerControls, scheduler: fakeScheduler } = createFakeScheduler(
         () => {
             if (scheduledDispatchRef === undefined) {
-                throw new Error("[fake-scheduler] dispatch not yet available — scheduler.advance called before harness construction completed");
+                throw new LunoraError(
+                    "INTERNAL",
+                    "[fake-scheduler] dispatch not yet available — scheduler.advance called before harness construction completed",
+                );
             }
 
             return scheduledDispatchRef;
         },
         () => {
             if (mutationContextRef === undefined) {
-                throw new Error("[fake-scheduler] mutationContext not yet available — scheduler.advance called before harness construction completed");
+                throw new LunoraError(
+                    "INTERNAL",
+                    "[fake-scheduler] mutationContext not yet available — scheduler.advance called before harness construction completed",
+                );
             }
 
             return mutationContextRef;
@@ -612,11 +619,12 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
             const kind = registeredFunctionKind(reference);
 
             if (kind !== expected) {
-                throw new Error(`expected a registered ${expected}, received a ${kind ?? "non-function"} reference`);
+                throw new LunoraError("INTERNAL", `expected a registered ${expected}, received a ${kind ?? "non-function"} reference`);
             }
 
             if (!allowInternal && registeredFunctionVisibility(reference) === "internal") {
-                throw new Error(
+                throw new LunoraError(
+                    "INTERNAL",
                     `"${expected}" is an internal function — it is unreachable from the external RPC boundary in production. ` +
                         `Call it through ctx.run${expected.charAt(0).toUpperCase()}${expected.slice(1)} from another function instead.`,
                 );

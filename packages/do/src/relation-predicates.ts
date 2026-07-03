@@ -28,6 +28,8 @@
  * inside-out).
  */
 
+import { LunoraError } from "@lunora/errors";
+
 import type { TableDefinitionLike } from "./ctx-db";
 import type { QueryArgs, QueryPage } from "./query-args";
 import type { RelationDefinitionLike } from "./relations";
@@ -236,7 +238,7 @@ const containsRelationPredicate = (where: WhereInput, schema: ResolveContext["sc
  */
 const assertFlatPredicate = (where: WhereInput | undefined, schema: ResolveContext["schema"], tableName: string, op: string): void => {
     if (where && containsRelationPredicate(where, schema, tableName)) {
-        throw new Error(`relation-crossing predicates are not supported in ${op}() — use them in findMany/findFirst or an RLS read policy`);
+        throw new LunoraError("INTERNAL", `relation-crossing predicates are not supported in ${op}() — use them in findMany/findFirst or an RLS read policy`);
     }
 };
 
@@ -271,7 +273,8 @@ const projectChildKeys = async (
             return KEY_OVERFLOW;
         }
 
-        throw new Error(
+        throw new LunoraError(
+            "INTERNAL",
             `relation predicate on "${relation.table}" matched ${String(keys.length)} rows, exceeding the ${String(context.maxRelationKeys)}-key limit; narrow the predicate (a same-shard EXISTS push-down lifts this cap)`,
         );
     }
@@ -307,7 +310,7 @@ const compileOperator = async (
     const meta = RELATION_OPERATOR_META[operator];
 
     if (!meta) {
-        throw new Error(`unknown relation operator "${operator}"`);
+        throw new LunoraError("INTERNAL", `unknown relation operator "${operator}"`);
     }
 
     const { clause, project } = joinColumns(relation);
@@ -347,7 +350,7 @@ const buildExistsMarker = async (
     const meta = RELATION_OPERATOR_META[operator];
 
     if (!meta) {
-        throw new Error(`unknown relation operator "${operator}"`);
+        throw new LunoraError("INTERNAL", `unknown relation operator "${operator}"`);
     }
 
     const base = context.relationBaseWhere?.(relation.table);
@@ -365,7 +368,7 @@ const assertCardinality = (operator: string, name: string, relation: RelationDef
     const meta = RELATION_OPERATOR_META[operator];
 
     if (meta && meta.kind !== relation.kind) {
-        throw new Error(`relation operator "${operator}" requires a to-${meta.kind} relation, but "${name}" is to-${relation.kind}`);
+        throw new LunoraError("INTERNAL", `relation operator "${operator}" requires a to-${meta.kind} relation, but "${name}" is to-${relation.kind}`);
     }
 };
 

@@ -1,14 +1,6 @@
-import type {
-    Browser,
-    BrowserLaunchLike,
-    BrowserLike,
-    LunoraBrowserOptions,
-    NavigateOptions,
-    PageLike,
-    PdfOptions,
-    RouteLike,
-    ScreenshotOptions,
-} from "./types";
+import { LunoraError } from "@lunora/errors";
+
+import type { Browser, BrowserLaunchLike, BrowserLike, LunoraBrowserOptions, NavigateOptions, PageLike, PdfOptions, RouteLike, ScreenshotOptions } from "./types";
 
 /** Default navigation timeout when neither the call nor the factory sets one. */
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -329,7 +321,7 @@ const isPrivateTarget = (parsed: URL): boolean => {
  */
 const validateUrl = (url: string, allowPrivateTargets: boolean, allowedHosts?: ReadonlyArray<string>): string => {
     if (typeof url !== "string" || url.length === 0) {
-        throw new Error("@lunora/browser: url must be a non-empty string");
+        throw new LunoraError("INTERNAL", "@lunora/browser: url must be a non-empty string");
     }
 
     let parsed: URL;
@@ -337,15 +329,15 @@ const validateUrl = (url: string, allowPrivateTargets: boolean, allowedHosts?: R
     try {
         parsed = new URL(url);
     } catch {
-        throw new Error(`@lunora/browser: url must be an absolute http(s) URL (got "${url}")`);
+        throw new LunoraError("INTERNAL", `@lunora/browser: url must be an absolute http(s) URL (got "${url}")`);
     }
 
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-        throw new Error(`@lunora/browser: url protocol must be http(s) (got "${parsed.protocol}")`);
+        throw new LunoraError("INTERNAL", `@lunora/browser: url protocol must be http(s) (got "${parsed.protocol}")`);
     }
 
     if (parsed.username !== "" || parsed.password !== "") {
-        throw new Error("@lunora/browser: url must not embed credentials (strip the `user:pass@` userinfo)"); // gitleaks:allow -- illustrative error text, not a credential
+        throw new LunoraError("INTERNAL", "@lunora/browser: url must not embed credentials (strip the `user:pass@` userinfo)"); // gitleaks:allow -- illustrative error text, not a credential
     }
 
     if (allowedHosts && allowedHosts.length > 0) {
@@ -357,7 +349,8 @@ const validateUrl = (url: string, allowPrivateTargets: boolean, allowedHosts?: R
     }
 
     if (!allowPrivateTargets && isPrivateTarget(parsed)) {
-        throw new Error(
+        throw new LunoraError(
+            "INTERNAL",
             `@lunora/browser: url host "${parsed.hostname}" is a private/internal address; pass createBrowser({ …, allowPrivateTargets: true }) to allow it`,
         );
     }
@@ -400,12 +393,13 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
     // (and `createBrowser({})` misuse) can omit it.
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the type
     if (!options.binding) {
-        throw new Error("@lunora/browser: `binding` is required (env.BROWSER)");
+        throw new LunoraError("INTERNAL", "@lunora/browser: `binding` is required (env.BROWSER)");
     }
 
     const getLaunch = (): BrowserLaunchLike => {
         if (!options.launch) {
-            throw new Error(
+            throw new LunoraError(
+                "INTERNAL",
                 '@lunora/browser: `launch` is not available — install the `@cloudflare/playwright` peer dependency. The generated worker wires it for you; outside codegen pass it via createBrowser({ binding, launch }) (import { launch } from "@cloudflare/playwright").',
             );
         }

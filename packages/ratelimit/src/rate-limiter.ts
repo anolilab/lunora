@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/errors";
+
 import { availableAt, evaluate } from "./algorithms";
 import RateLimitError from "./error";
 import { createMemoryStore } from "./store";
@@ -92,7 +94,7 @@ class RateLimiter<Names extends string = string> {
 
         for (const [name, config] of Object.entries<RateLimitConfig>(this.config)) {
             if (config.shards !== undefined && (!Number.isInteger(config.shards) || config.shards < 1)) {
-                throw new Error(`rate limit "${name}": shards must be a positive integer`);
+                throw new LunoraError("INTERNAL", `rate limit "${name}": shards must be a positive integer`);
             }
 
             // A zero/negative/non-finite period divides by zero in the token
@@ -100,15 +102,15 @@ class RateLimiter<Names extends string = string> {
             // window starts in the windowed algorithms — silently corrupting
             // every subsequent admit/reject decision. Fail fast at construction.
             if (!Number.isFinite(config.period) || config.period <= 0) {
-                throw new Error(`rate limit "${name}": period must be a positive number`);
+                throw new LunoraError("INTERNAL", `rate limit "${name}": period must be a positive number`);
             }
 
             if (!Number.isFinite(config.rate) || config.rate <= 0) {
-                throw new Error(`rate limit "${name}": rate must be a positive number`);
+                throw new LunoraError("INTERNAL", `rate limit "${name}": rate must be a positive number`);
             }
 
             if (config.capacity !== undefined && (!Number.isFinite(config.capacity) || config.capacity < 0)) {
-                throw new Error(`rate limit "${name}": capacity must be a non-negative number`);
+                throw new LunoraError("INTERNAL", `rate limit "${name}": capacity must be a non-negative number`);
             }
         }
     }
@@ -167,7 +169,7 @@ class RateLimiter<Names extends string = string> {
         // callers can pass an unconfigured name.
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the keyed type
         if (!config) {
-            throw new Error(`rate limit "${name}" is not configured`);
+            throw new LunoraError("INTERNAL", `rate limit "${name}" is not configured`);
         }
 
         return config;
@@ -197,7 +199,7 @@ class RateLimiter<Names extends string = string> {
         // bucket, so reject anything that isn't a positive integer before it
         // reaches the accounting layer.
         if (!Number.isInteger(count) || count <= 0) {
-            throw new Error(`rate limit "${name}": count must be a positive integer`);
+            throw new LunoraError("INTERNAL", `rate limit "${name}": count must be a positive integer`);
         }
 
         const shards = config.shards ?? 1;

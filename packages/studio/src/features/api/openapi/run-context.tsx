@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import { useLunora } from "@lunora/react";
 import type { ReactElement, ReactNode } from "react";
 import { createContext, use, useState } from "react";
@@ -38,7 +39,7 @@ const useOperationRun = (): OperationRun => {
     const value = use(OperationRunContext);
 
     if (value === null) {
-        throw new Error("useOperationRun must be used within an OperationRunProvider");
+        throw new LunoraError("INTERNAL", "useOperationRun must be used within an OperationRunProvider");
     }
 
     return value;

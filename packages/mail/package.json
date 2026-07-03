@@ -69,6 +69,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
+        "@lunora/errors": "1.0.0-alpha.0",
         "@react-email/render": "catalog:mail",
         "@visulima/email": "catalog:mail",
         "postal-mime": "catalog:mail"

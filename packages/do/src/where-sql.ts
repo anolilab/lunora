@@ -15,6 +15,7 @@
  * path resolves relations to flat clauses upstream and omits the hook.
  */
 /* eslint-disable no-restricted-syntax -- every `sql\`…\`` here is a drizzle tagged-template SQL builder, not a string conversion; the rule misfires on the inner TemplateLiteral. */
+import { LunoraError } from "@lunora/errors";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
@@ -211,7 +212,7 @@ const STRUCTURAL_KEYS = new Set<string>(["AND", "NOT", "OR", RELATION_EXISTS_KEY
 const compileStructuralKey = (key: string, value: unknown, strategy: WhereSqlStrategy): SQL | undefined => {
     if (key === RELATION_EXISTS_KEY) {
         if (!strategy.relationExists) {
-            throw new Error("encountered a relation EXISTS marker without a relationExists strategy hook");
+            throw new LunoraError("INTERNAL", "encountered a relation EXISTS marker without a relationExists strategy hook");
         }
 
         return strategy.relationExists(value);

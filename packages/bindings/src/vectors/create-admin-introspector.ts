@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/errors";
+
 import type { EmbedFunction, VectorizeIndexLike, VectorMetric } from "./types";
 
 /**
@@ -113,13 +115,13 @@ export const createVectorAdminIntrospector = (options: VectorAdminIntrospectorOp
         const binding = indexes[name];
 
         if (binding === undefined) {
-            throw new Error(`@lunora/bindings/vectors: no Vectorize binding registered for index "${name}"`);
+            throw new LunoraError("INTERNAL", `@lunora/bindings/vectors: no Vectorize binding registered for index "${name}"`);
         }
 
         const embed = embedders[name];
 
         if (embed === undefined) {
-            throw new Error(`@lunora/bindings/vectors: no embedder registered for index "${name}" — it lists read-only`);
+            throw new LunoraError("INTERNAL", `@lunora/bindings/vectors: no embedder registered for index "${name}" — it lists read-only`);
         }
 
         const vector = await embed(text);

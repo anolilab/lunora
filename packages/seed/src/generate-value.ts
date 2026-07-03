@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import type { Validator } from "@lunora/values";
 
 import { copycat } from "./copycat";
@@ -58,7 +59,8 @@ const generateString = (fieldName: string, input: unknown, constraints: Constrai
     const { maxLength, minLength } = constraints;
 
     if (maxLength !== undefined && minLength !== undefined && minLength > maxLength) {
-        throw new Error(
+        throw new LunoraError(
+            "INTERNAL",
             `Seed constraint error for field "${fieldName}": minLength (${String(minLength)}) > maxLength (${String(maxLength)}). Adjust the schema constraints.`,
         );
     }

@@ -7,6 +7,7 @@
  * container-enabled DO, so this module stays Node-safe and the test double
  * below can satisfy the exact same shape without a workerd runtime.
  */
+import { LunoraError } from "@lunora/errors";
 
 /** Options for explicitly starting an instance (mirrors `@cloudflare/containers`). */
 interface ContainerStartOptions {
@@ -564,7 +565,8 @@ const accessorFor = (namespace: ContainerNamespaceLike, spec: ContainerBindingSp
 /** Accessor used when the binding is absent: every call throws a directed error. */
 const missingBindingAccessor = (spec: ContainerBindingSpec): ContainerAccessor => {
     const fail = (): never => {
-        throw new Error(
+        throw new LunoraError(
+            "INTERNAL",
             `ctx.containers.${spec.exportName}: no "${spec.binding}" Durable Object binding found. Run \`lunora dev\` (or \`lunora deploy\`) to reconcile wrangler.jsonc, and make sure the worker entry re-exports the generated container classes.`,
         );
     };

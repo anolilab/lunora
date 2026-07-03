@@ -16,6 +16,8 @@
  * invisible runtime elasticity).
  */
 
+import { LunoraError } from "@lunora/errors";
+
 import { stableStringify } from "./reactive-cache";
 import type { ShapeRowOp } from "./shape-global-diff";
 
@@ -62,7 +64,7 @@ const DEFAULT_PROMOTION_THRESHOLDS: PromotionThresholds = { tDown: 4000, tUp: 80
  */
 const nextPromotionState = (current: PromotionState, subscribers: number, thresholds: PromotionThresholds = DEFAULT_PROMOTION_THRESHOLDS): PromotionState => {
     if (thresholds.tDown >= thresholds.tUp) {
-        throw new Error(`invalid promotion thresholds: tDown (${String(thresholds.tDown)}) must be < tUp (${String(thresholds.tUp)})`);
+        throw new LunoraError("INTERNAL", `invalid promotion thresholds: tDown (${String(thresholds.tDown)}) must be < tUp (${String(thresholds.tUp)})`);
     }
 
     if (current === "owned") {
