@@ -307,6 +307,17 @@ export const packages: PackageInfo[] = [
     {
         accentColor: categoryColors["Add-ons"]!,
         category: "Add-ons",
+        description:
+            "Cloudflare Access (Zero Trust) identity for Lunora — verify the Cf-Access-Jwt-Assertion JWT against your team JWKS and feed the verified identity into ctx.auth / RLS via a resolveIdentity adapter",
+        docsPath: "/docs/packages/cloudflare-access",
+        features: [],
+        name: "Cloudflare Access",
+        npmName: "@lunora/cloudflare-access",
+        slug: "cloudflare-access",
+    },
+    {
+        accentColor: categoryColors["Add-ons"]!,
+        category: "Add-ons",
         description: "Cloudflare Containers: defineContainer → generated container DOs + typed ctx.containers.",
         docsPath: "/docs/packages/container",
         features: ["defineContainer DO classes", "Typed ctx.containers", "Dockerfile / registry images"],
