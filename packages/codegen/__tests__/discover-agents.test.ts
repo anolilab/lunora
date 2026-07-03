@@ -88,12 +88,12 @@ describe("discover-agents", () => {
         });
     });
 
-    it("ignores the destructured runtime-function re-export in the same file", () => {
+    it("tolerates a hand-written runtime-function re-export without lifting it", () => {
         expect.assertions(1);
 
-        // `agentComponent().functions` is a property access, not a defineAgent
-        // call — discovery lifts only the `defineAgent` export, never the
-        // component functions the app re-exports for the `agents:*` namespace.
+        // Auto-registration makes this re-export unnecessary, but a user who
+        // writes it anyway must not break discovery: the initializer is a
+        // property access, not a defineAgent call, so only `support` is lifted.
         writeAgents(`
             import { agentComponent, defineAgent } from "@lunora/agent";
 
@@ -295,5 +295,19 @@ describe("auto-registered agent runtime functions", () => {
                 .map(([name]) => name)
                 .toSorted((a, b) => a.localeCompare(b)),
         ).toStrictEqual(["agentMessages", "agentThread"]);
+    });
+
+    it("pins the synthetic api arg shapes to the runtime component (drift guard)", () => {
+        expect.assertions(2);
+
+        // The api types for the two public queries are hand-pinned in
+        // syntheticAgentApiFunctions (codegen cannot read a published package's
+        // types) — at least the arg KEY SETS must match the runtime validators.
+        // A type-level change still needs a manual mirror; see the KEEP IN SYNC
+        // breadcrumbs in emit.ts and @lunora/agent's component.ts.
+        const runtime = agentComponent().functions;
+
+        expect(Object.keys(runtime.agentMessages.args as Record<string, unknown>).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["key", "limit"]);
+        expect(Object.keys(runtime.agentThread.args as Record<string, unknown>).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["key"]);
     });
 });

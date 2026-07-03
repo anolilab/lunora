@@ -215,6 +215,11 @@ export const agentComponent = (): AgentComponent => {
             });
         });
 
+    // KEEP IN SYNC: the arg/return TYPES of the two public queries below are
+    // mirrored by hand into codegen's `syntheticAgentApiFunctions` (emit.ts) —
+    // codegen cannot statically read this package's types, and only the arg
+    // key sets are drift-tested. Changing an input or return shape here means
+    // updating the emitted `api.agents.*` reference types there too.
     const agentThread = query.input({ key: v.string() }).query(async ({ args, ctx: context }): Promise<Record<string, unknown> | undefined> => {
         const thread = await context.db
             .query(THREADS_TABLE)

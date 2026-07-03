@@ -1,4 +1,5 @@
 import type { Finding } from "@lunora/advisor";
+import { agentComponent } from "@lunora/agent";
 import type {
     AdvisoryFinding,
     MaskPoliciesResult,
@@ -642,9 +643,12 @@ ${objectMembers}
  * values come from `agentComponent()` imported directly inside the generated
  * dispatch table, so apps never re-export them by hand — and function
  * discovery (which cannot resolve a destructured re-export through a
- * published package's `.d.ts`) is never involved.
+ * published package's `.d.ts`) is never involved. The name list is DERIVED
+ * from codegen's own `@lunora/agent` dependency at emit time, so a function
+ * added to (or renamed in) the component is auto-registered without touching
+ * this file — only the typed api surface below is pinned by hand.
  */
-const AGENT_RUNTIME_FUNCTION_NAMES = ["agentAppendMessage", "agentEnsureThread", "agentMessages", "agentPatchThread", "agentThread"] as const;
+const agentRuntimeFunctionNames = (): ReadonlyArray<string> => Object.keys(agentComponent().functions).toSorted((a, b) => a.localeCompare(b));
 
 /** Names the app registered itself under the `agents` namespace — they win over auto-registration. */
 const takenAgentFunctionNames = (functions: ReadonlyArray<FunctionIR>): ReadonlySet<string> =>
@@ -666,7 +670,7 @@ const renderAgentFunctionRegistry = (
     }
 
     const taken = takenAgentFunctionNames(functions);
-    const names = AGENT_RUNTIME_FUNCTION_NAMES.filter((name) => !taken.has(name));
+    const names = agentRuntimeFunctionNames().filter((name) => !taken.has(name));
 
     if (names.length === 0) {
         return empty;
@@ -687,6 +691,12 @@ const renderAgentFunctionRegistry = (
  * internal mutations are deliberately not surfaced — the loop dispatches them
  * by path over the scheduler channel and nothing client- or caller-side needs
  * a reference. App-registered names win (no duplicate members).
+ *
+ * KEEP IN SYNC with `@lunora/agent`'s `component.ts` (`agentMessages` /
+ * `agentThread` inputs + return shapes) — codegen cannot statically discover a
+ * published package's function types, so these are pinned by hand; the drift
+ * test in `discover-agents.test.ts` asserts the arg KEY SETS against the
+ * runtime component, but arg/return TYPE changes must be mirrored manually.
  */
 const syntheticAgentApiFunctions = (agents: ReadonlyArray<AgentIR>, functions: ReadonlyArray<FunctionIR>): FunctionIR[] => {
     if (agents.length === 0) {
@@ -1589,8 +1599,9 @@ const emitFunctions = (
 
     if (agentRegistry.lines.length > 0) {
         // Splice the auto entries after the discovered ones, preserving the
-        // `{\n    entries\n}` layout either side already emits.
-        dispatchBodyWithAgents = dispatchBody.length > 0 ? `${dispatchBody.slice(0, -1)}\n${agentRegistry.lines}\n` : `\n${agentRegistry.lines}\n`;
+        // `{\n    entries\n}` layout either side already emits (trimEnd keeps
+        // this independent of how many trailing newlines the wrapper carries).
+        dispatchBodyWithAgents = dispatchBody.length > 0 ? `${dispatchBody.trimEnd()}\n${agentRegistry.lines}\n` : `\n${agentRegistry.lines}\n`;
     }
     const lifecycleHooks = renderLifecycleManifest(functions);
 
