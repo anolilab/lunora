@@ -39,7 +39,13 @@ export const errorHint = (error: unknown): string | undefined => {
     return Array.isArray(hint) ? hint.filter((line): line is string => typeof line === "string").join("\n") : undefined;
 };
 
-/** Extract a documentation URL (the wire `docsUrl` field) carried on a thrown value (a `LunoraClientError`), or `undefined`. */
+/**
+ * Extract a documentation URL (the wire `docsUrl` field) carried on a thrown
+ * value (a `LunoraClientError`), or `undefined`. Only `http(s)` URLs are
+ * returned — a `javascript:`/`data:` scheme would be an XSS sink once rendered
+ * as an `href`, so anything else is dropped even though `docsUrl` normally comes
+ * from the trusted catalog (defense-in-depth against a crafted error envelope).
+ */
 export const errorDocumentationUrl = (error: unknown): string | undefined => {
     if (error === null || typeof error !== "object" || !("docsUrl" in error)) {
         return undefined;
@@ -47,7 +53,18 @@ export const errorDocumentationUrl = (error: unknown): string | undefined => {
 
     const value = (error as { docsUrl?: unknown }).docsUrl;
 
-    return typeof value === "string" ? value : undefined;
+    if (typeof value !== "string") {
+        return undefined;
+    }
+
+    try {
+        const { protocol } = new URL(value);
+
+        return protocol === "http:" || protocol === "https:" ? value : undefined;
+    } catch {
+        // Not an absolute URL (or unparseable) → don't render it as a link.
+        return undefined;
+    }
 };
 
 /**
