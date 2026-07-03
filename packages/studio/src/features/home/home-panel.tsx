@@ -1,8 +1,7 @@
 import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement, ReactNode } from "react";
+import { lazy, Suspense } from "react";
 
-import { Bar, EvilBarChart } from "../../components/evilcharts/charts/bar-chart";
-import type { ChartConfig } from "../../components/evilcharts/ui/chart";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
@@ -14,6 +13,15 @@ import { fireAndForget, formatBytes } from "../../lib/internal";
 import { cn } from "../../lib/utils";
 import { deriveInsights } from "../advisors/derive-insights";
 import { BindingsOverview } from "./bindings-overview";
+
+// The stat-card sparkline is Home's only `recharts` consumer. Lazy-loading it
+// keeps the (heavy) chart engine out of the studio's entry bundle — Home's
+// structure paints immediately and each sparkline streams in on its own chunk.
+const Sparkline = lazy(() =>
+    import("./sparkline").then((m) => {
+        return { default: m.Sparkline };
+    }),
+);
 
 interface HomePanelProps {
     /** Shard key the health digest targets on first load. Defaults to the root shard. */
@@ -55,32 +63,6 @@ interface StatDelta {
     readonly positive: boolean;
     readonly text: string;
 }
-
-/** Series colour for the stat-card sparkline (the foreground var already flips per theme). */
-const SPARKLINE_CONFIG = { value: { colors: { dark: ["var(--foreground)"], light: ["var(--foreground)"] }, label: "" } } satisfies ChartConfig;
-
-/** A compact monochrome bar sparkline (evilcharts) drawn from a numeric series (oldest → newest). */
-const Sparkline = ({ data }: { readonly data: ReadonlyArray<number> }): ReactElement | null => {
-    const bars = data.slice(-16);
-
-    // A single point can't read as a trend (and renders as one fat block), so a
-    // sparkline only shows once there are at least a few buckets.
-    if (bars.length < 3) {
-        return null;
-    }
-
-    const rows = bars.map((value, index) => {
-        return { index, value };
-    });
-
-    return (
-        <div aria-hidden="true" className="h-8 w-28">
-            <EvilBarChart animationType="none" barCategoryGap={1} className="h-8 w-full" config={SPARKLINE_CONFIG} data={rows}>
-                <Bar dataKey="value" />
-            </EvilBarChart>
-        </div>
-    );
-};
 
 /** Sum a metrics-history field per minute bucket, oldest first — the series a sparkline draws. */
 const bucketSeries = (history: MetricsSnapshot["history"], field: "calls" | "errors"): number[] => {
@@ -148,7 +130,11 @@ const StatCard = ({
                         <span className="text-2xl font-semibold tabular-nums text-foreground">{value}</span>
                         {unit !== undefined && <span className="text-xs text-muted-foreground">{unit}</span>}
                     </span>
-                    {trend !== undefined && <Sparkline data={trend} />}
+                    {trend !== undefined && (
+                        <Suspense fallback={<div aria-hidden="true" className="h-8 w-28" />}>
+                            <Sparkline data={trend} />
+                        </Suspense>
+                    )}
                 </div>
             </div>
             {delta == null ? (

@@ -12,7 +12,7 @@ import {
     useSearch,
 } from "@tanstack/react-router";
 import type { ReactElement, ReactNode } from "react";
-import { createContext, use, useEffect, useMemo } from "react";
+import { createContext, lazy, Suspense, use, useEffect, useMemo } from "react";
 
 import BrandMark from "../components/brand-mark";
 import { ErrorBoundary } from "../components/error-boundary";
@@ -38,45 +38,12 @@ import {
     useSidebar,
 } from "../components/ui/sidebar";
 import { Skeleton } from "../components/ui/skeleton";
-import { InsightsPanel } from "../features/advisors/insights-panel";
-import RlsPanel from "../features/advisors/rls-panel";
-import SecurityAdvisorPanel from "../features/advisors/security-advisor-panel";
-import { AnalyticsPanel } from "../features/analytics/analytics-panel";
-import ApiTab from "../features/api/api-tab";
-import { AuthConfigPanel } from "../features/auth/auth-config-panel";
-import { AuthSessionsPanel } from "../features/auth/auth-sessions-panel";
-import { OrganizationsPanel } from "../features/auth/organizations-panel";
-import { UsersPanel } from "../features/auth/users-panel";
-import { TableEditor } from "../features/data/table-editor";
-import { ExportImportPanel } from "../features/database/export-import";
-import { MigrationsPanel } from "../features/database/migrations";
-import { PitrPanel } from "../features/database/pitr-panel";
-import { FlagsPanel } from "../features/flags/flags-panel";
-import { FunctionRunner } from "../features/functions/function-runner";
-import { FunctionStatsPanel } from "../features/functions/function-stats";
+// Home stays a static (eager) import so the landing route paints synchronously;
+// every other feature panel is a route-level `React.lazy` boundary defined below
+// so it — and its heavy deps (`@xyflow/react`, `recharts`, the SQL editor, the
+// data grid) — loads in its own on-demand `chunk-*.js`, not in Home's first load.
 import { HomePanel } from "../features/home/home-panel";
-import { KvBrowser } from "../features/kv/kv-browser";
-import { AuditPanel } from "../features/logs/audit-panel";
-import { LogDrainsPanel } from "../features/logs/log-drains-panel";
-import { LogsPanel } from "../features/logs/logs-panel";
-import { MailPanel } from "../features/logs/mail-panel";
 import type { SchedulePanelProps } from "../features/logs/schedule-panel";
-import { SchedulePanel } from "../features/logs/schedule-panel";
-import SubscriptionsPanel from "../features/logs/subscriptions-panel";
-import { PaymentsPanel } from "../features/payments/payments-panel";
-import { PermissionsPanel } from "../features/permissions/permissions-panel";
-import QueuesPanel from "../features/queues/queues-panel";
-import DashboardsPanel from "../features/reports/dashboards-panel";
-import FanoutPanel from "../features/reports/fanout-panel";
-import { HealthPanel } from "../features/reports/health-panel";
-import { MetricsPanel } from "../features/reports/metrics-panel";
-import { SchemaViewer } from "../features/schema/schema-viewer";
-import { SettingsPanel } from "../features/settings/settings-panel";
-import { SqlEditorPanel } from "../features/sql/sql-editor-panel";
-import { FileBrowser } from "../features/storage/file-browser";
-import { StorageRulesPanel } from "../features/storage/storage-rules-panel";
-import { VectorBrowser } from "../features/vectors/vector-browser";
-import WorkflowsPanel from "../features/workflows/workflows-panel";
 import useStudioFeatures from "../hooks/use-studio-features";
 import { useT } from "../i18n/i18n-context";
 import { StudioI18nProvider } from "../i18n/i18n-provider";
@@ -86,6 +53,169 @@ import { fireAndForget } from "../lib/internal";
 import type { FunctionDescriptor } from "../lib/types";
 import { cn } from "../lib/utils";
 import { CommandPalette, openCommandPalette } from "./command-palette";
+
+// Route-level lazy panels. Each becomes its own on-demand `chunk-*.js` under
+// `dist/standalone/` (esbuild `splitting` in `scripts/build-standalone.mjs`),
+// so a user landing on Home never downloads the SQL editor, the data grid, the
+// schema diagram (`@xyflow/react`), the reports charts (`recharts`), or the
+// other ~30 panels — they load only when their tab is visited. The `React.lazy`
+// identities live at module scope so they stay stable across router rebuilds;
+// the routed `<Outlet>` is wrapped in `<Suspense>` (see {@link StudioLayout}).
+// Named exports are unwrapped to the shape `React.lazy` expects (`{ default }`);
+// default-exporting panels pass straight through.
+const InsightsPanel = lazy(() =>
+    import("../features/advisors/insights-panel").then((m) => {
+        return { default: m.InsightsPanel };
+    }),
+);
+const RlsPanel = lazy(() => import("../features/advisors/rls-panel"));
+const SecurityAdvisorPanel = lazy(() => import("../features/advisors/security-advisor-panel"));
+const AnalyticsPanel = lazy(() =>
+    import("../features/analytics/analytics-panel").then((m) => {
+        return { default: m.AnalyticsPanel };
+    }),
+);
+const ApiTab = lazy(() => import("../features/api/api-tab"));
+const AuthConfigPanel = lazy(() =>
+    import("../features/auth/auth-config-panel").then((m) => {
+        return { default: m.AuthConfigPanel };
+    }),
+);
+const AuthSessionsPanel = lazy(() =>
+    import("../features/auth/auth-sessions-panel").then((m) => {
+        return { default: m.AuthSessionsPanel };
+    }),
+);
+const OrganizationsPanel = lazy(() =>
+    import("../features/auth/organizations-panel").then((m) => {
+        return { default: m.OrganizationsPanel };
+    }),
+);
+const UsersPanel = lazy(() =>
+    import("../features/auth/users-panel").then((m) => {
+        return { default: m.UsersPanel };
+    }),
+);
+const TableEditor = lazy(() =>
+    import("../features/data/table-editor").then((m) => {
+        return { default: m.TableEditor };
+    }),
+);
+const ExportImportPanel = lazy(() =>
+    import("../features/database/export-import").then((m) => {
+        return { default: m.ExportImportPanel };
+    }),
+);
+const MigrationsPanel = lazy(() =>
+    import("../features/database/migrations").then((m) => {
+        return { default: m.MigrationsPanel };
+    }),
+);
+const PitrPanel = lazy(() =>
+    import("../features/database/pitr-panel").then((m) => {
+        return { default: m.PitrPanel };
+    }),
+);
+const FlagsPanel = lazy(() =>
+    import("../features/flags/flags-panel").then((m) => {
+        return { default: m.FlagsPanel };
+    }),
+);
+const FunctionRunner = lazy(() =>
+    import("../features/functions/function-runner").then((m) => {
+        return { default: m.FunctionRunner };
+    }),
+);
+const FunctionStatsPanel = lazy(() =>
+    import("../features/functions/function-stats").then((m) => {
+        return { default: m.FunctionStatsPanel };
+    }),
+);
+const AuditPanel = lazy(() =>
+    import("../features/logs/audit-panel").then((m) => {
+        return { default: m.AuditPanel };
+    }),
+);
+const LogDrainsPanel = lazy(() =>
+    import("../features/logs/log-drains-panel").then((m) => {
+        return { default: m.LogDrainsPanel };
+    }),
+);
+const LogsPanel = lazy(() =>
+    import("../features/logs/logs-panel").then((m) => {
+        return { default: m.LogsPanel };
+    }),
+);
+const MailPanel = lazy(() =>
+    import("../features/logs/mail-panel").then((m) => {
+        return { default: m.MailPanel };
+    }),
+);
+const SchedulePanel = lazy(() =>
+    import("../features/logs/schedule-panel").then((m) => {
+        return { default: m.SchedulePanel };
+    }),
+);
+const SubscriptionsPanel = lazy(() => import("../features/logs/subscriptions-panel"));
+const KvBrowser = lazy(() =>
+    import("../features/kv/kv-browser").then((m) => {
+        return { default: m.KvBrowser };
+    }),
+);
+const PaymentsPanel = lazy(() =>
+    import("../features/payments/payments-panel").then((m) => {
+        return { default: m.PaymentsPanel };
+    }),
+);
+const PermissionsPanel = lazy(() =>
+    import("../features/permissions/permissions-panel").then((m) => {
+        return { default: m.PermissionsPanel };
+    }),
+);
+const QueuesPanel = lazy(() => import("../features/queues/queues-panel"));
+const DashboardsPanel = lazy(() => import("../features/reports/dashboards-panel"));
+const FanoutPanel = lazy(() => import("../features/reports/fanout-panel"));
+const HealthPanel = lazy(() =>
+    import("../features/reports/health-panel").then((m) => {
+        return { default: m.HealthPanel };
+    }),
+);
+const MetricsPanel = lazy(() =>
+    import("../features/reports/metrics-panel").then((m) => {
+        return { default: m.MetricsPanel };
+    }),
+);
+const SchemaViewer = lazy(() =>
+    import("../features/schema/schema-viewer").then((m) => {
+        return { default: m.SchemaViewer };
+    }),
+);
+const SettingsPanel = lazy(() =>
+    import("../features/settings/settings-panel").then((m) => {
+        return { default: m.SettingsPanel };
+    }),
+);
+const SqlEditorPanel = lazy(() =>
+    import("../features/sql/sql-editor-panel").then((m) => {
+        return { default: m.SqlEditorPanel };
+    }),
+);
+const FileBrowser = lazy(() =>
+    import("../features/storage/file-browser").then((m) => {
+        return { default: m.FileBrowser };
+    }),
+);
+const StorageRulesPanel = lazy(() =>
+    import("../features/storage/storage-rules-panel").then((m) => {
+        return { default: m.StorageRulesPanel };
+    }),
+);
+const VectorBrowser = lazy(() =>
+    import("../features/vectors/vector-browser").then((m) => {
+        return { default: m.VectorBrowser };
+    }),
+);
+const WorkflowsPanel = lazy(() => import("../features/workflows/workflows-panel"));
 
 /** Identifier for each built-in studio tab. */
 type StudioTab =
@@ -699,6 +829,22 @@ const StudioSidebar = ({ chrome, connected, current, groupLabel, groups, selectT
 };
 
 /**
+ * Skeleton shown while a route resolves — the brief first paint after mount, a
+ * lazy panel's chunk streaming in (the {@link Suspense} fallback below), and any
+ * future panel with a router loader — so the content area never flashes empty.
+ * Renders inside the layout's panel region during navigation.
+ */
+const RoutePending = (): ReactElement => (
+    <div className="flex flex-col gap-4" data-testid="dash-pending">
+        <div className="flex items-center gap-2">
+            <Skeleton className="h-8 w-40" />
+            <Skeleton className="h-8 w-24" />
+        </div>
+        <Skeleton className="h-72 w-full" />
+    </div>
+);
+
+/**
  * Persistent shell rendered by the router's root route: the grouped sidebar
  * ({@link StudioSidebar}) and the routed panel area (`&lt;Outlet />`). The active
  * tab is derived from the URL, so deep links and the browser back/forward
@@ -935,7 +1081,12 @@ const StudioLayout = (): ReactElement => {
                             label={tabLabel[current]}
                             retryLabel={t("Try again")}
                         >
-                            <Outlet />
+                            {/* Every routed panel except Home is a `React.lazy` boundary, so its
+                                chunk streams in behind this Suspense fallback; Home (the index
+                                route) is eager and paints without suspending. */}
+                            <Suspense fallback={<RoutePending />}>
+                                <Outlet />
+                            </Suspense>
                         </ErrorBoundary>
                     </div>
                 </div>
@@ -943,21 +1094,6 @@ const StudioLayout = (): ReactElement => {
         </SidebarProvider>
     );
 };
-
-/**
- * Skeleton shown while a route resolves — the brief first paint after mount and
- * any future panel with a router loader — so the content area never flashes
- * empty. Renders inside the layout's panel region during navigation.
- */
-const RoutePending = (): ReactElement => (
-    <div className="flex flex-col gap-4" data-testid="dash-pending">
-        <div className="flex items-center gap-2">
-            <Skeleton className="h-8 w-40" />
-            <Skeleton className="h-8 w-24" />
-        </div>
-        <Skeleton className="h-72 w-full" />
-    </div>
-);
 
 /**
  * Schema tab wrapper that lifts the optional `?table=&lt;name>` search param off
