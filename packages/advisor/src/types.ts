@@ -9,6 +9,7 @@ import type { AdvisorConfigCall } from "./config-calls";
 import type { AdvisorContainerKeyAccess } from "./container-key-accesses";
 import type { AdvisorContainerOverride } from "./container-overrides";
 import type { AdvisorContainer } from "./containers";
+import type { AdvisorHttpActionGuard } from "./http-action-guards";
 import type { AdvisorHyperdriveCall } from "./hyperdrive-calls";
 import type { AdvisorImageDeliveryUrlAccess } from "./image-delivery-url-accesses";
 import type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
@@ -209,6 +210,15 @@ export interface LintContext {
      * the container lints find nothing.
      */
     containers?: ReadonlyArray<AdvisorContainer>;
+
+    /**
+     * `httpAction`/`httpRoute` handlers that perform a side effect
+     * (`ctx.runMutation` / `ctx.runAction` / a `ctx.db` write) from the HTTP edge,
+     * with whether each reads `ctx.auth` — the `http_action_missing_auth_guard`
+     * input. Supplied by the codegen feeder; absent for runtime callers, where the
+     * lint finds nothing.
+     */
+    httpActionGuards?: ReadonlyArray<AdvisorHttpActionGuard>;
 
     /**
      * Hyperdrive `ctx.sql` accesses discovered lexically inside `query`/`mutation`

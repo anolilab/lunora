@@ -33,6 +33,7 @@ import duplicateIndex from "./lints/static/duplicate-index";
 import emptyIndex from "./lints/static/empty-index";
 import filterWithoutIndex from "./lints/static/filter-without-index";
 import hardcodedSecret from "./lints/static/hardcoded-secret";
+import httpActionMissingAuthGuard from "./lints/static/http-action-missing-auth-guard";
 import hyperdriveOutsideAction from "./lints/static/hyperdrive-outside-action";
 import imagesUrlSourceFromUserInput from "./lints/static/images-url-source-from-user-input";
 import indexReferencesUnknownField from "./lints/static/index-references-unknown-field";
@@ -90,6 +91,7 @@ export type { AdvisorConfigCall } from "./config-calls";
 export type { AdvisorContainerKeyAccess } from "./container-key-accesses";
 export type { AdvisorContainerOverride } from "./container-overrides";
 export type { AdvisorContainer } from "./containers";
+export type { AdvisorHttpActionGuard } from "./http-action-guards";
 export type { AdvisorHyperdriveCall } from "./hyperdrive-calls";
 export type { AdvisorImageDeliveryUrlAccess } from "./image-delivery-url-accesses";
 export type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
@@ -123,6 +125,7 @@ export { default as externalSourceOnGlobal } from "./lints/static/external-sourc
 export { default as externalSourceUnscoped } from "./lints/static/external-source-unscoped";
 export { default as filterWithoutIndex } from "./lints/static/filter-without-index";
 export { default as hardcodedSecret } from "./lints/static/hardcoded-secret";
+export { default as httpActionMissingAuthGuard } from "./lints/static/http-action-missing-auth-guard";
 export { default as hyperdriveOutsideAction } from "./lints/static/hyperdrive-outside-action";
 export { default as imagesUrlSourceFromUserInput } from "./lints/static/images-url-source-from-user-input";
 export { default as indexReferencesUnknownField } from "./lints/static/index-references-unknown-field";
@@ -262,6 +265,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     storageUploadWithoutMaxSize,
     storageGenerateUploadUrlNoContentTypePin,
     storagePresignedUrlForPrivateContent,
+    httpActionMissingAuthGuard,
 ];
 
 /**

@@ -21,6 +21,7 @@ import discoverCrons from "./discover-crons";
 import { buildStudioFeatures, discoverFeatureUsage } from "./discover-feature-usage";
 import { discoverFlagKeys } from "./discover-flags";
 import { discoverFunctions, listLunoraSourceFiles } from "./discover-functions";
+import discoverHttpActionGuards from "./discover-http-action-guards";
 import discoverHttpRoutes from "./discover-http-routes";
 import { discoverIdentity } from "./discover-identity";
 import discoverImageDeliveryUrlAccesses from "./discover-image-delivery-url-accesses";
@@ -361,6 +362,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   discoverImageDeliveryUrlAccesses(project, lunoraDirectory),
                   discoverRatelimitKeySelectors(project, lunoraDirectory),
                   discoverStorageUploads(project, lunoraDirectory),
+                  discoverHttpActionGuards(project, lunoraDirectory),
               );
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,
