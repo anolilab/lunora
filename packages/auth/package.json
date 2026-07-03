@@ -97,6 +97,7 @@
     },
     "dependencies": {
         "@better-auth/passkey": "catalog:auth",
+        "@lunora/errors": "1.0.0-alpha.0",
         "@lunora/server": "1.0.0-alpha.13",
         "@lunora/values": "1.0.0-alpha.3",
         "better-auth": "catalog:auth"

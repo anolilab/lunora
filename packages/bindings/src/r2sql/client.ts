@@ -16,6 +16,8 @@
  * surface Studio uses to render tables).
  */
 
+import { LunoraError } from "@lunora/errors";
+
 import SelectBuilder from "./builder";
 import type { QueryExecutor } from "./query";
 import type { Sql } from "./sql";
@@ -58,13 +60,9 @@ const inferColumns = (rows: Record<string, unknown>[]): R2SqlColumn[] => {
  * envelope, or an unparseable body; carries the HTTP `status` and the raw body
  * for the caller to surface.
  */
-export class R2SqlError extends Error {
-    public readonly status: number;
-
+export class R2SqlError extends LunoraError {
     public constructor(status: number, body: string) {
-        super(`R2 SQL query failed (${String(status)}): ${body}`);
-        this.name = "R2SqlError";
-        this.status = status;
+        super("R2_SQL_ERROR", `R2 SQL query failed (${String(status)}): ${body}`, { name: "R2SqlError", status });
     }
 }
 

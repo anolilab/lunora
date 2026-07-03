@@ -39,10 +39,6 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
-        "./render": {
-            "types": "./dist/render/index.d.ts",
-            "import": "./dist/render/index.mjs"
-        },
         "./package.json": "./package.json"
     },
     "publishConfig": {
@@ -61,9 +57,6 @@
         "fallow:audit": "fallow audit",
         "fallow:dead-code": "fallow dead-code",
         "fallow:health": "fallow health --score"
-    },
-    "dependencies": {
-        "@visulima/error": "catalog:prod"
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",

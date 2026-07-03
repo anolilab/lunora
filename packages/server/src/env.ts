@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import type { Infer, Validator } from "@lunora/values";
 import { optionalInner } from "@lunora/values";
 
@@ -199,15 +200,13 @@ interface EnvKeyFailure {
  *
  * Named export only (no default) per the repo export convention.
  */
-class LunoraEnvError extends Error {
-    public override readonly name = "LunoraEnvError";
-
+class LunoraEnvError extends LunoraError {
     public readonly failures: ReadonlyArray<EnvKeyFailure>;
 
     public constructor(failures: ReadonlyArray<EnvKeyFailure>) {
         const summary = failures.map((failure) => `  - ${failure.key}: ${failure.message}`).join("\n");
 
-        super(`Invalid environment (${String(failures.length)} key(s)):\n${summary}`);
+        super("ENV_INVALID", `Invalid environment (${String(failures.length)} key(s)):\n${summary}`, { name: "LunoraEnvError" });
         this.failures = failures;
     }
 }

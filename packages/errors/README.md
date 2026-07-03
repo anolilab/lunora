@@ -35,19 +35,14 @@ import { invariant, unreachable } from "@lunora/errors";
 invariant(table !== undefined, `unknown table: ${name}`); // throws an INTERNAL LunoraError
 ```
 
-### Rendering (CLI / Node only)
+### Rendering
 
-The terminal renderer lives on a separate subpath so the Node-only code never reaches browser/worker
-bundles:
-
-```ts
-import { renderLunoraError } from "@lunora/errors/render";
-
-console.error(renderLunoraError(error, { reason: "codegen failed" }));
-```
+`LunoraError` mirrors `@visulima/error`'s error model (`type: "VisulimaError"` + `hint`/`title`/`loc`),
+so `@visulima/error`'s `renderError` renders it — hint and all — directly. The CLI does this in
+`@lunora/cli`'s `renderLunoraError` util; `@lunora/errors` itself stays free of the Node-only renderer.
 
 ## Exports
 
 - `@lunora/errors` — `LunoraError`, `ERROR_CATALOG`, `isLunoraError`, `resolveHint`,
-  `findSolutionByMessage`, `invariant`, `unreachable`, and the supporting types. **Browser/workerd-safe.**
-- `@lunora/errors/render` — `renderLunoraError` + `renderError`/`VisulimaError` re-exports. **Node only.**
+  `findSolutionByMessage`, `invariant`, `unreachable`, and the supporting types. **Zero-dependency;
+  browser/workerd/Node-safe.**

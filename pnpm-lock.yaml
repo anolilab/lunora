@@ -1639,6 +1639,9 @@ importers:
       '@better-auth/passkey':
         specifier: catalog:auth
         version: 1.6.22(@better-auth/core@1.6.22(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(@cloudflare/workers-types@4.20260628.1)(@opentelemetry/api@1.9.1)(better-call@1.3.7(zod@4.4.3))(jose@6.2.3)(kysely@0.28.17)(nanostores@1.3.0))(@better-auth/utils@0.4.2)(@better-fetch/fetch@1.3.1)(better-auth@1.6.22(1079843a700ef182d1fd520c029433f9))(better-call@1.3.7(zod@4.4.3))(nanostores@1.3.0)
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@lunora/server':
         specifier: workspace:*
         version: link:../server
@@ -1675,6 +1678,10 @@ importers:
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@26.0.1)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
   packages/bindings:
+    dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
     devDependencies:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
@@ -2027,6 +2034,10 @@ importers:
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@26.0.1)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
   packages/container:
+    dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
     devDependencies:
       '@cloudflare/containers':
         specifier: catalog:cloudflare
@@ -2210,10 +2221,6 @@ importers:
         version: 4.105.0(@cloudflare/workers-types@4.20260628.1)
 
   packages/errors:
-    dependencies:
-      '@visulima/error':
-        specifier: catalog:prod
-        version: 6.0.0-alpha.34
     devDependencies:
       '@codspeed/vitest-plugin':
         specifier: catalog:test
@@ -2491,6 +2498,9 @@ importers:
 
   packages/payment:
     dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@lunora/server':
         specifier: workspace:*
         version: link:../server
@@ -2560,6 +2570,10 @@ importers:
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@26.0.1)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
   packages/ratelimit:
+    dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
     devDependencies:
       '@codspeed/vitest-plugin':
         specifier: catalog:test
@@ -3282,6 +3296,9 @@ importers:
 
   packages/workflow:
     dependencies:
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@lunora/values':
         specifier: workspace:*
         version: link:../values

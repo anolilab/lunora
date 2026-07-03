@@ -41,14 +41,10 @@ choose the response status.
 `LunoraError`, so even "should never happen" assertions participate in the layer
 (redacted to a generic message on the wire, rich in logs).
 
-## Rendering (Node only)
+## Rendering
 
-```ts
-import { renderLunoraError } from "@lunora/errors/render";
-
-console.error(renderLunoraError(error, { reason: "codegen failed" }));
-```
-
-The renderer lives on the `@lunora/errors/render` subpath so its Node-only
-dependency (`@visulima/error`'s `renderError`) never reaches browser or workerd
-bundles.
+`LunoraError` mirrors `@visulima/error`'s error model (`type: "VisulimaError"`
+plus `hint`/`title`/`loc`), so `@visulima/error`'s `renderError` renders it — hint
+and all — directly. The CLI does this in `@lunora/cli`'s `renderLunoraError` util;
+`@lunora/errors` itself is **zero-dependency** so its class/catalog tree-shakes
+cleanly into browser and workerd bundles.

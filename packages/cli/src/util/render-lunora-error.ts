@@ -1,21 +1,16 @@
 /**
- * Node/CLI-edge rendering for Lunora errors. This is the **only** entry that
- * pulls `@visulima/error`'s `renderError` (which reads source files for code
- * frames and is Node-only), so it lives on the `@lunora/errors/render` subpath —
- * never imported by the browser client or the workerd runtime. The main
- * `@lunora/errors` entry stays free of this subgraph.
+ * Node/CLI-edge rendering for Lunora errors.
  *
- * `renderLunoraError` turns any thrown value into a single terminal block: the
- * failure line plus, when the error carries (or its message matches) an
- * actionable hint, that hint rendered underneath. It generalizes the former
- * `packages/cli/src/util/codegen-error.ts` renderer so every CLI surface shares
- * one hint presentation.
+ * `@lunora/errors` deliberately stays free of `@visulima/error`'s Node-only
+ * `renderError` (so its class/catalog entry tree-shakes cleanly into browser and
+ * workerd bundles). The terminal renderer therefore lives here, in the CLI, which
+ * already depends on `@visulima/error`. `renderLunoraError` turns any thrown value
+ * into a single terminal block — the failure line plus, when the error carries (or
+ * its message matches) an actionable hint, that hint rendered underneath.
  */
+import type { ErrorHint } from "@lunora/errors";
+import { isLunoraError, resolveHint } from "@lunora/errors";
 import { renderError, VisulimaError } from "@visulima/error";
-
-import type { ErrorHint } from "../catalog";
-import { resolveHint } from "../catalog";
-import { isLunoraError } from "../guards";
 
 /** `renderError` options that suppress the (usually uninformative) internal stack. */
 const NO_STACK = { filterStacktrace: () => false, hideErrorCodeView: true } as const;
@@ -60,5 +55,3 @@ export const renderLunoraError = (error: unknown, options: RenderLunoraErrorOpti
 
     return renderError(rendered, NO_STACK);
 };
-
-export { renderError, VisulimaError } from "@visulima/error";

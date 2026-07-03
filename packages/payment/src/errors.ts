@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/errors";
+
 type PaymentErrorCode =
     | "CONFIG_INVALID"
     | "CURRENCY_MISMATCH"
@@ -19,17 +21,13 @@ const STATUS_BY_CODE: Record<PaymentErrorCode, number> = {
     WEBHOOK_TIMESTAMP_INVALID: 400,
 };
 
-/** Typed error for all `@lunora/payment` failures. `status` maps onto an HTTP response. */
-class LunoraPaymentError extends Error {
-    public readonly code: PaymentErrorCode;
-
-    public readonly status: number;
+/** Typed error for all `@lunora/payment` failures. A `LunoraError` subclass; `status` maps onto an HTTP response. */
+class LunoraPaymentError extends LunoraError {
+    // Narrow the inherited `code` to the payment taxonomy (base sets it).
+    declare public readonly code: PaymentErrorCode;
 
     public constructor(code: PaymentErrorCode, message: string) {
-        super(message);
-        this.name = "LunoraPaymentError";
-        this.code = code;
-        this.status = STATUS_BY_CODE[code];
+        super(code, message, { name: "LunoraPaymentError", status: STATUS_BY_CODE[code] });
     }
 }
 

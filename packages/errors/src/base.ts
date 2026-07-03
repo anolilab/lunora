@@ -1,25 +1,28 @@
 /**
  * `LunoraError` — the one canonical error type for the whole framework.
  *
- * It extends `@visulima/error`'s {@link VisulimaError} (so it inherits `hint`,
- * `title`, `location`, and `cause`, and is renderable by `renderError` at the
- * CLI/overlay edge) and adds the transport fields Lunora needs: a machine
- * `code`, an HTTP/RPC `status`, an optional `docsUrl`, and an optional
- * wire-encodable `data` payload. Constructing one looks its defaults up in the
- * central {@link ERROR_CATALOG} by `code`, so a bare `new LunoraError("NOT_FOUND")`
- * already carries the right status/title/hint.
+ * It mirrors `@visulima/error`'s error model — the same `hint`, `title`, `loc`
+ * (location), and `type: "VisulimaError"` fields — so `@visulima/error`'s
+ * `renderError` renders it (and its actionable hint) directly at the CLI/overlay
+ * edge, and adds the transport fields Lunora needs: a machine `code`, an HTTP/RPC
+ * `status`, an optional `docsUrl`, and an optional wire-encodable `data` payload.
+ * Constructing one looks its defaults up in the central {@link ERROR_CATALOG} by
+ * `code`, so a bare `new LunoraError("NOT_FOUND")` already carries the right
+ * status/title/hint.
  *
- * All added fields are own-enumerable, so they ride the existing wire codec
+ * It intentionally does NOT `extend` `@visulima/error`'s `VisulimaError` class:
+ * that class's module (`@visulima/error/error`) statically pulls the Node-only
+ * `renderError` (which imports `node:module`), and bundlers inline the whole
+ * barrel rather than tree-shaking it — which would drag `node:module` into the
+ * browser client and workerd runtime bundles. Reimplementing the (tiny) shape
+ * here keeps `@lunora/errors` genuinely zero-dependency and bundle-safe on every
+ * runtime, while staying fully renderer-compatible.
+ *
+ * All fields are own-enumerable, so they ride the existing wire codec
  * (`shared/wire-codec.ts`) automatically when a `LunoraError` is embedded in a
- * payload, and the runtime/DO mappers copy them into the top-level error
- * envelope for the client, CLI, and Studio to render.
- *
- * NOTE: this module imports only the `VisulimaError` class (never `renderError`)
- * so the Node-only rendering subgraph stays tree-shakeable out of the browser
- * client and workerd runtime bundles. The renderer lives in `./render`.
+ * payload, and the runtime/DO mappers copy them into the top-level error envelope
+ * for the client, CLI, and Studio to render.
  */
-import { VisulimaError } from "@visulima/error/error";
-
 import type { ErrorCatalogEntry, ErrorHint, LunoraErrorCode } from "./catalog";
 import { ERROR_CATALOG } from "./catalog";
 
@@ -56,7 +59,23 @@ export interface LunoraErrorOptions {
  */
 export type LunoraErrorCodeInput = LunoraErrorCode | (string & {});
 
-export class LunoraError extends VisulimaError {
+export class LunoraError extends Error {
+    /**
+     * Discriminator recognised by `@visulima/error`'s `renderError`/`isVisulimaError`
+     * (`error.type === "VisulimaError"`), so a `LunoraError` renders like a native
+     * `VisulimaError` — hint and all.
+     */
+    public readonly type = "VisulimaError";
+
+    /** Actionable fix (Markdown), rendered by the CLI/overlay/Studio. */
+    public readonly hint: ErrorHint | undefined;
+
+    /** Short, human-readable summary (separate from `message`). */
+    public readonly title: string | undefined;
+
+    /** Source location, when known (mirrors `VisulimaError.loc`). */
+    public readonly loc: ErrorLocation | undefined;
+
     /** Machine-readable reason, keyed into {@link ERROR_CATALOG}. */
     public readonly code: string;
 
@@ -72,17 +91,14 @@ export class LunoraError extends VisulimaError {
     public constructor(code: LunoraErrorCodeInput, message?: string, options: LunoraErrorOptions = {}) {
         const entry: ErrorCatalogEntry | undefined = (ERROR_CATALOG as Record<string, ErrorCatalogEntry>)[code];
 
-        super({
-            cause: options.cause,
-            hint: options.hint ?? entry?.hint,
-            location: options.location,
-            // No message supplied → default to the code (a stable, predictable
-            // identifier). The human-readable `title` stays separate metadata.
-            message: message ?? code,
-            name: options.name ?? "LunoraError",
-            title: options.title ?? entry?.title,
-        });
+        // No message supplied → default to the code (a stable, predictable
+        // identifier). The human-readable `title` stays separate metadata.
+        super(message ?? code, { cause: options.cause });
 
+        this.name = options.name ?? "LunoraError";
+        this.hint = options.hint ?? entry?.hint;
+        this.title = options.title ?? entry?.title;
+        this.loc = options.location;
         this.code = code;
         this.status = options.status ?? entry?.status ?? 500;
         this.docsUrl = options.docsUrl ?? entry?.docsUrl;

@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 
 import { findSolutionByMessage, isLunoraError } from "@lunora/errors";
-import { renderLunoraError } from "@lunora/errors/render";
 import { createCerebro } from "@visulima/cerebro";
 import completionCommand from "@visulima/cerebro/command/completion";
 import versionCommand from "@visulima/cerebro/command/version";
@@ -35,6 +34,7 @@ import { seedCommand } from "./commands/seed";
 import { verifyCommand } from "./commands/verify";
 import { viewCommand } from "./commands/view";
 import { createLogger } from "./util/logger";
+import { renderLunoraError } from "./util/render-lunora-error";
 import { closestMatch } from "./util/suggest";
 import { maybeNotifyUpdate } from "./util/update-notifier";
 

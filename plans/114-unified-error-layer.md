@@ -38,10 +38,14 @@ A new internal, zero-runtime-dep package **`@lunora/errors`** built on
 - `isLunoraError` — one structural guard (string `code` + numeric `status`),
   realm-safe, replacing every scattered `name === "…"` matcher.
 - `invariant`/`unreachable` — assertion helpers that throw an `INTERNAL` `LunoraError`.
-- Browser/workerd-safe main entry (imports only `@visulima/error/error` — the
-  class, never `renderError`); the Node terminal renderer lives on the separate
-  `@lunora/errors/render` subpath (`renderLunoraError`). Bundle split verified: no
-  `renderError`/`node:fs` reachable from the main entry.
+- **Zero-dependency**: `LunoraError` mirrors `@visulima/error`'s model
+  (`type: "VisulimaError"` + `hint`/`title`/`loc`) rather than extending
+  `VisulimaError` — bundlers inline the whole `@visulima/error/error` barrel
+  (which drags `node:module` via `renderError`) instead of tree-shaking it, so
+  extending it would break browser/workerd/standalone bundles. Reimplementing the
+  small shape keeps the package bundle-safe everywhere and renderer-compatible.
+  The terminal renderer (`renderLunoraError`, using `@visulima/error`'s
+  `renderError`) lives in `@lunora/cli`.
 
 ## Phases
 
