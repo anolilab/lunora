@@ -30,4 +30,13 @@ describe("agent-env", () => {
         expect(detectAiAgent({ LUNORA_AGENT_MODE: "1" })?.variable).toBe("LUNORA_AGENT_MODE");
         expect(detectAiAgent({ CLAUDECODE: "1", LUNORA_AGENT_MODE: "0" })).toBeUndefined();
     });
+
+    it("lUNORA_AGENT_MODE disable is case-insensitive", () => {
+        expect.assertions(3);
+
+        // A human typing `False`/`FALSE` must not be flipped INTO agent mode.
+        expect(detectAiAgent({ CLAUDECODE: "1", LUNORA_AGENT_MODE: "False" })).toBeUndefined();
+        expect(detectAiAgent({ CLAUDECODE: "1", LUNORA_AGENT_MODE: "FALSE" })).toBeUndefined();
+        expect(detectAiAgent({ CLAUDECODE: "1", LUNORA_AGENT_MODE: " 0 " })).toBeUndefined();
+    });
 });

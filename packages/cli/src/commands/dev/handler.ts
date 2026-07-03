@@ -11,6 +11,7 @@ import {
     detectAiAgent,
     detectFramework,
     DEV_DAEMON_ENV,
+    DEV_HANDOFF_ENV,
     DEV_LOG_FILE_ENV,
     DEV_VARS_EXAMPLE_FILE,
     DEV_VARS_FILE,
@@ -40,6 +41,7 @@ import { detectPackageManager, execArgsFor, runScriptCommand } from "../../util/
 import type { Logger } from "../../util/logger";
 import { forceJsonLogging } from "../../util/logger";
 import type { SpawnDescriptor } from "../../util/spawn";
+import { spawnShellCompat } from "../../util/spawn";
 import type { StudioServerHandle } from "../../util/studio-server";
 import { startStudioServer } from "../../util/studio-server";
 import { createTuiConfirm } from "../../util/tui-prompts";
@@ -315,9 +317,13 @@ const pipeChildOutput = (child: ChildProcess, tag: string, logger: Logger): void
 
 /** Real worker spawner: runs the descriptor as a child and pipes its output through the logger. */
 const defaultWorkerSpawner: WorkerSpawner = (descriptor, logger) => {
-    const child = nodeSpawn(descriptor.command, [...descriptor.args], {
+    // Windows can't spawn the package-manager .cmd shims without a shell — see
+    // spawnShellCompat. POSIX passes through untouched.
+    const exec = spawnShellCompat(descriptor.command, descriptor.args);
+    const child = nodeSpawn(exec.command, exec.args, {
         cwd: descriptor.cwd ?? process.cwd(),
         env: descriptor.env ? { ...process.env, ...descriptor.env } : process.env,
+        shell: exec.shell,
         stdio: ["inherit", "pipe", "pipe"],
     });
 
@@ -547,25 +553,30 @@ const afterWorkerSpawn = (plan: DevCommandPlan, cwd: string, logger: Logger, stu
 };
 
 /**
- * Atomically claim `.lunora/dev.json` for a starting wrangler-flavor dev
- * server (a no-op for the vite flavor, whose record `@lunora/vite`'s
- * dev-state plugin claims itself once Vite listens). Closes the
+ * Atomically claim `.lunora/dev.json` for a starting dev server. Closes the
  * check-then-write race where two simultaneous starts both pass the
- * read-based lock check. Returns the live incumbent when the claim is lost.
+ * read-based lock check. For the wrangler flavor this record is final; for
+ * the vite flavor it is *provisional* — the pre-listen default URL under this
+ * CLI's PID — and `@lunora/vite`'s dev-state plugin supersedes it with the
+ * authoritative URL + Vite's PID (see {@link DEV_HANDOFF_ENV}). A daemon
+ * re-invocation likewise supersedes the provisional record its background
+ * parent claimed before spawning it. Returns the live incumbent on a lost
+ * claim.
  */
-const claimWranglerRecord = (plan: DevCommandPlan, cwd: string): { pid: number; url: string } | undefined => {
-    if (plan.flavor !== "wrangler") {
-        return undefined;
-    }
-
-    const claim = claimDevServerState(cwd, {
-        background: process.env[DEV_DAEMON_ENV] === "1",
-        logFile: process.env[DEV_LOG_FILE_ENV],
-        mode: "cli",
-        pid: process.pid,
-        startedAt: new Date().toISOString(),
-        url: plan.workerOrigin,
-    });
+const claimStartRecord = (plan: DevCommandPlan, cwd: string): { pid: number; url: string } | undefined => {
+    const handoffPid = Number(process.env[DEV_HANDOFF_ENV]);
+    const claim = claimDevServerState(
+        cwd,
+        {
+            background: process.env[DEV_DAEMON_ENV] === "1",
+            logFile: process.env[DEV_LOG_FILE_ENV],
+            mode: "cli",
+            pid: process.pid,
+            startedAt: new Date().toISOString(),
+            url: plan.workerOrigin,
+        },
+        Number.isInteger(handoffPid) && handoffPid > 0 ? { supersedePid: handoffPid } : undefined,
+    );
 
     return claim.ok ? undefined : claim.existing;
 };
@@ -598,13 +609,20 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         }
 
         // Atomically claim the record before ANY sibling starts (see
-        // claimWranglerRecord); a lost claim means another start won the race.
-        const incumbent = claimWranglerRecord(plan, cwd);
+        // claimStartRecord); a lost claim means another start won the race.
+        const incumbent = claimStartRecord(plan, cwd);
 
         if (incumbent !== undefined) {
             reportExistingServer(logger, incumbent);
 
             return { code: 0, plan };
+        }
+
+        if (plan.flavor === "vite") {
+            // Hand the provisional record down so the dev-state plugin inside
+            // the Vite child may supersede it (and only it) with the
+            // authoritative resolved URL + Vite's own PID.
+            plan.wrangler.env = { ...plan.wrangler.env, [DEV_HANDOFF_ENV]: String(process.pid) };
         }
 
         await offerDevVariablesScaffold(options, cwd);

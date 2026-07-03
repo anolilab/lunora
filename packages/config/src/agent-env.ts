@@ -32,8 +32,12 @@ interface AgentDetection {
 /** Env var that forces agent mode on (`1`/`true`) or off (`0`/`false`), overriding detection. */
 const AGENT_MODE_ENV = "LUNORA_AGENT_MODE";
 
-/** True when the env value spells an explicit "off" (`0` / `false`). */
-const isDisabled = (value: string): boolean => value === "0" || value === "false";
+/** True when the env value spells an explicit "off" (`0` / `false`, any casing). */
+const isDisabled = (value: string): boolean => {
+    const normalized = value.trim().toLowerCase();
+
+    return normalized === "0" || normalized === "false";
+};
 
 /**
  * Detect the AI agent driving this process, or `undefined` when none is.

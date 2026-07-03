@@ -28,6 +28,7 @@ export {
     claimDevServerState,
     clearDevServerState,
     DEV_DAEMON_ENV,
+    DEV_HANDOFF_ENV,
     DEV_LOG_FILE,
     DEV_LOG_FILE_ENV,
     DEV_STATE_DIR,

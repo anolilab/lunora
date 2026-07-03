@@ -18,8 +18,10 @@ import { dirname, join } from "node:path";
 
 import type { DevServerState } from "@lunora/config";
 import {
+    claimDevServerState,
     clearDevServerState,
     DEV_DAEMON_ENV,
+    DEV_HANDOFF_ENV,
     DEV_LOG_FILE,
     DEV_LOG_FILE_ENV,
     isRecordedProcessCurrent,
@@ -31,6 +33,7 @@ import {
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
 import { printJson } from "../../util/output-format";
+import { spawnShellCompat } from "../../util/spawn";
 import type { DevOptions } from "./index";
 
 /** How long `--background` waits for the server to accept requests before giving up. */
@@ -148,12 +151,19 @@ const defaultDetachedSpawner: DetachedSpawner = (descriptor) => {
 
     let child: ChildProcess;
 
+    // Windows can't spawn the package-manager .cmd shims without a shell — see
+    // spawnShellCompat. windowsHide keeps the detached child from flashing a
+    // console window; both are no-ops on POSIX.
+    const exec = spawnShellCompat(descriptor.command, descriptor.args);
+
     try {
-        child = nodeSpawn(descriptor.command, [...descriptor.args], {
+        child = nodeSpawn(exec.command, exec.args, {
             cwd: descriptor.cwd,
             detached: true,
             env: descriptor.env,
+            shell: exec.shell,
             stdio: ["ignore", logFd, logFd],
+            windowsHide: true,
         });
     } finally {
         // The child holds its own copies of the fd; the parent's must not leak.
@@ -429,27 +439,73 @@ const daemonArguments = (options: DevOptions, remote: boolean): string[] => {
  * Detach the dev server as a managed background process and block until it is
  * ready: the project's dev script directly for a Vite project (its dev-state
  * plugin writes the record), else this same CLI re-invoked as the daemon.
+ *
+ * Before spawning, this parent atomically claims `.lunora/dev.json` as a
+ * provisional record under its own PID — closing the race where two
+ * simultaneous starts both pass the read-based lock check and spawn separate
+ * servers — and hands its PID down via {@link DEV_HANDOFF_ENV} so exactly one
+ * child (the vite dev-state plugin, or the wrangler daemon) supersedes the
+ * record with the authoritative URL + PID. The provisional record is cleared
+ * (PID-guarded) once the wait resolves; after a successful handoff the clear
+ * is a no-op because the record already carries the child's PID.
  */
-const startBackground = (context: { cwd: string; jsonLogs: boolean; logger: Logger; options: DevOptions; remote: boolean }): Promise<{ code: number }> => {
+const startBackground = async (context: {
+    cwd: string;
+    jsonLogs: boolean;
+    logger: Logger;
+    options: DevOptions;
+    remote: boolean;
+    /** Injection seam for tests — defaults to the real {@link runDevBackground}. */
+    run?: (options: BackgroundCommandOptions) => Promise<{ code: number }>;
+}): Promise<{ code: number }> => {
     const { cwd, jsonLogs, logger, options, remote } = context;
+    const run = context.run ?? runDevBackground;
+    const flavor = detectDevFlavor(cwd);
+    // Pre-listen default URL — cosmetic (shown only if a concurrent starter
+    // loses to this claim); the child's superseding record carries the real one.
+    const url = flavor === "vite" ? "http://localhost:5173" : `http://localhost:${String(options.workerPort ?? 8787)}`;
 
-    if (detectDevFlavor(cwd) === "vite") {
-        return runDevBackground({
-            command: viteDevCommand(cwd),
+    const claim = claimDevServerState(cwd, {
+        background: true,
+        mode: "cli",
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+        url,
+    });
+
+    if (!claim.ok) {
+        if (claim.existing !== undefined) {
+            reportExistingServer(logger, claim.existing);
+        }
+
+        return { code: 0 };
+    }
+
+    const handoff = { [DEV_HANDOFF_ENV]: String(process.pid) };
+
+    try {
+        if (flavor === "vite") {
+            return await run({
+                command: viteDevCommand(cwd),
+                cwd,
+                env: { ...(remote ? { LUNORA_REMOTE: "1" } : {}), ...handoff },
+                json: jsonLogs,
+                logger,
+            });
+        }
+
+        // Re-invoke this same CLI entry as the detached daemon.
+        return await run({
+            command: { args: [process.argv[1] ?? "lunora", ...daemonArguments(options, remote)], command: process.execPath },
             cwd,
-            ...(remote ? { env: { LUNORA_REMOTE: "1" } } : {}),
+            env: handoff,
             json: jsonLogs,
             logger,
         });
+    } finally {
+        // Drop the provisional record unless a child already superseded it.
+        clearDevServerState(cwd, process.pid);
     }
-
-    // Re-invoke this same CLI entry as the detached daemon.
-    return runDevBackground({
-        command: { args: [process.argv[1] ?? "lunora", ...daemonArguments(options, remote)], command: process.execPath },
-        cwd,
-        json: jsonLogs,
-        logger,
-    });
 };
 
 /**
@@ -548,7 +604,13 @@ const runDevStop = async (options: StopCommandOptions): Promise<{ code: number }
     const grace = options.stopGraceMs ?? STOP_GRACE_MS;
 
     if (state === undefined || !alive(state.pid)) {
-        clearDevServerState(cwd);
+        // Drop the stale record — but only if it is still the one we read.
+        // Unguarded, this would race a concurrent `lunora dev` that claimed a
+        // fresh record between our read and this clear, orphaning that server
+        // from `stop`/`status`/`logs`.
+        if (state !== undefined) {
+            clearDevServerState(cwd, state.pid);
+        }
 
         if (options.json) {
             printJson({ running: false, stopped: false });

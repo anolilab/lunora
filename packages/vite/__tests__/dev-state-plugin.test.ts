@@ -76,6 +76,7 @@ describe("devStatePlugin", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-vite-dev-state-"));
         vi.stubEnv("LUNORA_DEV_DAEMON", "");
+        vi.stubEnv("LUNORA_DEV_HANDOFF_PID", "");
         vi.stubEnv("LUNORA_DEV_LOG_FILE", "");
     });
 
@@ -163,5 +164,26 @@ describe("devStatePlugin", () => {
         mock.close();
 
         expect(readDevServerState(workdir)?.pid).toBe(process.ppid);
+    });
+
+    it("supersedes the parent CLI's provisional record named via LUNORA_DEV_HANDOFF_PID", () => {
+        expect.assertions(3);
+
+        // The parent CLI (posed by the test runner's live parent) claimed a
+        // provisional record before spawning Vite and handed its PID down.
+        writeDevServerState(workdir, { mode: "cli", pid: process.ppid, url: "http://localhost:5173" });
+        vi.stubEnv("LUNORA_DEV_HANDOFF_PID", String(process.ppid));
+
+        const mock = createMockServer();
+
+        configure(devStatePlugin(options(workdir)), mock.server);
+        mock.server.printUrls();
+
+        // The provisional record is replaced with the authoritative one.
+        const state = readDevServerState(workdir);
+
+        expect(state?.pid).toBe(process.pid);
+        expect(state?.mode).toBe("vite");
+        expect(mock.warnings).toHaveLength(0);
     });
 });

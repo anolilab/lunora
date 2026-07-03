@@ -13,9 +13,12 @@
  *
  * The detach plumbing arrives via env: `LUNORA_DEV_DAEMON=1` marks a
  * backgrounded run and `LUNORA_DEV_LOG_FILE` names the capture log, both
- * recorded so `status`/`logs` can report them.
+ * recorded so `status`/`logs` can report them. `LUNORA_DEV_HANDOFF_PID` names
+ * the parent CLI's provisional record this server may supersede — the CLI
+ * claims `.lunora/dev.json` before spawning Vite (closing the duplicate-start
+ * race) and this plugin replaces that record with the authoritative URL + PID.
  */
-import { claimDevServerState, clearDevServerState, DEV_DAEMON_ENV, DEV_LOG_FILE_ENV } from "@lunora/config";
+import { claimDevServerState, clearDevServerState, DEV_DAEMON_ENV, DEV_HANDOFF_ENV, DEV_LOG_FILE_ENV } from "@lunora/config";
 import type { Plugin, ViteDevServer } from "vite";
 
 import { lunoraLine } from "./log";
@@ -67,15 +70,22 @@ const devStatePlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
 
                 // Atomic exclusive claim: never clobber another live server's
                 // record (even in a start race) — surface it instead, so
-                // `lunora dev stop` keeps targeting the first server.
-                const claim = claimDevServerState(root, {
-                    background: process.env[DEV_DAEMON_ENV] === "1",
-                    logFile: process.env[DEV_LOG_FILE_ENV],
-                    mode: "vite",
-                    pid: process.pid,
-                    startedAt: new Date().toISOString(),
-                    url,
-                });
+                // `lunora dev stop` keeps targeting the first server. The one
+                // exception is the parent CLI's provisional record named via
+                // LUNORA_DEV_HANDOFF_PID, which exists to be superseded here.
+                const handoffPid = Number(process.env[DEV_HANDOFF_ENV]);
+                const claim = claimDevServerState(
+                    root,
+                    {
+                        background: process.env[DEV_DAEMON_ENV] === "1",
+                        logFile: process.env[DEV_LOG_FILE_ENV],
+                        mode: "vite",
+                        pid: process.pid,
+                        startedAt: new Date().toISOString(),
+                        url,
+                    },
+                    Number.isInteger(handoffPid) && handoffPid > 0 ? { supersedePid: handoffPid } : undefined,
+                );
 
                 if (!claim.ok) {
                     if (claim.existing !== undefined) {

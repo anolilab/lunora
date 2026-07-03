@@ -460,6 +460,48 @@ describe("lunora dev", () => {
             expect(readDevServerState(workdir)).toBeUndefined();
         });
 
+        it("claims a provisional record for the vite flavor and hands off via env", async () => {
+            expect.assertions(4);
+
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ devDependencies: { "@lunora/vite": "workspace:*" }, name: "app" }), "utf8");
+
+            let resolveExit: (code: number) => void = () => {};
+            const exited = new Promise<number>((resolve) => {
+                resolveExit = resolve;
+            });
+            let childEnvironment: Record<string, string> | undefined;
+
+            const runPromise = runDevCommand({
+                cwd: workdir,
+                logger: silentLogger(),
+                startWorker: (descriptor) => {
+                    childEnvironment = descriptor.env ? { ...descriptor.env } : undefined;
+
+                    return { exited, kill: () => {} };
+                },
+            });
+
+            // Let startup complete (claim + scaffold offer + spawn).
+            await new Promise((resolve) => {
+                setTimeout(resolve, 25);
+            });
+
+            // The provisional record carries this CLI's pid until the vite
+            // dev-state plugin (in the child) supersedes it.
+            const state = readDevServerState(workdir);
+
+            expect(state?.pid).toBe(process.pid);
+            expect(state?.url).toBe("http://localhost:5173");
+            // The handoff env names the record the plugin may supersede.
+            expect(childEnvironment?.LUNORA_DEV_HANDOFF_PID).toBe(String(process.pid));
+
+            resolveExit(0);
+            await runPromise;
+
+            // The provisional record is cleared on shutdown.
+            expect(readDevServerState(workdir)).toBeUndefined();
+        });
+
         it("reports an already-running dev server instead of double-starting (lockfile)", async () => {
             expect.assertions(3);
 

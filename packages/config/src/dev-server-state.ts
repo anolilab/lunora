@@ -41,6 +41,17 @@ const DEV_DAEMON_ENV = "LUNORA_DEV_DAEMON";
 /** Env carrying the capture-log path into the detached server, recorded in the state file. */
 const DEV_LOG_FILE_ENV = "LUNORA_DEV_LOG_FILE";
 
+/**
+ * Env carrying the PID of a parent that holds a *provisional* state record it
+ * expects the child dev server to supersede. The CLI claims `.lunora/dev.json`
+ * with its own PID before spawning the real server (closing the duplicate-start
+ * race for the vite flavor and the wrangler daemon), then hands its PID down
+ * via this variable; the child's claim (see {@link claimDevServerState}'s
+ * `supersedePid`) may replace exactly that record with the authoritative
+ * URL + PID.
+ */
+const DEV_HANDOFF_ENV = "LUNORA_DEV_HANDOFF_PID";
+
 /** How the recorded dev server runs. */
 type DevServerMode = "cli" | "vite";
 
@@ -302,8 +313,40 @@ interface ClaimDevServerStateResult {
  * server the claim fails with that record; a stale incumbent is cleared and
  * the claim retried. Still best-effort on I/O errors: an unwritable checkout
  * degrades to the plain (non-exclusive) write, never a crash.
+ *
+ * `supersedePid` names ONE live record this claim may replace instead of
+ * losing to: the provisional record a parent CLI wrote before spawning this
+ * server (handed down via {@link DEV_HANDOFF_ENV}). Any other live record
+ * still wins.
  */
-const claimDevServerState = (projectRoot: string, state: DevServerState): ClaimDevServerStateResult => {
+
+/**
+ * Resolve an exclusive-create conflict for {@link claimDevServerState}:
+ * someone holds the file. Live (and not us) → they won — unless it is the
+ * provisional record this claim was spawned to supersede. `undefined` means
+ * the incumbent was stale (readLive cleared it) and the exclusive create
+ * should be retried.
+ */
+const resolveClaimConflict = (projectRoot: string, state: DevServerState, supersedePid: number | undefined): ClaimDevServerStateResult | undefined => {
+    const existing = readLiveDevServerState(projectRoot);
+
+    if (existing === undefined) {
+        return undefined;
+    }
+
+    if (supersedePid !== undefined && existing.pid === supersedePid) {
+        return { ok: writeDevServerState(projectRoot, state) !== undefined };
+    }
+
+    if (existing.pid !== state.pid) {
+        return { existing, ok: false };
+    }
+
+    // Our own pid already owns the record (restart in-process) — refresh it.
+    return { ok: writeDevServerState(projectRoot, state) !== undefined };
+};
+
+const claimDevServerState = (projectRoot: string, state: DevServerState, options?: { supersedePid?: number }): ClaimDevServerStateResult => {
     const path = join(projectRoot, DEV_STATE_FILE);
     const payload = `${JSON.stringify(state, undefined, 2)}\n`;
 
@@ -320,17 +363,10 @@ const claimDevServerState = (projectRoot: string, state: DevServerState): ClaimD
                 return { ok: writeDevServerState(projectRoot, state) !== undefined };
             }
 
-            // Someone holds the file. Live (and not us) → they won. Stale →
-            // readLive cleared it; retry the exclusive create once.
-            const existing = readLiveDevServerState(projectRoot);
+            const resolved = resolveClaimConflict(projectRoot, state, options?.supersedePid);
 
-            if (existing !== undefined && existing.pid !== state.pid) {
-                return { existing, ok: false };
-            }
-
-            if (existing !== undefined) {
-                // Our own pid already owns the record (restart in-process) — refresh it.
-                return { ok: writeDevServerState(projectRoot, state) !== undefined };
+            if (resolved !== undefined) {
+                return resolved;
             }
         }
     }
@@ -343,6 +379,7 @@ export {
     claimDevServerState,
     clearDevServerState,
     DEV_DAEMON_ENV,
+    DEV_HANDOFF_ENV,
     DEV_LOG_FILE,
     DEV_LOG_FILE_ENV,
     DEV_STATE_DIR,

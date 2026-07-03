@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { DEV_LOG_FILE, readDevServerState, writeDevServerState } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { runDevBackground, runDevLogs, runDevStatus, runDevStop } from "../../src/commands/dev/lifecycle";
+import type { DevOptions } from "../../src/commands/dev/index";
+import { runDevBackground, runDevLogs, runDevStatus, runDevStop, startBackground } from "../../src/commands/dev/lifecycle";
 import type { Logger } from "../../src/util/logger";
 
 interface RecordingLogger {
@@ -151,6 +152,29 @@ describe("lunora dev lifecycle", () => {
             expect(signals).toHaveLength(0);
             expect(readDevServerState(workdir)).toBeUndefined();
         });
+
+        it("leaves a record another server claimed after the stale read", async () => {
+            expect.assertions(1);
+
+            writeDevServerState(workdir, { mode: "cli", pid: 4242, url: "http://localhost:8787" });
+
+            await runDevStop({
+                // The observed record is dead — but by clear time a NEW server
+                // has re-claimed the file. The pid-guarded clear must not
+                // delete that fresh record.
+                alive: () => {
+                    writeDevServerState(workdir, { mode: "cli", pid: 5353, url: "http://localhost:8788" });
+
+                    return false;
+                },
+                cwd: workdir,
+                json: false,
+                logger: recordingLogger().logger,
+                signal: () => {},
+            });
+
+            expect(readDevServerState(workdir)?.pid).toBe(5353);
+        });
     });
 
     describe("runDevStatus", () => {
@@ -238,6 +262,65 @@ describe("lunora dev lifecycle", () => {
             stdoutSpy.mockRestore();
 
             expect(chunks.join("")).toBe("two\nthree\n");
+        });
+    });
+
+    describe("startBackground", () => {
+        it("claims a provisional record, hands its pid to the child, and clears after", async () => {
+            expect.assertions(4);
+
+            let envSeen: Record<string, string | undefined> | undefined;
+            let pidDuringRun: number | undefined;
+
+            const result = await startBackground({
+                cwd: workdir,
+                jsonLogs: false,
+                logger: recordingLogger().logger,
+                options: {} as DevOptions,
+                remote: false,
+                run: (options) => {
+                    envSeen = options.env;
+                    // The provisional record is already claimed when the child spawns.
+                    pidDuringRun = readDevServerState(workdir)?.pid;
+
+                    return Promise.resolve({ code: 0 });
+                },
+            });
+
+            expect(result.code).toBe(0);
+            expect(pidDuringRun).toBe(process.pid);
+            expect(envSeen?.LUNORA_DEV_HANDOFF_PID).toBe(String(process.pid));
+            // No child superseded it, so the provisional record is gone.
+            expect(readDevServerState(workdir)).toBeUndefined();
+        });
+
+        it("loses the claim to a live incumbent and reports it without spawning", async () => {
+            expect.assertions(4);
+
+            // A live record owned by a different process (the runner's parent).
+            writeDevServerState(workdir, { mode: "cli", pid: process.ppid, url: "http://localhost:8787" });
+
+            let spawned = false;
+            const { lines, logger } = recordingLogger();
+
+            const result = await startBackground({
+                cwd: workdir,
+                jsonLogs: false,
+                logger,
+                options: {} as DevOptions,
+                remote: false,
+                run: () => {
+                    spawned = true;
+
+                    return Promise.resolve({ code: 0 });
+                },
+            });
+
+            expect(result.code).toBe(0);
+            expect(spawned).toBe(false);
+            expect(lines.some((line) => line.message.includes("already running"))).toBe(true);
+            // The incumbent's record is untouched.
+            expect(readDevServerState(workdir)?.pid).toBe(process.ppid);
         });
     });
 

@@ -174,4 +174,25 @@ describe("dev-server-state", () => {
         expect(claim.ok).toBe(true);
         expect(readDevServerState(workdir)?.pid).toBe(process.pid);
     });
+
+    it("claimDevServerState supersedes exactly the named provisional record", () => {
+        expect.assertions(4);
+
+        // The parent CLI's provisional record (a live pid — use our own).
+        writeDevServerState(workdir, { mode: "cli", pid: process.pid, url: "http://localhost:5173" });
+
+        // The spawned server may replace the record it was handed (supersedePid).
+        const takeover = claimDevServerState(workdir, { mode: "vite", pid: 99_999, url: "http://localhost:5199" }, { supersedePid: process.pid });
+
+        expect(takeover.ok).toBe(true);
+        expect(readDevServerState(workdir)?.url).toBe("http://localhost:5199");
+
+        // A supersedePid that does NOT match the live record still loses.
+        writeDevServerState(workdir, { mode: "cli", pid: process.pid, url: "http://localhost:5173" });
+
+        const stranger = claimDevServerState(workdir, { mode: "vite", pid: 99_999, url: "http://localhost:5199" }, { supersedePid: 12_345 });
+
+        expect(stranger.ok).toBe(false);
+        expect(readDevServerState(workdir)?.url).toBe("http://localhost:5173");
+    });
 });

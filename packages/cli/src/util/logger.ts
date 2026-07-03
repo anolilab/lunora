@@ -86,6 +86,13 @@ const wantJson = (): boolean => {
 const constructReporter = (Reporter: unknown): PailReporter => new (Reporter as PailReporterConstructor)();
 
 const buildReporters = (): PailReporter[] => {
+    // Forced JSON (`--json` / agent auto-detect) is a machine-readability
+    // contract — it must win even over an explicitly configured reporter set,
+    // or automation parsing stdout breaks.
+    if (jsonForced) {
+        return [constructReporter(JsonReporter)];
+    }
+
     if (configuredReporters !== undefined && configuredReporters.length > 0) {
         return configuredReporters;
     }
