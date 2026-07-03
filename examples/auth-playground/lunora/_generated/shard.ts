@@ -216,6 +216,7 @@ const LUNORA_STORAGE_RULES: StorageRulesResult = {
 const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {
     "analytics": false,
     "auth": true,
+    "containers": false,
     "flags": false,
     "kv": false,
     "mail": false,
