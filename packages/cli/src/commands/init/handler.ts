@@ -14,7 +14,7 @@ import { defineHandler } from "../../util/command";
 import type { DetectedFramework, FrameworkDetection } from "../../util/detect-framework";
 import { detectFramework } from "../../util/detect-framework";
 import type { PackageManager, PackageManagerProbe } from "../../util/detect-package-manager";
-import { detectInstalledManagers, detectPackageManager, installArgsFor } from "../../util/detect-package-manager";
+import { detectInstalledManagers, detectPackageManager, installArgsFor, runScriptCommand } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
 import { patchViteConfig } from "../../util/patch-vite-config";
 import { PromptCancelledError } from "../../util/prompt-cancelled";
@@ -445,20 +445,6 @@ const logScaffoldSuccess = (logger: Logger, written: ReadonlyArray<string>, targ
     }
 
     logger.success(`scaffolded ${String(written.length)} files into ${target}`);
-};
-
-/** The shell command that runs a project script with `manager` (`pnpm dev`, `npm run dev`, …). */
-const runScriptCommand = (manager: PackageManager, script: string): string => {
-    if (manager === "npm") {
-        return `npm run ${script}`;
-    }
-
-    if (manager === "bun") {
-        return `bun run ${script}`;
-    }
-
-    // pnpm / yarn run scripts by bare name.
-    return `${manager} ${script}`;
 };
 
 /** The shell command that adds dependencies with `manager` (`pnpm add …`, `npm install …`, …). */

@@ -29,8 +29,7 @@ import type { CodegenWatcherHandle } from "../../util/codegen-watch";
 import { startCodegenWatch } from "../../util/codegen-watch";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
-import type { PackageManager } from "../../util/detect-package-manager";
-import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
+import { detectPackageManager, execArgsFor, runScriptCommand } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
 import type { SpawnDescriptor } from "../../util/spawn";
 import type { StudioServerHandle } from "../../util/studio-server";
@@ -153,9 +152,6 @@ const resolveRemotePlan = (options: DevCommandOptions, cwd: string): { args: str
     return { args: ["--config", result.configPath], plan: { bindings, cleanup, enabled: true } };
 };
 
-/** The dev-server script invocation for the framework redirect hint (`pnpm dev`, `npm run dev`, …). */
-const frameworkDevScript = (manager: PackageManager): string => (manager === "npm" || manager === "bun" ? `${manager} run dev` : `${manager} dev`);
-
 /**
  * Plan `lunora dev`: it runs the worker via `wrangler dev` and nothing else as a
  * child process. Vite is intentionally NOT spawned — a project may not use Vite,
@@ -174,7 +170,7 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
     const frameworkHint =
         detection.framework === "none"
             ? undefined
-            : `this project uses ${detection.framework} — the worker runs inside Vite there. run \`${frameworkDevScript(manager)}\` for the full app (frontend + HMR); \`lunora dev\` starts only the worker.`;
+            : `this project uses ${detection.framework} — the worker runs inside Vite there. run \`${runScriptCommand(manager, "dev")}\` for the full app (frontend + HMR); \`lunora dev\` starts only the worker.`;
     const remote = resolveRemotePlan(options, cwd);
     // `--var WORKER_ENV:development` flags the worker as a dev deployment so the
     // runtime streams every RPC dispatch summary to the terminal by default
