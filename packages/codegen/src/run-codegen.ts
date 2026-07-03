@@ -7,8 +7,10 @@ import { Project } from "ts-morph";
 
 import { lintSchema } from "./advisor";
 import discoverAdminRoutes from "./discover-admin-routes";
+import discoverArgumentDerivedFetches from "./discover-argument-derived-fetches";
 import discoverArgumentValidators from "./discover-argument-validators";
 import discoverAuthApiCalls from "./discover-authapi-calls";
+import discoverConfigCalls from "./discover-config-calls";
 import { discoverContainers } from "./discover-containers";
 import discoverCrons from "./discover-crons";
 import { buildStudioFeatures, discoverFeatureUsage } from "./discover-feature-usage";
@@ -17,11 +19,13 @@ import { discoverFunctions, listLunoraSourceFiles } from "./discover-functions";
 import discoverHttpRoutes from "./discover-http-routes";
 import { discoverIdentity } from "./discover-identity";
 import discoverInserts from "./discover-inserts";
+import discoverKvKeyAccesses from "./discover-kv-key-accesses";
 import discoverMaskProcedures, { discoverMaskMetadata } from "./discover-mask-procedures";
 import discoverMigrations from "./discover-migrations";
 import discoverMutatorWrites from "./discover-mutator-writes";
 import { discoverMutators } from "./discover-mutators";
 import discoverNondeterministicCalls from "./discover-nondeterministic-calls";
+import discoverOwnerFieldWrites from "./discover-owner-field-writes";
 import discoverPackageDependencies from "./discover-package-dependencies";
 import discoverProcedureMiddleware from "./discover-procedure-middleware";
 import discoverQueries from "./discover-queries";
@@ -32,6 +36,7 @@ import discoverSchema from "./discover-schema";
 import discoverSecrets from "./discover-secrets";
 import { discoverShapes } from "./discover-shapes";
 import discoverSqlInterpolation from "./discover-sql-interpolation";
+import discoverStorageKeyAccesses from "./discover-storage-key-accesses";
 import discoverStorageRulesMetadata from "./discover-storage-rules";
 import discoverWorkflowCalls from "./discover-workflow-calls";
 import { discoverWorkflows } from "./discover-workflows";
@@ -328,6 +333,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   discoverR2sqlCalls(project, lunoraDirectory),
                   shapes,
                   discoverMutatorWrites(project, lunoraDirectory),
+                  discoverConfigCalls(project, lunoraDirectory),
+                  discoverArgumentDerivedFetches(project, lunoraDirectory),
+                  discoverKvKeyAccesses(project, lunoraDirectory),
+                  discoverOwnerFieldWrites(project, lunoraDirectory),
+                  discoverStorageKeyAccesses(project, lunoraDirectory),
               );
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,

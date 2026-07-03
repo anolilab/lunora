@@ -818,12 +818,18 @@ export interface ProcedureMiddlewareIR {
     callsMail: boolean;
     /** Export binding name of the procedure (e.g. `signUp`). */
     exportName: string;
+    /** `true` when the handler fans work out to a privileged, cost-bearing dispatch surface (scheduler `runAfter`/`runAt`, a queue producer send, or a workflow create). Feeds the privileged-fanout lint. */
+    fanOut: boolean;
     /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
     file: string;
     /** Registration kind — only `mutation`/`action` are write-shaped; `query` is read-only. */
     kind: "action" | "mutation" | "query";
+    /** `true` when the handler runs an AI generation (`generateText`/`streamText`/`generateObject`/`streamObject`) with no `maxOutputTokens` bound in its config literal. Feeds the `ai_unbounded_generation_public` lint. */
+    unboundedAiGeneration: boolean;
     /** `true` when the chain carries `.use(verifyTurnstile(...))` or a `protectPublic({ captcha })` bundle. */
     usesCaptcha: boolean;
+    /** `true` when the handler calls `ctx.db.insertManyUnsafe(...)`, bypassing validators and triggers. Feeds the `insert_many_unsafe_user_data` lint. */
+    usesInsertManyUnsafe: boolean;
     /** `true` when the chain carries `.use(mask(...))`. */
     usesMask: boolean;
     /** `true` when the chain carries `.use(rateLimit(...))` or a `protectPublic({ rateLimit })` bundle. */
@@ -855,6 +861,28 @@ export interface ArgumentValidatorIR {
     line: number;
     /** Arg names declared as `v.string()` with no statically-visible max-length bound. */
     unboundedStringArgs: string[];
+}
+
+/**
+ * One factory/constructor call in `lunora/` whose config object literal a
+ * security lint inspects for a present-or-absent key — the shared input for the
+ * config-call security lints (payment authorize, inbound-mail verify, rate-limit
+ * store, browser private-targets). Structurally identical to `AdvisorConfigCall`
+ * so it passes straight through to the advisor without conversion.
+ */
+export interface ConfigCallIR {
+    /** `true` when the config argument was a static object literal the feeder could read. */
+    analyzable: boolean;
+    /** The factory function or constructor name at the call site, e.g. `createPayment` / `RateLimiter`. */
+    callee: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the call site, or `0` when unknown. */
+    line: number;
+    /** Keys present in the config object literal (empty when not `analyzable`). */
+    presentKeys: string[];
+    /** Keys in the config object literal explicitly assigned the literal `true`. */
+    trueKeys: string[];
 }
 
 /**
@@ -890,6 +918,90 @@ export interface SqlInterpolationIR {
     file: string;
     /** 1-based line of the interpolation, or `0` when unknown. */
     line: number;
+}
+
+/**
+ * One `ctx.fetch(url, …)` call inside an action whose URL argument is derived
+ * from the handler's `args` — the `action_fetch_ssrf` lint input. `ctx.fetch` is
+ * the action-only outbound-request escape hatch with no host allowlist, so a URL
+ * assembled from request input is a server-side request forgery vector (cloud
+ * metadata endpoints, internal services). Only arg-derived URLs reach here; a
+ * fixed literal or a URL built from config/`ctx.*` is not recorded. Structurally
+ * identical to `AdvisorArgumentDerivedFetch`.
+ */
+export interface ArgumentDerivedFetchIR {
+    /** Export binding name of the action performing the `ctx.fetch` call. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the `ctx.fetch` call, or `0` when unknown. */
+    line: number;
+}
+
+/**
+ * One `ctx.kv.&lt;method>(key, …)` call whose namespace key is derived from the
+ * handler's `args` with no server-side scoping — the `kv_unscoped_user_key_idor`
+ * lint input. Workers KV is a single flat namespace, so a key taken straight from
+ * request input lets any caller read, overwrite, or delete another user's entry
+ * (IDOR). Only arg-derived, unscoped keys reach here; a fixed literal, or a key
+ * prefixed with a server-trusted identity (`${ctx.auth.userId}:…` — references
+ * `ctx`, so treated as scoped), is not recorded. `list` is excluded (it takes a
+ * prefix, not a per-entry key). Structurally identical to `AdvisorKvKeyAccess`.
+ */
+export interface KvKeyAccessIR {
+    /** Export binding name of the procedure performing the `ctx.kv` access. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the `ctx.kv` call, or `0` when unknown. */
+    line: number;
+    /** The `ctx.kv` method invoked: `get` / `getRaw` / `getWithMetadata` / `put` / `delete`. */
+    method: string;
+}
+
+/**
+ * One `ctx.db` write (`insert` / `replace` / `patch` / `insertManyUnsafe`) that sets
+ * an ownership / identity column — `userId`, `ownerId`, `tenantId`, and the like —
+ * from the handler's `args` instead of the server-trusted identity. The
+ * `owner_field_from_args_not_auth` lint input: the ownership column decides who a
+ * row belongs to, so a value taken from request input lets any caller write rows
+ * owned by another user or tenant (the act-as-any-user / cross-tenant IDOR vector).
+ * A column stamped from `ctx.*`, or set to a fixed literal, is not recorded; only an
+ * arg-derived identity write reaches here. Structurally identical to
+ * `AdvisorOwnerFieldWrite`.
+ */
+export interface OwnerFieldWriteIR {
+    /** Export binding name of the procedure performing the write. */
+    exportName: string;
+    /** The identity column being written from `args` (e.g. `userId`). */
+    field: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the `ctx.db` write call, or `0` when unknown. */
+    line: number;
+    /** The `ctx.db` write method (`insert` / `replace` / `patch` / `insertManyUnsafe`). */
+    method: string;
+}
+
+/**
+ * One `ctx.storage.&lt;bucket>.&lt;method>(key, …)` call whose R2 object key is derived
+ * from the handler's `args` with no server-side scoping — the
+ * `storage_key_from_user_args` lint input. The bucket read/write/URL/delete methods
+ * key by their first argument, so an object key taken straight from request input is
+ * object-level IDOR (read/overwrite/delete anyone's object). A key referencing a
+ * server-trusted `ctx.*` value (e.g. `${ctx.auth.userId}/…`) is treated as scoped
+ * and is not recorded; only an arg-derived, `ctx`-free key reaches here.
+ * Structurally identical to `AdvisorStorageKeyAccess`.
+ */
+export interface StorageKeyAccessIR {
+    /** Export binding name of the procedure performing the storage call. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the storage call, or `0` when unknown. */
+    line: number;
+    /** The bucket method invoked with the arg-derived key, e.g. `get` / `put` / `delete` / `download`. */
+    method: string;
 }
 
 /**

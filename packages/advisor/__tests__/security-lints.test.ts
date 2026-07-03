@@ -2,12 +2,28 @@ import { defineSchema, defineTable } from "@lunora/server";
 import { v } from "@lunora/values";
 import { describe, expect, it } from "vitest";
 
-import type { AdvisorAdminRoute, AdvisorArgumentValidator, AdvisorProcedureProtection, AdvisorSecretLiteral, AdvisorSqlInterpolation } from "../src";
+import type {
+    AdvisorAdminRoute,
+    AdvisorArgumentDerivedFetch,
+    AdvisorArgumentValidator,
+    AdvisorConfigCall,
+    AdvisorProcedureProtection,
+    AdvisorSecretLiteral,
+    AdvisorSqlInterpolation,
+} from "../src";
 import { fromServerSchema } from "../src";
+import actionFetchSsrf from "../src/lints/static/action-fetch-ssrf";
 import adminRouteWithoutGuard from "../src/lints/static/admin-route-without-guard";
+import aiUnboundedGenerationPublic from "../src/lints/static/ai-unbounded-generation-public";
+import browserAllowPrivateTargets from "../src/lints/static/browser-allow-private-targets";
 import hardcodedSecret from "../src/lints/static/hardcoded-secret";
+import insertManyUnsafeUserData from "../src/lints/static/insert-many-unsafe-user-data";
+import mailInboundDispatchWithoutVerify from "../src/lints/static/mail-inbound-dispatch-without-verify";
+import paymentCreateWithoutAuthorize from "../src/lints/static/payment-create-without-authorize";
+import privilegedFanoutFromPublicProcedure from "../src/lints/static/privileged-fanout-from-public-procedure";
 import publicArgumentUsesAny from "../src/lints/static/public-argument-uses-any";
 import publicMutationWithoutRatelimit from "../src/lints/static/public-mutation-without-ratelimit";
+import ratelimitDefaultMemoryStore from "../src/lints/static/ratelimit-default-memory-store";
 import sqlInjectionRisk from "../src/lints/static/sql-injection-risk";
 import unboundedStringArgument from "../src/lints/static/unbounded-string-argument";
 import userCreatingMutationWithoutCaptcha from "../src/lints/static/user-creating-mutation-without-captcha";
@@ -19,9 +35,12 @@ const procedure = (overrides: Partial<AdvisorProcedureProtection> = {}): Advisor
     return {
         callsMail: false,
         exportName: "signUp",
+        fanOut: false,
         file: "signup",
         kind: "mutation",
+        unboundedAiGeneration: false,
         usesCaptcha: false,
+        usesInsertManyUnsafe: false,
         usesMask: false,
         usesRateLimit: false,
         usesRls: false,
@@ -185,5 +204,208 @@ describe("admin_route_without_guard", () => {
     it("ignores guarded admin routes", () => {
         expect.assertions(1);
         expect(adminRouteWithoutGuard.run({ adminRoutes: [route({ usesGuard: true })], schema: schema() })).toHaveLength(0);
+    });
+});
+
+/** A readable config-object call; spread overrides to vary one fact at a time. */
+const configCall = (overrides: Partial<AdvisorConfigCall> = {}): AdvisorConfigCall => {
+    return { analyzable: true, callee: "createPayment", file: "billing", line: 12, presentKeys: [], trueKeys: [], ...overrides };
+};
+
+describe("payment_create_without_authorize", () => {
+    it("flags a createPayment with no authorize key", () => {
+        expect.assertions(2);
+
+        const findings = paymentCreateWithoutAuthorize.run({ configCalls: [configCall()], schema: schema() });
+
+        expect(findings).toHaveLength(1);
+
+        expect(findings[0]).toMatchObject({
+            // eslint-disable-next-line no-secrets/no-secrets -- an advisor cache-key assertion, not a secret
+            cacheKey: "payment_create_without_authorize:billing:12",
+            level: "ERROR",
+            name: "payment_create_without_authorize",
+        });
+    });
+
+    it("ignores an authorized createPayment, an opaque config, and other callees", () => {
+        expect.assertions(1);
+
+        const calls = [configCall({ presentKeys: ["authorize"] }), configCall({ analyzable: false }), configCall({ callee: "createBrowser" })];
+
+        expect(paymentCreateWithoutAuthorize.run({ configCalls: calls, schema: schema() })).toHaveLength(0);
+    });
+
+    it("finds nothing without config-call evidence", () => {
+        expect.assertions(1);
+        expect(paymentCreateWithoutAuthorize.run({ schema: schema() })).toHaveLength(0);
+    });
+});
+
+// eslint-disable-next-line no-secrets/no-secrets -- lint rule id in a describe label, not a credential
+describe("mail_inbound_dispatch_without_verify", () => {
+    it("flags an inbound handler with no verify key", () => {
+        expect.assertions(2);
+
+        const findings = mailInboundDispatchWithoutVerify.run({
+            configCalls: [configCall({ callee: "createInboundEmailHandler", file: "email", line: 3 })],
+            schema: schema(),
+        });
+
+        expect(findings).toHaveLength(1);
+
+        expect(findings[0]).toMatchObject({
+            // eslint-disable-next-line no-secrets/no-secrets -- an advisor cache-key assertion, not a secret
+            cacheKey: "mail_inbound_dispatch_without_verify:email:3",
+            level: "ERROR",
+            // eslint-disable-next-line no-secrets/no-secrets -- an advisor rule id, not a secret
+            name: "mail_inbound_dispatch_without_verify",
+        });
+    });
+
+    it("ignores a handler that declares a verify hook", () => {
+        expect.assertions(1);
+
+        const calls = [configCall({ callee: "createInboundEmailHandler", presentKeys: ["parse", "verify"] })];
+
+        expect(mailInboundDispatchWithoutVerify.run({ configCalls: calls, schema: schema() })).toHaveLength(0);
+    });
+});
+
+describe("ratelimit_default_memory_store", () => {
+    it("flags a RateLimiter with no store key", () => {
+        expect.assertions(2);
+
+        const findings = ratelimitDefaultMemoryStore.run({ configCalls: [configCall({ callee: "RateLimiter", file: "limits", line: 8 })], schema: schema() });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({ cacheKey: "ratelimit_default_memory_store:limits:8", level: "WARN", name: "ratelimit_default_memory_store" });
+    });
+
+    it("ignores a RateLimiter with an explicit store", () => {
+        expect.assertions(1);
+
+        const calls = [configCall({ callee: "RateLimiter", presentKeys: ["store"] })];
+
+        expect(ratelimitDefaultMemoryStore.run({ configCalls: calls, schema: schema() })).toHaveLength(0);
+    });
+});
+
+describe("browser_allow_private_targets", () => {
+    it("flags a createBrowser that sets allowPrivateTargets: true", () => {
+        expect.assertions(2);
+
+        const calls = [
+            configCall({ callee: "createBrowser", file: "scrape", line: 5, presentKeys: ["allowPrivateTargets"], trueKeys: ["allowPrivateTargets"] }),
+        ];
+        const findings = browserAllowPrivateTargets.run({ configCalls: calls, schema: schema() });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({ cacheKey: "browser_allow_private_targets:scrape:5", level: "ERROR", name: "browser_allow_private_targets" });
+    });
+
+    it("ignores a createBrowser that only names the key without setting it true", () => {
+        expect.assertions(1);
+
+        const calls = [configCall({ callee: "createBrowser", presentKeys: ["allowPrivateTargets"], trueKeys: [] })];
+
+        expect(browserAllowPrivateTargets.run({ configCalls: calls, schema: schema() })).toHaveLength(0);
+    });
+});
+
+describe("privileged_fanout_from_public_procedure", () => {
+    it("flags a public procedure that fans out with no rate limit", () => {
+        expect.assertions(2);
+
+        const findings = privilegedFanoutFromPublicProcedure.run({
+            procedureProtections: [procedure({ exportName: "enqueue", fanOut: true })],
+            schema: schema(),
+        });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({
+            cacheKey: "privileged_fanout_from_public_procedure:signup:enqueue",
+            level: "WARN",
+            name: "privileged_fanout_from_public_procedure",
+        });
+    });
+
+    it("ignores rate-limited, internal, and non-fan-out procedures", () => {
+        expect.assertions(1);
+
+        const procedures = [
+            procedure({ fanOut: true, usesRateLimit: true }),
+            procedure({ exportName: "b", fanOut: true, visibility: "internal" }),
+            procedure({ exportName: "c" }),
+        ];
+
+        expect(privilegedFanoutFromPublicProcedure.run({ procedureProtections: procedures, schema: schema() })).toHaveLength(0);
+    });
+});
+
+describe("insert_many_unsafe_user_data", () => {
+    it("flags a public procedure using insertManyUnsafe", () => {
+        expect.assertions(2);
+
+        const findings = insertManyUnsafeUserData.run({
+            procedureProtections: [procedure({ exportName: "importRows", usesInsertManyUnsafe: true })],
+            schema: schema(),
+        });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({ cacheKey: "insert_many_unsafe_user_data:signup:importRows", level: "WARN", name: "insert_many_unsafe_user_data" });
+    });
+
+    it("ignores internal procedures and public procedures that don't use the unsafe insert", () => {
+        expect.assertions(1);
+
+        const procedures = [procedure({ exportName: "a", usesInsertManyUnsafe: true, visibility: "internal" }), procedure({ exportName: "b" })];
+
+        expect(insertManyUnsafeUserData.run({ procedureProtections: procedures, schema: schema() })).toHaveLength(0);
+    });
+});
+
+describe("ai_unbounded_generation_public", () => {
+    it("flags a public procedure running an unbounded AI generation", () => {
+        expect.assertions(2);
+
+        const findings = aiUnboundedGenerationPublic.run({
+            procedureProtections: [procedure({ exportName: "summarize", unboundedAiGeneration: true })],
+            schema: schema(),
+        });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({
+            cacheKey: "ai_unbounded_generation_public:signup:summarize",
+            level: "WARN",
+            name: "ai_unbounded_generation_public",
+        });
+    });
+
+    it("ignores internal procedures and public procedures with a bounded generation", () => {
+        expect.assertions(1);
+
+        const procedures = [procedure({ exportName: "a", unboundedAiGeneration: true, visibility: "internal" }), procedure({ exportName: "b" })];
+
+        expect(aiUnboundedGenerationPublic.run({ procedureProtections: procedures, schema: schema() })).toHaveLength(0);
+    });
+});
+
+describe("action_fetch_ssrf", () => {
+    it("flags one ERROR finding per arg-derived ctx.fetch", () => {
+        expect.assertions(2);
+
+        const argumentDerivedFetches: AdvisorArgumentDerivedFetch[] = [{ exportName: "proxyImage", file: "proxyImage", line: 7 }];
+        const findings = actionFetchSsrf.run({ argumentDerivedFetches, schema: schema() });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({ cacheKey: "action_fetch_ssrf:proxyImage:7", level: "ERROR", name: "action_fetch_ssrf" });
+    });
+
+    it("finds nothing when the feeder supplies no fetch evidence", () => {
+        expect.assertions(2);
+
+        expect(actionFetchSsrf.run({ schema: schema() })).toHaveLength(0);
+        expect(actionFetchSsrf.run({ argumentDerivedFetches: [], schema: schema() })).toHaveLength(0);
     });
 });

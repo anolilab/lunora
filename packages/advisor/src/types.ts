@@ -1,13 +1,17 @@
 import type { AdvisorAdminRoute } from "./admin-routes";
+import type { AdvisorArgumentDerivedFetch } from "./argument-derived-fetches";
 import type { AdvisorArgumentValidator } from "./argument-validators";
 import type { AdvisorAuthApiCall } from "./authapi-calls";
+import type { AdvisorConfigCall } from "./config-calls";
 import type { AdvisorContainer } from "./containers";
 import type { AdvisorHyperdriveCall } from "./hyperdrive-calls";
 import type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
 import type { AdvisorInsertWrite } from "./inserts";
+import type { AdvisorKvKeyAccess } from "./kv-key-accesses";
 import type { AdvisorMaskProcedure } from "./mask-procedures";
 import type { AdvisorMutatorWrite } from "./mutator-writes";
 import type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
+import type { AdvisorOwnerFieldWrite } from "./owner-field-writes";
 import type { AdvisorProcedureProtection } from "./procedure-protections";
 import type { AdvisorQueryRead } from "./queries";
 import type { AdvisorR2sqlCall } from "./r2sql-calls";
@@ -17,6 +21,7 @@ import type { AdvisorSecretLiteral } from "./secrets";
 import type { AdvisorShape } from "./shapes";
 import type { AdvisorShardTraffic } from "./shard-traffic";
 import type { AdvisorSqlInterpolation } from "./sql-interpolation";
+import type { AdvisorStorageKeyAccess } from "./storage-key-accesses";
 import type { AdvisorTableSample } from "./table-samples";
 import type { AdvisorWorkflow, AdvisorWorkflowCall } from "./workflows";
 
@@ -97,6 +102,15 @@ export interface LintContext {
     adminRoutes?: ReadonlyArray<AdvisorAdminRoute>;
 
     /**
+     * `ctx.fetch(url, …)` calls inside actions whose URL argument is derived from
+     * the handler's `args` — the `action_fetch_ssrf` input. `ctx.fetch` has no
+     * host allowlist, so a URL built from request input is a server-side request
+     * forgery vector. Supplied by the codegen feeder; absent for runtime callers,
+     * where the lint finds nothing.
+     */
+    argumentDerivedFetches?: ReadonlyArray<AdvisorArgumentDerivedFetch>;
+
+    /**
      * Per-public-procedure argument validators that weaken input safety — the
      * `public_arg_uses_any` (`v.any()` args) and `unbounded_string_arg` (length-less
      * `v.string()` args) input. Supplied by the codegen feeder for public procedures
@@ -110,6 +124,15 @@ export interface LintContext {
      * for runtime callers, where the lint finds nothing.
      */
     authApiCalls?: ReadonlyArray<AdvisorAuthApiCall>;
+
+    /**
+     * Factory/constructor calls in `lunora/` whose config object literal a
+     * security lint inspects for a present-or-absent key — the shared input for
+     * the config-call security lints (payment authorize, inbound-mail verify,
+     * rate-limit store, browser private-targets). Supplied by the codegen feeder;
+     * absent for runtime callers, where the config-call lints find nothing.
+     */
+    configCalls?: ReadonlyArray<AdvisorConfigCall>;
 
     /**
      * Containers declared in `lunora/containers.ts` — the `container_*` lint
@@ -144,6 +167,17 @@ export interface LintContext {
     inserts?: ReadonlyArray<AdvisorInsertWrite>;
 
     /**
+     * `ctx.kv.&lt;method>(key, …)` calls whose namespace key is derived from the
+     * handler's `args` with no server-side scoping — the `kv_unscoped_user_key_idor`
+     * input. Workers KV is one flat namespace, so a key taken straight from request
+     * input lets any caller read/overwrite/delete another user's entry (IDOR). Only
+     * arg-derived, unscoped keys are recorded (a fixed literal or a
+     * `${ctx.auth.userId}:…` prefix is not). Supplied by the codegen feeder; absent
+     * for runtime callers, where the lint finds nothing.
+     */
+    kvKeyAccesses?: ReadonlyArray<AdvisorKvKeyAccess>;
+
+    /**
      * Per-procedure column-masking usage discovered in function bodies (the
      * `mask_uncovered_pii_column` input). Carries whether each procedure's builder
      * chain includes `.use(mask(...))`, which `(table, column)` pairs its mask
@@ -171,6 +205,18 @@ export interface LintContext {
      * finds nothing.
      */
     nondeterministicCalls?: ReadonlyArray<AdvisorNondeterministicCall>;
+
+    /**
+     * `ctx.db` writes (`insert` / `replace` / `patch` / `insertManyUnsafe`) that set
+     * an ownership / identity column (`userId`, `ownerId`, `tenantId`, …) from the
+     * handler's `args` instead of the server-trusted identity — the
+     * `owner_field_from_args_not_auth` input. The ownership column decides who a row
+     * belongs to, so an arg-derived value lets any caller write rows owned by another
+     * user or tenant (act-as-any-user / cross-tenant IDOR). A column stamped from
+     * `ctx.*`, or a fixed literal, is not recorded. Supplied by the codegen feeder;
+     * absent for runtime callers, where the lint finds nothing.
+     */
+    ownerFieldWrites?: ReadonlyArray<AdvisorOwnerFieldWrite>;
 
     /**
      * Per-procedure protective-middleware snapshots — the
@@ -241,6 +287,18 @@ export interface LintContext {
      * finds nothing.
      */
     sqlInterpolations?: ReadonlyArray<AdvisorSqlInterpolation>;
+
+    /**
+     * `ctx.storage.&lt;bucket>.&lt;method>(key, …)` calls whose R2 object key is derived
+     * from the handler's `args` with no server-side scoping — the
+     * `storage_key_from_user_args` input. The bucket read/write/URL/delete methods
+     * key by their first argument, so an arg-derived key is object-level IDOR
+     * (read/overwrite/delete anyone's object). A key referencing a server-trusted
+     * `ctx.*` value (e.g. `${ctx.auth.userId}/…`) is treated as scoped and not
+     * recorded. Supplied by the codegen feeder; absent for runtime callers, where
+     * the lint finds nothing.
+     */
+    storageKeyAccesses?: ReadonlyArray<AdvisorStorageKeyAccess>;
 
     /**
      * Bounded row samples per table — the `constraint_validator` lint input.

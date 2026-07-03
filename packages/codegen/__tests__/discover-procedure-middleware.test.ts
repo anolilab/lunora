@@ -41,6 +41,56 @@ const BARE_SIGNUP = `
     });
 `;
 
+/** A bare-factory public mutation that fans out to the scheduler — no rate limit. */
+const FANOUT = `
+    import { mutation } from "@lunora/server";
+
+    export const enqueue = mutation({
+        args: {},
+        handler: async (ctx) => {
+            await ctx.scheduler.runAfter(1000, "internal.sendReminder", {});
+        },
+    });
+`;
+
+/** A bare-factory public mutation that bulk-inserts via the validator-bypassing `insertManyUnsafe`. */
+const UNSAFE_INSERT = `
+    import { mutation } from "@lunora/server";
+
+    export const importRows = mutation({
+        args: {},
+        handler: async (ctx) => {
+            await ctx.db.insertManyUnsafe("rows", []);
+        },
+    });
+`;
+
+/** A bare-factory public action that generates text with no `maxOutputTokens` bound. */
+const UNBOUNDED_AI = `
+    import { action } from "@lunora/server";
+    import { generateText } from "@lunora/ai";
+
+    export const summarize = action({
+        args: {},
+        handler: async (ctx) => {
+            return await generateText({ model: ctx.ai.model("@cf/meta/llama-3"), prompt: "hi" });
+        },
+    });
+`;
+
+/** A bare-factory public action that generates text WITH a `maxOutputTokens` bound — not flagged. */
+const BOUNDED_AI = `
+    import { action } from "@lunora/server";
+    import { generateText } from "@lunora/ai";
+
+    export const summarize = action({
+        args: {},
+        handler: async (ctx) => {
+            return await generateText({ maxOutputTokens: 256, model: ctx.ai.model("@cf/meta/llama-3"), prompt: "hi" });
+        },
+    });
+`;
+
 /** A builder-form mutation guarded by `.use(rateLimit())`. */
 const RATE_LIMITED = `${PREAMBLE}
     export const send = c.mutation
@@ -126,6 +176,42 @@ describe("discoverProcedureMiddleware", () => {
             visibility: "public",
             writesUserTable: true,
         });
+    });
+
+    it("records a scheduler fan-out from a public mutation", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(workdir, "lunora", "enqueue.ts"), FANOUT, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "enqueue", fanOut: true, usesRateLimit: false, visibility: "public" });
+        expect(found[0]).not.toMatchObject({ fanOut: false });
+    });
+
+    it("records a public `insertManyUnsafe` bulk write", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "import.ts"), UNSAFE_INSERT, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "importRows", usesInsertManyUnsafe: true, visibility: "public" });
+    });
+
+    it("records an unbounded AI generation (no maxOutputTokens) and clears a bounded one", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(workdir, "lunora", "summarize.ts"), UNBOUNDED_AI, "utf8");
+        let found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "summarize", unboundedAiGeneration: true });
+
+        writeFileSync(join(workdir, "lunora", "summarize.ts"), BOUNDED_AI, "utf8");
+        project.getSourceFile(join(workdir, "lunora", "summarize.ts"))?.refreshFromFileSystemSync();
+        found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "summarize", unboundedAiGeneration: false });
     });
 
     it("records a `.use(rateLimit())` builder chain as rate-limited", () => {

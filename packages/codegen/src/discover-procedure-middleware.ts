@@ -173,6 +173,79 @@ const isUserTableInsert = (call: CallExpression): boolean => {
     return Boolean(tableArgument && Node.isStringLiteral(tableArgument) && USER_TABLE_RE.test(tableArgument.getLiteralText()));
 };
 
+/** Method names that dispatch privileged, billable async work (fan-out surfaces). */
+const FANOUT_METHODS = new Set(["create", "runAfter", "runAt", "send", "sendBatch"]);
+
+/** `ctx.&lt;surface>` accessors those fan-out methods dispatch through. */
+const FANOUT_SURFACES = new Set(["queues", "scheduler", "workflows"]);
+
+/**
+ * True when `call` is a privileged fan-out dispatch — a {@link FANOUT_METHODS}
+ * call whose receiver chain roots at `ctx.scheduler` / `ctx.queues` /
+ * `ctx.workflows` (`ctx.scheduler.runAfter(...)`, `ctx.queues.&lt;name>.send(...)`,
+ * `ctx.workflows.&lt;name>.create(...)`). Anchoring to the `ctx.&lt;surface>` root — not
+ * just the method name — keeps generic `.create`/`.send` calls on unrelated
+ * objects from matching.
+ */
+const isFanOutCall = (call: CallExpression): boolean => {
+    const callee = call.getExpression();
+
+    if (!Node.isPropertyAccessExpression(callee) || !FANOUT_METHODS.has(callee.getName())) {
+        return false;
+    }
+
+    let node: TsNode = callee.getExpression();
+
+    while (Node.isCallExpression(node) || Node.isElementAccessExpression(node) || Node.isPropertyAccessExpression(node)) {
+        if (Node.isPropertyAccessExpression(node) && FANOUT_SURFACES.has(node.getName())) {
+            const receiver = node.getExpression();
+
+            if (Node.isIdentifier(receiver) && receiver.getText() === "ctx") {
+                return true;
+            }
+        }
+
+        node = node.getExpression();
+    }
+
+    return false;
+};
+
+/** True when `call` is a `ctx.db.insertManyUnsafe(...)` / `db.insertManyUnsafe(...)` — the validator/trigger-bypassing bulk insert. */
+const isUnsafeInsert = (call: CallExpression): boolean => {
+    const callee = call.getExpression();
+
+    if (!Node.isPropertyAccessExpression(callee) || callee.getName() !== "insertManyUnsafe") {
+        return false;
+    }
+
+    const receiver = callee.getExpression();
+
+    return Node.isPropertyAccessExpression(receiver) ? receiver.getName() === "db" : Node.isIdentifier(receiver) && receiver.getText() === "db";
+};
+
+/** AI SDK text/object generation helpers (re-exported from `@lunora/ai`) that accept a `maxOutputTokens` bound. */
+const AI_GENERATION_CALLEES = new Set(["generateObject", "generateText", "streamObject", "streamText"]);
+
+/**
+ * True when `call` is an AI generation helper ({@link AI_GENERATION_CALLEES})
+ * invoked with an object-literal config that declares no `maxOutputTokens` key —
+ * an unbounded generation. A non-object-literal config (statically opaque) is NOT
+ * flagged: we can't see whether it carries a bound, so this fails open to avoid a
+ * false positive on a hoisted-config call.
+ */
+const isUnboundedAiGeneration = (call: CallExpression): boolean => {
+    const name = calleeNameOf(call);
+
+    if (name === undefined || !AI_GENERATION_CALLEES.has(name)) {
+        return false;
+    }
+
+    const argument = call.getArguments()[0];
+
+    return Boolean(argument && Node.isObjectLiteralExpression(argument) && !argument.getProperty("maxOutputTokens"));
+};
+
 /** True when a node anywhere in `declaration` references `ctx.mail` / `ctx.email` (a mail send). */
 const referencesMail = (declaration: TsNode): boolean =>
     declaration.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression).some((access) => {
@@ -188,18 +261,37 @@ const referencesMail = (declaration: TsNode): boolean =>
     });
 
 /** Behavioural facts read from the procedure declaration body. */
-const behaviourOf = (declaration: TsNode): { callsMail: boolean; writesUserTable: boolean } => {
+const behaviourOf = (
+    declaration: TsNode,
+): { callsMail: boolean; fanOut: boolean; unboundedAiGeneration: boolean; usesInsertManyUnsafe: boolean; writesUserTable: boolean } => {
+    let fanOut = false;
+    let unboundedAiGeneration = false;
+    let usesInsertManyUnsafe = false;
     let writesUserTable = false;
 
     for (const call of declaration.getDescendantsOfKind(SyntaxKind.CallExpression)) {
         if (isUserTableInsert(call)) {
             writesUserTable = true;
+        }
 
+        if (isFanOutCall(call)) {
+            fanOut = true;
+        }
+
+        if (isUnsafeInsert(call)) {
+            usesInsertManyUnsafe = true;
+        }
+
+        if (isUnboundedAiGeneration(call)) {
+            unboundedAiGeneration = true;
+        }
+
+        if (writesUserTable && fanOut && usesInsertManyUnsafe && unboundedAiGeneration) {
             break;
         }
     }
 
-    return { callsMail: referencesMail(declaration), writesUserTable };
+    return { callsMail: referencesMail(declaration), fanOut, unboundedAiGeneration, usesInsertManyUnsafe, writesUserTable };
 };
 
 /** Build the {@link ProcedureMiddlewareIR} for one exported declaration, or `undefined` when it isn't a procedure. */
@@ -219,14 +311,17 @@ const middlewareIrFromDeclaration = (declaration: VariableDeclaration, relativeP
     const protections = classified.receiver
         ? protectionsInChain(classified.receiver)
         : { usesCaptcha: false, usesMask: false, usesRateLimit: false, usesRls: false };
-    const { callsMail, writesUserTable } = behaviourOf(declaration);
+    const { callsMail, fanOut, unboundedAiGeneration, usesInsertManyUnsafe, writesUserTable } = behaviourOf(declaration);
 
     return {
         callsMail,
         exportName: declaration.getName(),
+        fanOut,
         file: relativePath,
         kind: classified.kind,
+        unboundedAiGeneration,
         usesCaptcha: protections.usesCaptcha,
+        usesInsertManyUnsafe,
         usesMask: protections.usesMask,
         usesRateLimit: protections.usesRateLimit,
         usesRls: protections.usesRls,
