@@ -4,6 +4,9 @@
 "package: ai":
     - changed-files:
           - any-glob-to-any-file: "packages/ai/**/*"
+"package: angular":
+    - changed-files:
+          - any-glob-to-any-file: "packages/angular/**/*"
 "package: astro":
     - changed-files:
           - any-glob-to-any-file: "packages/astro/**/*"

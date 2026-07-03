@@ -1,0 +1,83 @@
+{
+    "name": "@lunora/angular",
+    "version": "0.0.0",
+    "description": "Angular reactive adapter for Lunora — signal-based live queries and mutations",
+    "keywords": [
+        "angular",
+        "cloudflare",
+        "durable-objects",
+        "lunora",
+        "realtime",
+        "signals",
+        "workers"
+    ],
+    "homepage": "https://lunora.sh",
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/anolilab/lunora.git",
+        "directory": "packages/angular"
+    },
+    "files": [
+        "./dist",
+        "README.md",
+        "LICENSE.md",
+        "__assets__"
+    ],
+    "type": "module",
+    "sideEffects": false,
+    "main": "./dist/index.mjs",
+    "module": "./dist/index.mjs",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.mjs"
+        },
+        "./package.json": "./package.json"
+    },
+    "publishConfig": {
+        "access": "public"
+    },
+    "scripts": {
+        "build": "pnpm exec packem build --development",
+        "build:prod": "pnpm exec packem build --production",
+        "lint:eslint": "eslint .",
+        "lint:eslint:fix": "eslint . --fix",
+        "lint:prettier": "prettier --check .",
+        "lint:prettier:fix": "prettier --write .",
+        "lint:types": "tsc --noEmit",
+        "test": "vitest run",
+        "test:coverage": "vitest run --coverage"
+    },
+    "dependencies": {
+        "@lunora/client": "1.0.0-alpha.15"
+    },
+    "devDependencies": {
+        "@angular/core": "^20.3.25",
+        "@types/node": "catalog:types",
+        "@visulima/packem": "catalog:build",
+        "@vitest/coverage-v8": "catalog:test",
+        "esbuild": "catalog:build",
+        "rxjs": "^7.8.1",
+        "typescript": "catalog:tsc",
+        "vitest": "catalog:test",
+        "zone.js": "^0.15.0"
+    },
+    "peerDependencies": {
+        "@angular/core": "^19.2.0 || ^20.0.0"
+    },
+    "peerDependenciesMeta": {
+        "@angular/core": {
+            "optional": false
+        }
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    }
+}
