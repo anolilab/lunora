@@ -7,14 +7,18 @@ import type {
     ArgumentDerivedFetchIR,
     ArgumentValidatorIR,
     AuthApiCallIR,
+    AuthConfigIR,
     BrowserUrlAccessIR,
     ConfigCallIR,
     ContainerIR,
     ContainerKeyAccessIR,
+    ContainerOverrideIR,
+    ImageDeliveryUrlAccessIR,
     InsertWriteIR,
     KvKeyAccessIR,
     MailRecipientAccessIR,
     MaskProcedureIR,
+    MaskStrategyIR,
     MutatorWriteIR,
     NondeterministicCallIR,
     OwnerFieldWriteIR,
@@ -22,6 +26,7 @@ import type {
     ProcedureMiddlewareIR,
     QueryReadIR,
     R2sqlCallIR,
+    RatelimitKeySelectorIR,
     RlsProcedureIR,
     SchemaIR,
     SecretLiteralIR,
@@ -68,6 +73,7 @@ const flattenIndexes = (table: TableIR): AdvisorIndex[] => [
  */
 const toAdvisorSchema = (schema: SchemaIR): AdvisorSchema => {
     return {
+        rlsMode: schema.rlsMode,
         tables: schema.tables.map((table) => {
             return {
                 externallyManaged: table.externallyManaged ?? false,
@@ -81,6 +87,7 @@ const toAdvisorSchema = (schema: SchemaIR): AdvisorSchema => {
                     : undefined,
                 fields: Object.keys(table.shape),
                 indexes: flattenIndexes(table),
+                isPublic: table.isPublic ?? false,
                 name: table.name,
                 relations: table.relations.map((relation) => {
                     return {
@@ -113,8 +120,9 @@ const toAdvisorShapes = (shapes: ReadonlyArray<ShapeIR>): AdvisorShape[] =>
  * Run the static lints against a discovered {@link SchemaIR} and the reads/writes/calls
  * found in function bodies: query reads feed `filter_without_index`, insert writes
  * feed `table_without_insert`, authApi calls feed `auth_api_call_without_headers`,
- * rls procedure snapshots feed `rls_uncovered_table`, and mask procedure
- * snapshots feed `mask_uncovered_pii_column`; declared containers
+ * rls procedure snapshots feed `rls_uncovered_table`, mask procedure
+ * snapshots feed `mask_uncovered_pii_column`, and per-column mask strategies
+ * feed `mask_weak_hash_strategy_on_pii`; declared containers
  * feed the `container_*` lints; declared workflows (with their durable step labels)
  * + `ctx.workflows.get(...)` call sites feed the `workflow_unused` /
  * `workflow_unknown_target` / duplicate-step-name lints; non-deterministic
@@ -154,6 +162,11 @@ export const lintSchema = (
     vectorNamespaceAccesses?: ReadonlyArray<VectorNamespaceAccessIR>,
     browserUrlAccesses?: ReadonlyArray<BrowserUrlAccessIR>,
     privilegedDispatches?: ReadonlyArray<PrivilegedDispatchIR>,
+    containerOverrides?: ReadonlyArray<ContainerOverrideIR>,
+    authConfigs?: ReadonlyArray<AuthConfigIR>,
+    maskStrategies?: ReadonlyArray<MaskStrategyIR>,
+    imageDeliveryUrlAccesses?: ReadonlyArray<ImageDeliveryUrlAccessIR>,
+    ratelimitKeySelectors?: ReadonlyArray<RatelimitKeySelectorIR>,
 ): Finding[] =>
     runAdvisor(
         {
@@ -162,14 +175,18 @@ export const lintSchema = (
             argumentDerivedFetches,
             argValidators: argumentValidators,
             authApiCalls,
+            authConfigs,
             browserUrlAccesses,
             configCalls,
             containerKeyAccesses,
+            containerOverrides,
             containers,
+            imageDeliveryUrlAccesses,
             inserts,
             kvKeyAccesses,
             mailRecipientAccesses,
             maskProcedures,
+            maskStrategies,
             mutatorWrites,
             nondeterministicCalls,
             ownerFieldWrites,
@@ -177,6 +194,7 @@ export const lintSchema = (
             procedureProtections,
             queries,
             r2sqlCalls,
+            ratelimitKeySelectors,
             rlsProcedures,
             schema: toAdvisorSchema(schema),
             secretLiterals,

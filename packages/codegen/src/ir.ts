@@ -168,6 +168,14 @@ export interface TableIR {
      */
     globalBackend?: "d1" | "hyperdrive";
     indexes: ReadonlyArray<IndexIR>;
+
+    /**
+     * `true` when the table chain carried `.public()` — an explicit opt-OUT of
+     * the schema's `.rls("required")` enforcement for this one table. Optional:
+     * hand-built IR and tables that never called `.public()` default it to
+     * `false`.
+     */
+    isPublic?: boolean;
     name: string;
     /** Rank indexes declared inline via `.rankIndex(name, …)`. */
     rankIndexes: ReadonlyArray<RankIndexIR>;
@@ -193,6 +201,14 @@ export interface SchemaIR {
      * Absent ⇒ un-pinned.
      */
     jurisdiction?: JurisdictionIR;
+
+    /**
+     * Set when `defineSchema(...).rls("required")` was chained onto the schema —
+     * every table's `ctx.db` write path is denied without an RLS-covering
+     * procedure unless the table itself is `.public()` (see {@link TableIR.isPublic}).
+     * Absent when the schema never called `.rls("required")`.
+     */
+    rlsMode?: "required";
     tables: ReadonlyArray<TableIR>;
     /** All vector indexes (inline Shape A hoisted + standalone Shape B), flattened. */
     vectorIndexes: ReadonlyArray<VectorIndexIR>;
@@ -704,6 +720,31 @@ export interface MaskMetadataIR {
 }
 
 /**
+ * One masked column whose `mask(policies)` strategy is a statically-known
+ * literal (`"hash"` or `"redact"`) — the `mask_weak_hash_strategy_on_pii` lint
+ * input. Unlike {@link MaskColumnMetadataIR} (app-wide, deduped by `(table,
+ * column)`, studio-preview evidence), this is per declaration site (file + line
+ * + enclosing export), undeduped, so the lint can point at the exact
+ * `mask(...)` call that applies a weak strategy. A `MaskFn` (custom, non-literal)
+ * strategy carries no lint-relevant signal and is never recorded here.
+ * Structurally identical to `AdvisorMaskStrategy`.
+ */
+export interface MaskStrategyIR {
+    /** Masked column name. */
+    column: string;
+    /** Export binding name of the procedure whose `.use(mask(...))` chain declared this column, or `"&lt;module>"` when declared at file scope. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the masked column's strategy property. */
+    line: number;
+    /** The statically-known strategy literal: `"hash"` or `"redact"`. */
+    strategy: string;
+    /** Logical table the masked column belongs to. */
+    table: string;
+}
+
+/**
  * One statically-readable policy entry from an `rls([...])` array literal,
  * surfaced to the studio's read-only RLS inspector via the generated
  * `rlsPolicies()` hook. Captures the policy's `table` + `on` operation and the
@@ -1104,6 +1145,111 @@ export interface BrowserUrlAccessIR {
     line: number;
     /** The browser method invoked: `content` / `pdf` / `scrape` / `screenshot`. */
     method: string;
+}
+
+/**
+ * One runtime container-override call: a `&lt;handle>.start({ enableInternet: true, … })`
+ * launch override, or a `&lt;handle>.egress.&lt;method>(...)` runtime firewall mutation
+ * (`allow` / `deny` / `setAllowed`) — the `container_start_enable_internet_override`
+ * and `container_runtime_egress_relaxation` lint input. Both shapes re-open network
+ * access the static `defineContainer` declaration (and its `container_public_internet`
+ * lint) assumes is locked down. Matched structurally by call shape, independent of the
+ * receiver's resolved type. Structurally identical to `AdvisorContainerOverride`.
+ */
+export interface ContainerOverrideIR {
+    /** e.g. the egress method name, or `"enableInternet: true"`. */
+    detail: string;
+    /** Export binding name of the procedure performing the call. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** Which override shape matched. */
+    kind: "egress_relaxation" | "enable_internet";
+    /** 1-based line of the call, or `0` when unknown. */
+    line: number;
+}
+
+/**
+ * One `buildImageDeliveryUrl({ key, … })` call (`@lunora/bindings/images`) whose
+ * `key` — the CDN transform's source image, an absolute URL or an
+ * origin-relative key — is derived from the handler's `args` with no
+ * server-side scoping — the `images_url_source_from_user_input` lint input.
+ * `ctx.images.transform`/`info` take image *bytes*, never a URL, so they are not
+ * sinks; only the `key` of `buildImageDeliveryUrl` accepts a URL-or-key source
+ * and is inspected. An arg-derived `key` lets any caller point the CDN's
+ * `/cdn-cgi/image/` transform at an attacker-chosen origin (SSRF / open proxy)
+ * or at an arbitrary key under the account's own store. A fixed literal, or a
+ * key scoped by a server-trusted `ctx.*` value, is not recorded. Structurally
+ * identical to `AdvisorImageDeliveryUrlAccess`.
+ */
+export interface ImageDeliveryUrlAccessIR {
+    /** Export binding name of the procedure performing the `buildImageDeliveryUrl` call. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the `buildImageDeliveryUrl` call, or `0` when unknown. */
+    line: number;
+}
+
+/**
+ * One `createAuth({...})` call's configuration snapshot — the shared input for
+ * the five `auth_*` security lints (trusted-origins wildcard, CSRF check
+ * disabled, secure cookies disabled, email verification disabled, session
+ * freshAge zero). Matched by callee NAME (an `import`-agnostic, fail-closed
+ * convention the other feeders share), so a re-export or alias still resolves.
+ * When the config argument isn't a statically-analyzable object literal (a
+ * top-level spread, or not an object literal at all), `analyzable` is `false`
+ * and every boolean fact defaults to its SAFE (not-flagged) value — an opaque
+ * config can't be relied on either way. Structurally identical to
+ * `AdvisorAuthConfig`.
+ */
+export interface AuthConfigIR {
+    /** `true` when the call's config argument was a static object literal the feeder could read. */
+    analyzable: boolean;
+    /** `advanced.disableCSRFCheck === true`. */
+    disableCsrfCheck: boolean;
+    /** `emailAndPassword.enabled === true`. */
+    emailPasswordEnabled: boolean;
+    /** Export binding name enclosing the `createAuth(...)` call. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the `createAuth(...)` call, or `0` when unknown. */
+    line: number;
+    // eslint-disable-next-line no-secrets/no-secrets -- the dotted config-path in the doc comment, not a credential
+    /** `emailAndPassword.requireEmailVerification === true` present. */
+    requireEmailVerification: boolean;
+    /** `advanced.useSecureCookies === false`. */
+    secureCookiesDisabled: boolean;
+    /** `session.freshAge === 0` (explicit literal). */
+    sessionFreshAgeZero: boolean;
+    /** `trustedOrigins` array literal contains a `"*"` element. */
+    trustedOriginsWildcard: boolean;
+}
+
+/**
+ * One `rateLimit`/`dbRateLimit` middleware call (`@lunora/ratelimit`) whose
+ * `key` selector — the per-caller rate-limit sub-key, `(ctx) => string |
+ * undefined` — is derived from the handler's `args` with no server-side
+ * scoping (no reference to the trusted `ctx` binding anywhere in the selector)
+ * — the `ratelimit_key_spoofable_or_global` lint input. A key an attacker
+ * controls lets them rotate it per request and bypass the limit entirely,
+ * defeating its purpose. A selector scoped by `ctx` (e.g. `ctx.auth.userId`,
+ * `ctx.ip`), or one with no `args` reference at all (a fixed/global bucket —
+ * the "no key" case this lint deliberately does not flag, to keep it low-FP),
+ * is not recorded. Structurally identical to `AdvisorRatelimitKeySelector`.
+ */
+export interface RatelimitKeySelectorIR {
+    /** The `rateLimit`/`dbRateLimit` callee invoked. */
+    callee: string;
+    /** Export binding name of the procedure whose `.use(...)` chain carries the call. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** The rate limit's `name` argument (the second positional argument), or `""` when not a string literal. */
+    limitName: string;
+    /** 1-based line of the `rateLimit`/`dbRateLimit` call, or `0` when unknown. */
+    line: number;
 }
 
 /**

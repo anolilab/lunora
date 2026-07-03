@@ -1,4 +1,4 @@
-import type { Node as TsNode, Project, SourceFile } from "ts-morph";
+import type { ArrowFunction, Block, FunctionExpression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
@@ -13,6 +13,22 @@ const FUNCTION_CALLEES = new Set(["createBrowser", "createInboundEmailHandler", 
 
 /** Constructors (`new X({...})`) whose first-argument config object literal a lint inspects. */
 const CONSTRUCTOR_CALLEES = new Set(["RateLimiter"]);
+
+/**
+ * Chained builder methods whose first-argument *callback* (not a bare object
+ * literal) returns the config object literal a security lint inspects — the
+ * generated `defineApp()...extend(fn)` escape hatch (`fn: (env, derived) =>
+ * Partial&lt;WorkerOptions>`, merged straight into the `createWorker(...)` options
+ * — see `emit-app.ts`'s `buildWorkerOptions`). Matched by name only (the same
+ * import-agnostic convention as {@link FUNCTION_CALLEES}); the compound
+ * signature of the method name plus a specific `trueKeys` member is precise
+ * enough to hold the false-positive rate down without also verifying the
+ * receiver is a `defineApp()` chain.
+ */
+const CALLBACK_CALLEES = new Set(["extend"]);
+
+/** The subset of {@link ConfigCallIR} a config/callback reader can determine from the argument alone — the caller fills in `callee`/`file`/`line`. */
+type ConfigCallEvidence = Pick<ConfigCallIR, "analyzable" | "presentKeys" | "trueKeys">;
 
 /**
  * The simple callee name of a call/new expression — the trailing identifier for a
@@ -32,22 +48,17 @@ const calleeName = (expression: TsNode): string | undefined => {
 };
 
 /**
- * Read a config object-literal argument into the present/true key sets. A
- * non-object argument (a variable, call result, or missing) is *not* analyzable,
- * and a spread (`{ ...base }`) makes it opaque too — keys could be contributed
+ * Read an object literal's properties into the present/true key sets. A spread
+ * (`{ ...base }`) makes the literal opaque — keys could be contributed
  * elsewhere, so the absent-key lints must skip it rather than flag on a key the
  * merged object may well set.
  */
-const readConfigArgument = (argument: TsNode | undefined): Pick<ConfigCallIR, "analyzable" | "presentKeys" | "trueKeys"> => {
-    if (!argument || !Node.isObjectLiteralExpression(argument)) {
-        return { analyzable: false, presentKeys: [], trueKeys: [] };
-    }
-
+const keysFromObjectLiteral = (objectLiteral: ObjectLiteralExpression): ConfigCallEvidence => {
     const presentKeys: string[] = [];
     const trueKeys: string[] = [];
     let hasSpread = false;
 
-    for (const property of argument.getProperties()) {
+    for (const property of objectLiteral.getProperties()) {
         if (Node.isSpreadAssignment(property)) {
             hasSpread = true;
 
@@ -77,23 +88,77 @@ const readConfigArgument = (argument: TsNode | undefined): Pick<ConfigCallIR, "a
     return { analyzable: !hasSpread, presentKeys, trueKeys };
 };
 
-/** Config-shaped factory/constructor calls in one source file. */
+/**
+ * Read a config object-literal argument into the present/true key sets. A
+ * non-object argument (a variable, call result, or missing) is *not* analyzable.
+ */
+const readConfigArgument = (argument: TsNode | undefined): ConfigCallEvidence =>
+    argument && Node.isObjectLiteralExpression(argument) ? keysFromObjectLiteral(argument) : { analyzable: false, presentKeys: [], trueKeys: [] };
+
+/** The sole statement of a single-statement `{ return {...}; }` block, when it returns an object literal. */
+const objectLiteralFromReturnBlock = (block: Block): ObjectLiteralExpression | undefined => {
+    const statements = block.getStatements();
+    const [statement] = statements;
+
+    if (statements.length !== 1 || statement === undefined || !Node.isReturnStatement(statement)) {
+        return undefined;
+    }
+
+    const expression = statement.getExpression();
+
+    return expression !== undefined && Node.isObjectLiteralExpression(expression) ? expression : undefined;
+};
+
+/**
+ * The object literal a callback body evaluates to, covering the concise-body
+ * form (`() => ({...})`, where the parens make the object literal the whole
+ * body) and the block-body form (`() => { return {...}; }`). Anything else
+ * (a variable, a multi-statement block, a conditional) is not analyzable.
+ */
+const objectLiteralFromCallbackBody = (body: TsNode): ObjectLiteralExpression | undefined => {
+    if (Node.isObjectLiteralExpression(body)) {
+        return body;
+    }
+
+    if (Node.isParenthesizedExpression(body)) {
+        const inner = body.getExpression();
+
+        return Node.isObjectLiteralExpression(inner) ? inner : undefined;
+    }
+
+    return Node.isBlock(body) ? objectLiteralFromReturnBlock(body) : undefined;
+};
+
+/**
+ * Read a callback argument (an arrow function or function expression) whose
+ * body returns the config object literal — the `.extend(fn)` shape. A
+ * non-callback argument, or a callback whose body isn't statically an object
+ * literal, is *not* analyzable.
+ */
+const readCallbackArgument = (argument: TsNode | undefined): ConfigCallEvidence => {
+    const callback: ArrowFunction | FunctionExpression | undefined =
+        argument && (Node.isArrowFunction(argument) || Node.isFunctionExpression(argument)) ? argument : undefined;
+    const objectLiteral = callback && objectLiteralFromCallbackBody(callback.getBody());
+
+    return objectLiteral ? keysFromObjectLiteral(objectLiteral) : { analyzable: false, presentKeys: [], trueKeys: [] };
+};
+
+/** Config-shaped factory/constructor/callback-builder calls in one source file. */
 const configCallsInSourceFile = (sourceFile: SourceFile, relativePath: string): ConfigCallIR[] => {
     const found: ConfigCallIR[] = [];
 
     for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
         const name = calleeName(call.getExpression());
 
-        if (name === undefined || !FUNCTION_CALLEES.has(name)) {
+        if (name === undefined) {
             continue;
         }
 
-        found.push({
-            callee: name,
-            file: relativePath,
-            line: call.getStartLineNumber(),
-            ...readConfigArgument(call.getArguments()[0]),
-        });
+        if (FUNCTION_CALLEES.has(name)) {
+            found.push({ callee: name, file: relativePath, line: call.getStartLineNumber(), ...readConfigArgument(call.getArguments()[0]) });
+        } else if (CALLBACK_CALLEES.has(name)) {
+            found.push({ callee: name, file: relativePath, line: call.getStartLineNumber(), ...readCallbackArgument(call.getArguments()[0]) });
+        }
     }
 
     for (const construction of sourceFile.getDescendantsOfKind(SyntaxKind.NewExpression)) {
@@ -115,12 +180,14 @@ const configCallsInSourceFile = (sourceFile: SourceFile, relativePath: string): 
 };
 
 /**
- * Discover factory/constructor calls in `lunora/` whose config object literal a
- * security lint inspects for a present-or-absent key — the shared input for the
- * config-call security lints (payment authorize, inbound-mail verify, rate-limit
- * store, browser private-targets). Records the callee name and, when the config
- * was a static object literal, the keys present and the subset assigned the
- * literal `true`; the lints decide what an absent (or present-and-true) key means.
+ * Discover factory/constructor/callback-builder calls in `lunora/` whose config
+ * object literal a security lint inspects for a present-or-absent key — the
+ * shared input for the config-call security lints (payment authorize,
+ * inbound-mail verify, rate-limit store, browser private-targets, unauthenticated
+ * shard access). Records the callee name and, when the config was a statically
+ * readable object literal (a bare argument, or a callback's returned object
+ * literal), the keys present and the subset assigned the literal `true`; the
+ * lints decide what an absent (or present-and-true) key means.
  */
 const discoverConfigCalls = (project: Project, lunoraDirectory: string): ConfigCallIR[] => {
     const calls: ConfigCallIR[] = [];

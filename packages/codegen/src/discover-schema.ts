@@ -312,6 +312,7 @@ interface TableBuilderAccumulator {
     externalSource?: ExternalSourceIR;
     globalBackend?: TableIR["globalBackend"];
     indexes: IndexIR[];
+    isPublic: boolean;
     rankIndexes: RankIndexIR[];
     relations: RelationIR[];
     searchIndexes: SearchIndexIR[];
@@ -425,6 +426,12 @@ const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, 
             break;
         }
 
+        case "public": {
+            accumulator.isPublic = true;
+
+            break;
+        }
+
         case "rankIndex": {
             accumulator.rankIndexes.push(parseRankIndexCall(args));
 
@@ -493,6 +500,7 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
     const accumulator: TableBuilderAccumulator = {
         externallyManaged: false,
         indexes: [],
+        isPublic: false,
         rankIndexes: [],
         relations: [],
         searchIndexes: [],
@@ -537,6 +545,7 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
         externalSource: accumulator.externalSource,
         globalBackend: accumulator.shardMode === "global" ? (accumulator.globalBackend ?? "d1") : undefined,
         indexes: accumulator.indexes,
+        isPublic: accumulator.isPublic,
         name,
         rankIndexes: accumulator.rankIndexes,
         relations: accumulator.relations,
@@ -1058,6 +1067,55 @@ const jurisdictionOf = (defineSchemaCall: CallExpression): SchemaIR["jurisdictio
     return undefined;
 };
 
+/** Recognised `.rls(...)` mode literals — currently only `"required"`. */
+const RLS_MODES = new Set<SchemaIR["rlsMode"]>(["required"]);
+
+/**
+ * Walk the builder chain wrapping a `defineSchema(...)` call for a
+ * `.rls("required")` link and return its string-literal argument. Mirrors
+ * {@link jurisdictionOf}'s parent-walk so the call is found regardless of
+ * where it sits in the chain (`defineSchema(...).rls("required").extend(...)`).
+ * Returns `undefined` when absent; throws on an unrecognised literal so a typo
+ * fails loudly rather than silently treating the schema as RLS-unenforced.
+ */
+const rlsModeOf = (defineSchemaCall: CallExpression): SchemaIR["rlsMode"] => {
+    let current: TsNode = defineSchemaCall;
+
+    for (;;) {
+        const parent = current.getParent();
+
+        if (!parent || !Node.isPropertyAccessExpression(parent)) {
+            break;
+        }
+
+        const callParent = parent.getParent();
+
+        if (!callParent || !Node.isCallExpression(callParent)) {
+            break;
+        }
+
+        if (parent.getName() === "rls") {
+            const argument = callParent.getArguments()[0];
+
+            if (!argument || !Node.isStringLiteral(argument)) {
+                throw diagnosticAt(callParent, '`.rls(...)` expects a string literal ("required")');
+            }
+
+            const value = argument.getLiteralText() as SchemaIR["rlsMode"];
+
+            if (!RLS_MODES.has(value)) {
+                throw diagnosticAt(argument, `unknown rls mode ${JSON.stringify(value)} — expected "required"`);
+            }
+
+            return value;
+        }
+
+        current = callParent;
+    }
+
+    return undefined;
+};
+
 /** Parse the base `defineSchema({ table: defineTable(...) })` object literal into {@link TableIR}s. */
 const parseBaseTables = (object: ObjectLiteralExpression): TableIR[] => {
     const tables: TableIR[] = [];
@@ -1155,7 +1213,7 @@ const discoverSchema = (project: Project, schemaPath: string, projectRoot?: stri
     // plus extension-contributed standalone vector indexes.
     const vectorIndexes: VectorIndexIR[] = [...tables.flatMap((table) => table.vectorIndexes), ...standaloneVectorIndexes, ...extensionStandaloneVectorIndexes];
 
-    return { jurisdiction: jurisdictionOf(defineSchemaCall), tables, vectorIndexes };
+    return { jurisdiction: jurisdictionOf(defineSchemaCall), rlsMode: rlsModeOf(defineSchemaCall), tables, vectorIndexes };
 };
 
 export default discoverSchema;

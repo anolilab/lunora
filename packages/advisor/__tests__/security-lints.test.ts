@@ -15,6 +15,7 @@ import { fromServerSchema } from "../src";
 import actionFetchSsrf from "../src/lints/static/action-fetch-ssrf";
 import adminRouteWithoutGuard from "../src/lints/static/admin-route-without-guard";
 import aiUnboundedGenerationPublic from "../src/lints/static/ai-unbounded-generation-public";
+import allowUnauthenticatedShardAccessEnabled from "../src/lints/static/allow-unauthenticated-shard-access-enabled";
 import browserAllowPrivateTargets from "../src/lints/static/browser-allow-private-targets";
 import hardcodedSecret from "../src/lints/static/hardcoded-secret";
 import insertManyUnsafeUserData from "../src/lints/static/insert-many-unsafe-user-data";
@@ -310,6 +311,67 @@ describe("browser_allow_private_targets", () => {
         const calls = [configCall({ callee: "createBrowser", presentKeys: ["allowPrivateTargets"], trueKeys: [] })];
 
         expect(browserAllowPrivateTargets.run({ configCalls: calls, schema: schema() })).toHaveLength(0);
+    });
+});
+
+describe("allow_unauthenticated_shard_access_enabled", () => {
+    it("flags an .extend() call that sets allowUnauthenticatedShardAccess: true on an RLS-gapped schema", () => {
+        expect.assertions(2);
+
+        // The default `schema()` fixture never calls `.rls("required")`, so it
+        // already has an RLS gap.
+        const calls = [
+            configCall({
+                callee: "extend",
+                file: "server",
+                line: 6,
+                presentKeys: ["allowUnauthenticatedShardAccess"],
+                trueKeys: ["allowUnauthenticatedShardAccess"],
+            }),
+        ];
+        const findings = allowUnauthenticatedShardAccessEnabled.run({ configCalls: calls, schema: schema() });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({
+            cacheKey: "allow_unauthenticated_shard_access_enabled:server:6",
+            level: "WARN",
+            name: "allow_unauthenticated_shard_access_enabled",
+        });
+    });
+
+    it("ignores the same .extend() call when the schema has no RLS gap", () => {
+        expect.assertions(1);
+
+        const rlsRequiredSchema = fromServerSchema(defineSchema({ users: defineTable({ name: v.string() }) }).rls("required"));
+        const calls = [configCall({ callee: "extend", presentKeys: ["allowUnauthenticatedShardAccess"], trueKeys: ["allowUnauthenticatedShardAccess"] })];
+
+        expect(allowUnauthenticatedShardAccessEnabled.run({ configCalls: calls, schema: rlsRequiredSchema })).toHaveLength(0);
+    });
+
+    it("flags when the schema is .rls(\"required\") but still has a .public() table", () => {
+        expect.assertions(1);
+
+        const gapSchema = fromServerSchema(defineSchema({ users: defineTable({ name: v.string() }).public() }).rls("required"));
+        const calls = [configCall({ callee: "extend", presentKeys: ["allowUnauthenticatedShardAccess"], trueKeys: ["allowUnauthenticatedShardAccess"] })];
+
+        expect(allowUnauthenticatedShardAccessEnabled.run({ configCalls: calls, schema: gapSchema })).toHaveLength(1);
+    });
+
+    it("ignores an .extend() call that only names the key without setting it true, an opaque config, and other callees", () => {
+        expect.assertions(1);
+
+        const calls = [
+            configCall({ callee: "extend", presentKeys: ["allowUnauthenticatedShardAccess"], trueKeys: [] }),
+            configCall({ analyzable: false, callee: "extend" }),
+            configCall({ callee: "createBrowser", presentKeys: ["allowUnauthenticatedShardAccess"], trueKeys: ["allowUnauthenticatedShardAccess"] }),
+        ];
+
+        expect(allowUnauthenticatedShardAccessEnabled.run({ configCalls: calls, schema: schema() })).toHaveLength(0);
+    });
+
+    it("finds nothing without config-call evidence", () => {
+        expect.assertions(1);
+        expect(allowUnauthenticatedShardAccessEnabled.run({ schema: schema() })).toHaveLength(0);
     });
 });
 

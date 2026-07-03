@@ -2,17 +2,21 @@ import type { AdvisorAdminRoute } from "./admin-routes";
 import type { AdvisorAiRawRun } from "./ai-raw-runs";
 import type { AdvisorArgumentDerivedFetch } from "./argument-derived-fetches";
 import type { AdvisorArgumentValidator } from "./argument-validators";
+import type { AdvisorAuthConfig } from "./auth-config";
 import type { AdvisorAuthApiCall } from "./authapi-calls";
 import type { AdvisorBrowserUrlAccess } from "./browser-url-accesses";
 import type { AdvisorConfigCall } from "./config-calls";
 import type { AdvisorContainerKeyAccess } from "./container-key-accesses";
+import type { AdvisorContainerOverride } from "./container-overrides";
 import type { AdvisorContainer } from "./containers";
 import type { AdvisorHyperdriveCall } from "./hyperdrive-calls";
+import type { AdvisorImageDeliveryUrlAccess } from "./image-delivery-url-accesses";
 import type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
 import type { AdvisorInsertWrite } from "./inserts";
 import type { AdvisorKvKeyAccess } from "./kv-key-accesses";
 import type { AdvisorMailRecipientAccess } from "./mail-recipient-accesses";
 import type { AdvisorMaskProcedure } from "./mask-procedures";
+import type { AdvisorMaskStrategy } from "./mask-strategies";
 import type { AdvisorMutatorWrite } from "./mutator-writes";
 import type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
 import type { AdvisorOwnerFieldWrite } from "./owner-field-writes";
@@ -20,6 +24,7 @@ import type { AdvisorPrivilegedDispatch } from "./privileged-dispatches";
 import type { AdvisorProcedureProtection } from "./procedure-protections";
 import type { AdvisorQueryRead } from "./queries";
 import type { AdvisorR2sqlCall } from "./r2sql-calls";
+import type { AdvisorRatelimitKeySelector } from "./ratelimit-key-selectors";
 import type { AdvisorRlsProcedure } from "./rls-procedures";
 import type { AdvisorSchema } from "./schema";
 import type { AdvisorSecretLiteral } from "./secrets";
@@ -143,6 +148,20 @@ export interface LintContext {
     authApiCalls?: ReadonlyArray<AdvisorAuthApiCall>;
 
     /**
+     * Per-`createAuth({...})`-call configuration snapshots — the shared input for
+     * the five `auth_*` security lints (`auth_trusted_origins_wildcard`,
+     * `auth_csrf_check_disabled`, `auth_secure_cookies_disabled`,
+     * `auth_email_verification_disabled`, `auth_session_freshage_zero`). Each
+     * carries whether the call's config object literal was statically analyzable
+     * and, when it was, the handful of nested facts the lints check (a
+     * `trustedOrigins` wildcard, `advanced.disableCSRFCheck`/`useSecureCookies`,
+     * `emailAndPassword.enabled`/`requireEmailVerification`,
+     * `session.freshAge === 0`). Supplied by the codegen feeder; absent for
+     * runtime callers, where the auth-config lints find nothing.
+     */
+    authConfigs?: ReadonlyArray<AdvisorAuthConfig>;
+
+    /**
      * `ctx.browser.&lt;method>(url, …)` calls whose navigation URL is derived from the
      * handler's `args` with no server-side scoping — the
      * `browser_user_url_without_allowlist` input. `@lunora/browser` blocks
@@ -175,6 +194,15 @@ export interface LintContext {
     containerKeyAccesses?: ReadonlyArray<AdvisorContainerKeyAccess>;
 
     /**
+     * Runtime container-override calls — a `.start({ enableInternet: true, … })`
+     * launch override, or a `.egress.&lt;method>(...)` runtime firewall mutation — the
+     * `container_start_enable_internet_override` and `container_runtime_egress_relaxation`
+     * lint input. Supplied by the codegen feeder; absent for runtime callers, where
+     * those lints find nothing.
+     */
+    containerOverrides?: ReadonlyArray<AdvisorContainerOverride>;
+
+    /**
      * Containers declared in `lunora/containers.ts` — the `container_*` lint
      * input. Supplied by the codegen feeder; absent for runtime callers, where
      * the container lints find nothing.
@@ -188,6 +216,21 @@ export interface LintContext {
      * intended surface); absent for runtime callers, where the lint finds nothing.
      */
     hyperdriveCalls?: ReadonlyArray<AdvisorHyperdriveCall>;
+
+    /**
+     * `buildImageDeliveryUrl({ key, … })` calls (`@lunora/bindings/images`) whose
+     * `key` — the CDN transform's source image, an absolute URL or an
+     * origin-relative key — is derived from the handler's `args` with no
+     * server-side scoping — the `images_url_source_from_user_input` input.
+     * `ctx.images.transform`/`info` take image bytes, never a URL, so they are
+     * not sinks; only the `key` of `buildImageDeliveryUrl` accepts a URL-or-key
+     * source and is inspected. An arg-derived key lets any caller point the
+     * CDN's `/cdn-cgi/image/` transform at an attacker-chosen origin (SSRF /
+     * open proxy). A fixed literal, or a key scoped by a server-trusted `ctx.*`
+     * value, is not recorded. Supplied by the codegen feeder; absent for
+     * runtime callers, where the lint finds nothing.
+     */
+    imageDeliveryUrlAccesses?: ReadonlyArray<AdvisorImageDeliveryUrlAccess>;
 
     /**
      * Per-declared-index hit counts observed at runtime (the dead-index half of
@@ -237,6 +280,16 @@ export interface LintContext {
      * nothing.
      */
     maskProcedures?: ReadonlyArray<AdvisorMaskProcedure>;
+
+    /**
+     * Masked columns whose `mask(policies)` strategy is a statically-known
+     * literal (the `mask_weak_hash_strategy_on_pii` input). One row per masked
+     * column, with the `"hash"` / `"redact"` strategy literal attached; a
+     * `MaskFn` (custom, non-literal) strategy is never recorded. Supplied by
+     * the codegen feeder; absent for runtime callers, where the lint finds
+     * nothing.
+     */
+    maskStrategies?: ReadonlyArray<AdvisorMaskStrategy>;
 
     /**
      * Whole-row `ctx.db.replace(id, document)` writes lifted from custom
@@ -305,6 +358,18 @@ export interface LintContext {
      * intended surface); absent for runtime callers, where the lint finds nothing.
      */
     r2sqlCalls?: ReadonlyArray<AdvisorR2sqlCall>;
+
+    /**
+     * `rateLimit`/`dbRateLimit` middleware calls (`@lunora/ratelimit`) whose
+     * `key` selector is derived from the handler's `args` with no server-side
+     * scoping — the `ratelimit_key_spoofable_or_global` input. A key an
+     * attacker controls lets them rotate it per request and bypass the limit
+     * entirely, defeating its purpose. A selector scoped by `ctx` (e.g.
+     * `ctx.auth.userId`, `ctx.ip`), or one with no `args` reference at all (a
+     * fixed/global bucket), is not recorded. Supplied by the codegen feeder;
+     * absent for runtime callers, where the lint finds nothing.
+     */
+    ratelimitKeySelectors?: ReadonlyArray<AdvisorRatelimitKeySelector>;
 
     /**
      * Per-procedure RLS usage discovered in function bodies (the

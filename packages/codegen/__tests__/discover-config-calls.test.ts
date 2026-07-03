@@ -99,4 +99,49 @@ describe("discoverConfigCalls", () => {
 
         expect(found).toHaveLength(0);
     });
+
+    it("reads a .extend() concise-body callback's returned object literal (the defineApp() escape hatch)", () => {
+        expect.assertions(1);
+
+        write("server.ts", `defineApp().shard((env) => env.SHARD).extend(() => ({ allowUnauthenticatedShardAccess: true }));`);
+
+        const found = discoverConfigCalls(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({
+            analyzable: true,
+            callee: "extend",
+            presentKeys: ["allowUnauthenticatedShardAccess"],
+            trueKeys: ["allowUnauthenticatedShardAccess"],
+        });
+    });
+
+    it("reads a .extend() block-body callback's `return {...}` statement", () => {
+        expect.assertions(1);
+
+        write("server.ts", `defineApp().extend((env, derived) => { return { allowUnauthenticatedShardAccess: true }; });`);
+
+        const found = discoverConfigCalls(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ analyzable: true, callee: "extend", trueKeys: ["allowUnauthenticatedShardAccess"] });
+    });
+
+    it("marks a .extend() callback whose body isn't statically an object literal as not analyzable", () => {
+        expect.assertions(1);
+
+        write("server.ts", `defineApp().extend((env, derived) => buildOptions(env, derived));`);
+
+        const found = discoverConfigCalls(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ analyzable: false, callee: "extend", presentKeys: [] });
+    });
+
+    it("marks a .extend() call with a non-callback argument as not analyzable", () => {
+        expect.assertions(1);
+
+        write("server.ts", `defineApp().extend(preset);`);
+
+        const found = discoverConfigCalls(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ analyzable: false, callee: "extend", presentKeys: [] });
+    });
 });

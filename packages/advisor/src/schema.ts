@@ -8,6 +8,15 @@ import type { Schema } from "@lunora/server";
  * read — tables, their columns, indexes, and relations.
  */
 export interface AdvisorSchema {
+    /**
+     * Set when the schema opted into `.rls("required")` — every table's `ctx.db`
+     * write path is denied without an RLS-covering procedure UNLESS the table
+     * itself is `.public()` (see {@link AdvisorTable.isPublic}). `undefined` when
+     * the schema never called `.rls("required")`. Read by the
+     * `public_table_rls_optout_confusion` and `allow_unauthenticated_shard_access_enabled`
+     * lints.
+     */
+    rlsMode?: "required";
     tables: ReadonlyArray<AdvisorTable>;
 }
 
@@ -38,6 +47,16 @@ export interface AdvisorTable {
     fields: ReadonlyArray<string>;
     /** Every declared index, across all kinds (secondary / search / rank / vector). */
     indexes: ReadonlyArray<AdvisorIndex>;
+
+    /**
+     * `true` when the table was declared with `.public()` — an explicit opt-OUT
+     * of the schema's `.rls("required")` enforcement for this one table (the
+     * name is misleading: it means "unprotected by RLS", not "safe to read
+     * publicly"). Has no effect when the schema itself never required RLS.
+     * Defaults to `false`. Read by `public_table_rls_optout_confusion` and
+     * `allow_unauthenticated_shard_access_enabled`.
+     */
+    isPublic?: boolean;
     /** Table name. */
     name: string;
 
@@ -123,6 +142,7 @@ export interface AdvisorRelation {
  */
 export const fromServerSchema = (schema: Schema): AdvisorSchema => {
     return {
+        rlsMode: schema.rlsMode,
         tables: Object.entries(schema.tables).map(([name, table]) => {
             const indexes: AdvisorIndex[] = [
                 ...table.indexes.map((index): AdvisorIndex => {
@@ -172,6 +192,7 @@ export const fromServerSchema = (schema: Schema): AdvisorSchema => {
                     : undefined,
                 fields: Object.keys(table.shape),
                 indexes,
+                isPublic: table.isPublic ?? false,
                 name,
                 optionalFields,
                 shardKind: table.shardMode.kind,
