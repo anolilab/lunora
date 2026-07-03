@@ -8,7 +8,7 @@
 // Run after `packem build`. packem's extension depends on its `runtime` setting
 // (`browser` → `.js`, `node` → `.mjs`), so detect whichever it produced rather
 // than hard-coding one.
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { build } from "esbuild";
@@ -72,9 +72,28 @@ const baseOptions = {
 const probe = await build({ ...baseOptions, define: { "process.env.NODE_ENV": '"production"' }, write: false });
 const nodeEnv = probe.outputFiles.some((file) => file.text.includes("jsxDEV")) ? "development" : "production";
 
+// esbuild appends to `outdir` without cleaning it, so stale (content-hashed)
+// chunks from a previous build would pile up beside the current ones. Wipe the
+// directory first so it holds exactly the entry + the chunks this build emits —
+// what the three static hosts serve.
+rmSync(join(process.cwd(), "dist/standalone"), { force: true, recursive: true });
+
 await build({
     ...baseOptions,
-    outfile: "dist/standalone/studio.js",
+    // Code-split output (not a single `outfile`): the route-level
+    // `React.lazy(() => import(...))` boundaries in `app/studio.tsx` (and Home's
+    // lazy `recharts` sparkline) become separate `chunk-*.js` files loaded on
+    // demand. `splitting` + `outdir` require the esm format (already set) and a
+    // directory; `entryNames: "studio"` keeps the entry at the `studio.js` name
+    // the HTML `scriptSrc` and the host resolvers hardcode, and the chunks live
+    // beside it, imported by relative path so the static hosts serve them from
+    // the standalone directory. Heavy deps (`@xyflow/react`, `recharts`) end up
+    // only in on-demand chunks, never in Home's first load.
+    outdir: "dist/standalone",
+    splitting: true,
+    entryNames: "studio",
+    chunkNames: "chunk-[hash]",
+    assetNames: "asset-[hash]",
     // React libraries gate dev-only warnings/checks (and the jsx vs jsxDEV
     // runtime) on this; match it to what the bundle graph actually needs.
     define: { "process.env.NODE_ENV": JSON.stringify(nodeEnv) },
