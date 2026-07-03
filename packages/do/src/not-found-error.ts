@@ -1,18 +1,15 @@
+import { LunoraError } from "@lunora/errors";
+
 /**
  * Thrown by `findFirstOrThrow` when no document matches the query.
  *
- * Like `ConflictError`, `code` / `status` are declared as own properties
- * so the cross-package structural error mapper maps it to a 404 without an
- * `instanceof` check against `@lunora/do`.
+ * A `LunoraError` subclass (`code: "NOT_FOUND"`, `status: 404`) so the
+ * cross-package transport mapper maps it to a 404 structurally (via
+ * `isLunoraError`) without an `instanceof` check against `@lunora/do`.
  */
-class NotFoundError extends Error {
-    public readonly code: string = "NOT_FOUND";
-
-    public readonly status: number = 404;
-
+class NotFoundError extends LunoraError {
     public constructor(message: string = "Document not found") {
-        super(message);
-        this.name = "NotFoundError";
+        super("NOT_FOUND", message, { name: "NotFoundError" });
     }
 }
 

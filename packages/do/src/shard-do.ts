@@ -4516,14 +4516,6 @@ abstract class ShardDO {
             return jsonResponse({ error: body }, error.status);
         }
 
-        // `ValidationError` (from `@lunora/values`) has no numeric `status` yet, so
-        // match it structurally by name and map to a 400.
-        if (error && typeof error === "object" && (error as { name?: string }).name === "ValidationError") {
-            const message = error instanceof Error ? error.message : "validation failed";
-
-            return jsonResponse({ error: { code: "VALIDATION_ERROR", message } }, 400);
-        }
-
         // Do NOT echo arbitrary error.message values to clients — an unhandled
         // throw may carry SQL fragments, file paths, or internal identifiers. Log
         // the raw error server-side and return a generic message (mirrors

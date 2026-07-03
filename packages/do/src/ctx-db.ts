@@ -29,6 +29,7 @@
 
 /* eslint-disable unicorn/prevent-abbreviations -- "ctx-db" is the established public module name: src/index.ts and every consumer/test import `createShardCtxDb` / `CtxDbOptions` from "./ctx-db.js", and it deliberately mirrors @lunora/d1's "d1-ctx-db.ts" twin. Renaming the file or those exports would break those importers. `doc`/`docs` is the domain term for a stored document throughout the DO/D1 ORM. */
 
+import { LunoraError } from "@lunora/errors";
 import type { SQL } from "drizzle-orm";
 // Aliased: this module already uses `sql` for the workerd `SqlExec` (see `runSql`), so the drizzle tag is `dsql`.
 import { sql as dsql } from "drizzle-orm";
@@ -1121,19 +1122,14 @@ const paginateStage = (sql: SqlExec, tableName: string, stage: QueryStage, optio
 };
 
 /**
- * Thrown by `.unique()` when more than one row matches. Like {@link ConflictError}
- * / `NotFoundError`, `code` / `status` are declared as own properties so the
- * cross-package structural error mapper renders it as a 400 without an
- * `instanceof` check against `@lunora/do`.
+ * Thrown by `.unique()` when more than one row matches. A `LunoraError` subclass
+ * (`code: "NOT_UNIQUE"`, `status: 400`) recognised structurally by the
+ * cross-package transport mapper (via `isLunoraError`) without an `instanceof`
+ * check against `@lunora/do`.
  */
-class NotUniqueError extends Error {
-    public readonly code: string = "NOT_UNIQUE";
-
-    public readonly status: number = 400;
-
+class NotUniqueError extends LunoraError {
     public constructor(message: string = "unique() found more than one matching document") {
-        super(message);
-        this.name = "NotUniqueError";
+        super("NOT_UNIQUE", message, { name: "NotUniqueError" });
     }
 }
 
