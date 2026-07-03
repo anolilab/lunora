@@ -1,5 +1,7 @@
 export type { AgentDetection } from "./agent-env";
 export { AGENT_MODE_ENV, detectAiAgent } from "./agent-env";
+export type { AgentIR, DiscoverAgentInfoResult } from "./agent-info";
+export { discoverAgentInfo } from "./agent-info";
 export type { AgentRulesStatus } from "./agent-rules";
 export {
     AGENT_RULES_DIR,
@@ -41,7 +43,7 @@ export {
     writeDevServerState,
 } from "./dev-server-state";
 export { DEV_VARS_EXAMPLE_FILE, DEV_VARS_FILE, DEV_VARS_KEY_PATTERN, parseDevVariableEntries } from "./dev-variables-format";
-export type { InferOptions, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
+export type { InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
 export { inferLunoraBindings, packageNamesFromBindings } from "./infer-bindings";
 export type { LinkedProject } from "./linked-project";
 export { LINKED_PROJECT_DIR, LINKED_PROJECT_FILE, readLinkedProject, writeLinkedProject } from "./linked-project";

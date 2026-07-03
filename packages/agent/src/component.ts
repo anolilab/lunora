@@ -97,13 +97,9 @@ export interface AgentComponent {
 /**
  * Build the agent runtime component: the thread schema extension plus the
  * functions the durable loop dispatches to (and the client subscribes to).
- * Re-export the functions from `lunora/agents.ts` so codegen registers them
- * under `agents:*` — the loop's dispatch paths assume that namespace:
- *
- * ```ts
- * // lunora/agents.ts
- * export const { agentAppendMessage, agentEnsureThread, agentMessages, agentPatchThread, agentThread } = agentComponent().functions;
- * ```
+ * Codegen auto-registers them under the `agents:*` namespace whenever
+ * `lunora/agents.ts` declares an agent — the loop's dispatch paths assume
+ * that namespace, and apps never re-export these by hand.
  *
  * The mutations are **internal** (only the workflow's admin-authenticated
  * dispatch may call them); the queries are public so a client can subscribe

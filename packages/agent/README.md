@@ -19,10 +19,10 @@ export const support = defineAgent({
         }),
     },
 });
-
-// Re-export the runtime functions so codegen registers them under `agents:*`:
-export const { agentAppendMessage, agentEnsureThread, agentMessages, agentPatchThread, agentThread } = agentComponent().functions;
 ```
+
+Codegen auto-registers the agent runtime functions (`agents:agentMessages`, …) and the
+`ctx.agents.support` producer as soon as an agent is declared — no re-export boilerplate.
 
 ```ts
 // lunora/schema.ts — merge the thread tables (auto-prefixed agent_threads / agent_messages):
