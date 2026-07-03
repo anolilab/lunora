@@ -9,9 +9,12 @@ server (read-your-writes SSR), the HTML ships with it, and on the client the
 
 ## Develop
 
+Install dependencies and start the dev server with your package manager
+(`npm`, `pnpm`, `yarn`, or `bun`):
+
 ```bash
-pnpm install
-pnpm dev
+<pm> install
+<pm> run dev
 ```
 
 ## What's wired

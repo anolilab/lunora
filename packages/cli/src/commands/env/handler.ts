@@ -16,6 +16,7 @@ import {
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
@@ -248,10 +249,12 @@ const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
     }
 
     const spawner = options.spawner ?? defaultSpawner;
+    const cwd = options.cwd ?? process.cwd();
+    const manager = detectPackageManager(cwd);
     const descriptors: SpawnDescriptor[] = [];
 
     for (const entry of map.values()) {
-        const args: string[] = ["exec", "wrangler", "secret", "put", entry.key];
+        const args: string[] = ["secret", "put", entry.key];
 
         if (options.prod) {
             args.push("--env", "production");
@@ -261,10 +264,11 @@ const runEnvPush = async (context: EnvContext): Promise<EnvCommandResult> => {
             args.push("--temporary");
         }
 
+        const exec = execArgsFor(manager, "wrangler", args);
         const descriptor: SpawnDescriptor = {
-            args,
-            command: "pnpm",
-            cwd: options.cwd ?? process.cwd(),
+            args: exec.args,
+            command: exec.command,
+            cwd,
             // `wrangler secret put <name>` reads the value from stdin. We
             // pipe it through the spawner's `input` channel so the secret
             // never lands on the command line, in env, or in shell history.

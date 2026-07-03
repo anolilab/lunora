@@ -10,9 +10,12 @@ loading flash.
 
 ## Develop
 
+Install dependencies and start the dev server with your package manager
+(`npm`, `pnpm`, `yarn`, or `bun`):
+
 ```bash
-pnpm install
-pnpm dev
+<pm> install
+<pm> run dev
 ```
 
 ## Why an island adapter?

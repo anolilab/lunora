@@ -1,5 +1,6 @@
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
@@ -42,7 +43,7 @@ const withEnv = (args: string[], env: string | undefined): string[] => {
 
 /** Build the wrangler argv for `list`. */
 const buildListArgs = (options: DeploymentsCommandOptions): string[] => {
-    const args = withEnv(["exec", "wrangler", "deployments", "list"], options.env);
+    const args = withEnv(["deployments", "list"], options.env);
 
     if (options.json) {
         args.push("--json");
@@ -62,7 +63,7 @@ const buildArgs = (options: DeploymentsCommandOptions): { args?: string[]; error
                 return { error: "deployments inspect requires a version id. Usage: lunora deployments inspect <version-id>" };
             }
 
-            return { args: withEnv(["exec", "wrangler", "versions", "view", options.versionId], options.env) };
+            return { args: withEnv(["versions", "view", options.versionId], options.env) };
         }
         case "list": {
             return { args: buildListArgs(options) };
@@ -77,7 +78,7 @@ const buildArgs = (options: DeploymentsCommandOptions): { args?: string[]; error
             }
 
             // `versions deploy <id>@100%` makes one version fully live; `-y` accepts the prompts.
-            const args = withEnv(["exec", "wrangler", "versions", "deploy", `${options.versionId}@100%`, "--yes"], options.env);
+            const args = withEnv(["versions", "deploy", `${options.versionId}@100%`, "--yes"], options.env);
 
             if (options.message !== undefined) {
                 args.push("--message", options.message);
@@ -90,7 +91,7 @@ const buildArgs = (options: DeploymentsCommandOptions): { args?: string[]; error
                 return { error: "deployments rollback changes the live version. Re-run with --yes to confirm." };
             }
 
-            const args = withEnv(["exec", "wrangler", "rollback"], options.env);
+            const args = withEnv(["rollback"], options.env);
 
             if (options.versionId !== undefined) {
                 args.push(options.versionId);
@@ -119,7 +120,9 @@ const runDeploymentsCommand = async (options: DeploymentsCommandOptions): Promis
         return { code: 1, descriptor: undefined, error };
     }
 
-    const descriptor: SpawnDescriptor = { args, command: "pnpm", cwd: options.cwd ?? process.cwd() };
+    const cwd = options.cwd ?? process.cwd();
+    const exec = execArgsFor(detectPackageManager(cwd), "wrangler", args);
+    const descriptor: SpawnDescriptor = { args: exec.args, command: exec.command, cwd };
 
     options.logger.info(`${descriptor.command} ${descriptor.args.join(" ")}`);
 

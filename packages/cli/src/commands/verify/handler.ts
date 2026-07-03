@@ -8,6 +8,7 @@ import { parseApiSpec } from "../../util/api-spec";
 import { renderCodegenHint } from "../../util/codegen-error";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import { runSchemaDriftGate } from "../../util/schema-drift-gate";
@@ -50,7 +51,8 @@ const runTypecheckStep = async (cwd: string, spawner: Spawner): Promise<{ error?
         return { warning: "no tsconfig.json found — skipping TypeScript type-check" };
     }
 
-    const result = await spawner({ args: ["exec", "tsc", "--noEmit", "-p", "tsconfig.json"], command: "pnpm", cwd });
+    const exec = execArgsFor(detectPackageManager(cwd), "tsc", ["--noEmit", "-p", "tsconfig.json"]);
+    const result = await spawner({ args: exec.args, command: exec.command, cwd });
 
     return result.code === 0 ? {} : { error: `type errors: tsc --noEmit exited ${String(result.code)}` };
 };

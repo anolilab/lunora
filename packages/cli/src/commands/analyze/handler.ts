@@ -4,6 +4,7 @@ import { join, relative } from "node:path";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
@@ -131,9 +132,12 @@ const runAnalyzeCommand = async (options: AnalyzeCommandOptions): Promise<Analyz
     } else {
         outdir = mkdtempSync(join(tmpdir(), "lunora-analyze-"));
         temporary = true;
+
+        const exec = execArgsFor(detectPackageManager(cwd), "wrangler", ["deploy", "--dry-run", "--outdir", outdir]);
+
         descriptor = {
-            args: ["exec", "wrangler", "deploy", "--dry-run", "--outdir", outdir],
-            command: "pnpm",
+            args: exec.args,
+            command: exec.command,
             cwd,
         };
 

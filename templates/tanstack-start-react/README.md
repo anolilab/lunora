@@ -8,12 +8,15 @@ wired through `preloadQuery` so initial paint hydrates without a fetch.
 
 ## Develop
 
+Install dependencies and start the dev server with your package manager
+(`npm`, `pnpm`, `yarn`, or `bun`):
+
 ```bash
-pnpm install
-pnpm dev
+<pm> install
+<pm> run dev
 ```
 
-`pnpm dev` runs the TanStack Start dev server alongside `wrangler dev` so
+The dev command runs the TanStack Start dev server alongside `wrangler dev` so
 your client and worker share the same origin.
 
 ## Build

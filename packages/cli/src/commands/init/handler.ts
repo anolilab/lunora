@@ -14,7 +14,7 @@ import { defineHandler } from "../../util/command";
 import type { DetectedFramework, FrameworkDetection } from "../../util/detect-framework";
 import { detectFramework } from "../../util/detect-framework";
 import type { PackageManager, PackageManagerProbe } from "../../util/detect-package-manager";
-import { detectInstalledManagers, installArgsFor } from "../../util/detect-package-manager";
+import { detectInstalledManagers, detectPackageManager, installArgsFor, runScriptCommand } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
 import { patchViteConfig } from "../../util/patch-vite-config";
 import { PromptCancelledError } from "../../util/prompt-cancelled";
@@ -447,18 +447,12 @@ const logScaffoldSuccess = (logger: Logger, written: ReadonlyArray<string>, targ
     logger.success(`scaffolded ${String(written.length)} files into ${target}`);
 };
 
-/** The shell command that runs a project script with `manager` (`pnpm dev`, `npm run dev`, …). */
-const runScriptCommand = (manager: PackageManager, script: string): string => {
-    if (manager === "npm") {
-        return `npm run ${script}`;
-    }
+/** The shell command that adds dependencies with `manager` (`pnpm add …`, `npm install …`, …). */
+const installCommand = (manager: PackageManager, packages: ReadonlyArray<string>): string => {
+    // npm spells "add a dependency" as `install`; pnpm/yarn/bun use `add`.
+    const verb = manager === "npm" ? "install" : "add";
 
-    if (manager === "bun") {
-        return `bun run ${script}`;
-    }
-
-    // pnpm / yarn run scripts by bare name.
-    return `${manager} ${script}`;
+    return `${manager} ${verb} ${packages.join(" ")}`;
 };
 
 /**
@@ -1004,13 +998,13 @@ const scaffoldLunoraDirectory = (cwd: string, logger: Logger): ReadonlyArray<str
  * composition is printed for the user to wire because it is framework-specific
  * and lives in files the CLI does not own.
  */
-const printFrameworkNextSteps = (detection: FrameworkDetection, logger: Logger): void => {
+const printFrameworkNextSteps = (detection: FrameworkDetection, manager: PackageManager, logger: Logger): void => {
     const { adapter, class: frameworkClass, framework } = detection;
 
     logger.info("");
     logger.info(`detected framework: ${framework} (class ${frameworkClass})`);
     logger.info("next steps:");
-    logger.info(`  1. install the adapter:  pnpm add ${adapter} @lunora/client @lunora/runtime @lunora/server`);
+    logger.info(`  1. install the adapter:  ${installCommand(manager, [adapter, "@lunora/client", "@lunora/runtime", "@lunora/server"])}`);
     logger.info("  2. run codegen:          lunora codegen");
 
     if (frameworkClass === "A") {
@@ -1097,7 +1091,9 @@ const runInPlaceInit = (cwd: string, logger: Logger): InitCommandResult => {
 
     const scaffolded = scaffoldLunoraDirectory(cwd, logger);
 
-    printFrameworkNextSteps(detection, logger);
+    // The overlay path patches an existing project, so honour its package
+    // manager (packageManager field / lockfile) rather than assuming pnpm.
+    printFrameworkNextSteps(detection, detectPackageManager(cwd), logger);
 
     return { code: 0, files: [...viteResult.files, ...scaffolded], target: cwd };
 };
