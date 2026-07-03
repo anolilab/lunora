@@ -3,6 +3,7 @@ import type { ChangeEvent, ReactElement } from "react";
 import { useEffect, useState } from "react";
 
 import { ConfirmButton } from "../../components/confirm-button";
+import { ErrorAlert } from "../../components/error-alert";
 import { LiveError } from "../../components/live-status";
 import { ShardInput } from "../../components/shard-input";
 import { Badge } from "../../components/ui/badge";
@@ -75,7 +76,7 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
 
     const rows = statusQuery.data?.migrations ?? null;
     const statusError = statusQuery.error;
-    const { liveError } = statusQuery;
+    const { errorSource: statusErrorSource, liveError } = statusQuery;
 
     // Record the browsed shard into recent-shards history once its status resolves.
     useEffect(() => {
@@ -136,11 +137,7 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
                 <LiveError message={liveError} prefix="mg" />
             </div>
 
-            {statusError !== null && (
-                <p className="text-sm text-destructive" data-testid="mg-status-error" role="alert">
-                    {statusError}
-                </p>
-            )}
+            {statusError !== null && <ErrorAlert error={statusErrorSource} testId="mg-status-error" />}
 
             {rows !== null && rows.length === 0 && (
                 <EmptyState

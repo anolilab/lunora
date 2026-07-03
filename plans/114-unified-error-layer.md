@@ -83,15 +83,17 @@ status})` factory for the ~157 dispatch-code sites).
 Done: `errorHint`/`errorDocumentationUrl` helpers (`studio/src/lib/internal.ts`),
 the additive `errorSource` field on `useAdminQuery`/`useClientQuery` (keeps
 `error: string`), the reusable `<ErrorAlert error={…}>` component
-(`components/error-alert.tsx`, message + stripped-markdown hint + docs link), and
-**9 panels** wired to it: flags, storage-rules, rls, queues, settings,
-subscriptions, fanout, function-stats, audit.
-TODO (mechanical): the remaining panels whose error is aggregated across multiple
-queries (home, insights, permissions), renamed, held in local state (kv, data
-browser), or routed through the shared `AdvisorView` (insights, security-advisor)
-— each needs `errorSource` threaded to its specific error source before the
-`<ErrorAlert>` swap. Verify via `lint:types` + `lint:eslint` + build (Studio jsdom
-tests SIGTERM in the sandbox).
+(`components/error-alert.tsx`, message + stripped-markdown hint + docs link), the
+shared `AdvisorView` (threads `errorSource`), and **every panel that reads a hook
+query error**: flags, storage-rules, rls, queues, settings, subscriptions,
+fanout, function-stats, audit, logs, permissions, payments, migrations (status),
+mail, insights, security-advisor.
+Remaining (deliberately deferred): panels that catch-and-flatten their error into
+a **string in local `useState`/reducer state** before render — health, analytics,
+the data/global-data browsers, kv editor/create, generate-rows, shard-explorer,
+cascade-preview, home widgets. Surfacing hints there needs the state shape to hold
+the raw error object (not the message string), a per-panel refactor with real
+regression risk and no jsdom test coverage in the sandbox — tracked as follow-up.
 
 > Verify via `pnpm --filter @lunora/studio run lint:types` + `lint:eslint` + build
 > (Studio jsdom tests SIGTERM in the sandbox — see the pinned memory; do not gate
