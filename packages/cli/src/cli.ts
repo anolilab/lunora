@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 
+import { findSolutionByMessage, isLunoraError } from "@lunora/errors";
+import { renderLunoraError } from "@lunora/errors/render";
 import { createCerebro } from "@visulima/cerebro";
 import completionCommand from "@visulima/cerebro/command/completion";
 import versionCommand from "@visulima/cerebro/command/version";
@@ -188,7 +190,14 @@ const reportRunError = (error: unknown): void => {
     const unknown = UNKNOWN_COMMAND.exec(message);
 
     if (!unknown?.groups) {
-        logger.error(message);
+        // A Lunora error (or a plain error whose message matches a known
+        // solution, e.g. a codegen failure) renders with its actionable hint
+        // block; anything else logs the bare message.
+        if (isLunoraError(error) || findSolutionByMessage(message) !== undefined) {
+            logger.error(renderLunoraError(error));
+        } else {
+            logger.error(message);
+        }
 
         return;
     }

@@ -1754,6 +1754,9 @@ importers:
       '@lunora/d1':
         specifier: workspace:*
         version: link:../d1
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@lunora/seed':
         specifier: workspace:*
         version: link:../seed
