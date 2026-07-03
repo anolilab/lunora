@@ -47,6 +47,7 @@ import { discoverShapes } from "./discover-shapes";
 import discoverSqlInterpolation from "./discover-sql-interpolation";
 import discoverStorageKeyAccesses from "./discover-storage-key-accesses";
 import discoverStorageRulesMetadata from "./discover-storage-rules";
+import discoverStorageUploads from "./discover-storage-uploads";
 import discoverVectorNamespaceAccesses from "./discover-vector-namespace-accesses";
 import discoverWorkflowCalls from "./discover-workflow-calls";
 import { discoverWorkflows } from "./discover-workflows";
@@ -359,6 +360,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   discoverMaskStrategies(project, lunoraDirectory),
                   discoverImageDeliveryUrlAccesses(project, lunoraDirectory),
                   discoverRatelimitKeySelectors(project, lunoraDirectory),
+                  discoverStorageUploads(project, lunoraDirectory),
               );
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,

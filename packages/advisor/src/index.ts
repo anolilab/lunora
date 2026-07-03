@@ -61,7 +61,11 @@ import rlsUncoveredTable from "./lints/static/rls-uncovered-table";
 import shapeTargetsGlobalTable from "./lints/static/shape-targets-global-table";
 import shapeUnknownTable from "./lints/static/shape-unknown-table";
 import sqlInjectionRisk from "./lints/static/sql-injection-risk";
+import storageGenerateUploadUrlNoContentTypePin from "./lints/static/storage-generate-upload-url-no-content-type-pin";
 import storageKeyFromUserArgs from "./lints/static/storage-key-from-user-args";
+import storagePresignedUrlForPrivateContent from "./lints/static/storage-presigned-url-for-private-content";
+import storageUploadWithoutContentTypeAllowlist from "./lints/static/storage-upload-without-content-type-allowlist";
+import storageUploadWithoutMaxSize from "./lints/static/storage-upload-without-max-size";
 import tableWithoutInsert from "./lints/static/table-without-insert";
 import unboundedStringArgument from "./lints/static/unbounded-string-argument";
 import unindexedForeignKey from "./lints/static/unindexed-foreign-key";
@@ -147,7 +151,11 @@ export { default as rlsUncoveredTable } from "./lints/static/rls-uncovered-table
 export { default as shapeTargetsGlobalTable } from "./lints/static/shape-targets-global-table";
 export { default as shapeUnknownTable } from "./lints/static/shape-unknown-table";
 export { default as sqlInjectionRisk } from "./lints/static/sql-injection-risk";
+export { default as storageGenerateUploadUrlNoContentTypePin } from "./lints/static/storage-generate-upload-url-no-content-type-pin";
 export { default as storageKeyFromUserArgs } from "./lints/static/storage-key-from-user-args";
+export { default as storagePresignedUrlForPrivateContent } from "./lints/static/storage-presigned-url-for-private-content";
+export { default as storageUploadWithoutContentTypeAllowlist } from "./lints/static/storage-upload-without-content-type-allowlist";
+export { default as storageUploadWithoutMaxSize } from "./lints/static/storage-upload-without-max-size";
 export { default as tableWithoutInsert } from "./lints/static/table-without-insert";
 export { default as unboundedStringArgument } from "./lints/static/unbounded-string-argument";
 export { default as unindexedForeignKey } from "./lints/static/unindexed-foreign-key";
@@ -176,6 +184,7 @@ export type { AdvisorShape } from "./shapes";
 export type { AdvisorShardTraffic } from "./shard-traffic";
 export type { AdvisorSqlInterpolation } from "./sql-interpolation";
 export type { AdvisorStorageKeyAccess } from "./storage-key-accesses";
+export type { AdvisorStorageUpload } from "./storage-uploads";
 export type { AdvisorTableSample } from "./table-samples";
 export type { Category, Facing, Finding, Level, Lint, LintContext, LintSource } from "./types";
 export type { AdvisorVectorNamespaceAccess } from "./vector-namespace-accesses";
@@ -249,6 +258,10 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     ratelimitKeySpoofableOrGlobal,
     publicTableRlsOptoutConfusion,
     allowUnauthenticatedShardAccessEnabled,
+    storageUploadWithoutContentTypeAllowlist,
+    storageUploadWithoutMaxSize,
+    storageGenerateUploadUrlNoContentTypePin,
+    storagePresignedUrlForPrivateContent,
 ];
 
 /**

@@ -32,6 +32,7 @@ import type { AdvisorShape } from "./shapes";
 import type { AdvisorShardTraffic } from "./shard-traffic";
 import type { AdvisorSqlInterpolation } from "./sql-interpolation";
 import type { AdvisorStorageKeyAccess } from "./storage-key-accesses";
+import type { AdvisorStorageUpload } from "./storage-uploads";
 import type { AdvisorTableSample } from "./table-samples";
 import type { AdvisorVectorNamespaceAccess } from "./vector-namespace-accesses";
 import type { AdvisorWorkflow, AdvisorWorkflowCall } from "./workflows";
@@ -427,6 +428,19 @@ export interface LintContext {
      * the lint finds nothing.
      */
     storageKeyAccesses?: ReadonlyArray<AdvisorStorageKeyAccess>;
+
+    /**
+     * Tracked `ctx.storage.&lt;bucket>.&lt;method>(...)` upload/signing calls — the
+     * shared input for the storage config-hygiene lints
+     * (`storage_upload_without_content_type_allowlist`, `storage_upload_without_max_size`,
+     * `storage_generate_upload_url_no_content_type_pin`,
+     * `storage_presigned_url_for_private_content`). Each row carries the method
+     * invoked, which options-object keys were present, and (for the two URL
+     * signers) a statically-known `expiresInSeconds` literal. Supplied by the
+     * codegen feeder; absent for runtime callers, where these lints find
+     * nothing.
+     */
+    storageUploads?: ReadonlyArray<AdvisorStorageUpload>;
 
     /**
      * Bounded row samples per table — the `constraint_validator` lint input.

@@ -33,6 +33,7 @@ import type {
     ShapeIR,
     SqlInterpolationIR,
     StorageKeyAccessIR,
+    StorageUploadIR,
     TableIR,
     VectorNamespaceAccessIR,
     WorkflowCallIR,
@@ -167,6 +168,7 @@ export const lintSchema = (
     maskStrategies?: ReadonlyArray<MaskStrategyIR>,
     imageDeliveryUrlAccesses?: ReadonlyArray<ImageDeliveryUrlAccessIR>,
     ratelimitKeySelectors?: ReadonlyArray<RatelimitKeySelectorIR>,
+    storageUploads?: ReadonlyArray<StorageUploadIR>,
 ): Finding[] =>
     runAdvisor(
         {
@@ -201,6 +203,7 @@ export const lintSchema = (
             shapes: shapes === undefined ? undefined : toAdvisorShapes(shapes),
             sqlInterpolations,
             storageKeyAccesses,
+            storageUploads,
             vectorNamespaceAccesses,
             workflowCalls,
             workflows,
