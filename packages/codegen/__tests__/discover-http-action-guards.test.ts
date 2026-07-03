@@ -121,6 +121,20 @@ describe("discoverHttpActionGuards", () => {
         expect(found[0]).toMatchObject({ exportName: "submit", kind: "httpRoute", method: "POST", readsAuth: false, sideEffect: "runMutation" });
     });
 
+    it("detects the side effect of a concise-body arrow handler (call as the body)", () => {
+        expect.assertions(2);
+
+        // Concise body — the `ctx.runMutation(...)` call IS the arrow body, which
+        // `getDescendantsOfKind` skips; without inspecting the body node itself the
+        // side effect is missed and the missing-guard finding never fires.
+        write("concise.ts", `export const submit = httpRoute.post("/submit").handler(({ ctx, body }) => ctx.runMutation(api.messages.add, body));`);
+
+        const found = discoverHttpActionGuards(project, join(workdir, "lunora"));
+
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({ exportName: "submit", kind: "httpRoute", method: "POST", readsAuth: false, sideEffect: "runMutation" });
+    });
+
     it("respects a ctx alias in a httpRoute destructure for both side-effect and auth detection", () => {
         expect.assertions(1);
 

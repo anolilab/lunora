@@ -91,6 +91,25 @@ const memberAccessRootIdentifier = (node: TsNode): Identifier | undefined => {
     return Node.isIdentifier(current) ? current : undefined;
 };
 
+/**
+ * The simple callee name of a call/`new` expression's *callee* node — the bare
+ * identifier (`createPayment`) or the trailing member name of a property access
+ * (`payment.createPayment` → `createPayment`), else `undefined`. The shared
+ * `import`-agnostic, fail-closed name match every config/argument feeder uses, so
+ * a re-export or alias still resolves.
+ */
+export const calleeName = (expression: TsNode): string | undefined => {
+    if (Node.isIdentifier(expression)) {
+        return expression.getText();
+    }
+
+    if (Node.isPropertyAccessExpression(expression)) {
+        return expression.getName();
+    }
+
+    return undefined;
+};
+
 /** True when `node` is, or textually contains, a value reference to the `args` binding. */
 export const referencesArgs = (node: TsNode): boolean => {
     if (Node.isIdentifier(node)) {
@@ -116,10 +135,34 @@ export const singleHopInitializer = (node: TsNode): TsNode | undefined => {
         (ancestor) => Node.isArrowFunction(ancestor) || Node.isFunctionExpression(ancestor) || Node.isFunctionDeclaration(ancestor),
     );
 
-    return enclosingFunction
-        ?.getDescendantsOfKind(SyntaxKind.VariableDeclaration)
-        .find((variable) => variable.getName() === name)
-        ?.getInitializer();
+    if (enclosingFunction === undefined) {
+        return undefined;
+    }
+
+    // The nearest same-named `const` declared *before* this use. A declaration that
+    // follows the use — or a shadowing one in a sibling branch — can't be its source,
+    // so preferring the closest preceding binding avoids resolving through a shadow.
+    // (Exact symbol resolution would need the type-checker these pre-`pnpm install`
+    // feeders deliberately run without, so scope-order is the closest safe proxy.)
+    const usePosition = node.getStart();
+    let nearest: TsNode | undefined;
+    let nearestPosition = -1;
+
+    for (const variable of enclosingFunction.getDescendantsOfKind(SyntaxKind.VariableDeclaration)) {
+        if (variable.getName() !== name) {
+            continue;
+        }
+
+        const initializer = variable.getInitializer();
+        const declarationPosition = variable.getStart();
+
+        if (initializer !== undefined && declarationPosition < usePosition && declarationPosition > nearestPosition) {
+            nearest = initializer;
+            nearestPosition = declarationPosition;
+        }
+    }
+
+    return nearest;
 };
 
 /**
@@ -204,9 +247,19 @@ export const isRequestInputDerived = (node: TsNode, requestName: string): boolea
     return false;
 };
 
-/** The export name of the nearest exported `const x = …` ancestor, or `"&lt;module>"` when at file scope. */
+/**
+ * The export name of the nearest *exported* `const x = …` ancestor, or `"&lt;module>"`
+ * when the node isn't inside one (e.g. an inline-mounted handler). Walks out past
+ * any local `const result = …` bindings to the exported declaration — matching
+ * {@link import("./discover-ast").enclosingExportName} — so a sink nested in a
+ * local `const` is still attributed to its exported handler, not the local.
+ */
 export const enclosingExportName = (node: TsNode): string => {
-    const declaration = node.getFirstAncestorByKind(SyntaxKind.VariableDeclaration);
+    for (const ancestor of node.getAncestors()) {
+        if (Node.isVariableDeclaration(ancestor) && ancestor.getVariableStatement()?.hasExportKeyword() === true) {
+            return ancestor.getName();
+        }
+    }
 
-    return declaration?.getName() ?? "<module>";
+    return "<module>";
 };

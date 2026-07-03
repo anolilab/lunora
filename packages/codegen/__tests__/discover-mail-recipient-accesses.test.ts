@@ -59,6 +59,35 @@ describe("discoverMailRecipientAccesses", () => {
         expect(discoverMailRecipientAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });
 
+    it("flags a shorthand recipient ({ to }) bound to an args value", () => {
+        expect.assertions(1);
+
+        write("shorthand.ts", `export const notify = mutation(async ({ ctx, args }) => { const to = args.email; await ctx.mail.send({ to }); });`);
+
+        expect(discoverMailRecipientAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("ignores a shorthand recipient ({ to }) bound to a server-trusted ctx value", () => {
+        expect.assertions(1);
+
+        write("shorthand-safe.ts", `export const notify = mutation(async ({ ctx }) => { const to = ctx.auth.user.email; await ctx.mail.send({ to }); });`);
+
+        expect(discoverMailRecipientAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("attributes a send bound to a local const to the exported handler, not the local", () => {
+        expect.assertions(1);
+
+        // The `ctx.mail.send(...)` call is nested in `const messageId = …`; enclosingExportName
+        // must walk past that local binding to the exported `notify`, not report "messageId".
+        write(
+            "local-const.ts",
+            `export const notify = mutation(async ({ ctx, args }) => { const messageId = await ctx.mail.send({ to: args.email }); return messageId; });`,
+        );
+
+        expect(discoverMailRecipientAccesses(project, join(workdir, "lunora"))[0]).toMatchObject({ exportName: "notify" });
+    });
+
     it("ignores a recipient scoped by a server-trusted ctx value", () => {
         expect.assertions(1);
 

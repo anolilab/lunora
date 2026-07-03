@@ -74,8 +74,15 @@ const contextBinding = (handler: InspectableHandler, isHttpAction: boolean): str
  */
 const firstSideEffect = (handler: InspectableHandler, contextName: string): string | undefined => {
     const body = handler.getBody();
+    const calls = body.getDescendantsOfKind(SyntaxKind.CallExpression);
 
-    for (const call of body.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    // A concise-body arrow (`(ctx) => ctx.runMutation(...)`) has the call *as* its
+    // body, which `getDescendantsOfKind` excludes — inspect the body node itself too.
+    if (Node.isCallExpression(body)) {
+        calls.unshift(body);
+    }
+
+    for (const call of calls) {
         const callee = call.getExpression();
 
         if (!Node.isPropertyAccessExpression(callee)) {

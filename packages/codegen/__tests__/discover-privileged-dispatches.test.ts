@@ -110,6 +110,25 @@ describe("discoverPrivilegedDispatches", () => {
         expect(discover()).toHaveLength(0);
     });
 
+    it("ignores a dispatch whose object key merely shares a payload binding's name", () => {
+        expect.assertions(1);
+
+        // `channelId` is a payload binding, but here it is only the *key* of a
+        // safe `{ channelId: freshId() }` value — a name position, not a use of
+        // the payload. Counting the key would flag this safe dispatch.
+        write(
+            "keyname.ts",
+            `export const onboard = defineWorkflow({
+    handler: async (context) => {
+        const { channelId } = context.params;
+        await context.run(api.messages.send, { channelId: freshId(), text: "hi" });
+    },
+});`,
+        );
+
+        expect(discover()).toHaveLength(0);
+    });
+
     it("ignores a dispatch to a non-static (variable) target it cannot resolve", () => {
         expect.assertions(1);
 

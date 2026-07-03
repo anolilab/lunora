@@ -37,9 +37,10 @@ const mailRecipientMethod = (node: TsNode): string | undefined => {
 /**
  * True when the options object literal `argument` carries a `to`/`cc`/`bcc`
  * recipient property whose value is derived from the handler's `args` with no
- * server-side scoping. Only a direct object-literal argument is inspected — a
- * shorthand (`{ to }`) or non-literal (spread/variable) options argument is
- * skipped, fail-closed.
+ * server-side scoping — inspecting both `to: &lt;expr>` assignments and `{ to }`
+ * shorthand (which references a same-named binding, followed one `const` hop).
+ * Only a direct object-literal argument is inspected; a non-literal
+ * (spread/variable) options argument is skipped, fail-closed.
  */
 const hasUnscopedArgumentDerivedRecipient = (argument: TsNode): boolean => {
     if (!Node.isObjectLiteralExpression(argument)) {
@@ -47,6 +48,13 @@ const hasUnscopedArgumentDerivedRecipient = (argument: TsNode): boolean => {
     }
 
     return argument.getProperties().some((property) => {
+        // `{ to }` shorthand — the value IS the same-named binding (`property.getNameNode()`).
+        if (Node.isShorthandPropertyAssignment(property)) {
+            const value = property.getNameNode();
+
+            return RECIPIENT_FIELDS.has(property.getName()) && isArgumentDerived(value) && !isScopedByContext(value);
+        }
+
         if (!Node.isPropertyAssignment(property) || !RECIPIENT_FIELDS.has(property.getName())) {
             return false;
         }

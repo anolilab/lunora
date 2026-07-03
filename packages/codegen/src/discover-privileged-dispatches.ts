@@ -1,4 +1,4 @@
-import type { ArrowFunction, CallExpression, FunctionExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
+import type { ArrowFunction, CallExpression, FunctionExpression, Identifier, Node as TsNode, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { enclosingExportName } from "./argument-taint";
@@ -81,11 +81,36 @@ const propertyAccessesIn = (node: TsNode): TsNode[] => {
     return accesses;
 };
 
-/** Every identifier at or below `node` (including `node` when it is itself an identifier). */
-const identifiersIn = (node: TsNode): TsNode[] => {
-    const identifiers: TsNode[] = node.getDescendantsOfKind(SyntaxKind.Identifier);
+/**
+ * True when `identifier` sits in a *value-reference* position — not an
+ * object-literal key (`{ channelId: safe() }`), a member name (`x.channelId`), or
+ * a destructuring binding name (`const { channelId } = …`). Those name positions
+ * merely share a payload binding's spelling without being a use of it, so counting
+ * them would flag a safe `{ channelId: computeSafe() }` dispatch as payload-derived.
+ * A shorthand `{ channelId }` IS a value reference and is kept.
+ */
+const isReferenceIdentifier = (identifier: Identifier): boolean => {
+    const parent = identifier.getParent();
 
-    if (Node.isIdentifier(node)) {
+    if (Node.isPropertyAccessExpression(parent) && parent.getNameNode() === identifier) {
+        return false;
+    }
+
+    if (Node.isPropertyAssignment(parent) && parent.getNameNode() === identifier) {
+        return false;
+    }
+
+    return !(Node.isBindingElement(parent) && parent.getNameNode() === identifier);
+};
+
+/**
+ * Every *value-reference* identifier at or below `node` (including `node` itself
+ * when it is one). Name-only positions are excluded — see {@link isReferenceIdentifier}.
+ */
+const identifiersIn = (node: TsNode): Identifier[] => {
+    const identifiers = node.getDescendantsOfKind(SyntaxKind.Identifier).filter((identifier) => isReferenceIdentifier(identifier));
+
+    if (Node.isIdentifier(node) && isReferenceIdentifier(node)) {
         identifiers.push(node);
     }
 

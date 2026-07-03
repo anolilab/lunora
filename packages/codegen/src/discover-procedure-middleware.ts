@@ -232,7 +232,9 @@ const AI_GENERATION_CALLEES = new Set(["generateObject", "generateText", "stream
  * invoked with an object-literal config that declares no `maxOutputTokens` key —
  * an unbounded generation. A non-object-literal config (statically opaque) is NOT
  * flagged: we can't see whether it carries a bound, so this fails open to avoid a
- * false positive on a hoisted-config call.
+ * false positive on a hoisted-config call. A literal carrying a spread
+ * (`{ ...shared, prompt }`) is opaque the same way — the bound may come from the
+ * spread source — so it fails open too, matching the sibling config readers.
  */
 const isUnboundedAiGeneration = (call: CallExpression): boolean => {
     const name = calleeNameOf(call);
@@ -243,7 +245,17 @@ const isUnboundedAiGeneration = (call: CallExpression): boolean => {
 
     const argument = call.getArguments()[0];
 
-    return Boolean(argument && Node.isObjectLiteralExpression(argument) && !argument.getProperty("maxOutputTokens"));
+    if (!argument || !Node.isObjectLiteralExpression(argument)) {
+        return false;
+    }
+
+    // A spread makes the literal opaque — `maxOutputTokens` could be set by the
+    // spread source, so fail open rather than flag a false positive.
+    if (argument.getProperties().some((property) => Node.isSpreadAssignment(property))) {
+        return false;
+    }
+
+    return !argument.getProperty("maxOutputTokens");
 };
 
 /** True when a node anywhere in `declaration` references `ctx.mail` / `ctx.email` (a mail send). */

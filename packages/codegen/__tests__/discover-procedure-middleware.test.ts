@@ -91,6 +91,19 @@ const BOUNDED_AI = `
     });
 `;
 
+/** A spread-config AI generation — `maxOutputTokens` may come from the spread source, so it fails open (not flagged). */
+const SPREAD_AI = `
+    import { action } from "@lunora/server";
+    import { generateText } from "@lunora/ai";
+
+    export const summarize = action({
+        args: {},
+        handler: async (ctx) => {
+            return await generateText({ ...ctx.ai.defaults, prompt: "hi" });
+        },
+    });
+`;
+
 /** A builder-form mutation guarded by `.use(rateLimit())`. */
 const RATE_LIMITED = `${PREAMBLE}
     export const send = c.mutation
@@ -210,6 +223,16 @@ describe("discoverProcedureMiddleware", () => {
         writeFileSync(join(workdir, "lunora", "summarize.ts"), BOUNDED_AI, "utf8");
         project.getSourceFile(join(workdir, "lunora", "summarize.ts"))?.refreshFromFileSystemSync();
         found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "summarize", unboundedAiGeneration: false });
+    });
+
+    it("does not flag an AI generation whose config carries a spread (fails open)", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "summarize.ts"), SPREAD_AI, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
 
         expect(found[0]).toMatchObject({ exportName: "summarize", unboundedAiGeneration: false });
     });
