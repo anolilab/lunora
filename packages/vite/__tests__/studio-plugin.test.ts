@@ -193,8 +193,10 @@ describe("studioPlugin", () => {
         const headers = Object.fromEntries((response.setHeader as ReturnType<typeof vi.fn>).mock.calls as [string, string][]);
 
         // Unhashed URL → revalidate every load so a rebuild is never shadowed.
+        // The ETag is keyed on the requested file (not just its kind) so each
+        // chunk revalidates independently — so `studio.js` yields `W/"studio.js-…"`.
         expect(headers["Cache-Control"]).toBe("no-cache");
-        expect(headers.ETag).toMatch(/^W\/"js-/);
+        expect(headers.ETag).toMatch(/^W\/"studio\.js-/);
 
         const second = makeResponse();
 

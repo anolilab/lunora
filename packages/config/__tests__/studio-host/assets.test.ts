@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveContainedFile } from "../../src/studio-host/assets";
+import { assetContentType, isStandaloneModulePath, resolveContainedFile } from "../../src/studio-host/assets";
 
 // A representative absolute standalone directory (as `@lunora/studio`'s
 // `dist/standalone` would resolve to). The guard is pure path math, so a fixed
@@ -38,5 +38,29 @@ describe("resolveContainedFile (studio standalone path-traversal guard)", () => 
         for (const name of rejected) {
             expect(resolveContainedFile(DIR, name)).toBeUndefined();
         }
+    });
+});
+
+describe("isStandaloneModulePath", () => {
+    it("matches the studio.js entry, chunks, and their maps — not the stylesheet or SPA routes", () => {
+        expect.assertions(6);
+
+        expect(isStandaloneModulePath("/studio.js")).toBe(true);
+        expect(isStandaloneModulePath("/__lunora/chunk-FQKNJSRA.js")).toBe(true);
+        expect(isStandaloneModulePath("/studio.js.map")).toBe(true);
+        expect(isStandaloneModulePath("/styles.css")).toBe(false);
+        expect(isStandaloneModulePath("/__lunora/data")).toBe(false);
+        expect(isStandaloneModulePath("/")).toBe(false);
+    });
+});
+
+describe("assetContentType", () => {
+    it("maps each served extension to its Content-Type", () => {
+        expect.assertions(4);
+
+        expect(assetContentType("styles.css")).toBe("text/css; charset=utf-8");
+        expect(assetContentType("studio.js.map")).toBe("application/json; charset=utf-8");
+        expect(assetContentType("studio.js")).toBe("text/javascript; charset=utf-8");
+        expect(assetContentType("chunk-ABCD1234.js")).toBe("text/javascript; charset=utf-8");
     });
 });

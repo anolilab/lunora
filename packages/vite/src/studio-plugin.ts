@@ -9,9 +9,11 @@ import type { AddressInfo } from "node:net";
 import { detectAgentRules } from "@lunora/config";
 import type { LocalEndpointHandler, StudioAssets } from "@lunora/config/studio-host";
 import {
+    assetContentType,
     handlePolicyScaffoldRequest,
     handleSchemaEditRequest,
     handleSeedRequest,
+    isStandaloneModulePath,
     loadStudioAssets,
     POLICY_SCAFFOLD_ENDPOINT,
     readStandaloneAsset,
@@ -319,7 +321,7 @@ const createStudioHandler = (
             return;
         }
 
-        sendOk(response, bytes, pathname.endsWith(".map") ? "application/json; charset=utf-8" : "text/javascript; charset=utf-8");
+        sendOk(response, bytes, assetContentType(fileName));
     };
 
     return (request: IncomingMessage, response: ServerResponse, next: () => void): void => {
@@ -384,7 +386,7 @@ const createStudioHandler = (
         // route under the mount is an SPA route and gets the history fallback (the
         // document) below, so a hard load of a deep link like `/__lunora/data`
         // boots the router there.
-        if (pathname === STUDIO_STYLE_PATH || pathname.endsWith(".js") || pathname.endsWith(".js.map")) {
+        if (pathname === STUDIO_STYLE_PATH || isStandaloneModulePath(pathname)) {
             serveStaticAsset(pathname, request, response);
 
             return;

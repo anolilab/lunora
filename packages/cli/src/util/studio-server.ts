@@ -20,9 +20,11 @@ import type { Duplex } from "node:stream";
 import { detectAgentRules } from "@lunora/config";
 import type { LocalEndpointHandler } from "@lunora/config/studio-host";
 import {
+    assetContentType,
     handlePolicyScaffoldRequest,
     handleSchemaEditRequest,
     handleSeedRequest,
+    isStandaloneModulePath,
     loadStudioAssets,
     POLICY_SCAFFOLD_ENDPOINT,
     readStandaloneAsset,
@@ -200,7 +202,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         // code-split `chunk-*.js` siblings. Anything else is an SPA route and falls
         // through to the history fallback (the document) below.
         const isStyle = pathname === "/styles.css";
-        const isModule = pathname.endsWith(".js") || pathname.endsWith(".js.map");
+        const isModule = isStandaloneModulePath(pathname);
 
         if (!isStyle && !isModule) {
             return false;
@@ -245,7 +247,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
             return true;
         }
 
-        sendAsset(response, bytes, pathname.endsWith(".map") ? "application/json; charset=utf-8" : "text/javascript; charset=utf-8");
+        sendAsset(response, bytes, assetContentType(fileName));
 
         return true;
     };

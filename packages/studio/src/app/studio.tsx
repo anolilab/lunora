@@ -11,7 +11,7 @@ import {
     useRouterState,
     useSearch,
 } from "@tanstack/react-router";
-import type { ReactElement, ReactNode } from "react";
+import type { ComponentType, ReactElement, ReactNode } from "react";
 import { createContext, lazy, Suspense, use, useEffect, useMemo } from "react";
 
 import BrandMark from "../components/brand-mark";
@@ -61,160 +61,63 @@ import { CommandPalette, openCommandPalette } from "./command-palette";
 // other ~30 panels — they load only when their tab is visited. The `React.lazy`
 // identities live at module scope so they stay stable across router rebuilds;
 // the routed `<Outlet>` is wrapped in `<Suspense>` (see {@link StudioLayout}).
-// Named exports are unwrapped to the shape `React.lazy` expects (`{ default }`);
-// default-exporting panels pass straight through.
-const InsightsPanel = lazy(() =>
-    import("../features/advisors/insights-panel").then((m) => {
-        return { default: m.InsightsPanel };
-    }),
-);
+//
+// `React.lazy` wants a `{ default }` module; {@link lazyNamed} unwraps a named
+// export to that shape (preserving the component's props), so the many
+// named-export panels stay one-liners. Default-exporting panels pass straight to
+// `lazy`. The literal `import("…")` specifier MUST stay inline in the loader —
+// esbuild's code-splitting keys off the static string, so never hoist it to a
+// variable.
+const lazyNamed = <P, K extends string>(load: () => Promise<Record<K, ComponentType<P>>>, key: K) =>
+    lazy(() =>
+        load().then((loaded) => {
+            return { default: loaded[key] };
+        }),
+    );
+
+const InsightsPanel = lazyNamed(() => import("../features/advisors/insights-panel"), "InsightsPanel");
 const RlsPanel = lazy(() => import("../features/advisors/rls-panel"));
 const SecurityAdvisorPanel = lazy(() => import("../features/advisors/security-advisor-panel"));
-const AnalyticsPanel = lazy(() =>
-    import("../features/analytics/analytics-panel").then((m) => {
-        return { default: m.AnalyticsPanel };
-    }),
-);
+const AnalyticsPanel = lazyNamed(() => import("../features/analytics/analytics-panel"), "AnalyticsPanel");
 const ApiTab = lazy(() => import("../features/api/api-tab"));
-const AuthConfigPanel = lazy(() =>
-    import("../features/auth/auth-config-panel").then((m) => {
-        return { default: m.AuthConfigPanel };
-    }),
-);
-const AuthSessionsPanel = lazy(() =>
-    import("../features/auth/auth-sessions-panel").then((m) => {
-        return { default: m.AuthSessionsPanel };
-    }),
-);
-const OrganizationsPanel = lazy(() =>
-    import("../features/auth/organizations-panel").then((m) => {
-        return { default: m.OrganizationsPanel };
-    }),
-);
-const UsersPanel = lazy(() =>
-    import("../features/auth/users-panel").then((m) => {
-        return { default: m.UsersPanel };
-    }),
-);
-const TableEditor = lazy(() =>
-    import("../features/data/table-editor").then((m) => {
-        return { default: m.TableEditor };
-    }),
-);
-const ExportImportPanel = lazy(() =>
-    import("../features/database/export-import").then((m) => {
-        return { default: m.ExportImportPanel };
-    }),
-);
-const MigrationsPanel = lazy(() =>
-    import("../features/database/migrations").then((m) => {
-        return { default: m.MigrationsPanel };
-    }),
-);
-const PitrPanel = lazy(() =>
-    import("../features/database/pitr-panel").then((m) => {
-        return { default: m.PitrPanel };
-    }),
-);
-const FlagsPanel = lazy(() =>
-    import("../features/flags/flags-panel").then((m) => {
-        return { default: m.FlagsPanel };
-    }),
-);
-const FunctionRunner = lazy(() =>
-    import("../features/functions/function-runner").then((m) => {
-        return { default: m.FunctionRunner };
-    }),
-);
-const FunctionStatsPanel = lazy(() =>
-    import("../features/functions/function-stats").then((m) => {
-        return { default: m.FunctionStatsPanel };
-    }),
-);
-const AuditPanel = lazy(() =>
-    import("../features/logs/audit-panel").then((m) => {
-        return { default: m.AuditPanel };
-    }),
-);
-const LogDrainsPanel = lazy(() =>
-    import("../features/logs/log-drains-panel").then((m) => {
-        return { default: m.LogDrainsPanel };
-    }),
-);
+const AuthConfigPanel = lazyNamed(() => import("../features/auth/auth-config-panel"), "AuthConfigPanel");
+const AuthSessionsPanel = lazyNamed(() => import("../features/auth/auth-sessions-panel"), "AuthSessionsPanel");
+const OrganizationsPanel = lazyNamed(() => import("../features/auth/organizations-panel"), "OrganizationsPanel");
+const UsersPanel = lazyNamed(() => import("../features/auth/users-panel"), "UsersPanel");
+const TableEditor = lazyNamed(() => import("../features/data/table-editor"), "TableEditor");
+const ExportImportPanel = lazyNamed(() => import("../features/database/export-import"), "ExportImportPanel");
+const MigrationsPanel = lazyNamed(() => import("../features/database/migrations"), "MigrationsPanel");
+const PitrPanel = lazyNamed(() => import("../features/database/pitr-panel"), "PitrPanel");
+const FlagsPanel = lazyNamed(() => import("../features/flags/flags-panel"), "FlagsPanel");
+const FunctionRunner = lazyNamed(() => import("../features/functions/function-runner"), "FunctionRunner");
+const FunctionStatsPanel = lazyNamed(() => import("../features/functions/function-stats"), "FunctionStatsPanel");
+const AuditPanel = lazyNamed(() => import("../features/logs/audit-panel"), "AuditPanel");
+const LogDrainsPanel = lazyNamed(() => import("../features/logs/log-drains-panel"), "LogDrainsPanel");
+// `logs-panel` re-exports several types alongside the component, which trips the
+// generic prop inference in `lazyNamed` (it mis-infers the panel's props). The
+// explicit unwrap keeps `LogsPanel`'s exact props type.
 const LogsPanel = lazy(() =>
     import("../features/logs/logs-panel").then((m) => {
         return { default: m.LogsPanel };
     }),
 );
-const MailPanel = lazy(() =>
-    import("../features/logs/mail-panel").then((m) => {
-        return { default: m.MailPanel };
-    }),
-);
-const SchedulePanel = lazy(() =>
-    import("../features/logs/schedule-panel").then((m) => {
-        return { default: m.SchedulePanel };
-    }),
-);
+const MailPanel = lazyNamed(() => import("../features/logs/mail-panel"), "MailPanel");
+const SchedulePanel = lazyNamed(() => import("../features/logs/schedule-panel"), "SchedulePanel");
 const SubscriptionsPanel = lazy(() => import("../features/logs/subscriptions-panel"));
-const KvBrowser = lazy(() =>
-    import("../features/kv/kv-browser").then((m) => {
-        return { default: m.KvBrowser };
-    }),
-);
-const PaymentsPanel = lazy(() =>
-    import("../features/payments/payments-panel").then((m) => {
-        return { default: m.PaymentsPanel };
-    }),
-);
-const PermissionsPanel = lazy(() =>
-    import("../features/permissions/permissions-panel").then((m) => {
-        return { default: m.PermissionsPanel };
-    }),
-);
+const KvBrowser = lazyNamed(() => import("../features/kv/kv-browser"), "KvBrowser");
+const PaymentsPanel = lazyNamed(() => import("../features/payments/payments-panel"), "PaymentsPanel");
+const PermissionsPanel = lazyNamed(() => import("../features/permissions/permissions-panel"), "PermissionsPanel");
 const QueuesPanel = lazy(() => import("../features/queues/queues-panel"));
 const DashboardsPanel = lazy(() => import("../features/reports/dashboards-panel"));
 const FanoutPanel = lazy(() => import("../features/reports/fanout-panel"));
-const HealthPanel = lazy(() =>
-    import("../features/reports/health-panel").then((m) => {
-        return { default: m.HealthPanel };
-    }),
-);
-const MetricsPanel = lazy(() =>
-    import("../features/reports/metrics-panel").then((m) => {
-        return { default: m.MetricsPanel };
-    }),
-);
-const SchemaViewer = lazy(() =>
-    import("../features/schema/schema-viewer").then((m) => {
-        return { default: m.SchemaViewer };
-    }),
-);
-const SettingsPanel = lazy(() =>
-    import("../features/settings/settings-panel").then((m) => {
-        return { default: m.SettingsPanel };
-    }),
-);
-const SqlEditorPanel = lazy(() =>
-    import("../features/sql/sql-editor-panel").then((m) => {
-        return { default: m.SqlEditorPanel };
-    }),
-);
-const FileBrowser = lazy(() =>
-    import("../features/storage/file-browser").then((m) => {
-        return { default: m.FileBrowser };
-    }),
-);
-const StorageRulesPanel = lazy(() =>
-    import("../features/storage/storage-rules-panel").then((m) => {
-        return { default: m.StorageRulesPanel };
-    }),
-);
-const VectorBrowser = lazy(() =>
-    import("../features/vectors/vector-browser").then((m) => {
-        return { default: m.VectorBrowser };
-    }),
-);
+const HealthPanel = lazyNamed(() => import("../features/reports/health-panel"), "HealthPanel");
+const MetricsPanel = lazyNamed(() => import("../features/reports/metrics-panel"), "MetricsPanel");
+const SchemaViewer = lazyNamed(() => import("../features/schema/schema-viewer"), "SchemaViewer");
+const SettingsPanel = lazyNamed(() => import("../features/settings/settings-panel"), "SettingsPanel");
+const SqlEditorPanel = lazyNamed(() => import("../features/sql/sql-editor-panel"), "SqlEditorPanel");
+const FileBrowser = lazyNamed(() => import("../features/storage/file-browser"), "FileBrowser");
+const StorageRulesPanel = lazyNamed(() => import("../features/storage/storage-rules-panel"), "StorageRulesPanel");
+const VectorBrowser = lazyNamed(() => import("../features/vectors/vector-browser"), "VectorBrowser");
 const WorkflowsPanel = lazy(() => import("../features/workflows/workflows-panel"));
 
 /** Identifier for each built-in studio tab. */

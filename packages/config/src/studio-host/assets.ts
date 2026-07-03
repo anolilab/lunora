@@ -15,7 +15,7 @@ import type { StudioAssets, WarnLogger } from "./types";
  * a host package (`@lunora/vite` / `@lunora/cli`) that has `@lunora/studio`
  * installed — node walks up from the host's `dist` to find it.
  */
-const loadStudioAssets = (logger?: WarnLogger, resolveFrom: string = import.meta.url): StudioAssets | undefined => {
+export const loadStudioAssets = (logger?: WarnLogger, resolveFrom: string = import.meta.url): StudioAssets | undefined => {
     try {
         const require = createRequire(resolveFrom);
 
@@ -123,4 +123,28 @@ export const readStandaloneAsset = (fileName: string, resolveFrom: string = impo
     }
 };
 
-export default loadStudioAssets;
+/**
+ * True when `pathname` addresses a standalone JS module — the `studio.js` entry
+ * or one of its code-split `chunk-*.js` siblings (and their `.map`s). Shared by
+ * the CLI and Vite hosts so both route the same request shapes to the directory
+ * server; the stylesheet is matched separately at each host's own style path.
+ */
+export const isStandaloneModulePath = (pathname: string): boolean => pathname.endsWith(".js") || pathname.endsWith(".js.map");
+
+/**
+ * Content-Type for a served standalone asset, by extension: `.css` → CSS,
+ * `.map` → JSON (a source map), everything else (the `.js` entry + chunks) →
+ * JavaScript. Shared by the CLI and Vite hosts so the MIME decision lives in one
+ * place.
+ */
+export const assetContentType = (fileName: string): string => {
+    if (fileName.endsWith(".css")) {
+        return "text/css; charset=utf-8";
+    }
+
+    if (fileName.endsWith(".map")) {
+        return "application/json; charset=utf-8";
+    }
+
+    return "text/javascript; charset=utf-8";
+};
