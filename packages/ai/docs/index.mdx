@@ -107,7 +107,9 @@ What you get beyond the manual loop:
   embedding, and every write (`{ unchanged: true }`), so periodic re-syncs are free.
 - **Tenant isolation** — thread `namespace` (your shard/tenant key) through both
   sides; a namespace-less call gets a one-time dev warning (Vectorize indexes are
-  account-global). Suppress for single-tenant apps with `allowSharedNamespace`.
+  account-global). Multi-tenant apps should set `requireNamespace: true` to turn
+  the warning into a hard error; single-tenant apps suppress it with
+  `allowSharedNamespace`.
 - **Ranking controls** — `minScore` threshold, per-source `importance` weighting
   (0–1, multiplied into scores), and `chunkContext: { before, after }` to stitch
   neighbouring chunks around each match ("embed small, retrieve big").
