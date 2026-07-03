@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
 
-import { ERROR_CATALOG, findSolutionByMessage, invariant, isInternalCode, isLunoraError, LunoraError, resolveHint, unreachable } from "../src";
+import {
+    ERROR_CATALOG,
+    findSolutionByMessage,
+    flattenHint,
+    invariant,
+    isInternalCode,
+    isLunoraError,
+    LunoraError,
+    resolveHint,
+    toErrorBody,
+    unreachable,
+} from "../src";
 
 describe("lunoraError", () => {
     it("fills status/title/hint from the catalog by code", () => {
@@ -85,6 +96,58 @@ describe("isInternalCode", () => {
         expect(isInternalCode("BAD_REQUEST")).toBe(false);
         expect(isInternalCode("CONFLICT")).toBe(false);
         expect(isInternalCode("NOT_FOUND")).toBe(false);
+    });
+});
+
+describe("toErrorBody", () => {
+    it("echoes a non-internal LunoraError with message, hint, and docsUrl", () => {
+        const error = new LunoraError("CONFLICT", "stale", { docsUrl: "https://lunora.sh/docs/errors" });
+        const { body, redacted, status } = toErrorBody(error);
+
+        expect(redacted).toBe(false);
+        expect(status).toBe(409);
+        expect(body.code).toBe("CONFLICT");
+        expect(body.message).toBe("stale");
+        expect(body.hint).toBe(ERROR_CATALOG.CONFLICT.hint);
+        expect(body.docsUrl).toBe("https://lunora.sh/docs/errors");
+    });
+
+    it("redacts an INTERNAL-coded LunoraError's message but keeps its status", () => {
+        const { body, redacted, status } = toErrorBody(new LunoraError("INTERNAL", "unknown table: users"), { redactedMessage: "internal error" });
+
+        expect(redacted).toBe(true);
+        expect(status).toBe(500);
+        expect(body.code).toBe("INTERNAL");
+        expect(body.message).toBe("internal error");
+        expect(body.hint).toBeUndefined();
+    });
+
+    it("maps an unrecognized throw to the fallback code + redacted message", () => {
+        const { body, redacted, status } = toErrorBody(new Error("boom"), { fallbackCode: "RPC_FAILED", redactedMessage: "internal error" });
+
+        expect(redacted).toBe(true);
+        expect(status).toBe(500);
+        expect(body.code).toBe("RPC_FAILED");
+        expect(body.message).toBe("internal error");
+    });
+
+    it("wire-encodes `data` only when an encoder is passed", () => {
+        const error = new LunoraError("BAD_REQUEST", "bad", { data: { retryAfterMs: 10 } });
+
+        expect(toErrorBody(error).body.data).toBeUndefined();
+        expect(
+            toErrorBody(error, {
+                encodeData: (d) => {
+                    return { encoded: d };
+                },
+            }).body.data,
+        ).toStrictEqual({ encoded: { retryAfterMs: 10 } });
+    });
+});
+
+describe("flattenHint", () => {
+    it("drops code fences and strips bold/code emphasis", () => {
+        expect(flattenHint(["Use `ctx.db`", "```ts", "code", "```", "and **retry**"])).toBe("Use ctx.db\ncode\nand retry");
     });
 });
 

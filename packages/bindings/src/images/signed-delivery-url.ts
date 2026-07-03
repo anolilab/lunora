@@ -11,7 +11,6 @@
  *
  * Pure WebCrypto, no binding I/O → deterministic, safe to call from any handler.
  */
-import { LunoraError } from "@lunora/errors";
 
 import type { TransformOptions } from "./types";
 
@@ -146,11 +145,11 @@ export const buildSignedImageUrl = async (options: SignedImageUrlOptions): Promi
     const expiresInSeconds = options.expiresInSeconds ?? 60 * 60;
 
     if (!Number.isFinite(expiresInSeconds) || expiresInSeconds <= 0) {
-        throw new LunoraError("INTERNAL", "@lunora/bindings/images: expiresInSeconds must be a positive finite number");
+        throw new TypeError("@lunora/bindings/images: expiresInSeconds must be a positive finite number");
     }
 
     if (expiresInSeconds > MAX_EXPIRES_IN_SECONDS) {
-        throw new LunoraError("INTERNAL", `@lunora/bindings/images: expiresInSeconds must not exceed ${String(MAX_EXPIRES_IN_SECONDS)} (7 days)`);
+        throw new TypeError(`@lunora/bindings/images: expiresInSeconds must not exceed ${String(MAX_EXPIRES_IN_SECONDS)} (7 days)`);
     }
 
     const exp = Math.floor(Date.now() / 1000) + expiresInSeconds;

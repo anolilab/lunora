@@ -21,6 +21,14 @@ export interface ErrorCatalogEntry {
     docsUrl?: string;
     /** Optional actionable fix, authored as Markdown (rendered by CLI/overlay/Studio). */
     hint?: ErrorHint;
+
+    /**
+     * When `true`, this code's `message` must NOT cross the wire — an internal
+     * failure or unhandled invariant may carry SQL fragments, file paths, or
+     * internal identifiers. The transport mappers emit a generic message for
+     * these (and log the real one server-side). See {@link isInternalCode}.
+     */
+    internal?: boolean;
     /** HTTP/RPC status this code maps to on the wire. */
     status: number;
     /** Short, human-readable summary. */
@@ -69,11 +77,11 @@ export const ERROR_CATALOG = {
     PAYLOAD_TOO_LARGE: { status: 413, title: "Payload too large" },
 
     /** Free-form internal failure — redacted to a generic message on the wire. */
-    INTERNAL: { status: 500, title: "Internal error" },
+    INTERNAL: { internal: true, status: 500, title: "Internal error" },
     /** Alias of {@link ERROR_CATALOG.INTERNAL} kept for `@lunora/server`'s historical code name. */
-    INTERNAL_SERVER_ERROR: { status: 500, title: "Internal error" },
+    INTERNAL_SERVER_ERROR: { internal: true, status: 500, title: "Internal error" },
     /** Non-mappable throw crossed the RPC boundary. */
-    RPC_FAILED: { status: 500, title: "Internal error" },
+    RPC_FAILED: { internal: true, status: 500, title: "Internal error" },
 
     COUNT_RLS_UNSUPPORTED: { status: 422, title: "count() is unsupported under an RLS policy" },
     MASK_UNSUPPORTED: { status: 422, title: "Aggregation over a masked column is unsupported" },
@@ -91,6 +99,22 @@ export const ERROR_CATALOG = {
     SHARD_ERROR: { status: 503, title: "Shard error" },
     SHARD_UNAVAILABLE: { status: 503, title: "Shard unavailable" },
     OFFLINE_IDENTITY_CHANGED: { status: 409, title: "Offline identity changed" },
+
+    /** Package-specific codes. Build-time (codegen) codes never cross the RPC wire. */
+    CODEGEN_DIAGNOSTIC: { status: 500, title: "Codegen diagnostic" },
+    SCHEMA_SNAPSHOT_PARSE: { status: 500, title: "Schema snapshot parse error" },
+    ENV_INVALID: { status: 500, title: "Invalid environment" },
+    AUTH_HEADERS_MISSING: { status: 500, title: "Auth headers missing" },
+
+    /**
+     * Upstream Cloudflare API failures surfaced from an action. The message
+     * carries the upstream response body (Cloudflare's own error text — trusted
+     * infra, not user input), so it is echoed rather than redacted. `status`
+     * here is a fallback; each throw passes the actual upstream HTTP status.
+     */
+    ANALYTICS_SQL_ERROR: { status: 502, title: "Analytics Engine SQL API error" },
+    R2_SQL_ERROR: { status: 502, title: "R2 SQL API error" },
+    WORKFLOWS_REST_ERROR: { status: 502, title: "Cloudflare Workflows REST API error" },
 } as const satisfies Record<string, ErrorCatalogEntry>;
 
 /** A well-known Lunora error code (a key of {@link ERROR_CATALOG}). */
@@ -99,12 +123,12 @@ export type LunoraErrorCode = keyof typeof ERROR_CATALOG;
 /**
  * True when `code` is an internal/redacted code — an internal failure or
  * unhandled invariant whose `message` must NOT cross the wire (it may carry SQL
- * fragments, file paths, or internal identifiers). The transport mappers emit a
- * generic message for these (and log the real one server-side). Throwing a
- * `LunoraError` with any *other* code is the author's vouch that its message is
- * client-safe.
+ * fragments, file paths, or internal identifiers). Derived from the catalog's
+ * `internal` flag so the redaction posture stays in one place (the table).
+ * Throwing a `LunoraError` with any non-internal code is the author's vouch that
+ * its message is client-safe; an unknown/unregistered code is treated as safe.
  */
-export const isInternalCode = (code: string): boolean => code === "INTERNAL" || code === "INTERNAL_SERVER_ERROR" || code === "RPC_FAILED";
+export const isInternalCode = (code: string): boolean => (ERROR_CATALOG as Record<string, ErrorCatalogEntry>)[code]?.internal === true;
 
 /**
  * A message-matched solution for errors that reach a consumer without a `code`
@@ -245,6 +269,19 @@ export const MESSAGE_SOLUTIONS: ReadonlyArray<SolutionRule> = [
         test: (message) => message.includes("optimistic concurrency conflict"),
     },
 ];
+
+/**
+ * Flatten a Markdown hint to plain text for a terminal / non-Markdown surface:
+ * drop code-fence markers and strip inline `**bold**` / `` `code` `` emphasis.
+ * Shared by the CLI renderer and the Studio `ErrorAlert` so the two can't drift.
+ */
+export const flattenHint = (hint: ErrorHint): string =>
+    (Array.isArray(hint) ? hint.join("\n") : hint)
+        .split("\n")
+        .filter((line) => !line.startsWith("```"))
+        .join("\n")
+        .replaceAll(/\*\*(.+?)\*\*/gu, "$1")
+        .replaceAll(/`([^`]+)`/gu, "$1");
 
 /**
  * Find the first message-matched {@link Solution} for `message`, or `undefined`

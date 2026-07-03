@@ -10,7 +10,9 @@
 export type { ErrorLocation, LunoraErrorCodeInput, LunoraErrorOptions } from "./base";
 export { LunoraError } from "./base";
 export type { ErrorCatalogEntry, ErrorHint, LunoraErrorCode, Solution, SolutionRule } from "./catalog";
-export { ERROR_CATALOG, findSolutionByMessage, isInternalCode, MESSAGE_SOLUTIONS, resolveHint } from "./catalog";
+export { ERROR_CATALOG, findSolutionByMessage, flattenHint, isInternalCode, MESSAGE_SOLUTIONS, resolveHint } from "./catalog";
 export type { LunoraErrorLike } from "./guards";
 export { isLunoraError } from "./guards";
 export { invariant, unreachable } from "./invariant";
+export type { ErrorBody, ToErrorBodyOptions, ToErrorBodyResult } from "./to-error-body";
+export { toErrorBody } from "./to-error-body";

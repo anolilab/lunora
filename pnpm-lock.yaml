@@ -1611,9 +1611,6 @@ importers:
       '@lunora/client':
         specifier: workspace:*
         version: link:../client
-      '@lunora/errors':
-        specifier: workspace:*
-        version: link:../errors
       '@lunora/runtime':
         specifier: workspace:*
         version: link:../runtime

@@ -1,6 +1,16 @@
 import { LunoraError } from "@lunora/errors";
 
-import type { Browser, BrowserLaunchLike, BrowserLike, LunoraBrowserOptions, NavigateOptions, PageLike, PdfOptions, RouteLike, ScreenshotOptions } from "./types";
+import type {
+    Browser,
+    BrowserLaunchLike,
+    BrowserLike,
+    LunoraBrowserOptions,
+    NavigateOptions,
+    PageLike,
+    PdfOptions,
+    RouteLike,
+    ScreenshotOptions,
+} from "./types";
 
 /** Default navigation timeout when neither the call nor the factory sets one. */
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -321,7 +331,7 @@ const isPrivateTarget = (parsed: URL): boolean => {
  */
 const validateUrl = (url: string, allowPrivateTargets: boolean, allowedHosts?: ReadonlyArray<string>): string => {
     if (typeof url !== "string" || url.length === 0) {
-        throw new LunoraError("INTERNAL", "@lunora/browser: url must be a non-empty string");
+        throw new TypeError("@lunora/browser: url must be a non-empty string");
     }
 
     let parsed: URL;
@@ -329,11 +339,11 @@ const validateUrl = (url: string, allowPrivateTargets: boolean, allowedHosts?: R
     try {
         parsed = new URL(url);
     } catch {
-        throw new LunoraError("INTERNAL", `@lunora/browser: url must be an absolute http(s) URL (got "${url}")`);
+        throw new TypeError(`@lunora/browser: url must be an absolute http(s) URL (got "${url}")`);
     }
 
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-        throw new LunoraError("INTERNAL", `@lunora/browser: url protocol must be http(s) (got "${parsed.protocol}")`);
+        throw new TypeError(`@lunora/browser: url protocol must be http(s) (got "${parsed.protocol}")`);
     }
 
     if (parsed.username !== "" || parsed.password !== "") {
@@ -393,7 +403,7 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
     // (and `createBrowser({})` misuse) can omit it.
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the type
     if (!options.binding) {
-        throw new LunoraError("INTERNAL", "@lunora/browser: `binding` is required (env.BROWSER)");
+        throw new TypeError("@lunora/browser: `binding` is required (env.BROWSER)");
     }
 
     const getLaunch = (): BrowserLaunchLike => {

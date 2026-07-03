@@ -90,7 +90,7 @@ const sanitizeTransform = (transform: TransformOptions | undefined, maxDimension
 
     const clampDimension = (value: number): number => {
         if (!Number.isFinite(value) || value <= 0) {
-            throw new LunoraError("INTERNAL", "@lunora/bindings/images: width/height must be a positive finite number");
+            throw new TypeError("@lunora/bindings/images: width/height must be a positive finite number");
         }
 
         return Math.min(Math.floor(value), maxDimension);

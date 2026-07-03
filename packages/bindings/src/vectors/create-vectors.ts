@@ -59,7 +59,7 @@ const MAX_UPSERT_BATCH = 1000;
 
 const createVectors = (options: LunoraVectorsOptions): LunoraVectors => {
     if (Object.keys(options.indexes).length === 0) {
-        throw new LunoraError("INTERNAL", "@lunora/bindings/vectors: at least one index binding is required");
+        throw new TypeError("@lunora/bindings/vectors: at least one index binding is required");
     }
 
     const upsert = async <TInput>(indexName: string, input: UpsertInput<TInput>): Promise<VectorizeUpsertMutation> => {
@@ -110,7 +110,7 @@ const createVectors = (options: LunoraVectorsOptions): LunoraVectors => {
             values = input.vector;
         } else {
             if (!input.embed || input.input === undefined) {
-                throw new LunoraError("INTERNAL", "@lunora/bindings/vectors: query requires either `vector` or both `input` and `embed`");
+                throw new TypeError("@lunora/bindings/vectors: query requires either `vector` or both `input` and `embed`");
             }
 
             values = await input.embed(input.input);

@@ -53,8 +53,10 @@ A new internal, zero-runtime-dep package **`@lunora/errors`** built on
 
 ### Phase 1 — Foundation ✅ (commit `64164735`)
 
-`packages/errors/*` (base, catalog, guards, invariant, render), tests (14),
-`@visulima/error` → `catalog:prod`, `@lunora/errors` → pnpm `overrides`.
+`packages/errors/*` (base, catalog, guards, invariant, to-error-body), tests,
+`@visulima/error` → `catalog:prod`, `@lunora/errors` → pnpm `overrides`. The
+terminal renderer (`renderLunoraError`) lives in `@lunora/cli`, not a
+`@lunora/errors` subpath — `@lunora/errors` stays zero-dependency.
 
 ### Phase 2 — Reconcile core + fix the latent bug ✅ (commit `c7f2840f`)
 
@@ -78,7 +80,8 @@ status})` factory for the ~157 dispatch-code sites).
 ### Phase 4b — CLI renderer ✅ (commit `8b6a4505`)
 
 `reportRunError` routes a `LunoraError` (or a message-matched solution) through
-`@lunora/errors/render`, so the terminal shows the hint block.
+`@lunora/cli`'s `render-lunora-error` util (using `@visulima/error`'s
+`renderError`), so the terminal shows the hint block.
 
 ### Phase 4c — Studio UI 🟡 PARTIAL
 

@@ -1,3 +1,4 @@
+import { flattenHint } from "@lunora/errors";
 import type { ReactElement } from "react";
 
 import { errorDocumentationUrl, errorHint, errorMessage } from "../lib/internal";
@@ -10,20 +11,6 @@ interface ErrorAlertProps {
     readonly error: unknown;
     readonly testId?: string;
 }
-
-/**
- * Lightly flatten a Markdown hint for plain-text display: drop code-fence
- * markers and strip inline `**bold**` / `` `code` `` emphasis. The hint is
- * authored as Markdown for the CLI/overlay; the studio renders it as
- * whitespace-preserved text.
- */
-const flattenHint = (hint: string): string =>
-    hint
-        .split("\n")
-        .filter((line) => !line.startsWith("```"))
-        .join("\n")
-        .replaceAll(/\*\*(.+?)\*\*/gu, "$1")
-        .replaceAll(/`([^`]+)`/gu, "$1");
 
 /**
  * A destructive callout that renders a failed admin/RPC call: the error message

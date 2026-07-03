@@ -1,56 +1,31 @@
-import { isInternalCode, isLunoraError, LunoraError as BaseLunoraError } from "@lunora/errors";
+import type { ErrorBody } from "@lunora/errors";
+import { isLunoraError, LunoraError as BaseLunoraError, toErrorBody } from "@lunora/errors";
 
 interface LunoraErrorBody {
-    error: {
-        code: string;
-        message: string;
-    };
+    error: ErrorBody;
 }
 
 /**
  * Convert any thrown value into a JSON error response.
  *
- * Recognizes any error carrying the unified Lunora shape (a string `code` + a
- * numeric `status`) via {@link isLunoraError} — this includes `@lunora/server`'s
- * `LunoraError`, this runtime `LunoraError`, and the `@lunora/do` data-layer
- * errors (`ConflictError`, `NotFoundError`, `NotUniqueError`, `RlsRequiredError`,
- * …), all of which share that shape. Everything else is redacted.
+ * Delegates the envelope + redaction to `@lunora/errors`' {@link toErrorBody} —
+ * a non-internal `LunoraError` (from `@lunora/server`, this runtime, or the
+ * `@lunora/do` data layer) is echoed with its `code`/`message`/`hint`/`docsUrl`;
+ * an internal-coded error keeps its status but its message is redacted; anything
+ * else becomes a generic `INTERNAL` 500. All of these share the unified shape
+ * recognized by {@link isLunoraError}.
  */
 const toErrorResponse = (error: unknown): Response => {
-    if (isLunoraError(error)) {
-        // An internal/invariant code must not echo its message (may carry stack
-        // traces, file paths, or internal identifiers) — log it, send generic.
-        if (isInternalCode(error.code)) {
-            // eslint-disable-next-line no-console
-            console.error("[lunora] internal error:", error);
+    const { body, redacted, status } = toErrorBody(error, { fallbackCode: "INTERNAL", redactedMessage: "Internal error" });
 
-            const redacted: LunoraErrorBody = { error: { code: error.code, message: "Internal error" } };
-
-            return Response.json(redacted, {
-                headers: { "content-type": "application/json" },
-                status: error.status,
-            });
-        }
-
-        const body: LunoraErrorBody = { error: { code: error.code, message: error.message } };
-
-        return Response.json(body, {
-            headers: { "content-type": "application/json" },
-            status: error.status,
-        });
+    if (redacted) {
+        // eslint-disable-next-line no-console -- log the raw internal/unhandled error server-side; never echo it
+        console.error("[lunora] internal error:", error);
     }
 
-    // Do NOT echo arbitrary error.message values to clients — they may
-    // contain stack traces, file paths, or internal identifiers. Log the
-    // raw error server-side and return a generic message.
-    // eslint-disable-next-line no-console
-    console.error("[lunora] unhandled error:", error);
-
-    const body: LunoraErrorBody = { error: { code: "INTERNAL", message: "Internal error" } };
-
-    return Response.json(body, {
+    return Response.json({ error: body } satisfies LunoraErrorBody, {
         headers: { "content-type": "application/json" },
-        status: 500,
+        status,
     });
 };
 
