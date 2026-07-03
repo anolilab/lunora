@@ -52,6 +52,7 @@ import nondeterministicQueryMutation from "./lints/static/nondeterministic-query
 import ownerFieldFromArgsNotAuth from "./lints/static/owner-field-from-args-not-auth";
 import paymentCreateWithoutAuthorize from "./lints/static/payment-create-without-authorize";
 import paymentWebhookWideTolerance from "./lints/static/payment-webhook-wide-tolerance";
+import plaintextSecretInWranglerVariables from "./lints/static/plaintext-secret-in-wrangler-variables";
 import policyReferencesUnknownTable from "./lints/static/policy-references-unknown-table";
 import privilegedDispatchUnvalidatedPayload from "./lints/static/privileged-dispatch-unvalidated-payload";
 import privilegedFanoutFromPublicProcedure from "./lints/static/privileged-fanout-from-public-procedure";
@@ -155,6 +156,7 @@ export { default as nondeterministicQueryMutation } from "./lints/static/nondete
 export { default as ownerFieldFromArgsNotAuth } from "./lints/static/owner-field-from-args-not-auth";
 export { default as paymentCreateWithoutAuthorize } from "./lints/static/payment-create-without-authorize";
 export { default as paymentWebhookWideTolerance } from "./lints/static/payment-webhook-wide-tolerance";
+export { default as plaintextSecretInWranglerVariables } from "./lints/static/plaintext-secret-in-wrangler-variables";
 export { default as policyReferencesUnknownTable } from "./lints/static/policy-references-unknown-table";
 export { default as privilegedDispatchUnvalidatedPayload } from "./lints/static/privileged-dispatch-unvalidated-payload";
 export { default as privilegedFanoutFromPublicProcedure } from "./lints/static/privileged-fanout-from-public-procedure";
@@ -213,6 +215,7 @@ export type { AdvisorTableSample } from "./table-samples";
 export type { Category, Facing, Finding, Level, Lint, LintContext, LintSource } from "./types";
 export type { AdvisorVectorNamespaceAccess } from "./vector-namespace-accesses";
 export type { AdvisorWorkflow, AdvisorWorkflowCall } from "./workflows";
+export type { AdvisorWranglerVariable } from "./wrangler-variables";
 
 /**
  * Every lint that runs against the declared schema (and, for
@@ -294,6 +297,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     paymentWebhookWideTolerance,
     softDeleteIncludeDeletedFromArgs,
     maskedRelationLeakViaWith,
+    plaintextSecretInWranglerVariables,
 ];
 
 /**

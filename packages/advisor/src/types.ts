@@ -44,6 +44,7 @@ import type { AdvisorStorageUpload } from "./storage-uploads";
 import type { AdvisorTableSample } from "./table-samples";
 import type { AdvisorVectorNamespaceAccess } from "./vector-namespace-accesses";
 import type { AdvisorWorkflow, AdvisorWorkflowCall } from "./workflows";
+import type { AdvisorWranglerVariable } from "./wrangler-variables";
 
 /**
  * Severity of a finding, mirroring splinter's `level`. `ERROR` is a definite
@@ -584,6 +585,14 @@ export interface LintContext {
      * nothing.
      */
     workflows?: ReadonlyArray<AdvisorWorkflow>;
+
+    /**
+     * Committed `wrangler.jsonc` `vars` entries holding plaintext secrets — the
+     * input for the `plaintext_secret_in_wrangler_vars` lint. Supplied by
+     * `@lunora/config` (which reads `wrangler.jsonc`) via the codegen pass-through;
+     * absent for runtime callers, where the lint finds nothing.
+     */
+    wranglerVariables?: ReadonlyArray<AdvisorWranglerVariable>;
 }
 
 /**

@@ -77,7 +77,7 @@ import {
     emitWranglerCronTriggers,
 } from "./emit";
 import { emitApp } from "./emit-app";
-import type { ContainerIR, QueueIR, WorkflowIR } from "./ir";
+import type { ContainerIR, QueueIR, WorkflowIR, WranglerVariableIR } from "./ir";
 import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
 import { buildOpenRpcDocument, emitOpenRpcModule } from "./openrpc";
 import type { SchemaSnapshot } from "./schema-drift";
@@ -377,6 +377,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   discoverPaymentWebhooks(project, lunoraDirectory),
                   discoverSoftDeleteReads(project, lunoraDirectory),
                   discoverRelationLoads(project, lunoraDirectory),
+                  options.wranglerVariables,
               );
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,
@@ -757,6 +758,15 @@ export interface CodegenOptions {
      * a breaking change. Ignored when `dryRun` is true.
      */
     updateSchemaBaseline?: boolean;
+
+    /**
+     * Committed `wrangler.jsonc` `vars` entries that hold plaintext secrets — the
+     * `plaintext_secret_in_wrangler_vars` lint input. Produced by `@lunora/config`
+     * (which reads `wrangler.jsonc`) and threaded through by the CLI / Vite plugin;
+     * codegen only forwards it to the advisor. Absent when no wrangler config is
+     * present or the caller doesn't scan it.
+     */
+    wranglerVariables?: ReadonlyArray<WranglerVariableIR>;
 }
 
 export interface CodegenResult {

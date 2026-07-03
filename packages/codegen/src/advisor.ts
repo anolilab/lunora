@@ -46,6 +46,7 @@ import type {
     VectorNamespaceAccessIR,
     WorkflowCallIR,
     WorkflowIR,
+    WranglerVariableIR,
 } from "./ir";
 
 /**
@@ -186,6 +187,7 @@ export const lintSchema = (
     paymentWebhooks?: ReadonlyArray<PaymentWebhookIR>,
     softDeleteReads?: ReadonlyArray<SoftDeleteReadIR>,
     relationLoads?: ReadonlyArray<RelationLoadIR>,
+    wranglerVariables?: ReadonlyArray<WranglerVariableIR>,
 ): Finding[] =>
     runAdvisor(
         {
@@ -232,6 +234,7 @@ export const lintSchema = (
             vectorNamespaceAccesses,
             workflowCalls,
             workflows,
+            wranglerVariables,
         },
         { source: "static" },
     );

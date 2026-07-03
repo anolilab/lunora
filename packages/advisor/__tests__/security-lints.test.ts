@@ -10,6 +10,7 @@ import type {
     AdvisorProcedureProtection,
     AdvisorSecretLiteral,
     AdvisorSqlInterpolation,
+    AdvisorWranglerVariable,
 } from "../src";
 import { fromServerSchema } from "../src";
 import actionFetchSsrf from "../src/lints/static/action-fetch-ssrf";
@@ -21,6 +22,7 @@ import hardcodedSecret from "../src/lints/static/hardcoded-secret";
 import insertManyUnsafeUserData from "../src/lints/static/insert-many-unsafe-user-data";
 import mailInboundDispatchWithoutVerify from "../src/lints/static/mail-inbound-dispatch-without-verify";
 import paymentCreateWithoutAuthorize from "../src/lints/static/payment-create-without-authorize";
+import plaintextSecretInWranglerVariables from "../src/lints/static/plaintext-secret-in-wrangler-variables";
 import privilegedFanoutFromPublicProcedure from "../src/lints/static/privileged-fanout-from-public-procedure";
 import publicArgumentUsesAny from "../src/lints/static/public-argument-uses-any";
 import publicMutationWithoutRatelimit from "../src/lints/static/public-mutation-without-ratelimit";
@@ -173,6 +175,47 @@ describe("hardcoded_secret", () => {
     it("finds nothing without secret evidence", () => {
         expect.assertions(1);
         expect(hardcodedSecret.run({ schema: schema() })).toHaveLength(0);
+    });
+});
+
+describe("plaintext_secret_in_wrangler_vars", () => {
+    it("flags one ERROR finding per wrangler var, carrying only the redacted preview", () => {
+        expect.assertions(3);
+
+        const wranglerVariables: AdvisorWranglerVariable[] = [
+            { file: "wrangler.jsonc", key: "STRIPE_SECRET_KEY", kind: "stripe_live_key", preview: "sk_l…(34 chars)" },
+        ];
+        const findings = plaintextSecretInWranglerVariables.run({ schema: schema(), wranglerVariables });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]).toMatchObject({
+            // eslint-disable-next-line no-secrets/no-secrets -- an advisor cache-key assertion, not a secret
+            cacheKey: "plaintext_secret_in_wrangler_vars:wrangler.jsonc:STRIPE_SECRET_KEY",
+            level: "ERROR",
+            name: "plaintext_secret_in_wrangler_vars",
+        });
+        expect(findings[0]?.detail).toContain("sk_l…(34 chars)");
+    });
+
+    it("produces distinct cacheKeys for duplicate evidence rows for the same key", () => {
+        expect.assertions(3);
+
+        const wranglerVariables: AdvisorWranglerVariable[] = [
+            { file: "wrangler.jsonc", key: "API_TOKEN", kind: "secret_named_var", preview: "abcd…(40 chars)" },
+            { file: "wrangler.jsonc", key: "API_TOKEN", kind: "secret_named_var", preview: "abcd…(40 chars)" },
+        ];
+        const findings = plaintextSecretInWranglerVariables.run({ schema: schema(), wranglerVariables });
+
+        expect(findings).toHaveLength(2);
+        // eslint-disable-next-line no-secrets/no-secrets -- an advisor cache-key assertion, not a secret
+        expect(findings[0]!.cacheKey).toBe("plaintext_secret_in_wrangler_vars:wrangler.jsonc:API_TOKEN");
+        // eslint-disable-next-line no-secrets/no-secrets -- an advisor cache-key assertion, not a secret
+        expect(findings[1]!.cacheKey).toBe("plaintext_secret_in_wrangler_vars:wrangler.jsonc:API_TOKEN:2");
+    });
+
+    it("finds nothing without wrangler-var evidence", () => {
+        expect.assertions(1);
+        expect(plaintextSecretInWranglerVariables.run({ schema: schema() })).toHaveLength(0);
     });
 });
 

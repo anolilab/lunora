@@ -1519,6 +1519,26 @@ export interface RelationLoadIR {
     visibility: "internal" | "public";
 }
 
+/**
+ * One committed `wrangler.jsonc` `vars` entry whose value is a plaintext secret —
+ * the `plaintext_secret_in_wrangler_vars` lint input. `vars` are baked into the
+ * deployed Worker in cleartext and checked into source control, so a real API key
+ * / token / private key there ships the secret to every reader of the repo and the
+ * bundle; it belongs in a Secrets Store binding or `wrangler secret put`. Produced
+ * by `@lunora/config` (which reads `wrangler.jsonc`), not a ts-morph feeder —
+ * codegen only passes it through. Structurally identical to `AdvisorWranglerVariable`.
+ */
+export interface WranglerVariableIR {
+    /** The `wrangler.jsonc` file the var was read from, relative to the project root. */
+    file: string;
+    /** The offending `vars` key (e.g. `STRIPE_SECRET_KEY`). */
+    key: string;
+    /** Heuristic that matched, e.g. `stripe_live_key` / `private_key` / `secret_named_var`. */
+    kind: string;
+    /** Redacted preview of the value (first few chars + length) for the finding detail — never the full secret. */
+    preview: string;
+}
+
 export interface ProjectIR {
     crons: ReadonlyArray<CronJobIR>;
     functions: ReadonlyArray<FunctionIR>;

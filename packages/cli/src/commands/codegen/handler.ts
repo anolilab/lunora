@@ -1,4 +1,5 @@
 import { runCodegen } from "@lunora/codegen";
+import { collectWranglerSecretVariables } from "@lunora/config";
 
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
@@ -43,7 +44,7 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
         return { advisories: [], cronTriggers: [], error: formatError, outputDirectory: "" };
     }
 
-    const result = runCodegen({ apiSpec: options.apiSpec, projectRoot });
+    const result = runCodegen({ apiSpec: options.apiSpec, projectRoot, wranglerVariables: collectWranglerSecretVariables(projectRoot) });
     const commandResult: CodegenCommandResult = {
         advisories: result.advisories.map((advisory) => {
             return {
