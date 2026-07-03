@@ -238,20 +238,20 @@ const resolveCors = (input: CorsOptions | false | undefined): ResolvedCors => {
         isAllowed = origins;
         isExplicitlyAllowed = origins;
 
-        // A predicate bypasses the array path's wildcard+credentials guard: if the
-        // predicate is over-broad (e.g. `() => true`, or a loose `endsWith`), it
-        // reflects any Origin *with* credentials — the exact "any site can read
-        // authed responses / forge state changes" combo the array path forbids at
-        // construction. We can't statically prove a predicate is safe, so warn
-        // loudly so an accidental `() => true` + credentials doesn't ship silently.
-        if (allowCredentials) {
-            // eslint-disable-next-line no-console -- surface a dangerous CORS combination at construction
-            console.warn(
-                "@lunora/runtime: security.cors combines a custom `allowedOrigins` predicate with `allowCredentials: true`. " +
-                    "Ensure the predicate matches ONLY trusted origins by exact equality — an over-broad predicate (e.g. `() => true`, " +
-                    "or `endsWith`/`includes` checks) reflects any origin with credentials, defeating the allowlist and the CSRF guard.",
-            );
-        }
+        // A predicate bypasses the array path's wildcard+credentials guard, and it
+        // is also assigned to `isExplicitlyAllowed` above — meaning the CSRF and
+        // WebSocket origin checks trust it even when CORS credentials are off. An
+        // over-broad predicate (e.g. `() => true`, or a loose `endsWith`) therefore
+        // admits cookie-bearing form posts and WS upgrades from any origin — and,
+        // with `allowCredentials: true`, additionally reflects any Origin with
+        // credentials (the exact combo the array path forbids at construction).
+        // We can't statically prove a predicate is safe, so warn loudly either way.
+        const credentialsNote = allowCredentials ? " AND reflects matching origins with credentials (`allowCredentials: true`)" : "";
+
+        // eslint-disable-next-line no-console -- surface a security-sensitive CORS configuration at construction
+        console.warn(
+            `@lunora/runtime: security.cors uses a custom \`allowedOrigins\` predicate. It is trusted by the CSRF and WebSocket origin checks${credentialsNote} — ensure it matches ONLY trusted origins by exact equality; an over-broad predicate (e.g. \`() => true\`, or \`endsWith\`/\`includes\` checks) defeats the allowlist.`,
+        );
     } else {
         const originsList = origins;
 

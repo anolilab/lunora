@@ -235,6 +235,14 @@ describe("createAuth — secure-by-default hardening", () => {
         expect(auth.options.advanced?.useSecureCookies).toBe(false);
     });
 
+    it("treats the scheme case-insensitively (HTTP:// is still plain http)", () => {
+        expect.assertions(1);
+
+        const auth = createAuth({ baseURL: "HTTP://localhost:8787", secret: "s".repeat(32) });
+
+        expect(auth.options.advanced?.useSecureCookies).toBe(false);
+    });
+
     it("defaults useSecureCookies on when baseURL is unset (Workers serve HTTPS in prod)", () => {
         expect.assertions(1);
 

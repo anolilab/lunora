@@ -203,6 +203,39 @@ describe("createWorker — auth admin mutation endpoints", () => {
         expect(response.status).toBe(403);
     });
 
+    it("maps a known client-input code to its 4xx and an unmapped backend failure to 500", async () => {
+        expect.assertions(4);
+
+        const plane = authAdmin();
+        const banUser = vi.mocked(plane.banUser as NonNullable<AuthAdmin["banUser"]>);
+
+        banUser.mockImplementationOnce(async () => {
+            throw Object.assign(new Error("nope"), { code: "USER_NOT_FOUND" });
+        });
+        banUser.mockImplementationOnce(async () => {
+            throw Object.assign(new Error("driver exploded"), { code: "SQLITE_IOERR" });
+        });
+
+        const error = vi.spyOn(console, "error").mockImplementation(() => {});
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: plane, shardDO: noopNamespace });
+
+        const notFound = await worker.fetch(post("https://app.example/_lunora/admin/auth/users/ban", { userId: "u1" }), {}, fakeContext);
+
+        expect(notFound.status).toBe(404);
+
+        // An unmapped code is a backend failure, not client input — it must
+        // read as a server incident (500), never a 400.
+        const backend = await worker.fetch(post("https://app.example/_lunora/admin/auth/users/ban", { userId: "u1" }), {}, fakeContext);
+        const body: { error: { code: string; message: string } } = await backend.json();
+
+        expect(backend.status).toBe(500);
+        expect(body.error.code).toBe("SQLITE_IOERR");
+        // The driver detail is logged server-side, never sent to the client.
+        expect(body.error.message).not.toContain("driver exploded");
+
+        error.mockRestore();
+    });
+
     it("reports AUTH_OP_NOT_SUPPORTED when the plane omits the mutation", async () => {
         expect.assertions(2);
 

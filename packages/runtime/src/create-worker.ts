@@ -453,15 +453,19 @@ interface WorkerOptions {
     /**
      * Opt into an authorization-open posture for sharded and fan-out access.
      *
-     * By default (this flag unset/`false`) the runtime FAILS CLOSED: when
-     * neither {@link WorkerOptions.authorizeShard} nor {@link WorkerOptions.authorizeFanOut}
-     * is configured, naming a non-default shard (a potential cross-tenant hop)
-     * or sending a fan-out envelope is rejected with a `403`
-     * (`FORBIDDEN_SHARD`/`FORBIDDEN_FANOUT`). Set this to `true` to allow such
-     * requests from any caller (including unauthenticated ones) — appropriate
-     * only when every table is protected by per-row RLS. The runtime then emits
-     * a single `console.warn` so the open posture stays visible in logs. Has no
-     * effect once an `authorize*` callback is configured (those gate directly).
+     * By default (this flag unset/`false`) the runtime FAILS CLOSED per
+     * operation: naming a non-default shard (a potential cross-tenant hop) is
+     * rejected with a `403` (`FORBIDDEN_SHARD`) unless
+     * {@link WorkerOptions.authorizeShard} is configured, and a fan-out
+     * envelope is rejected (`FORBIDDEN_FANOUT`) unless
+     * {@link WorkerOptions.authorizeFanOut} is. Set this to `true` to allow
+     * such requests from any caller (including unauthenticated ones) —
+     * appropriate only when every table is protected by per-row RLS. The
+     * runtime then emits a single `console.warn` so the open posture stays
+     * visible in logs. The flag is consulted per operation: it has no effect
+     * on an operation whose own `authorize*` callback is configured (that
+     * callback gates directly), but configuring only one of the two callbacks
+     * does NOT cover the other operation.
      *
      * NOTE: this is a behaviour change from earlier alphas, where the same
      * situation was warn-once-then-allow. Apps that relied on client-chosen
