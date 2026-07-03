@@ -2085,7 +2085,7 @@ class LunoraClient {
      */
     public async listKvNamespaces(): Promise<KvNamespaceSummary[]> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const body = (await this.adminFetch(KV_NAMESPACES_PATH, "GET")) as { namespaces?: KvNamespaceSummary[] };
@@ -2100,7 +2100,7 @@ class LunoraClient {
      */
     public async listKvKeys(options: { cursor?: string; limit?: number; namespace: string; prefix?: string }): Promise<KvKeyListResult> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const path = withQuery(KV_KEYS_PATH, {
@@ -2120,7 +2120,7 @@ class LunoraClient {
      */
     public async getKvValue(options: { key: string; namespace: string }): Promise<KvValueResult> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const path = withQuery(KV_VALUE_PATH, { key: options.key, namespace: options.namespace });
@@ -2143,7 +2143,7 @@ class LunoraClient {
         value: string;
     }): Promise<void> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         await this.adminFetch(KV_VALUE_PATH, "PUT", options);
@@ -2155,7 +2155,7 @@ class LunoraClient {
      */
     public async deleteKvKey(options: { key: string; namespace: string }): Promise<void> {
         if (this.closed) {
-            throw new Error("LunoraClient is closed");
+            throw new LunoraError("INTERNAL", "LunoraClient is closed");
         }
 
         const path = withQuery(KV_VALUE_PATH, { key: options.key, namespace: options.namespace });

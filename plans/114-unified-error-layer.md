@@ -104,7 +104,7 @@ regression risk and no jsdom test coverage in the sandbox — tracked as follow-
 > (Studio jsdom tests SIGTERM in the sandbox — see the pinned memory; do not gate
 > on `run test`).
 
-### Phase 3 — Per-package class collapse ✅ (classes) / ⬜ (raw throw sites)
+### Phase 3 — Per-package class collapse ✅ (classes) / ✅ (raw throw sites)
 
 **Custom classes collapsed onto `@lunora/errors`' `LunoraError`** (subclass, fixed
 `name` + `code` + catalog/explicit `status`, extra fields preserved):
@@ -132,12 +132,15 @@ Lunora errors — unifying them adds friction without user value):
 - `@lunora/mcp` `BinError` — carries a **numeric process exit code**, not a
   string wire code.
 
-**Remaining ⬜ (optional follow-up):** route the remaining raw
-`throw new Error(...)` domain sites through `LunoraError` / `invariant`
-package-by-package. This is **not** a functional blocker — the RPC edge already
-surfaces hints by `code`, and unhandled throws stay correctly redacted. Leave
-genuine JS `TypeError`/`RangeError` guards and codegen's emitted-into-generated
-throw strings (NodeNext `.js` exception) alone.
+**Raw throw sites ✅:** all `throw new Error(...)` domain sites routed through
+`LunoraError` (internal invariants → `INTERNAL`; caller-facing guards → `TypeError`
+or a meaningful catalog code — mcp `NOT_FOUND`/`BAD_REQUEST`, browser SSRF/DNS-rebind
+`FORBIDDEN`, kv-introspector `BAD_REQUEST`). **Deliberately left:** codegen's
+throws emitted _into generated code_ (NodeNext `.js` exception), the emitted app
+scaffold in `cli/.../overlay/adapters.ts`, JSDoc example snippets, and genuine JS
+`TypeError`/`RangeError` argument guards. (A few sites re-surfaced un-migrated when
+`alpha` changed those files after the initial sweep; caught + migrated in a
+post-rebase pass.)
 
 ## Verify (whole)
 

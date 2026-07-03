@@ -158,11 +158,11 @@ const assertRunnable = async (client: LunoraClient, functionPath: string, expect
     const descriptor: FunctionDescriptor | undefined = functions.find((function_) => function_.path === functionPath);
 
     if (descriptor === undefined) {
-        throw new Error(`function not found or not public: ${functionPath}`);
+        throw new LunoraError("NOT_FOUND", `function not found or not public: ${functionPath}`);
     }
 
     if (descriptor.kind !== expectedKind) {
-        throw new Error(`function ${functionPath} is a ${descriptor.kind}, not a ${expectedKind}`);
+        throw new LunoraError("BAD_REQUEST", `function ${functionPath} is a ${descriptor.kind}, not a ${expectedKind}`);
     }
 };
 

@@ -262,7 +262,8 @@ const assertResolvedHostIsPublic = async (target: string, timeoutMs: number = DO
 
     for (const answer of [...(aRecords ?? []), ...(aaaaRecords ?? [])]) {
         if ((answer.type === DNS_TYPE_A || answer.type === DNS_TYPE_AAAA) && isPrivateResolvedIp(answer.data, answer.type)) {
-            throw new Error(
+            throw new LunoraError(
+                "FORBIDDEN",
                 `@lunora/browser: url host "${host}" resolves to a private/internal address (${answer.data}); refusing to navigate (DNS-rebinding guard)`,
             );
         }
@@ -354,7 +355,7 @@ const validateUrl = (url: string, allowPrivateTargets: boolean, allowedHosts?: R
         const host = normalizeHost(parsed.hostname);
 
         if (!allowedHosts.some((entry) => normalizeHost(entry) === host)) {
-            throw new Error(`@lunora/browser: url host "${parsed.hostname}" is not in the configured allowedHosts allowlist`);
+            throw new LunoraError("FORBIDDEN", `@lunora/browser: url host "${parsed.hostname}" is not in the configured allowedHosts allowlist`);
         }
     }
 

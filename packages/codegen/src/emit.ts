@@ -2952,7 +2952,8 @@ const emitShard = ({
     if (hasD1Global && hasHyperdriveGlobal) {
         // Mixing backends needs a per-table routing writer (id-addressed ops must
         // probe both stores) — not supported yet. Pick one backend per app.
-        throw new Error(
+        throw new LunoraError(
+            "INTERNAL",
             'lunora codegen: mixing `.global()` (D1) and `.global({ backend: "hyperdrive" })` tables in one app is not supported yet — use a single global backend.',
         );
     }

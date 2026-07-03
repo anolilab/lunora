@@ -8,6 +8,8 @@
  * runtime package; the object satisfies the `KvIntrospector` contract
  * structurally at the call site.
  */
+import { LunoraError } from "@lunora/errors";
+
 import type { KVNamespaceLike } from "./types";
 
 /** One KV namespace as the studio's KV browser surfaces it (mirrors the runtime's KvNamespaceSummary). */
@@ -79,7 +81,7 @@ const createKvIntrospector = (options: CreateKvIntrospectorOptions): KvIntrospec
         const ns = namespaces[binding];
 
         if (ns === undefined) {
-            throw new Error(`@lunora/bindings/kv: no namespace registered under binding "${binding}"`);
+            throw new LunoraError("BAD_REQUEST", `@lunora/bindings/kv: no namespace registered under binding "${binding}"`);
         }
 
         return ns;
