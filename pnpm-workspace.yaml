@@ -21,6 +21,7 @@ overrides:
   # never clobbers it; published tarballs are unaffected (overrides are install-time).
   "@lunora/advisor": "workspace:*"
   "@lunora/ai": "workspace:*"
+  "@lunora/angular": "workspace:*"
   "@lunora/astro": "workspace:*"
   "@lunora/auth": "workspace:*"
   "@lunora/bindings": "workspace:*"
