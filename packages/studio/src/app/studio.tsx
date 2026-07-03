@@ -415,8 +415,18 @@ const TabIcon = ({ tab }: { readonly tab: StudioTab }): ReactElement => (
     </svg>
 );
 
+/**
+ * Compile-time route-coverage guard: the identity call typechecks only when
+ * `tabs` contains every {@link StudioTab}. The route table is built from
+ * {@link TABS} while the sidebar renders from {@link NAV_GROUPS}, so a tab
+ * missing from `TABS` still shows its nav link but the click falls through to
+ * {@link NotFoundRedirect} and bounces to Home (how `/fanout` regressed). A
+ * missing tab now fails `tsc` at the `TABS` declaration instead.
+ */
+const exhaustiveRouteTabs = <const T extends ReadonlyArray<StudioTab>>(tabs: ([StudioTab] extends [T[number]] ? unknown : never) & T): T => tabs;
+
 /** Flat list of every tab, in sidebar order; drives the route table. */
-const TABS = [
+const TABS = exhaustiveRouteTabs([
     "home",
     "data",
     "sql",
@@ -447,6 +457,7 @@ const TABS = [
     "insights",
     "logs",
     "realtime",
+    "fanout",
     "mail",
     "payments",
     "audit",
@@ -454,7 +465,7 @@ const TABS = [
     "drains",
     "flags",
     "settings",
-] as const;
+]);
 
 /**
  * Tabs that own the full panel height (a flush full-height table/query sidebar +
