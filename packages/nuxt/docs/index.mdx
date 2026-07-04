@@ -1,0 +1,148 @@
+---
+title: "@lunora/nuxt"
+description: "Nuxt module: single-worker composition (mounts /_lunora/* into Nitro) plus reactive-loader server helpers."
+---
+
+`@lunora/nuxt` runs Lunora and Nuxt as a **single Cloudflare Worker**. Instead
+of Lunora owning the Cloudflare worker entry (the two-worker split other
+adapters use), it is mounted _inside_ Nitro: the module registers a server
+route at `/_lunora/**` that forwards every Lunora RPC, WebSocket upgrade, and
+admin request to your Lunora app in-process. One `wrangler.jsonc`, one deploy,
+a same-origin client.
+
+## Install
+
+```bash
+pnpm add @lunora/nuxt
+```
+
+`nuxt` (`^4.0.0`) is an optional peer dependency — the host app supplies the
+Nuxt runtime. `h3` is also an optional peer (`^1.0.0 || ^2.0.0`); see
+[Deploy notes](#deploy-notes) below.
+
+## Setup
+
+<Steps>
+<Step>
+
+Register the module and pick the Cloudflare Nitro preset:
+
+```ts title="nuxt.config.ts"
+export default defineNuxtConfig({
+    modules: ["@lunora/nuxt"],
+    nitro: { preset: "cloudflare_module" },
+});
+```
+
+</Step>
+<Step>
+
+Add `exports.cloudflare.ts` to the project root so the `ShardDO` Durable
+Object class is exported from the emitted worker entry:
+
+```ts title="exports.cloudflare.ts"
+export { ShardDO } from "./lunora/server";
+```
+
+`lunora/server.ts` is your built Lunora app (`defineApp().build()`) — its
+default export is the worker (a `fetch` entrypoint), and it re-exports
+`ShardDO`.
+
+</Step>
+</Steps>
+
+## Options
+
+Configurable under the `lunora` key in `nuxt.config.ts`.
+
+| Option     | Default           | Description                                                                     |
+| ---------- | ----------------- | ------------------------------------------------------------------------------- |
+| `appEntry` | `~/lunora/server` | Module specifier of the Lunora app entry, aliased to the `#lunora/app` virtual. |
+| `prefix`   | `/_lunora`        | URL prefix the Lunora realtime plane is mounted at.                             |
+
+## How it works
+
+- **The route** (`addServerHandler` at `<prefix>/**`): reconstructs a Web
+  `Request` from the H3 event, resolves the Cloudflare `env`/`ExecutionContext`
+  off it (tolerating both `event.context.cloudflare` and
+  `event.req.runtime.cloudflare`), and forwards to your app's `fetch`. A
+  missing Cloudflare runtime answers a clear 500.
+- **The `#lunora/app` alias**: points the route's worker import at your app
+  entry (`options.appEntry`), forwarded into the Nitro server bundle via
+  `nuxt.options.alias`.
+- **`ShardDO`** rides to the worker entry through your root
+  `exports.cloudflare.ts` — the `cloudflare_module` preset appends its exports
+  onto the generated worker.
+
+## Server data-loading — `@lunora/nuxt/server`
+
+Re-exports the framework-neutral SSR contract from `@lunora/client/ssr`
+(`createServerClient`, `preloadQuery`, `serializePreloaded`,
+`deserializePreloaded`, `preloadedQueryResult`, `getServerSession`, plus the
+`ArgsOf` / `AuthLike` / `FunctionReference` / `HeadersSource` / `Preloaded` /
+`ReturnOf` / `ServerClientOptions` / `ServerSession` types) for the
+reactive-loader handoff. Opens no WebSocket and touches no browser globals, so
+it is safe to import from a Nitro server route.
+
+```ts
+import { createServerClient, preloadQuery } from "@lunora/nuxt/server";
+
+import { api } from "./lunora/_generated/api";
+
+// Per request — never reuse a client across requests (token leakage).
+const client = createServerClient({ url: process.env.LUNORA_URL!, token });
+const preloaded = await preloadQuery(client, api.posts.list, {});
+```
+
+Hand the serializable `preloaded` value to a client component and seed it with
+[`@lunora/vue`](/docs/packages/vue)'s `hydratePreloaded` — Nuxt is Vue, so the
+Vue adapter's composables (`useQuery`, `useMutation`, `hydratePreloaded`) are
+the reactive layer here; `@lunora/nuxt` only owns the server-side composition.
+
+## Feature flags
+
+`@lunora/nuxt` ships no flag composable of its own — since Nuxt _is_ Vue, read
+`ctx.flags` server-side (a Nitro route, a function, or a reactive loader) and
+pass the resolved value down, or call `useFlag` / `useFlags` from
+[`@lunora/vue`](/docs/packages/vue) directly in a component for live updates
+over the WebSocket. Requires [`@lunora/flags`](/docs/packages/flags) wired in
+`lunora/flags.ts`.
+
+```vue
+<script setup lang="ts">
+import { useFlag } from "@lunora/vue";
+
+// Live over the Lunora WS — holds `false` until the server resolves it.
+const newHero = useFlag("homepage-hero", false);
+</script>
+
+<template>
+    <NewHero v-if="newHero" />
+    <ClassicHero v-else />
+</template>
+```
+
+## Deploy notes
+
+<Callout type="warn">
+    **Verify before deploy.** Single-worker composition rides on two Nitro behaviours that vary across versions — verify them on your pinned toolchain: (1)
+    **WebSocket upgrade pass-through** — the live feed needs Nitro to return your Lunora app's `101 Switching Protocols` response (carrying its Cloudflare
+    `webSocket`) untouched; RPC (plain JSON) works regardless, so if live subscriptions never connect while RPC does, Nitro is normalising the upgrade response.
+    (2) **The `exports.cloudflare.ts` hook** — the `cloudflare_module` preset must append this file's exports onto the worker entry; if `wrangler deploy` fails
+    with "ShardDO class not exported", your Nitro version may use a different hook (`nitro.cloudflare.additionalModules`, or a `rollupConfig` output export).
+    The module warns when the file is missing but can't verify the hook fires.
+</Callout>
+
+<Callout type="info">
+    **h3 version.** The peer range is `^1.0.0 || ^2.0.0`, and the request handler feature-detects both at runtime. If you pin an explicit `h3` dependency
+    yourself, pin it to `^1.15.11` — npm's `h3@2.0.0` is a deprecated stub with no code, exports, or type declarations (the real v2 line is still
+    prerelease-only), while Nuxt 4 / Nitro 2 run h3 v1 at runtime anyway.
+</Callout>
+
+## See also
+
+- [@lunora/vue](/docs/packages/vue) — the reactive layer (Nuxt is Vue): `useQuery` / `useMutation` / `hydratePreloaded`
+- [@lunora/astro](/docs/packages/astro) — the other framework module composing single-worker deploys via `withLunora`
+- [@lunora/client](/docs/packages/client) — the framework-neutral SDK; `@lunora/nuxt/server` re-exports its `/ssr` contract
+- [@lunora/flags](/docs/packages/flags) — feature flags surfaced through `ctx.flags` / `useFlag`
+- [Bring your framework](/docs/frameworks/bring-your-framework) — composition + adapter maturity
