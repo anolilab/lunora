@@ -5,6 +5,9 @@
  * authorization (no IDOR), outbound idempotency keys (no double-charge), and webhook ingestion
  * that verifies, normalizes, and applies through the FSM.
  */
+import { toErrorBody } from "@lunora/errors";
+
+import { jsonResponse } from "../../../shared/json-response";
 import type { PaymentAdapter } from "./adapter";
 import type { Entitlements, EntitlementsConfig } from "./entitlements";
 import { featureNames, hasActivePrice, resolveEntitlements, usagePeriodStart } from "./entitlements";
@@ -26,8 +29,6 @@ import type {
     TrackInput,
     TrackResult,
 } from "./types";
-
-const jsonResponse = (body: unknown, status: number): Response => Response.json(body, { headers: { "content-type": "application/json" }, status });
 
 /** Drop a caller-supplied `referenceId` from checkout metadata — it's framework-controlled, never caller-set. */
 const stripReferenceId = (metadata: Record<string, string> | undefined): Record<string, string> | undefined =>
@@ -248,9 +249,16 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
                 action = await adapter.parseWebhook({ headers: request.headers, payload });
             } catch (error) {
-                // Only surface our own (non-sensitive) error messages; mask anything unexpected.
+                // Only surface our own (non-sensitive) error messages; mask anything
+                // unexpected. Routed through `toErrorBody` so a payment code's
+                // echo-vs-redact posture is governed centrally by the shared
+                // catalog rather than solely by this `instanceof` check — today no
+                // `PaymentErrorCode` is catalog-marked internal, so this preserves
+                // the exact message/status `LunoraPaymentError` already carries.
                 if (error instanceof LunoraPaymentError) {
-                    return jsonResponse({ error: error.message }, error.status);
+                    const { body, status } = toErrorBody(error);
+
+                    return jsonResponse({ error: body.message }, status);
                 }
 
                 return jsonResponse({ error: "webhook error" }, 400);

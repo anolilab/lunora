@@ -1,3 +1,4 @@
+import { jsonResponse } from "../../../shared/json-response";
 import type { RetryPolicy, ScheduleRecord } from "./types";
 
 /**
@@ -184,7 +185,7 @@ class SchedulerDO {
     }
 
     private static json(body: unknown, status: number = 200): Response {
-        return Response.json(body, { headers: { "content-type": "application/json" }, status });
+        return jsonResponse(body, status);
     }
 
     private static error(status: number, code: string, message: string): Response {
@@ -337,13 +338,7 @@ class SchedulerDO {
             }
         }
 
-        return Response.json(
-            { error: { code: "NOT_FOUND" } },
-            {
-                headers: { "content-type": "application/json" },
-                status: 404,
-            },
-        );
+        return jsonResponse({ error: { code: "NOT_FOUND" } }, 404);
     }
 
     /** Called by the Workers runtime when the alarm previously set by `_rescheduleAlarm()` fires. */

@@ -11,6 +11,8 @@
  * deliberately skips them — the worker reads them through `@lunora/d1`'s
  * sibling helpers and concatenates the two streams.
  */
+import { toErrorBody } from "@lunora/errors";
+
 import type { DatabaseWriterLike, SchemaLike } from "./ctx-db";
 
 /** One NDJSON line: a row from `table` shaped per its schema. */
@@ -279,10 +281,15 @@ const importOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, row:
 
         return { kind: "inserted", table };
     } catch (error: unknown) {
-        const code = (error as { code?: string }).code ?? "INSERT_FAILED";
-        const message = error instanceof Error ? error.message : String(error);
+        // Routed through `toErrorBody` rather than the naked `error.message`/`.code`
+        // this used to embed directly: a recognized `LunoraError` (e.g. the
+        // `NOT_UNIQUE` conflict `ctx-db.ts` throws on an `_id` collision) still
+        // surfaces its real code/message, but an internal-coded or unrecognized
+        // throw is redacted instead of leaking raw error text into the admin
+        // import response.
+        const { body } = toErrorBody(error, { fallbackCode: "INSERT_FAILED" });
 
-        return { error: { code, line, message, table }, kind: "error" };
+        return { error: { code: body.code, line, message: body.message, table }, kind: "error" };
     }
 };
 

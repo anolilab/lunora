@@ -158,7 +158,7 @@ describe("createPayment", () => {
     });
 
     it("returns the error status when webhook verification fails", async () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         const adapter = fakeAdapter({
             parseWebhook: async () => {
@@ -172,6 +172,49 @@ describe("createPayment", () => {
         const response = await payment.handleWebhook(new Request("https://app.test/payment/webhook", { body: "{}", method: "POST" }));
 
         expect(response.status).toBe(400);
+        // Plan 118: the `LunoraPaymentError` branch now goes through `toErrorBody`
+        // rather than reading `.message` directly — pin that a recognized payment
+        // error still echoes its own message verbatim (no `PaymentErrorCode` is
+        // catalog-marked internal, so this branch never redacts).
+        await expect(response.json()).resolves.toEqual({ error: "bad signature" });
+    });
+
+    it("preserves a LunoraPaymentError's own status (not hardcoded) through the webhook catch", async () => {
+        expect.assertions(2);
+
+        const adapter = fakeAdapter({
+            parseWebhook: async () => {
+                const { LunoraPaymentError } = await import("../src/errors");
+
+                throw new LunoraPaymentError("PROVIDER_ERROR", "upstream provider timed out");
+            },
+        });
+        const payment = createPayment({ adapter, store: new MemoryPaymentStore() });
+
+        const response = await payment.handleWebhook(new Request("https://app.test/payment/webhook", { body: "{}", method: "POST" }));
+
+        // `PROVIDER_ERROR` maps to 502 in `LunoraPaymentError`'s own status map —
+        // distinct from `WEBHOOK_SIGNATURE_INVALID`'s 400 above — confirming
+        // `toErrorBody`'s status for this branch tracks `error.status`, not a
+        // hardcoded literal.
+        expect(response.status).toBe(502);
+        await expect(response.json()).resolves.toEqual({ error: "upstream provider timed out" });
+    });
+
+    it("masks an unrecognized webhook-parsing throw behind a generic 400 (unchanged, non-LunoraPaymentError branch)", async () => {
+        expect.assertions(2);
+
+        const adapter = fakeAdapter({
+            parseWebhook: async () => {
+                throw new Error("driver error: connection reset");
+            },
+        });
+        const payment = createPayment({ adapter, store: new MemoryPaymentStore() });
+
+        const response = await payment.handleWebhook(new Request("https://app.test/payment/webhook", { body: "{}", method: "POST" }));
+
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toEqual({ error: "webhook error" });
     });
 });
 

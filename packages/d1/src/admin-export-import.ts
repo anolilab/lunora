@@ -6,6 +6,7 @@
  * stitches D1 globals and per-shard DO output into a single NDJSON stream.
  */
 import type { DatabaseWriterLike, SchemaLike } from "@lunora/do";
+import { toErrorBody } from "@lunora/errors";
 
 import type { D1Exec } from "./d1-ctx-db";
 import { decodeGlobalRow } from "./d1-ctx-db";
@@ -215,10 +216,14 @@ const importOneRow = async (writer: DatabaseWriterLike, schema: SchemaLike, args
 
         return { inserted: table, kind: "inserted" };
     } catch (error: unknown) {
-        const code = (error as { code?: string }).code ?? "INSERT_FAILED";
-        const message = error instanceof Error ? error.message : String(error);
+        // Routed through `toErrorBody` (mirrors `@lunora/do`'s twin) rather than
+        // the naked `error.message`/`.code` this used to embed directly: a
+        // recognized `LunoraError` still surfaces its real code/message, but an
+        // internal-coded or unrecognized throw is redacted instead of leaking
+        // raw error text into the admin import response.
+        const { body } = toErrorBody(error, { fallbackCode: "INSERT_FAILED" });
 
-        return { error: { code, line, message, table }, kind: "error" };
+        return { error: { code: body.code, line, message: body.message, table }, kind: "error" };
     }
 };
 

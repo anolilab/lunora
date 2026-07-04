@@ -34,6 +34,7 @@
  *
  * Responses are JSON; the client shapes them. Keep the surface narrow.
  */
+import { jsonResponse } from "../../../shared/json-response";
 
 /** Conventional DO instance name, passed to `idFromName` to address the single registry instance. */
 const SHARD_REGISTRY_DO_NAME: string = "__lunora_shard_registry__";
@@ -63,12 +64,6 @@ interface ShardRegistryDOState {
     };
 }
 
-const jsonResponse = (status: number, body: unknown): Response =>
-    Response.json(body, {
-        headers: { "content-type": "application/json" },
-        status,
-    });
-
 /**
  * Parse + validate the `{table, shardKey}` body shared by register/unregister.
  * Returns either the validated value or a ready-to-return error response.
@@ -81,7 +76,7 @@ const readTableShardBody = async (
     try {
         body = await request.json();
     } catch {
-        return { kind: "error", response: jsonResponse(400, { error: { code: "BAD_REQUEST", message: "invalid JSON body" } }) };
+        return { kind: "error", response: jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid JSON body" } }, 400) };
     }
 
     const table = typeof body.table === "string" ? body.table.trim() : "";
@@ -90,7 +85,7 @@ const readTableShardBody = async (
     if (!table || !shardKey) {
         return {
             kind: "error",
-            response: jsonResponse(400, { error: { code: "BAD_REQUEST", message: "table and shardKey required" } }),
+            response: jsonResponse({ error: { code: "BAD_REQUEST", message: "table and shardKey required" } }, 400),
         };
     }
 
@@ -149,7 +144,7 @@ class ShardRegistryDO {
             return this.handleSnapshot();
         }
 
-        return jsonResponse(404, { error: { code: "NOT_FOUND", message: `unknown shard-registry route ${request.method} ${url.pathname}` } });
+        return jsonResponse({ error: { code: "NOT_FOUND", message: `unknown shard-registry route ${request.method} ${url.pathname}` } }, 404);
     }
 
     /**
@@ -183,10 +178,10 @@ class ShardRegistryDO {
         const table = url.searchParams.get("table");
 
         if (!table) {
-            return jsonResponse(400, { error: { code: "BAD_REQUEST", message: "missing required query parameter: table" } });
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: "missing required query parameter: table" } }, 400);
         }
 
-        return jsonResponse(200, { shardKeys: [...(this.tables.get(table) ?? [])] });
+        return jsonResponse({ shardKeys: [...(this.tables.get(table) ?? [])] }, 200);
     }
 
     private async handleRegister(request: Request): Promise<Response> {
@@ -211,13 +206,13 @@ class ShardRegistryDO {
             }
 
             if (set.has(shardKey)) {
-                return jsonResponse(200, { changed: false, ok: true });
+                return jsonResponse({ changed: false, ok: true }, 200);
             }
 
             set.add(shardKey);
             await this.persist();
 
-            return jsonResponse(200, { changed: true, ok: true });
+            return jsonResponse({ changed: true, ok: true }, 200);
         });
     }
 
@@ -228,7 +223,7 @@ class ShardRegistryDO {
             out[table] = [...set];
         }
 
-        return jsonResponse(200, { tables: out });
+        return jsonResponse({ tables: out }, 200);
     }
 
     private async handleUnregister(request: Request): Promise<Response> {
@@ -247,7 +242,7 @@ class ShardRegistryDO {
             const set = this.tables.get(table);
 
             if (!set?.has(shardKey)) {
-                return jsonResponse(200, { changed: false, ok: true });
+                return jsonResponse({ changed: false, ok: true }, 200);
             }
 
             set.delete(shardKey);
@@ -258,7 +253,7 @@ class ShardRegistryDO {
 
             await this.persist();
 
-            return jsonResponse(200, { changed: true, ok: true });
+            return jsonResponse({ changed: true, ok: true }, 200);
         });
     }
 

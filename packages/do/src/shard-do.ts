@@ -5,6 +5,7 @@ import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
 import type { BatchEntry } from "../../../shared/batch-wire";
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
+import { jsonResponse } from "../../../shared/json-response";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { ExportRow, ImportShardResult } from "./admin-export-import";
 import { parseExportShardArgs, parseImportShardArgs } from "./admin-export-import";
@@ -1354,16 +1355,6 @@ const parseCdcSyncArgs = (args: Record<string, unknown>): RunShardCdcSyncArgs =>
     };
 
     return { limit: toCount(args["limit"]), sinceSeq: toCount(args["sinceSeq"]) ?? 0 };
-};
-
-const jsonResponse = (body: unknown, status = 200, bookmark?: string): Response => {
-    const headers: Record<string, string> = { "content-type": "application/json" };
-
-    if (bookmark) {
-        headers["x-d1-bookmark"] = bookmark;
-    }
-
-    return Response.json(body, { headers, status });
 };
 
 /**
@@ -4718,13 +4709,16 @@ abstract class ShardDO {
             // per-entry request builder / the nested `/rpc` dispatch throw *before*
             // the single-call path's own try/catch. Contain it to this slot so one
             // bad entry can't 500 the whole batch (per-slot isolation is the contract).
-            const message = error instanceof Error ? error.message : String(error);
+            // Routed through `toErrorBody` so a genuine `LunoraError` still surfaces
+            // its real code/status/message, while any other throw is redacted behind
+            // the generic `BATCH_ENTRY_FAILED`/500 this slot always returned before.
+            const { body, status } = toErrorBody(error, { fallbackCode: "BATCH_ENTRY_FAILED" });
 
             return {
-                body: { error: { code: "BATCH_ENTRY_FAILED", message } },
+                body: { error: body },
                 bookmark: undefined,
                 id: (entry as BatchEntry | null | undefined)?.id,
-                status: 500,
+                status,
             };
         }
     }

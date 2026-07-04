@@ -280,6 +280,67 @@ describe("exportShardRows / importShardRows roundtrip", () => {
     });
 });
 
+// Plan 118: `importOneRow`'s insert-failure catch now routes through
+// `toErrorBody` instead of embedding a caught error's raw `.code`/`.message`
+// directly. These pin both halves of the invariant: a recognized, non-internal
+// `LunoraError` (e.g. `ConflictError`, thrown on a real UNIQUE-index breach)
+// still reports its own code/message, while an unrecognized throw is redacted.
+describe("importOneRow insert-failure envelope (toErrorBody migration)", () => {
+    it("a genuine unique-index conflict still reports its real code + message", async () => {
+        expect.assertions(2);
+
+        const uniqueSchema: SchemaLike = {
+            tables: {
+                users: {
+                    indexes: [{ fields: ["email"], name: "by_email", unique: true }],
+                    shape: {
+                        email: minimalParser("string"),
+                        name: minimalParser("string"),
+                    },
+                },
+            },
+        };
+
+        const freshDatabase = createSqliteExec();
+
+        runShardMigrations(freshDatabase.sql, uniqueSchema);
+        const freshWriter = createShardContextDatabase({ schema: uniqueSchema, sql: freshDatabase.sql });
+
+        await freshWriter.insert("users", { _id: "u1", email: "dup@x.io", name: "First" }, { allowExplicitId: true });
+
+        const rows: ExportRow[] = [{ doc: { _id: "u2", email: "dup@x.io", name: "Second" }, table: "users" }];
+
+        const result = await importShardRows(freshWriter, uniqueSchema, { rows });
+
+        expect(result.errors).toHaveLength(1);
+        expect(result.errors[0]).toMatchObject({ code: "CONFLICT", message: expect.stringContaining("unique constraint violation") });
+
+        freshDatabase.close();
+    });
+
+    it("an unrecognized insert failure is redacted instead of leaking the raw error message", async () => {
+        expect.assertions(2);
+
+        const freshDatabase = createSqliteExec();
+
+        runShardMigrations(freshDatabase.sql, usersSchema);
+        const realWriter = createShardContextDatabase({ schema: usersSchema, sql: freshDatabase.sql });
+        const failingWriter: DatabaseWriterLike = {
+            ...realWriter,
+            insert: () => Promise.reject(new Error("disk io failure: sector 42 unreadable")),
+        };
+
+        const rows: ExportRow[] = [{ doc: { _id: "u1", email: "a@b.com", name: "Alice" }, table: "users" }];
+
+        const result = await importShardRows(failingWriter, usersSchema, { rows });
+
+        expect(result.errors).toHaveLength(1);
+        expect(result.errors[0]).toMatchObject({ code: "INSERT_FAILED", message: "Internal error" });
+
+        freshDatabase.close();
+    });
+});
+
 class ExportShardImpl extends ShardDO {
     // eslint-disable-next-line class-methods-use-this -- override stub; admin RPCs never dispatch through it
     public override async handleRpc(): Promise<unknown> {

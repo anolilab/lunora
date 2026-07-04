@@ -21,7 +21,7 @@
 
 /* eslint-disable max-classes-per-file -- the role-split is three cohesive collaborators by design: a shared RelayLink base plus the OwnerRelay and RelayMember role classes. */
 
-import { LunoraError } from "@lunora/errors";
+import { LunoraError, toErrorBody } from "@lunora/errors";
 
 import type { SqlExec } from "./ctx-db";
 import type { MaskPoliciesResult, RlsPoliciesResult } from "./introspect";
@@ -672,7 +672,14 @@ class OwnerRelay extends RelayLink {
         try {
             resolved = this.host.resolveShape(request.name, request.args, identity);
         } catch (error) {
-            return { error: { code: "SHAPE_RESOLVE_FAILED", message: error instanceof Error ? error.message : "shape resolve failed" } };
+            // eslint-disable-next-line no-secrets/no-secrets -- mirrors ShardDO's seedShapeSubscription local-path catch, not a credential
+            // Mirrors `ShardDO.seedShapeSubscription`'s local-path catch: preserve a
+            // structured error's real `code`/`message` (e.g. a cross-shard-join
+            // guard), but redact an internal-coded or unrecognized throw instead of
+            // relaying raw error text to the subscribing socket.
+            const { body } = toErrorBody(error, { fallbackCode: "SHAPE_RESOLVE_FAILED", redactedMessage: "shape resolution failed" });
+
+            return { error: { code: body.code, message: body.message } };
         }
 
         if (resolved === undefined || resolved.global === true) {
