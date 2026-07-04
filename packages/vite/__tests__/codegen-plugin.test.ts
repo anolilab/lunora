@@ -186,27 +186,37 @@ describe("codegen-plugin", () => {
     });
 
     /**
-     * Build a minimal stub dev server whose `hot.send` is a Vitest spy.
+     * Build a minimal stub dev server whose hot channels are Vitest spies.
      * Only the shape used by codegen-plugin needs to be present.
+     *
+     * `send` is the server-level channel (`server.hot.send`) the error overlay
+     * uses. Each environment carries its own `hot.send` spy — `clientSend` /
+     * `workerSend` — so tests can assert the scoped, per-environment reload/event
+     * emitted after a successful run. Plain-object environments are treated as
+     * non-runnable by `isRunnableDevEnvironment`, matching workerd + the browser.
      */
     const makeStubServer = () => {
         const send = vi.fn<(payload: unknown) => void>();
+        const clientSend = vi.fn<(payload: unknown) => void>();
+        const workerSend = vi.fn<(payload: unknown) => void>();
 
         return {
+            clientSend,
             send,
             server: {
                 config: { logger: { error: vi.fn<() => void>(), info: vi.fn<() => void>(), warn: vi.fn<() => void>() } },
                 // Vite 8 always exposes per-environment module graphs; codegen
                 // invalidates the generated dir across all of them.
                 environments: {
-                    client: { moduleGraph: { idToModuleMap: new Map(), invalidateModule: vi.fn<() => void>() } },
-                    worker: { moduleGraph: { idToModuleMap: new Map(), invalidateModule: vi.fn<() => void>() } },
+                    client: { hot: { send: clientSend }, moduleGraph: { idToModuleMap: new Map(), invalidateModule: vi.fn<() => void>() } },
+                    worker: { hot: { send: workerSend }, moduleGraph: { idToModuleMap: new Map(), invalidateModule: vi.fn<() => void>() } },
                 },
                 hot: { send },
                 httpServer: undefined,
                 watcher: { add: vi.fn<() => void>(), off: vi.fn<() => void>(), on: vi.fn<() => void>() },
                 ws: { send: vi.fn<() => void>() },
             } as unknown as import("vite").ViteDevServer,
+            workerSend,
         };
     };
 
@@ -331,8 +341,40 @@ export const schema = defineSchema({
             expect(payload.err.loc?.line).toBeGreaterThan(0);
         });
 
-        it("failure then success → second run sends exactly one type:full-reload (no double reload)", async () => {
-            expect.assertions(4);
+        it("normal save (no prior error) → scoped worker reload + client custom event, NO blanket browser reload", async () => {
+            expect.assertions(6);
+
+            writeFixture(workdir);
+
+            const schemaPath = join(workdir, "lunora", "schema.ts");
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { clientSend, send, server, workerSend } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            const onChangeCalls = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls;
+            const changeListener = onChangeCalls.find((args) => args[0] === "change")?.[1] as ((file: string) => void) | undefined;
+
+            changeListener!(schemaPath);
+
+            await vi.runAllTimersAsync();
+
+            // The workerd (non-runnable) environment gets a scoped full-reload on
+            // its OWN hot channel so the remote runner evicts its module cache.
+            expect(workerSend).toHaveBeenCalledTimes(1);
+            expect(workerSend.mock.calls[0]?.[0]).toMatchObject({ path: "*", type: "full-reload" });
+            expect(workerSend.mock.calls[0]?.[0]).toHaveProperty("triggeredBy", schemaPath);
+
+            // The client gets a non-destructive custom event — never a full-reload.
+            expect(clientSend).toHaveBeenCalledTimes(1);
+            expect(clientSend.mock.calls[0]?.[0]).toMatchObject({ event: "lunora:api-updated", type: "custom" });
+
+            // The old blanket browser `full-reload` on the server-level channel is gone.
+            expect(send.mock.calls.some((call) => (call[0] as { type?: string }).type === "full-reload")).toBe(false);
+        });
+
+        it("failure then success → recovery reloads the client once (clears overlay), still evicts the worker", async () => {
+            expect.assertions(6);
 
             mkdirSync(join(workdir, "lunora"), { recursive: true });
 
@@ -342,14 +384,14 @@ export const schema = defineSchema({
             writeFileSync(schemaPath, `export const broken = true;`, "utf8");
 
             const plugin = codegenPlugin(makeOptions(workdir));
-            const { send, server } = makeStubServer();
+            const { clientSend, send, server, workerSend } = makeStubServer();
 
             wireServer(plugin, server);
 
             const onChangeCalls = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls;
             const changeListener = onChangeCalls.find((args) => args[0] === "change")?.[1] as ((file: string) => void) | undefined;
 
-            // First run — codegen fails, error overlay sent.
+            // First run — codegen fails, error overlay sent on the server channel.
             changeListener!(schemaPath);
 
             await vi.runAllTimersAsync();
@@ -365,20 +407,24 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             );
             writeFileSync(join(workdir, "lunora", "messages.ts"), MESSAGES_SOURCE, "utf8");
 
-            // Second run — codegen succeeds, overlay should be cleared via full-reload.
+            // Second run — codegen succeeds; because an overlay was showing, the
+            // client is reloaded ONCE to clear it (rather than the custom event).
             changeListener!(schemaPath);
 
             await vi.runAllTimersAsync();
 
-            expect(send.mock.calls[1]?.[0]).toMatchObject({ type: "full-reload" });
+            expect(clientSend).toHaveBeenCalledTimes(1);
+            expect(clientSend.mock.calls[0]?.[0]).toMatchObject({ type: "full-reload" });
 
-            // Exactly one `full-reload` for the recovery — the success path and
-            // the change path must not both fire for the same triggering change.
-            const fullReloads = send.mock.calls.filter((call) => (call[0] as { type?: string }).type === "full-reload");
+            // The client got a real reload on recovery, not the custom event.
+            expect(clientSend.mock.calls.some((call) => (call[0] as { type?: string }).type === "custom")).toBe(false);
 
-            expect(fullReloads).toHaveLength(1);
-            // Total sends: one error (first run) + one full-reload (recovery).
-            expect(send).toHaveBeenCalledTimes(2);
+            // The workerd runner cache is still evicted on the successful run.
+            expect(workerSend.mock.calls[0]?.[0]).toMatchObject({ path: "*", type: "full-reload" });
+
+            // The server-level channel only ever sent the error overlay — no
+            // blanket browser reload rode along.
+            expect(send).toHaveBeenCalledTimes(1);
         });
 
         it("build mode (no dev server) → no hot.send, returns undefined on failure", async () => {

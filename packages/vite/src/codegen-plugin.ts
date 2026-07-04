@@ -6,8 +6,10 @@ import type { ExportGap } from "@lunora/config";
 import { collectWranglerSecretVariables, inferLunoraBindings, reconcileWranglerBindings } from "@lunora/config";
 import type { Project } from "ts-morph";
 import type { Plugin, ViteDevServer } from "vite";
+import { isRunnableDevEnvironment } from "vite";
 
 import { reconcileWranglerCrons } from "./cron-sync";
+import LUNORA_API_UPDATED_EVENT from "./hmr-events";
 import { advisoryLine, LUNORA_TAG } from "./log";
 import type { ResolvedLunoraPluginOptions } from "./types";
 
@@ -162,6 +164,71 @@ const runCodegenSafely = (
 };
 
 /**
+ * Notify the dev environments after a successful codegen run — replacing the old
+ * single, blanket browser `full-reload` that dropped every open WebSocket
+ * subscription, optimistic-mutation layer, offline-queue entry, and form field
+ * on every schema save (the worst default for a real-time framework).
+ *
+ * Non-runnable worker environments (workerd, run by `@cloudflare/vite-plugin`,
+ * for which {@link isRunnableDevEnvironment} returns `false`) still get a scoped
+ * `full-reload` on their own hot channel: the build-side `invalidateModule` loop
+ * alone does not evict the remote runner's evaluated-module cache, so the worker
+ * would keep serving the previous `_generated/*`. The scoped reload makes the
+ * runner drop its cache and re-evaluate the fresh generated code. Astro uses the
+ * same idiom for Cloudflare's workerd.
+ *
+ * The client/browser environment (always named `client`) is NOT reloaded. Vite's
+ * granular module HMR already re-imports the changed `_generated/*` in place, and
+ * the worker reload bounces the socket so the client's reconnect path
+ * re-subscribes with fresh server behaviour — all without a page reload. We emit
+ * a scoped custom event ({@link LUNORA_API_UPDATED_EVENT}) as a non-destructive
+ * hook instead. The one exception is `clearErrorOverlay`: when this run recovers
+ * from a codegen error overlay, the client is reloaded once so the overlay is
+ * cleared — a rare broken-to-fixed transition where a reload is expected, not a
+ * per-keystroke one.
+ *
+ * Falls back to a browser `full-reload` only when there is genuinely no client
+ * environment.
+ */
+const notifyEnvironmentsAfterCodegen = (server: ViteDevServer, changedFile: string, clearErrorOverlay: boolean): void => {
+    // The value type of the `environments` record — captured so the client env
+    // can be tracked as possibly-absent (defensive; Vite always registers one).
+    let clientEnvironment: (typeof server.environments)[string] | undefined;
+
+    for (const [name, environment] of Object.entries(server.environments)) {
+        if (name === "client") {
+            clientEnvironment = environment;
+
+            continue;
+        }
+
+        // A runnable (Node SSR) environment re-evaluates on its next request off
+        // the invalidated module graph, so it needs no reload signal.
+        if (isRunnableDevEnvironment(environment)) {
+            continue;
+        }
+
+        // Non-runnable, non-client → the workerd worker: evict its runner cache.
+        environment.hot.send({ path: "*", triggeredBy: changedFile, type: "full-reload" });
+    }
+
+    if (clientEnvironment === undefined) {
+        // No client environment at all — fall back to a browser reload.
+        server.hot.send({ type: "full-reload" });
+
+        return;
+    }
+
+    if (clearErrorOverlay) {
+        clientEnvironment.hot.send({ type: "full-reload" });
+
+        return;
+    }
+
+    clientEnvironment.hot.send({ event: LUNORA_API_UPDATED_EVENT, type: "custom" });
+};
+
+/**
  * Vite plugin that runs `@lunora/codegen` on startup and on file changes
  * inside the lunora schema directory.
  */
@@ -238,9 +305,17 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 },
             };
 
+            // True while a codegen error overlay is showing in the browser, so
+            // the next *successful* run knows to reload the client once to clear
+            // it (see `notifyEnvironmentsAfterCodegen`). Normal saves never set
+            // this, so they stay non-destructive.
+            let hadErrorOverlay = false;
+
             // Overlay callbacks: push failures to the browser and clear on recovery.
             const overlay: OverlayCallbacks = {
                 onError(error, message) {
+                    hadErrorOverlay = true;
+
                     // `CodegenDiagnosticError` carries the exact source location;
                     // for plain errors the location is unavailable in the overlay
                     // — steer the user to the terminal where the full stack is logged.
@@ -366,10 +441,12 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
 
                     invalidateGenerated();
 
-                    // Exactly one `full-reload` per successful codegen run. This
-                    // also clears any error overlay left from a previous failed
-                    // run, so recovery needs no separate reload.
-                    server.hot.send({ type: "full-reload" });
+                    // Scope the reload: evict the workerd runner's module cache
+                    // (invalidateModule alone doesn't reach it) and nudge the
+                    // client with a custom event instead of a destructive browser
+                    // reload — unless we're recovering from an error overlay.
+                    notifyEnvironmentsAfterCodegen(server, normalized, hadErrorOverlay);
+                    hadErrorOverlay = false;
                 }, DEBOUNCE_MS);
             };
 
