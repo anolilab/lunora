@@ -294,7 +294,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // Mutation/Action contexts, and the config layer's reconciliation of the
     // wrangler `workflows[]` array (an agent binding is a Workflow binding).
     const agents = discoverAgents(project, lunoraDirectory);
-    const crons = discoverCrons(project, lunoraDirectory, workflows);
+    const crons = discoverCrons(project, lunoraDirectory, workflows, agents);
 
     // Static advisories (unindexed FKs, redundant indexes, unknown index/relation
     // fields, filter-without-index, …). Cheap, derived from the schema + the
