@@ -31,6 +31,7 @@ import type { AdvisorPaymentWebhook } from "./payment-webhooks";
 import type { AdvisorPrivilegedDispatch } from "./privileged-dispatches";
 import type { AdvisorProcedureProtection } from "./procedure-protections";
 import type { AdvisorQueryRead } from "./queries";
+import type { AdvisorQueue } from "./queues";
 import type { AdvisorR2sqlCall } from "./r2sql-calls";
 import type { AdvisorRatelimitKeySelector } from "./ratelimit-key-selectors";
 import type { AdvisorRawRowReturn } from "./raw-row-returns";
@@ -446,6 +447,14 @@ export interface LintContext {
      * the query-shaped lints simply find nothing.
      */
     queries?: ReadonlyArray<AdvisorQueryRead>;
+
+    /**
+     * Queues declared via `defineQueue` exports in `lunora/queues.ts` — the
+     * declaration-side input for the `queue_*` lints (`queue_without_dlq`).
+     * Supplied by the codegen feeder; absent for runtime callers, where the
+     * queue lints find nothing.
+     */
+    queues?: ReadonlyArray<AdvisorQueue>;
 
     /**
      * R2 SQL `ctx.r2sql` accesses discovered lexically inside `query`/`mutation`

@@ -3,6 +3,7 @@ import type { ChangeEvent, MouseEvent, ReactElement } from "react";
 import { useState } from "react";
 
 import { ErrorAlert } from "../../components/error-alert";
+import { Alert } from "../../components/ui/alert";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
@@ -25,6 +26,7 @@ import type {
 } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
+import { computeQueueReliability } from "./reliability";
 
 interface QueuesPanelProps {
     /** Newest-N consumed messages to load into the log (default {@link DEFAULT_MESSAGE_LIMIT}). */
@@ -409,6 +411,12 @@ const QueuesPanel = ({ limit }: QueuesPanelProps): ReactElement => {
     const queues = Array.isArray(queuesData?.queues) ? [...queuesData.queues].toSorted((a, b) => a.exportName.localeCompare(b.exportName)) : [];
     const messages: QueueMessageRow[] = messagesData?.entries ?? [];
 
+    // Reliability nudge: a queue with no `deadLetterQueue` drops messages once
+    // they exhaust retries (push and pull alike — mirrors the `queue_without_dlq`
+    // advisor), paired with a count of messages actually dead-lettered in the
+    // loaded log so the warning is concrete once it bites.
+    const { deadLetteredCount, queuesWithoutDlq, showReliabilityWarning } = computeQueueReliability(queues, messages);
+
     const [selectedExport, setSelectedExport] = useState<string>("");
     const [bodyText, setBodyText] = useState<string>("");
     const [delayText, setDelayText] = useState<string>("");
@@ -577,6 +585,38 @@ const QueuesPanel = ({ limit }: QueuesPanelProps): ReactElement => {
             </div>
 
             {error !== null && <ErrorAlert error={errorSource} testId="queues-error" />}
+
+            {showReliabilityWarning && (
+                <Alert
+                    icon={
+                        <span aria-hidden="true" className="text-base leading-none">
+                            ⚠
+                        </span>
+                    }
+                    testId="queues-dlq-warning"
+                    variant="warning"
+                >
+                    <div className="flex flex-col gap-1">
+                        {queuesWithoutDlq.length > 0 && (
+                            <>
+                                <p className="font-medium">
+                                    {t("No dead-letter queue on {queues}.", { queues: queuesWithoutDlq.map((queue) => queue.name).join(", ") })}
+                                </p>
+                                <p className="text-muted-foreground">
+                                    {t("Exhausted messages are dropped after retries. Add a deadLetterQueue to capture them.")}
+                                </p>
+                            </>
+                        )}
+                        {deadLetteredCount > 0 && (
+                            <p className={queuesWithoutDlq.length > 0 ? "text-muted-foreground" : "font-medium"}>
+                                {deadLetteredCount === 1
+                                    ? t("1 message was recently dead-lettered.")
+                                    : t("{count} messages were recently dead-lettered.", { count: deadLetteredCount })}
+                            </p>
+                        )}
+                    </div>
+                </Alert>
+            )}
 
             {tab === "declared" && <QueuesDeclaredTab loaded={queuesData !== undefined} queues={queues} />}
 

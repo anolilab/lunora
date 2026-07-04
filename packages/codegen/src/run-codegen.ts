@@ -403,6 +403,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   discoverRawRowReturns(project, lunoraDirectory),
                   discoverNormalizeIdAuthorization(project, lunoraDirectory),
                   options.wranglerVariables,
+                  queues,
               );
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,

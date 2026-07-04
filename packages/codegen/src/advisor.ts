@@ -33,6 +33,7 @@ import type {
     PrivilegedDispatchIR,
     ProcedureMiddlewareIR,
     QueryReadIR,
+    QueueIR,
     R2sqlCallIR,
     RatelimitKeySelectorIR,
     RawRowReturnIR,
@@ -194,6 +195,7 @@ export const lintSchema = (
     rawRowReturns?: ReadonlyArray<RawRowReturnIR>,
     normalizeIdAuthorizations?: ReadonlyArray<NormalizeIdAuthorizationIR>,
     wranglerVariables?: ReadonlyArray<WranglerVariableIR>,
+    queues?: ReadonlyArray<QueueIR>,
 ): Finding[] =>
     runAdvisor(
         {
@@ -228,6 +230,7 @@ export const lintSchema = (
             privilegedDispatches,
             procedureProtections,
             queries,
+            queues,
             r2sqlCalls,
             ratelimitKeySelectors,
             rawRowReturns,

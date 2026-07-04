@@ -926,6 +926,11 @@ const MESSAGE_IDS = [
     "Inspect declared Cloudflare Queues — their producer bindings, consumer mode, and dead-letter queue.",
     "No defineQueue is declared in lunora/queues.ts in this deployment. Add one to offload async work to a Cloudflare Queue.",
     "Queues are declared in code with defineQueue. Enqueue from a mutation or action with ctx.queues.<name>.send(...); push consumers process batches in the worker.",
+    // Queues reliability banner.
+    "No dead-letter queue on {queues}.",
+    "Exhausted messages are dropped after retries. Add a deadLetterQueue to capture them.",
+    "1 message was recently dead-lettered.",
+    "{count} messages were recently dead-lettered.",
     // Queues messages + send.
     "Batch mode needs a JSON array body — each element is enqueued as one message.",
     "Body",
