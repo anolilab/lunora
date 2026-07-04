@@ -370,18 +370,39 @@ const toStepInfo = (decision: AgentGenerateResult): AgentStepInfo => {
     };
 };
 
-/** Dispatch the configured memory retrieval once per run and return its context. */
+/**
+ * Dispatch every configured memory source once per run and return the joined
+ * context. Sources run in a STABLE order — the default source (from `memory`)
+ * first, then skill `knowledge` in declaration order — each inside its own
+ * deterministic durable step. The default source keeps the historic
+ * `"memory:retrieve"` name so in-flight runs replay identically; a skill source
+ * uses `"memory:retrieve:&lt;key>"`. Sourced from `agent.memorySources` (folded by
+ * `defineAgent`), falling back to `agent.memory` alone for a directly-authored
+ * definition.
+ */
 const retrieveMemoryContext = async (agent: AgentDefinition, input: string, step: AgentStepLike, run: AgentRunFunction): Promise<string | undefined> => {
-    if (!agent.memory) {
+    const sources = agent.memorySources ?? (agent.memory ? [{ key: "default", ...agent.memory }] : []);
+
+    if (sources.length === 0) {
         return undefined;
     }
 
-    const memorySource = toFunctionReference(agent.memory.source);
-    const { topK } = agent.memory;
-    const retrieved = await step.do("memory:retrieve", async () => run(memorySource, { query: input, ...(topK === undefined ? {} : { topK }) }));
-    const context = (retrieved as { context?: unknown } | undefined)?.context;
+    const contexts: string[] = [];
 
-    return typeof context === "string" && context.length > 0 ? context : undefined;
+    for (const source of sources) {
+        const memorySource = toFunctionReference(source.source);
+        const { topK } = source;
+        const stepName = source.key === "default" ? "memory:retrieve" : `memory:retrieve:${source.key}`;
+        // eslint-disable-next-line no-await-in-loop -- sequential durable steps in a stable order ARE the replay-safe execution model
+        const retrieved = await step.do(stepName, async () => run(memorySource, { query: input, ...(topK === undefined ? {} : { topK }) }));
+        const context = (retrieved as { context?: unknown } | undefined)?.context;
+
+        if (typeof context === "string" && context.length > 0) {
+            contexts.push(context);
+        }
+    }
+
+    return contexts.length > 0 ? contexts.join("\n\n") : undefined;
 };
 
 /**

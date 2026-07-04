@@ -116,6 +116,19 @@ export interface AgentMemoryOptions {
     topK?: number;
 }
 
+/**
+ * One keyed memory-retrieval source the loop dispatches per run. `defineAgent`
+ * folds them onto {@link AgentDefinition.memorySources}: the default source
+ * (`key: "default"`) from {@link AgentConfig.memory}, then one per skill that
+ * carries `knowledge` (keyed by the skill's name). The key names the durable
+ * step — the default source keeps the historic `"memory:retrieve"`, a skill
+ * source uses `"memory:retrieve:&lt;key>"` — so replay stays deterministic.
+ */
+export interface AgentMemorySource extends AgentMemoryOptions {
+    /** Stable source key: `"default"` for `memory`, else the contributing skill's name. */
+    key: string;
+}
+
 /** Cumulative or per-turn token usage — AI SDK `LanguageModelUsage` field names. */
 export interface AgentUsage {
     /** Prompt (input) tokens. */
@@ -134,6 +147,50 @@ export interface AgentInstructionsContext {
     input: string;
     /** The thread this run belongs to. */
     threadKey: string;
+}
+
+/**
+ * Author-supplied config for {@link SkillDefinition} — a reusable bundle of
+ * expertise (an instruction fragment, tools, and retrieval knowledge) an agent
+ * composes in via `defineAgent({ skills: [...] })`. Reuse-first: `tools` carry
+ * the SAME {@link AnyAgentTool} shape agents already use
+ * (`functionTool`/`mcpTools`/`agentAsTool`), and `knowledge` reuses the
+ * {@link AgentMemoryOptions} retrieval verbatim.
+ */
+export interface SkillConfig {
+    /**
+     * An instruction fragment merged into the agent's system prompt — a static
+     * string or a thunk over the run context (same shape as
+     * {@link AgentConfig.instructions}). Fragments compose in order: the agent's
+     * own instructions first, then each skill's in `skills` array order.
+     */
+    instructions?: string | ((context: AgentInstructionsContext) => string);
+
+    /**
+     * Retrieval-augmented knowledge for this skill — see
+     * {@link AgentMemoryOptions}. Retrieved as its own durable step at run start
+     * (keyed by the skill `name`) and injected alongside the agent's `memory`.
+     */
+    knowledge?: AgentMemoryOptions;
+
+    /**
+     * The skill's identifier — namespaces this skill's `knowledge` memory source
+     * (the durable step `memory:retrieve:&lt;name>`). Must be identifier-shaped.
+     */
+    name: string;
+
+    /**
+     * Tools this skill contributes, merged into the agent's FLAT tool namespace.
+     * A name collision with the agent's own tools (or another skill's) is an
+     * error at `defineAgent` — the agent owns the model-facing namespace.
+     */
+    tools?: Record<string, AnyAgentTool>;
+}
+
+/** A `defineSkill` result — config plus the brand the agent merge checks. */
+export interface SkillDefinition extends SkillConfig {
+    /** Runtime brand check (see `isSkillDefinition`). */
+    readonly isLunoraSkill: true;
 }
 
 /** One prior turn, as {@link AgentConfig.prepareStep} and `stopWhen` observe it. */
@@ -256,6 +313,15 @@ export interface AgentConfig {
     prepareStep?: AgentPrepareStep;
 
     /**
+     * Reusable {@link SkillDefinition}s to compose in — each contributes an
+     * instruction fragment, tools (merged into the flat namespace; collisions
+     * throw), and retrieval `knowledge` (its own keyed memory source). Folded at
+     * declaration time; the tool namespace and memory sources on the returned
+     * {@link AgentDefinition} already reflect the merge.
+     */
+    skills?: ReadonlyArray<SkillDefinition>;
+
+    /**
      * Extra loop-stop conditions (AI SDK `StopCondition`s). Composes with
      * {@link AgentConfig.maxTurns} — the loop ends when EITHER triggers.
      */
@@ -314,6 +380,15 @@ export interface AgentDefinition extends AgentConfig {
 
     /** Runtime brand check (see `isAgentDefinition`). */
     readonly isLunoraAgent: true;
+
+    /**
+     * The keyed memory sources the loop dispatches per run — the merge of
+     * {@link AgentConfig.memory} (as `key: "default"`) and each skill's
+     * `knowledge`. Populated by `defineAgent`; `memory` stays on the config for
+     * back-compat and direct authoring. When absent the loop falls back to
+     * `memory` alone (preserving the historic `"memory:retrieve"` step).
+     */
+    memorySources?: ReadonlyArray<AgentMemorySource>;
 }
 
 /** Params of one agent run (the compiled workflow's payload). */
