@@ -114,17 +114,45 @@ export const fireAndForget = (promise: Promise<unknown>, onError?: (error: unkno
 };
 
 /**
- * Copy `text` to the clipboard when the browser exposes one; a no-op under
- * SSR/tests without `navigator`. The single home for the studio's copy buttons
- * so the (browser-only) guard and its lint exception live in one place.
+ * The Worker origin the studio is served from — what an API caller (or an MCP
+ * client's `LUNORA_URL`) points at. An `explicit` value wins when provided;
+ * otherwise falls back to `location.origin`, then the dev-server origin under
+ * SSR/tests. The single home for that dev-origin constant so it can't drift
+ * between call sites.
  */
-export const copyToClipboard = (text: string): void => {
+export const resolveOrigin = (explicit?: string): string => {
+    if (explicit !== undefined && explicit !== "") {
+        return explicit;
+    }
+
+    const loc = (globalThis as { location?: { origin?: string } }).location;
+
+    if (loc?.origin !== undefined && loc.origin !== "") {
+        return loc.origin;
+    }
+
+    return "http://localhost:5173";
+};
+
+/**
+ * Copy `text` to the clipboard when the browser exposes one; a no-op under
+ * SSR/tests or an insecure context without `navigator.clipboard`. The single
+ * home for the studio's copy buttons so the (browser-only) guard and its lint
+ * exception live in one place. Returns whether a clipboard was available (the
+ * write was kicked off) so callers can skip a "Copied" acknowledgement when it
+ * wasn't.
+ */
+export const copyToClipboard = (text: string): boolean => {
     // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser-only clipboard, guarded by the "navigator" in globalThis check
     const clipboard: Clipboard | undefined = "navigator" in globalThis ? globalThis.navigator.clipboard : undefined;
 
-    if (clipboard !== undefined) {
-        fireAndForget(clipboard.writeText(text));
+    if (clipboard === undefined) {
+        return false;
     }
+
+    fireAndForget(clipboard.writeText(text));
+
+    return true;
 };
 
 /**

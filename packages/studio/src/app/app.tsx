@@ -9,6 +9,7 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import useDebounced from "../hooks/use-debounced";
 import { createStudioI18n, useT } from "../i18n/i18n-context";
 import { StudioI18nProvider } from "../i18n/i18n-provider";
+import { resolveOrigin } from "../lib/internal";
 import STUDIO_ROOT_CLASS from "../lib/theme-constants";
 import { loadToken, saveToken } from "../lib/token-storage";
 import { cn } from "../lib/utils";
@@ -60,20 +61,6 @@ interface StudioAppProps {
     /** Forwarded to the composed {@link Studio} (functions, initialShardKey, scheduled overrides). */
     readonly studio?: Omit<StudioProps, "children" | "chrome" | "i18n" | "locale">;
 }
-
-const resolveBaseUrl = (explicit: string | undefined): string => {
-    if (explicit !== undefined && explicit !== "") {
-        return explicit;
-    }
-
-    const loc = (globalThis as { location?: { origin?: string } }).location;
-
-    if (loc?.origin !== undefined && loc.origin !== "") {
-        return loc.origin;
-    }
-
-    return "http://localhost:5173";
-};
 
 interface StudioAppBodyProps {
     readonly basePath?: string;
@@ -189,7 +176,7 @@ const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClient, rule
         // The token doubles as the WS credential (`wsToken`) so live admin
         // subscriptions clear the upgrade's admin gate, mirroring the bearer the
         // HTTP admin RPCs already send.
-        const created = new LunoraClient({ url: resolveBaseUrl(baseUrl), ...(debouncedToken === "" ? {} : { wsToken: debouncedToken }) });
+        const created = new LunoraClient({ url: resolveOrigin(baseUrl), ...(debouncedToken === "" ? {} : { wsToken: debouncedToken }) });
 
         if (debouncedToken !== "") {
             created.setAuthToken(debouncedToken);
