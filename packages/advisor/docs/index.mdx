@@ -164,6 +164,7 @@ Storage, AI, containers & payments:
 | `hyperdrive_outside_action`         | `WARN`  | `ctx.sql` used outside an action                                                                   |
 | `r2sql_outside_action`              | `WARN`  | `ctx.r2sql` used outside an action                                                                 |
 | `mutator_full_row_replace`          | `WARN`  | A mutator `server` impl overwriting a whole row with `replace`                                     |
+| `queue_without_dlq`                 | `WARN`  | A `defineQueue` with no `deadLetterQueue` — exhausted messages are dropped, not captured           |
 | `table_without_insert`              | `INFO`  | A table no function inserts into                                                                   |
 | `workflow_unused`                   | `INFO`  | A workflow that is never started                                                                   |
 

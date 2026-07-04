@@ -62,6 +62,7 @@ import privilegedFanoutFromPublicProcedure from "./lints/static/privileged-fanou
 import publicArgumentUsesAny from "./lints/static/public-argument-uses-any";
 import publicMutationWithoutRatelimit from "./lints/static/public-mutation-without-ratelimit";
 import publicTableRlsOptoutConfusion from "./lints/static/public-table-rls-optout-confusion";
+import queueWithoutDlq from "./lints/static/queue-without-dlq";
 import r2sqlOutsideAction from "./lints/static/r2sql-outside-action";
 import ratelimitDefaultMemoryStore from "./lints/static/ratelimit-default-memory-store";
 import ratelimitKeySpoofableOrGlobal from "./lints/static/ratelimit-key-spoofable-or-global";
@@ -170,6 +171,7 @@ export { default as privilegedFanoutFromPublicProcedure } from "./lints/static/p
 export { default as publicArgumentUsesAny } from "./lints/static/public-argument-uses-any";
 export { default as publicMutationWithoutRatelimit } from "./lints/static/public-mutation-without-ratelimit";
 export { default as publicTableRlsOptoutConfusion } from "./lints/static/public-table-rls-optout-confusion";
+export { default as queueWithoutDlq } from "./lints/static/queue-without-dlq";
 export { default as r2sqlOutsideAction } from "./lints/static/r2sql-outside-action";
 export { default as ratelimitDefaultMemoryStore } from "./lints/static/ratelimit-default-memory-store";
 export { default as ratelimitKeySpoofableOrGlobal } from "./lints/static/ratelimit-key-spoofable-or-global";
@@ -206,6 +208,7 @@ export type { AdvisorPaymentWebhook } from "./payment-webhooks";
 export type { AdvisorPrivilegedDispatch } from "./privileged-dispatches";
 export type { AdvisorProcedureProtection } from "./procedure-protections";
 export type { AdvisorQueryRead } from "./queries";
+export type { AdvisorQueue, AdvisorQueueTuning } from "./queues";
 export type { AdvisorR2sqlCall } from "./r2sql-calls";
 export type { AdvisorRatelimitKeySelector } from "./ratelimit-key-selectors";
 export type { AdvisorRawRowReturn } from "./raw-row-returns";
@@ -246,6 +249,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     duplicateIndex,
     tableWithoutInsert,
     workflowUnused,
+    queueWithoutDlq,
     filterWithoutIndex,
     shapeTargetsGlobalTable,
     mutatorFullRowReplace,
