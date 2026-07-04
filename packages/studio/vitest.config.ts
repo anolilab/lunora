@@ -58,6 +58,12 @@ export default getVitestConfig({
                 test: {
                     name: "component",
                     environment: "jsdom",
+                    // Explicit include required: with the root `include: []` above,
+                    // an inline project that declares none inherits the EMPTY
+                    // selector and silently matches zero files (verified via
+                    // `vitest list --project component`). Restore vitest's default
+                    // glob here; the `exclude` below carves the unit files out.
+                    include: [...configDefaults.include],
                     // React Flow (the schema diagram) needs DOM-measurement APIs jsdom lacks.
                     setupFiles: ["./__tests__/setup-reactflow.ts"],
                     // Rebuild the base exclude list (see tools/get-vitest-config.ts) plus the
