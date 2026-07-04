@@ -113,7 +113,8 @@
             # include studio's dependency graph. If that need ever arises, move
             # this step behind a studio-affected gate + a dep build instead.
             - "name": "Run studio unit tests"
-              "run": 'pnpm --filter "@lunora/studio" run test:unit'
+              "run": |
+                  pnpm --filter "@lunora/studio" run test:unit
 
             - "name": "Upload coverage to Codecov"
               "if": "matrix.node_version == '22.15' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository)"
@@ -167,10 +168,12 @@
             # `dependsOn: ["^build"]` in vis.config.ts, so targeting the `d1`
             # project also builds its upstream @lunora/* deps.
             - "name": "Build d1 and its workspace dependencies"
-              "run": 'pnpm exec vis run build --query "project=d1"'
+              "run": |
+                  pnpm exec vis run build --query "project=d1"
 
             - "name": "Run d1 test suite"
-              "run": 'pnpm --filter "@lunora/d1" run test'
+              "run": |
+                  pnpm --filter "@lunora/d1" run test
 
     "e2e":
         "name": "E2E (Playwright + Miniflare)"
