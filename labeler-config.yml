@@ -4,6 +4,9 @@
 "package: agent":
     - changed-files:
           - any-glob-to-any-file: "packages/agent/**/*"
+"package: agent-telemetry":
+    - changed-files:
+          - any-glob-to-any-file: "packages/agent-telemetry/**/*"
 "package: ai":
     - changed-files:
           - any-glob-to-any-file: "packages/ai/**/*"
