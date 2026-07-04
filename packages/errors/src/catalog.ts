@@ -57,13 +57,13 @@ export const ERROR_CATALOG = {
     },
     NOT_UNIQUE: {
         hint: [
-            "A row with the same value already exists in a `unique` index.",
+            "`.unique()` matched more than one document — it expects the query to identify at most one row.",
             "",
-            "- If you meant to upsert, use `ctx.db.<table>().upsert(...)` (or `.patch(...)` an existing row) instead of `.insert(...)`.",
-            '- Otherwise pick a value that isn\'t already taken, and consider surfacing a friendly "already exists" message to the user.',
+            "- If several matches are legitimate, use `.first()` (take one) or `.collect()` (take all) instead.",
+            "- Otherwise tighten the query (e.g. filter on a unique/indexed field) so it can only match one row.",
         ],
         status: 400,
-        title: "Unique constraint violation",
+        title: "Query matched more than one document",
     },
     VALIDATION_ERROR: { status: 400, title: "Validation failed" },
 
@@ -100,11 +100,14 @@ export const ERROR_CATALOG = {
     SHARD_UNAVAILABLE: { status: 503, title: "Shard unavailable" },
     OFFLINE_IDENTITY_CHANGED: { status: 409, title: "Offline identity changed" },
 
-    /** Package-specific codes. Build-time (codegen) codes never cross the RPC wire. */
+    /** Package-specific codes. Build-time-only — never cross the RPC wire, so deliberately not `internal`. */
     CODEGEN_DIAGNOSTIC: { status: 500, title: "Codegen diagnostic" },
+    /** Build-time-only — never crosses the RPC wire, so deliberately not `internal`. */
     SCHEMA_SNAPSHOT_PARSE: { status: 500, title: "Schema snapshot parse error" },
-    ENV_INVALID: { status: 500, title: "Invalid environment" },
-    AUTH_HEADERS_MISSING: { status: 500, title: "Auth headers missing" },
+    /** Runtime-reachable (env.ts): message enumerates failing env key names — redact on the wire. */
+    ENV_INVALID: { internal: true, status: 500, title: "Invalid environment" },
+    /** Runtime-reachable (auth/middleware.ts): message carries auth-wiring guidance — redact on the wire. */
+    AUTH_HEADERS_MISSING: { internal: true, status: 500, title: "Auth headers missing" },
 
     /**
      * Upstream Cloudflare API failures surfaced from an action. The message
