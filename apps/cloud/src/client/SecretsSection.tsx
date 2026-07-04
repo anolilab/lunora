@@ -87,29 +87,36 @@ export const SecretsSection = ({ organizationId }: SecretsSectionProps): ReactEl
                             setError(null);
                             setPending(true);
 
-                            void (async () => {
-                                try {
-                                    const response = await fetch("/v1/secrets", {
-                                        body: JSON.stringify({ name, organizationId, projectId, value }),
-                                        credentials: "include",
-                                        headers: { "content-type": "application/json" },
-                                        method: "POST",
-                                    });
+                            // Promise combinators instead of try/finally so React
+                            // Compiler can memoize the component (it can't lower
+                            // try-with-finally or throw-in-try yet).
+                            const save = async (): Promise<void> => {
+                                const response = await fetch("/v1/secrets", {
+                                    body: JSON.stringify({ name, organizationId, projectId, value }),
+                                    credentials: "include",
+                                    headers: { "content-type": "application/json" },
+                                    method: "POST",
+                                });
 
-                                    if (!response.ok) {
-                                        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+                                if (!response.ok) {
+                                    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
 
-                                        throw new Error(payload?.error ?? `set failed (${String(response.status)})`);
-                                    }
+                                    setError(payload?.error ?? `set failed (${String(response.status)})`);
 
-                                    setName("");
-                                    setValue("");
-                                } catch (error_: unknown) {
-                                    setError(error_ instanceof Error ? error_.message : "set failed");
-                                } finally {
-                                    setPending(false);
+                                    return;
                                 }
-                            })();
+
+                                setName("");
+                                setValue("");
+                            };
+
+                            void save()
+                                .catch((error_: unknown) => {
+                                    setError(error_ instanceof Error ? error_.message : "set failed");
+                                })
+                                .finally(() => {
+                                    setPending(false);
+                                });
                         }}
                     >
                         <input

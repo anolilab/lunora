@@ -32,22 +32,27 @@ export const Login = (): ReactElement => {
                     setError(null);
                     setPending(true);
 
-                    void (async () => {
-                        try {
-                            const result =
-                                mode === "signin"
-                                    ? await authClient.signIn.email({ email, password })
-                                    : await authClient.signUp.email({ email, name: name || email, password });
+                    // Promise combinators instead of try/finally so React
+                    // Compiler can memoize the component (it can't lower
+                    // try-with-finally yet).
+                    const submit = async (): Promise<void> => {
+                        const result =
+                            mode === "signin"
+                                ? await authClient.signIn.email({ email, password })
+                                : await authClient.signUp.email({ email, name: name || email, password });
 
-                            if (result.error) {
-                                setError(result.error.message ?? `${mode} failed`);
-                            }
-                        } catch (error_: unknown) {
-                            setError(error_ instanceof Error ? error_.message : "unknown error");
-                        } finally {
-                            setPending(false);
+                        if (result.error) {
+                            setError(result.error.message ?? `${mode} failed`);
                         }
-                    })();
+                    };
+
+                    void submit()
+                        .catch((error_: unknown) => {
+                            setError(error_ instanceof Error ? error_.message : "unknown error");
+                        })
+                        .finally(() => {
+                            setPending(false);
+                        });
                 }}
             >
                 <h1>Lunora Cloud</h1>

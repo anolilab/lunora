@@ -30,8 +30,10 @@ describe("cli commands", () => {
     });
 
     it("deploy requires login then link", async () => {
-        await expect(deploy(memoryStore(), { scriptName: "s" }, () => {})).rejects.toThrow(/not logged in/u);
-        await expect(deploy(memoryStore({ apiUrl: "https://c", deployKey: "k" }), { scriptName: "s" }, () => {})).rejects.toThrow(/no linked project/u);
+        await expect(deploy(memoryStore(), { bundle: "AA==", scriptName: "s" }, () => {})).rejects.toThrow(/not logged in/u);
+        await expect(deploy(memoryStore({ apiUrl: "https://c", deployKey: "k" }), { bundle: "AA==", scriptName: "s" }, () => {})).rejects.toThrow(
+            /no linked project/u,
+        );
     });
 
     it("deploy calls the deploy fn with the merged config", async () => {
@@ -40,11 +42,19 @@ describe("cli commands", () => {
             return { status: "live" };
         });
 
-        const result = await deploy(store, { kind: "production", scriptName: "s1" }, () => {}, deployFn);
+        const result = await deploy(store, { bundle: btoa("export default {}"), kind: "production", scriptName: "s1" }, () => {}, deployFn);
 
         expect(result).toStrictEqual({ status: "live" });
         expect(deployFn).toHaveBeenCalledWith(
-            { apiUrl: "https://cloud", branch: undefined, deployKey: "k", kind: "production", projectId: "proj_1", scriptName: "s1" },
+            {
+                apiUrl: "https://cloud",
+                branch: undefined,
+                bundle: btoa("export default {}"),
+                deployKey: "k",
+                kind: "production",
+                projectId: "proj_1",
+                scriptName: "s1",
+            },
             expect.any(Function),
         );
     });
