@@ -88,13 +88,13 @@ overrides:
 
 catalogs:
   ai:
-    # Vercel AI SDK v6 core + Cloudflare's official Workers AI provider. The
+    # Vercel AI SDK v7 core + Cloudflare's official Workers AI provider. The
     # provider peers `ai ^6.0.0` / `@ai-sdk/provider ^3.0.0`. Workers AI is the
     # zero-config default; the `@ai-sdk/*` providers below are optional
     # bring-your-own (declared as optional peers on @lunora/ai) so an app stays
     # Workers-AI-only unless it opts into another provider.
     #
-    # EXACT-pinned (no caret): v6 shipped inside the 1440-minute maturity window,
+    # EXACT-pinned (no caret): v7 shipped inside the 1440-minute maturity window,
     # so each version is allow-listed by exact name@version in
     # `minimumReleaseAgeExclude` below. A caret would let pnpm drift to a newer
     # patch that is NOT excluded and would then be gated. To bump: update the
@@ -435,9 +435,9 @@ allowBuilds:
 #   - 'better-auth@1.6.13 || 1.6.14'
 # When bumping a dependency, UPDATE its existing line — do not append a new one.
 minimumReleaseAgeExclude:
-  - '@ai-sdk/anthropic@3.0.83'
+  - '@ai-sdk/anthropic@4.0.7'
   - '@ai-sdk/gateway@3.0.128'
-  - '@ai-sdk/openai@3.0.70'
+  - '@ai-sdk/openai@4.0.7'
   - '@ai-sdk/provider-utils@4.0.28'
   - '@better-auth/core@1.6.16'
   - '@better-auth/drizzle-adapter@1.6.16'
@@ -484,7 +484,7 @@ minimumReleaseAgeExclude:
   - '@tanstack/react-virtual@3.14.2'
   - '@tanstack/virtual-core@3.17.0'
   - '@types/react@19.2.16'
-  - 'ai@6.0.202'
+  - 'ai@7.0.14'
   - 'better-auth@1.6.16'
   - 'deslop-js@0.0.21'
   - 'eslint-plugin-react-dom@5.8.17'
@@ -503,6 +503,7 @@ minimumReleaseAgeExclude:
   - 'react-dom@19.2.7'
   - 'tsx@4.22.4'
   - 'vite@8.0.16'
+  - 'workers-ai-provider@3.3.1'
   - 'wrangler@4.97.0'
   - tmp@0.2.4
   - lodash@4.17.24
