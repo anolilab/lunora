@@ -738,6 +738,40 @@ const renderAgentFunctionRegistry = (
 };
 
 /**
+ * Dispatch-table fragment for the auto-registered sandbox dispatcher — the
+ * single internal action the batteries-included `browserTool`/`containerTool`
+ * dispatch to. Mirrors {@link renderAgentFunctionRegistry}: every string is
+ * empty when the project imports no sandbox tool, keeping sandbox-free output
+ * byte-identical. No synthetic `api.*` entry (the action is internal).
+ *
+ * Unlike the agents namespace (where an app-registered name silently wins),
+ * `sandbox:invoke` is *required* for the tools to work, so a discovered function
+ * at that exact path is a genuine conflict — reject it instead of letting the
+ * auto entry silently shadow (last-key-wins) the app's `sandbox.invoke`.
+ */
+const renderSandboxFunctionRegistry = (usesSandbox: boolean, functions: ReadonlyArray<FunctionIR>): { importLine: string; lines: string; prelude: string } => {
+    if (!usesSandbox) {
+        return { importLine: "", lines: "", prelude: "" };
+    }
+
+    const collision = functions.find((definition) => sanitizeNamespace(definition.filePath) === "sandbox" && definition.exportName === "invoke");
+
+    if (collision) {
+        throw new LunoraError(
+            "INTERNAL",
+            `@lunora/codegen: "sandbox:invoke" is reserved for the batteries-included sandbox tool dispatcher (browserTool/containerTool) — rename the "invoke" export in ${collision.filePath}`,
+        );
+    }
+
+    return {
+        importLine: 'import { sandboxComponent } from "@lunora/agent/component";\n',
+        lines: '    "sandbox:invoke": lunoraSandbox.invoke as unknown as RegisteredLunoraFunction,',
+        prelude:
+            "\n/**\n * The `@lunora/agent` sandbox dispatcher — auto-registered because `lunora/`\n * imports a sandbox tool (`browserTool`/`containerTool`). The batteries-included\n * tools dispatch to this internal action, which runs on an action ctx carrying\n * `ctx.browser` + `ctx.containers` (the durable tool step itself has neither).\n */\nconst lunoraSandbox = sandboxComponent();\n",
+    };
+};
+
+/**
  * Synthetic `FunctionIR` entries for the auto-registered PUBLIC agent
  * functions, so `api.agents.agentMessages` / `api.agents.agentThread` /
  * `api.agents.agentResolveApproval` exist as typed references
@@ -1675,23 +1709,29 @@ interface EmitFunctionsOptions {
     migrations?: ReadonlyArray<MigrationIR>;
     mutators?: ReadonlyArray<MutatorIR>;
     shapes?: ReadonlyArray<ShapeIR>;
+    /** Import of a sandbox tool (`browserTool`/`containerTool`) auto-registers the `sandbox:invoke` action. */
+    usesSandbox?: boolean;
     useUmbrella?: boolean;
 }
 
 const emitFunctions = (options: EmitFunctionsOptions): string => {
-    const { agents = [], functions, migrations = [], mutators = [], shapes = [], useUmbrella = false } = options;
+    const { agents = [], functions, migrations = [], mutators = [], shapes = [], useUmbrella = false, usesSandbox = false } = options;
     const hasFunctions = functions.length > 0;
     const base = baseSpecifiers(useUmbrella);
     const { dispatchBody, importBlock, installBlock, migrationBody, mutatorPaths, shapeBody } = renderFunctionRegistry(functions, migrations, mutators, shapes);
-    // Auto-registered agent runtime functions (see renderAgentFunctionRegistry).
+    // Auto-registered agent runtime + sandbox dispatcher functions (see the
+    // render*FunctionRegistry helpers). Both are empty-gated so an unused feature
+    // keeps output byte-identical.
     const agentRegistry = renderAgentFunctionRegistry(agents, functions);
+    const sandboxRegistry = renderSandboxFunctionRegistry(usesSandbox, functions);
+    const autoLines = [agentRegistry.lines, sandboxRegistry.lines].filter((block) => block.length > 0).join("\n");
     let dispatchBodyWithAgents = dispatchBody;
 
-    if (agentRegistry.lines.length > 0) {
+    if (autoLines.length > 0) {
         // Splice the auto entries after the discovered ones, preserving the
         // `{\n    entries\n}` layout either side already emits (trimEnd keeps
         // this independent of how many trailing newlines the wrapper carries).
-        dispatchBodyWithAgents = dispatchBody.length > 0 ? `${dispatchBody.trimEnd()}\n${agentRegistry.lines}\n` : `\n${agentRegistry.lines}\n`;
+        dispatchBodyWithAgents = dispatchBody.length > 0 ? `${dispatchBody.trimEnd()}\n${autoLines}\n` : `\n${autoLines}\n`;
     }
     const lifecycleHooks = renderLifecycleManifest(functions);
 
@@ -1733,7 +1773,7 @@ const emitFunctions = (options: EmitFunctionsOptions): string => {
     const callerParameter = hasFunctions ? "context" : "_context";
     const callRegisteredHelper = hasFunctions ? `${CALL_REGISTERED_HELPER}\n\n` : "";
 
-    return `${GENERATED_HEADER}${importBlock}${agentRegistry.importLine}${compiledArgsImport}${shapeTypeImport}import type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";
+    return `${GENERATED_HEADER}${importBlock}${agentRegistry.importLine}${sandboxRegistry.importLine}${compiledArgsImport}${shapeTypeImport}import type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";
 ${dataModelImport}
 /**
  * Single registered function, narrowed to the shape \`handleRpc\` needs.
@@ -1753,7 +1793,7 @@ export interface RegisteredLunoraFunction {
     /** \`"internal"\` functions are rejected on the external RPC path; absence === public. */
     visibility?: "internal" | "public";
 }
-${agentRegistry.prelude}
+${agentRegistry.prelude}${sandboxRegistry.prelude}
 /**
  * Static dispatch table. The key matches the \`__lunoraRef\` the client
  * emits (\`api[namespace][fn].__lunoraRef === "namespace:fn"\`).

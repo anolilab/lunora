@@ -85,6 +85,17 @@ const ENV_AI_PATTERN = /\benv\s*\.\s*AI\b/;
 // mirroring the codegen feature probe.
 const CTX_PIPELINES_PATTERN = /\bctx\s*\.\s*pipelines\b/;
 const TYPE_ONLY_IMPORT_PATTERN = /^\s*import\s+type\b/;
+// The batteries-included `browserTool` (from `@lunora/agent`, main entry or the
+// `/sandbox` subpath) drives `ctx.browser` inside the auto-registered sandbox
+// dispatcher, so importing it must provision the BROWSER binding just like a
+// direct `@lunora/browser` import does — even though the app never imports
+// `@lunora/browser` itself. Match a named *value* `browserTool` import from
+// either specifier (no leading `import type`, mirroring codegen's type-only
+// exclusion — a type-only import wires nothing, so it must not provision a
+// binding). Both specifiers must match, or the documented main-entry import
+// (`import { browserTool } from "@lunora/agent"`) would type-check yet skip
+// provisioning BROWSER, crashing only at run time.
+const SANDBOX_BROWSER_TOOL_PATTERN = /import\s+\{[^}]*\bbrowserTool\b[^}]*\}\s+from\s+["']@lunora\/agent(?:\/sandbox)?["']/;
 
 /**
  * The single source of truth for import-driven capabilities: each capability
@@ -325,6 +336,9 @@ const capabilitiesFromSource = (code: string): Capabilities => {
         ...NO_CAPABILITIES,
         needsD1: ENV_DB_PATTERN.test(code),
         usesAi: ENV_AI_PATTERN.test(code),
+        // A sandbox `browserTool` import provisions BROWSER even without a direct
+        // `@lunora/browser` import (the browser op runs on the dispatcher's ctx).
+        usesBrowser: SANDBOX_BROWSER_TOOL_PATTERN.test(code),
         usesPipelines: CTX_PIPELINES_PATTERN.test(code),
     });
 };

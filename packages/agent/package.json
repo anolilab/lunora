@@ -49,6 +49,10 @@
             "types": "./dist/naming.d.ts",
             "import": "./dist/naming.mjs"
         },
+        "./sandbox": {
+            "types": "./dist/sandbox.d.ts",
+            "import": "./dist/sandbox.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {

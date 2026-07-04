@@ -30,6 +30,7 @@ import discoverQueries from "./discover-queries";
 import { discoverQueues } from "./discover-queues";
 import discoverR2sqlCalls from "./discover-r2sql-calls";
 import discoverRlsProcedures, { discoverRlsMetadata } from "./discover-rls-procedures";
+import { discoverSandboxUsage } from "./discover-sandbox";
 import discoverSchema from "./discover-schema";
 import discoverSecrets from "./discover-secrets";
 import { discoverShapes } from "./discover-shapes";
@@ -386,7 +387,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // (`useFlag`) iterate these. Only meaningful when a provider is wired.
     const flagKeys = hasFlags ? discoverFlagKeys(project, lunoraDirectory) : [];
     const hasHyperdrive = featureUsage.hyperdrive;
-    const hasBrowser = featureUsage.browser;
+    // Batteries-included sandbox tools (`@lunora/agent/sandbox`). `browserTool`
+    // drives `ctx.browser`, so it flips `hasBrowser` (provisioning the BROWSER
+    // binding + wiring `ctx.browser` onto the action ctx the dispatcher runs on);
+    // either tool registers the `sandbox:invoke` dispatcher via `emitFunctions`.
+    const sandboxUsage = discoverSandboxUsage(project, lunoraDirectory);
+    const usesSandbox = sandboxUsage.usesSandboxBrowser || sandboxUsage.usesSandboxContainer;
+    const hasBrowser = featureUsage.browser || sandboxUsage.usesSandboxBrowser;
     const hasImages = featureUsage.images;
     const hasAnalytics = featureUsage.analytics;
     const hasPipelines = featureUsage.pipelines;
@@ -445,7 +452,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         useUmbrella,
         workflows,
     });
-    const functionsContent = emitFunctions({ agents, functions, migrations, mutators, shapes, useUmbrella });
+    const functionsContent = emitFunctions({ agents, functions, migrations, mutators, shapes, useUmbrella, usesSandbox });
     const shardContent = emitShard({
         advisories,
         agents,

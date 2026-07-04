@@ -460,4 +460,6 @@ export const agentComponent = (): AgentComponent => {
     };
 };
 
+export type { SandboxComponent, SandboxRegisteredFunction } from "./sandbox-component";
+export { sandboxComponent } from "./sandbox-component";
 export { agentExtension };
