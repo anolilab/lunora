@@ -1155,12 +1155,22 @@ interface QueryCtx {
     readonly db: DatabaseReader;
 
     /**
+     * The validated, typed environment. Populated only when the project declares
+     * a `defineEnv(...)` contract in `lunora/env.ts`; codegen then narrows this to
+     * the validated `InferEnv` shape so `ctx.env.STRIPE_KEY` is parsed and
+     * coercion-aware. Absent (optional) without a contract — declare
+     * `lunora/env.ts` to populate and type it.
+     */
+    readonly env?: Record<string, unknown>;
+
+    /**
      * The caller's IP for this request — Cloudflare's trusted `CF-Connecting-IP`,
      * forwarded server-side (never read from a client header). `undefined` when
      * unknown: a live-subscription re-run, a server-initiated dispatch, or
      * non-Cloudflare hosting. A convenient rate-limit key for anonymous traffic.
      */
     readonly ip?: string;
+
     /** Structured, function-attributed logger; see {@link LunoraLogger}. */
     readonly log: LunoraLogger;
 
@@ -1195,12 +1205,22 @@ interface MutationCtx {
     readonly db: DatabaseWriter;
 
     /**
+     * The validated, typed environment. Populated only when the project declares
+     * a `defineEnv(...)` contract in `lunora/env.ts`; codegen then narrows this to
+     * the validated `InferEnv` shape so `ctx.env.STRIPE_KEY` is parsed and
+     * coercion-aware. Absent (optional) without a contract — declare
+     * `lunora/env.ts` to populate and type it.
+     */
+    readonly env?: Record<string, unknown>;
+
+    /**
      * The caller's IP for this request — Cloudflare's trusted `CF-Connecting-IP`,
      * forwarded server-side (never read from a client header). `undefined` when
      * unknown: a live-subscription re-run, a server-initiated dispatch, or
      * non-Cloudflare hosting. A convenient rate-limit key for anonymous traffic.
      */
     readonly ip?: string;
+
     /** Structured, function-attributed logger; see {@link LunoraLogger}. */
     readonly log: LunoraLogger;
 
@@ -1245,6 +1265,16 @@ interface ActionCtx {
     readonly auth: AuthState;
 
     readonly db: DatabaseWriter;
+
+    /**
+     * The validated, typed environment. Populated only when the project declares
+     * a `defineEnv(...)` contract in `lunora/env.ts`; codegen then narrows this to
+     * the validated `InferEnv` shape so `ctx.env.STRIPE_KEY` is parsed and
+     * coercion-aware. Absent (optional) without a contract — declare
+     * `lunora/env.ts` to populate and type it.
+     */
+    readonly env?: Record<string, unknown>;
+
     readonly fetch: typeof globalThis.fetch;
 
     /**
@@ -1254,6 +1284,7 @@ interface ActionCtx {
      * non-Cloudflare hosting. A convenient rate-limit key for anonymous traffic.
      */
     readonly ip?: string;
+
     /** Structured, function-attributed logger; see {@link LunoraLogger}. */
     readonly log: LunoraLogger;
 

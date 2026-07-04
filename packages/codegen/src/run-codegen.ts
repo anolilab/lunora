@@ -20,6 +20,7 @@ import discoverContainerKeyAccesses from "./discover-container-key-accesses";
 import discoverContainerOverrides from "./discover-container-overrides";
 import { discoverContainers } from "./discover-containers";
 import discoverCrons from "./discover-crons";
+import { discoverEnv } from "./discover-env";
 import discoverFailOpenGuards from "./discover-fail-open-guards";
 import { buildStudioFeatures, discoverFeatureUsage } from "./discover-feature-usage";
 import discoverFlagSecurityDefaults from "./discover-flag-security-defaults";
@@ -313,6 +314,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // file is absent, so a project without one emits byte-identical server.ts.
     const identity = discoverIdentity(project, lunoraDirectory);
 
+    // Typed env layer: the single `defineEnv(...)` contract declared in
+    // `lunora/env.ts`. When present, `emitServer` types `ctx.env` as the
+    // validated `InferEnv` shape and the generated ShardDO applies the accessor
+    // to the worker `env` at ctx-build time. `undefined` when the file is absent,
+    // so a project without one emits byte-identical generated code.
+    const env = discoverEnv(project, lunoraDirectory);
+
     // Workflows declared via `defineWorkflow` exports in `lunora/workflows.ts`.
     // Discovered before crons so a `cronJobs()` registration can target a
     // workflow by its export name (the cron then starts a durable instance per
@@ -484,6 +492,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const apiContent = emitApi(functions, workflows, useUmbrella);
     const serverContent = emitServer({
         containers,
+        env,
         hasAccessFacade,
         hasAi,
         hasAnalytics,
@@ -506,6 +515,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const shardContent = emitShard({
         advisories,
         containers,
+        env,
         flagKeys,
         hasAccessFacade,
         hasAi,

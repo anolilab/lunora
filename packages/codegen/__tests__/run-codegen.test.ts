@@ -396,6 +396,98 @@ export const other = defineIdentity({ userId: v.string() });
             });
         });
 
+        describe("typed env layer (defineEnv)", () => {
+            const writeEnv = (specifier = "@lunora/server"): void => {
+                writeFileSync(
+                    join(workdir, "lunora", "env.ts"),
+                    `import { defineEnv, v } from "${specifier}";
+export const env = defineEnv({
+    STRIPE_KEY: v.string(),
+    PORT: v.optional(v.number()),
+});
+`,
+                    "utf8",
+                );
+            };
+
+            it("leaves server.ts + shard.ts byte-identical when no defineEnv is declared", () => {
+                expect.assertions(4);
+
+                const { server, shard } = runCodegen({ lint: false, projectRoot: workdir }).generated;
+
+                // No contract ⇒ none of the wiring fragments are emitted, so the
+                // output is the baseline (guards the golden-fixture invariant).
+                expect(server).not.toContain("lunoraEnvContract");
+                expect(server).not.toContain("export type LunoraEnv");
+                expect(shard).not.toContain("lunoraEnvContract");
+                expect(shard).not.toContain("envConfig");
+            });
+
+            it("types ctx.env as the validated shape on every ctx when the project declares lunora/env.ts", () => {
+                expect.assertions(6);
+
+                writeEnv();
+
+                const { server } = runCodegen({ lint: false, projectRoot: workdir }).generated;
+
+                // The validated shape is recovered from the declaration itself
+                // (`ReturnType` over the accessor's `typeof` — no parallel type
+                // system, no runtime import in server.ts).
+                expect(server).toContain('import type * as lunoraEnvContract from "../env.js";');
+                expect(server).toContain("export type LunoraEnv = ReturnType<typeof lunoraEnvContract.env>;");
+                // ctx.env is typed on EVERY ctx (query/mutation/action).
+                expect(ctxInterface(server, "QueryCtx")).toContain("readonly env: LunoraEnv;");
+                expect(ctxInterface(server, "MutationCtx")).toContain("readonly env: LunoraEnv;");
+                expect(ctxInterface(server, "ActionCtx")).toContain("readonly env: LunoraEnv;");
+                // Each ctx omits the base optional `env` so the narrowed one replaces it.
+                expect(server).toContain('export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage" | "env">');
+            });
+
+            it("wires ctx.env end-to-end in the ShardDO by applying the accessor to the worker env", () => {
+                expect.assertions(4);
+
+                writeEnv();
+
+                const { shard } = runCodegen({ lint: false, projectRoot: workdir }).generated;
+
+                // Imported as a VALUE namespace (the accessor must run at ctx-build time).
+                expect(shard).toContain('import * as lunoraEnvContract from "../env.js";');
+                expect(shard).toContain("const envConfig = lunoraEnvContract.env(env);");
+                // Rides every ctx, so it is spliced into the shared ctx literal…
+                expect(shard).toContain("\n                env: envConfig,");
+                // …never gated behind the action-only block.
+                expect(shard).not.toContain("ctx.env = envConfig;");
+            });
+
+            it("routes ctx.env types through the lunorash umbrella when the accessor is imported from lunorash/server", () => {
+                expect.assertions(2);
+
+                writeEnv("lunorash/server");
+
+                const { server, shard } = runCodegen({ lint: false, projectRoot: workdir }).generated;
+
+                // The contract module is always `../env.js` regardless of the umbrella —
+                // it is the user's own module, not a base-package specifier.
+                expect(server).toContain("export type LunoraEnv = ReturnType<typeof lunoraEnvContract.env>;");
+                expect(shard).toContain("const envConfig = lunoraEnvContract.env(env);");
+            });
+
+            it("errors when more than one defineEnv is declared", () => {
+                expect.assertions(1);
+
+                writeFileSync(
+                    join(workdir, "lunora", "env.ts"),
+                    `import { defineEnv, v } from "@lunora/server";
+export const env = defineEnv({ PORT: v.number() });
+export const other = defineEnv({ HOST: v.string() });
+`,
+                    "utf8",
+                );
+
+                expect(() => runCodegen({ lint: false, projectRoot: workdir })).toThrow(/exactly one is allowed/u);
+            });
+        });
+
         it("wires ctx.ai end-to-end when a function reads ctx.ai", () => {
             expect.assertions(3);
 
