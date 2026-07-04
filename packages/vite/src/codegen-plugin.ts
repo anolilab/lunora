@@ -1,13 +1,23 @@
 import { existsSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { basename, join, resolve, sep } from "node:path";
 
 import { CodegenDiagnosticError, createCodegenProject, refreshCodegenProject, runCodegen } from "@lunora/codegen";
 import type { ExportGap } from "@lunora/config";
-import { collectWranglerSecretVariables, inferLunoraBindings, reconcileWranglerBindings } from "@lunora/config";
+import {
+    collectWranglerSecretVariables,
+    findWranglerFile,
+    inferLunoraBindings,
+    LUNORA_CONFIG_FILE,
+    readWranglerJsonc,
+    reconcileWranglerBindings,
+    WRANGLER_FILES,
+} from "@lunora/config";
 import type { Project } from "ts-morph";
 import type { Plugin, ViteDevServer } from "vite";
+import { isRunnableDevEnvironment } from "vite";
 
 import { reconcileWranglerCrons } from "./cron-sync";
+import LUNORA_API_UPDATED_EVENT from "./hmr-events";
 import { advisoryLine, LUNORA_TAG } from "./log";
 import type { ResolvedLunoraPluginOptions } from "./types";
 
@@ -162,6 +172,129 @@ const runCodegenSafely = (
 };
 
 /**
+ * Notify the dev environments after a successful codegen run — replacing the old
+ * single, blanket browser `full-reload` that dropped every open WebSocket
+ * subscription, optimistic-mutation layer, offline-queue entry, and form field
+ * on every schema save (the worst default for a real-time framework).
+ *
+ * Non-runnable worker environments (workerd, run by `@cloudflare/vite-plugin`,
+ * for which {@link isRunnableDevEnvironment} returns `false`) still get a scoped
+ * `full-reload` on their own hot channel: the build-side `invalidateModule` loop
+ * alone does not evict the remote runner's evaluated-module cache, so the worker
+ * would keep serving the previous `_generated/*`. The scoped reload makes the
+ * runner drop its cache and re-evaluate the fresh generated code. Astro uses the
+ * same idiom for Cloudflare's workerd.
+ *
+ * The client/browser environment (always named `client`) is NOT reloaded. Vite's
+ * granular module HMR already re-imports the changed `_generated/*` in place, and
+ * the worker reload bounces the socket so the client's reconnect path
+ * re-subscribes with fresh server behaviour — all without a page reload. We emit
+ * a scoped custom event ({@link LUNORA_API_UPDATED_EVENT}) as a non-destructive
+ * hook instead. The one exception is `clearErrorOverlay`: when this run recovers
+ * from a codegen error overlay, the client is reloaded once so the overlay is
+ * cleared — a rare broken-to-fixed transition where a reload is expected, not a
+ * per-keystroke one.
+ *
+ * Falls back to a browser `full-reload` only when there is genuinely no client
+ * environment.
+ */
+const notifyEnvironmentsAfterCodegen = (server: ViteDevServer, changedFile: string, clearErrorOverlay: boolean): void => {
+    // The value type of the `environments` record — captured so the client env
+    // can be tracked as possibly-absent (defensive; Vite always registers one).
+    let clientEnvironment: (typeof server.environments)[string] | undefined;
+
+    for (const [name, environment] of Object.entries(server.environments)) {
+        if (name === "client") {
+            clientEnvironment = environment;
+
+            continue;
+        }
+
+        // A runnable (Node SSR) environment re-evaluates on its next request off
+        // the invalidated module graph, so it needs no reload signal.
+        if (isRunnableDevEnvironment(environment)) {
+            continue;
+        }
+
+        // Non-runnable, non-client → the workerd worker: evict its runner cache.
+        environment.hot.send({ path: "*", triggeredBy: changedFile, type: "full-reload" });
+    }
+
+    if (clientEnvironment === undefined) {
+        // No client environment at all — fall back to a browser reload.
+        server.hot.send({ type: "full-reload" });
+
+        return;
+    }
+
+    if (clearErrorOverlay) {
+        clientEnvironment.hot.send({ type: "full-reload" });
+
+        return;
+    }
+
+    clientEnvironment.hot.send({ event: LUNORA_API_UPDATED_EVENT, type: "custom" });
+};
+
+/**
+ * A stable fingerprint of the binding-relevant slice of the project's config
+ * files (`wrangler.jsonc` + `lunora.json`), used by the dev config-drift watcher
+ * to tell a real, restart-worthy edit apart from codegen's own idempotent writes.
+ *
+ * Crucially, the codegen-owned `triggers.crons` key is stripped from the wrangler
+ * config: `reconcileWranglerCrons` rewrites it on every schema save, and those
+ * writes must never read as external drift and trigger a restart loop. Both files
+ * are JSONC-parsed first, so comment/whitespace-only edits don't count either. A
+ * transient unparseable read (mid-write) keys off the raw text so it doesn't
+ * momentarily look like "no bindings" and churn.
+ */
+const computeConfigFingerprint = (projectRoot: string): string => {
+    let wranglerPart = "absent";
+    const wranglerFile = findWranglerFile(projectRoot);
+
+    if (wranglerFile !== undefined) {
+        try {
+            const { parsed, text } = readWranglerJsonc<Record<string, unknown>>(wranglerFile);
+
+            if (parsed === undefined) {
+                wranglerPart = `raw:${text}`;
+            } else {
+                const clone: Record<string, unknown> = { ...parsed };
+                const { triggers } = clone;
+
+                if (triggers !== null && typeof triggers === "object") {
+                    const restTriggers: Record<string, unknown> = { ...(triggers as Record<string, unknown>) };
+
+                    delete restTriggers.crons;
+                    clone.triggers = restTriggers;
+                }
+
+                wranglerPart = JSON.stringify(clone);
+            }
+        } catch {
+            wranglerPart = "unreadable";
+        }
+    }
+
+    let lunoraPart = "absent";
+    const lunoraConfigPath = join(projectRoot, LUNORA_CONFIG_FILE);
+
+    if (existsSync(lunoraConfigPath)) {
+        try {
+            // `readWranglerJsonc` is a generic JSONC reader — reused here for the
+            // (also-JSONC) lunora.json so its parse/normalize path stays identical.
+            const { parsed, text } = readWranglerJsonc<Record<string, unknown>>(lunoraConfigPath);
+
+            lunoraPart = parsed === undefined ? `raw:${text}` : JSON.stringify(parsed);
+        } catch {
+            lunoraPart = "unreadable";
+        }
+    }
+
+    return `${wranglerPart} ${lunoraPart}`;
+};
+
+/**
  * Vite plugin that runs `@lunora/codegen` on startup and on file changes
  * inside the lunora schema directory.
  */
@@ -180,6 +313,17 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
     // Captured in configureServer and used to push overlay events. Undefined in
     // build mode (vite build) — the overlay callbacks are never wired up then.
     let devServer: ViteDevServer | undefined;
+
+    // --- Config-drift auto-restart state (see the config watcher in
+    // configureServer) --- Lives at the plugin-factory scope so it survives a
+    // `server.restart()` (Vite re-invokes the hooks on the SAME plugin instance).
+    //
+    // `configFingerprint` is the binding-relevant baseline of wrangler.jsonc +
+    // lunora.json, refreshed after every Lunora-initiated config write so codegen's
+    // own idempotent rewrites never look like drift. `restartInFlight` collapses a
+    // burst of edits during the async restart window into one restart.
+    let configFingerprint: string | undefined;
+    let restartInFlight = false;
 
     return {
         async buildStart() {
@@ -217,11 +361,26 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                     type: "error",
                 });
             });
+
+            // Re-baseline the config-drift fingerprint AFTER our own binding write,
+            // so the watcher event for that write is absorbed instead of read as an
+            // external edit (which would restart the just-started server). Dev only
+            // — build mode has no watcher. buildStart runs after configureServer, so
+            // this supersedes the baseline captured there.
+            if (devServer !== undefined) {
+                configFingerprint = computeConfigFingerprint(options.projectRoot);
+            }
         },
         configureServer(server: ViteDevServer) {
             devServer = server;
 
             server.watcher.add(absoluteSchemaDirectory);
+
+            // Baseline the config-drift fingerprint from the current on-disk state
+            // before any watcher event can fire (buildStart re-baselines it after
+            // its binding write). See the config watcher wired at the end of this
+            // hook and `computeConfigFingerprint` for the anti-loop rationale.
+            configFingerprint = computeConfigFingerprint(options.projectRoot);
 
             // Reuse the dev server's logger for codegen output. Declared here
             // (not inside the debounced callback) so the arrow bodies don't nest
@@ -238,9 +397,17 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 },
             };
 
+            // True while a codegen error overlay is showing in the browser, so
+            // the next *successful* run knows to reload the client once to clear
+            // it (see `notifyEnvironmentsAfterCodegen`). Normal saves never set
+            // this, so they stay non-destructive.
+            let hadErrorOverlay = false;
+
             // Overlay callbacks: push failures to the browser and clear on recovery.
             const overlay: OverlayCallbacks = {
                 onError(error, message) {
+                    hadErrorOverlay = true;
+
                     // `CodegenDiagnosticError` carries the exact source location;
                     // for plain errors the location is unavailable in the overlay
                     // — steer the user to the terminal where the full stack is logged.
@@ -366,16 +533,92 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
 
                     invalidateGenerated();
 
-                    // Exactly one `full-reload` per successful codegen run. This
-                    // also clears any error overlay left from a previous failed
-                    // run, so recovery needs no separate reload.
-                    server.hot.send({ type: "full-reload" });
+                    // Scope the reload: evict the workerd runner's module cache
+                    // (invalidateModule alone doesn't reach it) and nudge the
+                    // client with a custom event instead of a destructive browser
+                    // reload — unless we're recovering from an error overlay.
+                    notifyEnvironmentsAfterCodegen(server, normalized, hadErrorOverlay);
+                    hadErrorOverlay = false;
                 }, DEBOUNCE_MS);
             };
 
             server.watcher.on("add", onChange);
             server.watcher.on("change", onChange);
             server.watcher.on("unlink", onChange);
+
+            // The config files whose binding-relevant drift restarts the dev server
+            // in place. Both wrangler candidate names are watched (even if absent
+            // now) so creating one mid-session is caught. `@cloudflare/vite-plugin`
+            // already restarts on its own wrangler config change when the Cloudflare
+            // integration is active, but it does NOT watch lunora.json (the remote-
+            // binding preference) — and Vite's `server.restart()` coalesces
+            // concurrent calls via its `_restartPromise`, so a same-tick double
+            // restart is harmless. Under the BYO (`cloudflare: false`) path nothing
+            // else watches wrangler.jsonc, so this becomes the sole restart trigger.
+            const configWatchPaths = new Set<string>([
+                ...WRANGLER_FILES.map((name) => resolve(options.projectRoot, name)),
+                resolve(options.projectRoot, LUNORA_CONFIG_FILE),
+            ]);
+
+            for (const configPath of configWatchPaths) {
+                server.watcher.add(configPath);
+            }
+
+            const onConfigChange = (file: string): void => {
+                if (!configWatchPaths.has(resolve(file))) {
+                    return;
+                }
+
+                // A restart is already resolving — let it settle; the fresh server
+                // reads the latest on-disk config, so this edit is not lost.
+                if (restartInFlight) {
+                    return;
+                }
+
+                const nextFingerprint = computeConfigFingerprint(options.projectRoot);
+
+                // First observation (baseline not yet set) — adopt it, don't restart.
+                if (configFingerprint === undefined) {
+                    configFingerprint = nextFingerprint;
+
+                    return;
+                }
+
+                // Unchanged binding-relevant slice — a codegen cron rewrite, or a
+                // comment/whitespace-only edit. Nothing to restart for.
+                if (nextFingerprint === configFingerprint) {
+                    return;
+                }
+
+                // Adopt the new baseline BEFORE restarting so a failed restart (which
+                // keeps the current server up) doesn't re-fire on the same edit.
+                configFingerprint = nextFingerprint;
+                restartInFlight = true;
+
+                server.config.logger.info(`${LUNORA_TAG} ${basename(resolve(file))} changed — restarting dev server`);
+
+                // `server.restart()` must never throw out of the watcher: on failure
+                // keep serving the last-good config and surface the reason. The user
+                // can re-save the config to retry. `.finally` clears the guard on both
+                // paths; the terminal `.catch` handles a rejected restart (and marks
+                // the promise handled, so it never floats).
+                Promise.resolve(server.restart())
+                    .finally(() => {
+                        restartInFlight = false;
+                    })
+                    .catch((error: unknown) => {
+                        const message = error instanceof Error ? error.message : String(error);
+
+                        server.config.logger.error(
+                            `${LUNORA_TAG} dev server restart failed: ${message} — keeping the running server; re-save your config to retry.`,
+                        );
+                        server.hot.send({ err: { loc: undefined, message: `[lunora] dev server restart failed: ${message}`, stack: "" }, type: "error" });
+                    });
+            };
+
+            server.watcher.on("add", onConfigChange);
+            server.watcher.on("change", onConfigChange);
+            server.watcher.on("unlink", onConfigChange);
 
             // Tear down on server close: stop a pending debounce from firing on a
             // dead ws/module graph and drop the watcher listeners so repeated
@@ -396,6 +639,9 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                     server.watcher.off("add", onChange);
                     server.watcher.off("change", onChange);
                     server.watcher.off("unlink", onChange);
+                    server.watcher.off("add", onConfigChange);
+                    server.watcher.off("change", onConfigChange);
+                    server.watcher.off("unlink", onConfigChange);
                 });
             };
         },

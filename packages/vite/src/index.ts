@@ -176,6 +176,9 @@ export { createCommandProbe, DEV_WORKER_ENV_VALUE, DEV_WORKER_ENV_VAR, withDevWo
 // `isAutoComposable` / `CLASS_A_WIRING` are exported for the CLI + tests.
 export type { ClassAWiring } from "./framework-compose-plugin";
 export { buildWorkerEntrySource, CLASS_A_WIRING, frameworkComposePlugin, isAutoComposable, LUNORA_WORKER_VIRTUAL_ID } from "./framework-compose-plugin";
+// The custom HMR event the codegen plugin sends on the client environment's hot
+// channel after a successful codegen run (in place of a blanket browser reload).
+export { default as LUNORA_API_UPDATED_EVENT } from "./hmr-events";
 // `framework-detect-plugin` (the `LunoraPluginContext` bag + `createPluginContext`
 // + the plugin itself) stays internal plumbing — it is wired into `lunora()`
 // here and consumed only there + in tests until a second reader (PLAN4 M4
