@@ -629,11 +629,28 @@ interface StopCommandOptions {
 }
 
 /**
+ * Report a force-kill that did not land (e.g. win32 `taskkill` exiting
+ * non-zero, or an EPERM'd SIGKILL): the stop must not read as success — keep
+ * the record so a retry can still target the server, and fail the command.
+ */
+const reportSurvivedForceKill = (state: DevServerState, options: StopCommandOptions): { code: number } => {
+    if (options.json) {
+        printJson({ pid: state.pid, stopped: false });
+    } else {
+        options.logger.error(
+            `dev server (pid ${String(state.pid)}) survived the force-kill — record kept; retry \`lunora dev stop\` or kill the process manually.`,
+        );
+    }
+
+    return { code: 1 };
+};
+
+/**
  * `lunora dev stop` — SIGTERM the recorded dev server, escalate after a grace
- * period (see {@link forceKillRecordedServer}), and clear the state record.
- * Idempotent: stopping when nothing runs succeeds silently. The record's PID
- * is verified to still be the process that wrote it (PID-reuse guard) before
- * anything is signalled.
+ * period (see {@link forceKillRecordedServer}), verify the kill landed, and
+ * clear the state record. Idempotent: stopping when nothing runs succeeds
+ * silently. The record's PID is verified to still be the process that wrote it
+ * (PID-reuse guard) before anything is signalled.
  */
 const runDevStop = async (options: StopCommandOptions): Promise<{ code: number }> => {
     const { cwd, logger } = options;
@@ -682,6 +699,11 @@ const runDevStop = async (options: StopCommandOptions): Promise<{ code: number }
 
     if (alive(state.pid)) {
         forceKillRecordedServer(state, signal, platform, spawnSyncImpl);
+        await sleep(pollInterval);
+
+        if (alive(state.pid)) {
+            return reportSurvivedForceKill(state, options);
+        }
     }
 
     // The server clears its own record on clean shutdown; this covers the

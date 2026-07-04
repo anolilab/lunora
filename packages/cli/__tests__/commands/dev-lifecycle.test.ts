@@ -85,7 +85,9 @@ describe("lunora dev lifecycle", () => {
             const signals: { pid: number; signal: string }[] = [];
 
             const result = await runDevStop({
-                alive: () => true,
+                // Alive until the SIGKILL lands — the post-force-kill check must
+                // observe the death or stop now reports failure.
+                alive: () => !signals.some((sent) => sent.signal === "SIGKILL"),
                 cwd: workdir,
                 json: false,
                 logger: recordingLogger().logger,
@@ -115,7 +117,7 @@ describe("lunora dev lifecycle", () => {
             const signals: { pid: number; signal: string }[] = [];
 
             await runDevStop({
-                alive: () => true,
+                alive: () => !signals.some((sent) => sent.signal === "SIGKILL"),
                 cwd: workdir,
                 json: false,
                 logger: recordingLogger().logger,
@@ -589,7 +591,7 @@ describe("lunora dev lifecycle", () => {
             const signals: { pid: number; signal: string }[] = [];
 
             await runDevStop({
-                alive: () => true,
+                alive: () => spawnCalls.length === 0,
                 cwd: workdir,
                 json: false,
                 logger: recordingLogger().logger,
@@ -620,7 +622,7 @@ describe("lunora dev lifecycle", () => {
             const signals: { pid: number; signal: string }[] = [];
 
             await runDevStop({
-                alive: () => true,
+                alive: () => !signals.some((sent) => sent.signal === "SIGKILL"),
                 cwd: workdir,
                 json: false,
                 logger: recordingLogger().logger,
@@ -641,6 +643,42 @@ describe("lunora dev lifecycle", () => {
                 { pid: 4242, signal: "SIGTERM" },
                 { pid: -4242, signal: "SIGKILL" },
             ]);
+        });
+
+        it("keeps the record and reports failure when the force-kill does not land", async () => {
+            expect.assertions(4);
+
+            writeDevServerState(workdir, { background: true, mode: "cli", pid: 4242, url: "http://localhost:8787" });
+
+            const spawnCalls: unknown[][] = [];
+            const { lines, logger } = recordingLogger();
+
+            const result = await runDevStop({
+                // Never dies — models a win32 `taskkill` that exits non-zero
+                // while the target process survives.
+                alive: () => true,
+                cwd: workdir,
+                json: false,
+                logger,
+                platform: "win32",
+                pollIntervalMs: 1,
+                signal: () => {
+                    /* graceful SIGTERM attempt — irrelevant here */
+                },
+                spawnSyncImpl: (command, args, options) => {
+                    spawnCalls.push([command, args, options]);
+
+                    return { status: 1 };
+                },
+                stopGraceMs: 5,
+            });
+
+            expect(result.code).toBe(1);
+            // The taskkill escalation was attempted exactly once...
+            expect(spawnCalls).toHaveLength(1);
+            // ...and the record survives so a retry can still target the server.
+            expect(readDevServerState(workdir)?.pid).toBe(4242);
+            expect(lines.some((line) => line.level === "error" && line.message.includes("survived the force-kill"))).toBe(true);
         });
     });
 });
