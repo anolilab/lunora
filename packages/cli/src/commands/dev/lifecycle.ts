@@ -28,6 +28,7 @@ import {
     readDevServerState,
     readLiveDevServerState,
     readProjectDependencyNames,
+    updateDevServerState,
 } from "@lunora/config";
 
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
@@ -335,6 +336,13 @@ const waitUntilReady = async (parameters: {
  * it once Vite listens), so the record always carries the authoritative URL and
  * the PID that `dev stop` must signal. This parent only passes the log path and
  * detach marker down via env.
+ *
+ * On the ready-timeout path the child may still be alive and compiling — it
+ * hasn't been killed, just not waited for any longer — so the still-provisional
+ * parent record is re-pointed at the child's PID (see the timeout branch below)
+ * rather than left to be deleted by the caller's `finally`. That keeps `dev
+ * status`/`stop`/`logs` able to find the orphan instead of reporting "No dev
+ * server running" for a process that is, in fact, running.
  */
 const runDevBackground = async (options: BackgroundCommandOptions): Promise<{ code: number }> => {
     const { cwd, logger } = options;
@@ -382,13 +390,33 @@ const runDevBackground = async (options: BackgroundCommandOptions): Promise<{ co
             logger.error(`  ${line}`);
         }
 
-        clearDevServerState(cwd, child.pid);
+        // Guard with `?? process.pid`: a spawn failure can yield `pid:
+        // undefined` before the child ever claimed anything, in which case the
+        // record (if any) is still this parent's own provisional claim — or,
+        // worse, a pre-existing record some OTHER server owns. An unguarded
+        // clear would delete that unrelated record.
+        clearDevServerState(cwd, child.pid ?? process.pid);
 
         return { code: outcome.exitCode === 0 ? 1 : outcome.exitCode };
     }
 
+    if (child.pid !== undefined) {
+        // Keep the record alive past the parent: point it at the detached
+        // child so `dev status`/`stop` can still see and signal it. Only
+        // re-point while the record is still OUR provisional claim — if the
+        // child already wrote its own authoritative record (superseding
+        // ours), leave it untouched rather than clobber it.
+        const current = readDevServerState(cwd);
+
+        if (current?.pid === process.pid) {
+            updateDevServerState(cwd, { logFile: logPath, pid: child.pid });
+        }
+    }
+
+    const pidHint = child.pid === undefined ? "" : ` (pid ${String(child.pid)})`;
+
     logger.warn(
-        `dev server did not confirm ready within ${String(Math.round(timeout / 1000))}s — it may still be compiling. ` +
+        `dev server did not confirm ready within ${String(Math.round(timeout / 1000))}s — it may still be compiling${pidHint}. ` +
             "Check `lunora dev status` and `lunora dev logs`; `lunora dev stop` shuts it down.",
     );
 
@@ -529,6 +557,9 @@ const processGroupId = (pid: number): number | undefined => {
 /** The signal seam `dev stop` drives — `process.kill` in production, recorded in tests. */
 type SignalFunction = (pid: number, signal: NodeJS.Signals) => void;
 
+/** The `spawnSync` seam the win32 `taskkill` escalation drives — the real `spawnSync` in production, recorded in tests. */
+type SpawnSyncFunction = (command: string, args: ReadonlyArray<string>, options: { stdio: "ignore" }) => unknown;
+
 /**
  * Force-kill escalation after a stalled graceful shutdown, scoped by platform
  * and by how the server was started.
@@ -541,12 +572,21 @@ type SignalFunction = (pid: number, signal: NodeJS.Signals) => void;
  * leader). A FOREGROUND record gets a single-PID kill only: the foreground
  * CLI may share a process group with the user's shell job (no job control
  * under `sh -c`), so a group kill could fell innocent processes.
+ *
+ * `platform` and `spawnSyncImpl` are injection seams (defaulting to the real
+ * `process.platform` / `spawnSync`), following the same convention as the
+ * `signal` parameter — they let tests drive the win32 `taskkill` branch
+ * without a Windows host.
  */
-const forceKillRecordedServer = (state: DevServerState, signal: SignalFunction): void => {
-    if (process.platform === "win32") {
+const forceKillRecordedServer = (
+    state: DevServerState,
+    signal: SignalFunction,
+    platform: NodeJS.Platform = process.platform,
+    spawnSyncImpl: SpawnSyncFunction = spawnSync,
+): void => {
+    if (platform === "win32") {
         try {
-            // eslint-disable-next-line sonarjs/no-os-command-from-path -- `taskkill` must resolve from PATH (Windows system tool); args are fixed and no shell is involved
-            spawnSync("taskkill", ["/pid", String(state.pid), "/T", "/F"], { stdio: "ignore" });
+            spawnSyncImpl("taskkill", ["/pid", String(state.pid), "/T", "/F"], { stdio: "ignore" });
         } catch {
             /* already gone */
         }
@@ -577,10 +617,14 @@ interface StopCommandOptions {
     cwd: string;
     json: boolean;
     logger: Logger;
+    /** Injection seam for tests — defaults to `process.platform`. */
+    platform?: NodeJS.Platform;
     /** Injection seam for tests — defaults to {@link POLL_INTERVAL_MS} / {@link STOP_GRACE_MS}. */
     pollIntervalMs?: number;
     /** Injection seam for tests — defaults to `process.kill`. */
     signal?: SignalFunction;
+    /** Injection seam for tests — defaults to the real `spawnSync` (used by the win32 `taskkill` escalation). */
+    spawnSyncImpl?: SpawnSyncFunction;
     stopGraceMs?: number;
 }
 
@@ -602,6 +646,8 @@ const runDevStop = async (options: StopCommandOptions): Promise<{ code: number }
         });
     const pollInterval = options.pollIntervalMs ?? POLL_INTERVAL_MS;
     const grace = options.stopGraceMs ?? STOP_GRACE_MS;
+    const platform = options.platform ?? process.platform;
+    const spawnSyncImpl = options.spawnSyncImpl ?? spawnSync;
 
     if (state === undefined || !alive(state.pid)) {
         // Drop the stale record — but only if it is still the one we read.
@@ -635,7 +681,7 @@ const runDevStop = async (options: StopCommandOptions): Promise<{ code: number }
     }
 
     if (alive(state.pid)) {
-        forceKillRecordedServer(state, signal);
+        forceKillRecordedServer(state, signal, platform, spawnSyncImpl);
     }
 
     // The server clears its own record on clean shutdown; this covers the

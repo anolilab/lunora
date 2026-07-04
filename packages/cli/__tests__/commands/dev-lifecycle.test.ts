@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { DEV_LOG_FILE, readDevServerState, writeDevServerState } from "@lunora/config";
+import { claimDevServerState, DEV_LOG_FILE, readDevServerState, writeDevServerState } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DevOptions } from "../../src/commands/dev/index";
@@ -444,7 +444,7 @@ describe("lunora dev lifecycle", () => {
         });
 
         it("times out with an actionable hint when readiness is never confirmed", async () => {
-            expect.assertions(2);
+            expect.assertions(3);
 
             const { lines, logger } = recordingLogger();
 
@@ -463,6 +463,184 @@ describe("lunora dev lifecycle", () => {
 
             expect(result.code).toBe(1);
             expect(lines.some((line) => line.level === "warn" && line.message.includes("lunora dev logs"))).toBe(true);
+            // The child's pid is surfaced in the warning so an agent (or human)
+            // knows which process to inspect without a separate `dev status`.
+            expect(lines.some((line) => line.level === "warn" && line.message.includes("(pid 999999)"))).toBe(true);
+        });
+
+        it("hands the provisional record to the detached child when the ready wait times out", async () => {
+            expect.assertions(3);
+
+            // Simulate the parent's own provisional claim, as `startBackground`
+            // does before spawning the detached child.
+            claimDevServerState(workdir, {
+                background: true,
+                mode: "cli",
+                pid: process.pid,
+                startedAt: new Date().toISOString(),
+                url: "http://localhost:8787",
+            });
+
+            const { lines, logger } = recordingLogger();
+
+            const result = await runDevBackground({
+                command: { args: ["dev"], command: "lunora" },
+                cwd: workdir,
+                json: false,
+                logger,
+                pollIntervalMs: 1,
+                probe: async () => false,
+                readyTimeoutMs: 25,
+                spawnDetached: () => {
+                    return { exited: new Promise<number>(() => {}), pid: 4242 };
+                },
+            });
+
+            expect(result.code).toBe(1);
+            // The record now points at the detached child, not the parent that
+            // is about to return — `dev status`/`stop`/`logs` can still find
+            // and signal it instead of reporting "No dev server running".
+            expect(readDevServerState(workdir)?.pid).toBe(4242);
+            expect(lines.some((line) => line.level === "warn" && line.message.includes("(pid 4242)"))).toBe(true);
+        });
+
+        it("does not clobber the child's own authoritative record when it supersedes before the timeout fires", async () => {
+            expect.assertions(3);
+
+            claimDevServerState(workdir, {
+                background: true,
+                mode: "cli",
+                pid: process.pid,
+                startedAt: new Date().toISOString(),
+                url: "http://localhost:8787",
+            });
+
+            const result = await runDevBackground({
+                command: { args: ["dev"], command: "lunora" },
+                cwd: workdir,
+                json: false,
+                logger: recordingLogger().logger,
+                pollIntervalMs: 1,
+                // The probe never confirms ready — but the "child" independently
+                // supersedes the record with its authoritative info first, as the
+                // vite dev-state plugin / wrangler daemon would.
+                probe: async () => false,
+                readyTimeoutMs: 25,
+                spawnDetached: () => {
+                    // `pid: process.ppid` — a genuinely alive pid (the runner's
+                    // parent), like the other "child writes its own record"
+                    // tests in this file use. A fake pid would itself read as
+                    // stale/dead and get cleared by `readLiveDevServerState`'s
+                    // own staleness check inside the poll loop, unrelated to
+                    // (and masking) the behaviour under test here.
+                    writeDevServerState(workdir, {
+                        background: true,
+                        mode: "cli",
+                        pid: process.ppid,
+                        studioUrl: "http://127.0.0.1:6173",
+                        url: "http://localhost:9001",
+                    });
+
+                    return { exited: new Promise<number>(() => {}), pid: process.ppid };
+                },
+            });
+
+            expect(result.code).toBe(1);
+
+            const state = readDevServerState(workdir);
+
+            // The child's own authoritative record survives untouched — the
+            // parent's timeout handoff must not overwrite its real URL.
+            expect(state?.pid).toBe(process.ppid);
+            expect(state?.url).toBe("http://localhost:9001");
+        });
+
+        it("guards the exited-branch clear when the spawn failed before a pid was ever assigned", async () => {
+            expect.assertions(2);
+
+            // A pre-existing record owned by a totally different (but genuinely
+            // alive — see the note above) process — an unguarded
+            // `clearDevServerState(cwd, undefined)` would delete it.
+            writeDevServerState(workdir, { mode: "cli", pid: process.ppid, url: "http://localhost:9999" });
+
+            const result = await runDevBackground({
+                command: { args: ["dev"], command: "lunora" },
+                cwd: workdir,
+                json: false,
+                logger: recordingLogger().logger,
+                pollIntervalMs: 1,
+                probe: async () => false,
+                readyTimeoutMs: 2000,
+                spawnDetached: () => {
+                    return { exited: Promise.resolve(1), pid: undefined };
+                },
+            });
+
+            expect(result.code).toBe(1);
+            expect(readDevServerState(workdir)?.pid).toBe(process.ppid);
+        });
+
+        it("escalates a Windows record via `taskkill` instead of a POSIX process-group signal", async () => {
+            expect.assertions(2);
+
+            writeDevServerState(workdir, { background: true, mode: "cli", pid: 4242, url: "http://localhost:8787" });
+
+            const spawnCalls: unknown[][] = [];
+            const signals: { pid: number; signal: string }[] = [];
+
+            await runDevStop({
+                alive: () => true,
+                cwd: workdir,
+                json: false,
+                logger: recordingLogger().logger,
+                platform: "win32",
+                pollIntervalMs: 1,
+                signal: (pid, signal) => {
+                    signals.push({ pid, signal });
+                },
+                spawnSyncImpl: (command, args, options) => {
+                    spawnCalls.push([command, args, options]);
+
+                    return { status: 0 };
+                },
+                stopGraceMs: 5,
+            });
+
+            expect(spawnCalls).toStrictEqual([["taskkill", ["/pid", "4242", "/T", "/F"], { stdio: "ignore" }]]);
+            // The initial graceful SIGTERM still goes through `signal` — only
+            // the stalled-shutdown escalation itself is taskkill's job on win32.
+            expect(signals).toStrictEqual([{ pid: 4242, signal: "SIGTERM" }]);
+        });
+
+        it("escalates a background record with a POSIX process-group SIGKILL regardless of host platform", async () => {
+            expect.assertions(1);
+
+            writeDevServerState(workdir, { background: true, mode: "cli", pid: 4242, url: "http://localhost:8787" });
+
+            const signals: { pid: number; signal: string }[] = [];
+
+            await runDevStop({
+                alive: () => true,
+                cwd: workdir,
+                json: false,
+                logger: recordingLogger().logger,
+                platform: "linux",
+                pollIntervalMs: 1,
+                signal: (pid, signal) => {
+                    signals.push({ pid, signal });
+                },
+                spawnSyncImpl: (): never => {
+                    throw new Error("spawnSyncImpl must not be invoked on POSIX");
+                },
+                stopGraceMs: 5,
+            });
+
+            // SIGTERM first, then the group SIGKILL (negative pid — the pgid
+            // lookup on the fake pid fails and falls back to the recorded pid).
+            expect(signals).toStrictEqual([
+                { pid: 4242, signal: "SIGTERM" },
+                { pid: -4242, signal: "SIGKILL" },
+            ]);
         });
     });
 });
