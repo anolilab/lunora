@@ -70,7 +70,7 @@
     },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",
-        "@electric-sql/pglite": "0.5.3",
+        "@electric-sql/pglite": "0.5.4",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
