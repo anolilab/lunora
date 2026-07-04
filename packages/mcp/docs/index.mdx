@@ -45,6 +45,10 @@ Configuration comes from the environment, so the spawn config stays a plain
 - `LUNORA_ADMIN_TOKEN` (optional) — bearer token sent on every RPC.
 - `LUNORA_MCP_ALLOW_WRITES` (optional) — set to `1`/`true`/`yes`/`on` to expose
   the mutation/action run tools. Default: **read-only** (writes disabled).
+- `LUNORA_MCP_ALLOW_AGENTS` (optional) — set to `1`/`true`/`yes`/`on` to expose
+  the [agent tools](#expose-an-agent). Default: **agents disabled**.
+- `LUNORA_MCP_AGENTS` (optional) — a `;`-separated list of `name:description`
+  pairs selecting which agents to expose (see [Expose an agent](#expose-an-agent)).
 
 ```jsonc
 {
@@ -69,14 +73,16 @@ Configuration comes from the environment, so the spawn config stays a plain
 Each tool maps onto a method `LunoraClient` already provides. `TOOL_DEFINITIONS`
 is the registered tool surface; `callTool` dispatches a call against a client.
 
-| Tool                         | Input                                | What it does                                                                                    |
-| ---------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| `lunora_list_functions`      | _none_                               | Lists the deployment's public functions (queries, mutations, actions) with their kinds.         |
-| `lunora_list_tables`         | _none_                               | Lists the deployment's `.global()` tables with their row counts.                                |
-| `lunora_get_function_schema` | `functionPath`                       | Returns one function's argument descriptors and kind, so a caller can build valid args.         |
-| `lunora_run_query`           | `functionPath`, `args?`, `shardKey?` | Runs a query and returns its result. Read-only.                                                 |
-| `lunora_run_mutation`        | `functionPath`, `args?`, `shardKey?` | Runs a mutation and returns its result. Writes data. **Requires writes enabled.**               |
-| `lunora_run_action`          | `functionPath`, `args?`, `shardKey?` | Runs an action and returns its result. May call external services. **Requires writes enabled.** |
+| Tool                         | Input                                | What it does                                                                                                                                 |
+| ---------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lunora_list_functions`      | _none_                               | Lists the deployment's public functions (queries, mutations, actions) with their kinds.                                                      |
+| `lunora_list_tables`         | _none_                               | Lists the deployment's `.global()` tables with their row counts.                                                                             |
+| `lunora_get_function_schema` | `functionPath`                       | Returns one function's argument descriptors and kind, so a caller can build valid args.                                                      |
+| `lunora_run_query`           | `functionPath`, `args?`, `shardKey?` | Runs a query and returns its result. Read-only.                                                                                              |
+| `lunora_run_mutation`        | `functionPath`, `args?`, `shardKey?` | Runs a mutation and returns its result. Writes data. **Requires writes enabled.**                                                            |
+| `lunora_run_action`          | `functionPath`, `args?`, `shardKey?` | Runs an action and returns its result. May call external services. **Requires writes enabled.**                                              |
+| `agent_<name>`               | `prompt`, `threadKey?`, `title?`     | Starts a durable [`@lunora/agent`](/docs/packages/agent) run and awaits its answer. One tool per exposed agent. **Requires agents enabled.** |
+| `lunora_agent_status`        | `threadKey`                          | Polls a running agent by `threadKey` and returns its answer once finished. **Requires agents enabled.**                                      |
 
 <Callout type="warn">
     The server is **read-only by default**: only the introspection tools and `lunora_run_query` are exposed. `lunora_run_mutation` and `lunora_run_action` are
@@ -156,9 +162,62 @@ deployment's surface, then `lunora_run_query` / `lunora_run_mutation` /
 `lunora_run_action` to invoke it — passing `functionPath` (e.g.
 `"messages:list"`), an `args` object, and an optional `shardKey`.
 
+## Expose an agent
+
+A deployment's durable [`@lunora/agent`](/docs/packages/agent) agents can be
+fronted as MCP tools. Like writes, this is **opt-in and fail-closed**: starting
+an agent run is a side effect, so the agent tools are hidden from the advertised
+list _and_ refused at dispatch unless you enable them. `@lunora/mcp` takes no
+dependency on `@lunora/agent` — it calls the agent's public `agents:agentRun`
+mutation over HTTP RPC like any other function.
+
+Enable it with two env vars (or the matching `createLunoraMcpServer` options):
+
+- `LUNORA_MCP_ALLOW_AGENTS` — `1`/`true`/`yes`/`on` to expose the agent tools.
+- `LUNORA_MCP_AGENTS` — a `;`-separated list of `name:description` pairs
+  selecting which agents to expose, e.g.
+  `"support:Support questions;billing:Billing help"`.
+- `LUNORA_MCP_AGENT_TIMEOUT_MS` (optional) — wall-clock budget a single
+  `agent_<name>` call awaits before returning a pending result to poll.
+
+```jsonc
+{
+    "mcpServers": {
+        "lunora": {
+            "command": "lunora-mcp",
+            "env": {
+                "LUNORA_URL": "https://app.example.workers.dev",
+                "LUNORA_ADMIN_TOKEN": "...",
+                "LUNORA_MCP_ALLOW_AGENTS": "1",
+                "LUNORA_MCP_AGENTS": "support:Support questions;billing:Billing help",
+            },
+        },
+    },
+}
+```
+
+Each exposed agent gets an `agent_<name>` tool taking:
+
+- `prompt` (**required**, string) — the task or message for the agent.
+- `threadKey` (string) — reuse to continue a conversation; omit to start a new
+  thread. The tool returns the `threadKey` it used either way.
+- `title` (string) — an optional thread title, applied on the first run only.
+
+The tool starts a durable run and awaits it up to the timeout budget. If the run
+outlasts the budget, the tool returns a **pending** result — `{ status:
+"running", threadKey, runId, hint }` — instead of hanging. Feed that `threadKey`
+to the generic `lunora_agent_status` tool to poll for the final answer once the
+run finishes.
+
+<Callout type="warn">
+    Agent runs are **owner-scoped** to the identity the configured `token` resolves to. Grant a **least-privilege** token mapped to a bot identity so each
+    deployment's threads stay isolated — never the deployment's admin token. If the token resolves to no identity, threads are not owner-isolated.
+</Callout>
+
 ## See also
 
 - [@lunora/client](/docs/packages/client) — the HTTP RPC client backing every tool
 - [@lunora/server](/docs/packages/server) — defines the queries, mutations, and actions the tools call
+- [@lunora/agent](/docs/packages/agent) — the durable agents the `agent_<name>` tools front
 - [@lunora/cli](/docs/packages/cli) — deploy the app the server introspects
 - [Sharding](/docs/concepts/sharding) — the `shardKey` the run-tools accept

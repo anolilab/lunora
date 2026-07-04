@@ -24,6 +24,7 @@ export const DEFAULT_AGENT_FUNCTION_PATHS: AgentFunctionPaths = {
     ensureThread: `${AGENT_MODULE}:agentEnsureThread`,
     listMessages: `${AGENT_MODULE}:agentMessages`,
     patchThread: `${AGENT_MODULE}:agentPatchThread`,
+    run: `${AGENT_MODULE}:agentRun`,
     setState: `${AGENT_MODULE}:agentSetState`,
     state: `${AGENT_MODULE}:agentState`,
 };

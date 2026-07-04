@@ -167,6 +167,7 @@ export interface AgentComponent {
         agentMessages: AgentRegisteredFunction;
         agentPatchThread: AgentRegisteredFunction;
         agentResolveApproval: AgentRegisteredFunction;
+        agentRun: AgentRegisteredFunction;
         agentSetState: AgentRegisteredFunction;
         agentState: AgentRegisteredFunction;
         agentThread: AgentRegisteredFunction;
@@ -180,9 +181,11 @@ export interface AgentComponent {
  * `lunora/agents.ts` declares an agent — the loop's dispatch paths assume
  * that namespace, and apps never re-export these by hand.
  *
- * The mutations are **internal** (only the workflow's admin-authenticated
+ * Most mutations are **internal** (only the workflow's admin-authenticated
  * dispatch may call them); the queries are public so a client can subscribe
- * to `agents:agentMessages` for a live thread view.
+ * to `agents:agentMessages` for a live thread view. Two mutations are public:
+ * `agentResolveApproval` (a client resolves a HITL approval) and `agentRun`
+ * (an HTTP client starts a durable run) — both owner-gated.
  */
 export const agentComponent = (): AgentComponent => {
     const agentEnsureThread = mutation
@@ -521,6 +524,112 @@ export const agentComponent = (): AgentComponent => {
             return { resolved: true };
         });
 
+    /**
+     * Start a durable agent run. PUBLIC (owner-gated) — the only HTTP-reachable
+     * way to begin a run, so an external client (e.g. the `@lunora/mcp` server,
+     * which fronts agents over RPC) can invoke `ctx.agents.&lt;name>.run` without
+     * app code. Internal functions are unreachable over client RPC, so this must
+     * NOT be `asInternal(...)`; the security boundary is the per-agent
+     * `publicRun` opt-in and owner-scoping here (NOT the MCP-side `allowAgents`
+     * gate, which only controls what that separate process advertises).
+     *
+     * Per-agent capability gate (fail-closed): a run over this PUBLIC boundary is
+     * a privileged side effect (LLM cost, powerful tools), so an agent is
+     * reachable here ONLY when its author opted in with
+     * `defineAgent({ publicRun: true })`. Without the opt-in an `agentRun` caller
+     * could start ANY declared agent regardless of MCP configuration; the flag
+     * restores the app-author chokepoint that `ctx.agents.&lt;name>.run`
+     * (server-side app code) has always been — that programmatic path is
+     * unaffected, it never routes through this gate.
+     *
+     * Deterministic: `threadKey` is REQUIRED and supplied by the caller — the
+     * mutation never mints an id (no `crypto.randomUUID`/`Date.now`), so a
+     * retry/replay reuses the same thread. It is also idempotent under RPC retry:
+     * a call for a thread that already has a run in flight returns the in-flight
+     * instance instead of starting a SECOND run (which under
+     * `onConcurrentRun:"replace"` would terminate the original). The run itself
+     * starts a workflow via the `ctx.agents` binding (woven onto the ctx by
+     * generated code), mirroring how `agentResolveApproval` reaches the binding.
+     */
+    const agentRun = mutation
+        .input({
+            agent: v.string(),
+            input: v.string(),
+            threadKey: v.string(),
+            title: v.optional(v.string()),
+        })
+        .mutation(async ({ args, ctx: context }): Promise<{ id: string; threadKey: string }> => {
+            const { agents } = context as {
+                agents?: Record<
+                    string,
+                    { publicRun?: boolean; run?: (input: { input: string; owner?: string; threadKey: string; title?: string }) => Promise<{ id: string }> }
+                >;
+            };
+            const handle = agents?.[args.agent];
+
+            if (typeof handle?.run !== "function") {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `@lunora/agent: no ctx.agents["${args.agent}"] producer to start a run — run codegen/dev so the agent binding is wired, and check the agent name`,
+                );
+            }
+
+            // Fail-closed per-agent gate — see the doc comment. Only an agent
+            // explicitly marked `publicRun: true` may be started over the public
+            // RPC boundary; every other agent is refused, so declaring an agent
+            // never exposes it to arbitrary clients.
+            if (handle.publicRun !== true) {
+                throw new LunoraError(
+                    "FORBIDDEN",
+                    `@lunora/agent: agent "${args.agent}" is not enabled for public runs — set defineAgent({ publicRun: true }) to allow an external client (e.g. the @lunora/mcp server) to start it`,
+                );
+            }
+
+            // Owner-scope the thread to the caller's verified identity (see the
+            // owner column on the threads table). A token that resolves to no
+            // identity leaves the thread ownerless/open (single-tenant/anonymous).
+            const owner = context.auth.userId ?? undefined;
+
+            // Idempotent start: if a run is already in flight for this thread — a
+            // retried agentRun (an offline-queue replay or an HTTP retry after a
+            // lost ack) — return the in-flight instance instead of starting a
+            // SECOND run, which under `onConcurrentRun:"replace"` would terminate
+            // the original. A finished (idle/error/cancelled) thread is NOT
+            // deduped, so reusing the threadKey to continue a conversation still
+            // starts a fresh run. Only dedupe when the caller may attach (owner
+            // matches or the thread is ownerless); a foreign owner falls through
+            // to `handle.run`, whose bootstrap rejects it. A retry that races the
+            // not-yet-written thread row also falls through — the
+            // `agentEnsureThread` concurrency guard is the backstop there.
+            const inflight = await context.db
+                .query(THREADS_TABLE)
+                .withIndex("byKey", (q) => q.eq("key", args.threadKey))
+                .first();
+
+            if (inflight) {
+                const status = inflight["status"] as string;
+                const inflightInstanceId = inflight["instanceId"] as string | undefined;
+                const inflightOwner = inflight["owner"] as string | undefined;
+
+                if (
+                    (status === "running" || status === "awaiting_input") &&
+                    inflightInstanceId !== undefined &&
+                    (inflightOwner === undefined || inflightOwner === owner)
+                ) {
+                    return { id: inflightInstanceId, threadKey: args.threadKey };
+                }
+            }
+
+            const { id } = await handle.run({
+                input: args.input,
+                threadKey: args.threadKey,
+                ...(owner === undefined ? {} : { owner }),
+                ...(args.title === undefined ? {} : { title: args.title }),
+            });
+
+            return { id, threadKey: args.threadKey };
+        });
+
     return {
         extension: agentExtension,
         functions: {
@@ -529,6 +638,7 @@ export const agentComponent = (): AgentComponent => {
             agentMessages,
             agentPatchThread: asInternal(agentPatchThread),
             agentResolveApproval,
+            agentRun,
             agentSetState: asInternal(agentSetState),
             agentState,
             agentThread,

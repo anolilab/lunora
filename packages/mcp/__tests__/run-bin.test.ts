@@ -42,7 +42,7 @@ describe("runBin", () => {
 
         await runBin({ LUNORA_ADMIN_TOKEN: "admin-token", LUNORA_URL: "https://example.workers.dev" }, { connect, writeError });
 
-        expect(connect).toHaveBeenCalledWith({ allowWrites: false, token: "admin-token", url: "https://example.workers.dev" });
+        expect(connect).toHaveBeenCalledWith({ agents: [], allowAgents: false, allowWrites: false, token: "admin-token", url: "https://example.workers.dev" });
     });
 
     it("passes an undefined token through when LUNORA_ADMIN_TOKEN is unset", async () => {
@@ -53,7 +53,7 @@ describe("runBin", () => {
 
         await runBin({ LUNORA_URL: "https://example.workers.dev" }, { connect, writeError });
 
-        expect(connect).toHaveBeenCalledWith({ allowWrites: false, token: undefined, url: "https://example.workers.dev" });
+        expect(connect).toHaveBeenCalledWith({ agents: [], allowAgents: false, allowWrites: false, token: undefined, url: "https://example.workers.dev" });
         expect(writeError).not.toHaveBeenCalled();
     });
 
@@ -65,7 +65,36 @@ describe("runBin", () => {
 
         await runBin({ LUNORA_MCP_ALLOW_WRITES: "true", LUNORA_URL: "https://example.workers.dev" }, { connect, writeError });
 
-        expect(connect).toHaveBeenCalledWith({ allowWrites: true, token: undefined, url: "https://example.workers.dev" });
+        expect(connect).toHaveBeenCalledWith({ agents: [], allowAgents: false, allowWrites: true, token: undefined, url: "https://example.workers.dev" });
+    });
+
+    it("exposes agent tools when LUNORA_MCP_ALLOW_AGENTS is truthy and LUNORA_MCP_AGENTS is set", async () => {
+        expect.assertions(1);
+
+        const connect = vi.fn<Connect>(async () => undefined);
+        const writeError = vi.fn<WriteError>();
+
+        await runBin(
+            {
+                LUNORA_MCP_AGENT_TIMEOUT_MS: "30000",
+                LUNORA_MCP_AGENTS: "support:Support questions;billing:Billing help",
+                LUNORA_MCP_ALLOW_AGENTS: "1",
+                LUNORA_URL: "https://example.workers.dev",
+            },
+            { connect, writeError },
+        );
+
+        expect(connect).toHaveBeenCalledWith({
+            agentMaxWaitMs: 30_000,
+            agents: [
+                { description: "Support questions", name: "support" },
+                { description: "Billing help", name: "billing" },
+            ],
+            allowAgents: true,
+            allowWrites: false,
+            token: undefined,
+            url: "https://example.workers.dev",
+        });
     });
 
     it("surfaces a startup failure as a BinError(1) and writes the cause", async () => {

@@ -141,6 +141,36 @@ describe("discover-agents", () => {
 
         expect(() => discoverAgents(newProject(), workdir)).toThrow("`name` must be a static string literal");
     });
+
+    it("lifts the publicRun opt-in into IR only when the literal is true", () => {
+        expect.assertions(2);
+
+        writeAgents(`
+            import { defineAgent } from "@lunora/agent";
+
+            export const opened = defineAgent({ model: "m", publicRun: true });
+            export const closed = defineAgent({ model: "m", publicRun: false });
+        `);
+
+        const [closed, opened] = discoverAgents(newProject(), workdir);
+
+        // A `true` literal sets the flag; `false` (like absent) leaves it off, so
+        // the emitted spec stays byte-identical for a non-opted-in agent.
+        expect(opened?.publicRun).toBe(true);
+        expect(closed && "publicRun" in closed).toBe(false);
+    });
+
+    it("rejects a non-literal publicRun with a located diagnostic", () => {
+        expect.assertions(1);
+
+        writeAgents(`
+            import { defineAgent } from "@lunora/agent";
+            const flag = true;
+            export const support = defineAgent({ model: "m", publicRun: flag });
+        `);
+
+        expect(() => discoverAgents(newProject(), workdir)).toThrow("`publicRun` must be a static boolean literal");
+    });
 });
 
 describe("emit (agents)", () => {
@@ -224,7 +254,7 @@ describe("auto-registered agent runtime functions", () => {
     };
 
     it("registers the runtime functions in the dispatch table, imported from @lunora/agent", () => {
-        expect.assertions(11);
+        expect.assertions(12);
 
         const content = emitFunctions({ agents: discoverSupportAgent(), functions: [] });
 
@@ -237,6 +267,7 @@ describe("auto-registered agent runtime functions", () => {
             "agentMessages",
             "agentPatchThread",
             "agentResolveApproval",
+            "agentRun",
             "agentSetState",
             "agentState",
             "agentThread",
@@ -257,7 +288,7 @@ describe("auto-registered agent runtime functions", () => {
     });
 
     it("exposes the public thread queries and approval mutation as typed api references", () => {
-        expect.assertions(6);
+        expect.assertions(7);
 
         const content = emitApi({ agents: discoverSupportAgent(), functions: [] });
 
@@ -266,6 +297,9 @@ describe("auto-registered agent runtime functions", () => {
         expect(content).toContain('agentThread: FunctionReference<"query", { key: string }, Record<string, unknown> | undefined>;');
         expect(content).toContain(
             'agentResolveApproval: FunctionReference<"mutation", { decision: "approve" | "reject"; instanceId: string; note?: string; threadKey: string; toolCallId: string }, { resolved: boolean }>;',
+        );
+        expect(content).toContain(
+            'agentRun: FunctionReference<"mutation", { agent: string; input: string; threadKey: string; title?: string }, { id: string; threadKey: string }>;',
         );
         // The internal thread-write mutations never surface on the api objects.
         expect(content).not.toContain("agentAppendMessage");
@@ -307,11 +341,11 @@ describe("auto-registered agent runtime functions", () => {
                 .filter(([, definition]) => definition.visibility === undefined)
                 .map(([name]) => name)
                 .toSorted((a, b) => a.localeCompare(b)),
-        ).toStrictEqual(["agentMessages", "agentResolveApproval", "agentState", "agentThread"]);
+        ).toStrictEqual(["agentMessages", "agentResolveApproval", "agentRun", "agentState", "agentThread"]);
     });
 
     it("pins the synthetic api arg shapes to the runtime component (drift guard)", () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         // The api types for the public queries are hand-pinned in
         // syntheticAgentApiFunctions (codegen cannot read a published package's
@@ -329,6 +363,12 @@ describe("auto-registered agent runtime functions", () => {
             "note",
             "threadKey",
             "toolCallId",
+        ]);
+        expect(Object.keys(runtime.agentRun.args as Record<string, unknown>).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
+            "agent",
+            "input",
+            "threadKey",
+            "title",
         ]);
     });
 });

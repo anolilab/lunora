@@ -364,6 +364,19 @@ export interface AgentConfig {
     prepareStep?: AgentPrepareStep;
 
     /**
+     * Opt this agent into being STARTED over the public RPC boundary — i.e. via
+     * the auto-registered `agents:agentRun` mutation an HTTP-only client (e.g.
+     * the `@lunora/mcp` server) calls. Default `false`: an agent is startable
+     * only from server-side app code (`ctx.agents.&lt;name>.run(...)`), so declaring
+     * an agent does NOT expose it to arbitrary RPC callers. Fail-closed — the run
+     * mutation refuses an agent that has not opted in, regardless of any MCP-side
+     * `allowAgents` configuration. A started thread is still owner-scoped to
+     * `ctx.auth.userId`. Deploy configuration codegen reads STATICALLY (a boolean
+     * literal), so it must be inline in the `defineAgent({ ... })` object literal.
+     */
+    publicRun?: boolean;
+
+    /**
      * Reusable {@link SkillDefinition}s to compose in — each contributes an
      * instruction fragment, tools (merged into the flat namespace; collisions
      * throw), and retrieval `knowledge` (its own keyed memory source). Folded at
@@ -490,6 +503,13 @@ export interface AgentFunctionPaths {
     ensureThread: string;
     listMessages: string;
     patchThread: string;
+
+    /**
+     * The public `agents:agentRun` mutation an HTTP-only client (e.g. the
+     * `@lunora/mcp` server) calls to START a durable run — owner-scoped to
+     * `ctx.auth.userId`, deterministic (the caller supplies `threadKey`).
+     */
+    run: string;
     /** The internal `agents:agentSetState` mutation the loop dispatches for `setState`. */
     setState: string;
     /** The public owner-gated `agents:agentState` query (`getState` + `useAgentState`). */
@@ -596,6 +616,15 @@ export type AgentStreamGenerate = (options: AgentGenerateOptions, onDelta: (text
 export interface AgentBindingSpec {
     binding: string;
     exportName: string;
+
+    /**
+     * Whether the app author opted this agent into public run-starts (via
+     * `defineAgent({ publicRun: true })`) — codegen emits it only when `true`.
+     * Carried onto the {@link AgentHandle} so the public `agents:agentRun`
+     * mutation gates on it fail-closed: an agent without it can be started only
+     * from server-side app code, never by an external RPC client.
+     */
+    publicRun?: boolean;
 }
 
 /**
@@ -635,6 +664,15 @@ export interface AgentHandle {
      * its thread `"cancelled"`. Safe to call on an already-finished run.
      */
     cancel: (id: string) => Promise<void>;
+
+    /**
+     * Whether this agent may be started over the PUBLIC `agents:agentRun`
+     * mutation (the `defineAgent({ publicRun: true })` opt-in, carried from the
+     * codegen wiring spec). `false` by default — the run mutation refuses it
+     * fail-closed, so declaring an agent never exposes it to arbitrary RPC
+     * callers. Does not affect the server-side `run(...)` path below.
+     */
+    publicRun: boolean;
     /** Start a durable agent run for a thread. */
     run: (input: AgentRunInput, options?: { id?: string }) => Promise<AgentRunHandle>;
 

@@ -53,6 +53,22 @@ const stringProperty = (expression: Expression, exportName: string, property: st
     );
 };
 
+/** Read a property's boolean-literal value, or throw a located diagnostic. */
+const booleanProperty = (expression: Expression, exportName: string, property: string): boolean => {
+    if (expression.getKind() === SyntaxKind.TrueKeyword) {
+        return true;
+    }
+
+    if (expression.getKind() === SyntaxKind.FalseKeyword) {
+        return false;
+    }
+
+    throw diagnosticAt(
+        expression,
+        `agent "${exportName}": \`${property}\` must be a static boolean literal — it is deploy configuration codegen writes into the ctx.agents wiring spec`,
+    );
+};
+
 /** Lift one exported `defineAgent({...})` declaration into {@link AgentIR}. */
 const agentFromCall = (call: CallExpression, exportName: string): AgentIR => {
     const argument = call.getArguments()[0];
@@ -72,6 +88,19 @@ const agentFromCall = (call: CallExpression, exportName: string): AgentIR => {
 
     if (nameProperty && Node.isPropertyAssignment(nameProperty)) {
         ir.name = stringProperty(nameProperty.getInitializerOrThrow(), exportName, "name");
+    }
+
+    // Opt-in to public run-starts (`agents:agentRun`). Only a `true` literal is
+    // carried onto IR — `false`/absent stays undefined so the emitted spec (and
+    // agent-free output) is byte-identical.
+    const publicRunProperty = argument.getProperty("publicRun");
+
+    if (
+        publicRunProperty &&
+        Node.isPropertyAssignment(publicRunProperty) &&
+        booleanProperty(publicRunProperty.getInitializerOrThrow(), exportName, "publicRun")
+    ) {
+        ir.publicRun = true;
     }
 
     return ir;
@@ -120,9 +149,11 @@ const agentsFromSource = (source: SourceFile): AgentIR[] => {
 
 /**
  * Discover every agent the project declares: exported `defineAgent()` calls in
- * `lunora/agents.ts`. Returns `[]` when the file doesn't exist. The only
- * wrangler-relevant literal is the optional `name` override; the agent config
- * (model / tools / memory) is runtime-only, so codegen never evaluates it.
+ * `lunora/agents.ts`. Returns `[]` when the file doesn't exist. Only two literals
+ * are read statically — the optional `name` override (wrangler `workflows[].name`)
+ * and the optional `publicRun` opt-in (the `agents:agentRun` capability gate); the
+ * rest of the agent config (model / tools / memory) is runtime-only, so codegen
+ * never evaluates it.
  */
 const discoverAgents = (project: Project, lunoraDirectory: string): AgentIR[] => {
     const agentsPath = join(lunoraDirectory, AGENTS_FILENAME);

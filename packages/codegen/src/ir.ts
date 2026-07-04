@@ -452,6 +452,16 @@ export interface AgentIR {
      * definition overrides it.
      */
     name: string;
+
+    /**
+     * Whether the definition opted into public run-starts via
+     * `defineAgent({ publicRun: true })` — emitted into the `ctx.agents` wiring
+     * spec so the public `agents:agentRun` mutation can gate on it fail-closed.
+     * Absent (falsy) means server-side starts only; the field is written to IR
+     * only when the literal is `true`, so agent-free and non-opted-in output is
+     * byte-identical.
+     */
+    publicRun?: boolean;
 }
 
 /** One durable step call lifted from a workflow handler body (the use side of {@link WorkflowIR.steps}). */
