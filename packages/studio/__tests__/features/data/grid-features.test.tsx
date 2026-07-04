@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { toCsv, toJson } from "../../../src/features/data/grid-features";
+import { toCsv, toJson, toSql } from "../../../src/features/data/grid-features";
 
 describe("toCsv", () => {
     it("writes a header row then one row per record, in column order", () => {
@@ -39,5 +39,45 @@ describe("toJson", () => {
         expect.assertions(1);
 
         expect(toJson([{ id: 1 }])).toBe('[\n  {\n    "id": 1\n  }\n]');
+    });
+});
+
+describe("toSql", () => {
+    it("writes one multi-row INSERT with quoted identifiers and typed literals", () => {
+        expect.assertions(1);
+
+        const sql = toSql(
+            "users",
+            ["id", "name", "active"],
+            [
+                { active: true, id: 1, name: "ada" },
+                { active: false, id: 2, name: "grace" },
+            ],
+        );
+
+        expect(sql).toBe('INSERT INTO "users" ("id", "name", "active") VALUES\n  (1, \'ada\', 1),\n  (2, \'grace\', 0);');
+    });
+
+    it("renders null/undefined as NULL, non-finite numbers as NULL, and structured values as quoted JSON", () => {
+        expect.assertions(1);
+
+        const sql = toSql("t", ["a", "b", "c", "d"], [{ a: null, b: undefined, c: Number.NaN, d: { nested: true } }]);
+
+        expect(sql).toBe('INSERT INTO "t" ("a", "b", "c", "d") VALUES\n  (NULL, NULL, NULL, \'{"nested":true}\');');
+    });
+
+    it("doubles embedded single quotes in strings and double quotes in identifiers", () => {
+        expect.assertions(1);
+
+        const sql = toSql("query-result", ['we"ird'], [{ 'we"ird': "O'Brien" }]);
+
+        expect(sql).toBe('INSERT INTO "query-result" ("we""ird") VALUES\n  (\'O\'\'Brien\');');
+    });
+
+    it("returns an empty string when there are no columns or no rows", () => {
+        expect.assertions(2);
+
+        expect(toSql("t", [], [{ a: 1 }])).toBe("");
+        expect(toSql("t", ["a"], [])).toBe("");
     });
 });
