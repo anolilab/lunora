@@ -19,6 +19,7 @@ describe(deployToCloud, () => {
         const result = await deployToCloud(
             {
                 apiUrl: "https://cloud.example.com/",
+                bundle: btoa("export default {}"),
                 deployKey: "production:org|secret",
                 fetch: fetchMock as unknown as typeof fetch,
                 kind: "production",
@@ -33,7 +34,7 @@ describe(deployToCloud, () => {
         expect(url).toBe("https://cloud.example.com/v1/deploy");
         expect((init.headers as Record<string, string>)["authorization"]).toBe("Bearer production:org|secret");
         // `branch` is undefined here, so JSON.stringify omits the key entirely.
-        expect(JSON.parse(init.body as string)).toStrictEqual({ kind: "production", projectId: "p1", scriptName: "s1" });
+        expect(JSON.parse(init.body as string)).toStrictEqual({ bundle: btoa("export default {}"), kind: "production", projectId: "p1", scriptName: "s1" });
         expect(events).toHaveLength(4);
         expect(result.status).toBe("live");
     });
@@ -42,7 +43,10 @@ describe(deployToCloud, () => {
         const fetchMock = vi.fn<(input: string, init: RequestInit) => Promise<Response>>(async () => new Response("nope", { status: 403 }));
 
         await expect(
-            deployToCloud({ apiUrl: "https://c", deployKey: "k", fetch: fetchMock as unknown as typeof fetch, projectId: "p", scriptName: "s" }, () => {}),
+            deployToCloud(
+                { apiUrl: "https://c", bundle: "AA==", deployKey: "k", fetch: fetchMock as unknown as typeof fetch, projectId: "p", scriptName: "s" },
+                () => {},
+            ),
         ).rejects.toThrow(/deploy request failed \(403\)/u);
     });
 });
