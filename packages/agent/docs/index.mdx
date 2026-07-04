@@ -103,6 +103,12 @@ the durable loop:
 - **`onStepFinish`** — a callback after each turn (observability/side channels).
 - **`usage`** — token usage is accumulated across turns and surfaced on the
   run result and persisted onto the thread.
+- **`telemetry`** — an ai@7 `TelemetryOptions` handed to every turn; set
+  `telemetry.integrations` to trace turns and tool calls.
+  [`@lunora/agent-telemetry`](/docs/packages/agent-telemetry) ships ready-made
+  ones — `consoleTelemetry` (zero-dependency), `combineTelemetry`, and the
+  dependency-injected `sentryTelemetry` / `braintrustTelemetry` bridges
+  (privacy-safe by default — no prompt/output recorded without opt-in).
 
 ```ts
 import { hasToolCall } from "@lunora/ai";
@@ -508,5 +514,6 @@ runtime stubs to back the functions your tools dispatch to.
 
 - [@lunora/ai](/docs/packages/ai) — the model surface (`ctx.ai`) + `defineRag`
 - [@lunora/workflow](/docs/packages/workflow) — the durable-execution engine underneath
+- [@lunora/agent-telemetry](/docs/packages/agent-telemetry) — ready-made `telemetry.integrations` (console, Sentry, Braintrust)
 - [@lunora/testing](/docs/packages/testing) — `agentHarness` and the wider test toolkit
 - [@lunora/mcp](/docs/packages/mcp) — expose an agent to external MCP clients as an `agent_<name>` tool (see [Expose an agent](/docs/packages/mcp#expose-an-agent))
