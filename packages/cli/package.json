@@ -66,7 +66,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@bomb.sh/tab": "0.0.16",
+        "@bomb.sh/tab": "0.0.17",
         "@lunora/codegen": "1.0.0-alpha.32",
         "@lunora/config": "1.0.0-alpha.50",
         "@lunora/container": "1.0.0-alpha.6",
