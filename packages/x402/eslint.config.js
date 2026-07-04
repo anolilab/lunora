@@ -52,6 +52,19 @@ export default createConfig(
             "unicorn/number-literal-case": "off",
         },
     },
+    // Web3 domain: this package is full of high-entropy PUBLIC constants — CAIP-2
+    // genesis ids (`solana:5eyk…`), chain ids, token + wallet addresses, and later
+    // example signatures. `no-secrets` flags all of them as credentials; it is the
+    // wrong gate here (gitleaks via `vis secrets --staged` is the real secret scan).
+    // `import/prefer-default-export` would push single-export modules to a default
+    // export, but we keep uniform named imports (`import { x } from "./m"`), matching
+    // the repo convention and CLAUDE.md's no-mixed-default rule (see cli/studio).
+    {
+        rules: {
+            "import/prefer-default-export": "off",
+            "no-secrets/no-secrets": "off",
+        },
+    },
     // Test files: relax rules that are noisy or inappropriate in test code.
     {
         files: ["**/__tests__/**/*.{ts,tsx}", "**/__bench__/**/*.{ts,tsx}", "**/*.test.{ts,tsx}", "**/*.spec.{ts,tsx}", "**/*.bench.{ts,tsx}"],
@@ -77,6 +90,7 @@ export default createConfig(
             "unicorn/prevent-abbreviations": "off",
             "unused-imports/no-unused-vars": "off",
             "vitest/prefer-describe-function-title": "off",
+            "vitest/prefer-expect-assertions": "off",
             "vitest/prefer-strict-equal": "off",
         },
     },

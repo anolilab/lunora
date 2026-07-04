@@ -10,24 +10,7 @@
  * Validate with `@lunora/values` (`v.*`) if you need runtime schema checks.
  */
 
-/**
- * Networks x402 can settle on. EVM networks are served by `@x402/evm` (viem
- * signer); Solana by `@x402/svm` (a separate, non-viem signer). `base` /
- * `base-sepolia` are the primary prod / test pair.
- */
-export type X402Network = "arbitrum" | "avalanche" | "base" | "base-sepolia" | "ethereum" | "optimism" | "polygon" | "solana" | "solana-devnet";
-
-/** EVM networks (signed via `@x402/evm` + viem). */
-export const EVM_NETWORKS = ["arbitrum", "avalanche", "base", "base-sepolia", "ethereum", "optimism", "polygon"] as const;
-
-/** Solana networks (signed via `@x402/svm`). */
-export const SVM_NETWORKS = ["solana", "solana-devnet"] as const;
-
-/** True when `network` settles on an EVM chain (viem signer path). */
-export const isEvmNetwork = (network: X402Network): boolean => (EVM_NETWORKS as ReadonlyArray<string>).includes(network);
-
-/** True when `network` settles on Solana (`@x402/svm` signer path). */
-export const isSvmNetwork = (network: X402Network): boolean => (SVM_NETWORKS as ReadonlyArray<string>).includes(network);
+import type { X402Network } from "./networks";
 
 /**
  * The public, Coinbase-operated facilitator (verify + settle). It needs no API

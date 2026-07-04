@@ -25,7 +25,7 @@ See `plans/134-x402-agentic-payments.md` for the roadmap.
 
 ## Networks & custody
 
-- **EVM** (Base, Optimism, Arbitrum, …) is signed via [`@x402/evm`](https://npmjs.com/package/@x402/evm) + [viem](https://viem.sh).
+- **EVM** (Base, Arbitrum, Ethereum, Polygon, …) is signed via [`@x402/evm`](https://npmjs.com/package/@x402/evm) + [viem](https://viem.sh); pass a raw CAIP-2 id for chains without a friendly alias.
 - **Solana** is signed via [`@x402/svm`](https://npmjs.com/package/@x402/svm).
 - **Facilitator** defaults to the public, Coinbase-operated `https://x402.org/facilitator` (no key required); override it for a self-hosted or CDP facilitator.
 - **Pay-rail wallet custody** supports both a self-custodied raw key (from `ctx.secrets`) and a Coinbase-managed [CDP](https://docs.cdp.coinbase.com) wallet (via the optional `@coinbase/x402` peer).

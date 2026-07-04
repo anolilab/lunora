@@ -10,5 +10,7 @@
  * + `facilitator.ts`). For now the subpath re-exports the shared config so
  * consumers can type their `config.x402(env)` thunk against it.
  */
-export type { EvmAddress, FacilitatorConfig, X402ChargeConfig, X402Network, X402Price, X402Recipient } from "../config";
+export type { EvmAddress, FacilitatorConfig, X402ChargeConfig, X402Price, X402Recipient } from "../config";
 export { DEFAULT_FACILITATOR_URL, resolveFacilitatorUrl } from "../config";
+export type { Caip2, X402Network } from "../networks";
+export { isEvmNetwork, isSvmNetwork, toCaip2 } from "../networks";

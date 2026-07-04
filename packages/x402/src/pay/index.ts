@@ -11,5 +11,7 @@
  * (`wallet.ts` + `fetch.ts` + `policy.ts`). For now the subpath re-exports the
  * shared config so consumers can type their signer config against it.
  */
-export type { X402Network, X402PayConfig, X402Price, X402SignerConfig } from "../config";
-export { DEFAULT_FACILITATOR_URL, isEvmNetwork, isSvmNetwork, resolveFacilitatorUrl } from "../config";
+export type { X402PayConfig, X402Price, X402SignerConfig } from "../config";
+export { DEFAULT_FACILITATOR_URL, resolveFacilitatorUrl } from "../config";
+export type { Caip2, X402Network } from "../networks";
+export { isEvmNetwork, isSvmNetwork, toCaip2 } from "../networks";
