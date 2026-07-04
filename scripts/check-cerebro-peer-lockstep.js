@@ -46,6 +46,9 @@ const cliManifest = JSON.parse(readFileSync(join(cliDir, "package.json"), "utf8"
 const cerebroPeers = cerebroManifest.peerDependencies || {};
 const cliVersions = { ...cliManifest.dependencies, ...cliManifest.devDependencies };
 
+/** Matches an exact, range-free semver literal (`0.0.16`, `4.0.0-alpha.22`). */
+const EXACT_VERSION_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
 let hasMismatch = false;
 
 for (const name of GUARDED_PACKAGES) {
@@ -53,6 +56,18 @@ for (const name of GUARDED_PACKAGES) {
     const cliVersion = cliVersions[name];
 
     if (!cerebroVersion || !cliVersion) {
+        continue;
+    }
+
+    // The npx boot-crash this guards against only exists while cerebro pins
+    // these peers to EXACT versions. If either side stops being an exact bare
+    // version (cerebro publishes a range, or the CLI moves the pin to a
+    // `catalog:` ref), a raw string comparison would false-positively abort
+    // every install — stand down with a notice instead of blocking.
+    if (!EXACT_VERSION_RE.test(cerebroVersion) || !EXACT_VERSION_RE.test(cliVersion)) {
+        console.log(
+            `ℹ️  ${name}: non-exact specifier (cli "${cliVersion}" vs cerebro peer "${cerebroVersion}") — lockstep not string-comparable, verify manually.`,
+        );
         continue;
     }
 
