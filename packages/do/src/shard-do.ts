@@ -60,6 +60,7 @@ import type {
     FunctionStatsResult,
     MaskPoliciesResult,
     OrderByClause,
+    QueueMetadata,
     QueuesResult,
     RlsPoliciesResult,
     StorageRulesResult,
@@ -92,6 +93,8 @@ import { clearCapturedMail, MAIL_TABLE, readCapturedMail, recordCapturedMail } f
 import { armRestore, readBookmark } from "./pitr";
 import type { QueryStatEntry } from "./query-metrics";
 import { readQueryMetrics, recordQueryMetric } from "./query-metrics";
+import type { QueueMessageOutcome, RecordQueueMessageInput } from "./queue-catcher";
+import { clearQueueMessages, isLossyBody, QUEUE_TABLE, readQueueMessageById, readQueueMessages, recordQueueMessages } from "./queue-catcher";
 import type { ShardRankPageResult } from "./rank";
 import type { ReactiveCacheOptions } from "./reactive-cache";
 import { ReactiveCache, reactiveCacheKey } from "./reactive-cache";
@@ -968,6 +971,154 @@ const buildTestMailInput = (args: Record<string, unknown>): RecordMailInput => {
         text: `This is a test email from the Lunora dev mail catcher.\n\nVerify your email: ${link}`,
         to: recipient,
     };
+};
+
+/**
+ * Minimal structural shape of a Cloudflare Queue producer binding (the generated
+ * `env.QUEUE_*` object) — only `send`/`sendBatch`, the members the studio's
+ * send/replay ops call. Mirrors `@lunora/queue`'s producer surface so `@lunora/do`
+ * needs no dependency on the queue package.
+ */
+interface QueueBindingHandle {
+    send: (body: unknown, options?: { contentType?: string; delaySeconds?: number }) => Promise<void>;
+    sendBatch: (messages: Iterable<{ body: unknown; contentType?: string; delaySeconds?: number }>, options?: { delaySeconds?: number }) => Promise<void>;
+}
+
+/** Parsed `__lunora_admin__:sendQueueMessage` payload: which declared queue to enqueue to, plus body/tuning. */
+interface SendQueueMessageArgs {
+    /** When set, enqueue this array as a single `sendBatch` instead of `body` as one message. */
+    batch?: unknown[];
+    body: unknown;
+    contentType?: string;
+    delaySeconds?: number;
+    exportName: string;
+}
+
+/**
+ * Validate the `__lunora_admin__:recordQueueMessage` capture payload — a batch of
+ * consumed messages posted by the generated worker `queue()` sink. Shape-checks
+ * each entry (the trust-boundary re-check at the admin edge) and normalizes it to
+ * the {@link RecordQueueMessageInput} the catcher stores. Throws a 400 `LunoraError`
+ * on a malformed envelope.
+ */
+const parseRecordQueueMessageArgs = (args: Record<string, unknown>): RecordQueueMessageInput[] => {
+    const bad = (message: string): never => {
+        throw Object.assign(new Error(`recordQueueMessage: ${message}`), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+    };
+
+    const raw = args["messages"];
+
+    if (!Array.isArray(raw)) {
+        bad("`messages` must be an array");
+    }
+
+    const outcomes = new Set<QueueMessageOutcome>(["ack", "error", "retry"]);
+
+    return (raw as unknown[]).map((entry, index): RecordQueueMessageInput => {
+        if (typeof entry !== "object" || entry === null) {
+            bad(`\`messages[${String(index)}]\` must be an object`);
+        }
+
+        const record = entry as Record<string, unknown>;
+        const messageId = typeof record["messageId"] === "string" ? record["messageId"] : "";
+        const queue = typeof record["queue"] === "string" ? record["queue"] : "";
+        const outcome = typeof record["outcome"] === "string" ? record["outcome"] : "";
+
+        if (messageId === "") {
+            bad(`\`messages[${String(index)}].messageId\` is required`);
+        }
+
+        if (queue === "") {
+            bad(`\`messages[${String(index)}].queue\` is required`);
+        }
+
+        if (!outcomes.has(outcome as QueueMessageOutcome)) {
+            bad(`\`messages[${String(index)}].outcome\` must be one of ack | error | retry`);
+        }
+
+        // `Number.isFinite` (not just `typeof === "number"`) so a NaN/Infinity slipped
+        // into the JSON payload falls back to the default rather than being stored and
+        // later rendered as a broken attempt count / timestamp.
+        const { attempts, timestamp } = record;
+
+        return {
+            attempts: typeof attempts === "number" && Number.isFinite(attempts) ? attempts : 1,
+            body: record["body"],
+            deadLettered: record["deadLettered"] === true,
+            error: typeof record["error"] === "string" ? record["error"] : undefined,
+            exportName: typeof record["exportName"] === "string" ? record["exportName"] : undefined,
+            messageId,
+            outcome: outcome as QueueMessageOutcome,
+            queue,
+            timestamp: typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : 0,
+        };
+    });
+};
+
+/** Cloudflare Queues accepts 1–100 messages per `sendBatch` call (a 0 or >100 batch is a `BatchCountOutOfBounds` error). */
+const MAX_QUEUE_SEND_BATCH = 100;
+
+/**
+ * Validate the `__lunora_admin__:sendQueueMessage` payload (also the replay path's
+ * resolved target). Requires a non-empty `exportName`; `delaySeconds` must be a
+ * non-negative number when present; `batch` (when an array) switches the op to a
+ * single `sendBatch` and must carry 1–{@link MAX_QUEUE_SEND_BATCH} messages. Throws
+ * a 400 `LunoraError` on a bad shape.
+ */
+const parseSendQueueMessageArgs = (args: Record<string, unknown>): SendQueueMessageArgs => {
+    const exportName = typeof args["exportName"] === "string" ? args["exportName"].trim() : "";
+
+    if (exportName === "") {
+        throw Object.assign(new Error("sendQueueMessage: `exportName` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+    }
+
+    const delayRaw = args["delaySeconds"];
+
+    if (delayRaw !== undefined && (typeof delayRaw !== "number" || !Number.isFinite(delayRaw) || delayRaw < 0)) {
+        throw Object.assign(new Error("sendQueueMessage: `delaySeconds` must be a non-negative number"), {
+            code: "BAD_REQUEST",
+            name: "LunoraError",
+            status: 400,
+        });
+    }
+
+    const batch = Array.isArray(args["batch"]) ? (args["batch"] as unknown[]) : undefined;
+
+    // Cloudflare's `sendBatch` rejects an empty or >100-message batch (BatchCountOutOfBounds).
+    // Fail it on the existing 400 path so a malformed payload never reaches the queue API.
+    if (batch !== undefined && (batch.length === 0 || batch.length > MAX_QUEUE_SEND_BATCH)) {
+        throw Object.assign(new Error(`sendQueueMessage: \`batch\` must contain between 1 and ${String(MAX_QUEUE_SEND_BATCH)} messages`), {
+            code: "BAD_REQUEST",
+            name: "LunoraError",
+            status: 400,
+        });
+    }
+
+    return {
+        batch,
+        body: args["body"],
+        contentType: typeof args["contentType"] === "string" ? args["contentType"] : undefined,
+        delaySeconds: delayRaw,
+        exportName,
+    };
+};
+
+/**
+ * Validate the `__lunora_admin__:replayQueueMessage` payload. Requires a non-empty
+ * capture-row `id`; `target` optionally overrides the resolved destination export
+ * (the studio uses it for DLQ redrive onto the parent queue). Throws a 400
+ * `LunoraError` on a bad shape.
+ */
+const parseReplayQueueMessageArgs = (args: Record<string, unknown>): { id: string; target?: string } => {
+    const id = typeof args["id"] === "string" ? args["id"].trim() : "";
+
+    if (id === "") {
+        throw Object.assign(new Error("replayQueueMessage: `id` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+    }
+
+    const target = typeof args["target"] === "string" && args["target"].trim() !== "" ? args["target"].trim() : undefined;
+
+    return { id, target };
 };
 
 /**
@@ -4771,6 +4922,22 @@ abstract class ShardDO {
             return this.handleSendTestMail(args);
         }
 
+        if (functionPath === ADMIN_FUNCTIONS.recordQueueMessage) {
+            return this.handleRecordQueueMessage(args);
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.clearQueueMessages) {
+            return this.handleClearQueueMessages();
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.sendQueueMessage) {
+            return this.handleSendQueueMessage(args);
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.replayQueueMessage) {
+            return this.handleReplayQueueMessage(args);
+        }
+
         if (functionPath === ADMIN_FUNCTIONS.createWorkflowInstance) {
             return this.handleCreateWorkflowInstance(args);
         }
@@ -5027,6 +5194,157 @@ abstract class ShardDO {
         const result = recordCapturedMail(this.state.storage.sql as unknown as SqlExec, input, Date.now());
 
         return jsonResponse({ result }, 200);
+    }
+
+    /**
+     * Serve `__lunora_admin__:recordQueueMessage` — the capture sink the generated
+     * worker `queue()` handler (via `@lunora/queue`'s `dispatchQueueBatch`) posts
+     * every consumed message batch to. Records it into the reserved
+     * `__lunora_queue_messages` table (bounded, auto-trimmed) so the studio Queues
+     * panel shows one unified consumed-message log across every push consumer. Like
+     * the mail catcher, the gate is the admin token alone — a token holder can
+     * already mutate the shard, so a token-gated capture insert adds no privilege.
+     */
+    private handleRecordQueueMessage(args: Record<string, unknown>): Response {
+        const messages = parseRecordQueueMessageArgs(args);
+        const result = recordQueueMessages(this.state.storage.sql as unknown as SqlExec, messages, Date.now());
+
+        return jsonResponse({ result }, 200);
+    }
+
+    /** Empty the dev queue consumed-message log (studio "clear log" action). Admin-gated by the caller. */
+    private handleClearQueueMessages(): Response {
+        const result = clearQueueMessages(this.state.storage.sql as unknown as SqlExec);
+
+        return jsonResponse({ result }, 200);
+    }
+
+    /**
+     * Serve `__lunora_admin__:sendQueueMessage` — the studio's "Send test message"
+     * button. Resolves the declared queue's `QUEUE_*` producer binding and calls
+     * `.send(body, { delaySeconds?, contentType? })`, or `.sendBatch(...)` when a
+     * `batch` array is supplied. No SQLite write happens here (the message is only
+     * captured once a consumer processes it), so this only records an audit entry.
+     * Admin-gated by `handleAdminRpc`'s caller.
+     */
+    private async handleSendQueueMessage(args: Record<string, unknown>): Promise<Response> {
+        const parsed = parseSendQueueMessageArgs(args);
+        const { binding } = this.resolveQueueBinding(parsed.exportName);
+
+        let sent: number;
+
+        if (parsed.batch === undefined) {
+            await binding.send(parsed.body, { contentType: parsed.contentType, delaySeconds: parsed.delaySeconds });
+            sent = 1;
+        } else {
+            await binding.sendBatch(
+                parsed.batch.map((body) => {
+                    return { body, contentType: parsed.contentType, delaySeconds: parsed.delaySeconds };
+                }),
+            );
+            sent = parsed.batch.length;
+        }
+
+        this.recordAudit("sendQueueMessage", { detail: { count: sent, exportName: parsed.exportName } });
+
+        return jsonResponse({ result: { sent } }, 200);
+    }
+
+    /**
+     * Serve `__lunora_admin__:replayQueueMessage` — the studio's one-click replay /
+     * DLQ redrive. Looks the captured row up by id, resolves the destination export
+     * (explicit `target` → the parent queue when the message was captured off a
+     * dead-letter queue → the queue it was consumed from), and re-enqueues the
+     * stored body onto that producer. Records an audit entry; no SQLite write beyond
+     * that (the replayed message is re-captured when a consumer processes it).
+     * Admin-gated by `handleAdminRpc`'s caller.
+     */
+    private async handleReplayQueueMessage(args: Record<string, unknown>): Promise<Response> {
+        const parsed = parseReplayQueueMessageArgs(args);
+        const row = readQueueMessageById(this.state.storage.sql as unknown as SqlExec, parsed.id);
+
+        if (row === undefined) {
+            throw Object.assign(new Error(`replayQueueMessage: captured message "${parsed.id}" was not found`), {
+                code: "BAD_REQUEST",
+                name: "LunoraError",
+                status: 404,
+            });
+        }
+
+        // The catcher caps oversized bodies and stands in a marker for unserializable
+        // ones (see `queue-catcher.ts`), so the stored body isn't always the original.
+        // Refuse to replay a lossy body rather than deliver a corrupted message the
+        // producer never sent.
+        if (isLossyBody(row.body)) {
+            throw Object.assign(
+                new Error(`replayQueueMessage: captured message "${parsed.id}" has a truncated or unserializable body and can't be replayed faithfully`),
+                { code: "BAD_REQUEST", name: "LunoraError", status: 422 },
+            );
+        }
+
+        const target = parsed.target ?? this.resolveReplayTarget(row.queue) ?? row.exportName;
+
+        if (typeof target !== "string" || target === "") {
+            throw Object.assign(new Error(`replayQueueMessage: captured message "${parsed.id}" has no declared producer to replay onto (pass \`target\`)`), {
+                code: "BAD_REQUEST",
+                name: "LunoraError",
+                status: 400,
+            });
+        }
+
+        const { binding } = this.resolveQueueBinding(target);
+
+        await binding.send(row.body);
+
+        this.recordAudit("replayQueueMessage", { detail: { messageId: row.messageId, target }, id: parsed.id });
+
+        return jsonResponse({ result: { sent: 1, target } }, 200);
+    }
+
+    /**
+     * Resolve a declared queue's runtime producer binding from this shard's `env`.
+     * Looks the `exportName` up in {@link queuesMetadata} (the codegen subclass's
+     * statically-discovered list) to find its generated `QUEUE_*` binding, then
+     * reads `env[binding]` and validates it carries `send`/`sendBatch`. A bad export
+     * name or a missing/malformed binding throws a 400 `LunoraError` so the studio
+     * surfaces an actionable message. Mirrors {@link resolveWorkflowBinding}.
+     */
+    private resolveQueueBinding(exportName: string): { binding: QueueBindingHandle; metadata: QueueMetadata } {
+        const metadata = this.queuesMetadata().queues.find((queue) => queue.exportName === exportName);
+
+        if (!metadata) {
+            throw Object.assign(new Error(`queue "${exportName}" is not declared`), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        }
+
+        const binding = (this.env as Record<string, unknown> | undefined)?.[metadata.binding];
+
+        if (typeof binding !== "object" || binding === null || typeof (binding as QueueBindingHandle).send !== "function") {
+            throw Object.assign(new Error(`queue binding "${metadata.binding}" is not available on this deployment`), {
+                code: "BAD_REQUEST",
+                name: "LunoraError",
+                status: 400,
+            });
+        }
+
+        return { binding: binding as QueueBindingHandle, metadata };
+    }
+
+    /**
+     * Pick the replay destination export for a captured message's origin queue.
+     * When the message was consumed off a queue that is another queue's dead-letter
+     * queue, prefer that PARENT queue's producer (a DLQ usually has no producer of
+     * its own) so replay redrives onto the original; otherwise re-enqueue onto the
+     * queue the message came from. Returns `undefined` when neither is declared.
+     */
+    private resolveReplayTarget(queueName: string): string | undefined {
+        const { queues } = this.queuesMetadata();
+        const parent = queues.find((queue) => queue.deadLetterQueue === queueName);
+
+        if (parent !== undefined) {
+            return parent.exportName;
+        }
+
+        return queues.find((queue) => queue.name === queueName)?.exportName;
     }
 
     /**
@@ -5604,6 +5922,10 @@ abstract class ShardDO {
             return this.readAdminCapturedMail(sql, args);
         }
 
+        if (functionPath === ADMIN_FUNCTIONS.getQueueMessages) {
+            return this.readAdminQueueMessages(sql, args);
+        }
+
         return undefined;
     }
 
@@ -5639,6 +5961,31 @@ abstract class ShardDO {
         }
 
         return { result, tables: new Set([MAIL_TABLE]) };
+    }
+
+    /**
+     * Resolve a `getQueueMessages` admin read — the dev queue catcher's consumed
+     * message log (`queue-catcher.ts`), newest-first, optionally filtered to one
+     * queue. Best-effort: a SQL failure returns an empty log rather than throwing.
+     * Reported against the {@link QUEUE_TABLE} so this read participates in
+     * table-scoped subscription invalidation, but new captures arrive via the
+     * worker→root-shard `recordQueueMessage` write, which (like the mail catcher)
+     * inserts directly without a `flushChangedTables` — so the panel refreshes on
+     * its poll (`useAutoRefresh`) rather than a live push.
+     */
+    // eslint-disable-next-line class-methods-use-this -- kept an instance method for symmetry with the other `readAdmin*` resolvers
+    private readAdminQueueMessages(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
+        const limit = typeof args["limit"] === "number" ? args["limit"] : undefined;
+        const queue = typeof args["queue"] === "string" ? args["queue"] : undefined;
+        let result: { entries: unknown[] };
+
+        try {
+            result = readQueueMessages(sql, { limit, queue });
+        } catch {
+            result = { entries: [] };
+        }
+
+        return { result, tables: new Set([QUEUE_TABLE]) };
     }
 
     /** Resolve a `readTablePage` admin read, parsing the loosely-typed args into the reader's options. */

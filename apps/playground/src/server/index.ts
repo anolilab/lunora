@@ -375,6 +375,14 @@ export default {
 
         return app.fetch(request, env, context);
     },
+    queue(batch: MessageBatch, env: Env, context: ExecutionContextLike): Promise<void> {
+        // Cloudflare delivers each consumed batch here; the generated `app.queue`
+        // routes it to the matching `defineQueue` handler in `lunora/queues.ts` and,
+        // in dev, captures every outcome into the studio's Queues panel. `queue` is
+        // optional on the composed app (present only when queues are declared), so
+        // guard it and no-op otherwise.
+        return app.queue?.(batch, env, context) ?? Promise.resolve();
+    },
     scheduled(controller: ScheduledControllerLike, env: Env, context: ExecutionContextLike): Promise<void> {
         return app.scheduled(controller, env, context);
     },

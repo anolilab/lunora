@@ -28,6 +28,7 @@ export const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
  */
 export const ADMIN_FUNCTIONS = {
     clearCapturedMail: "__lunora_admin__:clearCapturedMail",
+    clearQueueMessages: "__lunora_admin__:clearQueueMessages",
     clearTable: "__lunora_admin__:clearTable",
     createWorkflowInstance: "__lunora_admin__:createWorkflowInstance",
     deleteRows: "__lunora_admin__:deleteRows",
@@ -49,6 +50,7 @@ export const ADMIN_FUNCTIONS = {
     getLogs: "__lunora_admin__:getLogs",
     getMetrics: "__lunora_admin__:getMetrics",
     getPitrBookmark: "__lunora_admin__:getPitrBookmark",
+    getQueueMessages: "__lunora_admin__:getQueueMessages",
     getRequestLog: "__lunora_admin__:getRequestLog",
     getSecurityAudit: "__lunora_admin__:getSecurityAudit",
     getSettings: "__lunora_admin__:getSettings",
@@ -60,10 +62,12 @@ export const ADMIN_FUNCTIONS = {
     migrationStatus: "__lunora_admin__:migrationStatus",
     pitrRestore: "__lunora_admin__:pitrRestore",
     readTablePage: "__lunora_admin__:readTablePage",
+    replayQueueMessage: "__lunora_admin__:replayQueueMessage",
     rlsPolicies: "__lunora_admin__:rlsPolicies",
     runAs: "__lunora_admin__:runAs",
     runMigration: "__lunora_admin__:runMigration",
     runSql: "__lunora_admin__:runSql",
+    sendQueueMessage: "__lunora_admin__:sendQueueMessage",
     sendTestMail: "__lunora_admin__:sendTestMail",
     storageOrphans: "__lunora_admin__:storageOrphans",
     storageReferences: "__lunora_admin__:storageReferences",
@@ -557,6 +561,61 @@ export interface QueueMetadata {
 /** Payload of a `__lunora_admin__:listQueues` call, hand-mirroring `@lunora/do`'s `QueuesResult`. */
 export interface QueuesResult {
     queues: QueueMetadata[];
+}
+
+/**
+ * The terminal disposition a consumer left a message in for one delivery attempt,
+ * hand-mirroring `@lunora/do`'s `QueueMessageOutcome`. `ack` succeeded; `retry`
+ * asked for redelivery; `error` means the handler threw (workerd retries the batch).
+ */
+export type QueueMessageOutcome = "ack" | "error" | "retry";
+
+/**
+ * One consumed queue message as served by `__lunora_admin__:getQueueMessages`,
+ * newest first — hand-mirroring `@lunora/do`'s `QueueMessageRow`. Cloudflare Queues
+ * expose no peek API, so this is the log of what push consumers actually processed,
+ * not pending depth. `id` is a synthetic per-capture row id (a message retried N
+ * times yields N rows, showing the delivery progression); `messageId` is the stable
+ * Cloudflare message id. `capturedAt`/`timestamp` are epoch-ms. A key-exhaustiveness
+ * drift guard in this package's tests (and `@lunora/do`'s) fails the build on drift.
+ */
+export interface QueueMessageRow {
+    attempts: number;
+    body: unknown;
+    capturedAt: number;
+    deadLettered: boolean;
+    error?: string;
+    exportName?: string;
+    id: string;
+    messageId: string;
+    outcome: QueueMessageOutcome;
+    queue: string;
+    timestamp: number;
+}
+
+/** Result of `__lunora_admin__:getQueueMessages` — the dev consumed-message log, newest first. */
+export interface QueueMessagesResult {
+    entries: QueueMessageRow[];
+}
+
+/**
+ * Result of `__lunora_admin__:sendQueueMessage` — the studio's "Send test message"
+ * button. `sent` is the number of messages enqueued (1 for a single `send`, or the
+ * batch length for a `sendBatch`). Nothing is captured until a consumer processes it.
+ */
+export interface SendQueueMessageResult {
+    sent: number;
+}
+
+/**
+ * Result of `__lunora_admin__:replayQueueMessage` — the studio's one-click replay /
+ * DLQ redrive. `sent` is always 1; `target` is the `lunora/queues.ts` export the
+ * stored body was re-enqueued onto (the origin queue, or a dead-lettered message's
+ * parent queue).
+ */
+export interface ReplayQueueMessageResult {
+    sent: number;
+    target: string;
 }
 
 /**

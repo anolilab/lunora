@@ -1119,6 +1119,9 @@ importers:
       '@lunora/mail':
         specifier: workspace:*
         version: link:../../packages/mail
+      '@lunora/queue':
+        specifier: workspace:*
+        version: link:../../packages/queue
       '@lunora/ratelimit':
         specifier: workspace:*
         version: link:../../packages/ratelimit
