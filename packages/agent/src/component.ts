@@ -82,6 +82,16 @@ const agentExtension: SchemaExtension = defineSchemaExtension(AGENT_EXTENSION_KE
              * apps). First writer wins — a later run may not change it.
              */
             owner: v.optional(v.string()),
+
+            /**
+             * The thread's synced agent state — a JSON object written by the
+             * internal `agentSetState` mutation (absolute REPLACE) and read by the
+             * public `agentState` query (`ctx.getState` / `useAgentState`). Seeded
+             * from `defineAgent({ initialState })` on thread creation. Optional so
+             * agent-free apps and pre-existing threads (written before this column)
+             * are unaffected.
+             */
+            state: v.optional(v.any()),
             status: v.union(v.literal("idle"), v.literal("running"), v.literal("error"), v.literal("cancelled"), v.literal("awaiting_input")),
             title: v.optional(v.string()),
             updatedAt: v.number(),
@@ -118,6 +128,25 @@ const asInternal = <T>(function_: T): T => {
 };
 
 /**
+ * Drop the `undefined`-valued keys from an optional-column bag so a
+ * `defineTable` insert never writes an explicit `undefined` (which the
+ * validators reject) — the spread-and-omit pattern for `owner`/`title`/
+ * `instanceId`/`state`, hoisted out of the insert to keep the handler's
+ * cyclomatic complexity flat as more optional columns are added.
+ */
+const definedColumns = (columns: Record<string, unknown>): Record<string, unknown> => {
+    const result: Record<string, unknown> = {};
+
+    for (const [key, value] of Object.entries(columns)) {
+        if (value !== undefined) {
+            result[key] = value;
+        }
+    }
+
+    return result;
+};
+
+/**
  * Loose structural view of a registered Lunora function — wide enough for any
  * concrete `RegisteredMutation`/`RegisteredQuery` (whose precise validator-map
  * generics make them invariant), narrow enough for re-export, dispatch, and
@@ -138,6 +167,8 @@ export interface AgentComponent {
         agentMessages: AgentRegisteredFunction;
         agentPatchThread: AgentRegisteredFunction;
         agentResolveApproval: AgentRegisteredFunction;
+        agentSetState: AgentRegisteredFunction;
+        agentState: AgentRegisteredFunction;
         agentThread: AgentRegisteredFunction;
     };
 }
@@ -157,6 +188,9 @@ export const agentComponent = (): AgentComponent => {
     const agentEnsureThread = mutation
         .input({
             agent: v.string(),
+            // Seed the thread's synced state — set on the INSERT branch only
+            // (first writer wins, like owner/title), so a replay never re-seeds.
+            initialState: v.optional(v.any()),
             instanceId: v.optional(v.string()),
             key: v.string(),
             onConcurrentRun: v.optional(v.union(v.literal("reject"), v.literal("queue"), v.literal("replace"))),
@@ -232,10 +266,8 @@ export const agentComponent = (): AgentComponent => {
                 key: args.key,
                 messageCount: 0,
                 status: "running",
-                ...(args.instanceId === undefined ? {} : { instanceId: args.instanceId }),
-                ...(args.owner === undefined ? {} : { owner: args.owner }),
-                ...(args.title === undefined ? {} : { title: args.title }),
                 updatedAt: now,
+                ...definedColumns({ instanceId: args.instanceId, owner: args.owner, state: args.initialState, title: args.title }),
             });
 
             return { created: true };
@@ -338,6 +370,32 @@ export const agentComponent = (): AgentComponent => {
         });
 
     /**
+     * Replace the thread's synced state (the `ctx.setState` target). INTERNAL —
+     * only the workflow's admin-dispatch may call it, from inside a tool's
+     * memoized durable step. Absolute set (whole-object REPLACE), so a step-retry
+     * that re-applies the same value is a no-op — idempotent under workflow
+     * replay, mirroring `agentPatchThread`'s usage semantics. No-op when the
+     * thread is missing.
+     */
+    const agentSetState = mutation
+        .input({
+            key: v.string(),
+            state: v.any(),
+        })
+        .mutation(async ({ args, ctx: context }): Promise<void> => {
+            const thread = await context.db
+                .query(THREADS_TABLE)
+                .withIndex("byKey", (q) => q.eq("key", args.key))
+                .first();
+
+            if (!thread) {
+                return;
+            }
+
+            await context.db.patch(thread["_id"] as never, { state: args.state, updatedAt: Date.now() });
+        });
+
+    /**
      * Owner gate for the public reads: an owned thread only answers for a
      * caller whose verified identity matches; an ownerless thread is open (the
      * app chose no identity). A mismatch is indistinguishable from a missing
@@ -369,6 +427,22 @@ export const agentComponent = (): AgentComponent => {
             .first();
 
         return readableThread(thread, context.auth);
+    });
+
+    // The live synced-state view: subscribe to `agents:agentState` (via
+    // `useAgentState`) and every `setState` streams the fresh state object over
+    // the existing reactive transport. A dedicated query (rather than reading
+    // `thread.state` off `agentThread`) so the per-socket JSON memo suppresses a
+    // push unless the STATE actually changed — not on every status/usage flip.
+    // Same owner gate as agentThread; returns `undefined` when unknown/forbidden
+    // or before any state was seeded.
+    const agentState = query.input({ key: v.string() }).query(async ({ args, ctx: context }): Promise<Record<string, unknown> | undefined> => {
+        const thread = await context.db
+            .query(THREADS_TABLE)
+            .withIndex("byKey", (q) => q.eq("key", args.key))
+            .first();
+
+        return readableThread(thread, context.auth)?.["state"] as Record<string, unknown> | undefined;
     });
 
     // The live thread view: subscribe to `agents:agentMessages` and every
@@ -455,6 +529,8 @@ export const agentComponent = (): AgentComponent => {
             agentMessages,
             agentPatchThread: asInternal(agentPatchThread),
             agentResolveApproval,
+            agentSetState: asInternal(agentSetState),
+            agentState,
             agentThread,
         },
     };

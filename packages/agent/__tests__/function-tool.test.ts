@@ -11,8 +11,10 @@ import { DurableStepJournal, loopDefaults, memoryRuntime, scriptedGenerate, tool
 const toolContext = (run: AgentToolContext["run"], overrides?: Partial<AgentToolContext>): AgentToolContext => {
     return {
         env: {},
+        getState: async () => undefined,
         idempotencyKey: "tool:lookupOrder:call_1",
         run,
+        setState: async () => {},
         threadKey: "thread-1",
         toolCallId: "call_1",
         ...overrides,

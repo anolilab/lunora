@@ -66,6 +66,8 @@ interface TurnContext {
     agent: AgentDefinition;
     env: Record<string, unknown>;
     generate: AgentGenerate;
+    /** Read the thread's synced state (dispatches `agents:agentState`) — the tool ctx's `getState`. */
+    getState: () => Promise<Record<string, unknown> | undefined>;
     instanceId: string;
     /** The resolved system prompt (static string, or a dynamic thunk's result). */
     instructions: string | undefined;
@@ -77,6 +79,8 @@ interface TurnContext {
     patchThread: (patch: Record<string, unknown>) => Promise<void>;
     persist: (message: Record<string, unknown>) => Promise<void>;
     run: AgentRunFunction;
+    /** Replace the thread's synced state (dispatches `agents:agentSetState`) — the tool ctx's `setState`. */
+    setState: (state: Record<string, unknown>) => Promise<void>;
     step: AgentStepLike;
     /** The streaming LLM-turn seam, when available (else `undefined`). */
     streamGenerate: AgentStreamGenerate | undefined;
@@ -197,7 +201,7 @@ const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall): Pro
 };
 
 const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promise<void> => {
-    const { env, instanceId, persist, run, step, threadKey, tools } = turnContext;
+    const { env, getState, instanceId, persist, run, setState, step, threadKey, tools } = turnContext;
     const stepName = `tool:${call.name}:${call.id}`;
     const tool: AnyAgentTool | undefined = tools[call.name];
     const messageKey = `${instanceId}:tool:${call.id}`;
@@ -211,7 +215,7 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
         return;
     }
 
-    const toolContext = { env, idempotencyKey: stepName, run, threadKey, toolCallId: call.id };
+    const toolContext = { env, getState, idempotencyKey: stepName, run, setState, threadKey, toolCallId: call.id };
 
     // Human-in-the-loop: a gated tool pauses the run until a client approves or
     // rejects it. A rejection skips the tool and records why, so the next LLM
@@ -575,6 +579,8 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
     const ensureThread = toFunctionReference(paths.ensureThread);
     const listMessages = toFunctionReference(paths.listMessages);
     const patchThread = toFunctionReference(paths.patchThread);
+    const setStateRef = toFunctionReference(paths.setState);
+    const stateRef = toFunctionReference(paths.state);
 
     const persist = async (message: Record<string, unknown>): Promise<void> => {
         await run(appendMessage, { threadKey: params.threadKey, ...message });
@@ -582,6 +588,19 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
 
     const patchThreadByKey = async (patch: Record<string, unknown>): Promise<void> => {
         await run(patchThread, { key: params.threadKey, ...patch });
+    };
+
+    // Synced-state closures handed to every tool ctx. They dispatch through the
+    // same `run` seam the loop uses for history/persistence, so a call made from
+    // inside a tool's memoized `step.do` is replay-safe (the memoized step is
+    // served without re-dispatching). `getState` reads the owner-gated
+    // `agentState` query (same identity/gate as `agentMessages`); `setState` is
+    // an absolute REPLACE, idempotent under an at-least-once step retry.
+    const getState = async (): Promise<Record<string, unknown> | undefined> =>
+        (await run(stateRef, { key: params.threadKey })) as Record<string, unknown> | undefined;
+
+    const setState = async (state: Record<string, unknown>): Promise<void> => {
+        await run(setStateRef, { key: params.threadKey, state });
     };
 
     // Thread bootstrap + user turn. Both are idempotent by themselves (get-or-
@@ -594,6 +613,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
         agent: exportName,
         instanceId,
         key: params.threadKey,
+        ...(agent.initialState === undefined ? {} : { initialState: agent.initialState }),
         ...(agent.onConcurrentRun === undefined ? {} : { onConcurrentRun: agent.onConcurrentRun }),
         ...(params.owner === undefined ? {} : { owner: params.owner }),
         ...(params.title === undefined ? {} : { title: params.title }),
@@ -621,6 +641,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
         agent,
         env,
         generate,
+        getState,
         instanceId,
         instructions,
         listMessages,
@@ -629,6 +650,7 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
         patchThread: patchThreadByKey,
         persist,
         run,
+        setState,
         step,
         streamGenerate,
         threadKey: params.threadKey,

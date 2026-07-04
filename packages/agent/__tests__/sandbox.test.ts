@@ -17,12 +17,14 @@ const recordingContext = (): { calls: { args: unknown; ref: unknown }[]; context
         calls,
         context: {
             env: {},
+            getState: async () => undefined,
             idempotencyKey: "tool:x:call-1",
             run: async (ref: unknown, args: unknown) => {
                 calls.push({ args, ref });
 
                 return "ok";
             },
+            setState: async () => {},
             threadKey: "t-1",
             toolCallId: "call-1",
         },

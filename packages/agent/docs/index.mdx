@@ -194,6 +194,76 @@ onto a live transport the loop takes the byte-identical non-streaming path, so
 subscription. Turn-granular streaming works today; sub-turn token streaming is
 the remaining follow-up.
 
+## Synced state
+
+Beyond the message log, a run carries a small **synced state** object — a
+`setState`-style scratchpad (the plan, a step counter, a progress summary) that
+a tool writes and a client watches live. Seed it with `initialState` on the
+agent (set once, on thread creation — first writer wins, so a replay never
+re-seeds), then read and write it from any tool's ctx:
+
+```ts
+const planner = defineAgent({
+    initialState: { applied: [], plan: [], step: 0 },
+    model: "@cf/meta/llama-3.1-8b-instruct",
+    tools: {
+        advance: defineAgentTool({
+            description: "Record the next step of the plan.",
+            execute: async ({ note }, { getState, idempotencyKey, setState }) => {
+                const current = (await getState()) ?? { applied: [], plan: [], step: 0 };
+                const applied = current.applied as string[];
+
+                // Idempotent read-modify-write: skip if this durable step already
+                // applied. A retried step re-reads the ALREADY-written state, so
+                // dedupe on `idempotencyKey` or the counter double-advances.
+                if (applied.includes(idempotencyKey)) {
+                    return "recorded";
+                }
+
+                await setState({
+                    applied: [...applied, idempotencyKey],
+                    plan: [...(current.plan as string[]), note],
+                    step: (current.step as number) + 1,
+                });
+
+                return "recorded";
+            },
+            inputSchema: jsonSchema({ properties: { note: { type: "string" } }, required: ["note"], type: "object" }),
+        }),
+    },
+});
+```
+
+`setState(state)` is an **absolute replace** (not a patch). The value you pass
+must be **replay-stable** — a constant or derived purely from the tool's
+`input`, never from `Date.now()` / `Math.random()`. A step that fails mid-body is
+retried at-least-once and re-runs the whole `execute` against state a prior
+attempt may already have written, so re-applying a replay-stable value is a
+no-op and a replay converges. A value derived from `getState()` is **not**
+replay-stable: a naive read-modify-write (`setState({ step: (await
+getState()).step + 1 })`) **double-advances** on a retry because the retry
+re-reads the already-written value — dedupe it on `idempotencyKey` as above.
+`getState()` reads the thread's current state through the owner-gated
+`agents:agentState` query — the same identity gate as the message reads, so only
+the thread's owner sees it.
+
+On the client, subscribe with **`useAgentState`** — a thin wrapper over the
+`agents:agentState` subscription that re-renders whenever a tool calls
+`setState` (a dedicated query with a per-socket JSON memo suppresses no-op
+pushes on unrelated thread writes):
+
+```tsx
+// React — generic over your app's state shape
+const { state, error } = useAgentState<PlanState>({ api, threadKey });
+// state?.step, state?.plan — live, undefined until first seeded/pushed
+```
+
+`useAgentState` ships in `@lunora/react` today; the Vue/Solid/Svelte
+equivalents are a follow-up (the server surface and the subscription are already
+in place). State sync is **opt-in**: an agent without `initialState` and tools
+that never touch `getState`/`setState` behaves exactly as before, and the
+`state` column stays absent on its threads.
+
 ## Tools from anywhere
 
 Beyond inline `defineAgentTool`, three helpers pull tools from other surfaces —
