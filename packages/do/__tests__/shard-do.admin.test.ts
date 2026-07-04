@@ -790,6 +790,38 @@ describe("shardDO admin introspection", () => {
         ]);
     });
 
+    it("rejects an empty batch with a 400 before touching the queue binding", async () => {
+        expect.assertions(2);
+
+        const binding = {
+            send: () => Promise.reject(new Error("send must not run for an invalid batch")),
+            sendBatch: () => Promise.reject(new Error("sendBatch must not run for an empty batch")),
+        };
+
+        const shard = new DeclaredQueueShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, QUEUE_EMAIL: binding });
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.sendQueueMessage, { batch: [], exportName: "emailQueue" }, ADMIN_TOKEN));
+
+        expect(response.status).toBe(400);
+        await expect(response.text()).resolves.toMatch(/between 1 and 100/u);
+    });
+
+    it("rejects a batch larger than 100 messages with a 400", async () => {
+        expect.assertions(1);
+
+        const binding = {
+            send: () => Promise.reject(new Error("send must not run for an oversized batch")),
+            sendBatch: () => Promise.reject(new Error("sendBatch must not run for an oversized batch")),
+        };
+
+        const shard = new DeclaredQueueShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, QUEUE_EMAIL: binding });
+        const oversized = Array.from({ length: 101 }, (_unused, index) => {
+            return { n: index };
+        });
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.sendQueueMessage, { batch: oversized, exportName: "emailQueue" }, ADMIN_TOKEN));
+
+        expect(response.status).toBe(400);
+    });
+
     it("rejects sending to an undeclared queue with a 400", async () => {
         expect.assertions(1);
 

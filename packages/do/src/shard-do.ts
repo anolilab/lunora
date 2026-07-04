@@ -1055,11 +1055,15 @@ const parseRecordQueueMessageArgs = (args: Record<string, unknown>): RecordQueue
     });
 };
 
+/** Cloudflare Queues accepts 1–100 messages per `sendBatch` call (a 0 or >100 batch is a `BatchCountOutOfBounds` error). */
+const MAX_QUEUE_SEND_BATCH = 100;
+
 /**
  * Validate the `__lunora_admin__:sendQueueMessage` payload (also the replay path's
  * resolved target). Requires a non-empty `exportName`; `delaySeconds` must be a
  * non-negative number when present; `batch` (when an array) switches the op to a
- * single `sendBatch`. Throws a 400 `LunoraError` on a bad shape.
+ * single `sendBatch` and must carry 1–{@link MAX_QUEUE_SEND_BATCH} messages. Throws
+ * a 400 `LunoraError` on a bad shape.
  */
 const parseSendQueueMessageArgs = (args: Record<string, unknown>): SendQueueMessageArgs => {
     const exportName = typeof args["exportName"] === "string" ? args["exportName"].trim() : "";
@@ -1078,8 +1082,20 @@ const parseSendQueueMessageArgs = (args: Record<string, unknown>): SendQueueMess
         });
     }
 
+    const batch = Array.isArray(args["batch"]) ? (args["batch"] as unknown[]) : undefined;
+
+    // Cloudflare's `sendBatch` rejects an empty or >100-message batch (BatchCountOutOfBounds).
+    // Fail it on the existing 400 path so a malformed payload never reaches the queue API.
+    if (batch !== undefined && (batch.length === 0 || batch.length > MAX_QUEUE_SEND_BATCH)) {
+        throw Object.assign(new Error(`sendQueueMessage: \`batch\` must contain between 1 and ${String(MAX_QUEUE_SEND_BATCH)} messages`), {
+            code: "BAD_REQUEST",
+            name: "LunoraError",
+            status: 400,
+        });
+    }
+
     return {
-        batch: Array.isArray(args["batch"]) ? (args["batch"] as unknown[]) : undefined,
+        batch,
         body: args["body"],
         contentType: typeof args["contentType"] === "string" ? args["contentType"] : undefined,
         delaySeconds: delayRaw,
