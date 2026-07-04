@@ -12,6 +12,15 @@ minimumReleaseAge: 1440
 
 blockExoticSubdeps: true
 
+# `@coinbase/x402` (optional CDP-wallet peer of @lunora/x402) ships a
+# `postinstall` that only prints a CDP-TOS notice (a pure `console.log`, no
+# native build). pnpm 11 blocks un-approved build scripts and exits non-zero on
+# every script run (ERR_PNPM_IGNORED_BUILDS reads as "deps dirty"), so approve
+# this one explicitly — the same entry `pnpm approve-builds` would write. It is
+# currently the only dependency in the tree with an un-prebuilt build script.
+onlyBuiltDependencies:
+  - "@coinbase/x402"
+
 # Force a single React across the tree. @visulima/tui (a vis dependency) and its
 # react-reconciler pin react@19.2.6 while everything else uses 19.2.7; the two
 # copies crash vis's TUI renderer ("Invalid hook call" / useContext on null).
@@ -60,6 +69,7 @@ overrides:
   "@lunora/vite": "workspace:*"
   "@lunora/vue": "workspace:*"
   "@lunora/workflow": "workspace:*"
+  "@lunora/x402": "workspace:*"
   "lunorash": "workspace:*"
   '@opentelemetry/core@<2.8.0': ^2.8.0
   astro@<6.4.6: ^6.4.6
@@ -253,6 +263,21 @@ catalogs:
     "postal-mime": 2.7.5
   mcp:
     "@modelcontextprotocol/sdk": ^1.29.0
+  # x402 agentic payments (@lunora/x402) — the Coinbase/x402 v2 protocol SDK
+  # (Apache-2.0) plus chain signers. EXACT-pinned (saveExact); all versions are
+  # >24h old so no `minimumReleaseAgeExclude` entry is needed. `@x402/core`'s
+  # only runtime dep is `zod@^3`, which arrives TRANSITIVELY — do NOT import zod
+  # directly in @lunora/x402 (the repo pins zod@4; two instances break
+  # `instanceof`). `viem` (>=2.48.11 per @x402/evm) is the EVM signer; the
+  # Solana peers ride in via `@x402/svm`. `@coinbase/x402` is the CDP wallet path
+  # (optional peer + devDep, mirrors @cloudflare/playwright on @lunora/browser).
+  web3:
+    "@x402/core": 2.17.0
+    "@x402/evm": 2.17.0
+    "@x402/fetch": 2.17.0
+    "@x402/svm": 2.17.0
+    "@coinbase/x402": 2.1.0
+    viem: 2.54.1
   # Docs site (apps/docs) — TanStack Start + Vite + fumadocs marketing/docs app.
   # Isolated catalog so the heavy web stack (three.js, fumadocs 17, radix, …)
   # never perturbs the framework packages' version pins.
@@ -411,6 +436,7 @@ peerDependencyRules:
 # scripts unless the workspace explicitly approves them. Re-run
 # `pnpm approve-builds` to repopulate this list when a new package joins.
 allowBuilds:
+  '@coinbase/x402': set this to true or false
   '@parcel/watcher': true
   core-js: false
   cpu-features: true
