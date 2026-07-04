@@ -258,6 +258,97 @@ describe("codegen-plugin", () => {
         await (plugin.buildStart as (this: unknown) => Promise<void>).call(undefined);
     };
 
+    describe("teardown (server close)", () => {
+        beforeEach(() => {
+            vi.useFakeTimers();
+        });
+
+        afterEach(() => {
+            vi.useRealTimers();
+        });
+
+        /**
+         * Invoke `configureServer` and return its "post" hook — the function Vite
+         * calls after internal middlewares are installed, where teardown is
+         * registered (see `wireServer` above, which discards this return value).
+         */
+        const configureAndCapturePost = (plugin: import("vite").Plugin, server: import("vite").ViteDevServer): (() => void) | undefined => {
+            const hook = plugin.configureServer as (server: import("vite").ViteDevServer) => (() => void) | undefined;
+
+            return hook(server);
+        };
+
+        it("middleware mode (no httpServer): buildEnd tears down watcher listeners and a later debounce performs no send", async () => {
+            expect.assertions(3);
+
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { clientSend, server, workerSend } = makeStubServer();
+
+            // `makeStubServer()`'s `httpServer: undefined` already models
+            // middleware mode (`server.middlewareMode: true` forces it to `null`).
+            const post = configureAndCapturePost(plugin, server);
+
+            post?.();
+
+            // Start a debounce — codegen hasn't run yet.
+            const onChangeCalls = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls;
+            const changeListener = onChangeCalls.find((args) => args[0] === "change")?.[1] as ((file: string) => void) | undefined;
+
+            changeListener!(join(workdir, "lunora", "schema.ts"));
+
+            // Fire the middleware-mode close signal: Vite invokes every eligible
+            // plugin's `buildEnd` hook once for the "client" environment from
+            // `server.close()`, regardless of middleware mode.
+            (plugin.buildEnd as (this: { environment: unknown }) => void).call({ environment: server.environments.client });
+
+            // eslint-disable-next-line @typescript-eslint/unbound-method -- vi.fn mock on the fake server's watcher; no `this` binding to lose
+            expect(server.watcher.off).toHaveBeenCalledTimes(6);
+
+            // The pending debounce fires after close but must no-op (closed guard).
+            await vi.runAllTimersAsync();
+
+            expect(clientSend).not.toHaveBeenCalled();
+            expect(workerSend).not.toHaveBeenCalled();
+        });
+
+        it("classic mode (httpServer present): teardown runs once even if the close listener fires twice", () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { server } = makeStubServer();
+
+            const closeListeners: (() => void)[] = [];
+
+            // A stub httpServer that records its "close" listener directly, so the
+            // test can invoke it more than once — a real `EventEmitter#once` would
+            // already dedupe this, but the plugin's own `closed` guard must be the
+            // thing making a second fire a no-op, not the transport.
+            (server as unknown as { httpServer: { once: (event: string, listener: () => void) => void } }).httpServer = {
+                once: (event, listener) => {
+                    if (event === "close") {
+                        closeListeners.push(listener);
+                    }
+                },
+            };
+
+            const post = configureAndCapturePost(plugin, server);
+
+            post?.();
+
+            expect(closeListeners).toHaveLength(1);
+
+            closeListeners[0]?.();
+            closeListeners[0]?.();
+
+            // eslint-disable-next-line @typescript-eslint/unbound-method -- vi.fn mock on the fake server's watcher; no `this` binding to lose
+            expect(server.watcher.off).toHaveBeenCalledTimes(6);
+        });
+    });
+
     describe("overlay wiring (configureServer)", () => {
         beforeEach(() => {
             vi.useFakeTimers();
