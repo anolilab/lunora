@@ -11,6 +11,7 @@
  */
 
 import type { X402Network } from "./networks";
+import type { SpendPolicy } from "./pay/policy";
 
 /**
  * The public, Coinbase-operated facilitator (verify + settle). It needs no API
@@ -62,20 +63,27 @@ export interface X402ChargeConfig {
 
 /**
  * Client-side (pay rail) config. The signer holds spending authority, so the
- * pay rail is ActionCtx-only and MUST be paired with a spend policy (Phase 5).
+ * pay rail is ActionCtx-only and MUST be paired with a spend `policy` — the pay
+ * rail refuses to build if the policy is unbounded.
  */
 export interface X402PayConfig {
     /** Network to transact on. Determines the signer family (EVM vs SVM). */
     readonly network: X402Network;
+    /** Mandatory spend limits + approval gates. An unbounded policy is refused. */
+    readonly policy: SpendPolicy;
     /** How the agent wallet is custodied (raw key or CDP-managed). */
     readonly signer: X402SignerConfig;
 }
 
 /**
- * Wallet custody for the pay rail. Both are supported from day one. A
- * `"raw-key"` signer resolves a private key from `ctx.secrets` (viem for EVM,
- * an `@x402/svm` keypair for Solana) — simplest, self-custodied. A `"cdp"`
- * signer uses a Coinbase-managed wallet via `@coinbase/x402` (the optional peer).
+ * Wallet custody for the pay rail. A `"raw-key"` signer resolves a private key
+ * from `ctx.secrets` (viem for EVM, an `@x402/svm` keypair for Solana) —
+ * simplest, self-custodied. A `"cdp"` signer uses a Coinbase-managed wallet (via
+ * `@coinbase/cdp-sdk`; note `@coinbase/x402` is a facilitator-auth helper, not a
+ * signer provider).
+ *
+ * Wired today: EVM raw-key. SVM raw-key and CDP custody are recognised config
+ * shapes that fail loudly with guidance until their signer integrations land.
  */
 export type X402SignerConfig =
     | {
