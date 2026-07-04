@@ -10,6 +10,7 @@ import type {
 } from "@lunora/do";
 import { LunoraError } from "@lunora/errors";
 
+import type { CapabilityKey } from "./capabilities";
 import { SERVER_CTX_FIELDS } from "./capabilities";
 import compileArgsValidator from "./compile-validator";
 import type {
@@ -1187,7 +1188,10 @@ export type Env = CloudflareBindings;`;
     // `ctx.r2sql`) from the single CAPABILITIES table, so the strings live in one
     // place. `ctx.access` (a synchronous facade type) and `ctx.flags` (an
     // umbrella-aware specifier) are the two exceptions kept bespoke below.
-    const serverCapabilityField = (key: string, enabled: boolean): string => (enabled ? (SERVER_CTX_FIELDS.get(key)?.field ?? "") : "");
+    // `key: CapabilityKey` (not `string`) so a mistyped capability id is a compile
+    // error, not a silent `?? ""` drop of the ctx field. The `?? ""` remains only
+    // for the legitimate case of a key with no `serverCtxField` in the map.
+    const serverCapabilityField = (key: CapabilityKey, enabled: boolean): string => (enabled ? (SERVER_CTX_FIELDS.get(key)?.field ?? "") : "");
     const kvContextField = serverCapabilityField("kv", hasKv);
     const analyticsContextField = serverCapabilityField("analytics", hasAnalytics);
     const hyperdriveActionField = serverCapabilityField("hyperdrive", hasHyperdrive);

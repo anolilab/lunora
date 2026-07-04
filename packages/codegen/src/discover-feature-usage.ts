@@ -103,7 +103,12 @@ const contextPropertiesRead = (sourceFile: SourceFile): Set<string> => {
  * `payments`) and — via {@link buildStudioFeatures} — the studio nav.
  */
 const discoverFeatureUsage = (project: Project, lunoraDirectory: string): FeatureUsage => {
-    const usage: Record<string, boolean> = Object.fromEntries(CAPABILITIES.map((capability) => [capability.key, false]));
+    // Typed as `FeatureUsage` (`Record<CapabilityKey, boolean>`) up front, so every
+    // `usage[capability.key]` read/write below is key-checked and the function
+    // returns with no boundary cast. The single assertion is the unavoidable
+    // `Object.fromEntries` widening (it always yields `{ [k: string]: T }`); the
+    // keys provably come from `CAPABILITIES`, whose `key` is a `CapabilityKey`.
+    const usage = Object.fromEntries(CAPABILITIES.map((capability) => [capability.key, false] as const)) as FeatureUsage;
 
     for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
@@ -131,9 +136,7 @@ const discoverFeatureUsage = (project: Project, lunoraDirectory: string): Featur
         }
     }
 
-    // Seeded from every `CAPABILITIES` key above, so the string-indexed record
-    // carries exactly the `FeatureUsage` (`CapabilityKey`) key set.
-    return usage as FeatureUsage;
+    return usage;
 };
 
 /**

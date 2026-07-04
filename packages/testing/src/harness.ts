@@ -79,6 +79,20 @@ type FunctionRegistry = Record<string, RegisteredAction<any, any> | RegisteredMu
  */
 interface LunoraTestOptions {
     /**
+     * Injectable `ctx.env` for every context (query / mutation / action). When
+     * provided, handlers that read `ctx.env.SOME_KEY` (the validated `defineEnv`
+     * surface) see this object. Left unset it stays `undefined` — matching the
+     * optional `ctx.env?` field, so graceful `ctx.env?.KEY` access still yields
+     * `undefined` rather than throwing. Not a throwing stub for exactly that
+     * reason: `env` is designed to be legitimately absent.
+     * @example
+     * ```ts
+     * const t = lunoraTest(schema, { env: { STRIPE_KEY: "sk_test_…" } });
+     * ```
+     */
+    env?: Record<string, unknown>;
+
+    /**
      * Injectable `fetch` implementation for action contexts. When provided,
      * `ctx.fetch` in every `action` (and `withIdentity` views) resolves to this
      * function rather than throwing the "not available in v1" stub.
@@ -421,6 +435,8 @@ const buildSubscribe = (runRegistered: RunRegisteredFunction, queryContext: Quer
  *
  * **v1 surfaces now supported:**
  *
+ * - `ctx.env` (all contexts): inject the validated env via `options.env`; unset it
+ * stays `undefined`, matching the optional `ctx.env?` field.
  * - `ctx.fetch` (actions): inject a custom `fetch` via `options.fetch`.
  * - `ctx.scheduler` (mutations + actions): fully functional fake with virtual clock;
  * control via `harness.scheduler.advance(ms)` / `runPending()` / `list()`.
@@ -559,6 +575,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         const queryContext: QueryCtx = {
             auth,
             db: database,
+            env: options?.env,
             log: noopLog,
             now: harnessNow,
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runQuery, after construction completes
@@ -571,6 +588,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         const mutationContext: MutationCtx = {
             auth,
             db: database,
+            env: options?.env,
             log: noopLog,
             now: harnessNow,
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runMutation, after construction completes
@@ -592,6 +610,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         const actionContext: ActionCtx = {
             auth,
             db: database,
+            env: options?.env,
             // Use the injected fetch when provided; fall back to the v1 stub otherwise.
             fetch: options?.fetch ?? (stubProxy("fetch") as ActionCtx["fetch"]),
             log: noopLog,

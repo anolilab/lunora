@@ -247,6 +247,17 @@ describe("codegen-plugin", () => {
         hook(server);
     };
 
+    /**
+     * Drive the plugin through a real `buildStart` so the config-drift baseline is
+     * "settled". The watcher only restarts on drift AFTER startup finishes — the
+     * plugin's own binding-provisioning write during `buildStart` must not read as
+     * external drift and restart the server mid-boot. Mirrors Vite's lifecycle:
+     * `configureServer` (via {@link wireServer}) runs first, then `buildStart`.
+     */
+    const settleConfigBaseline = async (plugin: import("vite").Plugin): Promise<void> => {
+        await (plugin.buildStart as (this: unknown) => Promise<void>).call(undefined);
+    };
+
     describe("overlay wiring (configureServer)", () => {
         beforeEach(() => {
             vi.useFakeTimers();
@@ -490,7 +501,7 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             expect(getConfigChangeListener(server)).toBeTypeOf("function");
         });
 
-        it("external wrangler binding edit restarts the dev server in place", () => {
+        it("external wrangler binding edit restarts the dev server in place", async () => {
             expect.assertions(2);
 
             writeFixture(workdir);
@@ -501,8 +512,10 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             const plugin = codegenPlugin(makeOptions(workdir));
             const { restart, server } = makeStubServer();
 
-            // configureServer captures the baseline from the initial wrangler.jsonc.
+            // configureServer captures the baseline; buildStart settles it after the
+            // plugin's own startup binding write, so only later edits count as drift.
             wireServer(plugin, server);
+            await settleConfigBaseline(plugin);
 
             const onConfigChange = getConfigChangeListener(server);
 
@@ -518,26 +531,33 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             expect(restart).toHaveBeenCalledTimes(1);
         });
 
-        it("codegen's own cron-only wrangler rewrite does NOT restart (anti-loop)", () => {
+        it("codegen's own cron-only wrangler rewrite does NOT restart (anti-loop)", async () => {
             expect.assertions(1);
 
             writeFixture(workdir);
             const wranglerPath = join(workdir, "wrangler.jsonc");
 
-            // Baseline already carries a binding + a crons array.
-            writeFileSync(wranglerPath, '{ "name": "app", "d1_databases": [{ "binding": "DB" }], "triggers": { "crons": ["0 9 * * *"] } }\n', "utf8");
+            // Baseline already carries every binding startup would infer (DB +
+            // observability) plus a crons array — so buildStart's reconcile is a
+            // no-op and the settled baseline is exactly this file (minus crons).
+            writeFileSync(
+                wranglerPath,
+                '{ "name": "app", "d1_databases": [{ "binding": "DB" }], "observability": { "enabled": true }, "triggers": { "crons": ["0 9 * * *"] } }\n',
+                "utf8",
+            );
 
             const plugin = codegenPlugin(makeOptions(workdir));
             const { restart, server } = makeStubServer();
 
             wireServer(plugin, server);
+            await settleConfigBaseline(plugin);
 
             const onConfigChange = getConfigChangeListener(server);
 
             // Simulate `reconcileWranglerCrons` rewriting ONLY triggers.crons.
             writeFileSync(
                 wranglerPath,
-                '{ "name": "app", "d1_databases": [{ "binding": "DB" }], "triggers": { "crons": ["*/30 * * * *", "0 9 * * *"] } }\n',
+                '{ "name": "app", "d1_databases": [{ "binding": "DB" }], "observability": { "enabled": true }, "triggers": { "crons": ["*/30 * * * *", "0 9 * * *"] } }\n',
                 "utf8",
             );
             onConfigChange(wranglerPath);
@@ -546,7 +566,41 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             expect(restart).not.toHaveBeenCalled();
         });
 
-        it("lunora.json drift restarts (the cloudflare plugin does not watch it)", () => {
+        it("a config write during startup adopts the baseline instead of restarting", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+            const wranglerPath = join(workdir, "wrangler.jsonc");
+
+            writeFileSync(wranglerPath, '{ "name": "app" }\n', "utf8");
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { restart, server } = makeStubServer();
+
+            // configureServer baselines but does NOT settle — buildStart has not run
+            // yet, so its own binding-provisioning write is still pending.
+            wireServer(plugin, server);
+
+            const onConfigChange = getConfigChangeListener(server);
+
+            // Simulate buildStart's binding write landing as a watcher event mid-boot:
+            // a real, binding-relevant change arriving before the baseline settles.
+            writeFileSync(wranglerPath, '{ "name": "app", "d1_databases": [{ "binding": "DB", "database_name": "app" }] }\n', "utf8");
+            onConfigChange(wranglerPath);
+
+            // Adopted as the new baseline, NOT treated as external drift → no restart.
+            expect(restart).not.toHaveBeenCalled();
+
+            // Once startup settles, a later external edit does restart as normal.
+            await settleConfigBaseline(plugin);
+
+            writeFileSync(wranglerPath, '{ "name": "app", "kv_namespaces": [{ "binding": "KV" }] }\n', "utf8");
+            onConfigChange(wranglerPath);
+
+            expect(restart).toHaveBeenCalledTimes(1);
+        });
+
+        it("lunora.json drift restarts (the cloudflare plugin does not watch it)", async () => {
             expect.assertions(2);
 
             writeFixture(workdir);
@@ -557,6 +611,7 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             const { restart, server } = makeStubServer();
 
             wireServer(plugin, server);
+            await settleConfigBaseline(plugin);
 
             const onConfigChange = getConfigChangeListener(server);
 
@@ -586,6 +641,7 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             restart.mockRejectedValueOnce(new Error("port in use"));
 
             wireServer(plugin, server);
+            await settleConfigBaseline(plugin);
 
             const onConfigChange = getConfigChangeListener(server);
 

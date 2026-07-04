@@ -211,13 +211,25 @@ const CAPABILITY_ROWS = [
 type CapabilityKey = (typeof CAPABILITY_ROWS)[number]["key"];
 
 /**
+ * The subset of {@link CapabilityKey} for capabilities that expose a fluent
+ * `defineApp` builder method (an `appMethod` facet). `emit-app.ts` derives each
+ * one's `has&lt;Capitalized>` option key off this union, so the derivation is
+ * checked against `EmitAppOptions` at compile time (a capability whose flag is
+ * missing from `EmitAppOptions` is a type error, not a silent no-op).
+ */
+type AppMethodKey = Extract<(typeof CAPABILITY_ROWS)[number], { appMethod: unknown }>["key"];
+
+/**
  * The canonical table, widened to `CapabilityDescriptor` for iteration — so a
  * consumer can read `capability.serverCtxField` / `.appMethod` / `.contextProperty`
  * uniformly across every row (they read as `T | undefined`, whereas the narrow
  * {@link CAPABILITY_ROWS} literal type only exposes the facets a given row
- * actually declares). {@link CapabilityKey} is recovered from the narrow rows.
+ * actually declares). `key` stays narrowed to the {@link CapabilityKey} union
+ * (recovered from the narrow rows), so a consumer that keys a `Record` /
+ * `ReadonlyMap` off `capability.key` gets exhaustiveness — a typo'd or dropped
+ * key is a compile error, not a silent miss.
  */
-const CAPABILITIES: ReadonlyArray<CapabilityDescriptor> = CAPABILITY_ROWS;
+const CAPABILITIES: ReadonlyArray<CapabilityDescriptor & { readonly key: CapabilityKey }> = CAPABILITY_ROWS;
 
 /**
  * The typed `ctx.*` field seam keyed by capability id — for `emit.ts`, which
@@ -225,7 +237,7 @@ const CAPABILITIES: ReadonlyArray<CapabilityDescriptor> = CAPABILITY_ROWS;
  * interfaces. Only the uniform binding capabilities appear (NOT `flags`/`access`,
  * whose fields stay bespoke).
  */
-const SERVER_CTX_FIELDS: ReadonlyMap<string, ServerContextFieldFacet> = new Map(
+const SERVER_CTX_FIELDS: ReadonlyMap<CapabilityKey, ServerContextFieldFacet> = new Map(
     CAPABILITIES.flatMap((capability) => (capability.serverCtxField ? [[capability.key, capability.serverCtxField] as const] : [])),
 );
 
@@ -235,9 +247,9 @@ const SERVER_CTX_FIELDS: ReadonlyMap<string, ServerContextFieldFacet> = new Map(
  * `createShardDO` config. Each pairs the capability's `has*` option key
  * (`has&lt;Capitalized-key>`) with its {@link AppMethodFacet}.
  */
-const APP_METHOD_CAPABILITIES: ReadonlyArray<{ appMethod: AppMethodFacet; key: string }> = CAPABILITIES.flatMap((capability) =>
-    capability.appMethod ? [{ appMethod: capability.appMethod, key: capability.key }] : [],
+const APP_METHOD_CAPABILITIES: ReadonlyArray<{ appMethod: AppMethodFacet; key: AppMethodKey }> = CAPABILITY_ROWS.flatMap((capability) =>
+    "appMethod" in capability ? [{ appMethod: capability.appMethod, key: capability.key }] : [],
 );
 
 export { APP_METHOD_CAPABILITIES, CAPABILITIES, SERVER_CTX_FIELDS };
-export type { AppMethodFacet, CapabilityDescriptor, CapabilityKey, CapabilityTier, ServerContextFieldFacet as ServerCtxFieldFacet };
+export type { AppMethodFacet, AppMethodKey, CapabilityDescriptor, CapabilityKey, CapabilityTier, ServerContextFieldFacet };

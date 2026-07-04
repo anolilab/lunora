@@ -66,13 +66,20 @@ interface EmitAppOptions {
  * configKey, doc]` shape the emitters below consume — the flag is the capability
  * key's `has&lt;Capitalized>` option (`ai` → `hasAi`, `payments` → `hasPayments`).
  */
+
+/**
+ * The capability key's `has&lt;Capitalized>` option name (`ai` → `hasAi`, `payments`
+ * → `hasPayments`). The internal `as` is a narrow, provably-correct cast — the
+ * runtime string equals the `has${Capitalize&lt;K>}` template; string methods just
+ * don't preserve the literal type. Correctness of the *flag* (that it names a real
+ * `EmitAppOptions` key) is enforced at {@link LONG_TAIL}'s type annotation below,
+ * not here — so a capability whose flag is missing from `EmitAppOptions` is a
+ * compile error rather than a silently dropped method.
+ */
+const hasFlagKey = <K extends string>(key: K): `has${Capitalize<K>}` => `has${key.charAt(0).toUpperCase()}${key.slice(1)}` as `has${Capitalize<K>}`;
+
 const LONG_TAIL: ReadonlyArray<readonly [keyof EmitAppOptions, string, string, string]> = APP_METHOD_CAPABILITIES.map(
-    ({ appMethod, key }): readonly [keyof EmitAppOptions, string, string, string] => [
-        `has${key.charAt(0).toUpperCase()}${key.slice(1)}` as keyof EmitAppOptions,
-        appMethod.method,
-        appMethod.configKey,
-        appMethod.doc,
-    ],
+    ({ appMethod, key }): readonly [keyof EmitAppOptions, string, string, string] => [hasFlagKey(key), appMethod.method, appMethod.configKey, appMethod.doc],
 );
 
 /** Whether any long-tail (`shardExtras`-backed) capability method is emitted. */

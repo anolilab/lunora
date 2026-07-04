@@ -3,19 +3,12 @@ import { basename, join, resolve, sep } from "node:path";
 
 import { CodegenDiagnosticError, createCodegenProject, refreshCodegenProject, runCodegen } from "@lunora/codegen";
 import type { ExportGap } from "@lunora/config";
-import {
-    collectWranglerSecretVariables,
-    findWranglerFile,
-    inferLunoraBindings,
-    LUNORA_CONFIG_FILE,
-    readWranglerJsonc,
-    reconcileWranglerBindings,
-    WRANGLER_FILES,
-} from "@lunora/config";
+import { collectWranglerSecretVariables, inferLunoraBindings, LUNORA_CONFIG_FILE, reconcileWranglerBindings, WRANGLER_FILES } from "@lunora/config";
 import type { Project } from "ts-morph";
 import type { Plugin, ViteDevServer } from "vite";
 import { isRunnableDevEnvironment } from "vite";
 
+import { computeConfigFingerprint } from "./config-fingerprint";
 import { reconcileWranglerCrons } from "./cron-sync";
 import LUNORA_API_UPDATED_EVENT from "./hmr-events";
 import { advisoryLine, LUNORA_TAG } from "./log";
@@ -237,64 +230,6 @@ const notifyEnvironmentsAfterCodegen = (server: ViteDevServer, changedFile: stri
 };
 
 /**
- * A stable fingerprint of the binding-relevant slice of the project's config
- * files (`wrangler.jsonc` + `lunora.json`), used by the dev config-drift watcher
- * to tell a real, restart-worthy edit apart from codegen's own idempotent writes.
- *
- * Crucially, the codegen-owned `triggers.crons` key is stripped from the wrangler
- * config: `reconcileWranglerCrons` rewrites it on every schema save, and those
- * writes must never read as external drift and trigger a restart loop. Both files
- * are JSONC-parsed first, so comment/whitespace-only edits don't count either. A
- * transient unparseable read (mid-write) keys off the raw text so it doesn't
- * momentarily look like "no bindings" and churn.
- */
-const computeConfigFingerprint = (projectRoot: string): string => {
-    let wranglerPart = "absent";
-    const wranglerFile = findWranglerFile(projectRoot);
-
-    if (wranglerFile !== undefined) {
-        try {
-            const { parsed, text } = readWranglerJsonc<Record<string, unknown>>(wranglerFile);
-
-            if (parsed === undefined) {
-                wranglerPart = `raw:${text}`;
-            } else {
-                const clone: Record<string, unknown> = { ...parsed };
-                const { triggers } = clone;
-
-                if (triggers !== null && typeof triggers === "object") {
-                    const restTriggers: Record<string, unknown> = { ...(triggers as Record<string, unknown>) };
-
-                    delete restTriggers.crons;
-                    clone.triggers = restTriggers;
-                }
-
-                wranglerPart = JSON.stringify(clone);
-            }
-        } catch {
-            wranglerPart = "unreadable";
-        }
-    }
-
-    let lunoraPart = "absent";
-    const lunoraConfigPath = join(projectRoot, LUNORA_CONFIG_FILE);
-
-    if (existsSync(lunoraConfigPath)) {
-        try {
-            // `readWranglerJsonc` is a generic JSONC reader — reused here for the
-            // (also-JSONC) lunora.json so its parse/normalize path stays identical.
-            const { parsed, text } = readWranglerJsonc<Record<string, unknown>>(lunoraConfigPath);
-
-            lunoraPart = parsed === undefined ? `raw:${text}` : JSON.stringify(parsed);
-        } catch {
-            lunoraPart = "unreadable";
-        }
-    }
-
-    return `${wranglerPart}\u0000${lunoraPart}`;
-};
-
-/**
  * Vite plugin that runs `@lunora/codegen` on startup and on file changes
  * inside the lunora schema directory.
  */
@@ -322,7 +257,16 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
     // lunora.json, refreshed after every Lunora-initiated config write so codegen's
     // own idempotent rewrites never look like drift. `restartInFlight` collapses a
     // burst of edits during the async restart window into one restart.
+    //
+    // `configBaselineSettled` is false during the startup window — from
+    // configureServer setting the baseline until buildStart finishes its own
+    // binding-provisioning write and re-baselines. While unsettled, a config
+    // event just adopts the new baseline instead of restarting, so the initial
+    // `reconcileBindings` write (or a restart's own reconcile) can't race the
+    // watcher into a spurious mid-boot restart. Reset each configureServer so a
+    // `server.restart()` re-guards its fresh boot window.
     let configFingerprint: string | undefined;
+    let configBaselineSettled = false;
     let restartInFlight = false;
 
     return {
@@ -366,9 +310,13 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             // so the watcher event for that write is absorbed instead of read as an
             // external edit (which would restart the just-started server). Dev only
             // — build mode has no watcher. buildStart runs after configureServer, so
-            // this supersedes the baseline captured there.
+            // this supersedes the baseline captured there. Marking the baseline
+            // settled closes the startup window: any binding-write event still
+            // queued from `reconcileBindings` now matches this baseline (or is
+            // absorbed by the unsettled guard if it arrives before this line).
             if (devServer !== undefined) {
                 configFingerprint = computeConfigFingerprint(options.projectRoot);
+                configBaselineSettled = true;
             }
         },
         configureServer(server: ViteDevServer) {
@@ -380,7 +328,12 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             // before any watcher event can fire (buildStart re-baselines it after
             // its binding write). See the config watcher wired at the end of this
             // hook and `computeConfigFingerprint` for the anti-loop rationale.
+            // `configBaselineSettled` reopens the startup window: until buildStart
+            // finishes its reconcile+re-baseline, config events only adopt (never
+            // restart), so this hook's own boot — and a `server.restart()`'s —
+            // can't restart on its own binding-provisioning write.
             configFingerprint = computeConfigFingerprint(options.projectRoot);
+            configBaselineSettled = false;
 
             // Reuse the dev server's logger for codegen output. Declared here
             // (not inside the debounced callback) so the arrow bodies don't nest
@@ -576,6 +529,16 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 }
 
                 const nextFingerprint = computeConfigFingerprint(options.projectRoot);
+
+                // Startup window: buildStart may still be provisioning bindings into
+                // wrangler.jsonc. Adopt those writes as the baseline rather than
+                // treating them as external drift — restarting mid-boot is never what
+                // the edit meant, and buildStart's re-baseline will settle the window.
+                if (!configBaselineSettled) {
+                    configFingerprint = nextFingerprint;
+
+                    return;
+                }
 
                 // First observation (baseline not yet set) — adopt it, don't restart.
                 if (configFingerprint === undefined) {
