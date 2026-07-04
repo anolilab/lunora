@@ -17,7 +17,7 @@ pnpm add @lunora/nuxt
 ```
 
 `nuxt` (`^4.0.0`) is an optional peer dependency — the host app supplies the
-Nuxt runtime. `h3` is also an optional peer (`^1.0.0 || ^2.0.0`); see
+Nuxt runtime. `h3` is also an optional peer (`^1.15.0`); see
 [Deploy notes](#deploy-notes) below.
 
 ## Setup
@@ -134,9 +134,9 @@ const newHero = useFlag("homepage-hero", false);
 </Callout>
 
 <Callout type="info">
-    **h3 version.** The peer range is `^1.0.0 || ^2.0.0`, and the request handler feature-detects both at runtime. If you pin an explicit `h3` dependency
-    yourself, pin it to `^1.15.11` — npm's `h3@2.0.0` is a deprecated stub with no code, exports, or type declarations (the real v2 line is still
-    prerelease-only), while Nuxt 4 / Nitro 2 run h3 v1 at runtime anyway.
+    **h3 version.** The peer range is `^1.15.0` (h3 v1 — what Nuxt 4 / Nitro 2 run at runtime). If you pin an explicit `h3` dependency yourself, pin it to
+    `^1.15.11` — npm's `h3@2.0.0` is a deprecated stub with no code, exports, or type declarations (the real v2 line is still prerelease-only). The peer will
+    re-admit v2 once a stable h3 v2 actually ships.
 </Callout>
 
 ## See also
