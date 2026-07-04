@@ -2591,8 +2591,8 @@ importers:
         specifier: 2.0.2
         version: 2.0.2
       stripe:
-        specifier: ^19.0.0
-        version: 19.3.0(@types/node@26.1.0)
+        specifier: ^19.0.0 || ^20.0.0 || ^21.0.0 || ^22.0.0
+        version: 22.3.0(@types/node@26.1.0)
     devDependencies:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
@@ -18158,15 +18158,6 @@ packages:
 
   strip-literal@3.1.0:
     resolution: {integrity: sha512-8r3mkIM/2+PpjHoOtiAW8Rg3jJLHaV7xPwG+YRGrv6FP0wwk/toTpATxWYOW0BKdWwl82VT2tFYi5DlROa0Mxg==}
-
-  stripe@19.3.0:
-    resolution: {integrity: sha512-3MbqRkw5LXb4LWP1LgIEYxUAYhYDDU5pcHZj4Xha6VWPnN1wrUmQ7Htsgm8wR584s0hn1aQg1lYD0Hi+F37E5g==}
-    engines: {node: '>=16'}
-    peerDependencies:
-      '@types/node': '>=16'
-    peerDependenciesMeta:
-      '@types/node':
-        optional: true
 
   stripe@22.3.0:
     resolution: {integrity: sha512-ypO6xjVrMWs9SmIMeHr8naCx3dAQ0clxMdUTxn7Ejd7hmY9meBGfE+N4pVHkf9sUNebAHp6uJo6mV3GxDIc2cA==}
@@ -36180,12 +36171,6 @@ snapshots:
   strip-literal@3.1.0:
     dependencies:
       js-tokens: 9.0.1
-
-  stripe@19.3.0(@types/node@26.1.0):
-    dependencies:
-      qs: 6.15.2
-    optionalDependencies:
-      '@types/node': 26.1.0
 
   stripe@22.3.0(@types/node@26.1.0):
     optionalDependencies:

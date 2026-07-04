@@ -77,7 +77,7 @@
         "vitest": "catalog:test"
     },
     "peerDependencies": {
-        "stripe": "^19.0.0"
+        "stripe": "^19.0.0 || ^20.0.0 || ^21.0.0 || ^22.0.0"
     },
     "peerDependenciesMeta": {
         "stripe": {
