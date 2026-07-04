@@ -9,16 +9,10 @@
  * consumers import it by relative path (see the `shared/` rules in
  * AGENTS.md — no runtime dependency edge, inlined per consumer's bundle).
  *
- * `bookmark`, when given, rides as the `x-d1-bookmark` response header — the
- * read-your-writes cursor `ShardDO` propagates back to callers pinning reads
- * after a write. Consumers with no bookmark concept simply omit the argument.
+ * `headers`, when given, are merged over the `content-type` default —
+ * consumer-specific response headers (e.g. `ShardDO`'s read-your-writes
+ * `x-d1-bookmark` cursor) stay a consumer concern rather than a parameter of
+ * the shared helper.
  */
-export const jsonResponse = (body: unknown, status = 200, bookmark?: string): Response => {
-    const headers: Record<string, string> = { "content-type": "application/json" };
-
-    if (bookmark) {
-        headers["x-d1-bookmark"] = bookmark;
-    }
-
-    return Response.json(body, { headers, status });
-};
+export const jsonResponse = (body: unknown, status = 200, headers?: Record<string, string>): Response =>
+    Response.json(body, { headers: { "content-type": "application/json", ...headers }, status });
