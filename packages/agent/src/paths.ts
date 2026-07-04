@@ -7,6 +7,17 @@ import type { AgentFunctionPaths, AgentFunctionReference } from "./types";
  */
 export const AGENT_MODULE = "agents";
 
+/**
+ * The namespace + name the batteries-included sandbox dispatcher registers
+ * under. Codegen auto-registers `sandboxComponent().invoke` here whenever
+ * `lunora/` imports a sandbox tool (`browserTool`/`containerTool`), so the
+ * tools' `execute` can dispatch to it through the loop's `run` seam.
+ */
+export const SANDBOX_MODULE = "sandbox";
+
+/** The dispatch path of the sandbox runtime action (an internal action). */
+export const SANDBOX_INVOKE_PATH: "sandbox:invoke" = `${SANDBOX_MODULE}:invoke`;
+
 /** Default dispatch paths of the agent runtime functions. */
 export const DEFAULT_AGENT_FUNCTION_PATHS: AgentFunctionPaths = {
     appendMessage: `${AGENT_MODULE}:agentAppendMessage`,

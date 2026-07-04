@@ -222,6 +222,60 @@ tools: {
 }
 ```
 
+## Sandbox tools (batteries-included browser + containers)
+
+Two batteries-included tools give an agent a **headless browser** and a
+**sandboxed container** with minimal glue. Import them from `@lunora/agent` (or
+the `@lunora/agent/sandbox` subpath) and drop them into `tools` — codegen does
+the rest:
+
+```ts
+import { browserTool, containerTool, defineAgent } from "@lunora/agent";
+
+export const operator = defineAgent({
+    model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    tools: {
+        // One tool, every browser op — the model picks via `op`.
+        browser: browserTool(),
+        // Talks to `ctx.containers.sandbox` (a `lunora/containers.ts` export).
+        sandbox: containerTool("sandbox"),
+    },
+});
+```
+
+- **`browserTool(opts?)`** exposes Cloudflare Browser Rendering as one tool. The
+  model sets `op` to `screenshot` \| `pdf` \| `content` \| `scrape` plus a `url`;
+  `screenshot`/`pdf` return base64 bytes, `content`/`scrape` return HTML. The
+  model picks the `url` with no allowlist, so this is an **SSRF surface** — a
+  prompt-injected model can aim it at an internal/link-local endpoint. It runs
+  **unattended by default**; pass `opts.needsApproval` (a boolean or a predicate)
+  to gate it.
+- **`containerTool(name, opts?)`** talks to the declared container at
+  `ctx.containers.<name>`. `op: "fetch"` sends an HTTP request (`path`, `method`,
+  `body`); `op: "exec"` runs a command (routed as a `POST /exec` the container
+  app serves). **Command execution is gated behind a human approval by default** —
+  an `exec`, and a `fetch` whose path resolves to that same `/exec` route (both
+  reach the container's command path, so gating on the `op` name alone would let a
+  `fetch` to `/exec` run a command unattended). A `fetch` to any _other_ route
+  runs unattended, so scope the container's routes accordingly. Pass
+  `opts.needsApproval` (a boolean or a predicate over the input) to widen or
+  disable the gate.
+
+Why it needs little wiring: a tool's `execute` runs inside the durable tool step,
+which has no `ctx.browser`/`ctx.containers`. Both tools instead dispatch to a
+single internal action — `sandbox:invoke` — that codegen **auto-registers** the
+moment a `lunora/` file imports either helper (no re-export boilerplate). That
+action runs on an action ctx, which is where `ctx.browser` lives (and
+`ctx.containers` rides every ctx once you declare a container). Importing
+`browserTool` also makes codegen provision the `BROWSER` wrangler binding.
+`browserTool` still needs `ctx.browser` wired the same way a direct
+`@lunora/browser` user does — supply a `config.browser` thunk
+(`createBrowser({ binding: env.BROWSER, launch })`, with the optional
+`@cloudflare/playwright` `launch` peer) to `createShardDO()`; codegen never
+injects that peer, so the browser op throws a directed error until it is wired.
+Payloads are replay-stable, so a workflow replay re-encodes identical bytes to
+identical text.
+
 ## Skills
 
 A **skill** is a reusable bundle of expertise — an instruction fragment, tools,

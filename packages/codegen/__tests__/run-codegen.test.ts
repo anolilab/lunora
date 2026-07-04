@@ -2540,4 +2540,45 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(shard).toContain('due: integer("due").notNull()');
         });
     });
+
+    describe("batteries-included sandbox", () => {
+        const sandboxFixtureRoot = join(here, "fixtures", "agent-sandbox");
+        let sandboxWorkdir: string;
+
+        beforeEach(() => {
+            sandboxWorkdir = mkdtempSync(join(tmpdir(), "lunora-sandbox-codegen-"));
+            cpSync(join(sandboxFixtureRoot, "lunora"), join(sandboxWorkdir, "lunora"), { recursive: true });
+        });
+
+        afterEach(() => {
+            rmSync(sandboxWorkdir, { force: true, recursive: true });
+        });
+
+        it("auto-registers the internal sandbox:invoke dispatcher when a sandbox tool is imported", () => {
+            expect.assertions(3);
+
+            const { functions } = runCodegen({ lint: false, projectRoot: sandboxWorkdir }).generated;
+
+            expect(functions).toContain('import { sandboxComponent } from "@lunora/agent/component";');
+            expect(functions).toContain("const lunoraSandbox = sandboxComponent();");
+            expect(functions).toContain('"sandbox:invoke": lunoraSandbox.invoke as unknown as RegisteredLunoraFunction,');
+        });
+
+        it("wires ctx.browser onto the ActionCtx because browserTool drives the headless browser", () => {
+            expect.assertions(1);
+
+            const { server } = runCodegen({ lint: false, projectRoot: sandboxWorkdir }).generated;
+
+            expect(ctxInterface(server, "ActionCtx")).toContain("browser");
+        });
+
+        it("does not register the sandbox dispatcher for a project without a sandbox tool", () => {
+            expect.assertions(1);
+
+            // The `simple` fixture imports no sandbox tool — its output must stay clean.
+            const { functions } = runCodegen({ lint: false, projectRoot: workdir }).generated;
+
+            expect(functions).not.toContain("sandbox:invoke");
+        });
+    });
 });
