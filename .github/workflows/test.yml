@@ -90,12 +90,14 @@
             # coverage provider collects via node:inspector, which the
             # @cloudflare/vitest-pool-workers runtime does not implement, and the
             # workerd-pool suites currently hang the runner. They run in a
-            # dedicated job once fixed. d1 is excluded from these `test*` scripts
-            # too, but its (workerd-free, mocks-only) suite now runs in the
-            # dedicated `test-d1` job below. studio is also excluded here — its
-            # jsdom COMPONENT tests hang this runner — but its pure-logic `unit`
-            # project is DOM-free and runs via the "Run studio unit tests" step
-            # below. lunora-playground stays excluded (same hang class as e2e).
+            # dedicated job once fixed. d1 runs here like any other package —
+            # with the workerd gate off, its vitest config exposes only the
+            # plain-node "mocks" project (20 files), so neither the old hang
+            # rationale nor the inspector limitation applies. studio is still
+            # excluded from the `test*` scripts — its jsdom COMPONENT tests hang
+            # this runner — but its pure-logic `unit` project is DOM-free and
+            # runs via the "Run studio unit tests" step below. lunora-playground
+            # stays excluded (same hang class as e2e).
             - "name": "Run affected tests"
               "shell": "bash"
               "run": |
@@ -123,57 +125,6 @@
               "with":
                   "token": "${{ secrets.CODECOV_TOKEN }}"
                   "fail_ci_if_error": false
-
-    # @lunora/d1 has its own dedicated job: its 21 test files never ran anywhere
-    # (every root `test*` script filters `project!=d1`) even though the D1
-    # dialect is the production `.global()` backend. This runs only the
-    # workers-pool-free "mocks" project (no LUNORA_WORKERD_TESTS, so
-    # vitest.config.ts's `runWorkerd` branch stays off) — coverage is left off
-    # too, since the v8 provider needs node:inspector, which the
-    # @cloudflare/vitest-pool-workers runtime does not implement for the sibling
-    # `workerd` project this config can add. Not a required check (see
-    # `test-required-check` below) and no other job depends on it.
-    "test-d1":
-        "name": "Test (@lunora/d1)"
-        "if": "needs.files-changed.outputs.packages == 'true'"
-        "needs": "files-changed"
-        "runs-on": "ubuntu-latest"
-        "timeout-minutes": 15
-        "steps":
-            - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
-              "with":
-                  "egress-policy": "audit"
-
-            - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
-              "with":
-                  "fetch-depth": "0"
-
-            - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
-              "with":
-                  "node-version": "22.15"
-                  "cache-prefix": "test-d1"
-                  "install-node-gyp": "true"
-                  "skip-playwright": "true"
-                  "enable-nx-cache": "false"
-                  "run-npm-audit": "false"
-                  "run-signatures-audit": "false"
-
-            # pnpm's own `--filter "@lunora/d1..." run build` does not walk the
-            # workspace dependency graph on this pnpm version (verified: it only
-            # builds d1 itself, leaving @lunora/do / @lunora/errors / @lunora/sql-store
-            # dist missing). `vis run build` does — its `build` task declares
-            # `dependsOn: ["^build"]` in vis.config.ts, so targeting the `d1`
-            # project also builds its upstream @lunora/* deps.
-            - "name": "Build d1 and its workspace dependencies"
-              "run": |
-                  pnpm exec vis run build --query "project=d1"
-
-            - "name": "Run d1 test suite"
-              "run": |
-                  pnpm --filter "@lunora/d1" run test
 
     "e2e":
         "name": "E2E (Playwright + Miniflare)"
