@@ -24,6 +24,8 @@ export const DEFAULT_AGENT_FUNCTION_PATHS: AgentFunctionPaths = {
     ensureThread: `${AGENT_MODULE}:agentEnsureThread`,
     listMessages: `${AGENT_MODULE}:agentMessages`,
     patchThread: `${AGENT_MODULE}:agentPatchThread`,
+    setState: `${AGENT_MODULE}:agentSetState`,
+    state: `${AGENT_MODULE}:agentState`,
 };
 
 /** Mint a dispatchable function reference from a path (or pass one through). */

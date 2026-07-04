@@ -48,8 +48,10 @@ const mockAgentBinding = (statuses: ReadonlyArray<string>): AgentWorkflowBinding
 const context = (env: Record<string, unknown>, run: AgentToolContext["run"], overrides?: Partial<AgentToolContext>): AgentToolContext => {
     return {
         env,
+        getState: async () => undefined,
         idempotencyKey: "tool:research:call_9",
         run,
+        setState: async () => {},
         threadKey: "thread-1",
         toolCallId: "call_9",
         ...overrides,

@@ -224,14 +224,23 @@ describe("auto-registered agent runtime functions", () => {
     };
 
     it("registers the runtime functions in the dispatch table, imported from @lunora/agent", () => {
-        expect.assertions(9);
+        expect.assertions(11);
 
         const content = emitFunctions({ agents: discoverSupportAgent(), functions: [] });
 
         expect(content).toContain('import { agentComponent } from "@lunora/agent/component";');
         expect(content).toContain("const lunoraAgentRuntimeFunctions = agentComponent().functions;");
 
-        for (const name of ["agentAppendMessage", "agentEnsureThread", "agentMessages", "agentPatchThread", "agentResolveApproval", "agentThread"]) {
+        for (const name of [
+            "agentAppendMessage",
+            "agentEnsureThread",
+            "agentMessages",
+            "agentPatchThread",
+            "agentResolveApproval",
+            "agentSetState",
+            "agentState",
+            "agentThread",
+        ]) {
             expect(content).toContain(`"agents:${name}": lunoraAgentRuntimeFunctions.${name} as unknown as RegisteredLunoraFunction,`);
         }
 
@@ -248,11 +257,12 @@ describe("auto-registered agent runtime functions", () => {
     });
 
     it("exposes the public thread queries and approval mutation as typed api references", () => {
-        expect.assertions(5);
+        expect.assertions(6);
 
         const content = emitApi({ agents: discoverSupportAgent(), functions: [] });
 
         expect(content).toContain('agentMessages: FunctionReference<"query", { key: string; limit?: number }, Record<string, unknown>[]>;');
+        expect(content).toContain('agentState: FunctionReference<"query", { key: string }, Record<string, unknown> | undefined>;');
         expect(content).toContain('agentThread: FunctionReference<"query", { key: string }, Record<string, unknown> | undefined>;');
         expect(content).toContain(
             'agentResolveApproval: FunctionReference<"mutation", { decision: "approve" | "reject"; instanceId: string; note?: string; threadKey: string; toolCallId: string }, { resolved: boolean }>;',
@@ -291,19 +301,19 @@ describe("auto-registered agent runtime functions", () => {
                 .filter(([, definition]) => definition.visibility === "internal")
                 .map(([name]) => name)
                 .toSorted((a, b) => a.localeCompare(b)),
-        ).toStrictEqual(["agentAppendMessage", "agentEnsureThread", "agentPatchThread"]);
+        ).toStrictEqual(["agentAppendMessage", "agentEnsureThread", "agentPatchThread", "agentSetState"]);
         expect(
             Object.entries(runtime)
                 .filter(([, definition]) => definition.visibility === undefined)
                 .map(([name]) => name)
                 .toSorted((a, b) => a.localeCompare(b)),
-        ).toStrictEqual(["agentMessages", "agentResolveApproval", "agentThread"]);
+        ).toStrictEqual(["agentMessages", "agentResolveApproval", "agentState", "agentThread"]);
     });
 
     it("pins the synthetic api arg shapes to the runtime component (drift guard)", () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
-        // The api types for the two public queries are hand-pinned in
+        // The api types for the public queries are hand-pinned in
         // syntheticAgentApiFunctions (codegen cannot read a published package's
         // types) — at least the arg KEY SETS must match the runtime validators.
         // A type-level change still needs a manual mirror; see the KEEP IN SYNC
@@ -311,6 +321,7 @@ describe("auto-registered agent runtime functions", () => {
         const runtime = agentComponent().functions;
 
         expect(Object.keys(runtime.agentMessages.args as Record<string, unknown>).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["key", "limit"]);
+        expect(Object.keys(runtime.agentState.args as Record<string, unknown>).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["key"]);
         expect(Object.keys(runtime.agentThread.args as Record<string, unknown>).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["key"]);
         expect(Object.keys(runtime.agentResolveApproval.args as Record<string, unknown>).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
             "decision",

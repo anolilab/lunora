@@ -132,8 +132,12 @@ describe(agentComponent, () => {
         expect(functions.agentAppendMessage.visibility).toBe("internal");
         expect(functions.agentEnsureThread.visibility).toBe("internal");
         expect(functions.agentPatchThread.visibility).toBe("internal");
+        // Loop-dispatched over the admin channel — never a client reference.
+        expect(functions.agentSetState.visibility).toBe("internal");
         expect(functions.agentMessages.visibility).toBeUndefined();
         expect(functions.agentThread.visibility).toBeUndefined();
+        // Public: a client subscribes to the synced state (owner-gated internally).
+        expect(functions.agentState.visibility).toBeUndefined();
         // Public: a client resolves approvals with it (owner-gated internally).
         expect(functions.agentResolveApproval.visibility).toBeUndefined();
     });
@@ -261,6 +265,79 @@ describe("thread ownership", () => {
         for (const table of Object.values(agentExtension.tables)) {
             expect((table as { isPublic?: boolean }).isPublic).toBe(true);
         }
+    });
+});
+
+describe("synced state", () => {
+    it("seeds initialState on creation only (first writer wins)", async () => {
+        const { functions } = agentComponent();
+        const { ctx, rows } = fakeDatabase();
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", initialState: { plan: [], step: 0 }, key: "t-1" });
+
+        expect(rows.get("agent_threads")?.[0]?.["state"]).toStrictEqual({ plan: [], step: 0 });
+
+        // A later run (a replay or a continuation) must not re-seed the state.
+        await callMutation(functions.agentSetState, ctx, { key: "t-1", state: { plan: ["a"], step: 1 } });
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", initialState: { plan: [], step: 0 }, key: "t-1" });
+
+        expect(rows.get("agent_threads")?.[0]?.["state"]).toStrictEqual({ plan: ["a"], step: 1 });
+    });
+
+    it("agentSetState absolutely replaces the state (idempotent under replay)", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", key: "t-1" });
+
+        // Absolute set, not a patch: the second write REPLACES the first.
+        await callMutation(functions.agentSetState, ctx, { key: "t-1", state: { count: 1, extra: "x" } });
+        await callMutation(functions.agentSetState, ctx, { key: "t-1", state: { count: 2 } });
+
+        expect((await callMutation(functions.agentState, ctx, { key: "t-1" })) as Record<string, unknown>).toStrictEqual({ count: 2 });
+
+        // Re-applying the same value (a step retry) is a no-op — idempotent.
+        await callMutation(functions.agentSetState, ctx, { key: "t-1", state: { count: 2 } });
+
+        expect((await callMutation(functions.agentState, ctx, { key: "t-1" })) as Record<string, unknown>).toStrictEqual({ count: 2 });
+    });
+
+    it("agentSetState no-ops when the thread is missing", async () => {
+        const { functions } = agentComponent();
+        const { ctx, rows } = fakeDatabase();
+
+        await expect(callMutation(functions.agentSetState, ctx, { key: "ghost", state: { a: 1 } })).resolves.toBeUndefined();
+        expect(rows.get("agent_threads") ?? []).toStrictEqual([]);
+    });
+
+    it("agentState owner-gates the read: only the owner sees the state", async () => {
+        const { functions } = agentComponent();
+        const owner = fakeDatabase({ userId: "user-a" });
+
+        await callMutation(functions.agentEnsureThread, owner.ctx, { agent: "support", initialState: { seeded: true }, key: "t-1", owner: "user-a" });
+
+        // The owner sees the seeded (then updated) state.
+        await expect(callMutation(functions.agentState, owner.ctx, { key: "t-1" })).resolves.toStrictEqual({ seeded: true });
+
+        await callMutation(functions.agentSetState, owner.ctx, { key: "t-1", state: { seeded: false, step: 3 } });
+
+        await expect(callMutation(functions.agentState, owner.ctx, { key: "t-1" })).resolves.toStrictEqual({ seeded: false, step: 3 });
+
+        // A stranger and an anonymous caller get `undefined` — same gate as agentThread.
+        const strangerContext = { ...owner.ctx, auth: { userId: "user-b" } };
+        const anonymousContext = { ...owner.ctx, auth: {} };
+
+        await expect(callMutation(functions.agentState, strangerContext, { key: "t-1" })).resolves.toBeUndefined();
+        await expect(callMutation(functions.agentState, anonymousContext, { key: "t-1" })).resolves.toBeUndefined();
+    });
+
+    it("agentState returns undefined before any state is seeded", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", key: "t-1" });
+
+        await expect(callMutation(functions.agentState, ctx, { key: "t-1" })).resolves.toBeUndefined();
     });
 });
 

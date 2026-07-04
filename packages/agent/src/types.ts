@@ -41,10 +41,48 @@ export interface AgentStepLike {
 export interface AgentToolContext {
     /** The Worker environment bindings. */
     env: Record<string, unknown>;
+
+    /**
+     * Read the thread's synced state — dispatches the public owner-gated
+     * `agents:agentState` query through {@link AgentToolContext.run} (the same
+     * admin-dispatch path the loop reads history with), so it inherits the
+     * thread's identity/owner gate. Returns `undefined` before any state was
+     * seeded (`defineAgent({ initialState })`) or written.
+     *
+     * NOT replay-stable: on an at-least-once step retry this reflects whatever a
+     * prior attempt already wrote via {@link AgentToolContext.setState} (a real
+     * committed write, not rolled back), so a value *derived* from it is not
+     * safe to pass straight back to `setState` — see its doc for the
+     * read-modify-write hazard and the `idempotencyKey` dedupe fix.
+     */
+    getState: () => Promise<Record<string, unknown> | undefined>;
     /** Deterministic idempotency key — the tool's durable-step name. */
     idempotencyKey: string;
     /** Dispatch a Lunora function (the workflow `ctx.run`). */
     run: AgentRunFunction;
+
+    /**
+     * Replace the thread's synced state — dispatches the internal
+     * `agents:agentSetState` mutation (absolute REPLACE of the whole object) and
+     * broadcasts to every `useAgentState` subscriber over the existing reactive
+     * channel. Runs inside the tool's memoized durable step, so a COMPLETED step
+     * is served from the memo on replay without re-dispatching.
+     *
+     * REPLAY-SAFETY CONTRACT — the *value* you pass must be REPLAY-STABLE: a
+     * constant or derived purely from the replay-stable tool `input` (never
+     * `Date.now()`/`Math.random()`). A step that FAILS mid-body is retried
+     * at-least-once, and the retry re-runs the whole `execute` against state a
+     * prior attempt may already have written (the dispatch is a real committed
+     * mutation, not rolled back). Re-applying a replay-stable value is a no-op,
+     * so the absolute set converges. A value derived from
+     * {@link AgentToolContext.getState} is NOT replay-stable — a naive
+     * read-modify-write (`setState({ count: (await getState()).count + 1 })`)
+     * DOUBLE-ADVANCES on a retry because the retry re-reads the already-written
+     * value. For a read-modify-write, make the tool idempotent on
+     * {@link AgentToolContext.idempotencyKey}: record the key in the state and
+     * skip the write when it is already present.
+     */
+    setState: (state: Record<string, unknown>) => Promise<void>;
     /** The thread this tool call belongs to. */
     threadKey: string;
     /** The provider-issued tool-call id. */
@@ -75,8 +113,11 @@ export interface AgentToolDefinition<Input = unknown, Output = unknown> {
      * On approve the tool runs exactly as normal; on reject it is skipped and a
      * tool result explaining the rejection is persisted so the next turn recovers.
      * A boolean gates statically; a function gates per input. Default: `false`
-     * (unchanged behavior). Evaluated from replay-stable input, so keep it
-     * deterministic (no `Date.now()`/`Math.random()`).
+     * (unchanged behavior). Evaluated from replay-stable input OUTSIDE the
+     * durable step (it re-runs on every replay), so it must be a PURE predicate:
+     * deterministic (no `Date.now()`/`Math.random()`) and free of side effects —
+     * never call {@link AgentToolContext.setState}/`getState` or a mutating `run`
+     * here; state writes belong only in `execute`, inside the memoized step.
      */
     needsApproval?: ((input: Input, context: AgentToolContext) => boolean | Promise<boolean>) | boolean;
 }
@@ -261,6 +302,16 @@ export interface AgentConfig {
     activeTools?: ReadonlyArray<string>;
 
     /**
+     * Seed the thread's synced state — a static, JSON-serializable object set on
+     * the thread row at creation only (first writer wins, like `owner`/`title`),
+     * so a `useAgentState` client sees it immediately. Keep it DETERMINISTIC (no
+     * `Date.now()`/`Math.random()`); it is written once by the durable bootstrap.
+     * Runtime-only config — invisible to codegen (agent-free and agent-ful
+     * `_generated/*` output is unchanged by its presence).
+     */
+    initialState?: Record<string, unknown>;
+
+    /**
      * System prompt prepended to every model call — a static string or a thunk
      * derived from the run context (dynamic instructions).
      */
@@ -439,6 +490,10 @@ export interface AgentFunctionPaths {
     ensureThread: string;
     listMessages: string;
     patchThread: string;
+    /** The internal `agents:agentSetState` mutation the loop dispatches for `setState`. */
+    setState: string;
+    /** The public owner-gated `agents:agentState` query (`getState` + `useAgentState`). */
+    state: string;
 }
 
 /**

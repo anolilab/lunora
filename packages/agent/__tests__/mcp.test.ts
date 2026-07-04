@@ -89,8 +89,10 @@ describe(mcpTools, () => {
             { city: "Berlin" },
             {
                 env: {},
+                getState: async () => undefined,
                 idempotencyKey: "tool:get_weather:call_1",
                 run: async () => null,
+                setState: async () => {},
                 threadKey: "thread-1",
                 toolCallId: "call_1",
             },
