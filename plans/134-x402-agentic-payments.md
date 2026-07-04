@@ -38,8 +38,11 @@
     - **Facilitator: public `https://x402.org/facilitator` default, overridable**
       (self-hosted / CDP).
     - **Wallet custody (pay): both from day one** — raw key via
-      `viem privateKeyToAccount(ctx.secrets…)` **and** CDP-managed via
-      `@coinbase/x402`, behind one signer config.
+      `viem privateKeyToAccount(ctx.secrets…)` **and** CDP-managed, behind one
+      signer config. **Revised 2026-07-04:** EVM raw-key ships now; CDP custody
+      is deferred to a follow-up because it needs `@coinbase/cdp-sdk` (not
+      `@coinbase/x402`, which turned out to be a facilitator-auth helper). Both
+      remain recognised config shapes; the unwired one fails loudly.
     - **Package tag: `category:web3`.**
 
 ## Why this matters
@@ -71,13 +74,14 @@ into a tree-shaken package. It is a separate rail.
 All `@x402/*` are **Apache-2.0** (compatible with the repo's
 `FSL-1.1-Apache-2.0`). We write the Lunora glue and reuse the protocol/crypto:
 
-| Package           | v      | Runtime deps                | Rail | Notes                                                                                                                                |
-| ----------------- | ------ | --------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| **`@x402/core`**  | 2.17.0 | `zod` only                  | both | Protocol engine. Subpaths: `./server`, `./client`, `./facilitator`, `./http`, `./schemas`, `./types`. The heart.                     |
-| **`@x402/evm`**   | 2.17.0 | `viem`, `@x402/core`, `zod` | both | "exact-EVM" scheme: signing (pay) + payload decode/verify (charge). `viem` is workerd-first.                                         |
-| **`@x402/fetch`** | 2.17.0 | `@x402/core` only           | pay  | `wrapFetchWithPayment` — client fetch wrapper. Optional (can drive `@x402/core/client` directly).                                    |
-| **`@x402/svm`**   | 2.17.0 | `@solana/*`, core, zod      | both | Solana scheme (multi-chain ruling). Second, non-viem signing path.                                                                   |
-| `@coinbase/x402`  | 2.1.0  | `@coinbase/cdp-sdk`, `viem` | pay  | **Optional peer** — required only for the CDP wallet-custody path (both custodies ship, but a raw-key user must not pull `cdp-sdk`). |
+| Package             | v      | Runtime deps                | Rail | Notes                                                                                                                                                                                        |
+| ------------------- | ------ | --------------------------- | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`@x402/core`**    | 2.17.0 | `zod` only                  | both | Protocol engine. Subpaths: `./server`, `./client`, `./facilitator`, `./http`, `./schemas`, `./types`. The heart.                                                                             |
+| **`@x402/evm`**     | 2.17.0 | `viem`, `@x402/core`, `zod` | both | "exact-EVM" scheme: signing (pay) + payload decode/verify (charge). `viem` is workerd-first.                                                                                                 |
+| **`@x402/fetch`**   | 2.17.0 | `@x402/core` only           | pay  | `wrapFetchWithPayment` — client fetch wrapper. Optional (can drive `@x402/core/client` directly).                                                                                            |
+| **`@x402/svm`**     | 2.17.0 | `@solana/*`, core, zod      | both | Solana scheme (multi-chain ruling). Second, non-viem signing path.                                                                                                                           |
+| `@coinbase/cdp-sdk` | latest | —                           | pay  | **Optional peer (deferred)** — the actual CDP **wallet** custody SDK. Only the CDP signer path needs it; a raw-key user must not pull it.                                                    |
+| `@coinbase/x402`    | 2.1.0  | `@coinbase/cdp-sdk`, `viem` | pay  | **Facilitator-auth helper, NOT a signer** — `createCdpAuthHeaders` / `createFacilitatorConfig` / `facilitator`. Use only for a CDP _facilitator_, not wallet custody (corrected 2026-07-04). |
 
 **Do NOT depend on:**
 
@@ -250,12 +254,32 @@ annotations, handler)` that registers a tool whose dispatch runs the charge
 3. Reuse the Phase 1 charge middleware — the only new part is mapping the MCP
    call/HTTP layer onto challenge/verify/settle.
 
-## Phase 4 — Pay core + agent wallet (MVP-B)
+## Phase 4 — Pay core + agent wallet (MVP-B) — ✅ EVM raw-key shipped (commit `8ed00cf2e`)
+
+> **Implemented**: EVM raw-key custody is fully wired and tested —
+> `resolveEvmAccount(secret)` (viem `privateKeyToAccount`) yields a
+> `PrivateKeyAccount` that **structurally satisfies** `@x402/evm`'s
+> `ClientEvmSigner` (no cast needed), registered via `registerExactEvmScheme`.
+> `createX402Pay(config, deps)` → `{ fetch }` wraps the platform `fetch` with
+> `wrapFetchWithPayment` (`@x402/fetch`). `deps.getSecret` is wired to
+> `ctx.secrets.get` at the call site (wallet key is a **secret**).
+>
+> **Deferred, failing loudly with `NOT_IMPLEMENTED` + guidance** (recognised
+> config shapes, not silent no-ops): **SVM pay custody** and **CDP custody**.
+>
+> **Plan correction (2026-07-04):** `@coinbase/x402` is **not** a wallet/signer
+> provider — v2.1.0 is a _facilitator-auth_ helper (`createCdpAuthHeaders`,
+> `createFacilitatorConfig`, `facilitator`). CDP **wallet** custody needs
+> `@coinbase/cdp-sdk` (an undeclared, heavier peer). So the "both custodies from
+> day one via `@coinbase/x402`" decision is revised: EVM raw-key ships now; CDP
+> custody is scoped to a follow-up that wires `@coinbase/cdp-sdk`. `wrapClient`
+> (the MCP-client payer) is likewise deferred — it belongs with Phase 3's remote
+> MCP transport. The `X-PAYMENT` / `X-PAYMENT-RESPONSE` fetch loop ships now.
 
 1. **`pay/wallet.ts`** — resolve a signer: `privateKeyToAccount(secret)` (viem)
    where `secret` comes from `ctx.secrets.get(name)`; optional CDP-managed
-   account via `@coinbase/x402` (optional peer). Wallet lives on **`ActionCtx`
-   only** (crypto + outbound network → action-only, same as
+   account via `@coinbase/cdp-sdk` (optional peer, **deferred**). Wallet lives on
+   **`ActionCtx` only** (crypto + outbound network → action-only, same as
    `ctx.browser`/`ctx.sql`).
 2. **`pay/fetch.ts`** — `wrapFetchWithPayment` over `@x402/fetch` (or drive
    `@x402/core/client` + `@x402/evm` directly) so an action's outbound `fetch`
@@ -269,7 +293,28 @@ wrapClient }`. `wrapClient` is the `withX402Client`-equivalent that wraps a
    end-to-end on `base-sepolia` semantics without real chain — mock
    verify/settle).
 
-## Phase 5 — Pay: policy (confirmation + spend caps) — SECURITY-CRITICAL
+## Phase 5 — Pay: policy (confirmation + spend caps) — SECURITY-CRITICAL — ✅ shipped (commit `8ed00cf2e`)
+
+> **Implemented** in `pay/policy.ts`, fully unit-tested, mapped onto
+> `@x402/core`'s three client seams:
+>
+> - `buildSpendPolicy(policy)` → a **`PaymentPolicy`** (runs at selection):
+>   filters offered requirements to those within the per-call cap and on the
+>   recipient / network allowlists. Empty result ⇒ the client has nothing to sign
+>   ⇒ **cannot pay** (fail-closed).
+> - `buildPaymentGuard(policy, state)` → a **`BeforePaymentCreationHook`**: the
+>   stateful per-run cumulative cap **and** the async confirmation gate
+>   (`onPaymentRequired`), aborting before any signature.
+> - `recordSpend(state)` → an **`AfterPaymentCreationHook`** tracking cumulative
+>   spend the guard reads.
+> - `assertBoundedPolicy(policy)` runs **first** in `createPayFetch`, _before_ a
+>   signer is resolved — an unbounded policy (`{}`) throws `FORBIDDEN`. The pay
+>   rail is fail-closed **by construction**: `X402PayConfig.policy` is required.
+> - `usdToAtomic` parses digit-by-digit (no binary-float drift), rejects
+>   exponential/negative; refusals surface as typed `LunoraError` codes.
+>
+> Advisor lint (item 4) is a follow-up; the runtime guard is the load-bearing
+> part and it ships now.
 
 Autonomous spending needs guardrails **before** anyone runs the pay rail against
 a real network:
