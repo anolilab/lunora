@@ -13,6 +13,7 @@ import { fireAndForget, formatBytes } from "../../lib/internal";
 import { cn } from "../../lib/utils";
 import { deriveInsights } from "../advisors/derive-insights";
 import { BindingsOverview } from "./bindings-overview";
+import { ConnectAgentCard } from "./connect-agent";
 
 // The stat-card sparkline is Home's only `recharts` consumer. Lazy-loading it
 // keeps the (heavy) chart engine out of the studio's entry bundle — Home's
@@ -449,6 +450,7 @@ export const HomePanel = ({ initialShardKey }: HomePanelProps): ReactElement => 
                     <ConnectCard command="npm i @lunora/react" label={t("React")} />
                     <ConnectCard command="lunora dev" label={t("CLI")} />
                 </div>
+                <ConnectAgentCard />
             </section>
         </div>
     );

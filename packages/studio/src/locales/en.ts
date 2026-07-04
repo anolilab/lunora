@@ -468,6 +468,7 @@ const MESSAGE_IDS = [
     "Results",
     "Explain",
     "Chart",
+    "Split editor and results",
     "History",
     "Format",
     "Clear history",
@@ -499,6 +500,7 @@ const MESSAGE_IDS = [
     "Loading…",
     "No matching row.",
     "CSV",
+    "SQL",
     "{count} selected",
     "Delete {count}",
     "Delete {count} rows?",
@@ -524,6 +526,11 @@ const MESSAGE_IDS = [
     "Client SDK",
     "React",
     "CLI",
+    // Connect an AI agent (MCP handoff).
+    "Connect an AI agent",
+    "Drive this deployment from an AI agent over the Model Context Protocol — it can list functions and tables, read schemas, and run read-only queries. Writes stay off unless you opt in.",
+    "Copy MCP config",
+    "Copy agent prompt",
     // Advisors section + Security Advisor panel.
     "Advisors",
     "Security",

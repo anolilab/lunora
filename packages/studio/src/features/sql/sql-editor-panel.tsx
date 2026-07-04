@@ -34,6 +34,23 @@ interface SqlEditorPanelProps {
 const RUN_SQL = adminRef(ADMIN_FUNCTIONS.runSql);
 const STORAGE_KEY = "lunora-studio-sql-queries";
 const HISTORY_KEY = "lunora-studio-sql-history";
+const SPLIT_VIEW_KEY = "lunora-studio-sql-split-view";
+
+/**
+ * Persisted editor↔results layout: `false` stacks them (editor over results, the
+ * default), `true` splits them side by side for wide screens. A one-element list
+ * reuses the array-backed storage helper — same trick as the tabs' active-id.
+ */
+const usePersistedSplitView = (): [boolean, (next: boolean) => void] => {
+    const [list, setList] = usePersistedList<boolean>(SPLIT_VIEW_KEY);
+
+    return [
+        list[0] ?? false,
+        (next: boolean): void => {
+            setList([next]);
+        },
+    ];
+};
 /** How many recent distinct queries the history keeps. */
 const HISTORY_LIMIT = 25;
 /** Line-number gutter sizing, aligned to the editor textarea's padding + line height. */
@@ -115,6 +132,8 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
     const [running, setRunning] = useState<boolean>(false);
+    // Editor↔results layout: stacked (default) or side-by-side, persisted across reloads.
+    const [splitView, setSplitView] = usePersistedSplitView();
     // The right-clicked tab's context menu: the target tab id + cursor position, or null when closed.
     const [tabMenu, setTabMenu] = useState<{ id: string; x: number; y: number } | null>(null);
     // The bulk close awaiting a discard confirm (because it would drop unsaved tabs), or null.
@@ -470,6 +489,10 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         setActivePane("chart");
     };
 
+    const toggleSplit = (): void => {
+        setSplitView(!splitView);
+    };
+
     const lineCount = draft.split("\n").length;
     const onSearchChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
         setSearch(event.target.value);
@@ -477,6 +500,13 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
     const tabClass = (selected: boolean): string =>
         `border-b-2 px-3 py-2 text-sm outline-none transition-colors ${selected ? "border-foreground font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`;
+
+    // Editor + results share a flex container; `splitView` flips its axis (and the
+    // results pane from a bottom band to a right column) — the only layout change.
+    const workspaceClass = splitView ? "flex min-h-0 flex-1 flex-row" : "flex min-h-0 flex-1 flex-col";
+    const resultsClass = splitView
+        ? "flex w-2/5 min-h-0 min-w-0 shrink-0 flex-col border-s border-border"
+        : "flex h-2/5 min-h-0 shrink-0 flex-col border-t border-border";
 
     return (
         <div className="flex h-full min-w-0" data-testid="lunora-sql-editor">
@@ -611,102 +641,128 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                     </>
                 )}
 
-                {/* Line-numbered editor pane. */}
-                <div className="flex min-h-0 flex-1">
-                    <div
-                        aria-hidden="true"
-                        className="shrink-0 select-none overflow-hidden border-e border-border bg-muted/30 py-3 text-end font-mono text-xs leading-5 text-muted-foreground/60"
-                        ref={gutterRef}
-                        style={GUTTER_STYLE}
-                    >
-                        {Array.from({ length: lineCount }, (_, index) => (
-                            <div key={index}>{index + 1}</div>
-                        ))}
-                    </div>
-                    <div className="relative min-w-0 flex-1">
-                        <textarea
-                            aria-activedescendant={autocompleteState === null ? undefined : `${listboxId}-opt-${autocompleteState.active.toString()}`}
-                            aria-autocomplete="list"
-                            aria-controls={autocompleteState === null ? undefined : listboxId}
-                            aria-expanded={autocompleteState !== null}
-                            aria-label={t("SQL query")}
-                            className="size-full resize-none bg-background p-3 font-mono text-xs leading-5 outline-none"
-                            data-testid="sql-input"
-                            onBlur={onEditorBlur}
-                            onChange={onDraftChange}
-                            onKeyDown={onEditorKeyDown}
-                            onScroll={onEditorScroll}
-                            onSelect={onEditorSelect}
-                            placeholder="SELECT * FROM …"
-                            ref={editorRef}
-                            role="combobox"
-                            spellCheck={false}
-                            value={draft}
-                        />
-                        <AutocompletePopover listboxId={listboxId} onPick={onPickSuggestion} state={autocompleteState} />
-                    </div>
-                </div>
-
-                {/* Results pane. */}
-                <div className="flex h-2/5 min-h-0 shrink-0 flex-col border-t border-border">
-                    <div className="flex shrink-0 items-center gap-2 border-b border-border pe-2">
-                        <button className={tabClass(tab === "results")} data-testid="sql-tab-results" onClick={showResults} type="button">
-                            {t("Results")}
-                        </button>
-                        <button className={tabClass(tab === "chart")} data-testid="sql-tab-chart" onClick={showChart} type="button">
-                            {t("Chart")}
-                        </button>
-                        <button className={tabClass(tab === "explain")} data-testid="sql-tab-explain" onClick={showExplain} type="button">
-                            {t("Explain")}
-                        </button>
-                        <div className="ms-auto flex items-center gap-2">
-                            {result !== null && result.columns.length > 0 && <ExportMenu columns={result.columns} name="query-result" rows={result.rows} />}
-                            <button
-                                className="inline-flex items-center rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-50"
-                                data-testid="sql-format"
-                                disabled={running}
-                                onClick={formatDraft}
-                                type="button"
-                            >
-                                {t("Format")}
-                            </button>
-                            <ShardInput onChange={setShardKey} testId="sql-shard-input" value={shardKey} />
-                            <button
-                                className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground outline-none transition-colors hover:bg-primary/90 focus-visible:bg-primary/90 disabled:pointer-events-none disabled:opacity-50"
-                                data-testid="sql-run"
-                                disabled={running}
-                                onClick={onRun}
-                                type="button"
-                            >
-                                {running ? t("Running…") : t("Run")}
-                                <kbd className="rounded border border-primary-foreground/30 px-1 font-sans text-[10px]">⌘↵</kbd>
-                            </button>
+                {/* Editor + results workspace — stacked, or split side-by-side. */}
+                <div className={workspaceClass}>
+                    {/* Line-numbered editor pane. */}
+                    <div className="flex min-h-0 min-w-0 flex-1">
+                        <div
+                            aria-hidden="true"
+                            className="shrink-0 select-none overflow-hidden border-e border-border bg-muted/30 py-3 text-end font-mono text-xs leading-5 text-muted-foreground/60"
+                            ref={gutterRef}
+                            style={GUTTER_STYLE}
+                        >
+                            {Array.from({ length: lineCount }, (_, index) => (
+                                <div key={index}>{index + 1}</div>
+                            ))}
+                        </div>
+                        <div className="relative min-w-0 flex-1">
+                            <textarea
+                                aria-activedescendant={autocompleteState === null ? undefined : `${listboxId}-opt-${autocompleteState.active.toString()}`}
+                                aria-autocomplete="list"
+                                aria-controls={autocompleteState === null ? undefined : listboxId}
+                                aria-expanded={autocompleteState !== null}
+                                aria-label={t("SQL query")}
+                                className="size-full resize-none bg-background p-3 font-mono text-xs leading-5 outline-none"
+                                data-testid="sql-input"
+                                onBlur={onEditorBlur}
+                                onChange={onDraftChange}
+                                onKeyDown={onEditorKeyDown}
+                                onScroll={onEditorScroll}
+                                onSelect={onEditorSelect}
+                                placeholder="SELECT * FROM …"
+                                ref={editorRef}
+                                role="combobox"
+                                spellCheck={false}
+                                value={draft}
+                            />
+                            <AutocompletePopover listboxId={listboxId} onPick={onPickSuggestion} state={autocompleteState} />
                         </div>
                     </div>
 
-                    <div className="min-h-0 flex-1 overflow-auto">
-                        {error !== null && (
-                            <Alert className="m-3 font-mono text-xs" testId="sql-error" variant="destructive">
-                                {error}
-                            </Alert>
-                        )}
-
-                        {error === null && result === null && (
-                            <p className="p-4 text-sm text-muted-foreground" data-testid="sql-empty">
-                                {t("Click Run to execute your query.")}
-                            </p>
-                        )}
-
-                        {error === null && result !== null && (
-                            <div data-testid="sql-result">
-                                {tab === "chart" ? <SqlResultChart result={result} /> : <SqlResultTable result={result} />}
-                                <p className="border-t border-border px-3 py-1.5 text-xs text-muted-foreground" data-testid="sql-count">
-                                    {result.truncated
-                                        ? t("Showing the first {max} of {count} rows.", { count: result.rowCount, max: result.rows.length })
-                                        : t("{count} rows", { count: result.rowCount })}
-                                </p>
+                    {/* Results pane. */}
+                    <div className={resultsClass}>
+                        <div className="flex shrink-0 items-center gap-2 border-b border-border pe-2">
+                            <button className={tabClass(tab === "results")} data-testid="sql-tab-results" onClick={showResults} type="button">
+                                {t("Results")}
+                            </button>
+                            <button className={tabClass(tab === "chart")} data-testid="sql-tab-chart" onClick={showChart} type="button">
+                                {t("Chart")}
+                            </button>
+                            <button className={tabClass(tab === "explain")} data-testid="sql-tab-explain" onClick={showExplain} type="button">
+                                {t("Explain")}
+                            </button>
+                            <div className="ms-auto flex items-center gap-2">
+                                <button
+                                    aria-label={t("Split editor and results")}
+                                    aria-pressed={splitView}
+                                    className={`inline-flex items-center rounded-md border border-border px-2 py-1.5 outline-none transition-colors hover:bg-accent focus-visible:bg-accent ${splitView ? "bg-accent text-foreground" : "text-muted-foreground"}`}
+                                    data-testid="sql-split-toggle"
+                                    onClick={toggleSplit}
+                                    title={t("Split editor and results")}
+                                    type="button"
+                                >
+                                    <svg
+                                        aria-hidden="true"
+                                        className="size-4"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        strokeWidth={1.7}
+                                        viewBox="0 0 24 24"
+                                    >
+                                        <rect height="16" rx="2" width="18" x="3" y="4" />
+                                        <path d="M12 4v16" />
+                                    </svg>
+                                </button>
+                                {result !== null && result.columns.length > 0 && <ExportMenu columns={result.columns} name="query-result" rows={result.rows} />}
+                                <button
+                                    className="inline-flex items-center rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-50"
+                                    data-testid="sql-format"
+                                    disabled={running}
+                                    onClick={formatDraft}
+                                    type="button"
+                                >
+                                    {t("Format")}
+                                </button>
+                                <ShardInput onChange={setShardKey} testId="sql-shard-input" value={shardKey} />
+                                <button
+                                    className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground outline-none transition-colors hover:bg-primary/90 focus-visible:bg-primary/90 disabled:pointer-events-none disabled:opacity-50"
+                                    data-testid="sql-run"
+                                    disabled={running}
+                                    onClick={onRun}
+                                    type="button"
+                                >
+                                    {running ? t("Running…") : t("Run")}
+                                    <kbd className="rounded border border-primary-foreground/30 px-1 font-sans text-[10px]">⌘↵</kbd>
+                                </button>
                             </div>
-                        )}
+                        </div>
+
+                        <div className="min-h-0 flex-1 overflow-auto">
+                            {error !== null && (
+                                <Alert className="m-3 font-mono text-xs" testId="sql-error" variant="destructive">
+                                    {error}
+                                </Alert>
+                            )}
+
+                            {error === null && result === null && (
+                                <p className="p-4 text-sm text-muted-foreground" data-testid="sql-empty">
+                                    {t("Click Run to execute your query.")}
+                                </p>
+                            )}
+
+                            {error === null && result !== null && (
+                                <div data-testid="sql-result">
+                                    {tab === "chart" ? <SqlResultChart result={result} /> : <SqlResultTable result={result} />}
+                                    <p className="border-t border-border px-3 py-1.5 text-xs text-muted-foreground" data-testid="sql-count">
+                                        {result.truncated
+                                            ? t("Showing the first {max} of {count} rows.", { count: result.rowCount, max: result.rows.length })
+                                            : t("{count} rows", { count: result.rowCount })}
+                                    </p>
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
             </div>

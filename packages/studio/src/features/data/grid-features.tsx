@@ -64,6 +64,68 @@ const toCsv = (columns: ReadonlyArray<string>, rows: ReadonlyArray<GridRow>): st
 /** Serialize the given rows to a pretty-printed JSON array string. */
 const toJson = (rows: ReadonlyArray<GridRow>): string => JSON.stringify(rows, null, 2);
 
+/** Rows per generated `INSERT` statement — chunked so a large export stays valid under statement-size limits and stays diff-friendly. */
+const SQL_INSERT_BATCH = 500;
+
+/** Quote a SQL identifier (table/column) with double quotes, doubling any embedded quote — handles names like `query-result` that aren't bare identifiers. */
+const sqlIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
+
+/**
+ * Render one value as a SQL literal for an `INSERT`: `NULL` for null/undefined,
+ * a bare numeral for finite numbers/bigints, `1`/`0` for booleans (SQLite has no
+ * boolean type), a single-quoted string (embedded quotes doubled) for text, and
+ * single-quoted JSON for anything structured. A non-finite number (`NaN`/`±∞`,
+ * which SQLite can't represent) degrades to `NULL`.
+ */
+const sqlLiteral = (value: unknown): string => {
+    if (value === null || value === undefined) {
+        return "NULL";
+    }
+
+    if (typeof value === "number") {
+        return Number.isFinite(value) ? String(value) : "NULL";
+    }
+
+    if (typeof value === "bigint") {
+        return String(value);
+    }
+
+    if (typeof value === "boolean") {
+        return value ? "1" : "0";
+    }
+
+    const text = typeof value === "string" ? value : JSON.stringify(value);
+
+    return `'${text.replaceAll("'", "''")}'`;
+};
+
+/**
+ * Serialize the given columns + rows to a SQL dump: one or more multi-row
+ * `INSERT INTO "…" (...) VALUES ...;` statements, batched at
+ * {@link SQL_INSERT_BATCH} rows each. `name` is the target table (the selected
+ * table, or the SQL console's `query-result` placeholder). Mirrors the CSV/JSON
+ * exports — the loaded page only.
+ */
+const toSql = (name: string, columns: ReadonlyArray<string>, rows: ReadonlyArray<GridRow>): string => {
+    if (columns.length === 0 || rows.length === 0) {
+        return "";
+    }
+
+    const columnList = columns.map((column) => sqlIdentifier(column)).join(", ");
+    const statements: string[] = [];
+
+    for (let start = 0; start < rows.length; start += SQL_INSERT_BATCH) {
+        const values = rows
+            .slice(start, start + SQL_INSERT_BATCH)
+            .map((row) => `  (${columns.map((column) => sqlLiteral(row[column])).join(", ")})`)
+            .join(",\n");
+
+        statements.push(`INSERT INTO ${sqlIdentifier(name)} (${columnList}) VALUES\n${values};`);
+    }
+
+    return statements.join("\n\n");
+};
+
 /**
  * Trigger a client-side file download of `content`. No-op outside the browser
  * (SSR / tests). Builds an object URL from a Blob, clicks a transient anchor, and
@@ -113,6 +175,10 @@ const ExportMenu = ({
         downloadFile(`${name}.json`, toJson(rows), "application/json");
     };
 
+    const onSql = (): void => {
+        downloadFile(`${name}.sql`, toSql(name, columns, rows), "application/sql;charset=utf-8");
+    };
+
     return (
         <DropdownMenu>
             <DropdownMenuTrigger
@@ -132,6 +198,9 @@ const ExportMenu = ({
                 </DropdownMenuItem>
                 <DropdownMenuItem data-testid="grid-export-json" onClick={onJson}>
                     {t("JSON")}
+                </DropdownMenuItem>
+                <DropdownMenuItem data-testid="grid-export-sql" onClick={onSql}>
+                    {t("SQL")}
                 </DropdownMenuItem>
             </DropdownMenuContent>
         </DropdownMenu>
@@ -346,5 +415,5 @@ const GridActionsBar = ({
     );
 };
 
-export { CellDetailDialog, ColumnsMenu, ExportMenu, GridActionsBar, SelectionBar, toCsv, toJson };
+export { CellDetailDialog, ColumnsMenu, ExportMenu, GridActionsBar, SelectionBar, toCsv, toJson, toSql };
 export type { GridRow };
