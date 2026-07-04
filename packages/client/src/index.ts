@@ -29,10 +29,12 @@ export { SubscriptionRegistry } from "./subscription";
 export type {
     ArgsOf,
     AuthCapabilities,
+    AuthConfigInfo,
     AuthImpersonation,
     AuthPage,
     AuthSession,
     AuthUser,
+    AuthUserFieldSpec,
     BookmarkStorage,
     CachedQuery,
     ClientMessage,
