@@ -10,6 +10,8 @@ export type DeployEvent = Record<string, unknown>;
 export interface DeployClientOptions {
     apiUrl: string;
     branch?: string;
+    /** Base64-encoded prebuilt worker module (the app's Vite build output). */
+    bundle: string;
     deployKey: string;
     fetch?: typeof globalThis.fetch;
     kind?: "dev" | "preview" | "production";
@@ -36,7 +38,13 @@ export const deployToCloud = async (options: DeployClientOptions, onEvent: (even
     const fetchImpl = options.fetch ?? globalThis.fetch;
 
     const response = await fetchImpl(`${stripTrailingSlashes(options.apiUrl)}/v1/deploy`, {
-        body: JSON.stringify({ branch: options.branch, kind: options.kind, projectId: options.projectId, scriptName: options.scriptName }), // secret-scanner:allow -- domain field name
+        body: JSON.stringify({
+            branch: options.branch,
+            bundle: options.bundle,
+            kind: options.kind,
+            projectId: options.projectId,
+            scriptName: options.scriptName,
+        }), // secret-scanner:allow -- domain field name
         headers: { authorization: `Bearer ${options.deployKey}`, "content-type": "application/json" },
         method: "POST",
     });

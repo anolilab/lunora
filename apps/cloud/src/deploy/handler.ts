@@ -63,12 +63,30 @@ export interface DeployHandlerDeps {
 
 interface DeployBody {
     branch?: string;
+    /** Base64-encoded prebuilt worker module (the app's Vite build output — never built here). */
+    bundle?: string;
     kind?: DeployKind;
     projectId?: string;
     scriptName?: string;
 }
 
 const json = (status: number, data: unknown): Response => Response.json(data, { headers: { "content-type": "application/json" }, status });
+
+/** Decode the base64 bundle payload into the ArrayBuffer the provisioner uploads, or `null` if malformed. */
+const decodeBundle = (encoded: string): ArrayBuffer | null => {
+    try {
+        const binary = atob(encoded);
+        const bytes = new Uint8Array(binary.length);
+
+        for (let index = 0; index < binary.length; index += 1) {
+            bytes[index] = binary.codePointAt(index) ?? 0;
+        }
+
+        return bytes.buffer;
+    } catch {
+        return null;
+    }
+};
 
 const bearerKey = (request: Request): null | string => {
     const header = request.headers.get("authorization") ?? "";
@@ -106,6 +124,18 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
 
     if (!body.projectId || !body.scriptName) {
         return json(400, { error: "projectId and scriptName are required" });
+    }
+
+    // The worker bundle is prebuilt client-side (the app's Vite pipeline);
+    // deploying without one would provision an empty module, so fail fast.
+    if (!body.bundle) {
+        return json(400, { error: "bundle is required (base64-encoded worker module)" });
+    }
+
+    const bundle = decodeBundle(body.bundle);
+
+    if (!bundle) {
+        return json(400, { error: "bundle is not valid base64" });
     }
 
     const kind = body.kind ?? target.type;
@@ -162,7 +192,7 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
 
             const spec: TenantDeploymentSpec = {
                 bindings: {},
-                bundle: new ArrayBuffer(0),
+                bundle,
                 cell: deps.cell,
                 dispatchNamespace: deps.dispatchNamespace(kind),
                 scriptName,

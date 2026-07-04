@@ -4,7 +4,7 @@ import type { MutationCtx } from "../lunora/_generated/server";
 import { revoke as revokeKey } from "../lunora/deploy-keys";
 import { revoke as revokeInvite } from "../lunora/invitations";
 import { remove as removeMember } from "../lunora/members";
-import { remove as removeSecret } from "../lunora/secrets";
+import { list as listSecrets, remove as removeSecret, store as storeSecret } from "../lunora/secrets";
 
 type Row = Record<string, unknown>;
 
@@ -68,4 +68,29 @@ describe("cross-org IDOR guard on delete/revoke", () => {
             expect(writes).toStrictEqual(["row_x"]);
         });
     }
+});
+
+describe("cross-org IDOR guard on project-scoped secrets access", () => {
+    it("rejects storing a secret against a foreign-org project", async () => {
+        const { ctx, writes } = makeCtx("org_2");
+
+        await expect(
+            storeSecret.handler(ctx, {
+                ciphertext: "c",
+                iv: "i",
+                name: "N",
+                organizationId: "org_1" as never,
+                projectId: "proj_x" as never, // secret-scanner:allow -- domain field name
+            }),
+        ).rejects.toMatchObject({ code: "NOT_FOUND" });
+        expect(writes).toStrictEqual([]);
+    });
+
+    it("rejects listing secrets for a foreign-org project", async () => {
+        const { ctx } = makeCtx("org_2");
+
+        await expect(
+            listSecrets.handler(ctx, { organizationId: "org_1" as never, projectId: "proj_x" as never }), // secret-scanner:allow -- domain field name
+        ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
 });
