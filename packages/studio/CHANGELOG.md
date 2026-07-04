@@ -1,3 +1,10 @@
+## @lunora/studio [1.0.0-alpha.40](https://github.com/anolilab/lunora/compare/%40lunora%2Fstudio%401.0.0-alpha.39...%40lunora%2Fstudio%401.0.0-alpha.40) (2026-07-04)
+
+
+### Dependencies
+
+* **@lunora/mail:** upgraded to 1.0.0-alpha.11
+
 ## @lunora/studio [1.0.0-alpha.39](https://github.com/anolilab/lunora/compare/%40lunora%2Fstudio%401.0.0-alpha.38...%40lunora%2Fstudio%401.0.0-alpha.39) (2026-07-04)
 
 
