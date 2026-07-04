@@ -2,7 +2,7 @@ import type { WorkflowDefinition } from "@lunora/workflow";
 import { defineWorkflow } from "@lunora/workflow";
 
 import { runAgentLoop } from "./agent-loop";
-import { createAgentGenerate } from "./generate";
+import { createAgentGenerate, createStreamGenerate } from "./generate";
 import { agentDefaultName } from "./naming";
 import { DEFAULT_AGENT_FUNCTION_PATHS } from "./paths";
 import type { AgentDefinition, AgentFunctionPaths, AgentRunInput, AgentRunResult } from "./types";
@@ -43,6 +43,11 @@ const compileAgentWorkflow = (
                 paths: options?.paths ?? DEFAULT_AGENT_FUNCTION_PATHS,
                 run: context.run,
                 step: context.step,
+                // The streaming seam is wired and ready, but stays dormant until a
+                // live token sink is threaded onto the run (a follow-up wires
+                // `onTokenDelta` to the stream transport). With no sink the loop
+                // takes the byte-identical non-streaming `generate` path.
+                streamGenerate: createStreamGenerate(agent, context.env),
             }),
         name: agent.name ?? agentDefaultName(exportName),
     });

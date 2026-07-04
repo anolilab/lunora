@@ -586,37 +586,49 @@ const renderApiBody = (functions: ReadonlyArray<FunctionIR>): string => {
 };
 
 /**
- * Render the `workflows.*` typed-reference block for `_generated/api.ts` (its
- * import line + the type/value). Each `lunora/workflows.ts` export becomes a
- * `workflows.&lt;name>` reference carrying its `WORKFLOW_*` binding and — via the
- * definition's phantom `__params` — its `params` type, so a `cronJobs()`
- * registration that targets it infers the args. Returns empty strings when the
- * project declares no workflows. The reference shape is defined locally (not
- * imported from `@lunora/scheduler`) so a workflow-only project needs no
- * scheduler dependency; it matches `@lunora/scheduler`'s `WorkflowReference`
- * structurally at the cron call site.
+ * Render the scheduler-target reference block for `_generated/api.ts` (its
+ * import line + the type/value) — the typed `workflows.*` and/or `agents.*`
+ * reference objects, whichever the project declares.
+ *
+ * Each `lunora/workflows.ts` export becomes a `workflows.&lt;name>` reference
+ * carrying its `WORKFLOW_*` binding and — via the definition's phantom
+ * `__params` — its `params` type, so a `cronJobs()` registration that targets it
+ * infers the args. Each `lunora/agents.ts` export becomes an `agents.&lt;name>`
+ * reference carrying its `AGENT_*` binding (an agent compiles onto a Cloudflare
+ * Workflow, so it IS a workflow reference structurally) typed with the flat
+ * `AgentRunInput`, so `crons.daily("sweep", …, agents.support, { input,
+ * threadKey })` starts a fresh agent run per fire.
+ *
+ * Returns empty strings when the project declares neither. The shared
+ * `WorkflowReference` shape is defined locally (not imported from
+ * `@lunora/scheduler`) so a workflow-only project needs no scheduler dependency;
+ * it matches `@lunora/scheduler`'s `WorkflowReference` structurally at the cron
+ * call site. `AgentRunInput` is imported from `@lunora/agent` (type-only, erased
+ * at build) only when agents are declared, so agent-free output is unchanged.
  */
 /* eslint-disable no-secrets/no-secrets -- the emitted `WorkflowReference`/`WorkflowParamsOf` generic strings are dense generated TS, not credentials */
-const renderWorkflowsRef = (workflows: ReadonlyArray<WorkflowIR>): { block: string; importLine: string } => {
-    if (workflows.length === 0) {
+const renderSchedulerReferences = (workflows: ReadonlyArray<WorkflowIR>, agents: ReadonlyArray<AgentIR>): { block: string; importLine: string } => {
+    if (workflows.length === 0 && agents.length === 0) {
         return { block: "", importLine: "" };
     }
 
-    const sorted = [...workflows].toSorted((a, b) => a.exportName.localeCompare(b.exportName));
-    const refMembers = sorted
-        .map((workflow) => `    ${workflow.exportName}: WorkflowReference<WorkflowParamsOf<typeof lunoraWorkflowDefinitions.${workflow.exportName}>>;`)
-        .join("\n");
-    const objectMembers = sorted
-        .map(
-            (workflow) =>
-                `    ${workflow.exportName}: { isLunoraWorkflow: true, binding: ${JSON.stringify(workflow.bindingName)}, name: ${JSON.stringify(workflow.exportName)} },`,
-        )
-        .join("\n");
+    const importLines: string[] = [];
+    let block = "";
 
-    const block = `
+    // `WorkflowParamsOf` is workflow-specific (agents carry the concrete flat
+    // `AgentRunInput`), so it is emitted only when workflows are declared.
+    if (workflows.length > 0) {
+        block += `
 /** Params type carried by a \`defineWorkflow\` definition (its phantom \`__params\`). */
 type WorkflowParamsOf<Definition> = Definition extends { __params?: infer Params } ? (unknown extends Params ? Record<string, unknown> : Params) : Record<string, unknown>;
+`;
+    }
 
+    // The `WorkflowReference` interface backs BOTH workflow and agent handles (an
+    // agent run is a workflow instance), so it is emitted once whenever either
+    // exists. The comment text is kept verbatim so workflow-only output stays
+    // byte-identical to before agents rode the same emitter.
+    block += `
 /** A typed reference to a durable workflow, addressable for \`cronJobs()\` targets. Mirrors \`@lunora/scheduler\`'s \`WorkflowReference\` structurally. */
 export interface WorkflowReference<Params = Record<string, unknown>> {
     readonly isLunoraWorkflow: true;
@@ -624,7 +636,21 @@ export interface WorkflowReference<Params = Record<string, unknown>> {
     readonly binding: string;
     readonly name: string;
 }
+`;
 
+    if (workflows.length > 0) {
+        const sorted = [...workflows].toSorted((a, b) => a.exportName.localeCompare(b.exportName));
+        const refMembers = sorted
+            .map((workflow) => `    ${workflow.exportName}: WorkflowReference<WorkflowParamsOf<typeof lunoraWorkflowDefinitions.${workflow.exportName}>>;`)
+            .join("\n");
+        const objectMembers = sorted
+            .map(
+                (workflow) =>
+                    `    ${workflow.exportName}: { isLunoraWorkflow: true, binding: ${JSON.stringify(workflow.bindingName)}, name: ${JSON.stringify(workflow.exportName)} },`,
+            )
+            .join("\n");
+
+        block += `
 /** This project's durable workflows, addressable as typed references (e.g. \`crons.daily("digest", …, workflows.digestPipeline, params)\`). */
 export interface WorkflowsRef {
 ${refMembers}
@@ -634,10 +660,35 @@ export const workflows: WorkflowsRef = {
 ${objectMembers}
 };
 `;
+        importLines.push(`import type * as lunoraWorkflowDefinitions from "../workflows.js";\n`);
+    }
 
-    return { block, importLine: `import type * as lunoraWorkflowDefinitions from "../workflows.js";\n` };
+    if (agents.length > 0) {
+        const sorted = [...agents].toSorted((a, b) => a.exportName.localeCompare(b.exportName));
+        const refMembers = sorted.map((agent) => `    ${agent.exportName}: WorkflowReference<AgentRunInput>;`).join("\n");
+        const objectMembers = sorted
+            .map(
+                (agent) =>
+                    `    ${agent.exportName}: { isLunoraWorkflow: true, binding: ${JSON.stringify(agent.bindingName)}, name: ${JSON.stringify(agent.name)} },`,
+            )
+            .join("\n");
+
+        block += `
+/** This project's durable agents, addressable as typed references for \`cronJobs()\` — each fire starts a fresh agent run (e.g. \`crons.daily("sweep", …, agents.support, { input, threadKey })\`). */
+export interface AgentsRef {
+${refMembers}
+}
+
+export const agents: AgentsRef = {
+${objectMembers}
 };
-/* eslint-enable no-secrets/no-secrets -- re-enable after the workflows-ref emitter */
+`;
+        importLines.push(`import type { AgentRunInput } from "@lunora/agent";\n`);
+    }
+
+    return { block, importLine: importLines.join("") };
+};
+/* eslint-enable no-secrets/no-secrets -- re-enable after the scheduler-refs emitter */
 
 /**
  * The `@lunora/agent` runtime functions codegen auto-registers under the
@@ -687,15 +738,18 @@ const renderAgentFunctionRegistry = (
 };
 
 /**
- * Synthetic `FunctionIR` entries for the auto-registered PUBLIC agent queries,
- * so `api.agents.agentMessages` / `api.agents.agentThread` exist as typed
- * references (`useSubscription(api.agents.agentMessages, { key })`). The three
- * internal mutations are deliberately not surfaced — the loop dispatches them
- * by path over the scheduler channel and nothing client- or caller-side needs
- * a reference. App-registered names win (no duplicate members).
+ * Synthetic `FunctionIR` entries for the auto-registered PUBLIC agent
+ * functions, so `api.agents.agentMessages` / `api.agents.agentThread` /
+ * `api.agents.agentResolveApproval` exist as typed references
+ * (`useSubscription(api.agents.agentMessages, { key })`,
+ * `useMutation(api.agents.agentResolveApproval)`). The three thread-write
+ * mutations stay internal — the loop dispatches them by path over the scheduler
+ * channel and nothing client- or caller-side needs a reference;
+ * `agentResolveApproval` is public because a client resolves approvals with it
+ * (owner-gated inside the mutation). App-registered names win (no duplicate members).
  *
  * KEEP IN SYNC with `@lunora/agent`'s `component.ts` (`agentMessages` /
- * `agentThread` inputs + return shapes) — codegen cannot statically discover a
+ * `agentThread` / `agentResolveApproval` inputs + return shapes) — codegen cannot statically discover a
  * published package's function types, so these are pinned by hand; the drift
  * test in `discover-agents.test.ts` asserts the arg KEY SETS against the
  * runtime component, but arg/return TYPE changes must be mirrored manually.
@@ -715,6 +769,25 @@ const syntheticAgentApiFunctions = (agents: ReadonlyArray<AgentIR>, functions: R
             returnType: "Record<string, unknown>[]",
         },
         {
+            args: {
+                decision: {
+                    kind: "union",
+                    members: [
+                        { kind: "literal", literalValue: '"approve"' },
+                        { kind: "literal", literalValue: '"reject"' },
+                    ],
+                },
+                instanceId: { kind: "string" },
+                note: { inner: { kind: "string" }, kind: "optional" },
+                threadKey: { kind: "string" },
+                toolCallId: { kind: "string" },
+            },
+            exportName: "agentResolveApproval",
+            filePath: "agents",
+            kind: "mutation",
+            returnType: "{ resolved: boolean }",
+        },
+        {
             args: { key: { kind: "string" } },
             exportName: "agentThread",
             filePath: "agents",
@@ -728,8 +801,8 @@ const syntheticAgentApiFunctions = (agents: ReadonlyArray<AgentIR>, functions: R
 
 /**
  * Emit `_generated/api.ts` — the typed `api.*` registry (public functions), the
- * `internal.*` registry, and (when the project declares workflows) the typed
- * `workflows.*` reference object. `api`/`internal` are the same `anyApi` proxy
+ * `internal.*` registry, and (when the project declares them) the typed
+ * `workflows.*` / `agents.*` scheduler-target reference objects. `api`/`internal` are the same `anyApi` proxy
  * at runtime (the `__lunoraRef` is identical); visibility is enforced
  * server-side at dispatch, not in the reference. Splitting the *types* keeps
  * internal functions off the client-facing `api` surface.
@@ -760,11 +833,11 @@ const emitApi = (options: EmitApiOptions): string => {
     const apiBlock = publicBody ? `\n${publicBody}\n` : "";
     const internalBlock = internalBody ? `\n${internalBody}\n` : "";
 
-    const workflowsRef = renderWorkflowsRef(workflows);
+    const schedulerReferences = renderSchedulerReferences(workflows, agents);
 
     return `${GENERATED_HEADER}import { anyApi } from "${base.serverTypes}";
 import type { FunctionReference } from "${base.client}";
-${workflowsRef.importLine}${dataModelImportLine}
+${schedulerReferences.importLine}${dataModelImportLine}
 export interface ApiTypes {${apiBlock}}
 
 export const api = anyApi as unknown as ApiTypes;
@@ -773,7 +846,7 @@ export const api = anyApi as unknown as ApiTypes;
 export interface InternalApiTypes {${internalBlock}}
 
 export const internal = anyApi as unknown as InternalApiTypes;
-${workflowsRef.block}`;
+${schedulerReferences.block}`;
 };
 
 /**

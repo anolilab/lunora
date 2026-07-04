@@ -37,6 +37,10 @@ export type {
     User,
     UseSubscriptionResult,
 } from "./types";
+export type { AgentThreadRecord, AgentThreadStatus, UseAgentApi, UseAgentOptions, UseAgentResult } from "./use-agent";
+export { useAgent } from "./use-agent";
+export type { AgentChatMessage, AgentTokenDelta, UseAgentChatApi, UseAgentChatOptions, UseAgentChatResult } from "./use-agent-chat";
+export { useAgentChat } from "./use-agent-chat";
 export { default as useAuth } from "./use-auth";
 export { default as useConnectionStatus } from "./use-connection-status";
 export type { FlagContext, FlagValue } from "./use-flag";

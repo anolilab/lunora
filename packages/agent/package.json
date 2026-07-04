@@ -71,9 +71,11 @@
         "@lunora/server": "1.0.0-alpha.14",
         "@lunora/values": "1.0.0-alpha.4",
         "@lunora/workflow": "1.0.0-alpha.6",
+        "@modelcontextprotocol/sdk": "catalog:mcp",
         "ai": "catalog:ai"
     },
     "devDependencies": {
+        "@lunora/dispatch": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

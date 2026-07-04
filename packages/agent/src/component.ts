@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import type { SchemaExtension } from "@lunora/server";
 import { defineSchemaExtension, defineTable, initLunora } from "@lunora/server";
 import { v } from "@lunora/values";
@@ -35,6 +36,14 @@ const agentExtension: SchemaExtension = defineSchemaExtension(AGENT_EXTENSION_KE
             messageKey: v.string(),
             role: v.union(v.literal("user"), v.literal("assistant"), v.literal("tool"), v.literal("system")),
             seq: v.number(),
+
+            /**
+             * Human-in-the-loop approval marker: `"awaiting_approval"` on the
+             * placeholder written while a run pauses on a gated tool, then
+             * `"approved"`/`"rejected"` on the tool result once resolved. Optional
+             * so ordinary messages (and pre-existing rows) are unaffected.
+             */
+            status: v.optional(v.union(v.literal("awaiting_approval"), v.literal("approved"), v.literal("rejected"))),
             stepName: v.optional(v.string()),
             threadKey: v.string(),
             toolCallId: v.optional(v.string()),
@@ -51,6 +60,16 @@ const agentExtension: SchemaExtension = defineSchemaExtension(AGENT_EXTENSION_KE
             agent: v.string(),
             createdAt: v.number(),
             error: v.optional(v.string()),
+
+            /**
+             * The workflow instance id of the run that currently owns this
+             * thread. The concurrency guard compares it to a starting run's own
+             * instance id — a match is a replay (allow), a mismatch while
+             * `status === "running"` is a genuine second run (apply
+             * `onConcurrentRun`). Also the target for `cancel`/`replace`. Optional
+             * so pre-existing threads (written before this column) are unaffected.
+             */
+            instanceId: v.optional(v.string()),
             key: v.string(),
             // Next message seq — incremented on every append (see above).
             messageCount: v.number(),
@@ -63,12 +82,22 @@ const agentExtension: SchemaExtension = defineSchemaExtension(AGENT_EXTENSION_KE
              * apps). First writer wins — a later run may not change it.
              */
             owner: v.optional(v.string()),
-            status: v.union(v.literal("idle"), v.literal("running"), v.literal("error")),
+            status: v.union(v.literal("idle"), v.literal("running"), v.literal("error"), v.literal("cancelled"), v.literal("awaiting_input")),
             title: v.optional(v.string()),
             updatedAt: v.number(),
+
+            /**
+             * Cumulative token usage for the latest run on this thread, patched
+             * at run end. Optional so agent-free apps and pre-existing threads
+             * (written before this column existed) are unaffected.
+             */
+            usage: v.optional(v.object({ inputTokens: v.optional(v.number()), outputTokens: v.optional(v.number()), totalTokens: v.optional(v.number()) })),
         })
             .index("byKey", ["key"], { unique: true })
             .index("byAgent", ["agent"])
+            // Targets a thread by the workflow instance that owns it — the
+            // lookup `cancel` uses to mark the right thread cancelled.
+            .index("byInstance", ["instanceId"])
             // RLS-exempt on purpose: under `.rls("required")` these tables are
             // written by the workflow's dispatched internal mutations and read
             // by the public queries, none of which can engage app RLS policies
@@ -108,6 +137,7 @@ export interface AgentComponent {
         agentEnsureThread: AgentRegisteredFunction;
         agentMessages: AgentRegisteredFunction;
         agentPatchThread: AgentRegisteredFunction;
+        agentResolveApproval: AgentRegisteredFunction;
         agentThread: AgentRegisteredFunction;
     };
 }
@@ -127,11 +157,13 @@ export const agentComponent = (): AgentComponent => {
     const agentEnsureThread = mutation
         .input({
             agent: v.string(),
+            instanceId: v.optional(v.string()),
             key: v.string(),
+            onConcurrentRun: v.optional(v.union(v.literal("reject"), v.literal("queue"), v.literal("replace"))),
             owner: v.optional(v.string()),
             title: v.optional(v.string()),
         })
-        .mutation(async ({ args, ctx: context }): Promise<{ created: boolean }> => {
+        .mutation(async ({ args, ctx: context }): Promise<{ created: boolean; priorInstanceId?: string; replaced?: boolean }> => {
             const now = Date.now();
             const existing = await context.db
                 .query(THREADS_TABLE)
@@ -146,10 +178,50 @@ export const agentComponent = (): AgentComponent => {
                     throw new Error(`@lunora/agent: thread "${args.key}" belongs to another owner`);
                 }
 
-                // Replay note: a resumed workflow re-runs this (it sits outside
-                // step.do) — resetting status/error to "running" is idempotent
-                // and correct, since a resume means the run IS active again.
-                await context.db.patch(existing["_id"] as never, { error: undefined, status: "running", updatedAt: now });
+                // Concurrency guard: a thread already owned by a DIFFERENT
+                // workflow instance is a genuine second run — the two would
+                // interleave their messages on the shared seq counter. "running"
+                // and "awaiting_input" both mean the prior instance is alive: the
+                // latter is a HITL pause hibernating on step.waitForEvent, which
+                // still owns the thread and will resume. A matching (or absent,
+                // pre-column) instance id is a REPLAY of the same run, which must
+                // be allowed. Only a known, differing instance id trips the policy.
+                const priorInstanceId = existing["instanceId"] as string | undefined;
+                const isConcurrentRun =
+                    (existing["status"] === "running" || existing["status"] === "awaiting_input") &&
+                    priorInstanceId !== undefined &&
+                    args.instanceId !== undefined &&
+                    priorInstanceId !== args.instanceId;
+
+                if (isConcurrentRun) {
+                    const policy = args.onConcurrentRun ?? "reject";
+
+                    // "queue" has no durable queue yet — degrade to reject rather
+                    // than silently interleave (tracked as a follow-up).
+                    if (policy !== "replace") {
+                        throw new LunoraError(
+                            "CONFLICT",
+                            `@lunora/agent: thread "${args.key}" already has a run in flight (instance "${priorInstanceId}") — onConcurrentRun="${policy}"`,
+                        );
+                    }
+
+                    // Replace: take the thread over now (the caller terminates the
+                    // prior instance) so the next append is attributed to this run.
+                    await context.db.patch(existing["_id"] as never, { error: undefined, instanceId: args.instanceId, status: "running", updatedAt: now });
+
+                    return { created: false, priorInstanceId, replaced: true };
+                }
+
+                // Replay (same instance) or a resumed idle/errored/cancelled
+                // thread: resetting status/error to "running" is idempotent and
+                // correct, since (re)starting means the run IS active again. The
+                // instance id is (re)stamped so cancel/replace can target it.
+                await context.db.patch(existing["_id"] as never, {
+                    error: undefined,
+                    status: "running",
+                    updatedAt: now,
+                    ...(args.instanceId === undefined ? {} : { instanceId: args.instanceId }),
+                });
 
                 return { created: false };
             }
@@ -160,6 +232,7 @@ export const agentComponent = (): AgentComponent => {
                 key: args.key,
                 messageCount: 0,
                 status: "running",
+                ...(args.instanceId === undefined ? {} : { instanceId: args.instanceId }),
                 ...(args.owner === undefined ? {} : { owner: args.owner }),
                 ...(args.title === undefined ? {} : { title: args.title }),
                 updatedAt: now,
@@ -173,6 +246,7 @@ export const agentComponent = (): AgentComponent => {
             content: v.string(),
             messageKey: v.string(),
             role: v.union(v.literal("user"), v.literal("assistant"), v.literal("tool"), v.literal("system")),
+            status: v.optional(v.union(v.literal("awaiting_approval"), v.literal("approved"), v.literal("rejected"))),
             stepName: v.optional(v.string()),
             threadKey: v.string(),
             toolCallId: v.optional(v.string()),
@@ -210,6 +284,7 @@ export const agentComponent = (): AgentComponent => {
                 role: args.role,
                 seq,
                 threadKey: args.threadKey,
+                ...(args.status === undefined ? {} : { status: args.status }),
                 ...(args.stepName === undefined ? {} : { stepName: args.stepName }),
                 ...(args.toolCallId === undefined ? {} : { toolCallId: args.toolCallId }),
                 ...(args.toolCalls === undefined ? {} : { toolCalls: args.toolCalls }),
@@ -223,15 +298,29 @@ export const agentComponent = (): AgentComponent => {
     const agentPatchThread = mutation
         .input({
             error: v.optional(v.string()),
-            key: v.string(),
-            status: v.optional(v.union(v.literal("idle"), v.literal("running"), v.literal("error"))),
+            // Target by thread key (the loop) OR by workflow instance id (cancel,
+            // which only knows the instance it terminated). Exactly one is set.
+            instanceId: v.optional(v.string()),
+            key: v.optional(v.string()),
+            status: v.optional(v.union(v.literal("idle"), v.literal("running"), v.literal("error"), v.literal("cancelled"), v.literal("awaiting_input"))),
             title: v.optional(v.string()),
+            usage: v.optional(v.object({ inputTokens: v.optional(v.number()), outputTokens: v.optional(v.number()), totalTokens: v.optional(v.number()) })),
         })
         .mutation(async ({ args, ctx: context }): Promise<void> => {
-            const thread = await context.db
-                .query(THREADS_TABLE)
-                .withIndex("byKey", (q) => q.eq("key", args.key))
-                .first();
+            const { instanceId, key } = args;
+            let thread: Record<string, unknown> | null | undefined;
+
+            if (key !== undefined) {
+                thread = await context.db
+                    .query(THREADS_TABLE)
+                    .withIndex("byKey", (q) => q.eq("key", key))
+                    .first();
+            } else if (instanceId !== undefined) {
+                thread = await context.db
+                    .query(THREADS_TABLE)
+                    .withIndex("byInstance", (q) => q.eq("instanceId", instanceId))
+                    .first();
+            }
 
             if (!thread) {
                 return;
@@ -242,6 +331,9 @@ export const agentComponent = (): AgentComponent => {
                 ...(args.error === undefined ? {} : { error: args.error }),
                 ...(args.status === undefined ? {} : { status: args.status }),
                 ...(args.title === undefined ? {} : { title: args.title }),
+                // The loop patches a per-run cumulative total; setting it (rather
+                // than adding) keeps the write idempotent under workflow replay.
+                ...(args.usage === undefined ? {} : { usage: args.usage }),
             });
         });
 
@@ -307,6 +399,54 @@ export const agentComponent = (): AgentComponent => {
             return args.limit === undefined ? ordered : ordered.slice(Math.max(0, ordered.length - args.limit));
         });
 
+    /**
+     * Resolve a human-in-the-loop tool approval: deliver the client's
+     * approve/reject decision to the paused run so its `waitForEvent` resumes.
+     * PUBLIC (a client calls it) but OWNER-GATED — the same `readableThread`
+     * gate as the reads, so only the thread's owner may approve. The AGENT_*
+     * workflow binding is reached via `ctx.agents` (woven onto the function-run
+     * ctx by generated code); the mutation ctx has no raw `env`.
+     */
+    const agentResolveApproval = mutation
+        .input({
+            decision: v.union(v.literal("approve"), v.literal("reject")),
+            instanceId: v.string(),
+            note: v.optional(v.string()),
+            threadKey: v.string(),
+            toolCallId: v.string(),
+        })
+        .mutation(async ({ args, ctx: context }): Promise<{ resolved: boolean }> => {
+            const thread = await context.db
+                .query(THREADS_TABLE)
+                .withIndex("byKey", (q) => q.eq("key", args.threadKey))
+                .first();
+
+            const readable = readableThread(thread, context.auth);
+
+            if (readable === undefined) {
+                // Unknown and forbidden are indistinguishable — key-guessing leaks nothing.
+                throw new LunoraError("FORBIDDEN", `@lunora/agent: not allowed to resolve approvals on thread "${args.threadKey}"`);
+            }
+
+            const agentName = readable["agent"] as string;
+            const { agents } = context as { agents?: Record<string, { sendEvent?: (id: string, event: { payload: unknown; type: string }) => Promise<void> }> };
+            const handle = agents?.[agentName];
+
+            if (typeof handle?.sendEvent !== "function") {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `@lunora/agent: no ctx.agents["${agentName}"] producer to resolve the approval — run codegen/dev so the agent binding is wired`,
+                );
+            }
+
+            await handle.sendEvent(args.instanceId, {
+                payload: { decision: args.decision, ...(args.note === undefined ? {} : { note: args.note }) },
+                type: "agent-approval",
+            });
+
+            return { resolved: true };
+        });
+
     return {
         extension: agentExtension,
         functions: {
@@ -314,6 +454,7 @@ export const agentComponent = (): AgentComponent => {
             agentEnsureThread: asInternal(agentEnsureThread),
             agentMessages,
             agentPatchThread: asInternal(agentPatchThread),
+            agentResolveApproval,
             agentThread,
         },
     };

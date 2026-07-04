@@ -1,3 +1,5 @@
+export type { AgentHarness, AgentHarnessOptions, AgentRunOverrides, HarnessDispatch, HarnessMessage, HarnessThread } from "./agent-harness";
+export { agentHarness, finalTurn, toolCallTurn } from "./agent-harness";
 export type {
     FakeScheduledJob,
     FakeSchedulerControls,
