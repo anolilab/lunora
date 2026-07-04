@@ -19,9 +19,11 @@
  * race) and this plugin replaces that record with the authoritative URL + PID.
  */
 import { claimDevServerState, clearDevServerState, DEV_DAEMON_ENV, DEV_HANDOFF_ENV, DEV_LOG_FILE_ENV } from "@lunora/config";
-import type { Environment, Plugin, ViteDevServer } from "vite";
+import type { Plugin, ViteDevServer } from "vite";
 
 import { lunoraLine } from "./log";
+import type { PendingCloseMap } from "./server-close";
+import { registerDevServerClose, runPendingClose } from "./server-close";
 import type { ResolvedLunoraPluginOptions } from "./types";
 
 /** Trailing slash on Vite's resolved URL, trimmed so state consumers can append paths uniformly. */
@@ -52,18 +54,11 @@ const resolveLocalUrl = (server: ViteDevServer): string | undefined => {
 const devStatePlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
     let recorded = false;
 
-    // Clear callbacks pending a dev-server close, keyed by that particular
-    // invocation's "client" Environment. `server.httpServer` is null when
-    // `server.middlewareMode: true` (programmatic hosts), so the classic-mode
-    // `httpServer.once("close", …)` registration below never fires there and
-    // `.lunora/dev.json` would be left pointing at a dead pid. This plugin is
-    // `apply: "serve"`-only, so the `buildEnd` fallback below only ever runs
-    // from a dev-server close, never a production build. See the matching
-    // `pendingMiddlewareTeardowns` map in `codegen-plugin.ts` for why this is
-    // keyed by Environment identity rather than a single "current" callback
-    // (a concurrent `server.restart()` configures + registers the NEW
-    // server's callback before closing the OLD one).
-    const pendingMiddlewareClears = new Map<Environment, () => void>();
+    // Clear callbacks pending a middleware-mode dev-server close (no
+    // httpServer to hang a "close" listener on) — see `server-close.ts` for
+    // the middleware/`buildEnd` mechanics and the restart-race rationale.
+    // Without this, `.lunora/dev.json` would be left pointing at a dead pid.
+    const pendingMiddlewareClears: PendingCloseMap = new Map();
 
     return {
         apply: "serve",
@@ -122,15 +117,7 @@ const devStatePlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 }
             };
 
-            // `server.httpServer` is non-null only outside middleware mode. In
-            // middleware mode, fall back to the `buildEnd` hook (registered per
-            // the "client" Environment so a concurrent restart can't cross-fire
-            // it — see `pendingMiddlewareClears` above).
-            if (server.httpServer) {
-                server.httpServer.once("close", clearOnClose);
-            } else {
-                pendingMiddlewareClears.set(server.environments.client, clearOnClose);
-            }
+            registerDevServerClose(server, pendingMiddlewareClears, clearOnClose);
 
             // Returned hook runs after internal middlewares are installed.
             return () => {
@@ -156,16 +143,10 @@ const devStatePlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             };
         },
         buildEnd() {
-            // Middleware-mode fallback for `clearOnClose` above — see
-            // `pendingMiddlewareClears`. No-op in classic dev-server mode (that
-            // path never populates the map) and never fires at all for a
-            // production build (this plugin is `apply: "serve"`-only).
-            const clear = pendingMiddlewareClears.get(this.environment);
-
-            if (clear !== undefined) {
-                pendingMiddlewareClears.delete(this.environment);
-                clear();
-            }
+            // Middleware-mode close fallback for `clearOnClose` above (no-op in
+            // classic dev mode; never fires for a production build — this
+            // plugin is `apply: "serve"`-only); see `server-close.ts`.
+            runPendingClose(pendingMiddlewareClears, this.environment);
         },
         name: "lunora:dev-state",
     };

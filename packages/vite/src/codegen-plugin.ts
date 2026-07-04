@@ -5,13 +5,15 @@ import { CodegenDiagnosticError, createCodegenProject, refreshCodegenProject, ru
 import type { ExportGap } from "@lunora/config";
 import { collectWranglerSecretVariables, inferLunoraBindings, LUNORA_CONFIG_FILE, reconcileWranglerBindings, WRANGLER_FILES } from "@lunora/config";
 import type { Project } from "ts-morph";
-import type { Environment, Plugin, ViteDevServer } from "vite";
+import type { Plugin, ViteDevServer } from "vite";
 import { isRunnableDevEnvironment } from "vite";
 
 import { computeConfigFingerprint } from "./config-fingerprint";
 import { reconcileWranglerCrons } from "./cron-sync";
 import LUNORA_API_UPDATED_EVENT from "./hmr-events";
 import { advisoryLine, LUNORA_TAG } from "./log";
+import type { PendingCloseMap } from "./server-close";
+import { registerDevServerClose, runPendingClose } from "./server-close";
 import type { ResolvedLunoraPluginOptions } from "./types";
 
 const DEBOUNCE_MS = 100;
@@ -249,24 +251,13 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
     // build mode (vite build) — the overlay callbacks are never wired up then.
     let devServer: ViteDevServer | undefined;
 
-    // Teardown callbacks pending a dev-server close, keyed by that particular
-    // invocation's "client" Environment. `server.httpServer` is null when
-    // `server.middlewareMode: true` (programmatic hosts), so the classic-mode
-    // `httpServer.once("close", …)` registration below never fires there — a
-    // pending debounce could still run codegen against a torn-down module
-    // graph, and the cached ts-morph Project + timer would leak past the
-    // server's life. Vite's `server.close()` always closes every environment
-    // (`environment.close()`) regardless of middleware mode, which invokes
-    // each eligible plugin's `buildEnd` hook once for the "client" environment
-    // (see the `buildEnd` hook below) — a reliable middleware-safe signal.
-    //
-    // Keyed by the Environment instance rather than a single "current"
-    // callback: `server.restart()` configures + registers the NEW server's
-    // teardown BEFORE closing the OLD one (Vite's `restartServer` creates and
-    // configures the replacement server, then awaits the old server's
-    // `close()`), so a shared mutable reference would let the old server's
-    // close invoke the new server's teardown instead of its own.
-    const pendingMiddlewareTeardowns = new Map<Environment, () => void>();
+    // Teardown callbacks pending a middleware-mode dev-server close (no
+    // httpServer to hang a "close" listener on) — see `server-close.ts` for
+    // the middleware/`buildEnd` mechanics and the restart-race rationale.
+    // Without this, a pending debounce could still run codegen against a
+    // torn-down module graph, and the cached ts-morph Project + timer would
+    // leak past the server's life.
+    const pendingMiddlewareTeardowns: PendingCloseMap = new Map();
 
     // --- Config-drift auto-restart state (see the config watcher in
     // configureServer) --- Lives at the plugin-factory scope so it survives a
@@ -632,34 +623,14 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             };
 
             return () => {
-                // `server.httpServer` is non-null only outside middleware mode
-                // (`server.middlewareMode: true` forces it to `null` — see Vite's
-                // `_createServer`). Middleware-mode hosts never emit an httpServer
-                // "close", so fall back to the `buildEnd` hook, registered per the
-                // "client" Environment so a concurrent restart can't cross-fire it
-                // (see `pendingMiddlewareTeardowns` above).
-                if (server.httpServer) {
-                    server.httpServer.once("close", teardown);
-                } else {
-                    pendingMiddlewareTeardowns.set(server.environments.client, teardown);
-                }
+                registerDevServerClose(server, pendingMiddlewareTeardowns, teardown);
             };
         },
         buildEnd() {
-            // Vite calls every eligible plugin's `buildEnd` hook once per
-            // dev-server close (filtered to the "client" environment — see the
-            // per-environment gate in Vite's `PluginContainer.close()`) AND once
-            // per production build (`vite build`). `pendingMiddlewareTeardowns` is
-            // only ever populated from a middleware-mode `configureServer` call,
-            // so this is a no-op in build mode and in classic dev-server mode
-            // (where the `httpServer.once("close", …)` registration above already
-            // handles teardown).
-            const teardown = pendingMiddlewareTeardowns.get(this.environment);
-
-            if (teardown !== undefined) {
-                pendingMiddlewareTeardowns.delete(this.environment);
-                teardown();
-            }
+            // Middleware-mode close fallback (no-op in classic dev mode and in
+            // `vite build` — the map is only populated by a middleware-mode
+            // `configureServer`); see `server-close.ts`.
+            runPendingClose(pendingMiddlewareTeardowns, this.environment);
         },
         name: "lunora:codegen",
     };
