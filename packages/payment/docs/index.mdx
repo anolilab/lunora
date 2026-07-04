@@ -1,9 +1,9 @@
 ---
 title: "@lunora/payment"
-description: Provider-agnostic payments for Lunora — Stripe/Polar adapters, webhook sync, and a payment/subscription state machine.
+description: Provider-agnostic payments for Lunora — Stripe/Polar/Autumn adapters, webhook sync, and a payment/subscription state machine.
 ---
 
-`@lunora/payment` is one provider-agnostic API over Stripe and Polar. Webhook
+`@lunora/payment` is one provider-agnostic API over Stripe, Polar, and Autumn. Webhook
 events are verified, normalized, and applied through an explicit
 payment/subscription state machine that makes duplicate and out-of-order
 deliveries safe by construction — synced into a durable store that rides the
@@ -70,35 +70,41 @@ export const ShardDO = createShardDO({
 
 The thunk returns `PaymentsFromContextOptions`:
 
-| Option          | Type                 | Notes                                                                                |
-| --------------- | -------------------- | ------------------------------------------------------------------------------------ |
-| `adapter`       | `PaymentAdapter`     | Built with `createStripeAdapter` / `createPolarAdapter`. Required.                   |
-| `authorize`     | `AuthorizeReference` | `(referenceId) => boolean \| Promise<boolean>`. Defaults to "caller owns reference". |
-| `entitlements`  | `EntitlementsConfig` | Plan → features/limits map. Required to use `check` / `listBalances`.                |
-| `observability` | `PaymentObserver`    | Telemetry sink for webhook applies, failed payments, past-due subscriptions.         |
+| Option          | Type                 | Notes                                                                                      |
+| --------------- | -------------------- | ------------------------------------------------------------------------------------------ |
+| `adapter`       | `PaymentAdapter`     | Built with `createStripeAdapter` / `createPolarAdapter` / `createAutumnAdapter`. Required. |
+| `authorize`     | `AuthorizeReference` | `(referenceId) => boolean \| Promise<boolean>`. Defaults to "caller owns reference".       |
+| `entitlements`  | `EntitlementsConfig` | Plan → features/limits map. Required to use `check` / `listBalances`.                      |
+| `observability` | `PaymentObserver`    | Telemetry sink for webhook applies, failed payments, past-due subscriptions.               |
 
 ### Provider adapters
 
-Both adapters take their client by injection and verify inbound webhooks:
+Every adapter takes its client by injection and verifies inbound webhooks:
 
 ```ts
-import { createPolarAdapter, createStripeAdapter } from "@lunora/payment";
+import { createAutumnAdapter, createPolarAdapter, createStripeAdapter } from "@lunora/payment";
 
 const stripe = createStripeAdapter({ client, webhookSecret, webhookToleranceSeconds: 300 });
 const polar = createPolarAdapter({ client, webhookSecret });
+const autumn = createAutumnAdapter({ client, webhookSecret });
 ```
 
-| Option                    | Stripe | Polar | Notes                                                  |
-| ------------------------- | :----: | :---: | ------------------------------------------------------ |
-| `client`                  |   ✓    |   ✓   | Structural `StripeClientLike` / `PolarClientLike`.     |
-| `webhookSecret`           |   ✓    |   ✓   | Signing secret for inbound webhook verification.       |
-| `webhookToleranceSeconds` |   ✓    |   ✓   | Optional clock-skew tolerance for the timestamp check. |
+| Option                    | Stripe | Polar | Autumn | Notes                                                                   |
+| ------------------------- | :----: | :---: | :----: | ----------------------------------------------------------------------- |
+| `client`                  |   ✓    |   ✓   |   ✓    | Structural `StripeClientLike` / `PolarClientLike` / `AutumnClientLike`. |
+| `webhookSecret`           |   ✓    |   ✓   |   ✓    | Signing secret for inbound webhook verification.                        |
+| `webhookToleranceSeconds` |   ✓    |   ✓   |   ✓    | Optional clock-skew tolerance for the timestamp check.                  |
 
 Stripe is a PSP (manual authorize/capture available). Polar is a
 Merchant-of-Record — `merchantOfRecord` is `true` and it owns tax/invoices, so
-manual capture isn't part of its flow. Stripe webhooks use Stripe's signature
-scheme; Polar uses Standard Webhooks (`webhook-id` / `webhook-timestamp` /
-`webhook-signature`).
+manual capture isn't part of its flow. Autumn ([useautumn.com](https://useautumn.com))
+is an entitlement-first billing layer that runs on **your own** Stripe account,
+so it is _not_ a Merchant-of-Record, but — like Polar — it abstracts the money
+movement, so manual authorize/capture/refund throw. Autumn keys a subscription
+on the `(customerId, productId)` pair, which the adapter encodes as the
+composite id `"<customerId>::<productId>"`. Stripe webhooks use Stripe's
+signature scheme; Polar and Autumn use Standard Webhooks (`webhook-id` /
+`webhook-timestamp` / `webhook-signature`).
 
 ## The `ctx.payments` API
 

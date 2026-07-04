@@ -26,6 +26,8 @@ export {
     zeroMoney,
 } from "./money";
 export type { PaymentEvent, PaymentObserver } from "./observability";
+export type { AutumnAdapterOptions, AutumnClientLike } from "./providers/autumn";
+export { createAutumnAdapter } from "./providers/autumn";
 export type { PolarAdapterOptions, PolarClientLike } from "./providers/polar";
 export { createPolarAdapter } from "./providers/polar";
 export type { StripeAdapterOptions, StripeClientLike } from "./providers/stripe";

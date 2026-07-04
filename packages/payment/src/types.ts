@@ -20,12 +20,12 @@ export interface Money {
     readonly minorUnits: bigint;
 }
 
-/** Stable provider identifier (Medusa-style). Scoped to what Convex ships: Stripe + Polar. */
-export type ProviderId = "polar" | "stripe";
+/** Stable provider identifier (Medusa-style). Scoped to what Convex ships: Stripe + Polar + Autumn. */
+export type ProviderId = "autumn" | "polar" | "stripe";
 
 /** What a provider can do — encoded in types so tax/UX assumptions aren't tribal knowledge. */
 export interface ProviderCapabilities {
-    /** True for Polar / Lemon Squeezy / Paddle; false for Stripe (PSP). Drives tax/invoice ownership. */
+    /** True for Polar / Lemon Squeezy / Paddle; false for Stripe (PSP) and Autumn (runs on your own Stripe). Drives tax/invoice ownership. */
     readonly merchantOfRecord: boolean;
     /** Native hosted customer/billing portal. */
     readonly portal: boolean;

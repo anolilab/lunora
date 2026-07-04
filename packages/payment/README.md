@@ -46,7 +46,7 @@ Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-sa
 pnpm add @lunora/payment stripe
 ```
 
-`stripe` is an optional peer dependency — install only the provider SDK you use; the adapter takes the client by injection.
+`stripe` is an optional peer dependency — install only the provider SDK you use; the adapter takes the client by injection. The same holds for the other providers: `createPolarAdapter` (Polar) and `createAutumnAdapter` ([Autumn](https://useautumn.com)) take a structural client too, so no provider SDK is a hard dependency of this package. Additional providers plug in via `PaymentAdapter`.
 
 ## Usage
 
