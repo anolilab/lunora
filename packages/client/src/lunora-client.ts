@@ -25,6 +25,7 @@ import { SubscriptionRegistry } from "./subscription";
 import type {
     ArgsOf,
     AuthCapabilities,
+    AuthConfigInfo,
     AuthImpersonation,
     AuthPage,
     AuthSession,
@@ -183,6 +184,24 @@ const AUTH_ORG_MEMBERS_PATH = "/_lunora/admin/auth/organizations/members";
 const AUTH_ORG_INVITATIONS_PATH = "/_lunora/admin/auth/organizations/invitations";
 const AUTH_REMOVE_MEMBER_PATH = "/_lunora/admin/auth/organizations/members/remove";
 const AUTH_CANCEL_INVITATION_PATH = "/_lunora/admin/auth/organizations/invitations/cancel";
+const AUTH_CONFIG_PATH = "/_lunora/admin/auth/config";
+const AUTH_CREATE_ORG_PATH = "/_lunora/admin/auth/organizations/create";
+const AUTH_UPDATE_ORG_PATH = "/_lunora/admin/auth/organizations/update";
+const AUTH_REMOVE_ORG_PATH = "/_lunora/admin/auth/organizations/remove";
+const AUTH_ADD_MEMBER_PATH = "/_lunora/admin/auth/organizations/members/add";
+const AUTH_INVITE_MEMBER_PATH = "/_lunora/admin/auth/organizations/members/invite";
+const AUTH_MEMBER_ROLE_PATH = "/_lunora/admin/auth/organizations/members/role";
+const AUTH_ORG_TEAMS_PATH = "/_lunora/admin/auth/organizations/teams";
+const AUTH_CREATE_TEAM_PATH = "/_lunora/admin/auth/organizations/teams/create";
+const AUTH_UPDATE_TEAM_PATH = "/_lunora/admin/auth/organizations/teams/update";
+const AUTH_REMOVE_TEAM_PATH = "/_lunora/admin/auth/organizations/teams/remove";
+const AUTH_ORG_TEAM_MEMBERS_PATH = "/_lunora/admin/auth/organizations/teams/members";
+const AUTH_ADD_TEAM_MEMBER_PATH = "/_lunora/admin/auth/organizations/teams/members/add";
+const AUTH_REMOVE_TEAM_MEMBER_PATH = "/_lunora/admin/auth/organizations/teams/members/remove";
+const AUTH_ORG_ROLES_PATH = "/_lunora/admin/auth/organizations/roles";
+const AUTH_CREATE_ROLE_PATH = "/_lunora/admin/auth/organizations/roles/create";
+const AUTH_UPDATE_ROLE_PATH = "/_lunora/admin/auth/organizations/roles/update";
+const AUTH_REMOVE_ROLE_PATH = "/_lunora/admin/auth/organizations/roles/remove";
 
 /**
  * Default better-auth session endpoint. The worker mounts better-auth at
@@ -2326,6 +2345,119 @@ class LunoraClient {
     /** Cancel a pending organization invitation. */
     public async cancelAuthOrgInvitation(input: { invitationId: string }): Promise<void> {
         await this.adminFetch(AUTH_CANCEL_INVITATION_PATH, "POST", input);
+    }
+
+    /**
+     * Report the deployment's auth configuration — enabled plugins, sign-in
+     * methods, user-settable create-user fields, organization sub-features
+     * (teams / roles), and session / rate-limit policy. Drives the config panel
+     * and the dynamic create-user form. Never carries a secret.
+     */
+    public async getAuthConfig(): Promise<AuthConfigInfo> {
+        return (await this.adminFetch(AUTH_CONFIG_PATH, "GET")) as AuthConfigInfo;
+    }
+
+    /** Create an organization; optionally seed an `owner` member for `ownerId`. */
+    public async createAuthOrganization(input: {
+        logo?: string;
+        metadata?: Record<string, unknown>;
+        name: string;
+        ownerId?: string;
+        slug?: string;
+    }): Promise<Record<string, unknown>> {
+        return (await this.adminFetch(AUTH_CREATE_ORG_PATH, "POST", input)) as Record<string, unknown>;
+    }
+
+    /** Update an organization's name/slug/logo/metadata. */
+    public async updateAuthOrganization(input: {
+        logo?: string;
+        metadata?: Record<string, unknown>;
+        name?: string;
+        organizationId: string;
+        slug?: string;
+    }): Promise<Record<string, unknown>> {
+        return (await this.adminFetch(AUTH_UPDATE_ORG_PATH, "POST", input)) as Record<string, unknown>;
+    }
+
+    /** Delete an organization and cascade its members, invitations, teams, and custom roles. */
+    public async deleteAuthOrganization(input: { organizationId: string }): Promise<void> {
+        await this.adminFetch(AUTH_REMOVE_ORG_PATH, "POST", input);
+    }
+
+    /** Directly add an existing user to an organization (no invitation/acceptance). */
+    public async addAuthOrgMember(input: { organizationId: string; role?: string; userId: string }): Promise<Record<string, unknown>> {
+        return (await this.adminFetch(AUTH_ADD_MEMBER_PATH, "POST", input)) as Record<string, unknown>;
+    }
+
+    /** Create a pending email invitation to an organization. */
+    public async inviteAuthOrgMember(input: { email: string; inviterId?: string; organizationId: string; role?: string }): Promise<Record<string, unknown>> {
+        return (await this.adminFetch(AUTH_INVITE_MEMBER_PATH, "POST", input)) as Record<string, unknown>;
+    }
+
+    /** Change a member's role. */
+    public async setAuthOrgMemberRole(input: { memberId: string; role: string | string[] }): Promise<Record<string, unknown>> {
+        return (await this.adminFetch(AUTH_MEMBER_ROLE_PATH, "POST", input)) as Record<string, unknown>;
+    }
+
+    /** List an organization's teams (requires the organization plugin with teams enabled). */
+    public async listAuthOrgTeams(input: { limit?: number; offset?: number; organizationId: string }): Promise<AuthPage<Record<string, unknown>>> {
+        const path = withQuery(AUTH_ORG_TEAMS_PATH, { limit: input.limit, offset: input.offset, organizationId: input.organizationId });
+
+        return (await this.adminFetch(path, "GET")) as AuthPage<Record<string, unknown>>;
+    }
+
+    /** Create a team under an organization. */
+    public async createAuthOrgTeam(input: { name: string; organizationId: string }): Promise<Record<string, unknown>> {
+        return (await this.adminFetch(AUTH_CREATE_TEAM_PATH, "POST", input)) as Record<string, unknown>;
+    }
+
+    /** Rename a team. */
+    public async updateAuthOrgTeam(input: { name: string; teamId: string }): Promise<Record<string, unknown>> {
+        return (await this.adminFetch(AUTH_UPDATE_TEAM_PATH, "POST", input)) as Record<string, unknown>;
+    }
+
+    /** Delete a team and its memberships. */
+    public async removeAuthOrgTeam(input: { teamId: string }): Promise<void> {
+        await this.adminFetch(AUTH_REMOVE_TEAM_PATH, "POST", input);
+    }
+
+    /** List a team's members. */
+    public async listAuthOrgTeamMembers(input: { limit?: number; offset?: number; teamId: string }): Promise<AuthPage<Record<string, unknown>>> {
+        const path = withQuery(AUTH_ORG_TEAM_MEMBERS_PATH, { limit: input.limit, offset: input.offset, teamId: input.teamId });
+
+        return (await this.adminFetch(path, "GET")) as AuthPage<Record<string, unknown>>;
+    }
+
+    /** Add a user to a team. */
+    public async addAuthOrgTeamMember(input: { teamId: string; userId: string }): Promise<Record<string, unknown>> {
+        return (await this.adminFetch(AUTH_ADD_TEAM_MEMBER_PATH, "POST", input)) as Record<string, unknown>;
+    }
+
+    /** Remove a member from a team. */
+    public async removeAuthOrgTeamMember(input: { teamMemberId: string }): Promise<void> {
+        await this.adminFetch(AUTH_REMOVE_TEAM_MEMBER_PATH, "POST", input);
+    }
+
+    /** List an organization's custom roles (requires the organization plugin with dynamic access control). */
+    public async listAuthOrgRoles(input: { limit?: number; offset?: number; organizationId: string }): Promise<AuthPage<Record<string, unknown>>> {
+        const path = withQuery(AUTH_ORG_ROLES_PATH, { limit: input.limit, offset: input.offset, organizationId: input.organizationId });
+
+        return (await this.adminFetch(path, "GET")) as AuthPage<Record<string, unknown>>;
+    }
+
+    /** Create a custom org role with a permission grant (a `resource -> actions[]` map). */
+    public async createAuthOrgRole(input: { organizationId: string; permission: Record<string, string[]>; role: string }): Promise<Record<string, unknown>> {
+        return (await this.adminFetch(AUTH_CREATE_ROLE_PATH, "POST", input)) as Record<string, unknown>;
+    }
+
+    /** Replace a custom org role's permission grant. */
+    public async updateAuthOrgRole(input: { permission: Record<string, string[]>; roleId: string }): Promise<Record<string, unknown>> {
+        return (await this.adminFetch(AUTH_UPDATE_ROLE_PATH, "POST", input)) as Record<string, unknown>;
+    }
+
+    /** Delete a custom org role. */
+    public async deleteAuthOrgRole(input: { roleId: string }): Promise<void> {
+        await this.adminFetch(AUTH_REMOVE_ROLE_PATH, "POST", input);
     }
 
     /** List auth sessions, paged and optionally filtered to one user. */
