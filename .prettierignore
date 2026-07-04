@@ -10,6 +10,11 @@
 
 **/CHANGELOG.md
 
+# LICENSE.md carries packem's injected bundled-dependency attribution between
+# <!-- DEPENDENCIES -->/<!-- TYPE_DEPENDENCIES --> markers; Prettier's heading
+# reflow fights packem's template and re-dirties the file every build.
+**/LICENSE.md
+
 pnpm-lock.yaml
 pnpm-workspace.yaml
 

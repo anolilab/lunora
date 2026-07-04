@@ -103,3 +103,29 @@ Unless required by applicable law or agreed to in writing, software distributed
 under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
 CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
+
+<!-- DEPENDENCIES -->
+
+# Licenses of bundled dependencies
+The published @lunora/container artifact additionally contains code with the following licenses:
+MIT OR Apache-2.0
+
+# Bundled dependencies:
+## @cloudflare/containers
+License: MIT OR Apache-2.0
+Repository: git+https://github.com/cloudflare/containers.git
+
+<!-- /DEPENDENCIES -->
+
+<!-- TYPE_DEPENDENCIES -->
+
+# Licenses of bundled types
+The published @lunora/container artifact additionally contains code with the following licenses:
+MIT OR Apache-2.0
+
+# Bundled types:
+## @cloudflare/containers
+License: MIT OR Apache-2.0
+Repository: git+https://github.com/cloudflare/containers.git
+
+<!-- /TYPE_DEPENDENCIES -->
