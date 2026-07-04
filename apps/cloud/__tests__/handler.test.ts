@@ -8,6 +8,9 @@ import type { Provisioner } from "../src/provision";
 
 const target: DeployTarget = { organizationId: "org_1", projectId: "proj_1", type: "production" };
 
+// base64("export default {}") — the prebuilt worker module the client uploads.
+const BUNDLE = btoa("export default {}");
+
 const okProvisioner: Provisioner = {
     deploy: () => Promise.resolve({ bundleHash: "h1", scriptName: "s", url: "https://proj.lunora.app" }),
     destroy: () => Promise.resolve(),
@@ -51,14 +54,17 @@ const backendWith = (overrides: Partial<DeployBackend>): DeployBackend => {
 
 describe(handleDeployRequest, () => {
     it("401 without a bearer deploy key", async () => {
-        const response = await handleDeployRequest(request(null, { projectId: "proj_1", scriptName: "s" }), deps(backendWith({}), okProvisioner));
+        const response = await handleDeployRequest(
+            request(null, { bundle: BUNDLE, projectId: "proj_1", scriptName: "s" }),
+            deps(backendWith({}), okProvisioner),
+        );
 
         expect(response.status).toBe(401);
     });
 
     it("403 for an invalid/revoked key", async () => {
         const response = await handleDeployRequest(
-            request("bad", { projectId: "proj_1", scriptName: "s" }),
+            request("bad", { bundle: BUNDLE, projectId: "proj_1", scriptName: "s" }),
             deps(backendWith({ verifyKey: () => Promise.resolve(null) }), okProvisioner),
         );
 
@@ -69,6 +75,41 @@ describe(handleDeployRequest, () => {
         const response = await handleDeployRequest(request("k", {}), deps(backendWith({}), okProvisioner));
 
         expect(response.status).toBe(400);
+    });
+
+    it("400 when the bundle is missing — never provisions an empty module", async () => {
+        const response = await handleDeployRequest(request("k", { projectId: "proj_1", scriptName: "s" }), deps(backendWith({}), okProvisioner));
+
+        expect(response.status).toBe(400);
+        expect(await response.json()).toMatchObject({ error: expect.stringContaining("bundle") as string });
+    });
+
+    it("400 when the bundle is not valid base64", async () => {
+        const response = await handleDeployRequest(
+            request("k", { bundle: "!!not-base64!!", projectId: "proj_1", scriptName: "s" }),
+            deps(backendWith({}), okProvisioner),
+        );
+
+        expect(response.status).toBe(400);
+    });
+
+    it("passes the decoded bundle bytes to the provisioner", async () => {
+        let uploaded: ArrayBuffer | undefined;
+        const capturing: Provisioner = {
+            deploy: (spec) => {
+                uploaded = spec.bundle;
+
+                return Promise.resolve({ bundleHash: "h1", scriptName: spec.scriptName, url: "https://proj.lunora.app" });
+            },
+            destroy: () => Promise.resolve(),
+        };
+
+        const response = await handleDeployRequest(request("k", { bundle: BUNDLE, projectId: "proj_1", scriptName: "s" }), deps(backendWith({}), capturing));
+
+        await response.text();
+
+        expect(uploaded).toBeDefined();
+        expect(new TextDecoder().decode(uploaded)).toBe("export default {}");
     });
 
     it("streams accepted → queued → provisioning → live and records status transitions", async () => {
@@ -82,7 +123,7 @@ describe(handleDeployRequest, () => {
             },
         });
 
-        const response = await handleDeployRequest(request("k", { projectId: "proj_1", scriptName: "s" }), deps(backend, okProvisioner));
+        const response = await handleDeployRequest(request("k", { bundle: BUNDLE, projectId: "proj_1", scriptName: "s" }), deps(backend, okProvisioner));
 
         expect(response.status).toBe(200);
         expect(response.headers.get("content-type")).toBe("application/x-ndjson");
@@ -107,7 +148,7 @@ describe(handleDeployRequest, () => {
         });
         const failing: Provisioner = { deploy: () => Promise.reject(new Error("alchemy not wired")), destroy: () => Promise.resolve() };
 
-        const response = await handleDeployRequest(request("k", { projectId: "proj_1", scriptName: "s" }), deps(backend, failing));
+        const response = await handleDeployRequest(request("k", { bundle: BUNDLE, projectId: "proj_1", scriptName: "s" }), deps(backend, failing));
         const lines = await readLines(response);
 
         expect(lines.at(-1)).toMatchObject({ done: true, status: "failed" });
