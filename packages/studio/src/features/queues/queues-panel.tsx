@@ -1,6 +1,6 @@
 import { useLunora } from "@lunora/react";
 import type { ChangeEvent, MouseEvent, ReactElement } from "react";
-import { useCallback, useMemo, useState } from "react";
+import { useState } from "react";
 
 import { ErrorAlert } from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
@@ -18,6 +18,7 @@ import type {
     QueueMessageOutcome,
     QueueMessageRow,
     QueueMessagesResult,
+    QueueMetadata,
     QueuesResult,
     ReplayQueueMessageResult,
     SendQueueMessageResult,
@@ -26,9 +27,12 @@ import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
 
 interface QueuesPanelProps {
-    /** Newest-N consumed messages to load into the log (default 200). */
+    /** Newest-N consumed messages to load into the log (default {@link DEFAULT_MESSAGE_LIMIT}). */
     readonly limit?: number;
 }
+
+/** Default `limit` for the consumed-message log — applied in the body, not as a param default (see {@link QueuesPanel}). */
+const DEFAULT_MESSAGE_LIMIT = 200;
 
 const SEND_QUEUE_MESSAGE = adminRef(ADMIN_FUNCTIONS.sendQueueMessage);
 const REPLAY_QUEUE_MESSAGE = adminRef(ADMIN_FUNCTIONS.replayQueueMessage);
@@ -71,6 +75,297 @@ const outcomeVariant = (outcome: QueueMessageOutcome): "destructive" | "outline"
     return "secondary";
 };
 
+/** Human label for a sub-tab. */
+const tabLabel = (value: QueuesTab, t: ReturnType<typeof useT>): string => {
+    if (value === "messages") {
+        return t("Messages");
+    }
+
+    if (value === "send") {
+        return t("Send");
+    }
+
+    return t("Declared");
+};
+
+/** Declared-producers tab: the `defineQueue` producers `@lunora/codegen` statically discovered. */
+const QueuesDeclaredTab = ({ loaded, queues }: { loaded: boolean; queues: QueueMetadata[] }): ReactElement => {
+    const t = useT();
+
+    return (
+        <div className="flex flex-col gap-4" data-testid="queues-declared">
+            <p className="text-sm text-muted-foreground">
+                {t(
+                    "Queues are declared in code with defineQueue. Enqueue from a mutation or action with ctx.queues.<name>.send(...); push consumers process batches in the worker.",
+                )}
+            </p>
+
+            {loaded && queues.length === 0 ? (
+                <EmptyState
+                    description={t("No defineQueue is declared in lunora/queues.ts in this deployment. Add one to offload async work to a Cloudflare Queue.")}
+                    testId="queues-empty"
+                    title={t("No queues defined")}
+                />
+            ) : (
+                <Card className="overflow-hidden py-0">
+                    <CardContent className="px-0">
+                        <Table data-testid="queues-table">
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead>{t("Export")}</TableHead>
+                                    <TableHead>{t("Queue")}</TableHead>
+                                    <TableHead>{t("Mode")}</TableHead>
+                                    <TableHead>{t("Binding")}</TableHead>
+                                    <TableHead>{t("Dead-letter")}</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {queues.map((queue) => (
+                                    <TableRow data-testid={`queues-row-${queue.exportName}`} key={queue.exportName}>
+                                        <TableCell className="font-mono text-xs">{queue.exportName}</TableCell>
+                                        <TableCell className="font-mono text-xs text-muted-foreground">{queue.name}</TableCell>
+                                        <TableCell className="font-mono text-xs text-muted-foreground">{queue.mode}</TableCell>
+                                        <TableCell className="font-mono text-xs text-muted-foreground">{queue.binding}</TableCell>
+                                        <TableCell className="font-mono text-xs text-muted-foreground">{queue.deadLetterQueue ?? "—"}</TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    </CardContent>
+                </Card>
+            )}
+        </div>
+    );
+};
+
+/** One consumed-message row in the log; its Replay button is disabled while any replay is in flight. */
+const QueueLogRow = ({
+    message,
+    onReplay,
+    replayingId,
+}: {
+    message: QueueMessageRow;
+    onReplay: (event: MouseEvent<HTMLButtonElement>) => void;
+    replayingId: null | string;
+}): ReactElement => {
+    const t = useT();
+    const body = formatBody(message.body);
+
+    return (
+        <TableRow data-testid={`queues-message-${message.id}`}>
+            <TableCell className="font-mono text-xs">{message.exportName ?? message.queue}</TableCell>
+            <TableCell className="max-w-[16ch] truncate font-mono text-xs text-muted-foreground" title={message.messageId}>
+                {message.messageId}
+            </TableCell>
+            <TableCell className="font-mono text-xs tabular-nums">{message.attempts}</TableCell>
+            <TableCell>
+                <span className="inline-flex items-center gap-1">
+                    <Badge data-testid={`queues-outcome-${message.id}`} variant={outcomeVariant(message.outcome)}>
+                        {message.outcome}
+                    </Badge>
+                    {message.deadLettered && (
+                        <Badge data-testid={`queues-dlq-${message.id}`} variant="destructive">
+                            {t("DLQ")}
+                        </Badge>
+                    )}
+                </span>
+            </TableCell>
+            <TableCell className="max-w-[32ch] truncate font-mono text-xs text-muted-foreground" title={body}>
+                {truncate(body)}
+            </TableCell>
+            <TableCell className="text-xs text-muted-foreground tabular-nums">{formatTimestamp(message.capturedAt, "—")}</TableCell>
+            <TableCell>
+                <Button
+                    data-id={message.id}
+                    data-testid={`queues-replay-${message.id}`}
+                    disabled={replayingId !== null}
+                    onClick={onReplay}
+                    size="xs"
+                    type="button"
+                    variant="outline"
+                >
+                    {replayingId === message.id ? t("Replaying…") : t("Replay")}
+                </Button>
+            </TableCell>
+        </TableRow>
+    );
+};
+
+/** Consumed-message log tab: what push consumers actually processed (Cloudflare Queues have no peek API). */
+const QueuesMessagesTab = ({
+    hasError,
+    messages,
+    onClear,
+    onReplay,
+    replayingId,
+}: {
+    hasError: boolean;
+    messages: QueueMessageRow[];
+    onClear: () => void;
+    onReplay: (event: MouseEvent<HTMLButtonElement>) => void;
+    replayingId: null | string;
+}): ReactElement => {
+    const t = useT();
+
+    return (
+        <div className="flex flex-col gap-4" data-testid="queues-messages">
+            <div className="flex flex-wrap items-center gap-2">
+                <p className="text-sm text-muted-foreground">
+                    {t("Cloudflare Queues have no peek API, so this is what push consumers actually processed — not pending depth.")}
+                </p>
+                <Button
+                    className="ml-auto"
+                    data-testid="queues-clear"
+                    disabled={messages.length === 0}
+                    onClick={onClear}
+                    size="sm"
+                    type="button"
+                    variant="outline"
+                >
+                    {t("Clear log")}
+                </Button>
+                {messages.length > 0 && (
+                    <Badge data-testid="queues-count" variant="secondary">
+                        {t("{count} messages", { count: messages.length })}
+                    </Badge>
+                )}
+            </div>
+
+            {!hasError && messages.length === 0 ? (
+                <EmptyState
+                    description={t(
+                        "Consumed messages appear here once a push consumer processes a batch in dev. Send one from the Send tab to see it captured.",
+                    )}
+                    testId="queues-messages-empty"
+                    title={t("No consumed messages yet.")}
+                />
+            ) : (
+                <Card className="overflow-hidden py-0">
+                    <CardContent className="px-0">
+                        <ScrollArea className="max-h-[32rem]" data-testid="queues-messages-scroll">
+                            <Table data-testid="queues-messages-table">
+                                <TableHeader>
+                                    <TableRow>
+                                        <TableHead>{t("Export")}</TableHead>
+                                        <TableHead>{t("Message")}</TableHead>
+                                        <TableHead>{t("Attempts")}</TableHead>
+                                        <TableHead>{t("Outcome")}</TableHead>
+                                        <TableHead>{t("Body")}</TableHead>
+                                        <TableHead>{t("Captured")}</TableHead>
+                                        <TableHead />
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {messages.map((message) => (
+                                        <QueueLogRow key={message.id} message={message} onReplay={onReplay} replayingId={replayingId} />
+                                    ))}
+                                </TableBody>
+                            </Table>
+                        </ScrollArea>
+                    </CardContent>
+                </Card>
+            )}
+        </div>
+    );
+};
+
+/** Props for the Send tab — the controlled form state plus its change/submit handlers. */
+interface QueuesSendTabProps {
+    batchMode: boolean;
+    bodyText: string;
+    delayText: string;
+    onBatchModeChange: (event: ChangeEvent<HTMLInputElement>) => void;
+    onBodyChange: (event: ChangeEvent<HTMLTextAreaElement>) => void;
+    onDelayChange: (event: ChangeEvent<HTMLInputElement>) => void;
+    onSelectExport: (event: ChangeEvent<HTMLSelectElement>) => void;
+    onSend: () => void;
+    queues: QueueMetadata[];
+    selectedExportName: string;
+    sending: boolean;
+}
+
+/** Send tab: enqueue a JSON body (optionally a delayed batch) to any declared producer to exercise its consumer. */
+const QueuesSendTab = ({
+    batchMode,
+    bodyText,
+    delayText,
+    onBatchModeChange,
+    onBodyChange,
+    onDelayChange,
+    onSelectExport,
+    onSend,
+    queues,
+    selectedExportName,
+    sending,
+}: QueuesSendTabProps): ReactElement => {
+    const t = useT();
+
+    return (
+        <div className="flex flex-col gap-3" data-testid="queues-send">
+            <p className="text-sm text-muted-foreground">
+                {t("Enqueue a JSON message to a declared producer to exercise its consumer. Nothing is captured until the consumer processes it.")}
+            </p>
+
+            {queues.length === 0 ? (
+                <EmptyState
+                    description={t("Declare a queue with defineQueue in lunora/queues.ts to enqueue a test message.")}
+                    testId="queues-send-empty"
+                    title={t("No queues to send to")}
+                />
+            ) : (
+                <>
+                    <div className="flex flex-wrap items-center gap-2">
+                        <select
+                            aria-label={t("Queue")}
+                            className="h-8 rounded-md border border-input bg-transparent px-2.5 py-1 text-xs outline-none focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring/50"
+                            data-testid="queues-send-select"
+                            onChange={onSelectExport}
+                            value={selectedExportName}
+                        >
+                            {queues.map((queue) => (
+                                <option key={queue.exportName} value={queue.exportName}>
+                                    {queue.exportName}
+                                </option>
+                            ))}
+                        </select>
+                        <Input
+                            aria-label={t("Delay (seconds)")}
+                            className="max-w-36"
+                            data-testid="queues-send-delay"
+                            min={0}
+                            onChange={onDelayChange}
+                            placeholder={t("Delay (s)")}
+                            type="number"
+                            value={delayText}
+                        />
+                        <label className="flex items-center gap-1.5 text-xs text-muted-foreground" htmlFor="queues-send-batch">
+                            <input checked={batchMode} data-testid="queues-send-batch" id="queues-send-batch" onChange={onBatchModeChange} type="checkbox" />
+                            {t("Send as batch (JSON array)")}
+                        </label>
+                        <Button
+                            className="ml-auto"
+                            data-testid="queues-send-button"
+                            disabled={sending || selectedExportName === ""}
+                            onClick={onSend}
+                            type="button"
+                        >
+                            {sending ? t("Sending…") : t("Send message")}
+                        </Button>
+                    </div>
+                    <Textarea
+                        aria-label={t("Message body (JSON)")}
+                        className="font-mono"
+                        data-testid="queues-send-body"
+                        onChange={onBodyChange}
+                        placeholder={batchMode ? '[ { "hello": "world" } ]' : '{ "hello": "world" }'}
+                        value={bodyText}
+                    />
+                </>
+            )}
+        </div>
+    );
+};
+
 /**
  * The Queues inspector — three tabs over the deployment's Cloudflare Queues.
  *
@@ -81,8 +376,18 @@ const outcomeVariant = (outcome: QueueMessageOutcome): "destructive" | "outline"
  * Send: enqueue a JSON body (optionally a batch, with an optional delay) to any declared producer, to exercise a consumer end to end.
  *
  * All three read/write reserved admin RPCs over the {@link useLunora} client, gated by the server's `LUNORA_ADMIN_TOKEN`.
+ *
+ * The tab bodies are extracted into sibling components so the panel stays small
+ * and each tab is independently readable; state and actions live here and flow
+ * down as props. No manual memoization — React Compiler caches derived values and
+ * handlers for the whole component. A few patterns keep it compilable (each bails
+ * `BuildHIR` in the compiler version this repo pins): the `limit` default is applied
+ * in the body (never as a destructuring default in the param signature), and the async
+ * actions keep their `try/catch` blocks simple — no `finally` clause, and no
+ * conditional / optional-chaining expression *inside* a `try` body.
  */
-const QueuesPanel = ({ limit = 200 }: QueuesPanelProps): ReactElement => {
+const QueuesPanel = ({ limit }: QueuesPanelProps): ReactElement => {
+    const messageLimit = limit ?? DEFAULT_MESSAGE_LIMIT;
     const client = useLunora();
     const t = useT();
 
@@ -93,19 +398,16 @@ const QueuesPanel = ({ limit = 200 }: QueuesPanelProps): ReactElement => {
     const { data: queuesData, error: queuesError, errorSource: queuesErrorSource } = useAdminQuery<QueuesResult>(ADMIN_FUNCTIONS.listQueues, {});
 
     // The consumed-message log is a single root-shard table with no write-flush to
-    // subscribe to, so it polls (paused while the tab is hidden) below.
+    // subscribe to, so it polls (only while the Messages tab is visible) below.
     const {
         data: messagesData,
         error: messagesError,
         errorSource: messagesErrorSource,
         refetch: refetchMessages,
-    } = useAdminQuery<QueueMessagesResult>(ADMIN_FUNCTIONS.getQueueMessages, { limit });
+    } = useAdminQuery<QueueMessagesResult>(ADMIN_FUNCTIONS.getQueueMessages, { limit: messageLimit });
 
-    const queues = useMemo(
-        () => (Array.isArray(queuesData?.queues) ? [...queuesData.queues].toSorted((a, b) => a.exportName.localeCompare(b.exportName)) : []),
-        [queuesData],
-    );
-    const messages = useMemo<QueueMessageRow[]>(() => messagesData?.entries ?? [], [messagesData]);
+    const queues = Array.isArray(queuesData?.queues) ? [...queuesData.queues].toSorted((a, b) => a.exportName.localeCompare(b.exportName)) : [];
+    const messages: QueueMessageRow[] = messagesData?.entries ?? [];
 
     const [selectedExport, setSelectedExport] = useState<string>("");
     const [bodyText, setBodyText] = useState<string>("");
@@ -115,25 +417,20 @@ const QueuesPanel = ({ limit = 200 }: QueuesPanelProps): ReactElement => {
     const [replayingId, setReplayingId] = useState<null | string>(null);
 
     // Default the Send target to the first declared queue until the user picks one.
-    const selectedExportName = useMemo(() => {
-        if (queues.some((queue) => queue.exportName === selectedExport)) {
-            return selectedExport;
-        }
-
-        return queues[0]?.exportName ?? "";
-    }, [queues, selectedExport]);
+    const selectedExportName = queues.some((queue) => queue.exportName === selectedExport) ? selectedExport : (queues[0]?.exportName ?? "");
 
     const readError = tab === "messages" ? messagesError : queuesError;
     const readErrorSource = tab === "messages" ? messagesErrorSource : queuesErrorSource;
     const error = readError ?? actionError;
     const errorSource = readError === null ? actionError : readErrorSource;
 
-    // Keep the consumed-message log live without a manual refresh.
+    // Keep the consumed-message log live without a manual refresh — but only while
+    // the Messages tab is visible, so the Declared / Send tabs don't poll the RPC.
     useAutoRefresh(() => {
         refetchMessages();
-    }, true);
+    }, tab === "messages");
 
-    const send = useCallback(async (): Promise<void> => {
+    const send = async (): Promise<void> => {
         setActionError(null);
 
         const exportName = selectedExportName;
@@ -178,36 +475,37 @@ const QueuesPanel = ({ limit = 200 }: QueuesPanelProps): ReactElement => {
 
         setSending(true);
 
-        try {
-            const args = batchMode ? { batch: body as unknown[], delaySeconds, exportName } : { body, delaySeconds, exportName };
+        // `args` is built before the `try`: React Compiler bails on a conditional (or
+        // optional-chaining) expression *inside* a try/catch. And no `finally` (that also
+        // bails) — the catch swallows the error, so the trailing `setSending(false)` always runs.
+        const args = batchMode ? { batch: body as unknown[], delaySeconds, exportName } : { body, delaySeconds, exportName };
 
+        try {
             (await client.query(SEND_QUEUE_MESSAGE, args, callOptions(""))) as SendQueueMessageResult;
             refetchMessages();
         } catch (error_) {
             setActionError(errorMessage(error_));
-        } finally {
-            setSending(false);
         }
-    }, [batchMode, bodyText, client, delayText, refetchMessages, selectedExportName, t]);
 
-    const replay = useCallback(
-        async (id: string): Promise<void> => {
-            setActionError(null);
-            setReplayingId(id);
+        setSending(false);
+    };
 
-            try {
-                (await client.query(REPLAY_QUEUE_MESSAGE, { id }, callOptions(""))) as ReplayQueueMessageResult;
-                refetchMessages();
-            } catch (error_) {
-                setActionError(errorMessage(error_));
-            } finally {
-                setReplayingId(null);
-            }
-        },
-        [client, refetchMessages],
-    );
+    const replay = async (id: string): Promise<void> => {
+        setActionError(null);
+        setReplayingId(id);
 
-    const clearLog = useCallback(async (): Promise<void> => {
+        // No `finally` (it bails the compiler): the catch swallows, so `setReplayingId(null)` always runs.
+        try {
+            (await client.query(REPLAY_QUEUE_MESSAGE, { id }, callOptions(""))) as ReplayQueueMessageResult;
+            refetchMessages();
+        } catch (error_) {
+            setActionError(errorMessage(error_));
+        }
+
+        setReplayingId(null);
+    };
+
+    const clearLog = async (): Promise<void> => {
         setActionError(null);
 
         try {
@@ -216,61 +514,46 @@ const QueuesPanel = ({ limit = 200 }: QueuesPanelProps): ReactElement => {
         } catch (error_) {
             setActionError(errorMessage(error_));
         }
-    }, [client, refetchMessages]);
+    };
 
-    const onSelectTab = useCallback((event: MouseEvent<HTMLButtonElement>): void => {
+    const onSelectTab = (event: MouseEvent<HTMLButtonElement>): void => {
         const next = event.currentTarget.dataset["tab"];
 
         if (next === "declared" || next === "messages" || next === "send") {
             setTab(next);
         }
-    }, []);
+    };
 
-    const onSelectExport = useCallback((event: ChangeEvent<HTMLSelectElement>): void => {
+    const onSelectExport = (event: ChangeEvent<HTMLSelectElement>): void => {
         setSelectedExport(event.currentTarget.value);
-    }, []);
+    };
 
-    const onBodyChange = useCallback((event: ChangeEvent<HTMLTextAreaElement>): void => {
+    const onBodyChange = (event: ChangeEvent<HTMLTextAreaElement>): void => {
         setBodyText(event.currentTarget.value);
-    }, []);
+    };
 
-    const onDelayChange = useCallback((event: ChangeEvent<HTMLInputElement>): void => {
+    const onDelayChange = (event: ChangeEvent<HTMLInputElement>): void => {
         setDelayText(event.currentTarget.value);
-    }, []);
+    };
 
-    const onBatchModeChange = useCallback((event: ChangeEvent<HTMLInputElement>): void => {
+    const onBatchModeChange = (event: ChangeEvent<HTMLInputElement>): void => {
         setBatchMode(event.currentTarget.checked);
-    }, []);
+    };
 
-    const onSend = useCallback((): void => {
+    const onSend = (): void => {
         fireAndForget(send());
-    }, [send]);
+    };
 
-    const onReplay = useCallback(
-        (event: MouseEvent<HTMLButtonElement>): void => {
-            const { id } = event.currentTarget.dataset;
+    const onReplay = (event: MouseEvent<HTMLButtonElement>): void => {
+        const { id } = event.currentTarget.dataset;
 
-            if (id !== undefined) {
-                fireAndForget(replay(id));
-            }
-        },
-        [replay],
-    );
+        if (id !== undefined) {
+            fireAndForget(replay(id));
+        }
+    };
 
-    const onClear = useCallback((): void => {
+    const onClear = (): void => {
         fireAndForget(clearLog());
-    }, [clearLog]);
-
-    const tabLabel = (value: QueuesTab): string => {
-        if (value === "messages") {
-            return t("Messages");
-        }
-
-        if (value === "send") {
-            return t("Send");
-        }
-
-        return t("Declared");
     };
 
     return (
@@ -288,234 +571,33 @@ const QueuesPanel = ({ limit = 200 }: QueuesPanelProps): ReactElement => {
                         type="button"
                         variant={tab === value ? "secondary" : "ghost"}
                     >
-                        {tabLabel(value)}
+                        {tabLabel(value, t)}
                     </Button>
                 ))}
             </div>
 
             {error !== null && <ErrorAlert error={errorSource} testId="queues-error" />}
 
-            {tab === "declared" && (
-                <div className="flex flex-col gap-4" data-testid="queues-declared">
-                    <p className="text-sm text-muted-foreground">
-                        {t(
-                            "Queues are declared in code with defineQueue. Enqueue from a mutation or action with ctx.queues.<name>.send(...); push consumers process batches in the worker.",
-                        )}
-                    </p>
-
-                    {queuesData !== undefined && queues.length === 0 ? (
-                        <EmptyState
-                            description={t(
-                                "No defineQueue is declared in lunora/queues.ts in this deployment. Add one to offload async work to a Cloudflare Queue.",
-                            )}
-                            testId="queues-empty"
-                            title={t("No queues defined")}
-                        />
-                    ) : (
-                        <Card className="overflow-hidden py-0">
-                            <CardContent className="px-0">
-                                <Table data-testid="queues-table">
-                                    <TableHeader>
-                                        <TableRow>
-                                            <TableHead>{t("Export")}</TableHead>
-                                            <TableHead>{t("Queue")}</TableHead>
-                                            <TableHead>{t("Mode")}</TableHead>
-                                            <TableHead>{t("Binding")}</TableHead>
-                                            <TableHead>{t("Dead-letter")}</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {queues.map((queue) => (
-                                            <TableRow data-testid={`queues-row-${queue.exportName}`} key={queue.exportName}>
-                                                <TableCell className="font-mono text-xs">{queue.exportName}</TableCell>
-                                                <TableCell className="font-mono text-xs text-muted-foreground">{queue.name}</TableCell>
-                                                <TableCell className="font-mono text-xs text-muted-foreground">{queue.mode}</TableCell>
-                                                <TableCell className="font-mono text-xs text-muted-foreground">{queue.binding}</TableCell>
-                                                <TableCell className="font-mono text-xs text-muted-foreground">{queue.deadLetterQueue ?? "—"}</TableCell>
-                                            </TableRow>
-                                        ))}
-                                    </TableBody>
-                                </Table>
-                            </CardContent>
-                        </Card>
-                    )}
-                </div>
-            )}
+            {tab === "declared" && <QueuesDeclaredTab loaded={queuesData !== undefined} queues={queues} />}
 
             {tab === "messages" && (
-                <div className="flex flex-col gap-4" data-testid="queues-messages">
-                    <div className="flex flex-wrap items-center gap-2">
-                        <p className="text-sm text-muted-foreground">
-                            {t("Cloudflare Queues have no peek API, so this is what push consumers actually processed — not pending depth.")}
-                        </p>
-                        <Button
-                            className="ml-auto"
-                            data-testid="queues-clear"
-                            disabled={messages.length === 0}
-                            onClick={onClear}
-                            size="sm"
-                            type="button"
-                            variant="outline"
-                        >
-                            {t("Clear log")}
-                        </Button>
-                        {messages.length > 0 && (
-                            <Badge data-testid="queues-count" variant="secondary">
-                                {t("{count} messages", { count: messages.length })}
-                            </Badge>
-                        )}
-                    </div>
-
-                    {messagesError === null && messages.length === 0 ? (
-                        <EmptyState
-                            description={t(
-                                "Consumed messages appear here once a push consumer processes a batch in dev. Send one from the Send tab to see it captured.",
-                            )}
-                            testId="queues-messages-empty"
-                            title={t("No consumed messages yet.")}
-                        />
-                    ) : (
-                        <Card className="overflow-hidden py-0">
-                            <CardContent className="px-0">
-                                <ScrollArea className="max-h-[32rem]" data-testid="queues-messages-scroll">
-                                    <Table data-testid="queues-messages-table">
-                                        <TableHeader>
-                                            <TableRow>
-                                                <TableHead>{t("Export")}</TableHead>
-                                                <TableHead>{t("Message")}</TableHead>
-                                                <TableHead>{t("Attempts")}</TableHead>
-                                                <TableHead>{t("Outcome")}</TableHead>
-                                                <TableHead>{t("Body")}</TableHead>
-                                                <TableHead>{t("Captured")}</TableHead>
-                                                <TableHead />
-                                            </TableRow>
-                                        </TableHeader>
-                                        <TableBody>
-                                            {messages.map((message) => {
-                                                const body = formatBody(message.body);
-
-                                                return (
-                                                    <TableRow data-testid={`queues-message-${message.id}`} key={message.id}>
-                                                        <TableCell className="font-mono text-xs">{message.exportName ?? message.queue}</TableCell>
-                                                        <TableCell
-                                                            className="max-w-[16ch] truncate font-mono text-xs text-muted-foreground"
-                                                            title={message.messageId}
-                                                        >
-                                                            {message.messageId}
-                                                        </TableCell>
-                                                        <TableCell className="font-mono text-xs tabular-nums">{message.attempts}</TableCell>
-                                                        <TableCell>
-                                                            <span className="inline-flex items-center gap-1">
-                                                                <Badge data-testid={`queues-outcome-${message.id}`} variant={outcomeVariant(message.outcome)}>
-                                                                    {message.outcome}
-                                                                </Badge>
-                                                                {message.deadLettered && (
-                                                                    <Badge data-testid={`queues-dlq-${message.id}`} variant="destructive">
-                                                                        {t("DLQ")}
-                                                                    </Badge>
-                                                                )}
-                                                            </span>
-                                                        </TableCell>
-                                                        <TableCell className="max-w-[32ch] truncate font-mono text-xs text-muted-foreground" title={body}>
-                                                            {truncate(body)}
-                                                        </TableCell>
-                                                        <TableCell className="text-xs text-muted-foreground tabular-nums">
-                                                            {formatTimestamp(message.capturedAt, "—")}
-                                                        </TableCell>
-                                                        <TableCell>
-                                                            <Button
-                                                                data-id={message.id}
-                                                                data-testid={`queues-replay-${message.id}`}
-                                                                disabled={replayingId === message.id}
-                                                                onClick={onReplay}
-                                                                size="xs"
-                                                                type="button"
-                                                                variant="outline"
-                                                            >
-                                                                {replayingId === message.id ? t("Replaying…") : t("Replay")}
-                                                            </Button>
-                                                        </TableCell>
-                                                    </TableRow>
-                                                );
-                                            })}
-                                        </TableBody>
-                                    </Table>
-                                </ScrollArea>
-                            </CardContent>
-                        </Card>
-                    )}
-                </div>
+                <QueuesMessagesTab hasError={messagesError !== null} messages={messages} onClear={onClear} onReplay={onReplay} replayingId={replayingId} />
             )}
 
             {tab === "send" && (
-                <div className="flex flex-col gap-3" data-testid="queues-send">
-                    <p className="text-sm text-muted-foreground">
-                        {t("Enqueue a JSON message to a declared producer to exercise its consumer. Nothing is captured until the consumer processes it.")}
-                    </p>
-
-                    {queues.length === 0 ? (
-                        <EmptyState
-                            description={t("Declare a queue with defineQueue in lunora/queues.ts to enqueue a test message.")}
-                            testId="queues-send-empty"
-                            title={t("No queues to send to")}
-                        />
-                    ) : (
-                        <>
-                            <div className="flex flex-wrap items-center gap-2">
-                                <select
-                                    aria-label={t("Queue")}
-                                    className="h-8 rounded-md border border-input bg-transparent px-2.5 py-1 text-xs outline-none focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring/50"
-                                    data-testid="queues-send-select"
-                                    onChange={onSelectExport}
-                                    value={selectedExportName}
-                                >
-                                    {queues.map((queue) => (
-                                        <option key={queue.exportName} value={queue.exportName}>
-                                            {queue.exportName}
-                                        </option>
-                                    ))}
-                                </select>
-                                <Input
-                                    aria-label={t("Delay (seconds)")}
-                                    className="max-w-36"
-                                    data-testid="queues-send-delay"
-                                    min={0}
-                                    onChange={onDelayChange}
-                                    placeholder={t("Delay (s)")}
-                                    type="number"
-                                    value={delayText}
-                                />
-                                <label className="flex items-center gap-1.5 text-xs text-muted-foreground" htmlFor="queues-send-batch">
-                                    <input
-                                        checked={batchMode}
-                                        data-testid="queues-send-batch"
-                                        id="queues-send-batch"
-                                        onChange={onBatchModeChange}
-                                        type="checkbox"
-                                    />
-                                    {t("Send as batch (JSON array)")}
-                                </label>
-                                <Button
-                                    className="ml-auto"
-                                    data-testid="queues-send-button"
-                                    disabled={sending || selectedExportName === ""}
-                                    onClick={onSend}
-                                    type="button"
-                                >
-                                    {sending ? t("Sending…") : t("Send message")}
-                                </Button>
-                            </div>
-                            <Textarea
-                                aria-label={t("Message body (JSON)")}
-                                className="font-mono"
-                                data-testid="queues-send-body"
-                                onChange={onBodyChange}
-                                placeholder={batchMode ? '[ { "hello": "world" } ]' : '{ "hello": "world" }'}
-                                value={bodyText}
-                            />
-                        </>
-                    )}
-                </div>
+                <QueuesSendTab
+                    batchMode={batchMode}
+                    bodyText={bodyText}
+                    delayText={delayText}
+                    onBatchModeChange={onBatchModeChange}
+                    onBodyChange={onBodyChange}
+                    onDelayChange={onDelayChange}
+                    onSelectExport={onSelectExport}
+                    onSend={onSend}
+                    queues={queues}
+                    selectedExportName={selectedExportName}
+                    sending={sending}
+                />
             )}
         </div>
     );
