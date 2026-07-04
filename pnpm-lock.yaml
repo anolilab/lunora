@@ -3295,6 +3295,9 @@ importers:
 
   packages/testing:
     dependencies:
+      '@lunora/agent':
+        specifier: workspace:*
+        version: link:../agent
       '@lunora/do':
         specifier: workspace:*
         version: link:../do
