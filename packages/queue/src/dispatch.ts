@@ -50,7 +50,7 @@ interface CapturedQueueMessage {
     attempts: number;
     /** The message body (JSON-encoded + capped by the catcher). */
     body: unknown;
-    /** `true` when this non-ack disposition exhausted the queue's `maxRetries` (dead-letters next). */
+    /** `true` when this failed delivery was the message's last (its retries are exhausted — the broker dead-letters it). */
     deadLettered: boolean;
     /** Handler error message when `outcome` is `error`; absent otherwise. */
     error?: string;
@@ -88,7 +88,7 @@ interface DispatchOptions {
     fetchImpl?: typeof fetch;
 }
 
-/** Cloudflare Queues' default max delivery attempts before a message is dead-lettered. */
+/** Cloudflare Queues' default `max_retries` (retries after the initial delivery; total deliveries = 1 + max_retries). */
 const DEFAULT_MAX_RETRIES = 3;
 
 /** Coerce a `Message.timestamp` (a `Date`, or a number/string in test doubles) to epoch-ms. */
@@ -228,7 +228,7 @@ const buildCaptureRecords = (
         return {
             attempts,
             body: message.body,
-            deadLettered: outcome !== "ack" && attempts >= maxRetries,
+            deadLettered: outcome !== "ack" && attempts > maxRetries,
             error: outcome === "error" ? errorMessage : undefined,
             exportName: entry.exportName,
             messageId: message.id,
