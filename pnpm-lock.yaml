@@ -1174,6 +1174,9 @@ importers:
       '@lunora/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@lunora/payment':
+        specifier: workspace:*
+        version: link:../../packages/payment
       '@types/node':
         specifier: catalog:types
         version: 26.1.0

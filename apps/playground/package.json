@@ -44,6 +44,7 @@
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@lunora/codegen": "workspace:*",
         "@lunora/config": "workspace:*",
+        "@lunora/payment": "workspace:*",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",
         "@types/react-dom": "catalog:frontend",
