@@ -1,5 +1,6 @@
-import emit from "../../finding";
+import type { AdvisorContainerKeyAccess } from "../../container-key-accesses";
 import type { Lint } from "../../types";
+import { makeArgumentDerivedSinkLint } from "../argument-derived-sink";
 
 /**
  * Flags a `ctx.containers.&lt;exportName>.get(name, …)` call whose instance key
@@ -20,29 +21,22 @@ import type { Lint } from "../../types";
  * (`context.containerKeyAccesses`); a runtime caller flags nothing. One
  * finding per arg-derived, unscoped `ctx.containers.*.get` call.
  */
-const containerInstanceKeyFromUserInput: Lint = {
+const containerInstanceKeyFromUserInput: Lint = makeArgumentDerivedSinkLint<AdvisorContainerKeyAccess>({
+    cacheKey: (access) => `container_instance_key_from_user_input:${access.file}:${access.line.toString()}`,
     categories: ["SECURITY"],
     description:
         "A `ctx.containers.<name>.get` call routes to a container instance using a key derived from the handler's `args` with no server-side scoping. Any caller can supply another tenant's key and reach that tenant's container instance — a cross-tenant insecure direct object reference (IDOR).",
+    detail: (access) =>
+        `\`ctx.containers.*.${access.method}\` in \`${access.exportName}\` (${access.file}:${access.line.toString()}) routes to a container instance using a key derived from \`args\` with no server-side scoping — any caller can reach another tenant's container (IDOR). Derive the key from a server-trusted identity (e.g. \`\${ctx.auth.userId}\`).`,
     facing: "EXTERNAL",
+    getAccesses: (context) => context.containerKeyAccesses,
     level: "WARN",
+    metadata: (access) => {
+        return { exportName: access.exportName, file: access.file, line: access.line, method: access.method };
+    },
     name: "container_instance_key_from_user_input",
     remediation: `Derive the container instance key from a server-trusted identity (e.g. \`\${ctx.auth.userId}\`) or a record the caller owns — never pass request input straight to \`ctx.containers.<name>.get\`.`,
-    run: (context) => {
-        if (context.containerKeyAccesses === undefined) {
-            return [];
-        }
-
-        return context.containerKeyAccesses.map((access) =>
-            emit(containerInstanceKeyFromUserInput, {
-                cacheKey: `container_instance_key_from_user_input:${access.file}:${access.line.toString()}`,
-                detail: `\`ctx.containers.*.${access.method}\` in \`${access.exportName}\` (${access.file}:${access.line.toString()}) routes to a container instance using a key derived from \`args\` with no server-side scoping — any caller can reach another tenant's container (IDOR). Derive the key from a server-trusted identity (e.g. \`\${ctx.auth.userId}\`).`,
-                metadata: { exportName: access.exportName, file: access.file, line: access.line, method: access.method },
-            }),
-        );
-    },
-    source: "static",
     title: "Possible cross-tenant IDOR from arg-derived unscoped container key",
-};
+});
 
 export default containerInstanceKeyFromUserInput;
