@@ -260,7 +260,17 @@ export const MESSAGE_SOLUTIONS: ReadonlyArray<SolutionRule> = [
         test: (message) => message.includes("not exported by your worker entry"),
     },
     {
-        body: ERROR_CATALOG.NOT_UNIQUE.hint.join("\n"),
+        // Deliberately NOT ERROR_CATALOG.NOT_UNIQUE.hint: that code (and hint)
+        // describes the read-side `.unique()` multi-match, while this matcher
+        // fires on the WRITE-path message ("unique constraint violation on
+        // <table>") thrown as a CONFLICT by an insert/patch breaching a
+        // `unique` index — a different error class needing insert remediation.
+        body: [
+            "A row with the same value already exists in a `unique` index.",
+            "",
+            "- If you meant to upsert, use `ctx.db.<table>().upsert(...)` (or `.patch(...)` an existing row) instead of `.insert(...)`.",
+            '- Otherwise pick a value that isn\'t already taken, and consider surfacing a friendly "already exists" message to the user.',
+        ].join("\n"),
         header: "Unique constraint violation",
         id: "lunora-runtime-unique",
         test: (message) => message.includes("unique constraint violation on"),
