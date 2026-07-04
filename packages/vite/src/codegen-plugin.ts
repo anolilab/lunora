@@ -291,7 +291,7 @@ const computeConfigFingerprint = (projectRoot: string): string => {
         }
     }
 
-    return `${wranglerPart} ${lunoraPart}`;
+    return `${wranglerPart}\u0000${lunoraPart}`;
 };
 
 /**
