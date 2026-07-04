@@ -5,7 +5,7 @@ import type { CdcChange, DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
 import { applyCdcChanges, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 
 /**
- * Plan 077 Phase 0 gate (see `plans/077-phase0-design.md` §9): the cost of the
+ * Plan 077 Phase 0 gate (design shipped in PR #80 `d5cf9151e`; §9 in git history): the cost of the
  * **apply** step of the external-source materialize loop — landing a batch of
  * pulled rows into the DO's SQLite through `applyCdcChanges`, the single legitimate
  * ingress for external data (design §1, Fact B).

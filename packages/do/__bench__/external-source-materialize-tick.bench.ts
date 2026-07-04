@@ -6,7 +6,7 @@ import { createShardCtxDb as createShardContextDatabase, runShardMigrations } fr
 import { diffExternalSource } from "../src/external-source-diff";
 
 /**
- * Plan 077 Phase 0 gate (see `plans/077-phase0-design.md` §9): the DO-side
+ * Plan 077 Phase 0 gate (design shipped in PR #80 `d5cf9151e`; §9 in git history): the DO-side
  * per-tick cost of the **full-pull** external-source materialize loop, the path
  * a sourced table runs on every poll alarm.
  *
