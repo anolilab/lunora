@@ -166,6 +166,36 @@ describe("devStatePlugin", () => {
         expect(readDevServerState(workdir)?.pid).toBe(process.ppid);
     });
 
+    it("middleware mode (no httpServer): buildEnd clears the record via the pending-close fallback", () => {
+        expect.assertions(2);
+
+        // `server.middlewareMode: true` forces `server.httpServer` to `null`, so
+        // there is no "close" event to register against — the plugin falls back
+        // to `pendingMiddlewareClears`, keyed by the "client" Environment and
+        // fired from the `buildEnd` hook (see the map in dev-state-plugin.ts).
+        const clientEnvironment = {};
+        const server = {
+            config: { logger: { warn: () => {} } },
+            environments: { client: clientEnvironment },
+            printUrls: () => {},
+            resolvedUrls: { local: ["http://localhost:5173/"], network: [] },
+        } as unknown as ViteDevServer;
+
+        const plugin = devStatePlugin(options(workdir));
+
+        configure(plugin, server);
+
+        // Middleware mode has no httpServer "listening" event to fall back to —
+        // the printUrls wrap is the only record trigger available here.
+        server.printUrls();
+
+        expect(readDevServerState(workdir)?.mode).toBe("vite");
+
+        (plugin.buildEnd as (this: { environment: unknown }) => void).call({ environment: clientEnvironment });
+
+        expect(readDevServerState(workdir)).toBeUndefined();
+    });
+
     it("supersedes the parent CLI's provisional record named via LUNORA_DEV_HANDOFF_PID", () => {
         expect.assertions(3);
 

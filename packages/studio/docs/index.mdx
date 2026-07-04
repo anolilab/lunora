@@ -58,17 +58,17 @@ The `<Studio>` shell takes a few host-controlled switches worth knowing:
 The icon rail has **nine domains**, top to bottom, with Settings pinned to the
 bottom. Each owns a set of pages:
 
-| Domain        | Pages                                                                             |
-| ------------- | --------------------------------------------------------------------------------- |
-| **Home**      | Home                                                                              |
-| **Database**  | Data · SQL editor · Schema · Migrations · Vectors · Export / Import · Time Travel |
-| **Functions** | Functions · API · Workflows                                                       |
-| **Auth**      | Users · Organizations · Sessions · Configuration                                  |
-| **Storage**   | Files · Access Rules                                                              |
-| **Reports**   | Dashboards · Metrics · Health                                                     |
-| **Advisors**  | Security · RLS Policies · Performance                                             |
-| **Logs**      | Logs · Audit · Scheduled · Realtime · Mail · Log drains · Payments                |
-| **Settings**  | Settings                                                                          |
+| Domain            | Pages                                                                             |
+| ----------------- | --------------------------------------------------------------------------------- |
+| **Overview**      | Home · Dashboards                                                                 |
+| **Database**      | Data · SQL editor · Schema · Migrations · Vectors · Time Travel · Export / Import |
+| **Functions**     | Functions · API · Workflows · Queues · Containers                                 |
+| **Auth**          | Users · Organizations · Sessions · Configuration                                  |
+| **Storage**       | Files · Access Rules · KV                                                         |
+| **Observability** | Logs · Audit · Realtime · Fan-out · Metrics · Analytics · Health                  |
+| **Advisors**      | Security · RLS Policies · Permissions · Performance                               |
+| **Operations**    | Scheduled · Mail · Log drains · Payments · Flags                                  |
+| **Settings**      | Settings                                                                          |
 
 Most shard-scoped pages share a **shard-key input** — Durable Objects aren't
 enumerable server-side, so you target a shard by key. The data and SQL pages
@@ -78,11 +78,13 @@ table/row-count summary. A **⌘K command palette** jumps to any page by name.
 The rail also collapses to just icons, and the whole console localises its own
 UI strings (`locale` / `i18n` props).
 
-## Home
+## Overview
 
-The landing overview: connection state, deployment health, and a roll-up of
-**advisor findings** (security, performance, schema) so the first thing you see
-is whatever needs attention. Drill into any summary to its panel.
+- **Home** — _Connection, health, and advisor summary for your deployment._ A
+  roll-up of **advisor findings** (security, performance, schema) so the first
+  thing you see is whatever needs attention; drill into any summary to its
+  panel.
+- **Dashboards** — _Chart widgets backed by saved read-only SQL queries._
 
 ## Database
 
@@ -111,8 +113,8 @@ The data console — everything that reads or shapes stored state.
 - **Migrations** — _Review migration status and run them._ Inspect
   data-migration run-state and kick one off.
 - **Vectors** — _Browse Vectorize indexes and run similarity searches._
-- **Export / Import** — _Export a shard to NDJSON, or import rows from it._
 - **Time Travel** — _Restore a shard to a point in the last 30 days_ (PITR).
+- **Export / Import** — _Export a shard to NDJSON, or import rows from it._
 
 ## Functions
 
@@ -127,6 +129,10 @@ The data console — everything that reads or shapes stored state.
   generated class, binding, and deployed name; starts an instance from a
   JSON-params form; and tracks instances with their live status (queued /
   running / complete / errored) and output.
+- **Queues** — _Inspect declared Cloudflare Queues — their producer bindings,
+  consumer mode, and dead-letter queue_ ([`@lunora/queue`](/docs/packages/queue)).
+- **Containers** — _Live Cloudflare Containers — current lifecycle state per
+  container from the log stream_ ([`@lunora/container`](/docs/packages/container)).
 
 ## Auth
 
@@ -144,12 +150,24 @@ each page shows only when its better-auth plugin is enabled.
 - **Files** — _Browse objects in your R2 storage buckets_ by prefix.
 - **Access Rules** — _Inspect storage access rules — per bucket, operation, and
   key prefix._
+- **KV** — _Browse and edit key-value pairs in your Workers KV namespaces_
+  ([`@lunora/bindings`](/docs/packages/bindings)).
 
-## Reports
+## Observability
 
-- **Dashboards** — _Chart widgets backed by saved read-only SQL queries._
+Operational streams and per-shard signal — the live pulse of a running
+deployment.
+
+- **Logs** — _A live stream of recent function logs_ (the shard's log ring
+  buffer).
+- **Audit** — _A durable log of admin state-changing operations._
+- **Realtime** — _Active WebSocket subscriptions on this shard._
+- **Fan-out** — _Realtime fan-out cost and per-topic subscriber counts for this
+  shard._
 - **Metrics** — _Per-shard health and aggregate metrics_ — request/error counts,
   uptime, DB size, reactive-cache hit rate.
+- **Analytics** — _Usage and latency from Analytics Engine_ — request volume,
+  p50/p95, and hot shards.
 - **Health** — _At-a-glance connection, error, and shard signals._
 
 ## Advisors
@@ -160,23 +178,24 @@ schema, functions, and runtime signal.
 - **Security** — _Review admin gates, credentials, and log redaction_ — the
   security-category findings.
 - **RLS Policies** — _Inspect row-level-security policies and roles, per table._
+- **Permissions** — _Inspect access policies per table, and probe a function as
+  any identity._
 - **Performance** — _Surface slow functions, error spikes, and cache problems._
   Runtime insights derived from each shard's durable metrics; findings deep-link
   to the fix (e.g. the Schema page to add a missing index).
 
-## Logs
+## Operations
 
-Operational streams and the optional package-backed pages.
+The optional package-backed operational pages — scheduling, email, log
+forwarding, payments, and feature flags.
 
-- **Logs** — _A live stream of recent function logs_ (the shard's log ring
-  buffer).
-- **Audit** — _A durable log of admin state-changing operations._
 - **Scheduled** — _Inspect and cancel scheduled jobs_ ([`@lunora/scheduler`](/docs/packages/scheduler)).
-- **Realtime** — _Active WebSocket subscriptions on this shard._
 - **Mail** — _Email your app sent, captured in dev_ ([`@lunora/mail`](/docs/packages/mail)).
 - **Log drains** — _Forward logs to Logpush, Tail Workers, or a webhook
   collector._
 - **Payments** — _Synced customers, subscriptions, and webhook events._
+- **Flags** — _Inspect feature flags and their live evaluation under a
+  targeting context_ ([`@lunora/flags`](/docs/packages/flags)).
 
 ## Settings
 

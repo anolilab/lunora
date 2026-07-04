@@ -90,6 +90,17 @@ export default createConfig(
             "unicorn/number-literal-case": "off",
         },
     },
+    // `__prototype__/`: throwaway design-spike scripts (see plans/131-phase0-design.md),
+    // not part of the package's build or public API. They intentionally import
+    // devDependencies (e.g. `prettier`, only needed at PoC-run time, never at
+    // package-build time) directly in source, which `import/no-extraneous-dependencies`
+    // otherwise reserves for test files. Nothing else about these files is relaxed.
+    {
+        files: ["**/__prototype__/**/*.ts"],
+        rules: {
+            "import/no-extraneous-dependencies": "off",
+        },
+    },
     // Test files: relax rules that are noisy or inappropriate in test code (loose
     // mocks/typing, inline regex, null fixtures, async helpers without await, toEqual,
     // describe titles). Source files still enforce all of these.

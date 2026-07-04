@@ -140,6 +140,18 @@ describe("unbounded_string_arg", () => {
         expect(findings).toHaveLength(1);
         expect(findings[0]).toMatchObject({ cacheKey: "unbounded_string_arg:update:update:name", level: "INFO", name: "unbounded_string_arg" });
     });
+
+    it("flags nothing when args are bounded or absent", () => {
+        expect.assertions(2);
+
+        expect(unboundedStringArgument.run({ schema: schema() })).toHaveLength(0);
+        expect(
+            unboundedStringArgument.run({
+                argValidators: [{ anyArgs: [], exportName: "update", file: "update", line: 4, unboundedStringArgs: [] }],
+                schema: schema(),
+            }),
+        ).toHaveLength(0);
+    });
 });
 
 describe("hardcoded_secret", () => {
@@ -228,6 +240,13 @@ describe("sql_injection_risk", () => {
 
         expect(findings).toHaveLength(1);
         expect(findings[0]).toMatchObject({ cacheKey: "sql_injection_risk:search:3", level: "ERROR", name: "sql_injection_risk" });
+    });
+
+    it("flags nothing without interpolation evidence", () => {
+        expect.assertions(2);
+
+        expect(sqlInjectionRisk.run({ schema: schema() })).toHaveLength(0);
+        expect(sqlInjectionRisk.run({ schema: schema(), sqlInterpolations: [] })).toHaveLength(0);
     });
 });
 

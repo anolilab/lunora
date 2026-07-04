@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { isPublicWrite } from "../helpers";
 
 /** Export names that strongly imply an abuse-sensitive endpoint — surfaced in the detail to raise urgency. */
 const SENSITIVE_NAME_RE = /contact|forgot|login|magic|otp|register|reset|signin|signup|subscribe|verify/iu;
@@ -36,9 +37,7 @@ const publicMutationWithoutRatelimit: Lint = {
         const findings = [];
 
         for (const procedure of context.procedureProtections) {
-            const isPublicWrite = procedure.visibility === "public" && (procedure.kind === "mutation" || procedure.kind === "action");
-
-            if (!isPublicWrite || procedure.usesRateLimit) {
+            if (!isPublicWrite(procedure) || procedure.usesRateLimit) {
                 continue;
             }
 

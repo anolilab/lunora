@@ -1,5 +1,6 @@
-import emit from "../../finding";
+import type { AdvisorStorageKeyAccess } from "../../storage-key-accesses";
 import type { Lint } from "../../types";
+import { makeArgumentDerivedSinkLint } from "../argument-derived-sink";
 
 /**
  * Flags a `ctx.storage.&lt;bucket>.&lt;method>(key, …)` whose R2 object key is derived
@@ -18,29 +19,22 @@ import type { Lint } from "../../types";
  * (`context.storageKeyAccesses`); a runtime caller flags nothing. One finding per
  * offending call.
  */
-const storageKeyFromUserArgs: Lint = {
+const storageKeyFromUserArgs: Lint = makeArgumentDerivedSinkLint<AdvisorStorageKeyAccess>({
+    cacheKey: (access) => `storage_key_from_user_args:${access.file}:${access.line.toString()}`,
     categories: ["SECURITY"],
     description:
         "A `ctx.storage.*` call uses an R2 object key taken directly from the handler's `args` with no server-side scoping. The bucket methods key by the caller-supplied string, so any caller can read, overwrite, or delete another user's object — object-level IDOR.",
+    detail: (access) =>
+        `\`ctx.storage.*.${access.method}\` in \`${access.exportName}\` (${access.file}:${access.line.toString()}) uses an object key derived from \`args\` with no server-side scoping — any caller can read/overwrite/delete another user's object (IDOR). Prefix the key with a server-trusted identity (e.g. \`\${ctx.auth.userId}/…\`) or resolve the object through an owned record.`,
     facing: "EXTERNAL",
+    getAccesses: (context) => context.storageKeyAccesses,
     level: "ERROR",
+    metadata: (access) => {
+        return { exportName: access.exportName, file: access.file, line: access.line, method: access.method };
+    },
     name: "storage_key_from_user_args",
     remediation: `Prefix the object key with a server-trusted identity (e.g. \`\${ctx.auth.userId}/…\`) or resolve the object through a record the caller is known to own. Never pass request input straight through as an R2 object key.`,
-    run: (context) => {
-        if (context.storageKeyAccesses === undefined) {
-            return [];
-        }
-
-        return context.storageKeyAccesses.map((access) =>
-            emit(storageKeyFromUserArgs, {
-                cacheKey: `storage_key_from_user_args:${access.file}:${access.line.toString()}`,
-                detail: `\`ctx.storage.*.${access.method}\` in \`${access.exportName}\` (${access.file}:${access.line.toString()}) uses an object key derived from \`args\` with no server-side scoping — any caller can read/overwrite/delete another user's object (IDOR). Prefix the key with a server-trusted identity (e.g. \`\${ctx.auth.userId}/…\`) or resolve the object through an owned record.`,
-                metadata: { exportName: access.exportName, file: access.file, line: access.line, method: access.method },
-            }),
-        );
-    },
-    source: "static",
     title: "R2 object key taken directly from user args (IDOR)",
-};
+});
 
 export default storageKeyFromUserArgs;

@@ -211,5 +211,26 @@ describe("d1 admin export/import globals", () => {
 
             fresh.close();
         });
+
+        // Plan 118: the insert-failure catch now routes through `toErrorBody`
+        // instead of embedding a caught error's raw `.code`/`.message` directly —
+        // pin that an unrecognized throw (no D1 driver error here carries a
+        // `LunoraError`-shaped code/status) is redacted rather than leaking raw
+        // error text into the admin import response.
+        it("an unrecognized insert failure is redacted instead of leaking the raw error message", async () => {
+            expect.assertions(2);
+
+            const failingWriter: DatabaseWriterLike = {
+                ...writer,
+                insert: () => Promise.reject(new Error("driver error: connection reset")),
+            };
+
+            const result = await importGlobalRows(failingWriter, schema, {
+                rows: [{ doc: { _id: "s1", name: "theme", value: "dark" }, table: "settings" }],
+            });
+
+            expect(result.errors).toHaveLength(1);
+            expect(result.errors[0]).toMatchObject({ code: "INSERT_FAILED", message: "Internal error" });
+        });
     });
 });

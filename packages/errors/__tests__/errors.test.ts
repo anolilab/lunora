@@ -90,6 +90,8 @@ describe("isInternalCode", () => {
         expect(isInternalCode("INTERNAL")).toBe(true);
         expect(isInternalCode("INTERNAL_SERVER_ERROR")).toBe(true);
         expect(isInternalCode("RPC_FAILED")).toBe(true);
+        expect(isInternalCode("ENV_INVALID")).toBe(true);
+        expect(isInternalCode("AUTH_HEADERS_MISSING")).toBe(true);
     });
 
     it("does not flag client-safe codes", () => {

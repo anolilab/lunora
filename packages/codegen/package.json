@@ -80,6 +80,7 @@
         "drizzle-orm": "catalog:drizzle",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
+        "prettier": "catalog:lint",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
     },

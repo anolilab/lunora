@@ -70,7 +70,7 @@
         "zone.js": "^0.16.2"
     },
     "peerDependencies": {
-        "@angular/core": "^19.2.0 || ^20.0.0"
+        "@angular/core": "^19.2.0 || ^20.0.0 || ^21.0.0 || ^22.0.0"
     },
     "peerDependenciesMeta": {
         "@angular/core": {

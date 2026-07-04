@@ -1,4 +1,4 @@
-import { isLunoraError } from "@lunora/errors";
+import { isLunoraError, toErrorBody } from "@lunora/errors";
 
 import type { BatchEntry } from "../../../shared/batch-wire";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
@@ -2621,11 +2621,18 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                     response = await forwardToShard(shardDO, shardKey, subRequest);
                 } catch (error) {
                     // The whole sub-batch failed to reach the shard — slot-error every
-                    // entry it carried instead of throwing the batch.
+                    // entry it carried instead of throwing the batch. The failure is
+                    // always reported as 502 (a protocol-level "shard unreachable"
+                    // decision, independent of what actually threw); `toErrorBody`
+                    // only supplies the code/message, redacting the raw (likely
+                    // infra-internal) error text unless it's a recognized, non-internal
+                    // `LunoraError`.
                     const durationMs = Date.now() - subStartedAt;
-                    const message = error instanceof Error ? error.message : String(error);
+                    const { body: errorBody } = toErrorBody(error, { fallbackCode: "SHARD_UNAVAILABLE", redactedMessage: "shard unavailable" });
 
-                    failSubBatch(entries, 502, "SHARD_UNAVAILABLE", message, (entry) => buildErrorEvent(entry.functionPath, durationMs, error, { shardKey }));
+                    failSubBatch(entries, 502, errorBody.code, errorBody.message, (entry) =>
+                        buildErrorEvent(entry.functionPath, durationMs, error, { shardKey }),
+                    );
 
                     return;
                 }

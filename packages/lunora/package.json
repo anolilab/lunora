@@ -66,6 +66,10 @@
             "types": "./dist/values.d.ts",
             "import": "./dist/values.mjs"
         },
+        "./errors": {
+            "types": "./dist/errors.d.ts",
+            "import": "./dist/errors.mjs"
+        },
         "./runtime": {
             "types": "./dist/runtime.d.ts",
             "import": "./dist/runtime.mjs"
@@ -137,6 +141,7 @@
         "@lunora/cli": "1.0.0-alpha.67",
         "@lunora/client": "1.0.0-alpha.18",
         "@lunora/do": "1.0.0-alpha.23",
+        "@lunora/errors": "1.0.0-alpha.1",
         "@lunora/flags": "1.0.0-alpha.9",
         "@lunora/runtime": "1.0.0-alpha.19",
         "@lunora/server": "1.0.0-alpha.16",

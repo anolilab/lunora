@@ -1,5 +1,6 @@
-import emit from "../../finding";
 import type { Lint } from "../../types";
+import type { AdvisorVectorNamespaceAccess } from "../../vector-namespace-accesses";
+import { makeArgumentDerivedSinkLint } from "../argument-derived-sink";
 
 /**
  * Flags a `ctx.vectors.query`/`upsert`/`upsertMany` call whose `namespace`
@@ -19,29 +20,22 @@ import type { Lint } from "../../types";
  * (`context.vectorNamespaceAccesses`); a runtime caller flags nothing. One
  * finding per arg-derived, unscoped `ctx.vectors` call.
  */
-const vectorsNamespaceFromUserInput: Lint = {
+const vectorsNamespaceFromUserInput: Lint = makeArgumentDerivedSinkLint<AdvisorVectorNamespaceAccess>({
+    cacheKey: (access) => `vectors_namespace_from_user_input:${access.file}:${access.line.toString()}`,
     categories: ["SECURITY"],
     description:
         "A `ctx.vectors.query`/`upsert`/`upsertMany` call uses a `namespace` derived from the handler's `args` with no server-side scoping. A Vectorize namespace partitions one index into isolated sub-collections, so an unscoped namespace lets any caller read or poison another tenant's vectors.",
+    detail: (access) =>
+        `\`ctx.vectors.${access.method}\` in \`${access.exportName}\` (${access.file}:${access.line.toString()}) uses a Vectorize namespace derived from \`args\` with no server-side scoping — any caller can read or poison another tenant's vectors. Derive the namespace from a server-trusted identity (e.g. \`\${ctx.auth.orgId}\`), never from \`args\`.`,
     facing: "EXTERNAL",
+    getAccesses: (context) => context.vectorNamespaceAccesses,
     level: "WARN",
+    metadata: (access) => {
+        return { exportName: access.exportName, file: access.file, line: access.line, method: access.method };
+    },
     name: "vectors_namespace_from_user_input",
     remediation: `Derive the \`namespace\` from a server-trusted identity (e.g. \`\${ctx.auth.orgId}\`), never from \`args\`.`,
-    run: (context) => {
-        if (context.vectorNamespaceAccesses === undefined) {
-            return [];
-        }
-
-        return context.vectorNamespaceAccesses.map((access) =>
-            emit(vectorsNamespaceFromUserInput, {
-                cacheKey: `vectors_namespace_from_user_input:${access.file}:${access.line.toString()}`,
-                detail: `\`ctx.vectors.${access.method}\` in \`${access.exportName}\` (${access.file}:${access.line.toString()}) uses a Vectorize namespace derived from \`args\` with no server-side scoping — any caller can read or poison another tenant's vectors. Derive the namespace from a server-trusted identity (e.g. \`\${ctx.auth.orgId}\`), never from \`args\`.`,
-                metadata: { exportName: access.exportName, file: access.file, line: access.line, method: access.method },
-            }),
-        );
-    },
-    source: "static",
     title: "Vectorize namespace derived from unscoped user input",
-};
+});
 
 export default vectorsNamespaceFromUserInput;

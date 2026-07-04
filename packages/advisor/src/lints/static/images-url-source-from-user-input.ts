@@ -1,5 +1,6 @@
-import emit from "../../finding";
+import type { AdvisorImageDeliveryUrlAccess } from "../../image-delivery-url-accesses";
 import type { Lint } from "../../types";
+import { makeArgumentDerivedSinkLint } from "../argument-derived-sink";
 
 /**
  * Flags a `buildImageDeliveryUrl({ key, … })` call (`@lunora/bindings/images`)
@@ -18,30 +19,23 @@ import type { Lint } from "../../types";
  * (`context.imageDeliveryUrlAccesses`); a runtime caller flags nothing. One
  * finding per arg-derived, unscoped `key`.
  */
-const imagesUrlSourceFromUserInput: Lint = {
+const imagesUrlSourceFromUserInput: Lint = makeArgumentDerivedSinkLint<AdvisorImageDeliveryUrlAccess>({
+    cacheKey: (access) => `images_url_source_from_user_input:${access.file}:${access.line.toString()}`,
     categories: ["SECURITY"],
     description:
         "A `buildImageDeliveryUrl({ key, … })` call's `key` — the CDN transform's source image, an absolute URL or an origin-relative key — is derived from the handler's `args` with no server-side scoping, so any caller can point the CDN's on-the-fly transform at an attacker-chosen origin (SSRF / open proxy) or an arbitrary key under the account's own store.",
+    detail: (access) =>
+        `\`buildImageDeliveryUrl\` in \`${access.exportName}\` (${access.file}:${access.line.toString()}) builds its delivery URL from a \`key\` derived from \`args\` with no server-side scoping — any caller can point the CDN's on-the-fly transform at an attacker-chosen origin or store key. Validate \`key\` against an allowlist, or derive it from server-trusted state.`,
     facing: "EXTERNAL",
+    getAccesses: (context) => context.imageDeliveryUrlAccesses,
     level: "WARN",
+    metadata: (access) => {
+        return { exportName: access.exportName, file: access.file, line: access.line };
+    },
     name: "images_url_source_from_user_input",
     remediation:
         "Validate `key` against an allowlist of known origins/prefixes before calling `buildImageDeliveryUrl`, or derive it from server-trusted state (a stored record's own image key) rather than passing `args` straight through.",
-    run: (context) => {
-        if (context.imageDeliveryUrlAccesses === undefined) {
-            return [];
-        }
-
-        return context.imageDeliveryUrlAccesses.map((access) =>
-            emit(imagesUrlSourceFromUserInput, {
-                cacheKey: `images_url_source_from_user_input:${access.file}:${access.line.toString()}`,
-                detail: `\`buildImageDeliveryUrl\` in \`${access.exportName}\` (${access.file}:${access.line.toString()}) builds its delivery URL from a \`key\` derived from \`args\` with no server-side scoping — any caller can point the CDN's on-the-fly transform at an attacker-chosen origin or store key. Validate \`key\` against an allowlist, or derive it from server-trusted state.`,
-                metadata: { exportName: access.exportName, file: access.file, line: access.line },
-            }),
-        );
-    },
-    source: "static",
     title: "Image delivery URL built from unscoped user input",
-};
+});
 
 export default imagesUrlSourceFromUserInput;

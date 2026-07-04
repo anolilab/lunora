@@ -1,0 +1,10 @@
+{
+    "entries": [
+        {
+            "acknowledgedAt": "2026-07-04T00:00:00.000Z",
+            "acknowledgedBy": "d.bannert@anolilab.de",
+            "cacheKey": "queue_without_dlq:notifications",
+            "reason": "Fire-and-forget notifications queue — message loss on exhausted retries is acceptable per the queue's own doc comment in lunora/queues.ts. Acknowledged rather than fixed."
+        }
+    ]
+}

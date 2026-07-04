@@ -35,6 +35,7 @@
  * a concrete `DurableObject` class today; the structural state shape used by
  * the unit tests is preserved so plain-object doubles still work.
  */
+import { jsonResponse } from "../../../shared/json-response";
 
 /** Default TTL for new sessions (7 days), matching `@lunora/auth`. */
 const SESSION_DO_TTL_DEFAULT: number = 7 * 24 * 60 * 60;
@@ -102,12 +103,6 @@ interface SessionDOState {
 interface SessionDOEnv {
     SESSION_DO_SECRET?: string;
 }
-
-const jsonResponse = (status: number, body: unknown): Response =>
-    Response.json(body, {
-        headers: { "content-type": "application/json" },
-        status,
-    });
 
 /**
  * Length-independent constant-time string compare. Mirrors the helper in
@@ -219,7 +214,7 @@ class SessionDO {
         const env = (this.env ?? {}) as SessionDOEnv;
 
         if (!isAuthorized(request, env)) {
-            return jsonResponse(401, { error: { code: "UNAUTHORIZED", message: "missing or invalid SessionDO secret" } });
+            return jsonResponse({ error: { code: "UNAUTHORIZED", message: "missing or invalid SessionDO secret" } }, 401);
         }
 
         const url = new URL(request.url);
@@ -236,7 +231,7 @@ class SessionDO {
             return this.handleRevoke(request);
         }
 
-        return jsonResponse(404, { error: { code: "NOT_FOUND", message: "no such session route" } });
+        return jsonResponse({ error: { code: "NOT_FOUND", message: "no such session route" } }, 404);
     }
 
     /**
@@ -281,25 +276,25 @@ class SessionDO {
         try {
             body = await request.json();
         } catch {
-            return jsonResponse(400, { error: "invalid_request" });
+            return jsonResponse({ error: "invalid_request" }, 400);
         }
 
         const token = validateToken(body.token);
 
         if (token === undefined) {
-            return jsonResponse(400, { error: "invalid_request" });
+            return jsonResponse({ error: "invalid_request" }, 400);
         }
 
         const { userId } = body;
 
         if (typeof userId !== "string" || userId.length === 0 || userId.length > MAX_USER_ID_LENGTH) {
-            return jsonResponse(400, { error: "invalid_request" });
+            return jsonResponse({ error: "invalid_request" }, 400);
         }
 
         const ttlSeconds = resolveTtlSeconds(body.ttlSeconds);
 
         if (ttlSeconds === undefined) {
-            return jsonResponse(400, { error: "invalid_request" });
+            return jsonResponse({ error: "invalid_request" }, 400);
         }
 
         const now = Date.now();
@@ -308,7 +303,7 @@ class SessionDO {
         await this.state.storage.put(`s:${token}`, record);
         await this.armGcAlarm();
 
-        return jsonResponse(201, { token, ...record });
+        return jsonResponse({ token, ...record }, 201);
     }
 
     /**
@@ -335,13 +330,13 @@ class SessionDO {
         const token = request.headers.get(SESSION_TOKEN_HEADER);
 
         if (!token) {
-            return jsonResponse(400, { error: { code: "INVALID_INPUT", message: "token required" } });
+            return jsonResponse({ error: { code: "INVALID_INPUT", message: "token required" } }, 400);
         }
 
         const record = await this.state.storage.get<SessionRecord>(`s:${token}`);
 
         if (!record) {
-            return jsonResponse(404, { error: { code: "NOT_FOUND", message: "session not found" } });
+            return jsonResponse({ error: { code: "NOT_FOUND", message: "session not found" } }, 404);
         }
 
         // Expire lazily on read for correctness; the GC alarm ({@link alarm})
@@ -349,22 +344,22 @@ class SessionDO {
         if (record.expiresAt < Date.now()) {
             await this.state.storage.delete(`s:${token}`);
 
-            return jsonResponse(404, { error: { code: "EXPIRED", message: "session expired" } });
+            return jsonResponse({ error: { code: "EXPIRED", message: "session expired" } }, 404);
         }
 
-        return jsonResponse(200, { token, ...record });
+        return jsonResponse({ token, ...record }, 200);
     }
 
     private async handleRevoke(request: Request): Promise<Response> {
         const token = request.headers.get(SESSION_TOKEN_HEADER);
 
         if (!token) {
-            return jsonResponse(400, { error: { code: "INVALID_INPUT", message: "token required" } });
+            return jsonResponse({ error: { code: "INVALID_INPUT", message: "token required" } }, 400);
         }
 
         await this.state.storage.delete(`s:${token}`);
 
-        return jsonResponse(200, { ok: true });
+        return jsonResponse({ ok: true }, 200);
     }
 }
 

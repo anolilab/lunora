@@ -233,7 +233,7 @@ describe("dispatchQueueBatch capture", () => {
         expect(records[0]).toMatchObject({ outcome: "error" });
     });
 
-    it("flags deadLettered when a non-ack disposition exhausts maxRetries", async () => {
+    it("does not flag deadLettered while a retry still remains (attempts === maxRetries)", async () => {
         expect.assertions(1);
 
         const capture = vi.fn();
@@ -243,13 +243,53 @@ describe("dispatchQueueBatch capture", () => {
             },
             maxRetries: 3,
         });
+        // CF semantics: total deliveries = 1 + maxRetries, so `attempts === maxRetries`
+        // still has one retry left — this is the off-by-one boundary the fix covers.
         const m = captureMessage({ n: 2 }, { attempts: 3 });
 
         await dispatchQueueBatch(batch("q", [m]), { q: { definition: queue, exportName: "q" } }, { capture, env: {} });
 
         const [records] = capture.mock.calls[0] as [{ deadLettered: boolean; outcome: string }[]];
 
+        expect(records[0]).toMatchObject({ deadLettered: false, outcome: "retry" });
+    });
+
+    it("flags deadLettered once attempts exceeds maxRetries (retries exhausted)", async () => {
+        expect.assertions(1);
+
+        const capture = vi.fn();
+        const queue = defineQueue({
+            handler: (_context, b) => {
+                b.messages[0]?.retry();
+            },
+            maxRetries: 3,
+        });
+        const m = captureMessage({ n: 2 }, { attempts: 4 });
+
+        await dispatchQueueBatch(batch("q", [m]), { q: { definition: queue, exportName: "q" } }, { capture, env: {} });
+
+        const [records] = capture.mock.calls[0] as [{ deadLettered: boolean; outcome: string }[]];
+
         expect(records[0]).toMatchObject({ deadLettered: true, outcome: "retry" });
+    });
+
+    it("never flags deadLettered for an ack, even past maxRetries", async () => {
+        expect.assertions(1);
+
+        const capture = vi.fn();
+        const queue = defineQueue({
+            handler: (_context, b) => {
+                b.messages[0]?.ack();
+            },
+            maxRetries: 3,
+        });
+        const m = captureMessage({ n: 2 }, { attempts: 4 });
+
+        await dispatchQueueBatch(batch("q", [m]), { q: { definition: queue, exportName: "q" } }, { capture, env: {} });
+
+        const [records] = capture.mock.calls[0] as [{ deadLettered: boolean; outcome: string }[]];
+
+        expect(records[0]).toMatchObject({ deadLettered: false, outcome: "ack" });
     });
 
     it("fills undecided messages from ackAll / retryAll", async () => {

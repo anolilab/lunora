@@ -5,6 +5,7 @@ import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
 import type { BatchEntry } from "../../../shared/batch-wire";
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
+import { jsonResponse } from "../../../shared/json-response";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { ExportRow, ImportShardResult } from "./admin-export-import";
 import { parseExportShardArgs, parseImportShardArgs } from "./admin-export-import";
@@ -1356,15 +1357,12 @@ const parseCdcSyncArgs = (args: Record<string, unknown>): RunShardCdcSyncArgs =>
     return { limit: toCount(args["limit"]), sinceSeq: toCount(args["sinceSeq"]) ?? 0 };
 };
 
-const jsonResponse = (body: unknown, status = 200, bookmark?: string): Response => {
-    const headers: Record<string, string> = { "content-type": "application/json" };
-
-    if (bookmark) {
-        headers["x-d1-bookmark"] = bookmark;
-    }
-
-    return Response.json(body, { headers, status });
-};
+/**
+ * The shard's read-your-writes cursor as a `jsonResponse` headers argument:
+ * `x-d1-bookmark` when a bookmark exists, else nothing. Keeps the DO-specific
+ * header out of the shared `jsonResponse` helper's signature.
+ */
+const bookmarkHeaders = (bookmark: string | undefined): Record<string, string> | undefined => (bookmark ? { "x-d1-bookmark": bookmark } : undefined);
 
 /**
  * Decode the JSON envelope shipped on the `x-lunora-identity` header.
@@ -2121,7 +2119,7 @@ abstract class ShardDO {
             if (payload.functionPath.startsWith(RELATION_FUNCTION_PREFIX)) {
                 const value = await this.runRelationFanoutRead(payload.functionPath, payload.args ?? {});
 
-                return jsonResponse(value, 200, this.currentResponseBookmark);
+                return jsonResponse(value, 200, bookmarkHeaders(this.currentResponseBookmark));
             }
 
             // Custom-mutator ordering: a watermarked push (`clientId` +
@@ -3615,7 +3613,7 @@ abstract class ShardDO {
             // re-running, echoing the watermark so the client can drop the
             // pending optimistic overlay.
             // eslint-disable-next-line unicorn/no-null -- `result: null` is the explicit on-the-wire "no fresh result" sentinel for a replay ack; `undefined` would be dropped by JSON serialization.
-            return jsonResponse({ lastMutationId: mutatorClass.expected - 1, result: null }, 200, this.currentResponseBookmark);
+            return jsonResponse({ lastMutationId: mutatorClass.expected - 1, result: null }, 200, bookmarkHeaders(this.currentResponseBookmark));
         }
 
         // Out-of-order gap — an earlier push was lost. Halt the batch so the
@@ -3629,7 +3627,7 @@ abstract class ShardDO {
                 },
             },
             409,
-            this.currentResponseBookmark,
+            bookmarkHeaders(this.currentResponseBookmark),
         );
     }
 
@@ -3663,7 +3661,11 @@ abstract class ShardDO {
         // overlay. {@link mutationCommitCursor} applies the same mutation/CDC scope.
         const commitCursor = this.mutationCommitCursor();
 
-        return jsonResponse(commitCursor === undefined ? { result: cachedValue } : { commitCursor, result: cachedValue }, 200, this.currentResponseBookmark);
+        return jsonResponse(
+            commitCursor === undefined ? { result: cachedValue } : { commitCursor, result: cachedValue },
+            200,
+            bookmarkHeaders(this.currentResponseBookmark),
+        );
     }
 
     /**
@@ -3689,12 +3691,12 @@ abstract class ShardDO {
      */
     protected buildDispatchResponse(mutatorClass: ClientMutationClass | undefined, result: unknown): Response {
         if (mutatorClass?.kind === "next") {
-            return jsonResponse({ lastMutationId: this.currentRequestClientSeq, result }, 200, this.currentResponseBookmark);
+            return jsonResponse({ lastMutationId: this.currentRequestClientSeq, result }, 200, bookmarkHeaders(this.currentResponseBookmark));
         }
 
         const commitCursor = this.mutationCommitCursor();
 
-        return jsonResponse(commitCursor === undefined ? { result } : { commitCursor, result }, 200, this.currentResponseBookmark);
+        return jsonResponse(commitCursor === undefined ? { result } : { commitCursor, result }, 200, bookmarkHeaders(this.currentResponseBookmark));
     }
 
     /**
@@ -4701,7 +4703,7 @@ abstract class ShardDO {
             results.push({ body: outcome.body, id: outcome.id, status: outcome.status });
         }
 
-        return jsonResponse({ results }, 200, latestBookmark);
+        return jsonResponse({ results }, 200, bookmarkHeaders(latestBookmark));
     }
 
     /** Dispatch one batch entry through the single-call `/rpc` path and capture its envelope (plan 088). */
@@ -4718,13 +4720,16 @@ abstract class ShardDO {
             // per-entry request builder / the nested `/rpc` dispatch throw *before*
             // the single-call path's own try/catch. Contain it to this slot so one
             // bad entry can't 500 the whole batch (per-slot isolation is the contract).
-            const message = error instanceof Error ? error.message : String(error);
+            // Routed through `toErrorBody` so a genuine `LunoraError` still surfaces
+            // its real code/status/message, while any other throw is redacted behind
+            // the generic `BATCH_ENTRY_FAILED`/500 this slot always returned before.
+            const { body, status } = toErrorBody(error, { fallbackCode: "BATCH_ENTRY_FAILED" });
 
             return {
-                body: { error: { code: "BATCH_ENTRY_FAILED", message } },
+                body: { error: body },
                 bookmark: undefined,
                 id: (entry as BatchEntry | null | undefined)?.id,
-                status: 500,
+                status,
             };
         }
     }

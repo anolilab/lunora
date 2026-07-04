@@ -800,6 +800,71 @@ describe("createWorker", () => {
     });
 });
 
+describe("createWorker — RPC batch forward failure (Plan 118 toErrorBody migration)", () => {
+    // Plan 118: the batch fan-out's per-sub-batch `forwardToShard` catch now
+    // routes the caught error through `toErrorBody` instead of embedding its raw
+    // `.message` directly into every entry's slot error. Pin both branches: an
+    // unrecognized throw (e.g. a network failure reaching the shard) is redacted,
+    // while a recognized `LunoraError` still surfaces its real code/message. The
+    // slot status stays the protocol-level 502 regardless (independent of the
+    // underlying error), per the existing "shard unreachable" contract.
+    const unreachableNamespace = (thrown: Error): ShardNamespaceLike => {
+        return {
+            get: () => {
+                return {
+                    fetch: (): Promise<Response> => Promise.reject(thrown),
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+    };
+
+    it("redacts an unrecognized shard-forward failure instead of leaking its raw message", async () => {
+        expect.assertions(3);
+
+        const worker = createWorker({ shardDO: unreachableNamespace(new Error("connect ECONNREFUSED 10.0.0.1:443")) });
+
+        const res = await worker.fetch(
+            new Request("https://app.example/_lunora/rpc-batch", {
+                body: JSON.stringify({ calls: [{ functionPath: "messages:list", id: 0 }] }),
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(res.status).toBe(200);
+
+        const body = await res.json<{ results: { body: { error: { code: string; message: string } }; status: number }[] }>();
+
+        expect(body.results).toHaveLength(1);
+        expect(body.results[0]).toMatchObject({ body: { error: { code: "SHARD_UNAVAILABLE", message: "shard unavailable" } }, status: 502 });
+    });
+
+    it("still surfaces a recognized LunoraError's real code + message on a shard-forward failure", async () => {
+        expect.assertions(2);
+
+        const structured = Object.assign(new Error("cross-shard join guard tripped"), { code: "CONFLICT", name: "LunoraError", status: 409 });
+        const worker = createWorker({ shardDO: unreachableNamespace(structured) });
+
+        const res = await worker.fetch(
+            new Request("https://app.example/_lunora/rpc-batch", {
+                body: JSON.stringify({ calls: [{ functionPath: "messages:list", id: 0 }] }),
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        const body = await res.json<{ results: { body: { error: { code: string; message: string } }; status: number }[] }>();
+
+        expect(body.results).toHaveLength(1);
+        expect(body.results[0]).toMatchObject({ body: { error: { code: "CONFLICT", message: "cross-shard join guard tripped" } }, status: 502 });
+    });
+});
+
 describe("createWorker — migration endpoint", () => {
     let shard: ShardSpy;
 

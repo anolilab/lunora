@@ -1,3 +1,4 @@
+import type { AdvisorProcedureProtection } from "../procedure-protections";
 import type { AdvisorTable } from "../schema";
 
 /**
@@ -65,3 +66,13 @@ export const ownershipOrPiiColumns = (table: AdvisorTable): string[] =>
  * `Array.includes` scan.
  */
 export const tableColumnSet = (table: AdvisorTable): ReadonlySet<string> => new Set<string>([...SYSTEM_FIELDS, ...table.fields]);
+
+/**
+ * `true` when a procedure is both publicly-callable and write-shaped
+ * (`mutation`/`action`) — the "public write" predicate re-derived inline
+ * across several static security lints (e.g. `public_mutation_without_ratelimit`,
+ * `user_creating_mutation_without_captcha`). `query` is read-only and an
+ * `internal` procedure is server-called, so neither counts as an exposed write.
+ */
+export const isPublicWrite = (procedure: Pick<AdvisorProcedureProtection, "kind" | "visibility">): boolean =>
+    procedure.visibility === "public" && (procedure.kind === "mutation" || procedure.kind === "action");

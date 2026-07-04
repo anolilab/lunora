@@ -90,8 +90,14 @@
             # coverage provider collects via node:inspector, which the
             # @cloudflare/vitest-pool-workers runtime does not implement, and the
             # workerd-pool suites currently hang the runner. They run in a
-            # dedicated job once fixed. studio/d1/playground are excluded in the
-            # `test*` scripts for the same hang reason.
+            # dedicated job once fixed. d1 runs here like any other package —
+            # with the workerd gate off, its vitest config exposes only the
+            # plain-node "mocks" project (20 files), so neither the old hang
+            # rationale nor the inspector limitation applies. studio is still
+            # excluded from the `test*` scripts — its jsdom COMPONENT tests hang
+            # this runner — but its pure-logic `unit` project is DOM-free and
+            # runs via the "Run studio unit tests" step below. lunora-playground
+            # stays excluded (same hang class as e2e).
             - "name": "Run affected tests"
               "shell": "bash"
               "run": |
@@ -100,6 +106,17 @@
                   else
                       pnpm run test:affected
                   fi
+
+            # INVARIANT: studio's `unit` vitest project must stay runtime-dist-free
+            # (node-env, DOM-free, at most TYPE-only imports of @lunora/* — types
+            # are erased at runtime). This step runs on every packages-affected PR
+            # without building studio's deps; a unit test that VALUE-imports an
+            # @lunora/* package would fail here whenever the affected build didn't
+            # include studio's dependency graph. If that need ever arises, move
+            # this step behind a studio-affected gate + a dep build instead.
+            - "name": "Run studio unit tests"
+              "run": |
+                  pnpm --filter "@lunora/studio" run test:unit
 
             - "name": "Upload coverage to Codecov"
               "if": "matrix.node_version == '22.15' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository)"

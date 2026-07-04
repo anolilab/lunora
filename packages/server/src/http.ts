@@ -331,7 +331,14 @@ const errorResponse = (error: unknown): Response => {
     }
 
     if (error instanceof LunoraError) {
-        return Response.json({ code: error.code, error: error.message }, { status: error.status });
+        const { body, redacted, status } = toErrorBody(error, { fallbackCode: "INTERNAL_SERVER_ERROR", redactedMessage: "Internal error" });
+
+        if (redacted) {
+            // eslint-disable-next-line no-console -- log internal errors server-side; never echo raw details to the client
+            console.error("[lunora] http action error (redacted on the wire):", error);
+        }
+
+        return Response.json({ code: body.code, error: body.message }, { status });
     }
 
     throw error;

@@ -22,6 +22,8 @@ import { claimDevServerState, clearDevServerState, DEV_DAEMON_ENV, DEV_HANDOFF_E
 import type { Plugin, ViteDevServer } from "vite";
 
 import { lunoraLine } from "./log";
+import type { PendingCloseMap } from "./server-close";
+import { registerDevServerClose, runPendingClose } from "./server-close";
 import type { ResolvedLunoraPluginOptions } from "./types";
 
 /** Trailing slash on Vite's resolved URL, trimmed so state consumers can append paths uniformly. */
@@ -51,6 +53,12 @@ const resolveLocalUrl = (server: ViteDevServer): string | undefined => {
 /** Vite plugin (serve-only) that writes the dev-server state record on listen and clears it on close. */
 const devStatePlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
     let recorded = false;
+
+    // Clear callbacks pending a middleware-mode dev-server close (no
+    // httpServer to hang a "close" listener on) — see `server-close.ts` for
+    // the middleware/`buildEnd` mechanics and the restart-race rationale.
+    // Without this, `.lunora/dev.json` would be left pointing at a dead pid.
+    const pendingMiddlewareClears: PendingCloseMap = new Map();
 
     return {
         apply: "serve",
@@ -102,12 +110,14 @@ const devStatePlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 recorded = true;
             };
 
-            server.httpServer?.once("close", () => {
+            const clearOnClose = (): void => {
                 if (recorded) {
                     clearDevServerState(root, process.pid);
                     recorded = false;
                 }
-            });
+            };
+
+            registerDevServerClose(server, pendingMiddlewareClears, clearOnClose);
 
             // Returned hook runs after internal middlewares are installed.
             return () => {
@@ -131,6 +141,12 @@ const devStatePlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                     setTimeout(record, 0);
                 });
             };
+        },
+        buildEnd() {
+            // Middleware-mode close fallback for `clearOnClose` above (no-op in
+            // classic dev mode; never fires for a production build — this
+            // plugin is `apply: "serve"`-only); see `server-close.ts`.
+            runPendingClose(pendingMiddlewareClears, this.environment);
         },
         name: "lunora:dev-state",
     };

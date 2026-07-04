@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { isPublicWrite } from "../helpers";
 
 /**
  * Flags a public `mutation`/`action` that creates a user/session or sends mail but
@@ -34,10 +35,9 @@ const userCreatingMutationWithoutCaptcha: Lint = {
         const findings = [];
 
         for (const procedure of context.procedureProtections) {
-            const isPublicWrite = procedure.visibility === "public" && (procedure.kind === "mutation" || procedure.kind === "action");
             const sensitive = procedure.writesUserTable || procedure.callsMail;
 
-            if (!isPublicWrite || !sensitive || procedure.usesCaptcha) {
+            if (!isPublicWrite(procedure) || !sensitive || procedure.usesCaptcha) {
                 continue;
             }
 

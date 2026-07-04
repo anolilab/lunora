@@ -12,6 +12,8 @@ import { computeConfigFingerprint } from "./config-fingerprint";
 import { reconcileWranglerCrons } from "./cron-sync";
 import LUNORA_API_UPDATED_EVENT from "./hmr-events";
 import { advisoryLine, LUNORA_TAG } from "./log";
+import type { PendingCloseMap } from "./server-close";
+import { registerDevServerClose, runPendingClose } from "./server-close";
 import type { ResolvedLunoraPluginOptions } from "./types";
 
 const DEBOUNCE_MS = 100;
@@ -248,6 +250,14 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
     // Captured in configureServer and used to push overlay events. Undefined in
     // build mode (vite build) — the overlay callbacks are never wired up then.
     let devServer: ViteDevServer | undefined;
+
+    // Teardown callbacks pending a middleware-mode dev-server close (no
+    // httpServer to hang a "close" listener on) — see `server-close.ts` for
+    // the middleware/`buildEnd` mechanics and the restart-race rationale.
+    // Without this, a pending debounce could still run codegen against a
+    // torn-down module graph, and the cached ts-morph Project + timer would
+    // leak past the server's life.
+    const pendingMiddlewareTeardowns: PendingCloseMap = new Map();
 
     // --- Config-drift auto-restart state (see the config watcher in
     // configureServer) --- Lives at the plugin-factory scope so it survives a
@@ -586,27 +596,41 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             // Tear down on server close: stop a pending debounce from firing on a
             // dead ws/module graph and drop the watcher listeners so repeated
             // `configureServer` invocations (restarts) don't leak handlers.
-            return () => {
-                server.httpServer?.once("close", () => {
-                    closed = true;
+            // Idempotent (`closed` guard) since classic mode and the `buildEnd`
+            // fallback below can both fire for the same server.
+            const teardown = (): void => {
+                if (closed) {
+                    return;
+                }
 
-                    // Drop the reused Project so a restart rebuilds it fresh and the
-                    // parsed TS program isn't held past the server's life.
-                    cachedProject = undefined;
+                closed = true;
 
-                    if (debounceTimer) {
-                        clearTimeout(debounceTimer);
-                        debounceTimer = undefined;
-                    }
+                // Drop the reused Project so a restart rebuilds it fresh and the
+                // parsed TS program isn't held past the server's life.
+                cachedProject = undefined;
 
-                    server.watcher.off("add", onChange);
-                    server.watcher.off("change", onChange);
-                    server.watcher.off("unlink", onChange);
-                    server.watcher.off("add", onConfigChange);
-                    server.watcher.off("change", onConfigChange);
-                    server.watcher.off("unlink", onConfigChange);
-                });
+                if (debounceTimer) {
+                    clearTimeout(debounceTimer);
+                    debounceTimer = undefined;
+                }
+
+                server.watcher.off("add", onChange);
+                server.watcher.off("change", onChange);
+                server.watcher.off("unlink", onChange);
+                server.watcher.off("add", onConfigChange);
+                server.watcher.off("change", onConfigChange);
+                server.watcher.off("unlink", onConfigChange);
             };
+
+            return () => {
+                registerDevServerClose(server, pendingMiddlewareTeardowns, teardown);
+            };
+        },
+        buildEnd() {
+            // Middleware-mode close fallback (no-op in classic dev mode and in
+            // `vite build` — the map is only populated by a middleware-mode
+            // `configureServer`); see `server-close.ts`.
+            runPendingClose(pendingMiddlewareTeardowns, this.environment);
         },
         name: "lunora:codegen",
     };

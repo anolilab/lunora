@@ -582,6 +582,151 @@ Vetted against live code and dropped — recorded so they aren't re-audited:
   Studio one-click seed button (minor); AI/rate-limit Studio panels (optional
   follow-ups noted in 112).
 
+## Wave 12 — all-package deep sweep (baseline `b6eb48dcd`, 2026-07-04)
+
+Deep `/improve` pass over **all packages** ("run this command on all packages"),
+8 read-only Explore agents (one per audit category), weighted toward the ~33k
+changed lines since the Wave-11 baseline `fc9c915b` (the errors layer #101, the
+Astro-inspired dev DX #110, the 12 security lints #107, CLI background dev
+mode, the studio queue/containers/auth-org panels, `@lunora/angular`). Every
+finding was vetted first-hand before planning; excerpts in each plan are from
+live reads. Note: the audit began on the working tree at `219eca84b`
+(`feat/studio-auth-pages`) and the checkout switched to `alpha` mid-session;
+all branch-sensitive excerpts were re-verified on `alpha` at `b6eb48dcd`, which
+is the stamped baseline. The user selected **all** fix findings plus two
+direction spikes. **Execution 2026-07-04: all 17 plans dispatched in one
+parallel wave (13 isolated-worktree sonnet executors; chains 117→119, 121→122,
+124→125 sequential within one executor each). Outcome: 15 DONE (incl. 3 spikes;
+one REVISE round on 131), 2 BLOCKED (119, 122 — both legitimate STOP
+conditions, unblock recipes in their rows). Reviewer re-ran every done
+criterion in each worktree before marking DONE. No branch is merged to
+`alpha` — that is the user's call.**
+
+Execution notes (Wave 12, for future executors):
+
+- **`pnpm --filter "@lunora/<pkg>..." run build` does NOT walk the workspace
+  dependency graph** in this repo (deps are exact-pinned, not `workspace:*` —
+  the overrides map them at install time, but the filter graph doesn't
+  traverse). Confirmed independently by three executors. Use
+  `pnpm run build:packages` locally or `vis run build --query "project=<p>"`
+  (vis `dependsOn: ["^build"]` works) — the AGENTS.md guidance overstates the
+  `...` form and should be corrected.
+- **`pnpm run build:packages` side-effect**: the packem license plugin rewrites
+  `packages/cloudflare-access/LICENSE.md` (whitespace). Two executors hit it;
+  both correctly reverted before committing. Fix the marker/idempotence
+  upstream or expect the dirt.
+- **`pnpm --filter @lunora/advisor run lint:eslint` crashes repo-wide**
+  (eslint-plugin-n TypeError on `SECURITY_LINT_CANDIDATES.md`) — pre-existing,
+  confirmed on two worktrees; lint touched files directly until fixed.
+- Merge-order interactions: 117→118 share `advisor/117-119-errors-chain`;
+  124→125 share `advisor/124-125-advisor-hygiene`. (129's peer-range docs were
+  pre-reconciled to 116's manifests by the thermos pass — no touch-up needed.)
+
+**Thermos review pass (2026-07-04, post-execution):** two thermo reviewers
+(branch audit + code quality) swept all 13 branches; verdict "remarkably
+clean" — zero P0/P1, no wire break, no security issue. All 9 surviving
+findings fixed and committed on their branches: 126 teardown-idiom dedup →
+`packages/vite/src/server-close.ts` (`a16fca94`); shared `jsonResponse`
+regains the plan's generic `headers?` param, `x-d1-bookmark` back to a
+ShardDO-local adapter (`cef72b486`); 131 fixer PoC made self-fixturing in a
+mkdtemp copy + playground schema reverted + codegen tsconfig `paths` for the
+prototype self-import (`9146c6a1c`); 129 docs peer strings reconciled to 116
+(`35a8d9a72`); 116 lockstep guard stands down on non-exact specifiers instead
+of false-positively breaking installs (`3955860eb`); 121 studio-unit-step
+dist-free invariant pinned in a workflow comment (`b79e9bd87`); and the
+audit's own discovery — the CLI insert-conflict solution matcher
+`lunora-runtime-unique` aliased the reworded read-side NOT_UNIQUE hint,
+rendering wrong remediation for insert conflicts — fixed with a dedicated
+write-path body (`ffee9a799` on the errors chain). Adjudicated no-change:
+NOT_UNIQUE reword confirmed semantics-preserving (producers untouched);
+ENV_INVALID/AUTH_HEADERS_MISSING redaction confirmed consumer-free; 131's
+prettier devDep + eslint override recorded in the design doc as spike residue
+that dies with the prototypes; pnpm-lock.yaml conflicts on sequential merges
+are expected — regenerate via `pnpm install`, never hand-merge.
+
+### Fix plans
+
+| Plan | Title                                                                                       | Category           | Pkg                             | Pri | Effort | Risk | Status                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ---- | ------------------------------------------------------------------------------------------- | ------------------ | ------------------------------- | --- | ------ | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 116  | Repin `@bomb.sh/tab` + lockstep guard + AI-exclude sync + peer drifts                       | deps/dx            | cli / root / 3 pkgs             | P1  | S      | LOW  | DONE — 3 commits ending `0e35ad3f0` on `advisor/116-deps-cerebro-lockstep`; reviewer re-ran gates (guard exit 0 + negative case, 578/578 cli tests, stale excludes gone); guard wired into postinstall. Note surfaced: `workers-ai-provider@3.3.1` still peers `ai ^6.0.0` vs catalog `ai@7.0.14` (warning-level, upstream fix needed — comment deliberately left accurate)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| 117  | HTTP-action redaction gap + internal 500 flags + NOT_UNIQUE hint + `lunorash/errors`        | security/bug       | server/errors/lunora            | P1  | S      | LOW  | DONE — `cc47e6143` on `advisor/117-119-errors-chain`; all four deliverables verified in-commit (errorResponse→toErrorBody, ENV_INVALID+AUTH_HEADERS_MISSING internal, read-side NOT_UNIQUE hint, `lunorash/errors` subpath); reviewer re-ran errors 21/21 + server 389/389                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 118  | Unify `jsonResponse` helpers, migrate caught-error envelopes to `toErrorBody`               | tech-debt/security | do/runtime/scheduler/payment/d1 | P2  | M      | MED  | DONE — `59f97bfe6` (same branch); shared `shared/json-response.ts`, zero status-first signatures remain (reviewer-grepped); class-A caught-error sites migrated w/ redaction tests, class-B statics correctly left (reviewer verified all remaining `error:{code` sites are fixed-literal protocol frames); reviewer re-ran do 1027 + runtime 469; executor ran d1 188 + scheduler 102 + payment 96                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 119  | [Investigate] Brand `LunoraError` so foreign errors can't ride the echo path                | security           | errors                          | P3  | S–M    | MED  | BLOCKED — STOP condition legitimately hit (investigation complete, no code committed). Failing test PROVED the leak is live (foreign Error w/ `code`+`status` echoes verbatim), but the brand fix requires migrating **~104 manual `Object.assign(new Error(), {code,name,status})` sites across do/d1/auth/ratelimit/codegen PLUS codegen emit templates** (user-facing `_generated/*` contract) — vs the plan's ~5-site limit; `.name`-based gating is a proven regression vector (the old allow-list bug). Unblock = a dedicated migration plan: (a) brand field on the base class, (b) mechanical 104-site migration, (c) emit-template update + compat note, then flip the guard                                                                                                                                                                                     |
+| 120  | Background dev: keep tracking a child past the ready timeout (+ pid guard, win32 kill test) | bug                | cli/config                      | P2  | M      | MED  | DONE — `d38389596` on `advisor/120-bg-dev-timeout-orphan`; reviewer re-ran gates (583/583 cli tests, grep clean, tsc clean); race-safe re-point (guarded on own provisional pid), reused `updateDevServerState` (no config change needed); 5 new tests incl. win32 taskkill seam                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 121  | Wire the D1 suite + studio pure-logic tests into local/CI runs                              | tests              | d1/studio/ci                    | P1  | M      | MED  | DONE — `704f00c30` on `advisor/121-122-test-wiring`; reviewer re-ran d1 187/187 (all green, zero fixes needed!) + studio unit 177/177 (17 node files, no hang). Post-review follow-up (user request): the dedicated `test-d1` job was removed again — `project!=d1` dropped from the root `test*` scripts instead, so d1's plain-node mocks project runs inside the existing Test matrix (coverage verified working on node; the workerd project stays gated). **Root cause found for the studio "hang" lore**: `getVitestConfig` spreads a root `include` that overrode project includes → `--project unit` ran ALL ~88 files incl. jsdom `.tsx` under node; fixed with root `include: []`. Build step uses `vis run build --query "project=d1"` (the `pnpm --filter "pkg..."` graph-walk documented in AGENTS.md doesn't work — confirmed by 3 executors independently) |
+| 122  | Scheduled workerd integration smoke job (allowlist-gated)                                   | tests              | ci                              | P2  | M      | MED  | BLOCKED — STOP condition hit exactly as designed: **0 of 6 packages boot the workerd pool in this sandbox** (identical signature all six: `Timeout starting cloudflare-pool runner` / `connect(): Connection timed out` / `No such module "cloudflare:test-internal"`; every mocks project green). Full triage table in the executor report. No workerd.yml created (empty allowlist = no matrix, correct). Contradicts the June observation that pool-workers boots here — environment-dependent. Unblock = re-run the plan's Step-1 triage on a host where the pool boots (dev workstation or a real GitHub runner via a manually-created workflow_dispatch), then create workerd.yml from THAT allowlist                                                                                                                                                               |
+| 123  | Behavioral tests for the org/team admin surface                                             | tests              | auth                            | P2  | M      | LOW  | DONE — `643937dac` on `advisor/123-auth-org-admin-tests`; 24 new tests (all 8 method groups + teams/org-roles), survivor-row IDOR-shaped assertions verified by reviewer; 180/180 auth tests, tsc clean. Two adapter quirks pinned-as-documented, not fixed: `addMember` on a nonexistent org silently orphans a row (memory adapter has no FK enforcement — worth a runtime-route validation follow-up), and `updateOrganization` synthesizes `{id}`-only success on adapter null-echo                                                                                                                                                                                                                                                                                                                                                                                   |
+| 124  | Advisor hygiene: negative fixtures for 2 lints + `isPublicWrite` helper                     | tests/tech-debt    | advisor                         | P3  | S      | LOW  | DONE — `493a36a28` on `advisor/124-125-advisor-hygiene`; 2 negative fixtures + helper; 2 exact-match replacements, 6 candidates checked-and-left (different predicates, listed); reviewer re-ran 329/329                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 125  | Collapse the 6× arg-derived-access quadruplets into two factories                           | tech-debt          | codegen/advisor                 | P3  | M      | MED  | DONE — `a6040ae86` (same branch); 4/6 feeders factored (vector-namespace + image-delivery-url documented exceptions: semantically different extraction), 6/6 lints via `makeArgumentDerivedSinkLint`; reviewer re-ran codegen 748/748 (goldens byte-identical) + advisor 329/329 with zero existing-test edits. Honest shortfall: ≥50% aggregate line-cut NOT met (feeders −61%, lints −13% — prose is byte-stability-locked); intent (next lint = one config/side) achieved. ⚠ Independent finding, confirmed pre-existing on 2 worktrees: `pnpm --filter @lunora/advisor run lint:eslint` crashes (eslint-plugin-n TypeError on `SECURITY_LINT_CANDIDATES.md`) — repo-wide, needs its own fix                                                                                                                                                                           |
+| 126  | Vite plugin teardown fires without an httpServer (middleware mode)                          | bug                | vite                            | P3  | S      | LOW  | DONE — `fcdbfef1e` on `advisor/126-vite-teardown-middleware`; reviewer re-ran gates (170/170 vite tests, tsc clean, only the out-of-scope record-WRITE `httpServer?.once("listening")` remains). Close signal chosen with source evidence: Vite `buildEnd` (fires once per close, client-env-filtered; chokidar 4 emits no `close`, ws events exclude it). Executor self-caught a `server.restart()` cross-fire race and keyed pending teardowns by Environment identity, consumed-and-deleted (no leak)                                                                                                                                                                                                                                                                                                                                                                  |
+| 127  | Queue capture `deadLettered` off-by-one vs CF `max_retries`                                 | bug                | queue                           | P3  | S      | LOW  | DONE — `8065865a9` on `advisor/127-queue-deadletter-flag`; reviewer re-ran gates (35/35 queue tests, grep clean, tsc clean); boundary triple added; scope exact                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| 128  | AGENTS.md package-table drift (4 missing rows, 10× stale advisor row) + studio docs table   | docs               | root/studio                     | P2  | S      | LOW  | DONE — `8722254ab` on `advisor/128-agents-md-drift`; reviewer re-ran gates (greps, prettier, symlink intact); word-diff confirms only the 4 rows + advisor rewrite are content changes (rest is table alignment); documented in-scope deviation: section prose below the table updated for consistency. Follow-up flagged (not planned): the "Optional-package nav gating" list in studio docs is stale vs `TAB_FEATURE` (missing containers/flags/kv/queues/analytics)                                                                                                                                                                                                                                                                                                                                                                                                   |
+| 129  | Author docs-site pages for `@lunora/angular` + `@lunora/nuxt`                               | docs               | angular/nuxt/docs               | P2  | S–M    | LOW  | DONE — `595d68d03` on `advisor/129-angular-nuxt-docs`; reviewer verified prettier + copy-script output + landing diff; executor also ran the full docs prod build (both pages prerendered). ⚠ Merge-order note: after 116 lands, update the two peer-range mentions (angular `@angular/core` peer now incl. ^21/^22; nuxt h3 peer now `^1.15.0`). Follow-up flagged: copy-script `CATEGORY_CONFIG` buckets angular/nuxt (and flags/errors/cloudflare-access) under "Other" in the sidebar                                                                                                                                                                                                                                                                                                                                                                                 |
+| 130  | [Spike] ctx-db twins shareability inventory (do vs sql-store)                               | tech-debt          | do/sql-store                    | P3  | L      | —    | SPIKE DONE — `51b49b43f` on `advisor/130-ctx-db-twins-spike` (`plans/130-phase0-design.md`, 349 lines). **Verdict: REJECT big-bang merge; STATUS-QUO+ tandem-edit checklist.** Root blocker: deliberate sync `SqlExec` (DO) vs async `SqlCtxExec` (D1/PG/MySQL) divide. Evidence reviewer-verified: 3 of 8 post-scaffold commits touched both files (e.g. `8d94ca17e` 92/89 lines); 1,876 parallel LOC vs 2,882 already shared; test gap do 1,005 vs sql-store 13+15 direct. One P3 follow-up sanctioned: rank strictly-before comparator extraction (~50-100 LOC, characterization tests first) + the checklist header comment                                                                                                                                                                                                                                           |
+
+### Direction plans (design/spike)
+
+| Plan | Title                                                         | Category     | Pri | Effort | Risk | Status                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ---- | ------------------------------------------------------------- | ------------ | --- | ------ | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 131  | [Spike] Advisor autofix + suppression/baseline design         | direction/dx | P2  | L      | MED  | SPIKE DONE — `71a17aab4`+`e48c6fcab`+`f1a3b1b87` on `advisor/131-autofix-baseline-spike` (`plans/131-phase0-design.md`, 595 lines, + working fixer/baseline PoCs on the playground; reviewer verified both, one REVISE round to record the cross-check). **Verdict: baseline/suppression FIRST (all 83 lints, cacheKey-keyed JSON w/ audit trail, external `applyBaseline()` wrapper), interactive-confirm ASSISTED fixer second (19 lints, extends Studio's ApplyIndexButton pattern), blind `--fix` last for the 4-lint SAFE set — gated on the index-naming ruling (§5.1 recommends deterministic `by_<snake>` without suffix-stripping; `suggestIndexName` currently emits camelCase).** Classification double-sourced: internal family-uniform pass (4/19/57) + independent 4-session external pass (3/33/44) agree exactly on the SAFE set (§1.5); the plan's own <5-SAFE STOP condition triggered and is recorded as the shaping constraint, not a failure. 4 open questions in §5 |
+| 132  | [Spike] Outbound webhook delivery on queue/scheduler/dispatch | direction    | P3  | M–L    | MED  | SPIKE DONE — `f9706e2f5` on `advisor/132-outbound-webhooks-spike` (`plans/132-phase0-design.md` + playground prototype, reviewer re-ran 3/3). **Verdict: buildable with ZERO core changes** — `TriggerCtx` already exposes `scheduler` (verified `types.ts:947-950`); prototype drove real Standard-Webhooks signing (verified by unmodified `@lunora/payment` `verifyStandardWebhook`) through the real SchedulerDO retry/dead-letter/redrive. Phasing: P1 declare+deliver (S–M, extract browser SSRF guard to `shared/` first) → P2 endpoint table + Studio panel → P3 redrive UX. 5 open questions incl. signature-convention choice and per-endpoint secret storage                                                                                                                                                                                                                                                                                                                   |
+
+### Recommended execution order & dependencies
+
+- **P1 first (independent):** 116 (the published-CLI boot-crash regression —
+  highest leverage, S), 117 (redaction gap), 121 (D1 tests never run).
+- **Errors chain (ordered):** 117 → 118 → 119. 118 copies 117's pattern;
+  119's guard change affects both seams' behavior and needs their tests.
+- **CI chain:** 121 → 122 (same workflow file; 122 is allowlist-gated with a
+  local triage step and must never become a required check).
+- **Advisor chain:** 124 → 125 (same package; 125's factories should consume
+  124's `isPublicWrite`). 131 coordinates with both (fixer configs slot into
+  125's factories) but is a spike and can run any time.
+- **Independent:** 120, 123, 126, 127, 128, 129, 130, 132 — any order.
+- **Docs pair:** 128 and 129 touch disjoint files; no ordering.
+
+### Findings considered and rejected (Wave 12)
+
+Vetted against live code and dropped — recorded so they aren't re-audited:
+
+- **PERF-01 — codegen discovery repeats the `lunora/` tree-walk ~50× per run**
+  (one `listLunoraSourceFiles` disk enumeration per feeder) — REAL but NOT
+  WORTH DOING: sub-ms to low-ms on a warm FS cache against a measured
+  ~18–20 ms warm-loop budget, and adjacent to the twice-rejected
+  incremental-discovery class (Wave-3 plan 063's measurement stands).
+- **`@visulima/pail` lockstep** — checked: the CLI's pin `4.0.0-alpha.22`
+  EQUALS cerebro alpha.32's peer; only `@bomb.sh/tab` regressed (116 covers
+  both going forward via the guard).
+- Verified clean this wave (no findings): `pnpm audit` (no high/critical);
+  cloudflare-access JWT verification (alg pinned, aud/iss/exp enforced,
+  fail-closed); CLI background-dev secret handling (0o600 capture log,
+  secret-free `dev.json`, loopback-gated studio token); studio org/queue-replay
+  admin surfaces (SENSITIVE_FIELDS stripping, id-only replay); codegen env/secret
+  discovery (names only, redacted previews); dispatch runner; mail-preview
+  iframe sandbox+CSP; advisor lint claims (spot-checked accurate); runtime
+  security-headers resolve-once shape; angular adapter teardown; DO
+  queue/mail catchers (bounded retention); no `@lunora/*` dependency cycles;
+  `shared/` still zero-import; all 5 framework adapters consume the shared
+  client cores (no duplication); `toErrorBody` itself exhaustively tested;
+  browser SSRF guard exemplary (30 tests).
+- **Studio `buildRouter` unmemoized call** — not a defect; React Compiler is
+  enabled for the package (auto-memoized).
+- **`fold-container-instances` `>=` tie-break** — degenerate same-epoch-ms
+  collision only; not worth a fix.
+- **`WorkflowsRestError` embeds upstream response bodies** (non-internal code
+  → echoed by design) — informational only; server-to-Cloudflare context,
+  unlikely client-facing. Keep in mind when assigning codes to errors that
+  wrap third-party response text.
+- **CI vis-cache not persisted across runs** — LOW-confidence soft note;
+  `vis affected` already scopes work; likely intentional.
+- **Studio i18n has only `en.ts`** — weak signal, low value for a local dev
+  tool; not filed.
+- **Direction items not filed** (already tracked or shipped): SvelteKit /
+  SolidStart composition adapters (recorded as a direction option, not
+  selected this wave — the Nuxt/Astro pattern is the template when wanted);
+  advisor-through-MCP (S–M, not selected); angular adapter parity (roadmap
+  choice, each primitive maps to an existing shared core).
+
 ## Notes for executors (carried from prior waves)
 
 - `dist/` is gitignored and built on demand. Build deps first:
