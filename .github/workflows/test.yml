@@ -105,6 +105,13 @@
                       pnpm run test:affected
                   fi
 
+            # INVARIANT: studio's `unit` vitest project must stay runtime-dist-free
+            # (node-env, DOM-free, at most TYPE-only imports of @lunora/* — types
+            # are erased at runtime). This step runs on every packages-affected PR
+            # without building studio's deps; a unit test that VALUE-imports an
+            # @lunora/* package would fail here whenever the affected build didn't
+            # include studio's dependency graph. If that need ever arises, move
+            # this step behind a studio-affected gate + a dep build instead.
             - "name": "Run studio unit tests"
               "run": 'pnpm --filter "@lunora/studio" run test:unit'
 
