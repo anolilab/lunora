@@ -3,7 +3,15 @@ import type { Validator } from "@lunora/values";
 import { validateArgs } from "../functions";
 import type { RlsTag } from "../rls/policy-tag";
 import { readRlsTag } from "../rls/policy-tag";
-import type { ActionCtx as ActionContext, ArgsValidator, FunctionKind, InferArgs, MutationCtx as MutationContext, QueryCtx as QueryContext } from "../types";
+import type {
+    ActionCtx as ActionContext,
+    ArgsValidator,
+    FunctionKind,
+    InferArgs,
+    MutationCtx as MutationContext,
+    QueryCtx as QueryContext,
+    X402ProcedureConfig,
+} from "../types";
 import runMiddlewareChain from "./run-middleware";
 import type {
     ActionBuilder,
@@ -25,6 +33,8 @@ interface BuilderState {
     middlewares: ReadonlyArray<Middleware<unknown, unknown>>;
     /** Validator the handler's result is parsed through when `.output()` was called. */
     output?: Validator;
+    /** Payment tag set by `.x402({ price })`; stamped onto the registered function as `fn.x402`. */
+    x402?: X402ProcedureConfig;
 }
 
 /**
@@ -178,6 +188,7 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
                 kind,
                 ...(rls ? { rls } : {}),
                 ...(visibility ? { visibility } : {}),
+                ...(state.x402 ? { x402: state.x402 } : {}),
             };
         },
         output: (validator: Validator) => makeBuilder(kind, { ...state, output: validator }, visibility),
@@ -202,11 +213,17 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
                           kind: "stream" as const,
                           ...(rls ? { rls } : {}),
                           ...(visibility ? { visibility } : {}),
+                          ...(state.x402 ? { x402: state.x402 } : {}),
                       };
                   },
               }
             : {}),
         use: (middleware: Middleware<unknown, unknown>) => makeBuilder(kind, { ...state, middlewares: [...state.middlewares, middleware] }, visibility),
+        // `.x402({ price })` marks a public procedure as paid. It's public-only:
+        // internal functions are server-to-server (cron/scheduler/`ctx.run*`) and
+        // never reachable via a client RPC, so there's nothing to charge. Omitting
+        // it on internal builders keeps the runtime shape aligned with the types.
+        ...(visibility ? {} : { x402: (config: X402ProcedureConfig) => makeBuilder(kind, { ...state, x402: config }, visibility) }),
     };
 };
 

@@ -235,3 +235,68 @@ describe("builder output", () => {
         await expect(fn.handler({}, { text: "hi" })).resolves.toEqual({ echoed: "hi" });
     });
 });
+
+describe("builder x402 (paid procedures)", () => {
+    it("stamps x402: { price } onto the registered function", () => {
+        expect.assertions(2);
+
+        const list = c.query.x402({ price: "0.01" }).query(() => "ok");
+
+        expect(list.kind).toBe("query");
+        expect(list.x402).toEqual({ price: "0.01" });
+    });
+
+    it("carries a numeric price and works on mutation + action too", () => {
+        expect.assertions(2);
+
+        const send = c.mutation.x402({ price: 0.05 }).mutation(() => "sent");
+        const call = c.action.x402({ price: "$0.10" }).action(() => "called");
+
+        expect(send.x402).toEqual({ price: 0.05 });
+        expect(call.x402).toEqual({ price: "$0.10" });
+    });
+
+    it("leaves x402 absent when the modifier is not used", () => {
+        expect.assertions(1);
+
+        const list = c.query.query(() => "ok");
+
+        expect(list.x402).toBeUndefined();
+    });
+
+    it("composes with .input()/.output()/.use() in any chain order, preserving validation", async () => {
+        expect.assertions(3);
+
+        const fn = c.mutation
+            .input({ text: v.string() })
+            .x402({ price: "0.02" })
+            .use(async ({ next }) => next({ ctx: { tag: "m" } }))
+            .output(v.object({ echoed: v.string() }))
+            .mutation(({ args }) => {
+                return { echoed: args.text };
+            });
+
+        expect(fn.x402).toEqual({ price: "0.02" });
+        await expect(fn.handler({}, { text: "hi" })).resolves.toEqual({ echoed: "hi" });
+        await expect(fn.handler({}, { text: 1 } as unknown as { text: string })).rejects.toBeInstanceOf(ValidationError);
+    });
+
+    it("stamps x402 onto a streaming query terminal", () => {
+        expect.assertions(2);
+
+        const feed = c.query.x402({ price: "0.001" }).stream(async function* gen() {
+            yield 1;
+        });
+
+        expect(feed.kind).toBe("stream");
+        expect((feed as unknown as { x402?: { price: unknown } }).x402).toEqual({ price: "0.001" });
+    });
+
+    it("is public-only: internal builders do not expose .x402()", () => {
+        expect.assertions(3);
+
+        expect((c.internalQuery as unknown as { x402?: unknown }).x402).toBeUndefined();
+        expect((c.internalMutation as unknown as { x402?: unknown }).x402).toBeUndefined();
+        expect((c.internalAction as unknown as { x402?: unknown }).x402).toBeUndefined();
+    });
+});
