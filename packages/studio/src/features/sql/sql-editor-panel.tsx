@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { useT } from "../../i18n/i18n-context";
 import type { SqlConsoleResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { newId, usePersistedList } from "../../lib/browser-storage";
+import { newId, usePersistedList, usePersistedValue } from "../../lib/browser-storage";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
 import { recordShard } from "../../lib/shard-history";
 import { CellValue } from "../data/data-grid";
@@ -34,23 +34,9 @@ interface SqlEditorPanelProps {
 const RUN_SQL = adminRef(ADMIN_FUNCTIONS.runSql);
 const STORAGE_KEY = "lunora-studio-sql-queries";
 const HISTORY_KEY = "lunora-studio-sql-history";
+/** Persisted editor↔results layout: `false` stacks them (default), `true` splits side by side for wide screens. */
 const SPLIT_VIEW_KEY = "lunora-studio-sql-split-view";
 
-/**
- * Persisted editor↔results layout: `false` stacks them (editor over results, the
- * default), `true` splits them side by side for wide screens. A one-element list
- * reuses the array-backed storage helper — same trick as the tabs' active-id.
- */
-const usePersistedSplitView = (): [boolean, (next: boolean) => void] => {
-    const [list, setList] = usePersistedList<boolean>(SPLIT_VIEW_KEY);
-
-    return [
-        list[0] ?? false,
-        (next: boolean): void => {
-            setList([next]);
-        },
-    ];
-};
 /** How many recent distinct queries the history keeps. */
 const HISTORY_LIMIT = 25;
 /** Line-number gutter sizing, aligned to the editor textarea's padding + line height. */
@@ -133,7 +119,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
     const [running, setRunning] = useState<boolean>(false);
     // Editor↔results layout: stacked (default) or side-by-side, persisted across reloads.
-    const [splitView, setSplitView] = usePersistedSplitView();
+    const [splitView, setSplitView] = usePersistedValue<boolean>(SPLIT_VIEW_KEY, false);
     // The right-clicked tab's context menu: the target tab id + cursor position, or null when closed.
     const [tabMenu, setTabMenu] = useState<{ id: string; x: number; y: number } | null>(null);
     // The bulk close awaiting a discard confirm (because it would drop unsaved tabs), or null.

@@ -1,7 +1,7 @@
 import type { Dispatch, SetStateAction } from "react";
 import { useEffect, useRef } from "react";
 
-import { newId, usePersistedList } from "../../lib/browser-storage";
+import { newId, usePersistedList, usePersistedValue } from "../../lib/browser-storage";
 
 /**
  * One open editor tab. Only the durable parts — the draft `sql`, the `name`
@@ -35,20 +35,7 @@ const makeTab = (sql = "", name = ""): SqlTab => {
 };
 
 /** A single persisted string (the active tab id) on top of the array storage helper. */
-const usePersistedActive = (): [string, Dispatch<SetStateAction<string>>] => {
-    const [list, setList] = usePersistedList<string>(ACTIVE_KEY);
-
-    const setActive = (action: SetStateAction<string>): void => {
-        setList((current) => {
-            const previous = current[0] ?? "";
-            const next = typeof action === "function" ? action(previous) : action;
-
-            return [next];
-        });
-    };
-
-    return [list[0] ?? "", setActive];
-};
+const usePersistedActive = (): [string, Dispatch<SetStateAction<string>>] => usePersistedValue<string>(ACTIVE_KEY, "");
 
 /**
  * Persisted open-tab list + the active tab id, restored from `localStorage` on

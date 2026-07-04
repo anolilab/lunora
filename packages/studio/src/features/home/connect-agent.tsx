@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "../../components/ui/button";
 import { Card } from "../../components/ui/card";
 import { useT } from "../../i18n/i18n-context";
-import { copyToClipboard } from "../../lib/internal";
+import { copyToClipboard, resolveOrigin } from "../../lib/internal";
 
 /**
  * The MCP tools `@lunora/mcp` exposes, paired with a one-line summary. This is
@@ -20,13 +20,6 @@ const MCP_TOOLS: ReadonlyArray<{ readonly name: string; readonly summary: string
     { name: "lunora_run_mutation", summary: "run a mutation — writes; only when LUNORA_MCP_ALLOW_WRITES is set" },
     { name: "lunora_run_action", summary: "run an action — writes/effects; only when LUNORA_MCP_ALLOW_WRITES is set" },
 ];
-
-/** The Worker origin this studio is served from — what an MCP client points `LUNORA_URL` at. Falls back to the dev-server origin when there's no `location` (tests/SSR). */
-const resolveOrigin = (): string => {
-    const loc = (globalThis as { location?: { origin?: string } }).location;
-
-    return loc?.origin !== undefined && loc.origin !== "" ? loc.origin : "http://localhost:5173";
-};
 
 /**
  * The ready-to-paste MCP client config (Claude Desktop / Cursor `mcpServers`

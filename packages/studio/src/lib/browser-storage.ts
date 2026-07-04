@@ -60,6 +60,27 @@ export const usePersistedList = function <T>(key: string): [T[], Dispatch<SetSta
 };
 
 /**
+ * A single persisted scalar on top of {@link usePersistedList}: the value is
+ * stored as a one-element array so it reuses the same guarded load/persist path.
+ * `fallback` is returned whenever storage holds nothing. Supports functional
+ * updaters like {@link useState}. The canonical home for "one persisted value"
+ * so panels stop hand-rolling the one-element-list wrapper.
+ */
+export const usePersistedValue = function <T>(key: string, fallback: T): [T, Dispatch<SetStateAction<T>>] {
+    const [list, setList] = usePersistedList<T>(key);
+
+    const setValue: Dispatch<SetStateAction<T>> = (action) => {
+        setList((current) => {
+            const previous = current[0] ?? fallback;
+
+            return [typeof action === "function" ? (action as (previous: T) => T)(previous) : action];
+        });
+    };
+
+    return [list[0] ?? fallback, setValue];
+};
+
+/**
  * A best-effort unique id for a browser-persisted record: `crypto.randomUUID`
  * when available, else a `prefix`-tagged high-resolution timestamp.
  */
