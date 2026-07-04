@@ -922,8 +922,8 @@ const MESSAGE_IDS = [
     // Queues reliability banner.
     "No dead-letter queue on {queues}.",
     "Exhausted messages are dropped after retries. Add a deadLetterQueue to capture them.",
-    "1 message was dead-lettered.",
-    "{count} messages were dead-lettered.",
+    "1 message was recently dead-lettered.",
+    "{count} messages were recently dead-lettered.",
     // Queues messages + send.
     "Batch mode needs a JSON array body — each element is enqueued as one message.",
     "Body",

@@ -26,6 +26,7 @@ import type {
 } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
+import { computeQueueReliability } from "./reliability";
 
 interface QueuesPanelProps {
     /** Newest-N consumed messages to load into the log (default {@link DEFAULT_MESSAGE_LIMIT}). */
@@ -410,16 +411,11 @@ const QueuesPanel = ({ limit }: QueuesPanelProps): ReactElement => {
     const queues = Array.isArray(queuesData?.queues) ? [...queuesData.queues].toSorted((a, b) => a.exportName.localeCompare(b.exportName)) : [];
     const messages: QueueMessageRow[] = messagesData?.entries ?? [];
 
-    // Reliability nudge: a push queue with no `deadLetterQueue` drops messages once
-    // they exhaust retries. Exclude any queue that is itself another queue's DLQ
-    // target (the terminal sink is meant to have no DLQ of its own). Pair it with a
-    // count of messages actually dead-lettered so the warning is concrete once it bites.
-    const dlqTargets = new Set(queues.map((queue) => queue.deadLetterQueue).filter((name): name is string => typeof name === "string" && name !== ""));
-    const queuesWithoutDlq = queues.filter(
-        (queue) => queue.mode === "push" && (queue.deadLetterQueue === undefined || queue.deadLetterQueue === "") && !dlqTargets.has(queue.name),
-    );
-    const deadLetteredCount = messages.filter((message) => message.deadLettered).length;
-    const showReliabilityWarning = queuesWithoutDlq.length > 0 || deadLetteredCount > 0;
+    // Reliability nudge: a queue with no `deadLetterQueue` drops messages once
+    // they exhaust retries (push and pull alike — mirrors the `queue_without_dlq`
+    // advisor), paired with a count of messages actually dead-lettered in the
+    // loaded log so the warning is concrete once it bites.
+    const { deadLetteredCount, queuesWithoutDlq, showReliabilityWarning } = computeQueueReliability(queues, messages);
 
     const [selectedExport, setSelectedExport] = useState<string>("");
     const [bodyText, setBodyText] = useState<string>("");
@@ -614,8 +610,8 @@ const QueuesPanel = ({ limit }: QueuesPanelProps): ReactElement => {
                         {deadLetteredCount > 0 && (
                             <p className={queuesWithoutDlq.length > 0 ? "text-muted-foreground" : "font-medium"}>
                                 {deadLetteredCount === 1
-                                    ? t("1 message was dead-lettered.")
-                                    : t("{count} messages were dead-lettered.", { count: deadLetteredCount })}
+                                    ? t("1 message was recently dead-lettered.")
+                                    : t("{count} messages were recently dead-lettered.", { count: deadLetteredCount })}
                             </p>
                         )}
                     </div>
