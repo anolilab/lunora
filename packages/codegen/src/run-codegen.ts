@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
 
@@ -110,15 +110,25 @@ const writeIfChanged = (filePath: string, content: string): void => {
 };
 
 /**
- * Write a conditionally-emitted `_generated/` file: a no-op when `content` is
- * the empty string (the convention `emit*` helpers use to mean "not
- * applicable"), so the file is only created for projects that actually use the
- * feature. Keeps the per-feature gating out of `runCodegen`'s control flow.
+ * Write a conditionally-emitted `_generated/` file, or **delete a stale one**.
+ * When `content` is the empty string (the convention `emit*` helpers use to mean
+ * "not applicable") the feature is not in use, so any file left at `filePath`
+ * from a prior run — when the feature WAS in use — is removed. Without this, a
+ * removed feature (last container/workflow/queue deleted, `@lunora/db` /
+ * `@lunora/seed` uninstalled) would leave a lingering `_generated/&lt;feature>.ts`
+ * that imports a now-absent package and breaks the build. `force: true` no-ops
+ * when the file never existed. Only ever called for the known conditional set
+ * (containers/workflows/queues/seed/collections), so it never touches an
+ * unrelated file. Keeps the per-feature gating out of `runCodegen`'s control flow.
  */
 const writeIfPresent = (filePath: string, content: string): void => {
-    if (content !== "") {
-        writeIfChanged(filePath, content);
+    if (content === "") {
+        rmSync(filePath, { force: true });
+
+        return;
     }
+
+    writeIfChanged(filePath, content);
 };
 
 /**

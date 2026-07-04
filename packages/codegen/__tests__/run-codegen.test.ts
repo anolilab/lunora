@@ -260,6 +260,29 @@ export const sendMessage = defineMutator({
                 expect(existsSync(join(workdir, "lunora", "_generated", "collections.ts"))).toBe(false);
             });
 
+            it("prunes a stale collections.ts when the @lunora/db feature is later removed", () => {
+                expect.assertions(3);
+
+                const collectionsPath = join(workdir, "lunora", "_generated", "collections.ts");
+
+                // Feature present: shapes + @lunora/db → collections.ts is written to disk.
+                writeShapes();
+                writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@lunora/db": "*" }, name: "db-app" }));
+                runCodegen({ lint: false, projectRoot: workdir });
+
+                expect(existsSync(collectionsPath)).toBe(true);
+
+                // Feature removed: drop the @lunora/db dependency. The emitter now
+                // returns "" and the prior file must be deleted, not left dangling
+                // (it imports @lunora/db, which the app no longer installs).
+                writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: {}, name: "db-app" }));
+
+                const result = runCodegen({ lint: false, projectRoot: workdir });
+
+                expect(result.generated.collections).toBe("");
+                expect(existsSync(collectionsPath)).toBe(false);
+            });
+
             it("leaves generated output byte-identical when neither shapes nor mutators are declared", () => {
                 expect.assertions(3);
 
