@@ -183,6 +183,41 @@ relation). Out of scope for autofix; in scope for the same baseline/suppression
 mechanism as the static lints (§3), since they use the same `Finding`/`cacheKey`
 contract (confirmed in `packages/advisor/src/index.ts`'s `ALL_LINTS`).
 
+### 1.5 Independent classification cross-check
+
+The classification above was not the only full pass over the 80 static lints. An
+independent classification of the same lint set — produced by four parallel
+classifier sessions with per-lint fix shapes, forwarded in batches during this
+spike, coordinated and spot-verified by the reviewing session — reached **3
+AUTOFIX-SAFE / 33 ASSISTED / 44 ADVISORY-ONLY** against this doc's **4 (3 hard +
+1 soft) / 19 / 57**. Where the two passes stand relative to each other:
+
+- **The hard AUTOFIX-SAFE sets agree exactly**: both passes independently landed
+  on `duplicate-index`, `unindexed-foreign-key`, `unindexed-relation-target` as
+  the only blind-apply-safe lints, and the external pass also flagged
+  `empty-index` as the same soft 4th candidate this doc does (§1.1).
+- **The entire delta (~14 lints) is in the ASSISTED↔ADVISORY middle band.** The
+  external pass scored each lint individually and rated
+  "single-decision-but-risky" cases ASSISTED; this doc's family-uniform rules
+  (§1) demote several of those to ADVISORY-ONLY as a family. Concrete examples,
+  all external-ASSISTED → this-doc-ADVISORY: `kv-unscoped-user-key-idor` (via
+  the arg-derived-sink family rule — the external pass itself split that family
+  5 ADVISORY vs 1 ASSISTED, which is precisely the inconsistency the family rule
+  exists to eliminate), `owner-field-from-args-not-auth`,
+  `output-projection-missing-on-public-read`, and `mask-uncovered-pii-column`
+  (silent access-control/identity failure modes, per §1.3's RLS grouping). One
+  reclassification went the other direction:
+  `mask-weak-hash-strategy-on-pii` moved to ASSISTED here, agreeing with the
+  external call over this spike's own earlier draft judgment.
+- **What the agreement and the disagreement each mean.** Two independent full
+  passes converging on the same tiny SAFE set materially strengthens the §2.5 /
+  §6 scoping of blind `--fix` to exactly those lints — that boundary is not one
+  session's taste. And the fact that the _only_ meaningful divergence is
+  ASSISTED-vs-ADVISORY in the debatable middle is itself evidence that this
+  boundary cannot be left to per-lint judgment calls: it needs the written,
+  per-family rules this doc establishes (§1), which any future lint must be
+  classified against rather than scored fresh.
+
 ## 2. Step 2 — Fixer architecture
 
 ### 2.1 Package boundary
