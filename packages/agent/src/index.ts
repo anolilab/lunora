@@ -13,6 +13,7 @@ export { adaptMcpResult, mcpTools } from "./mcp";
 export { buildModelMessages } from "./model-messages";
 export { agentBindingName, agentClassName, agentDefaultName } from "./naming";
 export { AGENT_MODULE, DEFAULT_AGENT_FUNCTION_PATHS, toFunctionReference } from "./paths";
+export { defineSkill, isSkillDefinition } from "./skill";
 export type {
     AgentAsToolOptions,
     AgentBindingSpec,
@@ -26,6 +27,7 @@ export type {
     AgentHandle,
     AgentInstructionsContext,
     AgentMemoryOptions,
+    AgentMemorySource,
     AgentMessageRow,
     AgentMessageStatus,
     AgentModelInput,
@@ -53,5 +55,7 @@ export type {
     AgentWorkflowBindingLike,
     AgentWorkflowInstanceLike,
     AnyAgentTool,
+    SkillConfig,
+    SkillDefinition,
 } from "./types";
 export { default as compileAgentWorkflow } from "./workflow";

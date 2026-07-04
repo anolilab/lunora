@@ -222,6 +222,62 @@ tools: {
 }
 ```
 
+## Skills
+
+A **skill** is a reusable bundle of expertise — an instruction fragment, tools,
+and retrieval knowledge — that many agents can share. `defineSkill` packages
+them; `defineAgent({ skills: [...] })` composes them in. It is reuse-first: a
+skill's `tools` carry the **same** `AgentToolDefinition` shape agents already use
+(`functionTool` / `mcpTools` / `agentAsTool`), and `knowledge` reuses `memory`'s
+retrieval verbatim.
+
+```ts
+import { defineAgent, defineSkill, functionTool } from "@lunora/agent";
+
+import { api } from "./_generated/api";
+
+const billing = defineSkill({
+    name: "billing",
+    // Merged into the system prompt, after the agent's own instructions.
+    instructions: "When asked about an invoice, always cite its invoice id.",
+    // Retrieved as its own durable step, keyed by the skill name.
+    knowledge: { source: "rag:searchBillingDocs", topK: 4 },
+    tools: {
+        lookupInvoice: functionTool(api.billing.invoiceById, {
+            description: "Look up an invoice by id.",
+            inputSchema: jsonSchema({ properties: { id: { type: "string" } }, required: ["id"], type: "object" }),
+        }),
+    },
+});
+
+export const support = defineAgent({
+    instructions: "You are a helpful support agent.",
+    memory: { source: "rag:searchDocs", topK: 5 },
+    model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    skills: [billing],
+});
+```
+
+`defineAgent` folds the skills at declaration time:
+
+- **Tools merge into one flat namespace.** A skill's tools join the agent's own
+  `tools`. The model sees a single namespace, so a name **collision** — between a
+  skill and the agent, or between two skills — throws at `defineAgent` (name the
+  colliding tool and rename one). This is the strict cousin of `mcpTools`'
+  `prefix`.
+- **Instructions compose in order.** The agent's own `instructions` come first,
+  then each skill's fragment in `skills` array order, joined with blank lines.
+  Dynamic fragments (thunks) resolve once at run start, so composition stays
+  replay-stable.
+- **Knowledge retrieves per skill.** Each skill's `knowledge` becomes its own
+  memory source, dispatched as a durable step at run start (`memory:retrieve:<name>`)
+  and injected alongside the agent's own `memory` context. The agent's `memory`
+  keeps the historic `memory:retrieve` step name, so adding skills never disturbs
+  an in-flight run's replay.
+
+Skills carry no runtime of their own — they are pure config the agent absorbs,
+so an agent with skills compiles onto the same durable Workflow as one without.
+
 ## Scheduling
 
 An agent compiles onto a Cloudflare Workflow, so it can be a **cron target**
