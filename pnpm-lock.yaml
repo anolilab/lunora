@@ -1580,6 +1580,9 @@ importers:
         specifier: catalog:ai
         version: 7.0.4(zod@4.4.3)
     devDependencies:
+      '@lunora/dispatch':
+        specifier: workspace:*
+        version: link:../dispatch
       '@types/node':
         specifier: catalog:types
         version: 26.0.1

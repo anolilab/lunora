@@ -1,10 +1,33 @@
 import type { AiBindingLike } from "@lunora/ai";
 import { createAi } from "@lunora/ai";
 import { LunoraError } from "@lunora/errors";
-import type { LanguageModel, ModelMessage, Tool } from "ai";
-import { generateText, tool as aiTool } from "ai";
+import type { LanguageModel, LanguageModelUsage, ModelMessage, Tool } from "ai";
+import { generateText, Output, tool as aiTool } from "ai";
 
-import type { AgentDefinition, AgentGenerate, AgentModelInput } from "./types";
+import type { AgentDefinition, AgentGenerate, AgentModelInput, AgentUsage } from "./types";
+
+/** Project AI SDK's `LanguageModelUsage` onto the loop's `AgentUsage` (defined fields only). */
+const toAgentUsage = (usage: LanguageModelUsage | undefined): AgentUsage | undefined => {
+    if (!usage) {
+        return undefined;
+    }
+
+    const result: AgentUsage = {};
+
+    if (usage.inputTokens !== undefined) {
+        result.inputTokens = usage.inputTokens;
+    }
+
+    if (usage.outputTokens !== undefined) {
+        result.outputTokens = usage.outputTokens;
+    }
+
+    if (usage.totalTokens !== undefined) {
+        result.totalTokens = usage.totalTokens;
+    }
+
+    return Object.keys(result).length > 0 ? result : undefined;
+};
 
 /** Resolve the configured model against the Worker env (see `AgentModelInput`). */
 // eslint-disable-next-line sonarjs/function-return-type -- single return type (LanguageModel); the string/object arms trip the heuristic, as in create-ai.ts
@@ -34,9 +57,15 @@ export const resolveAgentModel = (model: AgentModelInput, env: Record<string, un
  * tools are exposed to the model schema-only (NO `execute`) — the model can
  * decide to call them, but execution happens back in the loop as named
  * durable steps, never inside the model call.
+ *
+ * The static generation settings (`temperature`, `maxOutputTokens`,
+ * `toolChoice`, `output`, `telemetry`) come off the agent config; the per-turn
+ * `activeTools` / `toolChoice` / `model` overrides (from `prepareStep`) arrive
+ * on each call. When `output` is set the model runs with `Output.object` and
+ * the parsed answer is returned alongside the text.
  */
 export const createAgentGenerate = (agent: AgentDefinition, env: Record<string, unknown>): AgentGenerate => {
-    const model = resolveAgentModel(agent.model, env);
+    const defaultModel = resolveAgentModel(agent.model, env);
 
     const tools: Record<string, Tool> = {};
 
@@ -44,18 +73,33 @@ export const createAgentGenerate = (agent: AgentDefinition, env: Record<string, 
         tools[name] = aiTool({ description: definition.description, inputSchema: definition.inputSchema });
     }
 
-    return async ({ messages }) => {
+    const output = agent.output === undefined ? undefined : Output.object({ schema: agent.output });
+
+    return async ({ activeTools, messages, model, toolChoice }) => {
+        // `activeTools` restricts the exposed schema map — the model can only
+        // pick from the filtered set (default: all tools).
+        const exposed = activeTools === undefined ? tools : Object.fromEntries(Object.entries(tools).filter(([name]) => activeTools.includes(name)));
+
         const result = await generateText({
             messages: messages as ModelMessage[],
-            model,
-            ...(Object.keys(tools).length > 0 ? { tools } : {}),
+            model: model ?? defaultModel,
+            ...(Object.keys(exposed).length > 0 ? { tools: exposed } : {}),
+            ...(toolChoice === undefined ? {} : { toolChoice }),
+            ...(agent.temperature === undefined ? {} : { temperature: agent.temperature }),
+            ...(agent.maxOutputTokens === undefined ? {} : { maxOutputTokens: agent.maxOutputTokens }),
+            ...(agent.telemetry === undefined ? {} : { experimental_telemetry: agent.telemetry }),
+            ...(output === undefined ? {} : { output }),
         });
+
+        const usage = toAgentUsage(result.usage);
 
         return {
             text: result.text,
             toolCalls: result.toolCalls.map((call) => {
                 return { id: call.toolCallId, input: call.input as unknown, name: call.toolName };
             }),
+            ...(usage === undefined ? {} : { usage }),
+            ...(output === undefined ? {} : { output: result.output }),
         };
     };
 };

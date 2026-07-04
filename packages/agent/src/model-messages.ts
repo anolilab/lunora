@@ -52,6 +52,14 @@ const buildModelMessages = (options: { history: ReadonlyArray<AgentMessageRow>; 
     }
 
     for (const row of options.history) {
+        // The awaiting-approval placeholder is a UI/observability marker, not a
+        // real tool result — feeding it to the model would double the tool-call's
+        // tool-result part (breaking provider pairing). Skip it; the actual
+        // approved/rejected result carries the same toolCallId.
+        if (row.status === "awaiting_approval") {
+            continue;
+        }
+
         switch (row.role) {
             case "assistant": {
                 messages.push(assistantMessage(row));

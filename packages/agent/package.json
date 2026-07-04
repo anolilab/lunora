@@ -74,6 +74,7 @@
         "ai": "catalog:ai"
     },
     "devDependencies": {
+        "@lunora/dispatch": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

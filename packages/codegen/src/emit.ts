@@ -687,15 +687,18 @@ const renderAgentFunctionRegistry = (
 };
 
 /**
- * Synthetic `FunctionIR` entries for the auto-registered PUBLIC agent queries,
- * so `api.agents.agentMessages` / `api.agents.agentThread` exist as typed
- * references (`useSubscription(api.agents.agentMessages, { key })`). The three
- * internal mutations are deliberately not surfaced — the loop dispatches them
- * by path over the scheduler channel and nothing client- or caller-side needs
- * a reference. App-registered names win (no duplicate members).
+ * Synthetic `FunctionIR` entries for the auto-registered PUBLIC agent
+ * functions, so `api.agents.agentMessages` / `api.agents.agentThread` /
+ * `api.agents.agentResolveApproval` exist as typed references
+ * (`useSubscription(api.agents.agentMessages, { key })`,
+ * `useMutation(api.agents.agentResolveApproval)`). The three thread-write
+ * mutations stay internal — the loop dispatches them by path over the scheduler
+ * channel and nothing client- or caller-side needs a reference;
+ * `agentResolveApproval` is public because a client resolves approvals with it
+ * (owner-gated inside the mutation). App-registered names win (no duplicate members).
  *
  * KEEP IN SYNC with `@lunora/agent`'s `component.ts` (`agentMessages` /
- * `agentThread` inputs + return shapes) — codegen cannot statically discover a
+ * `agentThread` / `agentResolveApproval` inputs + return shapes) — codegen cannot statically discover a
  * published package's function types, so these are pinned by hand; the drift
  * test in `discover-agents.test.ts` asserts the arg KEY SETS against the
  * runtime component, but arg/return TYPE changes must be mirrored manually.
@@ -713,6 +716,25 @@ const syntheticAgentApiFunctions = (agents: ReadonlyArray<AgentIR>, functions: R
             filePath: "agents",
             kind: "query",
             returnType: "Record<string, unknown>[]",
+        },
+        {
+            args: {
+                decision: {
+                    kind: "union",
+                    members: [
+                        { kind: "literal", literalValue: '"approve"' },
+                        { kind: "literal", literalValue: '"reject"' },
+                    ],
+                },
+                instanceId: { kind: "string" },
+                note: { inner: { kind: "string" }, kind: "optional" },
+                threadKey: { kind: "string" },
+                toolCallId: { kind: "string" },
+            },
+            exportName: "agentResolveApproval",
+            filePath: "agents",
+            kind: "mutation",
+            returnType: "{ resolved: boolean }",
         },
         {
             args: { key: { kind: "string" } },

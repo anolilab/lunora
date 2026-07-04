@@ -1,4 +1,4 @@
-import type { FlexibleSchema, LanguageModel } from "ai";
+import type { FlexibleSchema, LanguageModel, ModelMessage, StopCondition, TelemetryOptions, ToolChoice, ToolSet } from "ai";
 
 /**
  * Structural mirror of the Lunora function reference (`{ __lunoraRef }`).
@@ -15,6 +15,15 @@ export type AgentRunFunction = (reference: AgentFunctionReference, args?: Record
 /** Structural subset of the Cloudflare Workflows durable-step API the loop needs. */
 export interface AgentStepLike {
     do: <T>(name: string, callback: () => Promise<T>) => Promise<T>;
+
+    /**
+     * Durably hibernate until an external event of `type` arrives, then return
+     * its payload. Used for human-in-the-loop approvals: a run pauses on
+     * `approval:&lt;toolCallId>` until a client resolves it. Like `do`, a resolved
+     * wait is memoized — a replay returns the recorded decision without pausing
+     * again. Signature mirrors `@lunora/workflow`'s `WorkflowStepLike`.
+     */
+    waitForEvent: <T = unknown>(name: string, options: { timeout?: number | string; type: string }) => Promise<{ payload: Readonly<T>; type: string }>;
 }
 
 /**
@@ -57,6 +66,19 @@ export interface AgentToolDefinition<Input = unknown, Output = unknown> {
     inputSchema: FlexibleSchema<Input>;
     /** Runtime brand. */
     isLunoraAgentTool: true;
+
+    /**
+     * Gate the tool behind a human approval (mirrors the AI SDK's
+     * `needsApproval`). When it resolves truthy the durable run PAUSES — the
+     * thread moves to `"awaiting_input"` and the workflow hibernates on
+     * `approval:&lt;toolCallId>` — until a client calls `agents:agentResolveApproval`.
+     * On approve the tool runs exactly as normal; on reject it is skipped and a
+     * tool result explaining the rejection is persisted so the next turn recovers.
+     * A boolean gates statically; a function gates per input. Default: `false`
+     * (unchanged behavior). Evaluated from replay-stable input, so keep it
+     * deterministic (no `Date.now()`/`Math.random()`).
+     */
+    needsApproval?: ((input: Input, context: AgentToolContext) => boolean | Promise<boolean>) | boolean;
 }
 
 /** Author-supplied tool config (see {@link AgentToolDefinition}). */
@@ -94,10 +116,105 @@ export interface AgentMemoryOptions {
     topK?: number;
 }
 
+/** Cumulative or per-turn token usage — AI SDK `LanguageModelUsage` field names. */
+export interface AgentUsage {
+    /** Prompt (input) tokens. */
+    inputTokens?: number;
+    /** Completion (output) tokens. */
+    outputTokens?: number;
+    /** Input + output tokens. */
+    totalTokens?: number;
+}
+
+/** Context handed to a dynamic {@link AgentConfig.instructions} function. */
+export interface AgentInstructionsContext {
+    /** The Worker environment bindings. */
+    env: Record<string, unknown>;
+    /** The user message that started this run. */
+    input: string;
+    /** The thread this run belongs to. */
+    threadKey: string;
+}
+
+/** One prior turn, as {@link AgentConfig.prepareStep} and `stopWhen` observe it. */
+export interface AgentStepInfo {
+    /** The assistant text of the turn. */
+    text: string;
+    /** The tool calls the turn issued (AI SDK `StepResult.toolCalls` shape). */
+    toolCalls: ReadonlyArray<{ input: unknown; toolCallId: string; toolName: string }>;
+    /** The turn's token usage, when the model reported it. */
+    usage?: AgentUsage;
+}
+
+/** The turn summary handed to {@link AgentConfig.onStepFinish}. */
+export interface AgentStepFinishInfo {
+    /** The assistant text produced this turn. */
+    text: string;
+    /** The tool calls issued this turn (empty on the final answer). */
+    toolCalls: ReadonlyArray<AgentToolCall>;
+    /** The zero-based turn index. */
+    turn: number;
+    /** The turn's token usage, when the model reported it. */
+    usage?: AgentUsage;
+}
+
+/**
+ * Called after each LLM turn with that turn's text, tool calls, and usage. Runs
+ * inside a named durable step (`agent:step-finish:&lt;turn>`) so it fires exactly
+ * once per turn even across a workflow replay.
+ */
+export type AgentOnStepFinish = (info: AgentStepFinishInfo) => Promise<void> | void;
+
+/** The input {@link AgentConfig.prepareStep} sees before a turn runs. */
+export interface AgentPrepareStepInput {
+    /** The messages assembled for this turn (instructions + memory + history). */
+    messages: ReadonlyArray<ModelMessage>;
+    /** The zero-based index of the turn about to run. */
+    stepNumber: number;
+    /** The turns already completed this run. */
+    steps: ReadonlyArray<AgentStepInfo>;
+}
+
+/**
+ * Per-turn overrides {@link AgentConfig.prepareStep} may return. A returned
+ * `messages` array **replaces** the assembled history for that turn — the seam
+ * where history compaction lives.
+ */
+export interface AgentPrepareStepResult {
+    /** Restrict the tools exposed to the model this turn (by name). */
+    activeTools?: ReadonlyArray<string>;
+    /** Replace the assembled messages for this turn (history compaction). */
+    messages?: ReadonlyArray<ModelMessage>;
+    /** Swap the model for this turn. */
+    model?: AgentModelInput;
+    /** Prepend a system message for this turn. */
+    system?: string;
+    /** Override the tool-choice strategy for this turn. */
+    toolChoice?: ToolChoice<ToolSet>;
+}
+
+/**
+ * Adjust the next turn before it runs — mirrors AI SDK's `prepareStep`. Invoked
+ * inside the turn's durable step so its effect is memoized on replay.
+ */
+export type AgentPrepareStep = (input: AgentPrepareStepInput) => AgentPrepareStepResult | Promise<AgentPrepareStepResult | undefined> | undefined;
+
 export interface AgentConfig {
-    /** System prompt prepended to every model call. */
-    instructions?: string;
-    /** Cost/step cap: maximum LLM turns per run. Default 8. */
+    /** Restrict the tools the model may call, by name. Default: all tools. */
+    activeTools?: ReadonlyArray<string>;
+
+    /**
+     * System prompt prepended to every model call — a static string or a thunk
+     * derived from the run context (dynamic instructions).
+     */
+    instructions?: string | ((context: AgentInstructionsContext) => string);
+    /** Cap the tokens generated per turn (AI SDK `maxOutputTokens`). */
+    maxOutputTokens?: number;
+
+    /**
+     * Cost/step cap: maximum LLM turns per run. Default 8. Composes with
+     * {@link AgentConfig.stopWhen} — the loop ends when EITHER triggers.
+     */
     maxTurns?: number;
     /** Retrieval-augmented memory — see {@link AgentMemoryOptions}. */
     memory?: AgentMemoryOptions;
@@ -111,6 +228,44 @@ export interface AgentConfig {
      * name (`support` → `AGENT_SUPPORT`).
      */
     name?: string;
+
+    /**
+     * Policy when a run starts on a thread that already has a DIFFERENT run in
+     * flight (the thread's `status` is `"running"` under another workflow
+     * instance) — the guard that stops two runs from interleaving messages on
+     * the shared per-thread seq counter:
+     *
+     * - `"reject"` (default) — fail the new run fast with a `CONFLICT` error.
+     * - `"replace"` — terminate the in-flight instance and take the thread over.
+     * - `"queue"` — reserved for a future durable queue; currently degrades to `"reject"` (no queue exists yet), tracked as a follow-up.
+     *
+     * A workflow REPLAY re-enters the bootstrap under the SAME instance id and
+     * is never a concurrent run (the guard compares the stored instance id).
+     */
+    onConcurrentRun?: "queue" | "reject" | "replace";
+    /** Called after each LLM turn — see {@link AgentOnStepFinish}. */
+    onStepFinish?: AgentOnStepFinish;
+
+    /**
+     * Structured final answer: a zod schema or `jsonSchema(...)`. When set the
+     * loop runs the model with AI SDK `Output.object({ schema })` and returns
+     * the parsed object in {@link AgentRunResult.output}.
+     */
+    output?: FlexibleSchema<unknown>;
+    /** Adjust the next turn before it runs — see {@link AgentPrepareStep}. */
+    prepareStep?: AgentPrepareStep;
+
+    /**
+     * Extra loop-stop conditions (AI SDK `StopCondition`s). Composes with
+     * {@link AgentConfig.maxTurns} — the loop ends when EITHER triggers.
+     */
+    stopWhen?: ReadonlyArray<StopCondition<ToolSet>> | StopCondition<ToolSet>;
+    /** Passed to `generateText` as `experimental_telemetry`. */
+    telemetry?: TelemetryOptions;
+    /** Sampling temperature forwarded to the model. */
+    temperature?: number;
+    /** Tool-choice strategy (AI SDK `ToolChoice`). Default: `"auto"`. */
+    toolChoice?: ToolChoice<ToolSet>;
     /** The tools the model may call, by name. */
     tools?: Record<string, AnyAgentTool>;
 }
@@ -143,12 +298,20 @@ export interface AgentRunInput {
 
 /** Output of one agent run (the compiled workflow's return value). */
 export interface AgentRunResult {
-    /** Why the run ended: a final answer or the `maxTurns` cap. */
-    stopped: "final" | "maxTurns";
+    /** The parsed structured answer, when {@link AgentConfig.output} is set. */
+    output?: unknown;
+
+    /**
+     * Why the run ended: a final answer, a `stopWhen` condition, or the
+     * `maxTurns` cap.
+     */
+    stopped: "final" | "maxTurns" | "stopCondition";
     /** The final assistant text (absent when stopped by `maxTurns`). */
     text?: string;
     /** LLM turns consumed. */
     turns: number;
+    /** Cumulative token usage across the run's turns, when the model reported it. */
+    usage?: AgentUsage;
 }
 
 /**
@@ -163,11 +326,21 @@ export interface AgentFunctionPaths {
     patchThread: string;
 }
 
+/**
+ * Approval lifecycle marker on a message: `"awaiting_approval"` on the
+ * placeholder written while a run pauses on a gated tool, then `"approved"` /
+ * `"rejected"` on the tool result once a client resolves it. Absent on ordinary
+ * messages. `"awaiting_approval"` rows are filtered out of the model prompt.
+ */
+export type AgentMessageStatus = "approved" | "awaiting_approval" | "rejected";
+
 /** One persisted thread message, as the loop reads it back. */
 export interface AgentMessageRow {
     content: string;
     role: "assistant" | "system" | "tool" | "user";
     seq: number;
+    /** Approval lifecycle marker — see {@link AgentMessageStatus}. */
+    status?: AgentMessageStatus;
     toolCallId?: string;
     toolCalls?: ReadonlyArray<AgentToolCall>;
     toolName?: string;
@@ -182,15 +355,31 @@ export interface AgentToolCall {
 
 /** Normalized result of one LLM turn (the `generate` seam's return value). */
 export interface AgentGenerateResult {
+    /** The parsed structured answer, when {@link AgentConfig.output} is set. */
+    output?: unknown;
     text: string;
     toolCalls: ReadonlyArray<AgentToolCall>;
+    /** Token usage the model reported for this turn. */
+    usage?: AgentUsage;
+}
+
+/** Options passed to the {@link AgentGenerate} seam for one LLM turn. */
+export interface AgentGenerateOptions {
+    /** Restrict the tools exposed to the model this turn (by name). */
+    activeTools?: ReadonlyArray<string>;
+    /** The assembled conversation for this turn. */
+    messages: ReadonlyArray<unknown>;
+    /** A per-turn model override (from {@link AgentConfig.prepareStep}). */
+    model?: LanguageModel;
+    /** A per-turn tool-choice override. */
+    toolChoice?: ToolChoice<ToolSet>;
 }
 
 /**
  * The LLM-turn seam: given the assembled conversation, return the model's
  * decision. Production wires AI SDK `generateText`; tests inject a script.
  */
-export type AgentGenerate = (options: { messages: ReadonlyArray<unknown> }) => Promise<AgentGenerateResult>;
+export type AgentGenerate = (options: AgentGenerateOptions) => Promise<AgentGenerateResult>;
 
 /** Spec entry codegen emits per agent: `{ binding: "AGENT_SUPPORT", exportName: "support" }`. */
 export interface AgentBindingSpec {
@@ -198,10 +387,28 @@ export interface AgentBindingSpec {
     exportName: string;
 }
 
+/**
+ * The lifecycle status stored on an agent thread: `"running"` while a run is in
+ * flight, `"idle"` after it finishes (or stops on a condition), `"error"` on a
+ * terminal failure, `"cancelled"` when a run was terminated via
+ * {@link AgentHandle.cancel}, and `"awaiting_input"` while the run is paused on
+ * a human-in-the-loop tool approval. Mirrored by the `status` `v.union` in
+ * `component.ts`.
+ */
+export type AgentThreadStatus = "awaiting_input" | "cancelled" | "error" | "idle" | "running";
+
+/** Structural subset of a Cloudflare Workflow instance the producer surface needs. */
+export interface AgentWorkflowInstanceLike {
+    /** Deliver an external event to the running instance (resumes a `waitForEvent`). */
+    sendEvent: (event: { payload: unknown; type: string }) => Promise<void>;
+    status: () => Promise<unknown>;
+    terminate: () => Promise<void>;
+}
+
 /** Structural subset of a Cloudflare Workflow binding the producer surface needs. */
 export interface AgentWorkflowBindingLike {
     create: (options?: { id?: string; params?: unknown }) => Promise<{ id: string }>;
-    get: (id: string) => Promise<{ status: () => Promise<unknown> }>;
+    get: (id: string) => Promise<AgentWorkflowInstanceLike>;
 }
 
 /** A started agent run (a workflow instance). */
@@ -212,8 +419,20 @@ export interface AgentRunHandle {
 
 /** The `ctx.agents.&lt;name>` producer handle. */
 export interface AgentHandle {
+    /**
+     * Cancel a run by its workflow instance id: terminate the instance and mark
+     * its thread `"cancelled"`. Safe to call on an already-finished run.
+     */
+    cancel: (id: string) => Promise<void>;
     /** Start a durable agent run for a thread. */
     run: (input: AgentRunInput, options?: { id?: string }) => Promise<AgentRunHandle>;
+
+    /**
+     * Deliver an external event to a run by its workflow instance id — the path
+     * `agents:agentResolveApproval` uses to resume a run paused on a
+     * human-in-the-loop tool approval.
+     */
+    sendEvent: (id: string, event: { payload: unknown; type: string }) => Promise<void>;
     /** Read a run's workflow status by instance id. */
     status: (id: string) => Promise<unknown>;
 }

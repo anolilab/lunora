@@ -4,6 +4,28 @@ import { agentComponent, agentExtension } from "../src/component";
 
 const UNKNOWN_THREAD_PATTERN = /unknown thread/u;
 const ANOTHER_OWNER_PATTERN = /another owner/u;
+const IN_FLIGHT_PATTERN = /already has a run in flight/u;
+const NOT_ALLOWED_PATTERN = /not allowed to resolve approvals/u;
+const NO_PRODUCER_PATTERN = /no ctx\.agents/u;
+
+/** A `ctx.agents` double recording the `sendEvent` calls the approval mutation makes. */
+const fakeAgents = (): {
+    agents: Record<string, { sendEvent: (id: string, event: { payload: unknown; type: string }) => Promise<void> }>;
+    sent: { event: { payload: unknown; type: string }; id: string }[];
+} => {
+    const sent: { event: { payload: unknown; type: string }; id: string }[] = [];
+
+    return {
+        agents: {
+            support: {
+                sendEvent: async (id, event) => {
+                    sent.push({ event, id });
+                },
+            },
+        },
+        sent,
+    };
+};
 
 interface FakeRow extends Record<string, unknown> {
     _id: string;
@@ -112,6 +134,8 @@ describe(agentComponent, () => {
         expect(functions.agentPatchThread.visibility).toBe("internal");
         expect(functions.agentMessages.visibility).toBeUndefined();
         expect(functions.agentThread.visibility).toBeUndefined();
+        // Public: a client resolves approvals with it (owner-gated internally).
+        expect(functions.agentResolveApproval.visibility).toBeUndefined();
     });
 
     it("get-or-creates threads and dedupes appends by messageKey", async () => {
@@ -237,5 +261,154 @@ describe("thread ownership", () => {
         for (const table of Object.values(agentExtension.tables)) {
             expect((table as { isPublic?: boolean }).isPublic).toBe(true);
         }
+    });
+});
+
+describe("approval resolution", () => {
+    it("delivers the decision to the run's workflow instance via ctx.agents", async () => {
+        const { functions } = agentComponent();
+        const owner = fakeDatabase({ userId: "user-a" });
+        const { agents, sent } = fakeAgents();
+        const ctx = { ...owner.ctx, agents };
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-1", key: "t-1", owner: "user-a" });
+
+        const result = await callMutation(functions.agentResolveApproval, ctx, {
+            decision: "approve",
+            instanceId: "wf-1",
+            note: "looks good",
+            threadKey: "t-1",
+            toolCallId: "call_1",
+        });
+
+        expect(result).toStrictEqual({ resolved: true });
+        expect(sent).toStrictEqual([{ event: { payload: { decision: "approve", note: "looks good" }, type: "agent-approval" }, id: "wf-1" }]);
+    });
+
+    it("owner-gates the mutation: a foreign caller cannot approve", async () => {
+        const { functions } = agentComponent();
+        const owner = fakeDatabase({ userId: "user-a" });
+        const { agents, sent } = fakeAgents();
+
+        await callMutation(functions.agentEnsureThread, { ...owner.ctx, agents }, { agent: "support", instanceId: "wf-1", key: "t-1", owner: "user-a" });
+
+        // A stranger's ctx carries a different verified identity.
+        const strangerContext = { ...owner.ctx, agents, auth: { userId: "user-b" } };
+
+        await expect(
+            callMutation(functions.agentResolveApproval, strangerContext, { decision: "approve", instanceId: "wf-1", threadKey: "t-1", toolCallId: "call_1" }),
+        ).rejects.toThrow(NOT_ALLOWED_PATTERN);
+
+        // The foreign caller never reached the workflow binding.
+        expect(sent).toStrictEqual([]);
+    });
+
+    it("errors when no ctx.agents producer is wired for the thread's agent", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase({ userId: "user-a" });
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-1", key: "t-1", owner: "user-a" });
+
+        await expect(
+            callMutation(functions.agentResolveApproval, ctx, { decision: "reject", instanceId: "wf-1", threadKey: "t-1", toolCallId: "call_1" }),
+        ).rejects.toThrow(NO_PRODUCER_PATTERN);
+    });
+});
+
+describe("concurrency guard", () => {
+    it("rejects a second run while the thread is running under another instance", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-a", key: "t-1" });
+
+        // A different instance on the still-running thread is a genuine second run.
+        await expect(
+            callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-b", key: "t-1", onConcurrentRun: "reject" }),
+        ).rejects.toThrow(IN_FLIGHT_PATTERN);
+
+        // The default policy is reject too.
+        await expect(callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-b", key: "t-1" })).rejects.toThrow(IN_FLIGHT_PATTERN);
+    });
+
+    it("rejects a second run while the thread is paused for approval (awaiting_input) under another instance", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-a", key: "t-1" });
+        // A HITL approval pause still owns the thread — the prior instance is
+        // hibernating on step.waitForEvent and will resume.
+        await callMutation(functions.agentPatchThread, ctx, { instanceId: "wf-a", status: "awaiting_input" });
+
+        await expect(
+            callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-b", key: "t-1", onConcurrentRun: "reject" }),
+        ).rejects.toThrow(IN_FLIGHT_PATTERN);
+    });
+
+    it("replaces a run paused for approval (awaiting_input) under another instance", async () => {
+        const { functions } = agentComponent();
+        const { ctx, rows } = fakeDatabase();
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-old", key: "t-1" });
+        await callMutation(functions.agentPatchThread, ctx, { instanceId: "wf-old", status: "awaiting_input" });
+
+        const result = await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-new", key: "t-1", onConcurrentRun: "replace" });
+
+        expect(result).toStrictEqual({ created: false, priorInstanceId: "wf-old", replaced: true });
+        expect(rows.get("agent_threads")?.[0]?.["instanceId"]).toBe("wf-new");
+        expect(rows.get("agent_threads")?.[0]?.["status"]).toBe("running");
+    });
+
+    it("allows a replay of the SAME instance (a workflow re-runs the bootstrap)", async () => {
+        const { functions } = agentComponent();
+        const { ctx, rows } = fakeDatabase();
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-a", key: "t-1" });
+
+        await expect(
+            callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-a", key: "t-1", onConcurrentRun: "reject" }),
+        ).resolves.toStrictEqual({
+            created: false,
+        });
+
+        expect(rows.get("agent_threads")?.[0]?.["status"]).toBe("running");
+        expect(rows.get("agent_threads")?.[0]?.["instanceId"]).toBe("wf-a");
+    });
+
+    it("does not reject when the running thread has no stored instance id (pre-column threads)", async () => {
+        const { functions } = agentComponent();
+        const { ctx } = fakeDatabase();
+
+        // A thread created without an instance id can't be told apart from a
+        // replay, so the guard must fall through rather than false-reject.
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", key: "t-1" });
+
+        await expect(callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-b", key: "t-1" })).resolves.toStrictEqual({
+            created: false,
+        });
+    });
+
+    it("replaces: takes the thread over and reports the prior instance", async () => {
+        const { functions } = agentComponent();
+        const { ctx, rows } = fakeDatabase();
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-old", key: "t-1" });
+
+        const result = await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-new", key: "t-1", onConcurrentRun: "replace" });
+
+        expect(result).toStrictEqual({ created: false, priorInstanceId: "wf-old", replaced: true });
+        expect(rows.get("agent_threads")?.[0]?.["instanceId"]).toBe("wf-new");
+        expect(rows.get("agent_threads")?.[0]?.["status"]).toBe("running");
+    });
+
+    it("cancels a thread by instance id: patchThread sets status cancelled", async () => {
+        const { functions } = agentComponent();
+        const { ctx, rows } = fakeDatabase();
+
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-a", key: "t-1" });
+
+        await callMutation(functions.agentPatchThread, ctx, { instanceId: "wf-a", status: "cancelled" });
+
+        expect(rows.get("agent_threads")?.[0]?.["status"]).toBe("cancelled");
     });
 });
