@@ -211,6 +211,28 @@ describe("dispatchQueueBatch capture", () => {
         expect(records[0]).toMatchObject({ outcome: "error" });
     });
 
+    it("records error and re-throws even when the handler throws a falsy value (throw undefined)", async () => {
+        expect.assertions(2);
+
+        const capture = vi.fn();
+        const queue = defineQueue({
+            handler: () => {
+                // eslint-disable-next-line @typescript-eslint/only-throw-error -- exercise the falsy-throw path: `throw undefined` reaches the catch with `undefined`, which `handlerError !== undefined` would misread as a clean return
+                throw undefined;
+            },
+        });
+        const m = captureMessage({ n: 1 });
+
+        // Dispatch must track "the handler threw" with a dedicated flag, not by
+        // inspecting the captured value: an undefined throw still records `error`
+        // and re-throws so workerd retries the batch.
+        await expect(dispatchQueueBatch(batch("q", [m]), { q: { definition: queue, exportName: "q" } }, { capture, env: {} })).rejects.toBeUndefined();
+
+        const [records] = capture.mock.calls[0] as [{ outcome: string }[]];
+
+        expect(records[0]).toMatchObject({ outcome: "error" });
+    });
+
     it("flags deadLettered when a non-ack disposition exhausts maxRetries", async () => {
         expect.assertions(1);
 

@@ -207,8 +207,13 @@ const describeThrownError = (handlerError: unknown): string => {
  * whole batch). `deadLettered` flags a non-ack disposition that exhausted the
  * queue's `maxRetries`.
  */
-const buildCaptureRecords = (harness: CaptureHarness, entry: QueueRegistryEntry, queue: string, handlerError: unknown): CapturedQueueMessage[] => {
-    const threw = handlerError !== undefined;
+const buildCaptureRecords = (
+    harness: CaptureHarness,
+    entry: QueueRegistryEntry,
+    queue: string,
+    threw: boolean,
+    handlerError: unknown,
+): CapturedQueueMessage[] => {
     const errorMessage = threw ? describeThrownError(handlerError) : undefined;
     const maxRetries = typeof entry.definition.maxRetries === "number" ? entry.definition.maxRetries : DEFAULT_MAX_RETRIES;
 
@@ -266,11 +271,17 @@ const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegist
     }
 
     const harness = instrumentBatch(batch);
+    // A separate flag, not `handlerError !== undefined`: a handler can throw a
+    // falsy/undefined value (`throw undefined`, `Promise.reject()`), which must
+    // still record `error` and re-throw — testing the captured value would
+    // mis-read those as a clean return.
+    let threw = false;
     let handlerError: unknown;
 
     try {
         await handler(context, harness.wrappedBatch);
     } catch (error) {
+        threw = true;
         handlerError = error;
     }
 
@@ -280,16 +291,17 @@ const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegist
     // (else workerd re-delivers an already-acked batch) and a failed batch must
     // still re-throw the handler's ORIGINAL value below — never the capture error.
     try {
-        const records = buildCaptureRecords(harness, entry, batch.queue, handlerError);
+        const records = buildCaptureRecords(harness, entry, batch.queue, threw, handlerError);
 
         await options.capture(records);
     } catch {
         // Swallowed — see above.
     }
 
-    // Preserve workerd's retry-on-throw: re-throw after capturing.
-    if (handlerError !== undefined) {
-        // eslint-disable-next-line @typescript-eslint/only-throw-error -- re-throw the handler's original thrown value verbatim so workerd's retry semantics are unchanged
+    // Preserve workerd's retry-on-throw: re-throw the handler's original value
+    // verbatim after capturing. (`handlerError` is `unknown`, which `only-throw-error`
+    // permits, so no disable directive is needed.)
+    if (threw) {
         throw handlerError;
     }
 };
