@@ -1,37 +1,22 @@
 import type { AuthCapabilities } from "@lunora/client";
-import { useLunora } from "@lunora/react";
-import { useEffect, useState } from "react";
 
-import { fireAndForget } from "../lib/internal";
+import { DEFAULT_AUTH_CONFIG, useAuthConfig } from "./use-auth-config";
 
-/** Conservative defaults until `getAuthCapabilities()` resolves: core surfaces on, plugin surfaces off. */
-export const DEFAULT_CAPABILITIES: AuthCapabilities = { accounts: true, admin: true, organization: false, passkey: false, twoFactor: false };
+/** Conservative defaults until the config resolves: core surfaces on, plugin surfaces off. Derived from the canonical {@link DEFAULT_AUTH_CONFIG}. */
+export const DEFAULT_CAPABILITIES: AuthCapabilities = DEFAULT_AUTH_CONFIG.capabilities;
 
 /**
- * Fetch the worker's auth capabilities once (they're fixed per deployment — which
- * better-auth plugins are enabled). Returns the conservative {@link DEFAULT_CAPABILITIES}
- * until the fetch settles (or if it fails, e.g. a read-only `authIntrospector`
- * that has no `capabilities` op), with `ready` flipping true once it has. Shared
- * by every panel that gates a surface on a plugin.
+ * The worker's auth capabilities (which better-auth plugins are enabled) — a
+ * thin selector over {@link useAuthConfig}, since `AuthConfigInfo.capabilities`
+ * already carries everything this returns. Sharing the underlying
+ * `["lunora-auth-config"]` read means a panel that gates on a plugin flag and a
+ * panel that renders the full config detail dedupe onto one request rather than
+ * fetching `getAuthCapabilities` and `getAuthConfig` separately. Returns the
+ * conservative {@link DEFAULT_CAPABILITIES} until the fetch settles, with
+ * `ready` flipping true once it has.
  */
 export const useAuthCapabilities = (): { capabilities: AuthCapabilities; ready: boolean } => {
-    const client = useLunora();
-    const [capabilities, setCapabilities] = useState<AuthCapabilities>(DEFAULT_CAPABILITIES);
-    const [ready, setReady] = useState<boolean>(false);
+    const { config, ready } = useAuthConfig();
 
-    useEffect(() => {
-        fireAndForget(
-            (async (): Promise<void> => {
-                try {
-                    setCapabilities(await client.getAuthCapabilities());
-                } catch {
-                    // Leave the conservative defaults in place if the endpoint is unavailable.
-                } finally {
-                    setReady(true);
-                }
-            })(),
-        );
-    }, [client]);
-
-    return { capabilities, ready };
+    return { capabilities: config.capabilities, ready };
 };
