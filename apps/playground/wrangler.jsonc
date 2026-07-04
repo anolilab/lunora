@@ -56,4 +56,18 @@
         "LUNORA_WORKER_ORIGIN": "http://localhost:8787",
         "LUNORA_ORIGIN_URL": "http://localhost:8787",
     },
+    "queues": {
+        "consumers": [
+            {
+                "queue": "notifications",
+                "max_retries": 3,
+            },
+        ],
+        "producers": [
+            {
+                "binding": "QUEUE_NOTIFICATIONS",
+                "queue": "notifications",
+            },
+        ],
+    },
 }

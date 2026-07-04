@@ -176,7 +176,12 @@ const buildImportLines = (options: EmitAppOptions): string[] => {
         ...(hasGlobal || hasHyperdriveGlobal ? [`import schema from "../schema.js";`] : []),
         `import { LUNORA_CRONS } from "./crons.js";`,
         `import { LUNORA_FUNCTIONS } from "./functions.js";`,
-        ...(hasQueue ? [`import { dispatchQueueBatch } from "@lunora/queue";`, `import { LUNORA_QUEUE_REGISTRY } from "./queues.js";`] : []),
+        ...(hasQueue
+            ? [
+                  `import { createQueueCaptureSink, dispatchQueueBatch, shouldCaptureQueue } from "@lunora/queue";`,
+                  `import { LUNORA_QUEUE_REGISTRY } from "./queues.js";`,
+              ]
+            : []),
         ...(wantsOpenApi ? [`import { openApiSpec } from "./openapi.js";`] : []),
         ...(wantsOpenRpc ? [`import { openRpcSpec } from "./openrpc.js";`] : []),
         `import { createShardDO } from "./shard.js";`,
@@ -567,11 +572,20 @@ const buildBaseWorkerOptions = (options: EmitAppOptions): string[] => [
     // The push-consumer handler backing the worker's `queue(batch, …)` entry:
     // routes each delivered batch to its `defineQueue` handler. Built from
     // `@lunora/queue` here (keeping the runtime decoupled) and wired only when the
-    // app declares push queues in `lunora/queues.ts`.
+    // app declares push queues in `lunora/queues.ts`. In a dev environment (or with
+    // `LUNORA_QUEUE_CAPTURE`), every consumed message is recorded into the studio's
+    // Queues log via the root shard's `recordQueueMessage` admin RPC.
     ...(options.hasQueue
         ? [
               `            queue: (batch: unknown, queueEnv: unknown, _context: ExecutionContextLike): Promise<void> =>`,
-              `                dispatchQueueBatch(batch as Parameters<typeof dispatchQueueBatch>[0], LUNORA_QUEUE_REGISTRY, { env: queueEnv as Record<string, unknown> }),`,
+              `                dispatchQueueBatch(batch as Parameters<typeof dispatchQueueBatch>[0], LUNORA_QUEUE_REGISTRY, {`,
+              `                    capture: shouldCaptureQueue(queueEnv as Record<string, unknown>)`,
+              `                        ? createQueueCaptureSink(queueEnv as Record<string, unknown>${
+                  options.jurisdiction ? `, { jurisdiction: ${JSON.stringify(options.jurisdiction)} }` : ""
+              })`,
+              `                        : undefined,`,
+              `                    env: queueEnv as Record<string, unknown>,`,
+              `                }),`,
           ]
         : []),
     `            routes: this.routeMap,`,

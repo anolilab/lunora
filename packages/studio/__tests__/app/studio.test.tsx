@@ -9,6 +9,7 @@ import type {
     FanoutTopicStat,
     FlagEvaluation,
     FlagsResult,
+    QueueMessageRow,
     QueueMetadata,
     StudioFeaturesResult,
 } from "../../src/lib/admin";
@@ -117,6 +118,29 @@ const STUDIO_FEATURES_KEY_GUARD: KeysMatch<keyof StudioFeaturesResult, (typeof S
 const QUEUE_METADATA_KEYS = ["binding", "deadLetterQueue", "exportName", "mode", "name"] as const;
 
 const QUEUE_METADATA_KEY_GUARD: KeysMatch<keyof QueueMetadata, (typeof QUEUE_METADATA_KEYS)[number]> = true;
+
+/**
+ * Canonical key set of `QueueMessageRow` (the `getQueueMessages` consumed-message
+ * log row) — hand-mirrored from `@lunora/do` the same way as `QueueMetadata`. The
+ * `QueuesPanel` Messages tab reads these fields off the wire, so a drift would
+ * surface as a silent `undefined` cell; this guard fails the build instead.
+ * `error`/`exportName` are optional.
+ */
+const QUEUE_MESSAGE_ROW_KEYS = [
+    "attempts",
+    "body",
+    "capturedAt",
+    "deadLettered",
+    "error",
+    "exportName",
+    "id",
+    "messageId",
+    "outcome",
+    "queue",
+    "timestamp",
+] as const;
+
+const QUEUE_MESSAGE_ROW_KEY_GUARD: KeysMatch<keyof QueueMessageRow, (typeof QUEUE_MESSAGE_ROW_KEYS)[number]> = true;
 
 /**
  * Canonical key sets of `FlagEvaluation` / `FlagsResult` — hand-mirrored from
@@ -284,6 +308,25 @@ describe("studio", () => {
 
         expect(QUEUE_METADATA_KEY_GUARD).toBe(true);
         expect([...QUEUE_METADATA_KEYS]).toStrictEqual(["binding", "deadLetterQueue", "exportName", "mode", "name"]);
+    });
+
+    it("keeps the studio's QueueMessageRow mirror in lockstep with @lunora/do's contract", () => {
+        expect.assertions(2);
+
+        expect(QUEUE_MESSAGE_ROW_KEY_GUARD).toBe(true);
+        expect([...QUEUE_MESSAGE_ROW_KEYS]).toStrictEqual([
+            "attempts",
+            "body",
+            "capturedAt",
+            "deadLettered",
+            "error",
+            "exportName",
+            "id",
+            "messageId",
+            "outcome",
+            "queue",
+            "timestamp",
+        ]);
     });
 
     it("keeps the studio's FlagEvaluation/FlagsResult mirror in lockstep with @lunora/do's contract", () => {

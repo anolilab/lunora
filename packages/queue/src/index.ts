@@ -1,7 +1,9 @@
+export type { QueueCaptureOptions, QueueEnv } from "./capture";
+export { createQueueCaptureSink, shouldCaptureQueue } from "./capture";
 export { createQueueContext } from "./create-queue-context";
 export { default as createQueues } from "./create-queues";
 export { defineQueue, isQueueDefinition, queueBindingName, queueDefaultName } from "./define-queue";
-export type { QueueRegistry, QueueRegistryEntry } from "./dispatch";
+export type { CapturedQueueMessage, QueueCaptureSink, QueueRegistry, QueueRegistryEntry } from "./dispatch";
 export { dispatchQueueBatch } from "./dispatch";
 export { createQueueRunContext } from "./run-context";
 export type {
