@@ -7,6 +7,7 @@ const ANOTHER_OWNER_PATTERN = /another owner/u;
 const IN_FLIGHT_PATTERN = /already has a run in flight/u;
 const NOT_ALLOWED_PATTERN = /not allowed to resolve approvals/u;
 const NO_PRODUCER_PATTERN = /no ctx\.agents/u;
+const NOT_ENABLED_PATTERN = /not enabled for public runs/u;
 
 /** A `ctx.agents` double recording the `sendEvent` calls the approval mutation makes. */
 const fakeAgents = (): {
@@ -140,6 +141,8 @@ describe(agentComponent, () => {
         expect(functions.agentState.visibility).toBeUndefined();
         // Public: a client resolves approvals with it (owner-gated internally).
         expect(functions.agentResolveApproval.visibility).toBeUndefined();
+        // Public: an HTTP-only client (the MCP server) starts a run with it.
+        expect(functions.agentRun.visibility).toBeUndefined();
     });
 
     it("get-or-creates threads and dedupes appends by messageKey", async () => {
@@ -389,6 +392,118 @@ describe("approval resolution", () => {
         await expect(
             callMutation(functions.agentResolveApproval, ctx, { decision: "reject", instanceId: "wf-1", threadKey: "t-1", toolCallId: "call_1" }),
         ).rejects.toThrow(NO_PRODUCER_PATTERN);
+    });
+});
+
+/**
+ * A `ctx.agents` double recording the `run` calls `agentRun` makes. `publicRun`
+ * defaults to `true` (the opt-in the run mutation requires); pass `false` to
+ * exercise the fail-closed gate.
+ */
+const fakeRunAgents = (
+    publicRun = true,
+): {
+    agents: Record<
+        string,
+        { publicRun: boolean; run: (input: { input: string; owner?: string; threadKey: string; title?: string }) => Promise<{ id: string }> }
+    >;
+    started: { input: string; owner?: string; threadKey: string; title?: string }[];
+} => {
+    const started: { input: string; owner?: string; threadKey: string; title?: string }[] = [];
+
+    return {
+        agents: {
+            support: {
+                publicRun,
+                run: async (input) => {
+                    started.push(input);
+
+                    return { id: "wf-run-1" };
+                },
+            },
+        },
+        started,
+    };
+};
+
+describe("agentRun", () => {
+    it("dispatches to ctx.agents[agent].run with the caller's owner and returns { id, threadKey }", async () => {
+        const { functions } = agentComponent();
+        const owner = fakeDatabase({ userId: "user-a" });
+        const { agents, started } = fakeRunAgents();
+        const ctx = { ...owner.ctx, agents };
+
+        const result = await callMutation(functions.agentRun, ctx, { agent: "support", input: "hello", threadKey: "mcp-1", title: "Greeting" });
+
+        expect(result).toStrictEqual({ id: "wf-run-1", threadKey: "mcp-1" });
+        expect(started).toStrictEqual([{ input: "hello", owner: "user-a", threadKey: "mcp-1", title: "Greeting" }]);
+    });
+
+    it("omits owner and title when they are absent (anonymous token, no title)", async () => {
+        const { functions } = agentComponent();
+        const { ctx: baseCtx } = fakeDatabase();
+        const { agents, started } = fakeRunAgents();
+        const ctx = { ...baseCtx, agents };
+
+        const result = await callMutation(functions.agentRun, ctx, { agent: "support", input: "hi", threadKey: "mcp-2" });
+
+        expect(result).toStrictEqual({ id: "wf-run-1", threadKey: "mcp-2" });
+        expect(started).toStrictEqual([{ input: "hi", threadKey: "mcp-2" }]);
+    });
+
+    it("refuses fail-closed an agent that did not opt into publicRun", async () => {
+        const { functions } = agentComponent();
+        const { ctx: baseCtx } = fakeDatabase({ userId: "user-a" });
+        const { agents, started } = fakeRunAgents(false);
+        const ctx = { ...baseCtx, agents };
+
+        await expect(callMutation(functions.agentRun, ctx, { agent: "support", input: "hi", threadKey: "mcp-gate" })).rejects.toThrow(NOT_ENABLED_PATTERN);
+
+        // The workflow binding was never reached — nothing was started.
+        expect(started).toStrictEqual([]);
+    });
+
+    it("is idempotent under retry: returns the in-flight instance without starting a second run", async () => {
+        const { functions } = agentComponent();
+        const database = fakeDatabase({ userId: "user-a" });
+        const { agents, started } = fakeRunAgents();
+        const ctx = { ...database.ctx, agents };
+
+        // A run is already in flight for this thread (started by an earlier
+        // agentRun whose bootstrap wrote the thread row under instance "wf-run-1").
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-run-1", key: "mcp-retry", owner: "user-a" });
+
+        const result = await callMutation(functions.agentRun, ctx, { agent: "support", input: "hello again", threadKey: "mcp-retry" });
+
+        expect(result).toStrictEqual({ id: "wf-run-1", threadKey: "mcp-retry" });
+        // No SECOND run — the in-flight instance is reused (never terminated).
+        expect(started).toStrictEqual([]);
+    });
+
+    it("starts a fresh run when reusing a threadKey whose prior run has finished", async () => {
+        const { functions } = agentComponent();
+        const database = fakeDatabase({ userId: "user-a" });
+        const { agents, started } = fakeRunAgents();
+        const ctx = { ...database.ctx, agents };
+
+        // A prior run on this thread has finished (idle) — continuing the
+        // conversation must start a new run, not dedupe onto the old instance.
+        await callMutation(functions.agentEnsureThread, ctx, { agent: "support", instanceId: "wf-old", key: "mcp-cont", owner: "user-a" });
+        await callMutation(functions.agentPatchThread, ctx, { key: "mcp-cont", status: "idle" });
+
+        const result = await callMutation(functions.agentRun, ctx, { agent: "support", input: "next turn", threadKey: "mcp-cont" });
+
+        expect(result).toStrictEqual({ id: "wf-run-1", threadKey: "mcp-cont" });
+        expect(started).toStrictEqual([{ input: "next turn", owner: "user-a", threadKey: "mcp-cont" }]);
+    });
+
+    it("errors when no ctx.agents producer is wired for the named agent", async () => {
+        const { functions } = agentComponent();
+        const { ctx: baseCtx } = fakeDatabase({ userId: "user-a" });
+        const { agents } = fakeRunAgents();
+        const ctx = { ...baseCtx, agents };
+
+        await expect(callMutation(functions.agentRun, ctx, { agent: "unknown", input: "hi", threadKey: "mcp-3" })).rejects.toThrow(NO_PRODUCER_PATTERN);
     });
 });
 

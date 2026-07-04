@@ -777,18 +777,22 @@ const renderSandboxFunctionRegistry = (usesSandbox: boolean, functions: Readonly
 /**
  * Synthetic `FunctionIR` entries for the auto-registered PUBLIC agent
  * functions, so `api.agents.agentMessages` / `api.agents.agentState` /
- * `api.agents.agentThread` / `api.agents.agentResolveApproval` exist as typed
- * references (`useSubscription(api.agents.agentMessages, { key })`,
+ * `api.agents.agentThread` / `api.agents.agentResolveApproval` /
+ * `api.agents.agentRun` exist as typed references
+ * (`useSubscription(api.agents.agentMessages, { key })`,
  * `useAgentState({ api, threadKey })` over `api.agents.agentState`,
  * `useMutation(api.agents.agentResolveApproval)`). The four thread-write
  * mutations (`agentAppendMessage`/`agentEnsureThread`/`agentPatchThread`/
  * `agentSetState`) stay internal — the loop dispatches them by path over the
  * scheduler channel and nothing client- or caller-side needs a reference;
- * `agentResolveApproval` is public because a client resolves approvals with it
- * (owner-gated inside the mutation). App-registered names win (no duplicate members).
+ * `agentResolveApproval` is public because a client resolves approvals with it,
+ * and `agentRun` is public because an HTTP-only client (the `@lunora/mcp`
+ * server) starts a durable run with it — both owner-gated inside the mutation.
+ * App-registered names win (no duplicate members).
  *
  * KEEP IN SYNC with `@lunora/agent`'s `component.ts` (`agentMessages` /
- * `agentState` / `agentThread` / `agentResolveApproval` inputs + return shapes) — codegen cannot statically discover a
+ * `agentState` / `agentThread` / `agentResolveApproval` / `agentRun` inputs +
+ * return shapes) — codegen cannot statically discover a
  * published package's function types, so these are pinned by hand; the drift
  * test in `discover-agents.test.ts` asserts the arg KEY SETS against the
  * runtime component, but arg/return TYPE changes must be mirrored manually.
@@ -825,6 +829,18 @@ const syntheticAgentApiFunctions = (agents: ReadonlyArray<AgentIR>, functions: R
             filePath: "agents",
             kind: "mutation",
             returnType: "{ resolved: boolean }",
+        },
+        {
+            args: {
+                agent: { kind: "string" },
+                input: { kind: "string" },
+                threadKey: { kind: "string" },
+                title: { inner: { kind: "string" }, kind: "optional" },
+            },
+            exportName: "agentRun",
+            filePath: "agents",
+            kind: "mutation",
+            returnType: "{ id: string; threadKey: string }",
         },
         {
             args: { key: { kind: "string" } },
@@ -2989,7 +3005,9 @@ const emitAgentFragments = (agents: ReadonlyArray<AgentIR>): { build: string; co
         assertIdentifier(agent.bindingName, `agent binding "${agent.bindingName}"`);
     }
 
-    const specEntries = agents.map((agent) => `    { binding: "${agent.bindingName}", exportName: "${agent.exportName}" },`).join("\n");
+    const specEntries = agents
+        .map((agent) => `    { binding: "${agent.bindingName}", exportName: "${agent.exportName}"${agent.publicRun === true ? ", publicRun: true" : ""} },`)
+        .join("\n");
 
     return {
         build: `

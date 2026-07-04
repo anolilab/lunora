@@ -47,6 +47,10 @@ const createAgentContext = (env: Record<string, unknown>, specs: ReadonlyArray<A
                 await instance.terminate();
                 await resolveDispatch()(patchThread, { instanceId: id, status: "cancelled" });
             },
+            // Carried from the codegen spec (`defineAgent({ publicRun: true })`).
+            // Gates the public `agents:agentRun` mutation fail-closed; the
+            // server-side `run(...)` below is unaffected.
+            publicRun: spec.publicRun === true,
             run: async (input: AgentRunInput, options?: { id?: string }) => {
                 const instance = await resolve().create({ ...(options?.id === undefined ? {} : { id: options.id }), params: input });
 
