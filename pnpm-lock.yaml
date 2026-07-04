@@ -640,6 +640,7 @@ catalogs:
 overrides:
   '@lunora/advisor': workspace:*
   '@lunora/agent': workspace:*
+  '@lunora/agent-telemetry': workspace:*
   '@lunora/ai': workspace:*
   '@lunora/angular': workspace:*
   '@lunora/astro': workspace:*
@@ -1604,6 +1605,34 @@ importers:
       esbuild:
         specifier: catalog:build
         version: 0.28.1
+      typescript:
+        specifier: catalog:tsc
+        version: 6.0.3
+      vitest:
+        specifier: catalog:test
+        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@26.0.1)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
+
+  packages/agent-telemetry:
+    dependencies:
+      ai:
+        specifier: catalog:ai
+        version: 7.0.4(zod@4.4.3)
+    devDependencies:
+      '@types/node':
+        specifier: catalog:types
+        version: 26.0.1
+      '@visulima/packem':
+        specifier: catalog:build
+        version: 2.0.0-alpha.93(bffced2686306bb6226d43aebeb20a33)
+      '@vitest/coverage-v8':
+        specifier: catalog:test
+        version: 4.1.9(vitest@4.1.9)
+      esbuild:
+        specifier: catalog:build
+        version: 0.28.1
+      fallow:
+        specifier: catalog:lint
+        version: 2.102.0
       typescript:
         specifier: catalog:tsc
         version: 6.0.3

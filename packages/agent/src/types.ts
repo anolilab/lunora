@@ -326,7 +326,7 @@ export interface AgentConfig {
      * {@link AgentConfig.maxTurns} — the loop ends when EITHER triggers.
      */
     stopWhen?: ReadonlyArray<StopCondition<ToolSet>> | StopCondition<ToolSet>;
-    /** Passed to `generateText` as `experimental_telemetry`. */
+    /** Passed to `generateText` as its stable `telemetry` option. */
     telemetry?: TelemetryOptions;
     /** Sampling temperature forwarded to the model. */
     temperature?: number;
