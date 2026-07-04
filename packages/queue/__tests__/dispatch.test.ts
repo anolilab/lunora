@@ -1,8 +1,44 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { defineQueue } from "../src/define-queue";
+import type { CapturedQueueMessage } from "../src/dispatch";
 import { dispatchQueueBatch } from "../src/dispatch";
 import type { MessageBatchLike, MessageLike } from "../src/types";
+
+/** `true` only when `Keys` and `Canonical` are mutually assignable (the exact same key set). */
+type KeysMatch<Keys extends string, Canonical extends string> = [Keys] extends [Canonical] ? ([Canonical] extends [Keys] ? true : never) : never;
+
+/**
+ * Canonical key set of `CapturedQueueMessage` — the record `dispatchQueueBatch`
+ * hands the sink. `@lunora/do`'s `RecordQueueMessageInput` is its structural mirror
+ * across the deliberate no-dependency-edge boundary and duplicates this exact tuple
+ * in its own drift guard (`shard-do.admin.test.ts`), so a field added to / dropped
+ * from either side fails that side's build before a capture write loses or forges a
+ * column. `error` is optional.
+ */
+const CAPTURED_QUEUE_MESSAGE_KEYS = ["attempts", "body", "deadLettered", "error", "exportName", "messageId", "outcome", "queue", "timestamp"] as const;
+
+// Compile-time drift guard: assigning `true` fails tsc the moment the key sets diverge.
+const CAPTURED_QUEUE_MESSAGE_KEY_GUARD: KeysMatch<keyof CapturedQueueMessage, (typeof CAPTURED_QUEUE_MESSAGE_KEYS)[number]> = true;
+
+describe("captured-message wire shape (CapturedQueueMessage)", () => {
+    it("keeps its keys in lockstep with @lunora/do's RecordQueueMessageInput", () => {
+        expect.assertions(2);
+
+        expect(CAPTURED_QUEUE_MESSAGE_KEY_GUARD).toBe(true);
+        expect([...CAPTURED_QUEUE_MESSAGE_KEYS]).toStrictEqual([
+            "attempts",
+            "body",
+            "deadLettered",
+            "error",
+            "exportName",
+            "messageId",
+            "outcome",
+            "queue",
+            "timestamp",
+        ]);
+    });
+});
 
 const message = <Body>(body: Body): MessageLike<Body> & { acked: boolean } => {
     const m = {
@@ -64,5 +100,192 @@ describe("dispatchQueueBatch", () => {
         const pull = defineQueue({ mode: "pull" });
 
         await expect(dispatchQueueBatch(batch("p", []), { p: { definition: pull, exportName: "p" } }, { env: {} })).rejects.toThrow(/pull consumer/);
+    });
+});
+
+/** A message double with a caller-chosen id / attempt count for the capture tests. */
+const captureMessage = (body: unknown, options: { attempts?: number; id?: string } = {}): MessageLike & { acked: boolean; retried: boolean } => {
+    const m = {
+        ack: vi.fn<() => void>(() => {
+            m.acked = true;
+        }),
+        acked: false,
+        attempts: options.attempts ?? 1,
+        body,
+        id: options.id ?? "m1",
+        retried: false,
+        retry: vi.fn<() => void>(() => {
+            m.retried = true;
+        }),
+        timestamp: new Date(0),
+    };
+
+    return m;
+};
+
+describe("dispatchQueueBatch capture", () => {
+    it("records an implicit ack for a clean handler return", async () => {
+        expect.assertions(2);
+
+        const capture = vi.fn();
+        const queue = defineQueue({ handler: () => {} });
+        const m = captureMessage({ ok: true });
+
+        await dispatchQueueBatch(batch("q", [m]), { q: { definition: queue, exportName: "myQueue" } }, { capture, env: {} });
+
+        expect(capture).toHaveBeenCalledTimes(1);
+
+        const [records] = capture.mock.calls[0] as [{ deadLettered: boolean; exportName: string; outcome: string; queue: string }[]];
+
+        expect(records[0]).toMatchObject({ deadLettered: false, exportName: "myQueue", outcome: "ack" });
+    });
+
+    it("records an explicit retry and does not mutate the original message", async () => {
+        expect.assertions(4);
+
+        const capture = vi.fn();
+        let handlerSaw: MessageLike | undefined;
+        const queue = defineQueue({
+            handler: (_context, b) => {
+                [handlerSaw] = b.messages;
+                handlerSaw?.retry();
+            },
+        });
+        const m = captureMessage({ ok: false });
+
+        await dispatchQueueBatch(batch("q", [m]), { q: { definition: queue, exportName: "q" } }, { capture, env: {} });
+
+        // The handler sees a WRAPPER, not the original host message, but calling
+        // wrapper.retry() delegates to the original's spy.
+        expect(handlerSaw).not.toBe(m);
+        expect(m.retried).toBe(true);
+
+        const [records] = capture.mock.calls[0] as [{ outcome: string }[]];
+
+        expect(records[0]).toMatchObject({ outcome: "retry" });
+        expect(capture).toHaveBeenCalledTimes(1);
+    });
+
+    it("records an error and re-throws so workerd still retries the batch", async () => {
+        expect.assertions(2);
+
+        const capture = vi.fn();
+        const boom = new Error("handler blew up");
+        const queue = defineQueue({
+            handler: () => {
+                throw boom;
+            },
+        });
+        const m = captureMessage({ n: 1 });
+
+        await expect(dispatchQueueBatch(batch("q", [m]), { q: { definition: queue, exportName: "q" } }, { capture, env: {} })).rejects.toBe(boom);
+
+        const [records] = capture.mock.calls[0] as [{ error?: string; outcome: string }[]];
+
+        expect(records[0]).toMatchObject({ error: "handler blew up", outcome: "error" });
+    });
+
+    it("re-throws the handler's original error even when it can't be JSON-encoded (cyclic)", async () => {
+        expect.assertions(2);
+
+        const capture = vi.fn();
+        const cyclic: Record<string, unknown> = {};
+
+        cyclic["self"] = cyclic;
+
+        const queue = defineQueue({
+            handler: () => {
+                // eslint-disable-next-line @typescript-eslint/only-throw-error -- deliberately throwing a non-Error cyclic value to exercise the describe/capture guard
+                throw cyclic;
+            },
+        });
+        const m = captureMessage({ n: 1 });
+
+        // Describing the thrown value used to `JSON.stringify` it OUTSIDE the capture
+        // guard, so a cyclic throw replaced the handler's error with a serializer
+        // TypeError. It must now re-throw the ORIGINAL value and still record `error`.
+        await expect(dispatchQueueBatch(batch("q", [m]), { q: { definition: queue, exportName: "q" } }, { capture, env: {} })).rejects.toBe(cyclic);
+
+        const [records] = capture.mock.calls[0] as [{ outcome: string }[]];
+
+        expect(records[0]).toMatchObject({ outcome: "error" });
+    });
+
+    it("flags deadLettered when a non-ack disposition exhausts maxRetries", async () => {
+        expect.assertions(1);
+
+        const capture = vi.fn();
+        const queue = defineQueue({
+            handler: (_context, b) => {
+                b.messages[0]?.retry();
+            },
+            maxRetries: 3,
+        });
+        const m = captureMessage({ n: 2 }, { attempts: 3 });
+
+        await dispatchQueueBatch(batch("q", [m]), { q: { definition: queue, exportName: "q" } }, { capture, env: {} });
+
+        const [records] = capture.mock.calls[0] as [{ deadLettered: boolean; outcome: string }[]];
+
+        expect(records[0]).toMatchObject({ deadLettered: true, outcome: "retry" });
+    });
+
+    it("fills undecided messages from ackAll / retryAll", async () => {
+        expect.assertions(2);
+
+        const ackCapture = vi.fn();
+        const ackQueue = defineQueue({
+            handler: (_context, b) => {
+                b.ackAll();
+            },
+        });
+
+        await dispatchQueueBatch(
+            batch("q", [captureMessage(1), captureMessage(2, { id: "m2" })]),
+            { q: { definition: ackQueue, exportName: "q" } },
+            { capture: ackCapture, env: {} },
+        );
+        const [ackRecords] = ackCapture.mock.calls[0] as [{ outcome: string }[]];
+
+        expect(ackRecords.every((record) => record.outcome === "ack")).toBe(true);
+
+        const retryCapture = vi.fn();
+        const retryQueue = defineQueue({
+            handler: (_context, b) => {
+                b.retryAll();
+            },
+        });
+
+        await dispatchQueueBatch(
+            batch("q", [captureMessage(1), captureMessage(2, { id: "m2" })]),
+            { q: { definition: retryQueue, exportName: "q" } },
+            { capture: retryCapture, env: {} },
+        );
+        const [retryRecords] = retryCapture.mock.calls[0] as [{ outcome: string }[]];
+
+        expect(retryRecords.every((record) => record.outcome === "retry")).toBe(true);
+    });
+
+    it("swallows a capture-sink rejection so delivery semantics are unchanged", async () => {
+        expect.assertions(2);
+
+        const capture = vi.fn(() => Promise.reject(new Error("sink down")));
+        const m = captureMessage({ ok: true });
+        const queue = defineQueue({ handler: () => {} });
+
+        // The clean-return path resolves despite the sink failing...
+        await expect(dispatchQueueBatch(batch("q", [m]), { q: { definition: queue, exportName: "q" } }, { capture, env: {} })).resolves.toBeUndefined();
+
+        // ...and a throwing handler still re-throws (retry preserved) despite the sink failing.
+        const boom = new Error("boom");
+        const throwing = defineQueue({
+            handler: () => {
+                throw boom;
+            },
+        });
+
+        await expect(dispatchQueueBatch(batch("q", [captureMessage(1)]), { q: { definition: throwing, exportName: "q" } }, { capture, env: {} })).rejects.toBe(
+            boom,
+        );
     });
 });
