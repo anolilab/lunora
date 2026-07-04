@@ -89,6 +89,52 @@ describe("createQueueCaptureSink", () => {
         expect(JSON.parse(init.body as string)).toStrictEqual({ args: { messages }, functionPath: "__lunora_admin__:recordQueueMessage" });
     });
 
+    it("passes an abort signal on the capture fetch", async () => {
+        expect.assertions(2);
+
+        const ns = namespace();
+
+        await createQueueCaptureSink({ LUNORA_ADMIN_TOKEN: "tok", SHARD: { get: ns.get, idFromName: ns.idFromName } })([record()]);
+
+        const [, init] = ns.fetch.mock.calls[0] as [string, RequestInit];
+
+        expect(init.signal).toBeInstanceOf(AbortSignal);
+        expect(init.signal?.aborted).toBe(false);
+    });
+
+    it("aborts the capture fetch when the root shard never responds", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers();
+
+        try {
+            // A stub whose fetch hangs until its abort signal fires — stands in for an
+            // unresponsive root shard DO. Without the sink's timeout this would stall
+            // the whole queue() invocation.
+            const fetch = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(
+                (_url, init) =>
+                    new Promise((_resolve, reject) => {
+                        init?.signal?.addEventListener("abort", () => {
+                            reject(new DOMException("Aborted", "AbortError"));
+                        });
+                    }),
+            );
+            const idFromName = vi.fn<(name: string) => string>((name) => `id:${name}`);
+            const get = vi.fn<(id: unknown) => { fetch: typeof fetch }>(() => {
+                return { fetch };
+            });
+
+            const pending = createQueueCaptureSink({ LUNORA_ADMIN_TOKEN: "tok", SHARD: { get, idFromName } })([record()]);
+
+            // Advance past the 5s cap and assert the hung fetch is aborted. The
+            // expectation subscribes to `pending` before the timer fires, so the
+            // rejection is always observed (no unhandled rejection).
+            await Promise.all([expect(pending).rejects.toThrow(/abort/iu), vi.advanceTimersByTimeAsync(5000)]);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it("routes through a jurisdiction-scoped namespace when configured", async () => {
         expect.assertions(2);
 

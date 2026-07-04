@@ -24,6 +24,14 @@ const DEFAULT_ROOT_SHARD = "__root__";
 const DEV_ENVIRONMENT_PATTERN = /^(?:dev(?:elopment)?|local(?:host)?|test)$/iu;
 const ENVIRONMENT_VARS = ["CF_ENV", "ENVIRONMENT", "NODE_ENV", "WORKER_ENV"] as const;
 
+/**
+ * Cap on the capture-sink POST to the root shard. The sink is best-effort but
+ * `dispatchQueueBatch` awaits it inline, so an unresponsive root shard would stall
+ * the whole `queue()` invocation (risking the consumer's execution limit) without
+ * this abort. On timeout the fetch rejects and the dispatcher swallows it.
+ */
+const CAPTURE_FETCH_TIMEOUT_MS = 5000;
+
 /** Minimal structural projection of a Durable Object stub (`namespace.get(id)`) — only `fetch`. */
 interface DurableObjectStubLike {
     fetch: (url: string, init?: RequestInit) => Promise<Response>;
@@ -111,11 +119,23 @@ const createQueueCaptureSink = (env: QueueEnv, options: QueueCaptureOptions = {}
 
         const stub = namespace.get(namespace.idFromName(rootShard));
 
-        await stub.fetch("https://shard.internal/rpc", {
-            body: JSON.stringify({ args: { messages }, functionPath: RECORD_QUEUE_MESSAGE_OP }),
-            headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
-            method: "POST",
-        });
+        // Bound the inline capture write so a slow/unresponsive root shard can't hold
+        // the consumer open indefinitely (see CAPTURE_FETCH_TIMEOUT_MS).
+        const controller = new AbortController();
+        const timeout = setTimeout(() => {
+            controller.abort();
+        }, CAPTURE_FETCH_TIMEOUT_MS);
+
+        try {
+            await stub.fetch("https://shard.internal/rpc", {
+                body: JSON.stringify({ args: { messages }, functionPath: RECORD_QUEUE_MESSAGE_OP }),
+                headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+                method: "POST",
+                signal: controller.signal,
+            });
+        } finally {
+            clearTimeout(timeout);
+        }
     };
 };
 
