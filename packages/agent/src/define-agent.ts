@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
+import { agentAsTool } from "./as-tool";
 import type { AgentConfig, AgentDefinition, AgentToolConfig, AgentToolDefinition } from "./types";
 
 /** Tool names surface as model function names — keep them identifier-shaped. */
@@ -54,7 +55,11 @@ const defineAgent = (config: AgentConfig): AgentDefinition => {
         }
     }
 
-    return { ...config, isLunoraAgent: true };
+    // `asTool` ignores the parent config — it delegates by the child's export
+    // name (its `AGENT_*` binding) — so a plain function works as the method.
+    // It is runtime-only: codegen discovers agents by AST, never by evaluating
+    // the object, so the extra property does not perturb emission.
+    return { ...config, asTool: agentAsTool, isLunoraAgent: true };
 };
 
 /** Runtime brand check for a {@link AgentDefinition}. */

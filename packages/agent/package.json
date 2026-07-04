@@ -71,6 +71,7 @@
         "@lunora/server": "1.0.0-alpha.14",
         "@lunora/values": "1.0.0-alpha.4",
         "@lunora/workflow": "1.0.0-alpha.6",
+        "@modelcontextprotocol/sdk": "catalog:mcp",
         "ai": "catalog:ai"
     },
     "devDependencies": {

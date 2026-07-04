@@ -18,6 +18,8 @@ import type {
     AgentStepFinishInfo,
     AgentStepInfo,
     AgentStepLike,
+    AgentStreamGenerate,
+    AgentTokenSink,
     AgentToolCall,
     AgentToolContext,
     AgentUsage,
@@ -34,10 +36,27 @@ interface AgentLoopOptions {
     generate: AgentGenerate;
     /** The workflow instance id — the deterministic per-run message-key prefix. */
     instanceId: string;
+
+    /**
+     * Live-only sink for streamed token deltas. Supplied by the runtime (tees to
+     * the existing stream transport); when present together with
+     * {@link AgentLoopOptions.streamGenerate} each turn streams its deltas here
+     * instead of a single non-streaming `generate` call. Absent (the default)
+     * keeps the byte-identical non-streaming path. Never fired on a replay — the
+     * memoized turn skips the step body that would emit deltas.
+     */
+    onTokenDelta?: AgentTokenSink;
     params: AgentRunInput;
     paths: AgentFunctionPaths;
     run: AgentRunFunction;
     step: AgentStepLike;
+
+    /**
+     * The streaming LLM-turn seam — production wires AI SDK `streamText`. Used
+     * only when {@link AgentLoopOptions.onTokenDelta} is also present; otherwise
+     * the loop falls back to {@link AgentLoopOptions.generate} unchanged.
+     */
+    streamGenerate?: AgentStreamGenerate;
 }
 
 const DEFAULT_MAX_TURNS = 8;
@@ -52,11 +71,15 @@ interface TurnContext {
     instructions: string | undefined;
     listMessages: ReturnType<typeof toFunctionReference>;
     memoryContext: string | undefined;
+    /** Live-only token-delta sink, when the runtime provided one (else `undefined`). */
+    onTokenDelta: AgentTokenSink | undefined;
     /** Patch this run's thread by key (status/error/usage/…). */
     patchThread: (patch: Record<string, unknown>) => Promise<void>;
     persist: (message: Record<string, unknown>) => Promise<void>;
     run: AgentRunFunction;
     step: AgentStepLike;
+    /** The streaming LLM-turn seam, when available (else `undefined`). */
+    streamGenerate: AgentStreamGenerate | undefined;
     threadKey: string;
     tools: Record<string, AnyAgentTool>;
 }
@@ -279,7 +302,7 @@ const applyPrepareStepResult = (
  * non-deterministic compaction (e.g. an LLM summarization) replay-safe.
  */
 const generateTurn = async (turnContext: TurnContext, turn: number, steps: ReadonlyArray<AgentStepInfo>): Promise<AgentGenerateResult> => {
-    const { agent, env, generate, instructions, listMessages, memoryContext, run, step, threadKey } = turnContext;
+    const { agent, env, generate, instructions, listMessages, memoryContext, onTokenDelta, run, step, streamGenerate, threadKey } = turnContext;
 
     return step.do(`llm:turn:${String(turn)}`, async () => {
         const history = (await run(listMessages, { key: threadKey })) as AgentMessageRow[];
@@ -295,12 +318,25 @@ const generateTurn = async (turnContext: TurnContext, turn: number, steps: Reado
             prepared = applyPrepareStepResult(prepared, await agent.prepareStep({ messages: prepared.messages, stepNumber: turn, steps }), env);
         }
 
-        return generate({
+        const request: AgentGenerateOptions = {
             messages: prepared.messages,
             ...(prepared.activeTools === undefined ? {} : { activeTools: prepared.activeTools }),
             ...(prepared.model === undefined ? {} : { model: prepared.model }),
             ...(prepared.toolChoice === undefined ? {} : { toolChoice: prepared.toolChoice }),
-        });
+        };
+
+        // Streaming path: only when the runtime wired BOTH a streaming seam and a
+        // live sink. The tee runs here, inside the turn's durable step, so a
+        // replay serves the memoized result WITHOUT re-invoking the seam — no
+        // delta is re-emitted. The resolved final value is identical to the
+        // non-streaming seam's, so the persisted message is unchanged either way.
+        if (streamGenerate && onTokenDelta) {
+            return streamGenerate(request, (text) => {
+                onTokenDelta({ text, threadKey, turn });
+            });
+        }
+
+        return generate(request);
     });
 };
 
@@ -510,7 +546,7 @@ const runTurns = async (
  * step-name sequence.
  */
 const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> => {
-    const { agent, env, exportName, generate, instanceId, params, paths, run, step } = options;
+    const { agent, env, exportName, generate, instanceId, onTokenDelta, params, paths, run, step, streamGenerate } = options;
     const maxTurns = agent.maxTurns ?? DEFAULT_MAX_TURNS;
     const stopConditions = normalizeStopWhen(agent.stopWhen);
 
@@ -568,10 +604,12 @@ const runAgentLoop = async (options: AgentLoopOptions): Promise<AgentRunResult> 
         instructions,
         listMessages,
         memoryContext,
+        onTokenDelta,
         patchThread: patchThreadByKey,
         persist,
         run,
         step,
+        streamGenerate,
         threadKey: params.threadKey,
         tools: agent.tools ?? {},
     };

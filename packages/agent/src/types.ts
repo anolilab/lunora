@@ -270,8 +270,48 @@ export interface AgentConfig {
     tools?: Record<string, AnyAgentTool>;
 }
 
+/** The input the parent model provides when delegating to a sub-agent tool. */
+export interface AgentSubToolInput {
+    /** The task or question to hand to the sub-agent. */
+    prompt: string;
+}
+
+/** Options for {@link AgentDefinition.asTool} (`agent.asTool(...)`). */
+export interface AgentAsToolOptions {
+    /** What the sub-agent does — shown to the parent's model (it decides from it). */
+    description: string;
+
+    /** Cap on child-run status polls before giving up. Default 120. */
+    maxPolls?: number;
+
+    /**
+     * The child agent's export name — selects its `AGENT_&lt;NAME>` Workflow
+     * binding (e.g. `"researcher"` → `AGENT_RESEARCHER`). The model-facing tool
+     * name is the KEY assigned in the parent's `tools` map, not this.
+     */
+    name: string;
+
+    /** Delay (ms) between child-run status polls. Default 500. */
+    pollIntervalMs?: number;
+
+    /**
+     * Test seam replacing the between-poll wait. Production uses a real timer;
+     * tests inject an immediate resolve so polling runs without wall-clock delay.
+     */
+    wait?: (ms: number) => Promise<void>;
+}
+
 /** A `defineAgent` result — config plus the brand codegen discovers. */
 export interface AgentDefinition extends AgentConfig {
+    /**
+     * Adapt this agent into a tool a PARENT agent can call: the returned tool's
+     * `execute` starts a durable child run on the named agent's Workflow binding
+     * and returns its final answer. Mirrors `@lunora/ai/rag`'s `asTool()`. The
+     * child run is correlated by a replay-stable `threadKey` derived from the
+     * parent's `toolCallId`, so a retried step reuses the same sub-run.
+     */
+    asTool: (options: AgentAsToolOptions) => AgentToolDefinition<AgentSubToolInput, string>;
+
     /** Runtime brand check (see `isAgentDefinition`). */
     readonly isLunoraAgent: true;
 }
@@ -380,6 +420,47 @@ export interface AgentGenerateOptions {
  * decision. Production wires AI SDK `generateText`; tests inject a script.
  */
 export type AgentGenerate = (options: AgentGenerateOptions) => Promise<AgentGenerateResult>;
+
+/**
+ * A live token delta produced while a turn streams. Ephemeral — deltas are
+ * pushed to the sink as the model generates and are NEVER replayed (the
+ * persisted assistant message is the single source of truth). Keyed by
+ * `threadKey` + the zero-based `turn` so a client can correlate a delta to the
+ * in-flight turn.
+ */
+export interface AgentTokenDelta {
+    /** The incremental text chunk the model just produced. */
+    text: string;
+    /** The thread this delta belongs to. */
+    threadKey: string;
+    /** The zero-based index of the turn producing the delta. */
+    turn: number;
+}
+
+/**
+ * A live-only sink for streamed token deltas. The runtime provides it (teeing
+ * to the existing stream transport); tests capture it. Invoked ONLY on the
+ * first execution of a turn's durable step — a workflow replay serves the
+ * memoized turn without re-running the body, so no delta is re-emitted.
+ *
+ * At-least-once caveat: if a turn's step *fails mid-stream* (before it commits)
+ * the workflow retries the not-yet-memoized step and re-tees that turn's deltas
+ * from scratch. This is the standard durable-step retry contract, not a replay
+ * of a completed turn. Consumers should therefore reset/dedupe accumulated text
+ * per `threadKey`+`turn` boundary so a step retry cannot visually double-append;
+ * the persisted assistant message remains the single source of truth.
+ */
+export type AgentTokenSink = (delta: AgentTokenDelta) => void;
+
+/**
+ * The streaming LLM-turn seam: like {@link AgentGenerate} but tees each text
+ * delta to `onDelta` as the model produces it, then resolves the SAME
+ * {@link AgentGenerateResult} the non-streaming seam returns — so the value the
+ * durable `llm:turn:N` step memoizes (and persists) is identical whether the
+ * turn streamed or not. Production wires AI SDK `streamText`; tests inject a
+ * script. Deltas are live-only — a workflow replay never re-invokes the seam.
+ */
+export type AgentStreamGenerate = (options: AgentGenerateOptions, onDelta: (text: string) => void) => Promise<AgentGenerateResult>;
 
 /** Spec entry codegen emits per agent: `{ binding: "AGENT_SUPPORT", exportName: "support" }`. */
 export interface AgentBindingSpec {

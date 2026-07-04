@@ -11,6 +11,9 @@ import type {
     AgentGenerateResult,
     AgentRunFunction,
     AgentStepFinishInfo,
+    AgentStreamGenerate,
+    AgentTokenDelta,
+    AgentTokenSink,
     AgentToolContext,
 } from "../src/types";
 
@@ -276,6 +279,41 @@ const scriptedGenerate = (script: AgentGenerateResult[]): AgentGenerate & { seen
     generate.seen = seen;
 
     return generate;
+};
+
+/** One scripted streamed turn: the deltas to tee, then the final decision it resolves to. */
+interface StreamTurn {
+    deltas: ReadonlyArray<string>;
+    result: AgentGenerateResult;
+}
+
+/**
+ * A scripted streaming LLM seam: per turn it tees each delta through `onDelta`
+ * (in order), then resolves the scripted final decision — mirroring how the real
+ * `streamText` seam feeds the live channel while returning the persisted turn.
+ * `state.calls` counts real invocations so a test can prove a replay skipped it.
+ */
+const scriptedStreamGenerate = (script: StreamTurn[]): { seam: AgentStreamGenerate; state: { calls: number } } => {
+    const state = { calls: 0 };
+    const remaining = [...script];
+
+    const seam: AgentStreamGenerate = async (_options, onDelta) => {
+        state.calls += 1;
+
+        const next = remaining.shift();
+
+        if (!next) {
+            throw new Error("scripted stream generate exhausted");
+        }
+
+        for (const delta of next.deltas) {
+            onDelta(delta);
+        }
+
+        return next.result;
+    };
+
+    return { seam, state };
 };
 
 const finalTurn = (text: string): AgentGenerateResult => {
@@ -817,5 +855,107 @@ describe(runAgentLoop, () => {
 
         expect(String(toolResult?.content[0]?.output.value)).toContain("rejected by the user");
         expect(runtime.threads.get("thread-1")?.status).toBe("idle");
+    });
+
+    it("streams token deltas in order and persists the concatenated final text", async () => {
+        const agent = defineAgent({ model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+        const runtime = memoryRuntime();
+
+        const deltas: AgentTokenDelta[] = [];
+        const onTokenDelta: AgentTokenSink = (delta) => {
+            deltas.push(delta);
+        };
+        const stream = scriptedStreamGenerate([{ deltas: ["It ", "is ", "sunny."], result: finalTurn("It is sunny.") }]);
+
+        const result = await runAgentLoop(loopDefaults(agent, { onTokenDelta, run: runtime.run, streamGenerate: stream.seam }));
+
+        expect(result).toStrictEqual({ stopped: "final", text: "It is sunny.", turns: 1 });
+
+        // Deltas arrive in order, each keyed to the thread + the turn producing it.
+        expect(deltas).toStrictEqual([
+            { text: "It ", threadKey: "thread-1", turn: 0 },
+            { text: "is ", threadKey: "thread-1", turn: 0 },
+            { text: "sunny.", threadKey: "thread-1", turn: 0 },
+        ]);
+
+        // The persisted assistant message is the single source of truth: it equals
+        // the concatenation of the (ephemeral) deltas.
+        const finalMessage = [...runtime.messages.values()].toSorted((a, b) => a.seq - b.seq).at(-1);
+
+        expect(finalMessage?.role).toBe("assistant");
+        expect(finalMessage?.content).toBe(deltas.map((delta) => delta.text).join(""));
+        expect(stream.state.calls).toBe(1);
+    });
+
+    it("re-emits NO deltas on a replay of a completed turn but returns the memoized value", async () => {
+        const agent = defineAgent({ model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+
+        const deltas: AgentTokenDelta[] = [];
+        const onTokenDelta: AgentTokenSink = (delta) => {
+            deltas.push(delta);
+        };
+        // A single scripted turn — a replay must NOT reach the (now-exhausted) seam.
+        const stream = scriptedStreamGenerate([{ deltas: ["hel", "lo"], result: finalTurn("hello") }]);
+
+        const first = await runAgentLoop(loopDefaults(agent, { onTokenDelta, run: runtime.run, step: journal, streamGenerate: stream.seam }));
+
+        expect(first).toStrictEqual({ stopped: "final", text: "hello", turns: 1 });
+        expect(deltas.map((delta) => delta.text)).toStrictEqual(["hel", "lo"]);
+        expect(stream.state.calls).toBe(1);
+
+        // Replay the SAME instance (same journal + store). The memoized `llm:turn:0`
+        // is served WITHOUT re-running its body, so the stream seam is never
+        // re-invoked and no delta is re-emitted — yet the run returns the identical
+        // final value (deltas are ephemeral; the persisted message is durable).
+        deltas.length = 0;
+
+        const replay = await runAgentLoop(loopDefaults(agent, { onTokenDelta, run: runtime.run, step: journal, streamGenerate: stream.seam }));
+
+        expect(replay).toStrictEqual(first);
+        expect(deltas).toStrictEqual([]);
+        expect(stream.state.calls).toBe(1);
+        expect(journal.invoked.filter((name) => name === "llm:turn:0")).toHaveLength(1);
+    });
+
+    it("takes the byte-identical non-streaming path when no token sink is present", async () => {
+        const agent = defineAgent({ model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+
+        // Baseline: the existing non-streaming path with no streaming wiring at all.
+        const baseRuntime = memoryRuntime();
+        const baseResult = await runAgentLoop(loopDefaults(agent, { generate: scriptedGenerate([finalTurn("hi there")]), run: baseRuntime.run }));
+
+        // A streaming seam is wired, but WITHOUT a sink the loop must ignore it and
+        // run the identical `generate` path.
+        const runtime = memoryRuntime();
+        const stream = scriptedStreamGenerate([{ deltas: ["should not stream"], result: finalTurn("should not stream") }]);
+        const result = await runAgentLoop(
+            loopDefaults(agent, { generate: scriptedGenerate([finalTurn("hi there")]), run: runtime.run, streamGenerate: stream.seam }),
+        );
+
+        expect(stream.state.calls).toBe(0);
+        expect(result).toStrictEqual(baseResult);
+
+        const project = (rt: ReturnType<typeof memoryRuntime>): unknown[] =>
+            [...rt.messages.values()].toSorted((a, b) => a.seq - b.seq).map((message) => [message.seq, message.role, message.content]);
+
+        expect(project(runtime)).toStrictEqual(project(baseRuntime));
+    });
+
+    it("ignores a token sink when no streaming seam is wired (falls back to generate)", async () => {
+        const agent = defineAgent({ model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+        const runtime = memoryRuntime();
+
+        const deltas: AgentTokenDelta[] = [];
+        const onTokenDelta: AgentTokenSink = (delta) => {
+            deltas.push(delta);
+        };
+
+        // A sink is present, but with no `streamGenerate` the gate stays closed.
+        const result = await runAgentLoop(loopDefaults(agent, { generate: scriptedGenerate([finalTurn("plain")]), onTokenDelta, run: runtime.run }));
+
+        expect(result).toStrictEqual({ stopped: "final", text: "plain", turns: 1 });
+        expect(deltas).toStrictEqual([]);
     });
 });
