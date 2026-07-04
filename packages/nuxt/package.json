@@ -73,7 +73,7 @@
         "@types/node": "catalog:types",
         "@vitest/coverage-v8": "catalog:test",
         "fallow": "catalog:lint",
-        "h3": "^1.0.0",
+        "h3": "^2.0.0",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
     },
