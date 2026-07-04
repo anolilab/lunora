@@ -18,7 +18,11 @@ export default defineSchema({
         name: v.string(),
     })
         .global()
-        .index("by_name", ["name"], { unique: true }),
+        .index("by_name", ["name"], { unique: true })
+        .relations((r) => ({
+            creator: r.one("users", { field: "createdBy" }),
+        }))
+        .index("byCreatedBy", ["createdBy"]),
 
     inbox: defineTable({
         body: v.string(),

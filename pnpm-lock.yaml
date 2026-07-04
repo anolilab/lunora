@@ -2026,6 +2026,9 @@ importers:
       fallow:
         specifier: catalog:lint
         version: 2.104.0
+      prettier:
+        specifier: catalog:lint
+        version: 3.9.4
       typescript:
         specifier: catalog:tsc
         version: 6.0.3
