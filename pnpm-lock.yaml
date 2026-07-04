@@ -1582,10 +1582,16 @@ importers:
       '@lunora/workflow':
         specifier: workspace:*
         version: link:../workflow
+      '@modelcontextprotocol/sdk':
+        specifier: catalog:mcp
+        version: 1.29.0(zod@4.4.3)
       ai:
         specifier: catalog:ai
         version: 7.0.4(zod@4.4.3)
     devDependencies:
+      '@lunora/dispatch':
+        specifier: workspace:*
+        version: link:../dispatch
       '@types/node':
         specifier: catalog:types
         version: 26.0.1
@@ -3304,6 +3310,9 @@ importers:
 
   packages/testing:
     dependencies:
+      '@lunora/agent':
+        specifier: workspace:*
+        version: link:../agent
       '@lunora/do':
         specifier: workspace:*
         version: link:../do

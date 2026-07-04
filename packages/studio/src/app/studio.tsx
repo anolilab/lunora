@@ -78,6 +78,7 @@ const lazyNamed = <P, K extends string>(load: () => Promise<Record<K, ComponentT
 const InsightsPanel = lazyNamed(() => import("../features/advisors/insights-panel"), "InsightsPanel");
 const RlsPanel = lazy(() => import("../features/advisors/rls-panel"));
 const SecurityAdvisorPanel = lazy(() => import("../features/advisors/security-advisor-panel"));
+const AgentsPanel = lazyNamed(() => import("../features/agents/agents-panel"), "AgentsPanel");
 const AnalyticsPanel = lazyNamed(() => import("../features/analytics/analytics-panel"), "AnalyticsPanel");
 const ApiTab = lazy(() => import("../features/api/api-tab"));
 const AuthConfigPanel = lazyNamed(() => import("../features/auth/auth-config-panel"), "AuthConfigPanel");
@@ -123,6 +124,7 @@ const WorkflowsPanel = lazy(() => import("../features/workflows/workflows-panel"
 
 /** Identifier for each built-in studio tab. */
 type StudioTab =
+    | "agents"
     | "analytics"
     | "api"
     | "audit"
@@ -299,6 +301,9 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     authConfig: (
         <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4-3a7.4 7.4 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7.3 7.3 0 0 0-2-1.2l-.4-2.6h-3.6l-.4 2.6a7.3 7.3 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7.4 7.4 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7.3 7.3 0 0 0 2 1.2l.4 2.6h3.6l.4-2.6a7.3 7.3 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6a7.4 7.4 0 0 0 .1-1.2Z" />
     ),
+    agents: (
+        <path d="M12 8V5m0 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM6 8h12a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2Zm3 5h.01M15 13h.01M9 21h6" />
+    ),
     authSessions: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0-13.5V12l4 2" />,
     containers: <path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5v-9Zm0 0 9 4.5m0 0 9-4.5m-9 4.5V21" />,
     dashboards: <path d="M4 5h7v6H4V5Zm9 0h7v4h-7V5ZM4 14h7v5H4v-5Zm9-1h7v6h-7v-6Z" />,
@@ -355,7 +360,7 @@ type NavGroup = { readonly key: NavGroupKey; readonly tabs: ReadonlyArray<Studio
 const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "overview", tabs: ["home", "dashboards"] },
     { key: "database", tabs: ["data", "sql", "schema", "migrations", "vectors", "pitr", "export"] },
-    { key: "functions", tabs: ["functions", "api", "workflows", "queues", "containers"] },
+    { key: "functions", tabs: ["functions", "api", "workflows", "agents", "queues", "containers"] },
     { key: "auth", tabs: ["users", "organizations", "authSessions", "authConfig"] },
     { key: "storage", tabs: ["files", "storageRules", "kv"] },
     { key: "observability", tabs: ["logs", "audit", "realtime", "fanout", "metrics", "analytics", "health"] },
@@ -433,6 +438,7 @@ const TABS = exhaustiveRouteTabs([
     "functions",
     "api",
     "workflows",
+    "agents",
     "queues",
     "containers",
     "schema",
@@ -801,6 +807,7 @@ const StudioLayout = (): ReactElement => {
     // locale changes but aren't rebuilt on every unrelated render.
     const tabLabel = useMemo(() => {
         return {
+            agents: t("Agents"),
             analytics: t("Analytics"),
             api: t("API"),
             audit: t("Audit"),
@@ -856,6 +863,7 @@ const StudioLayout = (): ReactElement => {
 
     // One-line section descriptions for the page header.
     const tabDescription = {
+        agents: t("Inspect agent threads, message timelines, tool calls, and token usage."),
         analytics: t("Usage and latency from Analytics Engine — request volume, p50/p95, and hot shards."),
         api: t("Interactive OpenAPI reference and copy-paste snippets for your functions."),
         audit: t("A durable log of admin state-changing operations."),
@@ -1067,6 +1075,7 @@ const buildRouter = ({
     const rootRoute = createRootRoute({ component: StudioLayout });
 
     const panels: Record<StudioTab, ReactElement> = {
+        agents: <AgentsPanel initialShardKey={initialShardKey} />,
         analytics: <AnalyticsPanel />,
         api: <ApiTab functions={functions} initialShardKey={initialShardKey} openApiSpec={openApiSpec} openRpcSpec={openRpcSpec} />,
         audit: <AuditPanel initialShardKey={initialShardKey} />,

@@ -60,6 +60,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
+        "@lunora/agent": "0.0.0",
         "@lunora/do": "1.0.0-alpha.24",
         "@lunora/errors": "1.0.0-alpha.2",
         "@lunora/mail": "1.0.0-alpha.12",

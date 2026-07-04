@@ -224,14 +224,14 @@ describe("auto-registered agent runtime functions", () => {
     };
 
     it("registers the runtime functions in the dispatch table, imported from @lunora/agent", () => {
-        expect.assertions(8);
+        expect.assertions(9);
 
         const content = emitFunctions({ agents: discoverSupportAgent(), functions: [] });
 
         expect(content).toContain('import { agentComponent } from "@lunora/agent/component";');
         expect(content).toContain("const lunoraAgentRuntimeFunctions = agentComponent().functions;");
 
-        for (const name of ["agentAppendMessage", "agentEnsureThread", "agentMessages", "agentPatchThread", "agentThread"]) {
+        for (const name of ["agentAppendMessage", "agentEnsureThread", "agentMessages", "agentPatchThread", "agentResolveApproval", "agentThread"]) {
             expect(content).toContain(`"agents:${name}": lunoraAgentRuntimeFunctions.${name} as unknown as RegisteredLunoraFunction,`);
         }
 
@@ -247,14 +247,17 @@ describe("auto-registered agent runtime functions", () => {
         expect(content).toContain("lunoraAgentRuntimeFunctions.agentThread");
     });
 
-    it("exposes the public thread queries as typed api references", () => {
-        expect.assertions(4);
+    it("exposes the public thread queries and approval mutation as typed api references", () => {
+        expect.assertions(5);
 
         const content = emitApi({ agents: discoverSupportAgent(), functions: [] });
 
         expect(content).toContain('agentMessages: FunctionReference<"query", { key: string; limit?: number }, Record<string, unknown>[]>;');
         expect(content).toContain('agentThread: FunctionReference<"query", { key: string }, Record<string, unknown> | undefined>;');
-        // The internal mutations never surface on the api objects.
+        expect(content).toContain(
+            'agentResolveApproval: FunctionReference<"mutation", { decision: "approve" | "reject"; instanceId: string; note?: string; threadKey: string; toolCallId: string }, { resolved: boolean }>;',
+        );
+        // The internal thread-write mutations never surface on the api objects.
         expect(content).not.toContain("agentAppendMessage");
         expect(emitApi({ functions: [] })).not.toContain("agentMessages");
     });
@@ -294,11 +297,11 @@ describe("auto-registered agent runtime functions", () => {
                 .filter(([, definition]) => definition.visibility === undefined)
                 .map(([name]) => name)
                 .toSorted((a, b) => a.localeCompare(b)),
-        ).toStrictEqual(["agentMessages", "agentThread"]);
+        ).toStrictEqual(["agentMessages", "agentResolveApproval", "agentThread"]);
     });
 
     it("pins the synthetic api arg shapes to the runtime component (drift guard)", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         // The api types for the two public queries are hand-pinned in
         // syntheticAgentApiFunctions (codegen cannot read a published package's
@@ -309,5 +312,12 @@ describe("auto-registered agent runtime functions", () => {
 
         expect(Object.keys(runtime.agentMessages.args as Record<string, unknown>).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["key", "limit"]);
         expect(Object.keys(runtime.agentThread.args as Record<string, unknown>).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["key"]);
+        expect(Object.keys(runtime.agentResolveApproval.args as Record<string, unknown>).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
+            "decision",
+            "instanceId",
+            "note",
+            "threadKey",
+            "toolCallId",
+        ]);
     });
 });

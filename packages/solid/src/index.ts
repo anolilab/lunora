@@ -1,4 +1,8 @@
 export { LunoraContext, useLunora } from "./context";
+export type { AgentThreadRecord, AgentThreadStatus, CreateAgentApi, CreateAgentOptions, CreateAgentResult } from "./create-agent";
+export { createAgent } from "./create-agent";
+export type { AgentChatMessage, CreateAgentChatApi, CreateAgentChatOptions, CreateAgentChatResult } from "./create-agent-chat";
+export { createAgentChat } from "./create-agent-chat";
 export type { UseAuthResult } from "./create-auth";
 export { Authenticated, AuthLoading, createAuth, Unauthenticated } from "./create-auth";
 export { default as createConnectionStatus } from "./create-connection-status";

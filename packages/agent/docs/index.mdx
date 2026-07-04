@@ -41,8 +41,9 @@ export const support = defineAgent({
 
 Declaring an agent is enough: codegen auto-registers the runtime functions the
 durable loop persists through (`agents:agentAppendMessage`, `agents:agentEnsureThread`,
-`agents:agentPatchThread`) plus the public thread queries (`agents:agentMessages`,
-`agents:agentThread`), and wires the typed `ctx.agents.<name>` producer.
+`agents:agentPatchThread`, `agents:agentResolveApproval`) plus the public thread
+queries (`agents:agentMessages`, `agents:agentThread`), and wires the typed
+`ctx.agents.<name>` producer.
 
 Merge the thread tables into your schema — they auto-prefix to
 `agent_threads` / `agent_messages` and can never collide with app tables:
@@ -52,6 +53,13 @@ Merge the thread tables into your schema — they auto-prefix to
 import { agentExtension } from "@lunora/agent";
 
 export default defineSchema({/* your tables */}).extend(agentExtension);
+```
+
+Scaffold a new agent with the generator (appends to `lunora/agents.ts`,
+creating it if missing, and wires the worker entry):
+
+```sh
+vis generate lunora-agent --name=support
 ```
 
 ## Running + observing
@@ -67,9 +75,178 @@ useSubscription(api.agents.agentMessages, { key: threadKey });
 ```
 
 Reuse the same `threadKey` to continue a conversation — the loop reads the
-persisted history each turn. Only one run should be active per thread at a
-time: two concurrent runs on the same key would interleave their messages into
-one history (they share the thread's sequence counter).
+persisted history each turn.
+
+`ctx.agents.<name>` is the typed producer surface on Mutation/Action ctx:
+
+| Method               | Does                                                                          |
+| -------------------- | ----------------------------------------------------------------------------- |
+| `run(params)`        | Start (or continue) a run; returns `{ id }` (the Workflow instance id).       |
+| `cancel(id)`         | Terminate the in-flight instance and mark the thread `"cancelled"`.           |
+| `status(id)`         | Read the instance's current status.                                           |
+| `sendEvent(id, evt)` | Deliver an event to a hibernated run (the primitive HITL approvals build on). |
+
+## Loop control
+
+`defineAgent` exposes the AI SDK's loop-shaping seams, evaluated per turn inside
+the durable loop:
+
+- **`maxTurns`** — hard cap on LLM turns. Hitting it stops the run with
+  `result.stopped === "maxTurns"`.
+- **`stopWhen`** — a stop condition (e.g. `stopWhen: hasToolCall("finalize")`);
+  stopping this way reports `result.stopped === "stopCondition"`. A clean
+  final answer (no pending tool calls) reports `result.stopped === "final"`.
+- **`prepareStep`** — mutate the request just before a turn (swap the model,
+  trim messages, force a tool). Must be deterministic — it runs on replay.
+- **`output`** — a `FlexibleSchema` (zod or `jsonSchema(...)`) for a structured
+  final answer; the typed value is surfaced on `result.output`.
+- **`onStepFinish`** — a callback after each turn (observability/side channels).
+- **`usage`** — token usage is accumulated across turns and surfaced on the
+  run result and persisted onto the thread.
+
+```ts
+import { hasToolCall } from "@lunora/ai";
+
+export const support = defineAgent({
+    maxTurns: 6,
+    model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    output: jsonSchema({ properties: { answer: { type: "string" }, confidence: { type: "number" } }, required: ["answer"], type: "object" }),
+    prepareStep: async ({ stepNumber }) => (stepNumber === 0 ? { toolChoice: "required" } : {}),
+    stopWhen: hasToolCall("finalize"),
+});
+```
+
+## Concurrency + cancellation
+
+Only one run owns a thread at a time — two concurrent runs on the same
+`threadKey` would interleave their messages into the shared per-thread sequence
+counter. The `onConcurrentRun` policy decides what happens when a run starts on
+a thread that already has a _different_ instance in flight:
+
+- **`"reject"`** (default) — fail the new run fast with a `CONFLICT` error.
+- **`"replace"`** — terminate the in-flight instance and take the thread over.
+- **`"queue"`** — reserved for a future durable queue; currently degrades to
+  `"reject"` (no queue exists yet).
+
+A workflow _replay_ re-enters under the same instance id and is never treated as
+a concurrent run.
+
+Cancel from the server with `ctx.agents.<name>.cancel(instanceId)`, or from the
+client through the framework hooks (below) — `cancel()` terminates the in-flight
+instance and moves the thread to `"cancelled"`.
+
+## Human-in-the-loop approvals
+
+Gate a side-effecting tool behind a human decision with `needsApproval` (a
+boolean, or a per-input predicate — mirrors the AI SDK's `needsApproval`):
+
+```ts
+chargeCard: defineAgentTool({
+    description: "Charge the customer's saved card.",
+    execute: async ({ amount }, { run }) => run({ __lunoraRef: "billing:charge" }, { amount }),
+    inputSchema: jsonSchema({ properties: { amount: { type: "number" } }, required: ["amount"], type: "object" }),
+    needsApproval: ({ amount }) => amount > 5000,
+}),
+```
+
+When the gate resolves truthy the run **pauses**: the thread moves to
+`"awaiting_input"` and the workflow **hibernates** on `approval:<toolCallId>` —
+no compute is billed while it waits. A client resolves it via the
+auto-registered `agents:agentResolveApproval` (the framework `approve`/`reject`
+helpers dispatch it). On approve the tool runs exactly as normal; on reject it
+is skipped and a tool result explaining the rejection is persisted so the next
+turn recovers. Because `needsApproval` runs on replay, keep it deterministic
+(no `Date.now()`/`Math.random()`).
+
+## Client hooks
+
+Every framework adapter ships two hooks over the same live subscription. The
+generated `api` drives them; you pass the `run`/`send` and `cancel` mutation
+references your app exposes.
+
+- **`useAgent`** (`useAgent` / `createAgent` / `agent`) — the thin driver:
+  `{ run, cancel, pending, status, thread }`. `run(input, args?)` dispatches
+  the run mutation with `{ input, threadKey }` merged over `runArgs`; `cancel()`
+  terminates the in-flight instance (a no-op when nothing is running or no
+  cancel ref was supplied); `status`/`thread` flow live from `agents:agentThread`.
+- **`useAgentChat`** — the batteries-included chat surface:
+  `{ send, approve, reject, cancel, messages, status, streamingText }`. `send`
+  appends an optimistic user turn then starts/continues the run; `approve`/`reject`
+  resolve a pending tool approval; `messages` is the live thread.
+
+```tsx
+// React
+const chat = useAgentChat({ api, cancel: api.chat.cancelRun, send: api.chat.startRun, threadKey });
+chat.send("Refund my last order");
+if (chat.status === "awaiting_input") chat.approve(toolCallId);
+```
+
+The same hooks exist as Vue composables (`useAgent`/`useAgentChat`), Solid
+primitives (`createAgent`/`createAgentChat`), and Svelte store factories
+(`agent`/`agentChat`).
+
+**Token streaming.** The turn seam has a streaming counterpart (`streamText`
+via `createStreamGenerate`) and the hooks expose a `stream` option feeding
+`useAgentChat`'s live `streamingText`. The server-side token sink
+(`onTokenDelta` → transport) is a wired-but-dormant seam: until it is threaded
+onto a live transport the loop takes the byte-identical non-streaming path, so
+`streamingText` stays empty and messages still arrive per-turn over the thread
+subscription. Turn-granular streaming works today; sub-turn token streaming is
+the remaining follow-up.
+
+## Tools from anywhere
+
+Beyond inline `defineAgentTool`, three helpers pull tools from other surfaces —
+each returns an `AgentToolDefinition` you drop into the `tools` map:
+
+- **`functionTool`** — expose a Lunora function as a tool. `execute` dispatches
+  the referenced function; `inputSchema` should mirror its argument validator.
+- **`agentAsTool`** — adapt a declared agent into a tool so a supervisor can
+  delegate to specialists. It starts a **child run** on the child agent's
+  Workflow binding, polls to completion, and returns the child's final answer.
+  Child `threadKey` + instance id derive from the parent's (replay-stable), so a
+  retried step reuses the same child run (idempotent). Options: `name` (child
+  export name → `AGENT_<NAME>` binding), `description`, `maxPolls` (default 120),
+  `pollIntervalMs` (default 500).
+- **`mcpTools`** — adapt the tools an MCP server lists. Pass a pre-connected
+  `client` (the SSE/HTTP transport cannot run in workerd), optionally filtered
+  with `only` and namespaced with `prefix`.
+
+```ts
+import { agentAsTool, functionTool, mcpTools } from "@lunora/agent";
+
+tools: {
+    lookupOrder: functionTool({ description: "Look up an order by id.", functionPath: "orders:byId", inputSchema }),
+    research: agentAsTool({ description: "Delegate deep research.", name: "researcher" }),
+    ...mcpTools({ client: docsClient, prefix: "docs_" }),
+}
+```
+
+## Scheduling
+
+An agent compiles onto a Cloudflare Workflow, so it can be a **cron target**
+directly. Codegen emits an `agents.<name>` reference into `_generated/api`; pass
+it to a `cronJobs()` schedule and each fire starts a fresh durable run with the
+trailing object as its `AgentRunInput`:
+
+```ts
+import { cronJobs } from "@lunora/scheduler";
+
+import { agents } from "./_generated/api";
+
+const crons = cronJobs();
+
+// Every day at 03:00 UTC, start a fresh `support` run.
+crons.daily("nightly sweep", { hourUTC: 3, minuteUTC: 0 }, agents.support, { input: "sweep", threadKey: "cron" });
+
+export default crons;
+```
+
+Each fire is an independent run (its own instance id), so give recurring jobs a
+stable `threadKey` only if you want them to share one conversation thread.
+Delay-based scheduling (`ctx.scheduler.runAfter`/`runAt` targeting an agent) is
+not wired yet — cron targets start a workflow per fire, which is all an agent
+run needs.
 
 ## Access control
 
@@ -121,7 +298,34 @@ Dispatching to a real action keeps retrieval inside a fully wired ctx —
 codegen-resolved vector bindings, RLS, observability — instead of
 re-plumbing vectors into the workflow runtime.
 
+## Testing
+
+`@lunora/testing` ships `agentHarness` — an in-memory double over the same
+`AgentGenerate` turn seam the production loop runs on. You **script the model
+turns** (never a real model or network) and assert the persisted thread,
+dispatched functions, and run result:
+
+```ts
+import { agentHarness, finalTurn, toolCallTurn } from "@lunora/testing";
+
+const harness = agentHarness(support, {
+    // Each entry is one scripted LLM turn, consumed in order.
+    script: [toolCallTurn("call_1", "getWeather", { city: "Berlin" }), finalTurn("It's sunny in Berlin.")],
+});
+
+const result = await harness.run({ input: "weather in Berlin?", threadKey: "t1" });
+
+expect(result.stopped).toBe("final");
+expect(harness.messages("t1").map((m) => m.role)).toStrictEqual(["user", "assistant", "tool", "assistant"]);
+expect(harness.dispatches).toContainEqual({ args: { city: "Berlin" }, path: "weather:lookup" });
+```
+
+`finalTurn(text, extra?)` and `toolCallTurn(id, name, input, text?)` build turn
+scripts; `harness.thread(key)` reads the persisted thread record; provide `functions`
+runtime stubs to back the functions your tools dispatch to.
+
 ## See also
 
 - [@lunora/ai](/docs/packages/ai) — the model surface (`ctx.ai`) + `defineRag`
 - [@lunora/workflow](/docs/packages/workflow) — the durable-execution engine underneath
+- [@lunora/testing](/docs/packages/testing) — `agentHarness` and the wider test toolkit

@@ -7,9 +7,74 @@
 import { describe, expect, it } from "vitest";
 
 import { emitApi, emitFunctions } from "../src/emit";
-import type { FunctionIR, WorkflowIR } from "../src/ir";
+import type { AgentIR, FunctionIR, WorkflowIR } from "../src/ir";
+
+const SUPPORT_AGENT: AgentIR = {
+    bindingName: "AGENT_SUPPORT",
+    className: "SupportAgentWorkflow",
+    exportName: "support",
+    name: "agent-support",
+};
 
 describe("emitApi", () => {
+    it("emits a typed `agents.*` scheduler-target reference object when the project declares agents", () => {
+        expect.assertions(6);
+
+        const rendered = emitApi({ agents: [SUPPORT_AGENT], functions: [] });
+
+        // The flat AgentRunInput is imported (type-only) so `cronJobs()` args infer.
+        expect(rendered).toContain('import type { AgentRunInput } from "@lunora/agent";');
+        // The shared WorkflowReference interface backs the agent handle (an agent run is a workflow instance).
+        expect(rendered).toContain("export interface WorkflowReference<Params = Record<string, unknown>> {");
+        // Typed reference carries AgentRunInput.
+        expect(rendered).toContain("support: WorkflowReference<AgentRunInput>;");
+        // Runtime object carries the AGENT_* binding + stable name.
+        expect(rendered).toContain('support: { isLunoraWorkflow: true, binding: "AGENT_SUPPORT", name: "agent-support" },');
+        expect(rendered).toContain("export interface AgentsRef {");
+        expect(rendered).toContain("export const agents: AgentsRef = {");
+    });
+
+    it("omits the `agents` block entirely when no agents are declared", () => {
+        expect.assertions(3);
+
+        const rendered = emitApi({ functions: [] });
+
+        expect(rendered).not.toContain("AgentsRef");
+        expect(rendered).not.toContain("AgentRunInput");
+        // The shared WorkflowReference interface only appears when a workflow/agent exists.
+        expect(rendered).not.toContain("WorkflowReference");
+    });
+
+    it("emits agent-free api output byte-identical to before the agents-ref emitter", () => {
+        expect.assertions(2);
+
+        // The agent handle is fully gated on a declared agent: passing `agents: []`
+        // (or omitting it) must yield the exact same bytes as an agent-unaware call.
+        const withEmptyAgents = emitApi({ agents: [], functions: [] });
+        const withoutAgents = emitApi({ functions: [] });
+
+        expect(withEmptyAgents).toBe(withoutAgents);
+        expect(withEmptyAgents).not.toContain("agents");
+    });
+
+    it("emits ONE shared WorkflowReference interface when both workflows and agents are declared", () => {
+        expect.assertions(4);
+
+        const workflows: ReadonlyArray<WorkflowIR> = [
+            { bindingName: "WORKFLOW_DIGEST_PIPELINE", className: "DigestPipelineWorkflow", exportName: "digestPipeline", name: "digest-pipeline", steps: [] },
+        ];
+
+        const rendered = emitApi({ agents: [SUPPORT_AGENT], functions: [], workflows });
+
+        // The WorkflowReference interface is emitted exactly once (shared by both blocks).
+        expect(rendered.match(/export interface WorkflowReference</gu)).toHaveLength(1);
+        // Both reference objects are present.
+        expect(rendered).toContain("export const workflows: WorkflowsRef = {");
+        expect(rendered).toContain("export const agents: AgentsRef = {");
+        // Both import lines are present.
+        expect(rendered).toContain('import type * as lunoraWorkflowDefinitions from "../workflows.js";');
+    });
+
     it("emits a typed `workflows.*` reference object when the project declares workflows", () => {
         expect.assertions(5);
 
