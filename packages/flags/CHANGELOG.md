@@ -1,3 +1,5 @@
+## @lunora/flags [1.0.0-alpha.9](https://github.com/anolilab/lunora/compare/%40lunora%2Fflags%401.0.0-alpha.8...%40lunora%2Fflags%401.0.0-alpha.9) (2026-07-04)
+
 ## @lunora/flags [1.0.0-alpha.8](https://github.com/anolilab/lunora/compare/%40lunora%2Fflags%401.0.0-alpha.7...%40lunora%2Fflags%401.0.0-alpha.8) (2026-07-04)
 
 ## @lunora/flags [1.0.0-alpha.7](https://github.com/anolilab/lunora/compare/%40lunora%2Fflags%401.0.0-alpha.6...%40lunora%2Fflags%401.0.0-alpha.7) (2026-07-04)
