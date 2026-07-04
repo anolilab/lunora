@@ -56,7 +56,7 @@ const buildAgentPrompt = (origin: string): string => {
         "It exposes this backend's functions and schema so you can inspect and operate it:",
         tools,
         "",
-        `Start by calling lunora_list_functions and lunora_list_tables to learn what exists, then lunora_get_function_schema before any run call. The full HTTP API is also documented at ${origin}/_lunora/admin/openapi.`,
+        `Start by calling lunora_list_functions and lunora_list_tables to learn what exists, then lunora_get_function_schema before any run call. The full HTTP API is also documented at ${origin}/_lunora/admin/openapi (that endpoint needs the same admin token the MCP server is configured with).`,
     ].join("\n");
 };
 
@@ -87,7 +87,11 @@ const ConnectAgentCard = (): ReactElement => {
     );
 
     const copy = (target: CopyTarget, text: string): void => {
-        copyToClipboard(text);
+        if (!copyToClipboard(text)) {
+            // No clipboard (insecure context / SSR) — don't flash a false "Copied".
+            return;
+        }
+
         setCopied(target);
 
         if (resetTimerRef.current !== null) {

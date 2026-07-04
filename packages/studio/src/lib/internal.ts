@@ -136,16 +136,23 @@ export const resolveOrigin = (explicit?: string): string => {
 
 /**
  * Copy `text` to the clipboard when the browser exposes one; a no-op under
- * SSR/tests without `navigator`. The single home for the studio's copy buttons
- * so the (browser-only) guard and its lint exception live in one place.
+ * SSR/tests or an insecure context without `navigator.clipboard`. The single
+ * home for the studio's copy buttons so the (browser-only) guard and its lint
+ * exception live in one place. Returns whether a clipboard was available (the
+ * write was kicked off) so callers can skip a "Copied" acknowledgement when it
+ * wasn't.
  */
-export const copyToClipboard = (text: string): void => {
+export const copyToClipboard = (text: string): boolean => {
     // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser-only clipboard, guarded by the "navigator" in globalThis check
     const clipboard: Clipboard | undefined = "navigator" in globalThis ? globalThis.navigator.clipboard : undefined;
 
-    if (clipboard !== undefined) {
-        fireAndForget(clipboard.writeText(text));
+    if (clipboard === undefined) {
+        return false;
     }
+
+    fireAndForget(clipboard.writeText(text));
+
+    return true;
 };
 
 /**

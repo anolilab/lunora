@@ -152,9 +152,9 @@ const downloadFile = (filename: string, content: string, mime: string): void => 
 };
 
 /**
- * Export menu: downloads the loaded rows as CSV or JSON. Exports exactly what's
- * loaded (the current page passed in by the parent), named after the table,
- * mirroring Supabase's "Export" affordance.
+ * Export menu: downloads the loaded rows as CSV, JSON, or SQL. Exports exactly
+ * what's loaded (the current page passed in by the parent), named after the
+ * table, mirroring Supabase's "Export" affordance.
  */
 const ExportMenu = ({
     columns,
