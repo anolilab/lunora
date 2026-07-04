@@ -81,29 +81,36 @@ export const InvitationsSection = ({ organizationId }: InvitationsSectionProps):
                         setError(null);
                         setPending(true);
 
-                        void (async () => {
-                            try {
-                                const response = await fetch("/v1/invitations/send", {
-                                    body: JSON.stringify({ email, organizationId }),
-                                    credentials: "include",
-                                    headers: { "content-type": "application/json" },
-                                    method: "POST",
-                                });
+                        // Promise combinators instead of try/finally so React
+                        // Compiler can memoize the component (it can't lower
+                        // try-with-finally or throw-in-try yet).
+                        const send = async (): Promise<void> => {
+                            const response = await fetch("/v1/invitations/send", {
+                                body: JSON.stringify({ email, organizationId }),
+                                credentials: "include",
+                                headers: { "content-type": "application/json" },
+                                method: "POST",
+                            });
 
-                                if (!response.ok) {
-                                    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+                            if (!response.ok) {
+                                const payload = (await response.json().catch(() => null)) as { error?: string } | null;
 
-                                    throw new Error(payload?.error ?? `invite failed (${String(response.status)})`);
-                                }
+                                setError(payload?.error ?? `invite failed (${String(response.status)})`);
 
-                                setSentTo(email);
-                                setEmail("");
-                            } catch (error_: unknown) {
-                                setError(error_ instanceof Error ? error_.message : "invite failed");
-                            } finally {
-                                setPending(false);
+                                return;
                             }
-                        })();
+
+                            setSentTo(email);
+                            setEmail("");
+                        };
+
+                        void send()
+                            .catch((error_: unknown) => {
+                                setError(error_ instanceof Error ? error_.message : "invite failed");
+                            })
+                            .finally(() => {
+                                setPending(false);
+                            });
                     }}
                 >
                     <input

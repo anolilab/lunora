@@ -898,7 +898,7 @@ importers:
         version: link:../../packages/values
       better-auth:
         specifier: catalog:auth
-        version: 1.6.22(@cloudflare/workers-types@4.20260628.1)(@opentelemetry/api@1.9.1)(@tanstack/react-start@1.168.26(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite-plugin-solid@2.11.12(@testing-library/jest-dom@6.9.1)(solid-js@1.9.13)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))(webpack@5.105.0(esbuild@0.28.1)))(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260628.1)(@electric-sql/pglite@0.5.3)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@26.0.1))(pg@8.21.0)(postgres@3.4.9))(mysql2@3.22.5(@types/node@26.0.1))(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.1)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(pg@8.21.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.13)(svelte@5.56.4(@typescript-eslint/types@8.62.0))(vitest@4.1.9)(vue@3.5.39(typescript@6.0.3))
+        version: 1.6.23(@cloudflare/workers-types@5.20260704.1)(@opentelemetry/api@1.9.1)(@tanstack/react-start@1.168.27(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite-plugin-solid@2.11.12(@testing-library/jest-dom@6.9.1)(solid-js@1.9.14)(vite@8.1.3(@types/node@26.1.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0)))(vite@8.1.3(@types/node@26.1.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))(webpack@5.105.0(esbuild@0.28.1)))(drizzle-orm@0.45.2(@cloudflare/workers-types@5.20260704.1)(@electric-sql/pglite@0.5.4)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@26.1.0))(pg@8.21.0)(postgres@3.4.9))(mysql2@3.22.5(@types/node@26.1.0))(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.1)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(pg@8.21.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.14)(svelte@5.56.4(@typescript-eslint/types@8.62.1))(vitest@4.1.9)(vue@3.5.39(typescript@6.0.3))
       react:
         specifier: 19.2.7
         version: 19.2.7
@@ -907,11 +907,11 @@ importers:
         version: 19.2.7(react@19.2.7)
       stripe:
         specifier: ^19.0.0
-        version: 19.3.0(@types/node@26.0.1)
+        version: 19.3.1(@types/node@26.1.0)
     devDependencies:
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
-        version: 4.20260628.1
+        version: 5.20260704.1
       '@lunora/cli':
         specifier: workspace:*
         version: link:../../packages/cli
@@ -926,7 +926,7 @@ importers:
         version: link:../../packages/vite
       '@types/node':
         specifier: catalog:types
-        version: 26.0.1
+        version: 26.1.0
       '@types/react':
         specifier: catalog:frontend
         version: 19.2.17
@@ -938,13 +938,13 @@ importers:
         version: 6.0.3
       vite:
         specifier: catalog:vite
-        version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0)
+        version: 8.1.3(@types/node@26.1.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0)
       vitest:
         specifier: catalog:test
-        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@26.0.1)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
+        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@26.1.0)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@26.1.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
       wrangler:
         specifier: catalog:cloudflare
-        version: 4.105.0(@cloudflare/workers-types@4.20260628.1)
+        version: 4.107.0(@cloudflare/workers-types@5.20260704.1)
 
   apps/docs:
     dependencies:
@@ -18942,6 +18942,16 @@ packages:
 
   strip-literal@3.1.0:
     resolution: {integrity: sha512-8r3mkIM/2+PpjHoOtiAW8Rg3jJLHaV7xPwG+YRGrv6FP0wwk/toTpATxWYOW0BKdWwl82VT2tFYi5DlROa0Mxg==}
+
+  stripe@19.3.1:
+    resolution: {integrity: sha512-5NXhLxTZ+4uO1wnsmNysILVuyeZ1Xia7niz/8ykBkGJkCcrY2WyQZwcfYuWZmZEJtWr2+0j49JXwNC6y9CHL7Q==}
+    engines: {node: '>=16'}
+    deprecated: This version has a major bug where the Files API times out. See issue 2538
+    peerDependencies:
+      '@types/node': '>=16'
+    peerDependenciesMeta:
+      '@types/node':
+        optional: true
 
   stripe@22.3.0:
     resolution: {integrity: sha512-ypO6xjVrMWs9SmIMeHr8naCx3dAQ0clxMdUTxn7Ejd7hmY9meBGfE+N4pVHkf9sUNebAHp6uJo6mV3GxDIc2cA==}
@@ -37627,6 +37637,12 @@ snapshots:
   strip-literal@3.1.0:
     dependencies:
       js-tokens: 9.0.1
+
+  stripe@19.3.1(@types/node@26.1.0):
+    dependencies:
+      qs: 6.15.2
+    optionalDependencies:
+      '@types/node': 26.1.0
 
   stripe@22.3.0(@types/node@26.1.0):
     optionalDependencies:

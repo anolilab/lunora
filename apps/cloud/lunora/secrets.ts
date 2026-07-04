@@ -32,8 +32,11 @@ export const store = mutation
     })
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"secrets">> => {
         await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
+        await assertRowInOrg(context, arguments_.projectId, arguments_.organizationId, "project");
 
-        const { page } = await context.db.secrets.findMany({ where: { projectId: arguments_.projectId, name: arguments_.name } }); // secret-scanner:allow -- domain field name
+        const { page } = await context.db.secrets.findMany({
+            where: { name: arguments_.name, organizationId: arguments_.organizationId, projectId: arguments_.projectId }, // secret-scanner:allow -- domain field name
+        });
         const existing = (page as unknown as SecretRow[])[0];
         const now = Date.now();
 
@@ -60,8 +63,9 @@ export const list = query
     .query(
         async ({ ctx: context, args: { organizationId, projectId } }): Promise<{ createdAt: number; id: Id<"secrets">; name: string; updatedAt: number }[]> => {
             await assertMember(context, organizationId);
+            await assertRowInOrg(context, projectId, organizationId, "project");
 
-            const { page } = await context.db.secrets.findMany({ where: { projectId } });
+            const { page } = await context.db.secrets.findMany({ where: { organizationId, projectId } });
 
             return (page as unknown as SecretRow[]).map((secret) => {
                 return { createdAt: secret.createdAt, id: secret._id, name: secret.name, updatedAt: secret.updatedAt };
@@ -78,8 +82,9 @@ export const listEncrypted = query
     .input({ deployKey: v.optional(v.string()), organizationId: v.id("organizations"), projectId: v.id("projects") })
     .query(async ({ ctx: context, args: { deployKey, organizationId, projectId } }): Promise<{ ciphertext: string; iv: string; name: string }[]> => {
         await (deployKey ? authorizeDeployKey(context, organizationId, deployKey, projectId) : assertMember(context, organizationId));
+        await assertRowInOrg(context, projectId, organizationId, "project");
 
-        const { page } = await context.db.secrets.findMany({ where: { projectId } });
+        const { page } = await context.db.secrets.findMany({ where: { organizationId, projectId } });
 
         return (page as unknown as SecretRow[]).map((secret) => {
             return { ciphertext: secret.ciphertext, iv: secret.iv, name: secret.name };

@@ -38,7 +38,7 @@ export const status = (config: CliConfig): { linked: boolean; loggedIn: boolean 
  */
 export const deploy = async (
     store: ConfigStore,
-    input: { branch?: string; kind?: "dev" | "preview" | "production"; scriptName: string },
+    input: { branch?: string; bundle: string; kind?: "dev" | "preview" | "production"; scriptName: string },
     onEvent: (event: DeployEvent) => void,
     deployFunction: typeof deployToCloud = deployToCloud,
 ): Promise<DeployResult> => {
@@ -56,6 +56,7 @@ export const deploy = async (
         {
             apiUrl: config.apiUrl,
             branch: input.branch,
+            bundle: input.bundle,
             deployKey: config.deployKey,
             kind: input.kind,
             projectId: config.projectId, // secret-scanner:allow -- domain field name
