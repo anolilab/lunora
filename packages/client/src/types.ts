@@ -963,4 +963,4 @@ export interface WorkflowInstancePage {
 // package that defines the `/_lunora/admin/auth/*` endpoints) and re-exported here
 // for SDK consumers — a single source of truth, no hand-kept copies. This is a
 // type-only re-export, so no runtime/worker code is pulled into the browser SDK.
-export type { AuthCapabilities, AuthImpersonation, AuthPage, AuthSession, AuthUser } from "@lunora/runtime";
+export type { AuthCapabilities, AuthConfigInfo, AuthImpersonation, AuthPage, AuthSession, AuthUser, AuthUserFieldSpec } from "@lunora/runtime";

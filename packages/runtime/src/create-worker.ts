@@ -3422,11 +3422,13 @@ export { type ExecutionContextLike, NOOP_EXECUTION_CONTEXT } from "../../../shar
 export type {
     AuthAdmin,
     AuthCapabilities,
+    AuthConfigInfo,
     AuthImpersonation,
     AuthIntrospector,
     AuthPage,
     AuthSession,
     AuthUser,
+    AuthUserFieldSpec,
     ListAuthUsersOptions,
 } from "./auth-admin-routes";
 export type {
