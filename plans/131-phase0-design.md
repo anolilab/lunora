@@ -408,12 +408,23 @@ public API. Both are Prettier-clean, ESLint-clean (package's own flat config, on
 narrowly-scoped override added for `import/no-extraneous-dependencies` — see
 `packages/codegen/eslint.config.js`), and `tsc --noEmit`-clean.
 
+Spike residue to delete WITH the prototypes when this branch's throwaway code
+is removed: the `prettier` devDependency in `packages/codegen/package.json`,
+the `**/__prototype__/**` override in `packages/codegen/eslint.config.js`, and
+the `"@lunora/codegen" → ./src/index.ts` `paths` mapping in
+`packages/codegen/tsconfig.json` (added so `tsc --noEmit` passes on a fresh
+checkout despite the prototypes' self-import of the built package entry). All
+three exist only to host the PoCs.
+
 ### 4.1 Fixer proof — `plan-131-fixer-poc.ts`
 
-Target: `unindexed_foreign_key` on `apps/playground`. Ground truth was made
-genuine, not fabricated — added a real `.relations()` declaration to `channels` in
-`apps/playground/lunora/schema.ts` (confirmed empirically this session that the
-lint requires an explicit relation; it does not infer FKs from `v.id()` alone):
+Target: `unindexed_foreign_key` against a **temp copy** of `apps/playground` —
+the PoC is self-fixturing and never writes to the repository working tree. It
+copies the playground (minus `node_modules`/`.lunora`/`dist`) into a
+`mkdtemp` directory, injects a real `.relations()` declaration onto `channels`
+there (its `createdBy: v.id("users")` column exists in the genuine schema; the
+lint requires an explicit relation — confirmed empirically, it does not infer
+FKs from `v.id()` alone), and runs the before/fix/after loop against the copy:
 
 ```diff
      .global()
@@ -425,40 +436,33 @@ lint requires an explicit relation; it does not infer FKs from `v.id()` alone):
 +    .index("byCreatedBy", ["createdBy"]),
 ```
 
-The first line of the diff hunk (adding `.relations()`) is the hand-authored setup
-that makes the lint fire; the last line (`.index("byCreatedBy", ...)`) is the
-fixer's own mechanical output, appended by `appendIndexFix`.
+The `.relations()` line is the injected fixture that makes the lint fire; the
+`.index("byCreatedBy", ...)` line is the fixer's own mechanical output,
+appended by `appendIndexFix` from the finding's `metadata.suggestedIndex`.
 
-Run sequence (both runs are real, not simulated output):
+Run sequence (real output; the temp path varies per run):
 
 ```
-=== Plan 131 fixer PoC: unindexed_foreign_key on apps/playground ===
+=== Plan 131 fixer PoC: unindexed_foreign_key on a temp copy of apps/playground ===
+Fixture: temp copy at /tmp/plan-131-fixer-poc-XXXXXX, .relations() injected on channels.
 Before: 2 advisories, target finding present: true
-  - unindexed_foreign_key:channels:createdBy
-  - queue_without_dlq:notifications
-Applying fix: .index("byCreatedBy", ["createdBy"]) on table "channels"...
-Wrote apps/playground/lunora/schema.ts (Prettier-formatted).
+  cacheKey: unindexed_foreign_key:channels:createdBy
+  metadata.suggestedIndex: {"fields":["createdBy"],"name":"byCreatedBy"}
+Wrote fix to /tmp/plan-131-fixer-poc-XXXXXX/lunora/schema.ts
 After: 1 advisories, target finding present: false
-  - queue_without_dlq:notifications
-PASS — finding is gone after the fix, and no new advisories were introduced.
+Idempotence: second apply changed=false (expected false)
+PASS — finding is gone and the fix is idempotent.
 ```
 
-Second run (idempotence check, after the fix already landed on disk):
-
-```
-Before: 1 advisories, target finding present: false
-Nothing to fix — target finding not present (already fixed, or .relations() edit missing). Exiting.
-```
-
-Independently verified: `git diff apps/playground/lunora/schema.ts` matches the
-hunk above exactly; a separate `prettier --check` invocation (not the script's own
-formatting step) reports the file clean; `pnpm --filter "@lunora/advisor" run test`
+Independently verified: `git status` stays clean across a run (the temp root is
+removed in a `finally`); the fixer's output is Prettier-formatted through the
+project's own resolved config; `pnpm --filter "@lunora/advisor" run test`
 stayed green (49 files / 325 tests) throughout.
 
 ### 4.2 Suppression/baseline proof — `plan-131-baseline-poc.ts`
 
-Target: `queue_without_dlq:notifications` — a real, still-present finding after
-§4.1's fix (not a synthetic one), acknowledged via
+Target: `queue_without_dlq:notifications` — a real finding on the genuine
+playground schema (not a synthetic one), acknowledged via
 `packages/codegen/src/__prototype__/plan-131-baseline.demo.json` (§3.5's exact
 fixture). Run output (real, not simulated):
 
