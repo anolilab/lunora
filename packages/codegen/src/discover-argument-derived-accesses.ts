@@ -9,7 +9,8 @@ import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions"
  * satisfying `config` (name in `config.methods`, receiver text accepted by
  * `config.matchReceiver`), else `undefined`. Matched by shape — the same
  * `import`-agnostic, fail-closed convention every argument-derived-access
- * feeder uses, so a re-export or alias still resolves.
+ * feeder uses. Receiver aliases (`const kv = ctx.kv; kv.get(...)`) are
+ * deliberately not resolved — matching is on the literal receiver text.
  */
 const sinkMethod = (node: TsNode, config: ArgumentDerivedAccessConfig): string | undefined => {
     if (!Node.isPropertyAccessExpression(node)) {

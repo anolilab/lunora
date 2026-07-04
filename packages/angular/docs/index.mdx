@@ -26,14 +26,14 @@ dependency — the host app supplies the Angular runtime.
 
 ## Exports
 
-| Symbol               | Kind             | Role                                                                                                                            |
-| -------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `provideLunora`      | provider factory | Wires a `LunoraClient` into the application injector. Add to your app config.                                                   |
-| `injectLunoraClient` | function         | Read the `LunoraClient` from the current injector. Throws outside an injection context (falls back to the root-scoped default). |
-| `LUNORA_CLIENT`      | injection token  | The DI token every reactive primitive resolves the client from. Root-scoped default: a same-origin browser client.              |
-| `liveQuery`          | function         | Live query as an Angular `Signal`. Args re-subscribe are not reactive here — pass `"skip"` to short-circuit.                    |
-| `mutate`             | function         | Run a mutation and resolve with the server result. Optimistic updates + offline queue pass through to the client.               |
-| `connectionStatus`   | function         | `Signal` of the aggregate live-socket status across all shard connections.                                                      |
+| Symbol               | Kind             | Role                                                                                                                                                                              |
+| -------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provideLunora`      | provider factory | Wires a `LunoraClient` into the application injector. Add to your app config.                                                                                                     |
+| `injectLunoraClient` | function         | Read the `LunoraClient` from the current injector. Throws outside an injection context; inside DI, `LUNORA_CLIENT`'s root-scoped default applies when no provider was registered. |
+| `LUNORA_CLIENT`      | injection token  | The DI token every reactive primitive resolves the client from. Root-scoped default: a same-origin browser client.                                                                |
+| `liveQuery`          | function         | Live query as an Angular `Signal`. Args re-subscribe are not reactive here — pass `"skip"` to short-circuit.                                                                      |
+| `mutate`             | function         | Run a mutation and resolve with the server result. Optimistic updates + offline queue pass through to the client.                                                                 |
+| `connectionStatus`   | function         | `Signal` of the aggregate live-socket status across all shard connections.                                                                                                        |
 
 Re-exported types: `ArgsOf`, `ConnectionStatus`, `FunctionReference`,
 `LunoraClient`, `LunoraClientOptions`, `MutationCallOptions`, `ReturnOf`,
