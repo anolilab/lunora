@@ -15,7 +15,7 @@ import {
 } from "../../components/ui/dropdown-menu";
 import { ModalShell } from "../../components/ui/modal-shell";
 import { useT } from "../../i18n/i18n-context";
-import { fireAndForget, formatCell } from "../../lib/internal";
+import { copyToClipboard, formatCell } from "../../lib/internal";
 
 /** A loaded grid row keyed by column name. */
 type GridRow = Record<string, unknown>;
@@ -315,15 +315,9 @@ const CellDetailDialog = ({ column, onClose, value }: { readonly column: string;
     const text = formatCell(value);
 
     const onCopy = (): void => {
-        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser-only clipboard; guarded by the "navigator" in globalThis check
-        const clipboard: Clipboard | undefined = "navigator" in globalThis ? globalThis.navigator.clipboard : undefined;
-
-        if (clipboard === undefined) {
-            return;
+        if (copyToClipboard(text)) {
+            setCopied(true);
         }
-
-        fireAndForget(clipboard.writeText(text));
-        setCopied(true);
     };
 
     return (

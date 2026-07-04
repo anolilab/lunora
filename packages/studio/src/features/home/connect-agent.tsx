@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { Card } from "../../components/ui/card";
@@ -75,16 +75,24 @@ const ConnectAgentCard = (): ReactElement => {
     const t = useT();
     const origin = resolveOrigin();
     const [copied, setCopied] = useState<CopyTarget | null>(null);
-    const resetTimerRef = useRef<null | ReturnType<typeof setTimeout>>(null);
 
-    useEffect(
-        () => () => {
-            if (resetTimerRef.current !== null) {
-                clearTimeout(resetTimerRef.current);
-            }
-        },
-        [],
-    );
+    // Clear the "Copied" acknowledgement a moment after a copy so it reads as
+    // transient feedback, tying the timer's whole lifecycle to `copied` (the
+    // same effect-based reset the storage file browser uses) rather than
+    // hand-managing a ref.
+    useEffect(() => {
+        if (copied === null) {
+            return undefined;
+        }
+
+        const timer = globalThis.setTimeout(() => {
+            setCopied(null);
+        }, COPIED_RESET_MS);
+
+        return () => {
+            globalThis.clearTimeout(timer);
+        };
+    }, [copied]);
 
     const copy = (target: CopyTarget, text: string): void => {
         if (!copyToClipboard(text)) {
@@ -93,14 +101,6 @@ const ConnectAgentCard = (): ReactElement => {
         }
 
         setCopied(target);
-
-        if (resetTimerRef.current !== null) {
-            clearTimeout(resetTimerRef.current);
-        }
-
-        resetTimerRef.current = setTimeout(() => {
-            setCopied(null);
-        }, COPIED_RESET_MS);
     };
 
     const onCopyConfig = (): void => {
