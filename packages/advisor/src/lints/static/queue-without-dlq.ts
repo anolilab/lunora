@@ -2,7 +2,7 @@ import emit from "../../finding";
 import type { Lint } from "../../types";
 
 /**
- * Flags a declared queue that has no dead-letter queue.
+ * Flags a declared queue — push or pull — that has no dead-letter queue.
  *
  * A Cloudflare Queues consumer retries a failing message up to `maxRetries`
  * times (default 3 — roughly four total delivery attempts); once that budget is

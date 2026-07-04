@@ -58,11 +58,11 @@ export const ${exportName} = defineQueue({
 `;
 
 /**
- * The best-practice pair: the queue bounds redelivery with \`maxRetries\` and
- * routes exhausted messages to \`${dlqName}\`, plus a terminal dead-letter sink
- * (\`${dlqExportName}\`) that consumes them so they can't vanish. Cloudflare
- * expires an *unconsumed* DLQ at its retention window, so the sink is what makes
- * "nothing is silently lost" actually true.
+ * The best-practice pair: the queue bounds redelivery with `maxRetries` and
+ * routes exhausted messages to the `<queue>-dlq` sink, plus a terminal
+ * dead-letter consumer (`<queue>Dlq`) that drains them so they can't vanish.
+ * Cloudflare expires an *unconsumed* DLQ at its retention window, so the sink is
+ * what makes "nothing is silently lost" actually true.
  */
 const bestPracticeDefinition = (exportName: string, dlqExportName: string, dlqName: string): string => `/**
  * One Cloudflare Queue (production best-practice setup). Codegen wires
