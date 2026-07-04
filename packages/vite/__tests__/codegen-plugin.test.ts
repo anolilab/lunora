@@ -199,9 +199,13 @@ describe("codegen-plugin", () => {
         const send = vi.fn<(payload: unknown) => void>();
         const clientSend = vi.fn<(payload: unknown) => void>();
         const workerSend = vi.fn<(payload: unknown) => void>();
+        // `restart` resolves by default; individual tests override it (e.g. to
+        // reject) to exercise the config-drift auto-restart guard.
+        const restart = vi.fn<() => Promise<void>>(() => Promise.resolve());
 
         return {
             clientSend,
+            restart,
             send,
             server: {
                 config: { logger: { error: vi.fn<() => void>(), info: vi.fn<() => void>(), warn: vi.fn<() => void>() } },
@@ -213,11 +217,23 @@ describe("codegen-plugin", () => {
                 },
                 hot: { send },
                 httpServer: undefined,
+                restart,
                 watcher: { add: vi.fn<() => void>(), off: vi.fn<() => void>(), on: vi.fn<() => void>() },
                 ws: { send: vi.fn<() => void>() },
             } as unknown as import("vite").ViteDevServer,
             workerSend,
         };
+    };
+
+    /**
+     * Extract the config-drift watcher (the SECOND `change` listener the plugin
+     * registers — the first is the schema-dir codegen watcher). Returns the
+     * listener so a test can drive it with a config file path directly.
+     */
+    const getConfigChangeListener = (server: import("vite").ViteDevServer): ((file: string) => void) => {
+        const changeCalls = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls.filter((args) => args[0] === "change");
+
+        return changeCalls[1]?.[1] as (file: string) => void;
     };
 
     /**
@@ -451,6 +467,141 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
 
             // We just need to confirm the build doesn't crash and logs the error.
             expect(errors.some((message) => message.includes("codegen failed"))).toBe(true);
+        });
+    });
+
+    describe("config-drift auto-restart (configureServer)", () => {
+        it("registers a config-drift watcher for wrangler + lunora.json", () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+            writeFileSync(join(workdir, "wrangler.jsonc"), '{ "name": "app" }\n', "utf8");
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            // The plugin added the config files (both wrangler names + lunora.json)
+            // to the watcher and registered a second `change` listener for them.
+            const added = (server.watcher.add as ReturnType<typeof vi.fn>).mock.calls.flat().map(String);
+
+            expect(added).toEqual(expect.arrayContaining([join(workdir, "wrangler.jsonc"), join(workdir, "lunora.json")]));
+            expect(getConfigChangeListener(server)).toBeTypeOf("function");
+        });
+
+        it("external wrangler binding edit restarts the dev server in place", () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+            const wranglerPath = join(workdir, "wrangler.jsonc");
+
+            writeFileSync(wranglerPath, '{ "name": "app" }\n', "utf8");
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { restart, server } = makeStubServer();
+
+            // configureServer captures the baseline from the initial wrangler.jsonc.
+            wireServer(plugin, server);
+
+            const onConfigChange = getConfigChangeListener(server);
+
+            // A real, binding-relevant external edit — add a D1 binding.
+            writeFileSync(wranglerPath, '{ "name": "app", "d1_databases": [{ "binding": "DB", "database_name": "app" }] }\n', "utf8");
+            onConfigChange(wranglerPath);
+
+            expect(restart).toHaveBeenCalledTimes(1);
+
+            // The guard is armed, so a second edit mid-restart does not pile on.
+            onConfigChange(wranglerPath);
+
+            expect(restart).toHaveBeenCalledTimes(1);
+        });
+
+        it("codegen's own cron-only wrangler rewrite does NOT restart (anti-loop)", () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+            const wranglerPath = join(workdir, "wrangler.jsonc");
+
+            // Baseline already carries a binding + a crons array.
+            writeFileSync(wranglerPath, '{ "name": "app", "d1_databases": [{ "binding": "DB" }], "triggers": { "crons": ["0 9 * * *"] } }\n', "utf8");
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { restart, server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            const onConfigChange = getConfigChangeListener(server);
+
+            // Simulate `reconcileWranglerCrons` rewriting ONLY triggers.crons.
+            writeFileSync(
+                wranglerPath,
+                '{ "name": "app", "d1_databases": [{ "binding": "DB" }], "triggers": { "crons": ["*/30 * * * *", "0 9 * * *"] } }\n',
+                "utf8",
+            );
+            onConfigChange(wranglerPath);
+
+            // crons are excluded from the fingerprint → no restart.
+            expect(restart).not.toHaveBeenCalled();
+        });
+
+        it("lunora.json drift restarts (the cloudflare plugin does not watch it)", () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+            // No lunora.json initially → baseline records it absent.
+            const lunoraConfigPath = join(workdir, "lunora.json");
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { restart, server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            const onConfigChange = getConfigChangeListener(server);
+
+            // A comment/whitespace-only edit to a still-absent file is a no-op…
+            onConfigChange(lunoraConfigPath);
+
+            expect(restart).not.toHaveBeenCalled();
+
+            // …but writing a real remote preference is binding-relevant drift.
+            writeFileSync(lunoraConfigPath, '{ "remote": true }\n', "utf8");
+            onConfigChange(lunoraConfigPath);
+
+            expect(restart).toHaveBeenCalledTimes(1);
+        });
+
+        it("a rejected restart is swallowed (keeps serving) and surfaces an overlay error", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+            const wranglerPath = join(workdir, "wrangler.jsonc");
+
+            writeFileSync(wranglerPath, '{ "name": "app" }\n', "utf8");
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { restart, send, server } = makeStubServer();
+
+            restart.mockRejectedValueOnce(new Error("port in use"));
+
+            wireServer(plugin, server);
+
+            const onConfigChange = getConfigChangeListener(server);
+
+            writeFileSync(wranglerPath, '{ "name": "app", "kv_namespaces": [{ "binding": "KV" }] }\n', "utf8");
+
+            // Must not throw out of the watcher even though restart rejects.
+            expect(() => {
+                onConfigChange(wranglerPath);
+            }).not.toThrow();
+
+            // Flush the finally/catch chain (a macrotask drains all pending microtasks).
+            await new Promise((resolve) => {
+                setTimeout(resolve, 0);
+            });
+
+            expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: "error" }));
         });
     });
 });
