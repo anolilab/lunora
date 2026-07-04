@@ -180,6 +180,52 @@ describe("usersPanel", () => {
         expect(mock.createAuthUser).toHaveBeenCalledWith(expect.objectContaining({ email: "c@example.com", name: "Cara" }));
     });
 
+    it("renders plugin-derived fields in the create dialog and submits their values", async () => {
+        expect.assertions(3);
+
+        const mock = createUsersClient();
+
+        // A deployment with the username plugin: a required `username` user field.
+        mock.getAuthConfig.mockResolvedValue({
+            capabilities: { accounts: true, admin: true, organization: false, passkey: false, twoFactor: false },
+            emailAndPassword: true,
+            organization: { enabled: false, roles: false, teams: false },
+            plugins: ["username"],
+            rateLimit: { enabled: false },
+            session: {},
+            socialProviders: [],
+            userFields: [{ name: "username", required: true, type: "string", unique: true }],
+        });
+
+        render(renderPanel(mock));
+        await screen.findByTestId("us-table");
+
+        fireEvent.click(screen.getByTestId("us-new"));
+
+        // The plugin field only renders once getAuthConfig resolves.
+        await screen.findByTestId("uc-field-username");
+
+        fireEvent.change(screen.getByTestId("uc-email"), { target: { value: "c@example.com" } });
+        fireEvent.change(screen.getByTestId("uc-name"), { target: { value: "Cara" } });
+
+        // The required plugin field is still empty, so submit stays disabled.
+        expect(screen.getByTestId<HTMLButtonElement>("uc-submit").disabled).toBe(true);
+
+        fireEvent.change(screen.getByTestId("uc-field-username"), { target: { value: "neo" } });
+
+        expect(screen.getByTestId<HTMLButtonElement>("uc-submit").disabled).toBe(false);
+
+        fireEvent.click(screen.getByTestId("uc-submit"));
+
+        await waitFor(() => {
+            if (mock.createAuthUser.mock.calls.length === 0) {
+                throw new Error("create not invoked yet");
+            }
+        });
+
+        expect(mock.createAuthUser).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ username: "neo" }) }));
+    });
+
     it("surfaces a users-listing error", async () => {
         expect.assertions(1);
 
