@@ -300,6 +300,19 @@ export interface IdentityIR {
 }
 
 /**
+ * The single `defineEnv({...})` contract discovered in `lunora/env.ts`. Like
+ * {@link IdentityIR}, only the export binding is lifted — the emitted
+ * `_generated/server.ts` recovers the validated shape from the declaration
+ * itself (`ReturnType` over the accessor's `typeof`), and the generated ShardDO
+ * applies the same accessor to the worker `env` at ctx-build time to populate
+ * `ctx.env`. Exactly one per app; absent ⇒ generated output is byte-identical.
+ */
+export interface EnvIR {
+    /** Export binding name — the namespace member `_generated/server.ts` reads via `typeof`. */
+    exportName: string;
+}
+
+/**
  * A `defineMutator({...})` declaration discovered in `lunora/mutators.ts`
  * (local-first sync engine, Phase 7). The emitted registry registers the
  * authoritative `server` impl into the DO's `LUNORA_FUNCTIONS` table (so

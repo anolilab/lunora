@@ -1,4 +1,5 @@
 /* eslint-disable no-secrets/no-secrets -- emitted builder source: the string fragments are framework API type names (e.g. "SchedulerDeclaration<Env>"), not credentials. */
+import { APP_METHOD_CAPABILITIES } from "./capabilities";
 import { GENERATED_HEADER } from "./emit";
 import type { IdentityIR, JurisdictionIR } from "./ir";
 
@@ -59,29 +60,20 @@ interface EmitAppOptions {
  * `env.AI`/`env.KV`/… binding), while `vectors` / `hyperdrive` / `payment`
  * need explicit construction. Each method's parameter is derived from the
  * generated config type, so no per-capability type imports are needed.
- * `[flag, methodName, configKey, doc]`.
+ *
+ * Derived from the single {@link APP_METHOD_CAPABILITIES} table (so it can't
+ * drift from the usage probe / ctx-field seam) into the `[flag, methodName,
+ * configKey, doc]` shape the emitters below consume — the flag is the capability
+ * key's `has&lt;Capitalized>` option (`ai` → `hasAi`, `payments` → `hasPayments`).
  */
-const LONG_TAIL: ReadonlyArray<readonly [keyof EmitAppOptions, string, string, string]> = [
-    ["hasAi", "ai", "ai", "Override the Workers AI binding backing `ctx.ai` (defaults to `env.AI`)."],
-    ["hasAnalytics", "analytics", "analytics", "Override the Analytics Engine dataset backing `ctx.analytics` (defaults to `env.ANALYTICS`)."],
-    ["hasBrowser", "browser", "browser", "Override the Browser Rendering binding backing `ctx.browser` (defaults to `env.BROWSER`)."],
-    [
-        "hasHyperdrive",
-        "hyperdrive",
-        "sql",
-        "Wire the Hyperdrive SQL client backing `ctx.sql` — build it with `createHyperdrive` + `fromPostgresJs`/`fromNodePg`/`fromMysql2`.",
+const LONG_TAIL: ReadonlyArray<readonly [keyof EmitAppOptions, string, string, string]> = APP_METHOD_CAPABILITIES.map(
+    ({ appMethod, key }): readonly [keyof EmitAppOptions, string, string, string] => [
+        `has${key.charAt(0).toUpperCase()}${key.slice(1)}` as keyof EmitAppOptions,
+        appMethod.method,
+        appMethod.configKey,
+        appMethod.doc,
     ],
-    ["hasImages", "images", "images", "Override the Images binding backing `ctx.images` (defaults to `env.IMAGES`)."],
-    ["hasKv", "kv", "kv", "Override the Workers KV binding backing `ctx.kv` (defaults to `env.KV`)."],
-    ["hasPayments", "payment", "payment", "Wire the payment options backing `ctx.payments`."],
-    [
-        "hasR2sql",
-        "r2sql",
-        "r2sql",
-        "Wire the R2 SQL client backing `ctx.r2sql` — build it with `createR2Sql({ accountId, apiToken, bucket })` (defaults to env `R2_SQL_TOKEN` / `R2_SQL_ACCOUNT_ID` / `R2_SQL_BUCKET`).",
-    ],
-    ["hasVectors", "vectors", "vectors", "Wire the Vectorize index map backing `ctx.vectors`."],
-];
+);
 
 /** Whether any long-tail (`shardExtras`-backed) capability method is emitted. */
 const hasAnyLongTail = (options: EmitAppOptions): boolean => LONG_TAIL.some(([flag]) => options[flag]);

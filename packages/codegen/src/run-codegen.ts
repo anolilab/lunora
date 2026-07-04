@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
 
@@ -20,6 +20,7 @@ import discoverContainerKeyAccesses from "./discover-container-key-accesses";
 import discoverContainerOverrides from "./discover-container-overrides";
 import { discoverContainers } from "./discover-containers";
 import discoverCrons from "./discover-crons";
+import { discoverEnv } from "./discover-env";
 import discoverFailOpenGuards from "./discover-fail-open-guards";
 import { buildStudioFeatures, discoverFeatureUsage } from "./discover-feature-usage";
 import discoverFlagSecurityDefaults from "./discover-flag-security-defaults";
@@ -110,15 +111,25 @@ const writeIfChanged = (filePath: string, content: string): void => {
 };
 
 /**
- * Write a conditionally-emitted `_generated/` file: a no-op when `content` is
- * the empty string (the convention `emit*` helpers use to mean "not
- * applicable"), so the file is only created for projects that actually use the
- * feature. Keeps the per-feature gating out of `runCodegen`'s control flow.
+ * Write a conditionally-emitted `_generated/` file, or **delete a stale one**.
+ * When `content` is the empty string (the convention `emit*` helpers use to mean
+ * "not applicable") the feature is not in use, so any file left at `filePath`
+ * from a prior run — when the feature WAS in use — is removed. Without this, a
+ * removed feature (last container/workflow/queue deleted, `@lunora/db` /
+ * `@lunora/seed` uninstalled) would leave a lingering `_generated/&lt;feature>.ts`
+ * that imports a now-absent package and breaks the build. `force: true` no-ops
+ * when the file never existed. Only ever called for the known conditional set
+ * (containers/workflows/queues/seed/collections), so it never touches an
+ * unrelated file. Keeps the per-feature gating out of `runCodegen`'s control flow.
  */
 const writeIfPresent = (filePath: string, content: string): void => {
-    if (content !== "") {
-        writeIfChanged(filePath, content);
+    if (content === "") {
+        rmSync(filePath, { force: true });
+
+        return;
     }
+
+    writeIfChanged(filePath, content);
 };
 
 /**
@@ -303,6 +314,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // file is absent, so a project without one emits byte-identical server.ts.
     const identity = discoverIdentity(project, lunoraDirectory);
 
+    // Typed env layer: the single `defineEnv(...)` contract declared in
+    // `lunora/env.ts`. When present, `emitServer` types `ctx.env` as the
+    // validated `InferEnv` shape and the generated ShardDO applies the accessor
+    // to the worker `env` at ctx-build time. `undefined` when the file is absent,
+    // so a project without one emits byte-identical generated code.
+    const env = discoverEnv(project, lunoraDirectory);
+
     // Workflows declared via `defineWorkflow` exports in `lunora/workflows.ts`.
     // Discovered before crons so a `cronJobs()` registration can target a
     // workflow by its export name (the cron then starts a durable instance per
@@ -474,6 +492,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const apiContent = emitApi(functions, workflows, useUmbrella);
     const serverContent = emitServer({
         containers,
+        env,
         hasAccessFacade,
         hasAi,
         hasAnalytics,
@@ -496,6 +515,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const shardContent = emitShard({
         advisories,
         containers,
+        env,
         flagKeys,
         hasAccessFacade,
         hasAi,

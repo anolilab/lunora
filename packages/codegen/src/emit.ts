@@ -10,10 +10,12 @@ import type {
 } from "@lunora/do";
 import { LunoraError } from "@lunora/errors";
 
+import { SERVER_CTX_FIELDS } from "./capabilities";
 import compileArgsValidator from "./compile-validator";
 import type {
     ContainerIR,
     CronJobIR,
+    EnvIR,
     FunctionIR,
     IdentityIR,
     IndexIR,
@@ -1018,6 +1020,14 @@ interface EmitServerOptions {
     containers?: ReadonlyArray<ContainerIR>;
 
     /**
+     * The single `defineEnv(...)` contract declared in `lunora/env.ts`. When
+     * present, `ctx.env` is typed as the validated `InferEnv` shape (recovered
+     * via `ReturnType` over the accessor's `typeof`). `undefined` leaves `ctx.env`
+     * the base optional binding record — byte-identical to today.
+     */
+    env?: EnvIR;
+
+    /**
      * A `lunora/` source reads `ctx.access` — wires the verified Cloudflare Access
      * facade (`@lunora/cloudflare-access/context`) onto every ctx. Distinct from
      * `emitApp`'s `hasAccess` (which gates the worker's `.access()` resolveIdentity
@@ -1064,6 +1074,7 @@ interface EmitServerOptions {
 /* eslint-disable sonarjs/cognitive-complexity -- emitter that gates each Cloudflare-capability fragment behind its own `has*`/length flag to assemble dense generated TS; the branching is the per-binding emission contract, not refactorable logic */
 const emitServer = ({
     containers = [],
+    env,
     hasAccessFacade = false,
     hasAi = false,
     hasAnalytics = false,
@@ -1170,9 +1181,20 @@ export type Env = CloudflareBindings;`;
     // deterministic query/mutation contexts), while write-only / side-effect-free
     // helpers (\`kv\`, \`analytics\`) ride every ctx.
     //
-    // `ctx.kv` — Workers KV. Typed on EVERY ctx (a KV read is allowed in a
-    // deterministic read path the way `ctx.db` is; the binding is user-named).
-    const kvContextField = hasKv ? `\n    readonly kv: import("@lunora/bindings/kv").Kv;` : "";
+    // The uniform Cloudflare-binding capabilities source their exact ctx-interface
+    // fragment (and determinism tier — EVERY ctx for `ctx.kv`/`ctx.analytics`,
+    // ActionCtx-only for `ctx.sql`/`ctx.browser`/`ctx.images`/`ctx.pipelines`/
+    // `ctx.r2sql`) from the single CAPABILITIES table, so the strings live in one
+    // place. `ctx.access` (a synchronous facade type) and `ctx.flags` (an
+    // umbrella-aware specifier) are the two exceptions kept bespoke below.
+    const serverCapabilityField = (key: string, enabled: boolean): string => (enabled ? (SERVER_CTX_FIELDS.get(key)?.field ?? "") : "");
+    const kvContextField = serverCapabilityField("kv", hasKv);
+    const analyticsContextField = serverCapabilityField("analytics", hasAnalytics);
+    const hyperdriveActionField = serverCapabilityField("hyperdrive", hasHyperdrive);
+    const browserActionField = serverCapabilityField("browser", hasBrowser);
+    const imagesActionField = serverCapabilityField("images", hasImages);
+    const pipelinesActionField = serverCapabilityField("pipelines", hasPipelines);
+    const r2sqlActionField = serverCapabilityField("r2sql", hasR2sql);
     // `ctx.access` — the verified Cloudflare Access identity, a synchronous facade
     // over the already-resolved claims. Rides EVERY ctx (a deterministic read of
     // the per-request identity, like `ctx.auth`; no I/O — verification happened
@@ -1186,35 +1208,6 @@ export type Env = CloudflareBindings;`;
     // memoized per request. Gated on the project declaring `lunora/flags.ts`.
     const flagsContextField = hasFlags
         ? `\n    /** Feature-flag evaluation (OpenFeature). Reads are memoized per request; evaluations never throw — a provider error resolves to the supplied default. */\n    readonly flags: import("${base.flags}").LunoraFlags;`
-        : "";
-    // `ctx.sql` — Hyperdrive (external Postgres/MySQL). ActionCtx ONLY: external,
-    // non-deterministic I/O whose writes are invisible to Lunora live queries.
-    const hyperdriveActionField = hasHyperdrive
-        ? `\n    /**\n     * External database access via Hyperdrive. Non-deterministic — available only in actions. Writes here are NOT tracked by Lunora live queries; subscriptions will not re-run on external DB changes.\n     */\n    readonly sql: import("@lunora/hyperdrive").SqlClient;`
-        : "";
-    // `ctx.browser` — Browser Rendering. ActionCtx ONLY: non-deterministic network I/O.
-    const browserActionField = hasBrowser
-        ? `\n    /** Browser Rendering (screenshots/PDF/scrape). Non-deterministic — available only in actions. */\n    readonly browser: import("@lunora/browser").Browser;`
-        : "";
-    // `ctx.images` — Cloudflare Images binding transforms. ActionCtx ONLY: non-deterministic compute/network I/O.
-    const imagesActionField = hasImages
-        ? `\n    /** Cloudflare Images transforms (resize/format/optimize). Non-deterministic — available only in actions. */\n    readonly images: import("@lunora/bindings/images").Images;`
-        : "";
-    // `ctx.analytics` — Analytics Engine write helper. EVERY ctx: a write-only,
-    // fire-and-forget side effect, not a determinism hazard for reads.
-    const analyticsContextField = hasAnalytics
-        ? `\n    /** Analytics Engine telemetry sink. Fire-and-forget and sampled; do not read it back in-handler. */\n    readonly analytics: import("@lunora/bindings/analytics").AnalyticsClient;`
-        : "";
-    // `ctx.pipelines` — Pipelines (R2-backed) ingestion sink. ActionCtx ONLY
-    // (write-only fire-and-forget, but external I/O — kept off query/mutation).
-    const pipelinesActionField = hasPipelines
-        ? `\n    /** Pipelines ingestion sink (durable, R2-backed). Fire-and-forget and batched; do not read it back in-handler. */\n    readonly pipelines: import("@lunora/bindings/pipelines").PipelineClient;`
-        : "";
-    // `ctx.r2sql` — R2 SQL (serverless query engine over Apache Iceberg tables).
-    // ActionCtx ONLY: external REST I/O, non-deterministic, and non-reactive
-    // (reads are not tracked by Lunora live queries).
-    const r2sqlActionField = hasR2sql
-        ? `\n    /**\n     * R2 SQL over Apache Iceberg tables (window functions, DISTINCT, set operations). Non-deterministic — available only in actions. Reads here are NOT tracked by Lunora live queries.\n     */\n    readonly r2sql: import("@lunora/bindings/r2sql").R2SqlClient;`
         : "";
 
     // Workflows live on BOTH MutationCtx and ActionCtx (a workflow can be kicked
@@ -1295,6 +1288,27 @@ type NarrowedAuth = Omit<QueryCtxBase["auth"], "getIdentity"> & { getIdentity: (
     // untyped `Record<string, unknown>` default in `createPolicyDsl`.
     const policyIdentityArgument = identity ? ", Identity" : "";
 
+    // `ctx.env` — the validated, typed environment declared by `defineEnv(...)` in
+    // `lunora/env.ts`. Like the identity block, only the export binding is lifted;
+    // the emitted type recovers the validated shape from the declaration itself
+    // (`ReturnType` over the accessor's `typeof`, since `EnvAccessor<S>`'s call
+    // signature returns `InferEnv<S>`). Every fragment is gated on the contract
+    // existing, so with no `defineEnv` the emitted server.ts is byte-identical.
+    const envTypeImport = env ? `import type * as lunoraEnvContract from "../env.js";\n` : "";
+    const envTypeBlock = env
+        ? `
+
+/** This app's declared env contract (\`defineEnv\` in \`lunora/env.ts\`) — the validated, coercion-aware shape of \`ctx.env\`. */
+export type LunoraEnv = ReturnType<typeof lunoraEnvContract.${env.exportName}>;`
+        : "";
+    // Appended to each ctx's `Omit<…Base, …>` key union so the narrowed, required
+    // `env` replaces the base's optional binding record; empty ⇒ the base `env?`
+    // is inherited untouched (byte-identical).
+    const envOmit = env ? ` | "env"` : "";
+    const envContextField = env
+        ? `\n    /** Validated, typed environment declared by \`defineEnv\` in \`lunora/env.ts\` — parsed & coercion-aware config values (\`ctx.env.STRIPE_KEY\`); a missing or invalid value throws at read time. */\n    readonly env: LunoraEnv;`
+        : "";
+
     const server = `${GENERATED_HEADER}import { createPolicyDsl, initLunora, v as vBase } from "${base.server}";
 import type {
     ActionBuilder,
@@ -1316,11 +1330,11 @@ import type {
 } from "${base.server}";
 
 import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, Relations, TableName } from "./dataModel.js";
-${aiTypeImport}${paymentsTypeImport}${containersTypeImport}${workflowsTypeImport}${queuesTypeImport}${identityTypeImport}
+${aiTypeImport}${paymentsTypeImport}${containersTypeImport}${workflowsTypeImport}${queuesTypeImport}${identityTypeImport}${envTypeImport}
 export type { DataModel, Doc, Id, TableName } from "./dataModel.js";
 
 /** Storage buckets this schema declares (\`v.storage("name")\`), narrowing \`ctx.storage.bucket(name)\`. */
-export type StorageBucketName = ${storageBucketUnion};${envBlock}${workflowsTypeBlock}${queuesTypeBlock}${identityTypeBlock}
+export type StorageBucketName = ${storageBucketUnion};${envBlock}${workflowsTypeBlock}${queuesTypeBlock}${identityTypeBlock}${envTypeBlock}
 
 /**
  * Project-typed contexts. The base contexts from \`@lunora/server\` are
@@ -1349,22 +1363,22 @@ type TypedTableQuery = (<T extends TableName>(table: T) => TableReader<Doc<T>>) 
  */
 type TypedTableGet = <T extends TableName>(id: IdOfTable<T>) => Promise<Doc<T> | null>;
 
-export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"${authOmit}> {
+export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"${authOmit}${envOmit}> {
     readonly db: Omit<DatabaseReader, "query" | "get"> & DatabaseReaderFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmReader;
-    readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${analyticsContextField}${authContextField}
+    readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${analyticsContextField}${envContextField}${authContextField}
 }
 
-export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${workflowsOmit}${authOmit}> {
+export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${workflowsOmit}${authOmit}${envOmit}> {
     readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${analyticsContextField}${workflowsContextField}${queuesContextField}${authContextField}
+    readonly storage: ReadOnlyStorage<StorageBucketName>;${accessContextField}${kvContextField}${flagsContextField}${analyticsContextField}${envContextField}${workflowsContextField}${queuesContextField}${authContextField}
 }
 
-export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${workflowsOmit}${authOmit}> {
+export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${workflowsOmit}${authOmit}${envOmit}> {
     readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: StorageBase<StorageBucketName>;${accessContextField}${aiActionField}${paymentsActionField}${containersActionField}${kvContextField}${flagsContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${workflowsContextField}${queuesContextField}${authContextField}
+    readonly storage: StorageBase<StorageBucketName>;${accessContextField}${aiActionField}${paymentsActionField}${containersActionField}${kvContextField}${flagsContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${envContextField}${workflowsContextField}${queuesContextField}${authContextField}
 }
 
 /**
@@ -1948,6 +1962,30 @@ const emitFlagsFragments = (hasFlags: boolean, flagsSpecifier: string): HelperFr
         configField: `\n    flags?: (env: Record<string, unknown>) => import("${flagsSpecifier}").Provider;`,
         contextField: `\n                flags,`,
         importLines: [`import { createFlags } from "${flagsSpecifier}";`, `import flagsConfig from "../flags.js";`],
+        stub: "",
+    };
+};
+
+/**
+ * `ctx.env` (validated environment) fragments. Rides EVERY ctx (a deterministic
+ * read of parsed config, like `ctx.secrets`). The project's `defineEnv(...)`
+ * accessor (namespace-imported from `../env.js`) is applied to the worker `env`
+ * at ctx-build time; `defineEnv` returns a lazy per-key-validated proxy, so the
+ * build is cheap (no eager validation) and there is no stub fallback. Gated on
+ * the project declaring `lunora/env.ts` — empty otherwise (byte-identical).
+ */
+const emitEnvFragments = (env: EnvIR | undefined): HelperFragments => {
+    if (!env) {
+        return EMPTY_HELPER_FRAGMENTS;
+    }
+
+    return {
+        build: `
+            const envConfig = lunoraEnvContract.${env.exportName}(env);
+`,
+        configField: "",
+        contextField: `\n                env: envConfig,`,
+        importLines: [`import * as lunoraEnvContract from "../env.js";`],
         stub: "",
     };
 };
@@ -2788,6 +2826,8 @@ const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean, hasQueue
 interface EmitShardOptions {
     advisories?: ReadonlyArray<Finding>;
     containers?: ReadonlyArray<ContainerIR>;
+    /** The single `defineEnv(...)` contract declared in `lunora/env.ts` — applies the accessor to the worker `env` to populate `ctx.env`. */
+    env?: EnvIR;
     /** Statically-discovered `ctx.flags.&lt;type>("key")` reads — the studio Flags page + reactive evaluation iterate these. */
     flagKeys?: ReadonlyArray<{ key: string; type: "boolean" | "number" | "object" | "string" }>;
     /** A `lunora/` source reads `ctx.access` — wires the verified Cloudflare Access facade onto every ctx. */
@@ -2830,6 +2870,7 @@ interface EmitShardOptions {
 const emitShard = ({
     advisories = [],
     containers = [],
+    env,
     flagKeys = [],
     hasAccessFacade = false,
     hasAi = false,
@@ -2865,6 +2906,7 @@ const emitShard = ({
     const kvFragments = emitKvFragments(hasKv);
     const flagsFragments = emitFlagsFragments(hasFlags, base.flags);
     const flagsOverrides = emitFlagsOverrides(flagKeys, hasFlags, base.flags);
+    const envFragments = emitEnvFragments(env);
     const analyticsFragments = emitAnalyticsFragments(hasAnalytics);
     const imagesFragments = emitImagesFragments(hasImages);
     const hyperdriveFragments = emitHyperdriveFragments(hasHyperdrive);
@@ -3097,6 +3139,7 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
         ...accessFragments.importLines,
         ...kvFragments.importLines,
         ...flagsFragments.importLines,
+        ...envFragments.importLines,
         ...analyticsFragments.importLines,
         ...imagesFragments.importLines,
         ...hyperdriveFragments.importLines,
@@ -3495,8 +3538,8 @@ ${schema.tables
     const secretsBuild = `
             const secrets = createSecrets(env);
 `;
-    const everyContextBuild = `${accessFragments.build}${kvFragments.build}${flagsFragments.build}${analyticsFragments.build}${secretsBuild}`;
-    const everyContextField = `${accessFragments.contextField}${kvFragments.contextField}${flagsFragments.contextField}${analyticsFragments.contextField}\n                secrets,`;
+    const everyContextBuild = `${accessFragments.build}${kvFragments.build}${flagsFragments.build}${analyticsFragments.build}${envFragments.build}${secretsBuild}`;
+    const everyContextField = `${accessFragments.contextField}${kvFragments.contextField}${flagsFragments.contextField}${analyticsFragments.contextField}${envFragments.contextField}\n                secrets,`;
 
     // `ctx.images` / `ctx.sql` (Hyperdrive) / `ctx.browser` are ActionCtx-ONLY:
     // external, non-deterministic I/O the typed `ActionCtx` exposes but
