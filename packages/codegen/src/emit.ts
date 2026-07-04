@@ -10,6 +10,7 @@ import type {
 } from "@lunora/do";
 import { LunoraError } from "@lunora/errors";
 
+import { SERVER_CTX_FIELDS } from "./capabilities";
 import compileArgsValidator from "./compile-validator";
 import type {
     ContainerIR,
@@ -1180,9 +1181,20 @@ export type Env = CloudflareBindings;`;
     // deterministic query/mutation contexts), while write-only / side-effect-free
     // helpers (\`kv\`, \`analytics\`) ride every ctx.
     //
-    // `ctx.kv` — Workers KV. Typed on EVERY ctx (a KV read is allowed in a
-    // deterministic read path the way `ctx.db` is; the binding is user-named).
-    const kvContextField = hasKv ? `\n    readonly kv: import("@lunora/bindings/kv").Kv;` : "";
+    // The uniform Cloudflare-binding capabilities source their exact ctx-interface
+    // fragment (and determinism tier — EVERY ctx for `ctx.kv`/`ctx.analytics`,
+    // ActionCtx-only for `ctx.sql`/`ctx.browser`/`ctx.images`/`ctx.pipelines`/
+    // `ctx.r2sql`) from the single CAPABILITIES table, so the strings live in one
+    // place. `ctx.access` (a synchronous facade type) and `ctx.flags` (an
+    // umbrella-aware specifier) are the two exceptions kept bespoke below.
+    const serverCapabilityField = (key: string, enabled: boolean): string => (enabled ? (SERVER_CTX_FIELDS.get(key)?.field ?? "") : "");
+    const kvContextField = serverCapabilityField("kv", hasKv);
+    const analyticsContextField = serverCapabilityField("analytics", hasAnalytics);
+    const hyperdriveActionField = serverCapabilityField("hyperdrive", hasHyperdrive);
+    const browserActionField = serverCapabilityField("browser", hasBrowser);
+    const imagesActionField = serverCapabilityField("images", hasImages);
+    const pipelinesActionField = serverCapabilityField("pipelines", hasPipelines);
+    const r2sqlActionField = serverCapabilityField("r2sql", hasR2sql);
     // `ctx.access` — the verified Cloudflare Access identity, a synchronous facade
     // over the already-resolved claims. Rides EVERY ctx (a deterministic read of
     // the per-request identity, like `ctx.auth`; no I/O — verification happened
@@ -1196,35 +1208,6 @@ export type Env = CloudflareBindings;`;
     // memoized per request. Gated on the project declaring `lunora/flags.ts`.
     const flagsContextField = hasFlags
         ? `\n    /** Feature-flag evaluation (OpenFeature). Reads are memoized per request; evaluations never throw — a provider error resolves to the supplied default. */\n    readonly flags: import("${base.flags}").LunoraFlags;`
-        : "";
-    // `ctx.sql` — Hyperdrive (external Postgres/MySQL). ActionCtx ONLY: external,
-    // non-deterministic I/O whose writes are invisible to Lunora live queries.
-    const hyperdriveActionField = hasHyperdrive
-        ? `\n    /**\n     * External database access via Hyperdrive. Non-deterministic — available only in actions. Writes here are NOT tracked by Lunora live queries; subscriptions will not re-run on external DB changes.\n     */\n    readonly sql: import("@lunora/hyperdrive").SqlClient;`
-        : "";
-    // `ctx.browser` — Browser Rendering. ActionCtx ONLY: non-deterministic network I/O.
-    const browserActionField = hasBrowser
-        ? `\n    /** Browser Rendering (screenshots/PDF/scrape). Non-deterministic — available only in actions. */\n    readonly browser: import("@lunora/browser").Browser;`
-        : "";
-    // `ctx.images` — Cloudflare Images binding transforms. ActionCtx ONLY: non-deterministic compute/network I/O.
-    const imagesActionField = hasImages
-        ? `\n    /** Cloudflare Images transforms (resize/format/optimize). Non-deterministic — available only in actions. */\n    readonly images: import("@lunora/bindings/images").Images;`
-        : "";
-    // `ctx.analytics` — Analytics Engine write helper. EVERY ctx: a write-only,
-    // fire-and-forget side effect, not a determinism hazard for reads.
-    const analyticsContextField = hasAnalytics
-        ? `\n    /** Analytics Engine telemetry sink. Fire-and-forget and sampled; do not read it back in-handler. */\n    readonly analytics: import("@lunora/bindings/analytics").AnalyticsClient;`
-        : "";
-    // `ctx.pipelines` — Pipelines (R2-backed) ingestion sink. ActionCtx ONLY
-    // (write-only fire-and-forget, but external I/O — kept off query/mutation).
-    const pipelinesActionField = hasPipelines
-        ? `\n    /** Pipelines ingestion sink (durable, R2-backed). Fire-and-forget and batched; do not read it back in-handler. */\n    readonly pipelines: import("@lunora/bindings/pipelines").PipelineClient;`
-        : "";
-    // `ctx.r2sql` — R2 SQL (serverless query engine over Apache Iceberg tables).
-    // ActionCtx ONLY: external REST I/O, non-deterministic, and non-reactive
-    // (reads are not tracked by Lunora live queries).
-    const r2sqlActionField = hasR2sql
-        ? `\n    /**\n     * R2 SQL over Apache Iceberg tables (window functions, DISTINCT, set operations). Non-deterministic — available only in actions. Reads here are NOT tracked by Lunora live queries.\n     */\n    readonly r2sql: import("@lunora/bindings/r2sql").R2SqlClient;`
         : "";
 
     // Workflows live on BOTH MutationCtx and ActionCtx (a workflow can be kicked
