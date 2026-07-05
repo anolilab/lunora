@@ -31,8 +31,8 @@ const makeClient = (calls: RecordedCall[] = []): DodoPaymentsClientLike => {
             },
         },
         customers: {
-            create: async (body) => {
-                calls.push({ args: [body], name: "customer" });
+            create: async (body, options) => {
+                calls.push({ args: [body, options], name: "customer" });
 
                 return { customer_id: "cus_1", email: "a@b.test" };
             },
@@ -179,6 +179,45 @@ describe("dodopayments adapter", () => {
 
         // changePlan requires a quantity — it must carry the current 5, not silently reset to 1.
         expect((calls.find((call) => call.name === "changePlan")?.args[1] as Record<string, unknown>).quantity).toBe(5);
+    });
+
+    it("supports a quantity-only update by carrying the current plan into change-plan (regression)", async () => {
+        expect.assertions(2);
+
+        const calls: RecordedCall[] = [];
+        const base = makeClient(calls);
+        const client = {
+            ...base,
+            subscriptions: {
+                ...base.subscriptions,
+                retrieve: async (id: string) => {
+                    return { cancel_at_next_billing_date: false, product_id: "pro", quantity: 2, status: "active", subscription_id: id };
+                },
+            },
+        };
+        const adapter = createDodoPaymentsAdapter({ client, webhookSecret: SECRET });
+
+        // Only quantity changes — the plan must be filled from the current subscription, not dropped.
+        await adapter.updateSubscription("sub_1", { quantity: 9 });
+
+        const changePlan = calls.find((call) => call.name === "changePlan")?.args[1] as Record<string, unknown>;
+
+        expect(changePlan.product_id).toBe("pro");
+        expect(changePlan.quantity).toBe(9);
+    });
+
+    it("keys customer creation on an idempotency key derived from the reference (regression)", async () => {
+        expect.assertions(2);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createDodoPaymentsAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+
+        await adapter.getOrCreateCustomer({ email: "a@b.test", referenceId: "user_1" });
+
+        const options = calls.find((call) => call.name === "customer")?.args[1] as { idempotencyKey?: string } | undefined;
+
+        expect(typeof options?.idempotencyKey).toBe("string");
+        expect(options?.idempotencyKey).not.toHaveLength(0);
     });
 
     it("ingests usage as a Dodo usage-event keyed on the customer id", async () => {

@@ -48,10 +48,13 @@ interface UsageEventPoint {
     readonly raw: Record<string, unknown>;
 }
 
-interface EventsQueryInput {
+interface EventsListInput {
     /** Feature(s) to report on. */
     readonly featureId: ReadonlyArray<string> | string;
-    /** Bucket granularity for `aggregate`. */
+}
+
+interface EventsAggregateInput extends EventsListInput {
+    /** Time window to aggregate over (aggregate only — `list` ignores it, so it isn't accepted there). */
     readonly range?: "7d" | "24h" | "30d" | "90d" | "last_cycle";
 }
 
@@ -131,8 +134,8 @@ interface AutumnFeatures {
         readonly get: (referenceId: string, entityId: string, expand?: ReadonlyArray<"invoices">) => Promise<AutumnEntity>;
     };
     readonly events: {
-        readonly aggregate: (referenceId: string, input: EventsQueryInput) => Promise<UsageEventPoint[]>;
-        readonly list: (referenceId: string, input: EventsQueryInput) => Promise<UsageEventPoint[]>;
+        readonly aggregate: (referenceId: string, input: EventsAggregateInput) => Promise<UsageEventPoint[]>;
+        readonly list: (referenceId: string, input: EventsListInput) => Promise<UsageEventPoint[]>;
     };
     readonly products: {
         readonly list: (referenceId?: string) => Promise<Record<string, unknown>[]>;
@@ -202,14 +205,14 @@ export const createAutumnFeatures = (options: AutumnFeaturesOptions): AutumnFeat
 
         events: {
             /** Bucketed usage aggregation for a reference's feature(s) over a range. */
-            aggregate: async (referenceId: string, input: EventsQueryInput): Promise<UsageEventPoint[]> => {
+            aggregate: async (referenceId: string, input: EventsAggregateInput): Promise<UsageEventPoint[]> => {
                 const result = await client.events.aggregate({ customer_id: referenceId, feature_id: input.featureId, range: input.range });
 
                 return pointsFrom(result);
             },
 
             /** Raw usage events for a reference's feature(s). */
-            list: async (referenceId: string, input: EventsQueryInput): Promise<UsageEventPoint[]> => {
+            list: async (referenceId: string, input: EventsListInput): Promise<UsageEventPoint[]> => {
                 const result = await client.events.list({ customer_id: referenceId, feature_id: input.featureId });
 
                 return pointsFrom(result);
@@ -248,7 +251,8 @@ export type {
     AutumnFeaturesClientLike,
     AutumnFeaturesOptions,
     CreateEntityInput,
-    EventsQueryInput,
+    EventsAggregateInput,
+    EventsListInput,
     PrepaidOption,
     UsageEventPoint,
 };

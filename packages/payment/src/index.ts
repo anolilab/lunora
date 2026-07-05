@@ -35,7 +35,8 @@ export type {
     AutumnFeaturesClientLike,
     AutumnFeaturesOptions,
     CreateEntityInput,
-    EventsQueryInput,
+    EventsAggregateInput,
+    EventsListInput,
     PrepaidOption,
     UsageEventPoint,
 } from "./providers/autumn-features";

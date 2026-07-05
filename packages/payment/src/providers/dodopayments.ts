@@ -14,6 +14,7 @@
  */
 import type { PaymentAdapter, WebhookInput } from "../adapter";
 import { LunoraPaymentError } from "../errors";
+import idempotencyKey from "../idempotency";
 import { asRecord, parseTimestamp, readBoolean, readNumber, readString } from "../json";
 import { money, zeroMoney } from "../money";
 import type {
@@ -41,7 +42,7 @@ interface DodoPaymentsClientLike {
         readonly create: (body: Record<string, unknown>) => Promise<Record<string, unknown>>;
     };
     readonly customers: {
-        readonly create: (body: Record<string, unknown>) => Promise<Record<string, unknown>>;
+        readonly create: (body: Record<string, unknown>, options?: { idempotencyKey?: string }) => Promise<Record<string, unknown>>;
         readonly customerPortal: {
             readonly create: (customerId: string, body?: Record<string, unknown>) => Promise<Record<string, unknown>>;
         };
@@ -265,7 +266,13 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
         },
 
         getOrCreateCustomer: async (ref: CustomerRef): Promise<Customer> => {
-            const customer = await client.customers.create({ email: ref.email, name: ref.metadata?.name ?? ref.referenceId });
+            // Dodo's `customers.create` is NOT idempotent by email, so a retried/raced first checkout
+            // for the same reference would mint duplicate customers. Key the create on the reference so
+            // repeats return the same customer (the facade also gates this behind a store lookup).
+            const customer = await client.customers.create(
+                { email: ref.email, name: ref.metadata?.name ?? ref.referenceId },
+                { idempotencyKey: idempotencyKey("customer", "dodopayments", ref.referenceId) },
+            );
 
             return {
                 createdAt: Date.now(),
@@ -345,19 +352,20 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
         },
 
         updateSubscription: async (subscriptionId, patch: SubscriptionPatch) => {
-            // A plan change goes through Dodo's dedicated change-plan endpoint (prorated immediately),
-            // then we re-read the authoritative subscription. A bare metadata/quantity update has no
-            // change-plan semantics, so just return the current truth.
-            if (patch.priceId) {
-                // `changePlan` REQUIRES a quantity — when the caller changes only the plan, preserve the
-                // current seat count rather than defaulting to 1, which would silently shrink a
-                // multi-seat subscription and re-prorate it.
-                const quantity = patch.quantity ?? readNumber(await client.subscriptions.retrieve(subscriptionId), "quantity") ?? 1;
+            // A plan and/or quantity change goes through Dodo's dedicated change-plan endpoint (prorated
+            // immediately), then we re-read the authoritative subscription. `changePlan` REQUIRES BOTH
+            // `product_id` and `quantity`, so a patch that sets only one side (plan-only OR quantity-only)
+            // must fill the other from the current subscription — otherwise the missing side would
+            // silently reset (a quantity-only patch was previously dropped entirely).
+            if (patch.priceId !== undefined || patch.quantity !== undefined) {
+                const current = asRecord(
+                    patch.priceId !== undefined && patch.quantity !== undefined ? undefined : await client.subscriptions.retrieve(subscriptionId),
+                );
 
                 await client.subscriptions.changePlan(subscriptionId, {
-                    product_id: patch.priceId,
+                    product_id: patch.priceId ?? readString(current, "product_id") ?? "",
                     proration_billing_mode: "prorated_immediately",
-                    quantity,
+                    quantity: patch.quantity ?? readNumber(current, "quantity") ?? 1,
                 });
             }
 
