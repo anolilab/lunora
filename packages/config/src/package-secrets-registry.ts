@@ -128,6 +128,19 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             key: "AUTUMN_SECRET_KEY",
             placeholderValue: "<your-autumn-secret-key>",
         },
+        {
+            description: "Dodo Payments API key (bearer token) for the Dodo Payments adapter. Obtain at https://app.dodopayments.com/developer/api-keys",
+            docsUrl: "https://lunora.sh/docs/packages/payment#dodo-payments",
+            key: "DODO_PAYMENTS_API_KEY",
+            placeholderValue: "<your-dodo-payments-api-key>",
+        },
+        {
+            description:
+                "Dodo Payments webhook signing secret (whsec_…) for verifying event payloads. Obtain at https://app.dodopayments.com/developer/webhooks",
+            docsUrl: "https://lunora.sh/docs/packages/payment#dodo-payments",
+            key: "DODO_PAYMENTS_WEBHOOK_KEY",
+            placeholderValue: "<your-dodo-payments-webhook-secret>",
+        },
     ],
 };
 

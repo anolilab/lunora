@@ -40,6 +40,8 @@ export type {
     UsageEventPoint,
 } from "./providers/autumn-features";
 export { createAutumnFeatures } from "./providers/autumn-features";
+export type { DodoPaymentsAdapterOptions, DodoPaymentsClientLike } from "./providers/dodopayments";
+export { createDodoPaymentsAdapter } from "./providers/dodopayments";
 export type { PolarAdapterOptions, PolarClientLike } from "./providers/polar";
 export { createPolarAdapter } from "./providers/polar";
 export type { StripeAdapterOptions, StripeClientLike } from "./providers/stripe";

@@ -1,0 +1,254 @@
+import { createHmac } from "node:crypto";
+
+import { describe, expect, it } from "vitest";
+
+import type { DodoPaymentsClientLike } from "../../src/providers/dodopayments";
+import { createDodoPaymentsAdapter } from "../../src/providers/dodopayments";
+
+const SECRET = "MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw"; // gitleaks:allow -- test fixture signing key, not a real secret
+
+const sign = (id: string, timestamp: string, body: string): string =>
+    `v1,${createHmac("sha256", Buffer.from(SECRET, "base64")).update(`${id}.${timestamp}.${body}`).digest("base64")}`;
+
+const headersFor = (id: string, timestamp: string, signature: string) => {
+    return {
+        get: (name: string): null | string => ({ "webhook-id": id, "webhook-signature": signature, "webhook-timestamp": timestamp })[name] ?? null,
+    };
+};
+
+interface RecordedCall {
+    args: unknown[];
+    name: string;
+}
+
+const makeClient = (calls: RecordedCall[] = []): DodoPaymentsClientLike => {
+    return {
+        checkoutSessions: {
+            create: async (body) => {
+                calls.push({ args: [body], name: "checkout" });
+
+                return { checkout_url: "https://dodo.test/checkout", session_id: "cks_1" };
+            },
+        },
+        customers: {
+            create: async (body) => {
+                calls.push({ args: [body], name: "customer" });
+
+                return { customer_id: "cus_1", email: "a@b.test" };
+            },
+            customerPortal: {
+                create: async (customerId, body) => {
+                    calls.push({ args: [customerId, body], name: "portal" });
+
+                    return { link: "https://dodo.test/portal" };
+                },
+            },
+        },
+        payments: {
+            retrieve: async (id) => {
+                return { currency: "USD", payment_id: id, status: "succeeded", total_amount: 2500 };
+            },
+        },
+        refunds: {
+            create: async (body) => {
+                calls.push({ args: [body], name: "refund" });
+
+                return { amount: 2500, currency: "USD", payment_id: "pay_1", refund_id: "ref_1", status: "succeeded" };
+            },
+        },
+        subscriptions: {
+            changePlan: async (id, body) => {
+                calls.push({ args: [id, body], name: "changePlan" });
+
+                return { changed: true };
+            },
+            retrieve: async (id) => {
+                return { cancel_at_next_billing_date: false, product_id: "pro", quantity: 1, status: "active", subscription_id: id };
+            },
+            update: async (id, body) => {
+                calls.push({ args: [id, body], name: "update" });
+                const cancelling = body.status === "cancelled";
+
+                return {
+                    cancel_at_next_billing_date: body.cancel_at_next_billing_date === true,
+                    product_id: "pro",
+                    quantity: 1,
+                    status: cancelling ? "cancelled" : "active",
+                    subscription_id: id,
+                };
+            },
+        },
+        usageEvents: {
+            ingest: async (body) => {
+                calls.push({ args: [body], name: "ingest" });
+
+                return { ingested_count: 1 };
+            },
+        },
+    };
+};
+
+describe("dodopayments adapter", () => {
+    it("is a merchant-of-record: rejects manual capture but supports refunds", async () => {
+        expect.assertions(3);
+
+        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+
+        expect(adapter.capabilities.merchantOfRecord).toBe(true);
+        expect(() => adapter.capturePayment({ sessionId: "x" })).toThrow(/does not support/);
+        // Refunds ARE supported by Dodo (unlike manual capture).
+        await expect(adapter.refundPayment({ sessionId: "pay_1" })).resolves.toMatchObject({ state: "refunded" });
+    });
+
+    it("creates a checkout carrying the pinned reference metadata and product cart", async () => {
+        expect.assertions(4);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createDodoPaymentsAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+
+        const result = await adapter.createCheckout({
+            cancelUrl: "https://x/cancel",
+            customerId: "cus_1",
+            metadata: { referenceId: "attacker_wins" },
+            mode: "subscription",
+            priceId: "pro",
+            referenceId: "user_1",
+            successUrl: "https://x/ok",
+        });
+
+        expect(result).toEqual({ id: "cks_1", provider: "dodopayments", url: "https://dodo.test/checkout" });
+
+        const body = calls.find((call) => call.name === "checkout")?.args[0] as Record<string, unknown>;
+
+        expect(body.product_cart).toEqual([{ product_id: "pro", quantity: 1 }]);
+        expect(body.customer).toEqual({ customer_id: "cus_1" });
+        // The framework-controlled referenceId is pinned last — caller metadata cannot override it.
+        expect((body.metadata as { referenceId?: string }).referenceId).toBe("user_1");
+    });
+
+    it("cancels immediately by default and at period end when asked", async () => {
+        expect.assertions(4);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createDodoPaymentsAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+
+        const immediate = await adapter.cancelSubscription("sub_1");
+
+        expect(immediate.state).toBe("canceled");
+        expect((calls.at(-1)?.args[1] as Record<string, unknown>).status).toBe("cancelled");
+
+        const atPeriodEnd = await adapter.cancelSubscription("sub_1", { atPeriodEnd: true });
+
+        expect(atPeriodEnd).toMatchObject({ cancelAtPeriodEnd: true, state: "active" });
+        expect((calls.at(-1)?.args[1] as Record<string, unknown>).cancel_at_next_billing_date).toBe(true);
+    });
+
+    it("changes plan through the change-plan endpoint, then re-reads the subscription", async () => {
+        expect.assertions(3);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createDodoPaymentsAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+
+        const subscription = await adapter.updateSubscription("sub_1", { priceId: "enterprise", quantity: 3 });
+
+        const changePlan = calls.find((call) => call.name === "changePlan")?.args[1] as Record<string, unknown>;
+
+        expect(changePlan).toMatchObject({ product_id: "enterprise", proration_billing_mode: "prorated_immediately", quantity: 3 });
+        expect(subscription.state).toBe("active");
+        expect(subscription.provider).toBe("dodopayments");
+    });
+
+    it("ingests usage as a Dodo usage-event keyed on the customer id", async () => {
+        expect.assertions(3);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createDodoPaymentsAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+
+        await adapter.reportUsage?.({ customerId: "cus_1", featureId: "api_calls", idempotencyKey: "usage_1", quantity: 3, referenceId: "user_1" });
+
+        const { events } = calls.find((call) => call.name === "ingest")?.args[0] as { events: Record<string, unknown>[] };
+
+        expect(events[0]?.event_name).toBe("api_calls");
+        expect(events[0]?.customer_id).toBe("cus_1");
+        expect(events[0]?.event_id).toBe("usage_1");
+    });
+
+    it("normalizes a verified payment.succeeded webhook (Standard Webhooks scheme)", async () => {
+        expect.assertions(5);
+
+        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+
+        const payload = JSON.stringify({
+            data: {
+                currency: "USD",
+                customer: { customer_id: "cus_1" },
+                metadata: { referenceId: "user_1" },
+                payment_id: "pay_1",
+                subscription_id: "sub_1",
+                total_amount: 2500,
+            },
+            type: "payment.succeeded",
+        });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const action = await adapter.parseWebhook({ headers: headersFor("msg_1", timestamp, sign("msg_1", timestamp, payload)), payload });
+
+        expect(action.type).toBe("payment.captured");
+        expect(action.sessionId).toBe("pay_1");
+        expect(action.subscriptionId).toBe("sub_1");
+        expect(action.referenceId).toBe("user_1");
+        expect(action.amount?.minorUnits).toBe(2500n);
+    });
+
+    it("maps subscription.cancelled/expired to a cancellation and renewed to active", async () => {
+        expect.assertions(3);
+
+        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+
+        const cancelledBody = JSON.stringify({ data: { status: "cancelled", subscription_id: "sub_1" }, type: "subscription.cancelled" });
+        const cancelled = await adapter.parseWebhook({ headers: headersFor("m1", timestamp, sign("m1", timestamp, cancelledBody)), payload: cancelledBody });
+
+        expect(cancelled.type).toBe("subscription.canceled");
+        expect(cancelled.subscriptionId).toBe("sub_1");
+
+        const renewedBody = JSON.stringify({ data: { status: "active", subscription_id: "sub_1" }, type: "subscription.renewed" });
+        const renewed = await adapter.parseWebhook({ headers: headersFor("m2", timestamp, sign("m2", timestamp, renewedBody)), payload: renewedBody });
+
+        expect(renewed.type).toBe("subscription.active");
+    });
+
+    it("maps an `on_hold` subscription to a non-entitling state, not an active grant (regression)", async () => {
+        expect.assertions(1);
+
+        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const payload = JSON.stringify({ data: { status: "on_hold", subscription_id: "sub_1" }, type: "subscription.on_hold" });
+        const action = await adapter.parseWebhook({ headers: headersFor("m3", timestamp, sign("m3", timestamp, payload)), payload });
+
+        // `on_hold` (dunning) must NOT map to the entitling `subscription.active`.
+        expect(action.type).toBe("subscription.past_due");
+    });
+
+    it("normalizes a refund.succeeded webhook to a refund", async () => {
+        expect.assertions(2);
+
+        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const payload = JSON.stringify({ data: { amount: 1000, currency: "USD", payment_id: "pay_1" }, type: "refund.succeeded" });
+        const action = await adapter.parseWebhook({ headers: headersFor("m4", timestamp, sign("m4", timestamp, payload)), payload });
+
+        expect(action.type).toBe("payment.refunded");
+        expect(action.amount?.minorUnits).toBe(1000n);
+    });
+
+    it("rejects a bad signature", async () => {
+        expect.assertions(1);
+
+        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+
+        await expect(adapter.parseWebhook({ headers: headersFor("m5", timestamp, "v1,not-a-valid-signature"), payload: "{}" })).rejects.toMatchObject({
+            code: "WEBHOOK_SIGNATURE_INVALID",
+        });
+    });
+});

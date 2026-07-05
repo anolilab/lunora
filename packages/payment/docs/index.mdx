@@ -1,9 +1,9 @@
 ---
 title: "@lunora/payment"
-description: Provider-agnostic payments for Lunora — Stripe/Polar/Autumn adapters, webhook sync, and a payment/subscription state machine.
+description: Provider-agnostic payments for Lunora — Stripe/Polar/Autumn/Dodo Payments adapters, webhook sync, and a payment/subscription state machine.
 ---
 
-`@lunora/payment` is one provider-agnostic API over Stripe, Polar, and Autumn. Webhook
+`@lunora/payment` is one provider-agnostic API over Stripe, Polar, Autumn, and Dodo Payments. Webhook
 events are verified, normalized, and applied through an explicit
 payment/subscription state machine that makes duplicate and out-of-order
 deliveries safe by construction — synced into a durable store that rides the
@@ -70,36 +70,37 @@ export const ShardDO = createShardDO({
 
 The thunk returns `PaymentsFromContextOptions`:
 
-| Option          | Type                 | Notes                                                                                      |
-| --------------- | -------------------- | ------------------------------------------------------------------------------------------ |
-| `adapter`       | `PaymentAdapter`     | Built with `createStripeAdapter` / `createPolarAdapter` / `createAutumnAdapter`. Required. |
-| `authorize`     | `AuthorizeReference` | `(referenceId) => boolean \| Promise<boolean>`. Defaults to "caller owns reference".       |
-| `entitlements`  | `EntitlementsConfig` | Plan → features/limits map. Required to use `check` / `listBalances`.                      |
-| `observability` | `PaymentObserver`    | Telemetry sink for webhook applies, failed payments, past-due subscriptions.               |
+| Option          | Type                 | Notes                                                                                                                    |
+| --------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `adapter`       | `PaymentAdapter`     | Built with `createStripeAdapter` / `createPolarAdapter` / `createAutumnAdapter` / `createDodoPaymentsAdapter`. Required. |
+| `authorize`     | `AuthorizeReference` | `(referenceId) => boolean \| Promise<boolean>`. Defaults to "caller owns reference".                                     |
+| `entitlements`  | `EntitlementsConfig` | Plan → features/limits map. Required to use `check` / `listBalances`.                                                    |
+| `observability` | `PaymentObserver`    | Telemetry sink for webhook applies, failed payments, past-due subscriptions.                                             |
 
 ### Provider adapters
 
 Every adapter takes its client by injection and verifies inbound webhooks:
 
 ```ts
-import { createAutumnAdapter, createPolarAdapter, createStripeAdapter } from "@lunora/payment";
+import { createAutumnAdapter, createDodoPaymentsAdapter, createPolarAdapter, createStripeAdapter } from "@lunora/payment";
 
 const stripe = createStripeAdapter({ client, webhookSecret, webhookToleranceSeconds: 300 });
 const polar = createPolarAdapter({ client, webhookSecret });
 const autumn = createAutumnAdapter({ client, webhookSecret });
+const dodo = createDodoPaymentsAdapter({ client, webhookSecret });
 ```
 
-| Option                    | Stripe | Polar | Autumn | Notes                                                                   |
-| ------------------------- | :----: | :---: | :----: | ----------------------------------------------------------------------- |
-| `client`                  |   ✓    |   ✓   |   ✓    | Structural `StripeClientLike` / `PolarClientLike` / `AutumnClientLike`. |
-| `webhookSecret`           |   ✓    |   ✓   |   ✓    | Signing secret for inbound webhook verification.                        |
-| `webhookToleranceSeconds` |   ✓    |   ✓   |   ✓    | Optional clock-skew tolerance for the timestamp check.                  |
+| Option                    | Stripe | Polar | Autumn | Dodo | Notes                                                                                              |
+| ------------------------- | :----: | :---: | :----: | :--: | -------------------------------------------------------------------------------------------------- |
+| `client`                  |   ✓    |   ✓   |   ✓    |  ✓   | Structural `StripeClientLike` / `PolarClientLike` / `AutumnClientLike` / `DodoPaymentsClientLike`. |
+| `webhookSecret`           |   ✓    |   ✓   |   ✓    |  ✓   | Signing secret for inbound webhook verification.                                                   |
+| `webhookToleranceSeconds` |   ✓    |   ✓   |   ✓    |  ✓   | Optional clock-skew tolerance for the timestamp check.                                             |
 
-Stripe is a PSP (manual authorize/capture available). Polar is a
-Merchant-of-Record — `merchantOfRecord` is `true` and it owns tax/invoices, so
-manual capture isn't part of its flow. Stripe webhooks use Stripe's signature
-scheme; Polar uses Standard Webhooks (`webhook-id` / `webhook-timestamp` /
-`webhook-signature`).
+Stripe is a PSP (manual authorize/capture available). Polar and Dodo Payments
+are Merchants-of-Record — `merchantOfRecord` is `true` and they own tax/invoices,
+so manual capture isn't part of their flow. Stripe webhooks use Stripe's
+signature scheme; Polar, Autumn, and Dodo Payments use Standard Webhooks
+(`webhook-id` / `webhook-timestamp` / `webhook-signature`).
 
 ### Autumn
 
@@ -150,6 +151,31 @@ const autumnFeatures = createAutumnFeatures({ client });
 await autumnFeatures.entities.create(userId, { featureId: "seats", name: "Workspace A" });
 const usage = await autumnFeatures.events.aggregate(userId, { featureId: "api_calls", range: "30d" });
 const { url } = await autumnFeatures.checkout(userId, { productId: "pro", freeTrial: true });
+```
+
+### Dodo Payments
+
+[Dodo Payments](https://dodopayments.com) is a **Merchant-of-Record** — like
+Polar, it is the legal seller of record and calculates, collects, and remits tax
+across 190+ jurisdictions, and owns chargebacks and disputes. So `merchantOfRecord`
+is `true` and manual authorize/capture throw — but **refunds are first-class**
+(`refunds.create`). The flow is checkout-session → subscription/payment, synced
+from Standard Webhooks (the `dodopayments` SDK exposes the full, verified event
+catalog: `payment.*`, `subscription.*`, `refund.*`, …). It supports usage-based
+billing, so `reportUsage` ingests Dodo usage-events.
+
+Construct the client from `dodopayments` and inject it (the cast keeps the
+package free of a hard `dodopayments` dependency):
+
+```ts
+import type { DodoPaymentsClientLike } from "@lunora/payment";
+import { createDodoPaymentsAdapter } from "@lunora/payment";
+import DodoPayments from "dodopayments";
+
+const dodo = createDodoPaymentsAdapter({
+    client: new DodoPayments({ bearerToken: env.DODO_PAYMENTS_API_KEY }) as unknown as DodoPaymentsClientLike,
+    webhookSecret: env.DODO_PAYMENTS_WEBHOOK_KEY,
+});
 ```
 
 ## The `ctx.payments` API
