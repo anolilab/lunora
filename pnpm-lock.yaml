@@ -1827,6 +1827,9 @@ importers:
       '@visulima/fs':
         specifier: 5.0.0-alpha.32
         version: 5.0.0-alpha.32(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(smol-toml@1.6.1)(yaml@2.9.0)
+      '@visulima/package':
+        specifier: 5.0.0-alpha.23
+        version: 5.0.0-alpha.23(ini@7.0.0)(jsonc-parser@3.3.1)(smol-toml@1.6.1)
       '@visulima/pail':
         specifier: 4.0.0-alpha.22
         version: 4.0.0-alpha.22(@opentelemetry/api@1.9.1)(@visulima/redact@3.0.0-alpha.14)(express@5.2.1)(hono@4.12.27)(next@16.2.9(@babel/core@8.0.1)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.1)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))
