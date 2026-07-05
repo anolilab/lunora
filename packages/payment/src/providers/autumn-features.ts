@@ -14,6 +14,11 @@
  * calling convention: top-level actions take a single params object carrying `customer_id`, while
  * sub-resource getters are positional (id first). If your client differs, pass a thin shim.
  *
+ * SECURITY: unlike the `ctx.payments` facade, these methods do **not** authorize the caller — each
+ * takes the `referenceId` (and `entityId`) positionally and trusts it. Before exposing any of them on
+ * a request handler, check that the caller owns the reference by matching it against the
+ * authenticated user; forwarding an unvalidated reference from the request is an app-layer IDOR. // secret-scanner:allow -- prose only, no secret
+ *
  * Credit systems need no method here — Autumn models them as features, so credit balances flow
  * through the adapter's `checkEntitlement` / `getBalances` like any other feature.
  */
