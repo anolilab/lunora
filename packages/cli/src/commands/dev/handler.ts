@@ -40,6 +40,7 @@ import { startCodegenWatch } from "../../util/codegen-watch";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { detectPackageManager, execArgsFor, runScriptCommand } from "../../util/detect-package-manager";
+import { findAvailablePort } from "../../util/free-port";
 import type { Logger } from "../../util/logger";
 import { forceJsonLogging } from "../../util/logger";
 import { hasIpv6Loopback } from "../../util/loopback";
@@ -83,6 +84,8 @@ interface DevCommandOptions {
     ensureExample?: typeof ensureDevVarsExample;
     /** Injection seam for tests — defaults to the real empty-secret/admin-token filler. */
     fillSecrets?: typeof fillDevSecrets;
+    /** Injection seam for tests — defaults to the real free-port probe ({@link findAvailablePort}). */
+    findFreePort?: (preferred: number) => Promise<number>;
     /** Dev flavor override (tests / callers that already detected it) — defaults to {@link detectDevFlavor}. */
     flavor?: DevFlavor;
     /** Injection seam for tests — defaults to the real IPv6-loopback probe ({@link hasIpv6Loopback}). */
@@ -204,6 +207,37 @@ const resolveLoopbackArgs = (cwd: string, hasLoopback: () => boolean): string[] 
     }
 
     return hasLoopback() ? [] : ["--ip", "127.0.0.1"];
+};
+
+/**
+ * Resolve the port `wrangler dev` binds, so Lunora knows the worker origin up
+ * front (the studio proxies to it). Precedence — an explicit choice always wins:
+ *
+ * 1. `--port` / `--worker-port` on the CLI (`options.workerPort`).
+ * 2. `dev.port` pinned in the project's wrangler config.
+ * 3. The first free port at/above 8787.
+ *
+ * Step 3 restores the free-port fallback that a fixed `--port` would otherwise
+ * disable: `wrangler dev` only auto-probes for an open port when none is passed,
+ * so without this two projects both defaulting to 8787 would collide (the second
+ * crashing with `EADDRINUSE`) instead of the second one landing on 8788.
+ */
+const resolveWorkerPort = async (options: DevCommandOptions, cwd: string): Promise<number> => {
+    if (options.workerPort !== undefined) {
+        return options.workerPort;
+    }
+
+    const wranglerPath = findWranglerFile(cwd);
+
+    if (wranglerPath !== undefined) {
+        const { parsed } = readWranglerJsonc<{ dev?: { port?: unknown } }>(wranglerPath);
+
+        if (typeof parsed?.dev?.port === "number") {
+            return parsed.dev.port;
+        }
+    }
+
+    return (options.findFreePort ?? findAvailablePort)(DEFAULT_WORKER_PORT);
 };
 
 /**
@@ -621,13 +655,29 @@ const claimStartRecord = (plan: DevCommandPlan, cwd: string): { pid: number; url
 };
 
 /**
+ * Resolve the worker port (a free-port probe for the wrangler flavor, so the
+ * origin stays deterministic without pinning a busy 8787) and build the dev
+ * plan. Extracted from {@link runDevCommand} so its startup orchestration stays
+ * legible — the async port resolution is the only reason planning isn't inline.
+ */
+const buildDevPlan = async (options: DevCommandOptions): Promise<DevCommandPlan> => {
+    const cwd = options.cwd ?? process.cwd();
+    const flavor = options.flavor ?? detectDevFlavor(cwd);
+    // The vite flavor lets Vite resolve its own port; only the wrangler flavor
+    // needs a pre-picked free port passed through as `--port`.
+    const workerPort = flavor === "wrangler" ? await resolveWorkerPort(options, cwd) : options.workerPort;
+
+    return planDevCommand({ ...options, cwd, flavor, workerPort });
+};
+
+/**
  * Start codegen watch + the studio server, spawn `wrangler dev`, print the
  * banner, and resolve when the worker exits or the user interrupts — tearing
  * down the sibling servers either way. The three side-effecting pieces (worker,
  * studio, codegen) are injectable so this is testable without real I/O.
  */
 const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number; plan: DevCommandPlan }> => {
-    const plan = planDevCommand(options);
+    const plan = await buildDevPlan(options);
     const { logger } = options;
     const cwd = plan.wrangler.cwd ?? process.cwd();
     // Register the remote temp-config disposer up front so it's torn down on
@@ -829,4 +879,4 @@ export type { DevCommandOptions, DevCommandPlan, DevRemotePlan, WorkerProcess, W
 // planning surface (`planDevCommand` and friends) stays importable from one module.
 export type { DevFlavor } from "./lifecycle";
 export { detectDevFlavor } from "./lifecycle";
-export { planDevCommand, resolveRemotePlan, runDevCommand };
+export { planDevCommand, resolveRemotePlan, resolveWorkerPort, runDevCommand };

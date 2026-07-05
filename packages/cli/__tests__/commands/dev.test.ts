@@ -6,7 +6,7 @@ import { readDevServerState, writeDevServerState } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DevCommandOptions } from "../../src/commands/dev/handler";
-import { detectDevFlavor, planDevCommand, runDevCommand } from "../../src/commands/dev/handler";
+import { detectDevFlavor, planDevCommand, resolveWorkerPort, runDevCommand } from "../../src/commands/dev/handler";
 import type { Logger } from "../../src/util/logger";
 
 const silentLogger = (): Logger => {
@@ -280,6 +280,47 @@ describe("lunora dev", () => {
         });
     });
 
+    describe("resolveWorkerPort", () => {
+        it("uses an explicit worker port and never probes", async () => {
+            expect.assertions(2);
+
+            let probed = false;
+            const port = await resolveWorkerPort(
+                {
+                    findFreePort: async () => {
+                        probed = true;
+
+                        return 9999;
+                    },
+                    logger: silentLogger(),
+                    workerPort: 4000,
+                },
+                workdir,
+            );
+
+            expect(port).toBe(4000);
+            expect(probed).toBe(false);
+        });
+
+        it("respects a `dev.port` pinned in the wrangler config over the free-port probe", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ dev: { port: 4321 }, name: "app" }), "utf8");
+
+            const port = await resolveWorkerPort({ findFreePort: async () => 9999, logger: silentLogger() }, workdir);
+
+            expect(port).toBe(4321);
+        });
+
+        it("falls back to a probed free port when nothing is pinned", async () => {
+            expect.assertions(1);
+
+            const port = await resolveWorkerPort({ findFreePort: async () => 8801, logger: silentLogger() }, workdir);
+
+            expect(port).toBe(8801);
+        });
+    });
+
     describe("runDevCommand", () => {
         it("spawns the wrangler worker, starts studio + codegen, and tears them down on exit", async () => {
             expect.assertions(6);
@@ -296,6 +337,9 @@ describe("lunora dev", () => {
 
             const result = await runDevCommand({
                 cwd: workdir,
+                // Deterministic port so the origin assertion below doesn't depend
+                // on whether 8787 is free on the test host.
+                findFreePort: async () => 8787,
                 logger: silentLogger(),
                 startCodegen: () => {
                     return {
@@ -465,6 +509,8 @@ describe("lunora dev", () => {
 
             const runPromise = runDevCommand({
                 cwd: workdir,
+                // Deterministic port so the recorded URL assertion is host-independent.
+                findFreePort: async () => 8787,
                 logger: silentLogger(),
                 startCodegen: () => {
                     return { close: () => {}, watchAvailable: true };
