@@ -19,6 +19,7 @@ import {
     ensureDevVariables,
     ensureDevVarsExample,
     fillDevSecrets,
+    findWranglerFile,
     formatLunoraEvent,
     inferLunoraBindings,
     isInteractive,
@@ -26,6 +27,7 @@ import {
     packageNamesFromBindings,
     readLiveDevServerState,
     readProjectRemotePreference,
+    readWranglerJsonc,
     resolveRemoteEnabled,
     streamContainerLogs,
     updateDevServerState,
@@ -40,6 +42,7 @@ import { defineHandler } from "../../util/command";
 import { detectPackageManager, execArgsFor, runScriptCommand } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
 import { forceJsonLogging } from "../../util/logger";
+import { hasIpv6Loopback } from "../../util/loopback";
 import type { SpawnDescriptor } from "../../util/spawn";
 import { spawnShellCompat } from "../../util/spawn";
 import type { StudioServerHandle } from "../../util/studio-server";
@@ -82,6 +85,8 @@ interface DevCommandOptions {
     fillSecrets?: typeof fillDevSecrets;
     /** Dev flavor override (tests / callers that already detected it) — defaults to {@link detectDevFlavor}. */
     flavor?: DevFlavor;
+    /** Injection seam for tests — defaults to the real IPv6-loopback probe ({@link hasIpv6Loopback}). */
+    hasIpv6Loopback?: () => boolean;
     logger: Logger;
     /** Injection seam for tests — defaults to the real remote-config materializer. */
     materializeRemote?: typeof materializeRemoteWranglerConfig;
@@ -132,6 +137,13 @@ interface DevCommandPlan {
      * regardless.
      */
     frameworkHint?: string;
+
+    /**
+     * True when `wrangler dev` was given `--ip 127.0.0.1` because the host has no
+     * IPv6 loopback (`::1`) — surfaced so the dev loop can note the rebind.
+     * Always `false` for the vite flavor (the plugin owns its own bind).
+     */
+    ipv4LoopbackForced: boolean;
     /** The remote-binding decision: which D1/KV/R2 bindings hit the deployed worker. */
     remote: DevRemotePlan;
     studioEnabled: boolean;
@@ -173,6 +185,28 @@ const resolveRemotePlan = (options: DevCommandOptions, cwd: string): { args: str
 };
 
 /**
+ * Extra `wrangler dev` args that pin the worker to the IPv4 loopback
+ * (`--ip 127.0.0.1`) when the host has no IPv6 loopback (`::1`) — without which
+ * `workerd`'s default `[::1]` bind aborts on startup with `Cannot assign
+ * requested address`. Returns nothing (leaving wrangler's default) when the host
+ * has `::1`, or when the project already pins `dev.ip` in its wrangler config —
+ * an explicit user choice always wins over the auto-detection.
+ */
+const resolveLoopbackArgs = (cwd: string, hasLoopback: () => boolean): string[] => {
+    const wranglerPath = findWranglerFile(cwd);
+
+    if (wranglerPath !== undefined) {
+        const { parsed } = readWranglerJsonc<{ dev?: { ip?: unknown } }>(wranglerPath);
+
+        if (parsed?.dev?.ip !== undefined) {
+            return [];
+        }
+    }
+
+    return hasLoopback() ? [] : ["--ip", "127.0.0.1"];
+};
+
+/**
  * Plan `lunora dev`. Wrangler flavor: the worker runs via `wrangler dev` and
  * nothing else as a child process. Vite flavor (`@lunora/vite` declared): the
  * plugin already runs the worker inside the Vite dev server, so the one child
@@ -199,6 +233,7 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
         return {
             codegenEnabled: false,
             flavor,
+            ipv4LoopbackForced: false,
             remote: { bindings: [], cleanup: () => {}, enabled: options.remote === true },
             studioEnabled: false,
             studioPort: options.port ?? DEFAULT_STUDIO_PORT,
@@ -233,12 +268,16 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
     // `--var` the user passes still wins. Mirrors the Vite plugin's injection.
     // `--config <temp>` (when remote) points wrangler at a config whose D1/KV/R2
     // bindings carry `"remote": true`.
-    const exec = execArgsFor(manager, "wrangler", ["dev", "--port", String(workerPort), "--var", "WORKER_ENV:development", ...remote.args]);
+    // On a host without IPv6 loopback, prepend `--ip 127.0.0.1` so workerd doesn't
+    // abort trying to bind its default `[::1]` (see resolveLoopbackArgs).
+    const loopbackArgs = resolveLoopbackArgs(cwd, options.hasIpv6Loopback ?? hasIpv6Loopback);
+    const exec = execArgsFor(manager, "wrangler", ["dev", "--port", String(workerPort), ...loopbackArgs, "--var", "WORKER_ENV:development", ...remote.args]);
 
     return {
         codegenEnabled: options.codegen !== false,
         flavor,
         frameworkHint,
+        ipv4LoopbackForced: loopbackArgs.length > 0,
         remote: remote.plan,
         studioEnabled: options.studio !== false,
         studioPort: options.port ?? DEFAULT_STUDIO_PORT,
@@ -630,6 +669,12 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         logger.info(
             plan.flavor === "vite" ? "starting vite dev (worker + studio + codegen run inside Vite via @lunora/vite)" : "starting wrangler dev + studio",
         );
+
+        if (plan.ipv4LoopbackForced) {
+            logger.info(
+                "no IPv6 loopback (::1) on this host — binding the worker to 127.0.0.1 (--ip) so wrangler dev doesn't crash. Pin `dev.ip` in wrangler.jsonc to override.",
+            );
+        }
 
         if (plan.codegenEnabled) {
             handles.codegen = (options.startCodegen ?? startCodegenWatch)({ apiSpec: options.apiSpec, logger, projectRoot: cwd });

@@ -95,6 +95,41 @@ describe("lunora dev", () => {
             expect(plan.studioPort).toBe(7000);
         });
 
+        it("pins the worker to 127.0.0.1 when the host has no IPv6 loopback", () => {
+            expect.assertions(3);
+
+            // Simulate a host without `::1`: workerd's default `[::1]` bind would
+            // abort with `Cannot assign requested address` — so `--ip 127.0.0.1`.
+            const plan = planDevCommand({ cwd: workdir, hasIpv6Loopback: () => false, logger: silentLogger() });
+
+            expect(plan.wrangler.args.join(" ")).toContain("--ip 127.0.0.1");
+            // Placed before `--var` so it applies to the same `wrangler dev` invocation.
+            expect(plan.wrangler.args.join(" ")).toContain("wrangler dev --port");
+            expect(plan.ipv4LoopbackForced).toBe(true);
+        });
+
+        it("leaves wrangler's default bind when the host has IPv6 loopback", () => {
+            expect.assertions(2);
+
+            const plan = planDevCommand({ cwd: workdir, hasIpv6Loopback: () => true, logger: silentLogger() });
+
+            expect(plan.wrangler.args).not.toContain("--ip");
+            expect(plan.ipv4LoopbackForced).toBe(false);
+        });
+
+        it("respects an explicit `dev.ip` in wrangler config over the loopback auto-detect", () => {
+            expect.assertions(2);
+
+            // The user pinned their own bind — the auto `--ip 127.0.0.1` must not
+            // override it, even on a host without IPv6 loopback.
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ dev: { ip: "0.0.0.0" }, name: "app" }), "utf8");
+
+            const plan = planDevCommand({ cwd: workdir, hasIpv6Loopback: () => false, logger: silentLogger() });
+
+            expect(plan.wrangler.args).not.toContain("--ip");
+            expect(plan.ipv4LoopbackForced).toBe(false);
+        });
+
         it("reflects the --no-studio / --no-codegen toggles", () => {
             expect.assertions(2);
 
