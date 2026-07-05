@@ -28,6 +28,18 @@ export {
 export type { PaymentEvent, PaymentObserver } from "./observability";
 export type { AutumnAdapterOptions, AutumnClientLike } from "./providers/autumn";
 export { createAutumnAdapter } from "./providers/autumn";
+export type {
+    AutumnCheckoutInput,
+    AutumnEntity,
+    AutumnFeatures,
+    AutumnFeaturesClientLike,
+    AutumnFeaturesOptions,
+    CreateEntityInput,
+    EventsQueryInput,
+    PrepaidOption,
+    UsageEventPoint,
+} from "./providers/autumn-features";
+export { createAutumnFeatures } from "./providers/autumn-features";
 export type { PolarAdapterOptions, PolarClientLike } from "./providers/polar";
 export { createPolarAdapter } from "./providers/polar";
 export type { StripeAdapterOptions, StripeClientLike } from "./providers/stripe";

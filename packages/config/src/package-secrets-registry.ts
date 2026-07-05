@@ -122,6 +122,12 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             key: "POLAR_WEBHOOK_SECRET",
             placeholderValue: "<your-polar-webhook-secret>",
         },
+        {
+            description: "Autumn secret key (am_sk_…) for the Autumn payment adapter. Obtain at https://app.useautumn.com/dev",
+            docsUrl: "https://lunora.sh/docs/packages/payment#autumn",
+            key: "AUTUMN_SECRET_KEY",
+            placeholderValue: "<your-autumn-secret-key>",
+        },
     ],
 };
 

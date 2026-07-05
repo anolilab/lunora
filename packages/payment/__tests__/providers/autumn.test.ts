@@ -2,8 +2,10 @@ import { createHmac } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
+import { createPayment } from "../../src/create-payment";
 import type { AutumnClientLike } from "../../src/providers/autumn";
 import { createAutumnAdapter } from "../../src/providers/autumn";
+import { MemoryPaymentStore } from "../../src/store";
 
 const SECRET = "MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw"; // gitleaks:allow -- test fixture signing key, not a real secret
 
@@ -21,7 +23,10 @@ interface RecordedCall {
     name: string;
 }
 
-const makeClient = (calls: RecordedCall[] = [], overrides: Partial<{ customerGet: Record<string, unknown> }> = {}): AutumnClientLike => {
+const makeClient = (
+    calls: RecordedCall[] = [],
+    overrides: Partial<{ check: Record<string, unknown>; customerGet: Record<string, unknown> }> = {},
+): AutumnClientLike => {
     return {
         attach: async (parameters) => {
             calls.push({ args: [parameters], name: "attach" });
@@ -32,6 +37,11 @@ const makeClient = (calls: RecordedCall[] = [], overrides: Partial<{ customerGet
             calls.push({ args: [parameters], name: "cancel" });
 
             return { success: true };
+        },
+        check: async (parameters) => {
+            calls.push({ args: [parameters], name: "check" });
+
+            return overrides.check ?? { allowed: true, balance: { granted: 1000, remaining: 940, unlimited: false, usage: 60 }, customer_id: "user_1" };
         },
         customers: {
             billingPortal: async (customerId, parameters) => {
@@ -49,6 +59,10 @@ const makeClient = (calls: RecordedCall[] = [], overrides: Partial<{ customerGet
 
                 return (
                     overrides.customerGet ?? {
+                        balances: {
+                            api_calls: { feature_id: "api_calls", granted: 1000, remaining: 940, unlimited: false, usage: 60 },
+                            export: { feature_id: "export", unlimited: true },
+                        },
                         id: customerId,
                         products: [{ current_period_end: 1_900_000_000_000, current_period_start: 1_800_000_000_000, id: "pro", status: "active" }],
                     }
@@ -265,6 +279,74 @@ describe("autumn adapter", () => {
 
         await expect(adapter.parseWebhook({ headers: headersFor("msg_4", timestamp, "v1,not-a-valid-signature"), payload: "{}" })).rejects.toMatchObject({
             code: "WEBHOOK_SIGNATURE_INVALID",
+        });
+    });
+
+    describe("entitlement delegation", () => {
+        it("checkEntitlement reads Autumn's balance math for a metered feature", async () => {
+            expect.assertions(5);
+
+            const calls: RecordedCall[] = [];
+            const adapter = createAutumnAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+
+            const result = await adapter.checkEntitlement?.({ featureId: "api_calls", quantity: 10, referenceId: "user_1" });
+
+            expect(result).toEqual({ allowed: true, balance: 940, limit: 1000, unlimited: false, used: 60 });
+
+            const check = calls.find((call) => call.name === "check")?.args[0] as Record<string, unknown>;
+
+            expect(check.customer_id).toBe("user_1");
+            expect(check.feature_id).toBe("api_calls");
+            expect(check.required_balance).toBe(10);
+            expect(check.product_id).toBeUndefined();
+        });
+
+        it("checkEntitlement returns a bare allow/deny for a product (priceId) check", async () => {
+            expect.assertions(2);
+
+            const client = makeClient([], { check: { allowed: false, customer_id: "user_1" } });
+            const adapter = createAutumnAdapter({ client, webhookSecret: SECRET });
+
+            const result = await adapter.checkEntitlement?.({ priceId: "pro", referenceId: "user_1" });
+
+            expect(result).toEqual({ allowed: false, unlimited: false });
+            expect(result?.balance).toBeUndefined();
+        });
+
+        it("getBalances maps every Autumn feature balance, including unlimited", async () => {
+            expect.assertions(3);
+
+            const adapter = createAutumnAdapter({ client: makeClient(), webhookSecret: SECRET });
+
+            const balances = await adapter.getBalances?.("user_1");
+
+            expect(balances).toContainEqual({ allowed: true, balance: 940, featureId: "api_calls", limit: 1000, unlimited: false, used: 60 });
+
+            const unlimited = balances?.find((balance) => balance.featureId === "export");
+
+            expect(unlimited?.unlimited).toBe(true);
+            expect(unlimited?.allowed).toBe(true);
+        });
+
+        it("the facade delegates check + listBalances to the adapter, bypassing the local ledger", async () => {
+            expect.assertions(3);
+
+            // No `entitlements` config — proving the facade uses Autumn's truth, not the local evaluator
+            // (which would throw "requires entitlements to be configured").
+            const payment = createPayment({
+                adapter: createAutumnAdapter({ client: makeClient(), webhookSecret: SECRET }),
+                authorize: () => true,
+                store: new MemoryPaymentStore(),
+            });
+
+            const check = await payment.check({ featureId: "api_calls", referenceId: "user_1" });
+
+            expect(check).toMatchObject({ allowed: true, balance: 940, limit: 1000 });
+
+            const balances = await payment.listBalances("user_1");
+
+            expect(balances).toHaveLength(2);
+            expect(balances.map((balance) => balance.featureId).toSorted((a, b) => a.localeCompare(b))).toEqual(["api_calls", "export"]);
         });
     });
 });

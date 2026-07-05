@@ -206,6 +206,13 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         check: async (input) => {
             await ensureAuthorized(input.referenceId);
 
+            // When the provider owns entitlement truth (e.g. Autumn), delegate the whole decision to
+            // it — its live balances/credits/limits are authoritative, and the app need not mirror
+            // plan limits into `entitlements`.
+            if (adapter.checkEntitlement) {
+                return adapter.checkEntitlement(input);
+            }
+
             const subscriptions = await store.listSubscriptionsByReference(input.referenceId);
 
             // Product access check: is there an active subscription on this price/product?
@@ -272,6 +279,11 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
         listBalances: async (referenceId) => {
             await ensureAuthorized(referenceId);
+
+            // Provider-owned entitlements (e.g. Autumn): read the live balances straight from it.
+            if (adapter.getBalances) {
+                return adapter.getBalances(referenceId);
+            }
 
             if (!options.entitlements) {
                 throw new LunoraPaymentError("CONFIG_INVALID", "listBalances() requires `entitlements` to be configured");

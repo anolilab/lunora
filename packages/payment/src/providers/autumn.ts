@@ -4,7 +4,17 @@
  * Autumn (useautumn.com) is an open-source pricing and billing layer that runs on **your own**
  * Stripe account — so, unlike Polar, it is **not** a merchant-of-record: you own the tax and the
  * invoice. Its model is entitlement-first (`attach` a product, then `check` / `track` features),
- * which maps onto Lunora's `createCheckout` + `reportUsage` surface.
+ * which maps onto Lunora's `createCheckout` + `check` / `track` + `reportUsage` surface.
+ *
+ * **Autumn owns entitlement truth.** Balances, credits, limits, and rollovers are computed on
+ * Autumn's side from your plan config — so this adapter implements the optional
+ * {@link PaymentAdapter.checkEntitlement} / {@link PaymentAdapter.getBalances} hooks, and the facade
+ * delegates `check` / `listBalances` to Autumn's live API rather than the local ledger. The
+ * authoritative sync path is therefore **live queries + `reconcile`**, not webhook fan-in: the
+ * `autumn-js` SDK models no outbound webhook stream at all. Autumn's dashboard can still emit Svix
+ * (Standard Webhooks) events, so {@link verifyStandardWebhook}-backed `parseWebhook` is provided as
+ * a **best-effort** convenience — the exact event catalog is dashboard-configured and unverified
+ * here, so `reconcile` (built on `getSubscriptionStatus`) remains the reliable path.
  *
  * Like the Polar adapter, this takes an injected, structural `AutumnClientLike` (so this package
  * never imports `autumn-js`); pass `new Autumn({ secretKey })` from the app. Autumn identifies a
@@ -12,9 +22,8 @@
  * encodes the Lunora `Subscription.id` as the composite `customerId::productId` and splits it
  * back apart for `cancel` / `getSubscriptionStatus` / `update` / `resume`. Autumn abstracts the
  * money movement through Stripe, so manual authorize/capture/cancel/refund of a payment intent has
- * no API surface and those throw. Webhooks use the Standard Webhooks (Svix) scheme, verified by
- * {@link verifyStandardWebhook} — the same as Polar. Field casing varies across autumn-js
- * generations (classic snake_case vs. the newer camelCase SDK), so responses are read defensively.
+ * no API surface and those throw. Field casing varies across autumn-js generations (classic
+ * snake_case vs. the newer camelCase SDK), so responses are read defensively.
  */
 import type { PaymentAdapter, WebhookInput } from "../adapter";
 import { LunoraPaymentError } from "../errors";
@@ -22,10 +31,13 @@ import { asRecord, readBoolean, readNumber, readString } from "../json";
 import { money } from "../money";
 import type {
     CaptureInput,
+    CheckInput,
     CheckoutInput,
     CheckoutResult,
+    CheckResult,
     Customer,
     CustomerRef,
+    FeatureBalance,
     PortalInput,
     ReportUsageInput,
     Subscription,
@@ -42,6 +54,8 @@ interface AutumnClientLike {
     readonly attach: (parameters: Record<string, unknown>) => Promise<Record<string, unknown>>;
     /** Cancel a customer's product, immediately or at period end. */
     readonly cancel: (parameters: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    /** Ask Autumn whether a customer may use a feature / holds a product right now (its balance math). */
+    readonly check: (parameters: Record<string, unknown>) => Promise<Record<string, unknown>>;
     readonly customers: {
         readonly billingPortal: (customerId: string, parameters?: Record<string, unknown>) => Promise<Record<string, unknown>>;
         readonly create: (parameters: Record<string, unknown>) => Promise<Record<string, unknown>>;
@@ -153,6 +167,20 @@ const findProduct = (customer: Record<string, unknown>, productId: string): Reco
     const products = Array.isArray(customer.products) ? customer.products : [];
 
     return products.map((entry) => asRecord(entry)).find((entry) => (readAny(entry, "id", "product_id", "productId") ?? "") === productId);
+};
+
+/**
+ * Normalize one Autumn balance record into the numeric fields of a {@link CheckResult}. Reads across
+ * SDK generations: `remaining`/`balance`, `granted`/`included_usage`/`limit`, `usage`/`used`. A
+ * boolean feature (no numeric balance) leaves the numbers `undefined` and is `unlimited` when granted.
+ */
+const balanceFields = (balance: Record<string, unknown>): Pick<CheckResult, "balance" | "limit" | "unlimited" | "used"> => {
+    return {
+        balance: readAnyNumber(balance, "remaining", "balance"),
+        limit: readAnyNumber(balance, "granted", "included_usage", "limit"),
+        unlimited: readBoolean(balance, "unlimited") ?? false,
+        used: readAnyNumber(balance, "usage", "used"),
+    };
 };
 
 /** Deterministically construct the subscription a cancel/update/resume call resolves to. */
@@ -271,6 +299,28 @@ export const createAutumnAdapter = (options: AutumnAdapterOptions): PaymentAdapt
 
         capturePayment: (_input: CaptureInput) => notSupported("manual capture"),
 
+        checkEntitlement: async (input: CheckInput): Promise<CheckResult> => {
+            // Autumn owns the balance math — ask it directly. `required_balance` is how many units the
+            // caller intends to consume; `feature_id` gates a feature, `product_id` gates product access.
+            const result = await client.check({
+                customer_id: input.referenceId,
+                feature_id: input.featureId,
+                product_id: input.priceId,
+                required_balance: input.quantity,
+            });
+            const allowed = readBoolean(result, "allowed") ?? false;
+
+            // A product check has no numeric balance — return the bare allow/deny.
+            if (input.featureId === undefined) {
+                return { allowed, unlimited: false };
+            }
+
+            // The feature balance may sit under `balance` (newer SDK) or be inlined on the response.
+            const balance = result.balance === undefined || result.balance === null ? result : asRecord(result.balance);
+
+            return { allowed, ...balanceFields(balance) };
+        },
+
         createCheckout: async (input: CheckoutInput): Promise<CheckoutResult> => {
             const result = await client.attach({
                 customer_id: input.referenceId,
@@ -288,6 +338,22 @@ export const createAutumnAdapter = (options: AutumnAdapterOptions): PaymentAdapt
             const data = asRecord(result.data);
 
             return { url: readAny(result, "url") ?? readAny(data, "url") ?? "" };
+        },
+
+        getBalances: async (referenceId): Promise<FeatureBalance[]> => {
+            // Autumn returns every feature balance on the customer, keyed by feature id. Newer SDKs put
+            // it under `balances`; classic ones under `features`.
+            const customer = await client.customers.get(referenceId);
+            const balances = asRecord(customer.balances ?? customer.features);
+
+            return Object.entries(balances).map(([key, raw]) => {
+                const balance = asRecord(raw);
+                const fields = balanceFields(balance);
+                // `allowed` mirrors the local evaluator: unlimited, or some balance remains.
+                const allowed = fields.unlimited || (fields.balance ?? 0) > 0;
+
+                return { allowed, featureId: readAny(balance, "featureId", "feature_id") ?? key, ...fields };
+            });
         },
 
         getOrCreateCustomer: async (ref: CustomerRef): Promise<Customer> => {
