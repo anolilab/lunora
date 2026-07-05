@@ -124,6 +124,9 @@
 "package: workflow":
     - changed-files:
           - any-glob-to-any-file: "packages/workflow/**/*"
+"package: x402":
+    - changed-files:
+          - any-glob-to-any-file: "packages/x402/**/*"
 "documentation":
     - changed-files:
           - any-glob-to-any-file: "docs/**/*"
