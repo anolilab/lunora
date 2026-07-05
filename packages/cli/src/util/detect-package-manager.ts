@@ -1,20 +1,17 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
 
-import { dirname, join } from "@visulima/path";
+import { LunoraError } from "@lunora/errors";
+import { findPackageManagerSync, identifyInitiatingPackageManager } from "@visulima/package/package-manager";
 
 type PackageManager = "pnpm" | "npm" | "yarn" | "bun";
 
-const FALLBACK: PackageManager = "pnpm";
-
-const KNOWN_MANAGERS: ReadonlyArray<PackageManager> = ["pnpm", "yarn", "npm", "bun"];
-
 /**
- * Preference order for the post-scaffold install offer's **default**: the first
- * installed manager in this list is pre-selected. `pnpm`/`bun` lead because
- * they're the fastest + Lunora's recommended runtimes; `npm` is the universal
- * fallback. Every installed manager is still offered — this only sets the
- * highlighted default.
+ * Preference order for the post-scaffold install offer's **default** and for the
+ * last-resort "what's actually installed on this machine" detection: the first
+ * installed manager in this list is chosen. `pnpm`/`bun` lead because they're
+ * the fastest + Lunora's recommended runtimes; `npm` is the universal fallback.
+ * Every installed manager is still offered — this only sets the highlighted
+ * default.
  */
 const INSTALL_PREFERENCE: ReadonlyArray<PackageManager> = ["pnpm", "bun", "yarn", "npm"];
 
@@ -42,55 +39,47 @@ const installArgsFor = (manager: PackageManager): { args: string[]; command: str
     return { args: ["install"], command: manager };
 };
 
-/** Match a corepack-canonical `packageManager` string (`pnpm@8.0.0`) to a manager. */
-const parseDeclaredManager = (declared: unknown): PackageManager | undefined => {
-    if (typeof declared !== "string") {
-        return undefined;
-    }
-
-    return KNOWN_MANAGERS.find((manager) => declared.startsWith(`${manager}@`));
-};
-
-/** Read the nearest `package.json`'s `packageManager` field at `directory`. */
-const readDeclaredManager = (directory: string): PackageManager | undefined => {
-    const candidate = join(directory, "package.json");
-
-    if (!existsSync(candidate)) {
-        return undefined;
-    }
-
-    try {
-        const parsed = JSON.parse(readFileSync(candidate, "utf8")) as { packageManager?: string };
-
-        return parseDeclaredManager(parsed.packageManager);
-    } catch {
-        // unreadable / unparseable — keep walking up
-        return undefined;
-    }
-};
-
 /**
- * Walk up from `startDirectory` and read the nearest `package.json`'s
- * `packageManager` field. Returns the detected manager, or `"pnpm"` as a
- * fallback if nothing is declared.
+ * Resolve the package manager to drive for the project rooted at (or above)
+ * `startDirectory`. Every step is a real signal — Lunora never blindly assumes a
+ * particular manager, and there is no hardcoded fallback:
  *
- * Recognises the corepack-canonical strings (`pnpm@8.0.0`, `npm@9.0.0`,
- * `yarn@4.0.0`, `bun@1.0.0`) and ignores anything else.
+ * 1. `@visulima/package` — the nearest lock file (`pnpm-lock.yaml`, `yarn.lock`,
+ * `package-lock.json`, `bun.lockb`) or the `packageManager` field of the nearest
+ * `package.json`.
+ * 2. The manager that launched this CLI, read from `npm_config_user_agent` (so
+ * `pnpm dlx lunora …` / `npx lunora …` resolve to the right manager).
+ * 3. The first package manager actually installed on this machine
+ * ({@link detectInstalledManagers}).
+ *
+ * Throws when none of those resolve — i.e. there is no lock file / `packageManager`
+ * field, the CLI wasn't launched by a known manager, and none is on `PATH`.
+ * Surfacing that is better than silently guessing a manager that can't run.
  */
 const detectPackageManager = (startDirectory: string): PackageManager => {
-    let directory = startDirectory;
-
-    while (directory && directory !== dirname(directory)) {
-        const declared = readDeclaredManager(directory);
-
-        if (declared !== undefined) {
-            return declared;
-        }
-
-        directory = dirname(directory);
+    try {
+        return findPackageManagerSync(startDirectory).packageManager;
+    } catch {
+        // No lock file or `packageManager` field up the tree — keep detecting.
     }
 
-    return FALLBACK;
+    const initiating = identifyInitiatingPackageManager();
+
+    if (initiating !== undefined) {
+        // `cnpm` (npminstall) is npm-compatible for our exec/run purposes.
+        return initiating.name === "cnpm" ? "npm" : initiating.name;
+    }
+
+    const [installed] = detectInstalledManagers();
+
+    if (installed !== undefined) {
+        return installed;
+    }
+
+    throw new LunoraError(
+        "INTERNAL",
+        "Could not detect a package manager: no lock file or `packageManager` field was found, and none (pnpm, bun, yarn, npm) is installed on PATH.",
+    );
 };
 
 /** Map a package manager to the argv pair that runs an installed CLI. */
