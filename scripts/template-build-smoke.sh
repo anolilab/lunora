@@ -118,9 +118,11 @@ process.stdout.write(lines.join('\n'));
 inject_overrides() {
     local scaffold_dir="$1"
     # Write pnpm-workspace.yaml (pnpm 11: overrides live here, not in package.json).
-    # allowBuilds: permit native postinstall scripts that framework tools need
-    # (esbuild, workerd, sharp). Without this pnpm 11 refuses to run them and
-    # the subsequent `vite build` / `wrangler` invocations fail.
+    # allowBuilds: permit native postinstall scripts that framework tools need.
+    # Without this pnpm 11 refuses to run them and the subsequent `vite build` /
+    # `wrangler` invocations fail. Kept in sync with the CLI init handler's
+    # PNPM_BUILT_DEPENDENCIES (packages/cli/src/commands/init/handler.ts) — the
+    # list a real `lunora init` scaffold ships.
     cat > "$scaffold_dir/pnpm-workspace.yaml" <<WSEOF
 packages: []
 overrides:
@@ -129,8 +131,11 @@ $OVERRIDES_YAML
 allowBuilds:
   "@parcel/watcher": true
   esbuild: true
-  workerd: true
+  msgpackr-extract: true
+  rs-module-lexer: true
   sharp: true
+  unrs-resolver: true
+  workerd: true
 WSEOF
 }
 
