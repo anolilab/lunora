@@ -158,6 +158,29 @@ describe("dodopayments adapter", () => {
         expect(subscription.provider).toBe("dodopayments");
     });
 
+    it("preserves the current seat count on a plan-only change (regression)", async () => {
+        expect.assertions(1);
+
+        const calls: RecordedCall[] = [];
+        const base = makeClient(calls);
+        // A 5-seat subscription; the caller changes ONLY the plan (no quantity).
+        const client = {
+            ...base,
+            subscriptions: {
+                ...base.subscriptions,
+                retrieve: async (id: string) => {
+                    return { cancel_at_next_billing_date: false, product_id: "pro", quantity: 5, status: "active", subscription_id: id };
+                },
+            },
+        };
+        const adapter = createDodoPaymentsAdapter({ client, webhookSecret: SECRET });
+
+        await adapter.updateSubscription("sub_1", { priceId: "enterprise" });
+
+        // changePlan requires a quantity — it must carry the current 5, not silently reset to 1.
+        expect((calls.find((call) => call.name === "changePlan")?.args[1] as Record<string, unknown>).quantity).toBe(5);
+    });
+
     it("ingests usage as a Dodo usage-event keyed on the customer id", async () => {
         expect.assertions(3);
 

@@ -9,7 +9,7 @@
  */
 import type { PaymentAdapter, WebhookInput } from "../adapter";
 import { LunoraPaymentError } from "../errors";
-import { asRecord, readBoolean, readNumber, readString } from "../json";
+import { asRecord, parseTimestamp, readBoolean, readNumber, readString } from "../json";
 import { money, zeroMoney } from "../money";
 import type {
     CaptureInput,
@@ -90,12 +90,6 @@ const SUBSCRIPTION_STATE_BY_POLAR_STATUS: Record<string, SubscriptionState> = {
 
 const notSupported = (operation: string): never => {
     throw new LunoraPaymentError("PROVIDER_ERROR", `polar (merchant-of-record) does not support ${operation}`);
-};
-
-const parseTimestamp = (value: null | string | undefined): number | undefined => {
-    const parsed = typeof value === "string" ? Date.parse(value) : Number.NaN;
-
-    return Number.isNaN(parsed) ? undefined : parsed;
 };
 
 const subscriptionFromPolar = (subscription: PolarSubscriptionLike): Subscription => {

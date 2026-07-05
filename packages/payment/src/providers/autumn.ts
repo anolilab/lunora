@@ -183,7 +183,7 @@ const balanceFields = (balance: Record<string, unknown>): Pick<CheckResult, "bal
     };
 };
 
-/** Deterministically construct the subscription a cancel/update/resume call resolves to. */
+/** Deterministically construct the subscription for the fail-closed "no such product" case. */
 const constructedSubscription = (customerId: string, productId: string, state: SubscriptionState, cancelAtPeriodEnd: boolean): Subscription => {
     const now = Date.now();
 
@@ -198,6 +198,19 @@ const constructedSubscription = (customerId: string, productId: string, state: S
         state,
         updatedAt: now,
     };
+};
+
+/**
+ * Read Autumn's authoritative subscription for a `(customerId, productId)` pair from the customer's
+ * product list. A missing product means the reference holds no grant on it — fail closed as canceled.
+ * Cancel / update / resume re-read through this (rather than fabricating a state/quantity) so the
+ * store is never desynced and a non-entitling status is never silently promoted to `active`.
+ */
+const readSubscription = async (client: AutumnClientLike, customerId: string, productId: string): Promise<Subscription> => {
+    const customer = await client.customers.get(customerId);
+    const product = findProduct(customer, productId);
+
+    return product ? productToSubscription(customerId, product) : constructedSubscription(customerId, productId, "canceled", false);
 };
 
 const subscriptionEventType = (status: string | undefined): WebhookActionType => {
@@ -261,7 +274,10 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
 
             return {
                 ...base,
-                amount: amount === undefined ? undefined : money(BigInt(amount), currency),
+                // Autumn amounts are assumed integer minor units, but the event catalog is unverified —
+                // round defensively so a provider-sent decimal can't throw a RangeError out of
+                // `parseWebhook` (which would 400 the endpoint and wedge Autumn into infinite retries).
+                amount: amount === undefined ? undefined : money(BigInt(Math.round(amount)), currency),
                 customerId: referenceFromEvent(object),
                 referenceId: referenceFromEvent(object),
                 sessionId: readAny(object, "id", "invoice_id", "stripe_id"),
@@ -290,9 +306,14 @@ export const createAutumnAdapter = (options: AutumnAdapterOptions): PaymentAdapt
 
             await client.cancel({ cancel_immediately: cancelOptions?.atPeriodEnd !== true, customer_id: customerId, product_id: productId });
 
-            return cancelOptions?.atPeriodEnd
-                ? constructedSubscription(customerId, productId, "active", true)
-                : constructedSubscription(customerId, productId, "canceled", false);
+            // An immediate cancel is terminal — canceled, unambiguously. A cancel-at-period-end leaves
+            // the product active-until-end, so re-read Autumn's real status and only flip the schedule
+            // flag: never assume `active` (a `past_due`/`paused` grant must not be re-entitled here).
+            if (cancelOptions?.atPeriodEnd) {
+                return { ...(await readSubscription(client, customerId, productId)), cancelAtPeriodEnd: true };
+            }
+
+            return constructedSubscription(customerId, productId, "canceled", false);
         },
 
         capabilities: { merchantOfRecord: false, portal: true, usageMetering: true },
@@ -301,12 +322,14 @@ export const createAutumnAdapter = (options: AutumnAdapterOptions): PaymentAdapt
 
         checkEntitlement: async (input: CheckInput): Promise<CheckResult> => {
             // Autumn owns the balance math — ask it directly. `required_balance` is how many units the
-            // caller intends to consume; `feature_id` gates a feature, `product_id` gates product access.
+            // caller intends to consume; default it to 1 to match the local evaluator's semantics (an
+            // omitted quantity means "is at least one unit available?"), never fail open on undefined.
+            // `feature_id` gates a feature, `product_id` gates product access.
             const result = await client.check({
                 customer_id: input.referenceId,
                 feature_id: input.featureId,
                 product_id: input.priceId,
-                required_balance: input.quantity,
+                required_balance: input.quantity ?? 1,
             });
             const allowed = readBoolean(result, "allowed") ?? false;
 
@@ -315,8 +338,12 @@ export const createAutumnAdapter = (options: AutumnAdapterOptions): PaymentAdapt
                 return { allowed, unlimited: false };
             }
 
-            // The feature balance may sit under `balance` (newer SDK) or be inlined on the response.
-            const balance = result.balance === undefined || result.balance === null ? result : asRecord(result.balance);
+            // The feature balance may be a nested object (newer SDK: `balance: { remaining, granted, … }`)
+            // or inlined on the response as a top-level number (`balance: 100` + `included_usage`/`usage`).
+            // Only descend into `balance` when it is an object; otherwise read the fields off the response
+            // itself — so a numeric top-level `balance` is not lost to `asRecord(number) === {}`.
+            const rawBalance = result.balance;
+            const balance = typeof rawBalance === "object" && rawBalance !== null ? asRecord(rawBalance) : result;
 
             return { allowed, ...balanceFields(balance) };
         },
@@ -374,11 +401,8 @@ export const createAutumnAdapter = (options: AutumnAdapterOptions): PaymentAdapt
 
         getSubscriptionStatus: async (subscriptionId) => {
             const { customerId, productId } = parseAutumnSubscriptionId(subscriptionId);
-            const customer = await client.customers.get(customerId);
-            const product = findProduct(customer, productId);
 
-            // No matching product means the reference holds no grant on it — fail closed as canceled.
-            return product ? productToSubscription(customerId, product) : constructedSubscription(customerId, productId, "canceled", false);
+            return readSubscription(client, customerId, productId);
         },
 
         identifier: "autumn",
@@ -416,20 +440,23 @@ export const createAutumnAdapter = (options: AutumnAdapterOptions): PaymentAdapt
         resumeSubscription: async (subscriptionId) => {
             const { customerId, productId } = parseAutumnSubscriptionId(subscriptionId);
 
-            // Re-attaching the product undoes a scheduled cancellation.
+            // Re-attaching the product undoes a scheduled cancellation; re-read the real state rather
+            // than assuming `active`, and clear the schedule flag.
             await client.attach({ customer_id: customerId, product_id: productId });
 
-            return constructedSubscription(customerId, productId, "active", false);
+            return { ...(await readSubscription(client, customerId, productId)), cancelAtPeriodEnd: false };
         },
 
         updateSubscription: async (subscriptionId, patch: SubscriptionPatch) => {
             const { customerId, productId } = parseAutumnSubscriptionId(subscriptionId);
             const targetProduct = patch.priceId ?? productId;
 
-            // A plan change is an `attach` of the new product; a bare quantity change re-attaches the same one.
+            // A plan change is an `attach` of the new product. Autumn keys prepaid quantity by feature,
+            // so a bare `quantity` patch has no direct attach mapping; re-read Autumn's authoritative
+            // subscription (its real state AND quantity) instead of fabricating `quantity: 1` / `active`.
             await client.attach({ customer_id: customerId, product_id: targetProduct });
 
-            return constructedSubscription(customerId, targetProduct, "active", false);
+            return readSubscription(client, customerId, targetProduct);
         },
     };
 };

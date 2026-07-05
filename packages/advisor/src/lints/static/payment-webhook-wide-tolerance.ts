@@ -12,8 +12,9 @@ import type { Lint } from "../../types";
 const WIDE_TOLERANCE_THRESHOLD_SECONDS = 60 * 60;
 
 /**
- * Flags a payment webhook adapter (`createStripeAdapter` / `createPolarAdapter`)
- * configured with an implausibly wide `webhookToleranceSeconds` replay window.
+ * Flags a payment webhook adapter (`createStripeAdapter` / `createPolarAdapter` /
+ * `createAutumnAdapter` / `createDodoPaymentsAdapter`) configured with an
+ * implausibly wide `webhookToleranceSeconds` replay window.
  *
  * The adapters reject a webhook whose signed timestamp is more than
  * `webhookToleranceSeconds` from now, so a captured-then-replayed signed payload

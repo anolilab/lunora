@@ -206,6 +206,13 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         check: async (input) => {
             await ensureAuthorized(input.referenceId);
 
+            // Validate the argument shape BEFORE any delegation, so misuse fails the same way on every
+            // provider — otherwise a `check({ referenceId })` with neither `featureId` nor `priceId`
+            // would reach a provider-owned adapter unscoped and could fail open ("customer exists").
+            if (input.featureId === undefined && input.priceId === undefined) {
+                throw new LunoraPaymentError("CONFIG_INVALID", "check() requires a featureId or priceId");
+            }
+
             // When the provider owns entitlement truth (e.g. Autumn), delegate the whole decision to
             // it — its live balances/credits/limits are authoritative, and the app need not mirror
             // plan limits into `entitlements`.
@@ -350,7 +357,10 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             }
 
             // Provider meters are additive: only forward positive deltas (a "set" that lowers usage,
-            // or a no-op, stays local — the ledger `check` reads is authoritative either way).
+            // or a no-op, stays local). For a locally-evaluated provider the ledger `check` reads is
+            // authoritative; for a provider that OWNS entitlements (`checkEntitlement`/`getBalances`),
+            // the provider's meter is authoritative and this forward is what `check` will later read —
+            // a swallowed forward failure below means the usage isn't enforced until `reconcile`.
             if (delta <= 0 || !adapter.capabilities.usageMetering || !adapter.reportUsage) {
                 return { recorded: true, reportedToProvider: false };
             }
@@ -369,8 +379,10 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
                 return { recorded: true, reportedToProvider: true };
             } catch {
-                // Upstream metering is best-effort: the durable ledger `check` reads is already
-                // updated, so a transient provider error can never fail the caller's request.
+                // Upstream metering is best-effort: the durable ledger is already updated, so a
+                // transient provider error can never fail the caller's request. For a locally-evaluated
+                // provider that ledger is what `check` reads; for a provider that owns entitlements the
+                // forward is retried out-of-band (the `usage.report_failed` signal + `reconcile`).
                 notifyObserver(options.observability, {
                     featureId: input.featureId,
                     provider: adapter.identifier,

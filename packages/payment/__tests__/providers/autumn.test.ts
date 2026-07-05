@@ -137,14 +137,31 @@ describe("autumn adapter", () => {
         const adapter = createAutumnAdapter({ client: makeClient(calls), webhookSecret: SECRET });
 
         const immediate = await adapter.cancelSubscription("user_1::pro");
+        const immediateCancel = calls.findLast((call) => call.name === "cancel")?.args[0] as Record<string, unknown>;
 
         expect(immediate.state).toBe("canceled");
-        expect((calls.at(-1)?.args[0] as Record<string, unknown>).cancel_immediately).toBe(true);
+        expect(immediateCancel.cancel_immediately).toBe(true);
 
+        // At-period-end re-reads Autumn's real status (still "active" here) and only flips the schedule flag.
         const atPeriodEnd = await adapter.cancelSubscription("user_1::pro", { atPeriodEnd: true });
+        const scheduledCancel = calls.findLast((call) => call.name === "cancel")?.args[0] as Record<string, unknown>;
 
         expect(atPeriodEnd).toMatchObject({ cancelAtPeriodEnd: true, state: "active" });
-        expect((calls.at(-1)?.args[0] as Record<string, unknown>).cancel_immediately).toBe(false);
+        expect(scheduledCancel.cancel_immediately).toBe(false);
+    });
+
+    it("cancel-at-period-end does NOT re-entitle a non-active subscription (regression)", async () => {
+        expect.assertions(2);
+
+        // The subscription is past_due (Autumn dunning). Cancelling at period end must preserve that
+        // non-entitling state — never fabricate `active` and silently re-grant access.
+        const client = makeClient([], { customerGet: { id: "user_1", products: [{ id: "pro", status: "past_due" }] } });
+        const adapter = createAutumnAdapter({ client, webhookSecret: SECRET });
+
+        const subscription = await adapter.cancelSubscription("user_1::pro", { atPeriodEnd: true });
+
+        expect(subscription.state).toBe("past_due");
+        expect(subscription.cancelAtPeriodEnd).toBe(true);
     });
 
     it("reads subscription status from the customer's product list", async () => {
@@ -193,7 +210,7 @@ describe("autumn adapter", () => {
 
         expect(subscription.id).toBe("user_1::enterprise");
         expect(subscription.priceId).toBe("enterprise");
-        expect((calls.at(-1)?.args[0] as Record<string, unknown>).product_id).toBe("enterprise");
+        expect(calls.find((call) => call.name === "attach")?.args[0]).toMatchObject({ product_id: "enterprise" });
     });
 
     it("resumes by re-attaching the product", async () => {
@@ -313,6 +330,31 @@ describe("autumn adapter", () => {
             expect(result?.balance).toBeUndefined();
         });
 
+        it("checkEntitlement reads a top-level numeric `balance` shape without losing it (regression)", async () => {
+            expect.assertions(2);
+
+            // Classic autumn-js returns `balance` as a top-level NUMBER (+ `included_usage`/`usage`),
+            // not a nested object. `asRecord(number)` is `{}`, so a naive descent would drop the balance.
+            const client = makeClient([], { check: { allowed: true, balance: 100, included_usage: 500, unlimited: false, usage: 400 } });
+            const adapter = createAutumnAdapter({ client, webhookSecret: SECRET });
+
+            const result = await adapter.checkEntitlement?.({ featureId: "credits", referenceId: "user_1" });
+
+            expect(result).toEqual({ allowed: true, balance: 100, limit: 500, unlimited: false, used: 400 });
+            expect(result?.balance).toBe(100);
+        });
+
+        it("checkEntitlement defaults required_balance to 1 when quantity is omitted (fail-closed)", async () => {
+            expect.assertions(1);
+
+            const calls: RecordedCall[] = [];
+            const adapter = createAutumnAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+
+            await adapter.checkEntitlement?.({ featureId: "api_calls", referenceId: "user_1" });
+
+            expect((calls.find((call) => call.name === "check")?.args[0] as Record<string, unknown>).required_balance).toBe(1);
+        });
+
         it("getBalances maps every Autumn feature balance, including unlimited", async () => {
             expect.assertions(3);
 
@@ -347,6 +389,19 @@ describe("autumn adapter", () => {
 
             expect(balances).toHaveLength(2);
             expect(balances.map((balance) => balance.featureId).toSorted((a, b) => a.localeCompare(b))).toEqual(["api_calls", "export"]);
+        });
+
+        it("the facade still validates check() args before delegating (no fail-open on misuse)", async () => {
+            expect.assertions(1);
+
+            const payment = createPayment({
+                adapter: createAutumnAdapter({ client: makeClient(), webhookSecret: SECRET }),
+                authorize: () => true,
+                store: new MemoryPaymentStore(),
+            });
+
+            // Neither featureId nor priceId — must throw CONFIG_INVALID, not reach Autumn unscoped.
+            await expect(payment.check({ referenceId: "user_1" })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
         });
     });
 });

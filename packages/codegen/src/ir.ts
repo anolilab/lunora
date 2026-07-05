@@ -1492,14 +1492,15 @@ export interface IdentityClaimReadIR {
 
 /**
  * One payment webhook-adapter construction in `lunora/` (`createStripeAdapter` /
- * `createPolarAdapter`). `toleranceSeconds` carries the statically-known
- * `webhookToleranceSeconds` replay window when it is a plain numeric literal; the
- * payment-webhook wide-tolerance lint fires when it exceeds a conservative
- * ceiling. Structurally identical to `AdvisorPaymentWebhook`.
+ * `createPolarAdapter` / `createAutumnAdapter` / `createDodoPaymentsAdapter`).
+ * `toleranceSeconds` carries the statically-known `webhookToleranceSeconds`
+ * replay window when it is a plain numeric literal; the payment-webhook
+ * wide-tolerance lint fires when it exceeds a conservative ceiling. Structurally
+ * identical to `AdvisorPaymentWebhook`.
  */
 export interface PaymentWebhookIR {
     /** The adapter factory invoked. */
-    callee: "createPolarAdapter" | "createStripeAdapter";
+    callee: "createAutumnAdapter" | "createDodoPaymentsAdapter" | "createPolarAdapter" | "createStripeAdapter";
     /** Export binding name of the enclosing declaration (`&lt;module>` at file scope). */
     exportName: string;
     /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */

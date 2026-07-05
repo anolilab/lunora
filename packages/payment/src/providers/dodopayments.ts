@@ -14,7 +14,7 @@
  */
 import type { PaymentAdapter, WebhookInput } from "../adapter";
 import { LunoraPaymentError } from "../errors";
-import { asRecord, readBoolean, readNumber, readString } from "../json";
+import { asRecord, parseTimestamp, readBoolean, readNumber, readString } from "../json";
 import { money, zeroMoney } from "../money";
 import type {
     CaptureInput,
@@ -96,12 +96,6 @@ const SUBSCRIPTION_STATE_BY_DODO_STATUS: Record<string, SubscriptionState> = {
 
 const notSupported = (operation: string): never => {
     throw new LunoraPaymentError("PROVIDER_ERROR", `dodopayments (merchant-of-record) does not support ${operation}`);
-};
-
-const parseTimestamp = (value: null | string | undefined): number | undefined => {
-    const parsed = typeof value === "string" ? Date.parse(value) : Number.NaN;
-
-    return Number.isNaN(parsed) ? undefined : parsed;
 };
 
 /** Dodo nests the reference under the object's `metadata`; we pin it there on checkout. */
@@ -241,11 +235,10 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
         cancelPayment: () => notSupported("manual payment cancellation"),
 
         cancelSubscription: async (subscriptionId, cancelOptions) => {
-            const subscription = cancelOptions?.atPeriodEnd
-                ? await client.subscriptions.update(subscriptionId, { cancel_at_next_billing_date: true })
-                : await client.subscriptions.update(subscriptionId, { status: "cancelled" });
+            // Same endpoint either way — only the body differs (schedule vs. immediate).
+            const body = cancelOptions?.atPeriodEnd ? { cancel_at_next_billing_date: true } : { status: "cancelled" };
 
-            return subscriptionFromDodo(subscription);
+            return subscriptionFromDodo(await client.subscriptions.update(subscriptionId, body));
         },
 
         capabilities: { merchantOfRecord: true, portal: true, usageMetering: true },
@@ -356,10 +349,15 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
             // then we re-read the authoritative subscription. A bare metadata/quantity update has no
             // change-plan semantics, so just return the current truth.
             if (patch.priceId) {
+                // `changePlan` REQUIRES a quantity — when the caller changes only the plan, preserve the
+                // current seat count rather than defaulting to 1, which would silently shrink a
+                // multi-seat subscription and re-prorate it.
+                const quantity = patch.quantity ?? readNumber(await client.subscriptions.retrieve(subscriptionId), "quantity") ?? 1;
+
                 await client.subscriptions.changePlan(subscriptionId, {
                     product_id: patch.priceId,
                     proration_billing_mode: "prorated_immediately",
-                    quantity: patch.quantity ?? 1,
+                    quantity,
                 });
             }
 
