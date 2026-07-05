@@ -9,6 +9,8 @@
  */
 import { execFile } from "node:child_process";
 
+import { detectPackageManager, execArgsFor } from "./detect-package-manager";
+
 /**
  * The shape of an `execFile` callback error we care about. `@types/node`'s
  * `ExecFileException` covers this but is now deprecated; we only read `code`
@@ -86,18 +88,21 @@ const parseSecretNames = (stdout: string): ReadonlyArray<string> | undefined => 
 };
 
 const listRemoteSecrets = async (inputs: ListRemoteSecretsInputs): Promise<ListRemoteSecretsResult> => {
-    const args = ["exec", "wrangler", "secret", "list", "--format", "json"];
+    const wranglerArgs = ["secret", "list", "--format", "json"];
 
     if (inputs.env !== undefined) {
-        args.push("--env", inputs.env);
+        wranglerArgs.push("--env", inputs.env);
     }
 
     if (inputs.temporary) {
-        args.push("--temporary");
+        wranglerArgs.push("--temporary");
     }
 
+    // Run wrangler through the project's package manager (pnpm/npm/yarn/bun),
+    // detected from its lock file / `packageManager` field — never hardcoded.
+    const { args, command } = execArgsFor(detectPackageManager(inputs.cwd), "wrangler", wranglerArgs);
     const runner = inputs.runner ?? defaultRunner;
-    const result = await runner("pnpm", args, inputs.cwd);
+    const result = await runner(command, args, inputs.cwd);
 
     if (result.code !== 0) {
         return { error: result.stderr.trim() || `wrangler secret list exited ${String(result.code)}`, names: [], ok: false };

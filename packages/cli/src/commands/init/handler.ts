@@ -549,13 +549,12 @@ const maybeOfferGit = async (options: InitCommandOptions, target: string): Promi
 /**
  * Print the post-scaffold "next steps". When deps were already installed (the
  * user accepted the install offer), the `install` line is dropped and the `dev`
- * line uses the chosen manager; otherwise it defaults to `pnpm`. Inside a
- * monorepo we point at the workspace root, since installing in the new package
- * before it's wired into the workspace won't work.
+ * line uses the chosen manager; otherwise the caller passes the detected manager
+ * (lock file / `packageManager` field / launching manager / first installed).
+ * Inside a monorepo we point at the workspace root, since installing in the new
+ * package before it's wired into the workspace won't work.
  */
-const printNextSteps = async (name: string, installed: PackageManager | undefined, insideMonorepo: boolean): Promise<void> => {
-    const manager: PackageManager = installed ?? "pnpm";
-
+const printNextSteps = async (name: string, installed: PackageManager | undefined, manager: PackageManager, insideMonorepo: boolean): Promise<void> => {
     const steps: NextStep[] = [{ code: `cd ./${name}`, lead: "Enter your project directory using" }];
 
     if (installed === undefined) {
@@ -1518,8 +1517,13 @@ const runPostScaffold = async (options: InitCommandOptions, result: InitCommandR
     if (options.inPlace !== true) {
         await maybeOfferGit(options, result.target);
 
+        // The install may have been declined; fall back to the manager detected
+        // for the scaffolded project (lock file / `packageManager` field /
+        // launching manager / first installed) rather than assuming pnpm.
+        const manager = installedManager ?? detectPackageManager(result.target);
+
         // Closing flourish + next steps + Luna's send-off, after the install so it's truly last.
-        await printNextSteps(basename(result.target), installedManager, isInsideMonorepo(cwd));
+        await printNextSteps(basename(result.target), installedManager, manager, isInsideMonorepo(cwd));
         await emitMascot(options.logger);
     }
 };
