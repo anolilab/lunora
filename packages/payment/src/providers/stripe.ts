@@ -25,9 +25,9 @@ import type {
     SubscriptionPatch,
     SubscriptionState,
     WebhookAction,
-    WebhookActionType,
 } from "../types";
 import { verifyStripeSignature } from "../webhook";
+import stateToEventType from "./subscription-event";
 
 interface StripeRequestOptions {
     readonly idempotencyKey?: string;
@@ -173,28 +173,6 @@ const subscriptionFromStripe = (subscription: StripeSubscriptionLike): Subscript
     };
 };
 
-const subscriptionEventType = (status: string | undefined): WebhookActionType => {
-    const state = status ? SUBSCRIPTION_STATE_BY_STRIPE_STATUS[status] : undefined;
-
-    if (state === "canceled") {
-        return "subscription.canceled";
-    }
-
-    if (state === "past_due") {
-        return "subscription.past_due";
-    }
-
-    if (state === "paused") {
-        return "subscription.paused";
-    }
-
-    if (state === "active" || state === "trialing") {
-        return "subscription.active";
-    }
-
-    return "subscription.updated";
-};
-
 const mapEvent = (eventId: string, eventType: string, object: Record<string, unknown>): WebhookAction => {
     const base = { eventId, provider: "stripe" as const, raw: { object, type: eventType } };
     const currency = readString(object, "currency") ?? "usd";
@@ -261,7 +239,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 quantity: firstQuantity(object),
                 referenceId: readReferenceId(object),
                 subscriptionId: readString(object, "id"),
-                type: subscriptionEventType(readString(object, "status")),
+                type: stateToEventType(SUBSCRIPTION_STATE_BY_STRIPE_STATUS[readString(object, "status") ?? ""]),
             };
         }
 

@@ -44,9 +44,9 @@ import type {
     SubscriptionPatch,
     SubscriptionState,
     WebhookAction,
-    WebhookActionType,
 } from "../types";
 import { verifyStandardWebhook } from "../webhook";
+import stateToEventType from "./subscription-event";
 
 /** The subset of the Autumn SDK surface this adapter calls. A real `Autumn` instance satisfies it. */
 interface AutumnClientLike {
@@ -213,28 +213,6 @@ const readSubscription = async (client: AutumnClientLike, customerId: string, pr
     return product ? productToSubscription(customerId, product) : constructedSubscription(customerId, productId, "canceled", false);
 };
 
-const subscriptionEventType = (status: string | undefined): WebhookActionType => {
-    const state = status ? SUBSCRIPTION_STATE_BY_AUTUMN_STATUS[status] : undefined;
-
-    if (state === "canceled") {
-        return "subscription.canceled";
-    }
-
-    if (state === "past_due") {
-        return "subscription.past_due";
-    }
-
-    if (state === "paused") {
-        return "subscription.paused";
-    }
-
-    if (state === "active" || state === "trialing") {
-        return "subscription.active";
-    }
-
-    return "subscription.updated";
-};
-
 // Webhook bodies carry the event `type` and a `data` object. Read the reference id (the Autumn
 // customer id, which is our reference id) and the product/subscription details defensively.
 const referenceFromEvent = (object: Record<string, unknown>): string | undefined => readAny(object, "customer_id", "customerId");
@@ -264,7 +242,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 referenceId: customerId,
                 subscriptionId:
                     customerId === undefined ? undefined : autumnSubscriptionId(customerId, readAny(product, "id", "product_id", "productId") ?? ""),
-                type: subscriptionEventType(status),
+                type: stateToEventType(SUBSCRIPTION_STATE_BY_AUTUMN_STATUS[status ?? ""]),
             };
         }
         // Money movement — Autumn surfaces settled invoices/payments.

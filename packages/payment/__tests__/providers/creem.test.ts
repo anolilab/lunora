@@ -198,6 +198,55 @@ describe("creem adapter", () => {
         expect(canceled.type).toBe("subscription.canceled");
     });
 
+    it("rounds a fractional webhook amount instead of throwing on the BigInt conversion (regression)", async () => {
+        expect.assertions(2);
+
+        const adapter = createCreemAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const payload = JSON.stringify({
+            eventType: "checkout.completed",
+            id: "evt_2",
+            object: { id: "ch_1", metadata: { referenceId: "user_1" }, order: { amount: 2500.5, currency: "EUR", status: "paid" } },
+        });
+        const action = await adapter.parseWebhook({ headers: headersFor(sign(payload)), payload });
+
+        // A fractional amount must not throw a RangeError out of parseWebhook (which would 400 the
+        // webhook and wedge Creem into retrying) — it is rounded to integer minor units.
+        expect(action.type).toBe("payment.captured");
+        expect(action.amount?.minorUnits).toBe(2501n);
+    });
+
+    it("reuses the existing customer when create fails on a duplicate email (regression)", async () => {
+        expect.assertions(3);
+
+        const calls: RecordedCall[] = [];
+        const client: CreemClientLike = {
+            ...makeClient(),
+            customers: {
+                create: async () => {
+                    calls.push({ args: [], name: "create" });
+
+                    // Creem returns 400 "A resource with this identifier already exists" for a dup email.
+                    throw new Error("A resource with this identifier already exists");
+                },
+                generateBillingLinks: async () => {
+                    return {};
+                },
+                retrieve: async (request) => {
+                    calls.push({ args: [request], name: "retrieve" });
+
+                    return { email: "a@b.test", id: "cust_existing" };
+                },
+            },
+        };
+        const adapter = createCreemAdapter({ client, webhookSecret: SECRET });
+
+        const customer = await adapter.getOrCreateCustomer({ email: "a@b.test", referenceId: "user_1" });
+
+        expect(customer.id).toBe("cust_existing");
+        expect(calls.some((call) => call.name === "create")).toBe(true);
+        expect((calls.find((call) => call.name === "retrieve")?.args[0] as Record<string, unknown>).email).toBe("a@b.test");
+    });
+
     it("rejects a bad signature", async () => {
         expect.assertions(1);
 

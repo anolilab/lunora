@@ -9,7 +9,7 @@
  */
 import type { PaymentAdapter, WebhookInput } from "../adapter";
 import { LunoraPaymentError } from "../errors";
-import { asRecord, parseTimestamp, readBoolean, readNumber, readString } from "../json";
+import { asRecord, parseTimestamp, readBoolean, readNumber, readString, referenceFromMetadata } from "../json";
 import { money, zeroMoney } from "../money";
 import type {
     CaptureInput,
@@ -25,9 +25,9 @@ import type {
     SubscriptionPatch,
     SubscriptionState,
     WebhookAction,
-    WebhookActionType,
 } from "../types";
 import { verifyStandardWebhook } from "../webhook";
+import stateToEventType from "./subscription-event";
 
 interface PolarSubscriptionLike {
     readonly cancelAtPeriodEnd?: boolean;
@@ -130,27 +130,7 @@ const orderToSession = (order: PolarOrderLike): PaymentSession => {
     };
 };
 
-const subscriptionEventType = (status: string | undefined): WebhookActionType => {
-    const state = status ? SUBSCRIPTION_STATE_BY_POLAR_STATUS[status] : undefined;
-
-    if (state === "canceled") {
-        return "subscription.canceled";
-    }
-
-    if (state === "past_due") {
-        return "subscription.past_due";
-    }
-
-    if (state === "active" || state === "trialing") {
-        return "subscription.active";
-    }
-
-    return "subscription.updated";
-};
-
 // Webhook bodies are raw snake_case.
-const referenceFromMetadata = (object: Record<string, unknown>): string | undefined => readString(asRecord(object.metadata), "referenceId");
-
 const mapEvent = (eventId: string, eventType: string, object: Record<string, unknown>): WebhookAction => {
     const base = { eventId, provider: "polar" as const, raw: { object, type: eventType } };
     const currency = readString(object, "currency") ?? "usd";
@@ -184,7 +164,10 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         case "subscription.created":
         case "subscription.revoked":
         case "subscription.updated": {
-            const type = eventType === "subscription.revoked" ? "subscription.canceled" : subscriptionEventType(readString(object, "status"));
+            const type =
+                eventType === "subscription.revoked"
+                    ? "subscription.canceled"
+                    : stateToEventType(SUBSCRIPTION_STATE_BY_POLAR_STATUS[readString(object, "status") ?? ""]);
 
             return {
                 ...base,

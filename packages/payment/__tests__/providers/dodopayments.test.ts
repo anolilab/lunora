@@ -291,6 +291,31 @@ describe("dodopayments adapter", () => {
         expect(action.type).toBe("subscription.past_due");
     });
 
+    it("maps a paused subscription to subscription.paused, not the generic update (regression)", async () => {
+        expect.assertions(1);
+
+        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const payload = JSON.stringify({ data: { status: "paused", subscription_id: "sub_1" }, type: "subscription.paused" });
+        const action = await adapter.parseWebhook({ headers: headersFor("m6", timestamp, sign("m6", timestamp, payload)), payload });
+
+        // A `paused` status must route to `subscription.paused` (the status→state table once lacked the
+        // entry, so the event silently fell through to `subscription.updated`).
+        expect(action.type).toBe("subscription.paused");
+    });
+
+    it("rounds a fractional webhook amount instead of throwing on the BigInt conversion (regression)", async () => {
+        expect.assertions(2);
+
+        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const payload = JSON.stringify({ data: { currency: "USD", payment_id: "pay_1", total_amount: 2500.5 }, type: "payment.succeeded" });
+        const action = await adapter.parseWebhook({ headers: headersFor("m7", timestamp, sign("m7", timestamp, payload)), payload });
+
+        expect(action.type).toBe("payment.captured");
+        expect(action.amount?.minorUnits).toBe(2501n);
+    });
+
     it("normalizes a refund.succeeded webhook to a refund", async () => {
         expect.assertions(2);
 

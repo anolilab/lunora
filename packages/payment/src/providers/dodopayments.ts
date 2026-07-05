@@ -15,7 +15,7 @@
 import type { PaymentAdapter, WebhookInput } from "../adapter";
 import { LunoraPaymentError } from "../errors";
 import idempotencyKey from "../idempotency";
-import { asRecord, parseTimestamp, readBoolean, readNumber, readString } from "../json";
+import { asRecord, parseTimestamp, readBoolean, readNumber, readString, referenceFromMetadata } from "../json";
 import { money, zeroMoney } from "../money";
 import type {
     CaptureInput,
@@ -32,9 +32,9 @@ import type {
     SubscriptionPatch,
     SubscriptionState,
     WebhookAction,
-    WebhookActionType,
 } from "../types";
 import { verifyStandardWebhook } from "../webhook";
+import stateToEventType from "./subscription-event";
 
 /** The subset of the Dodo Payments SDK surface this adapter calls. A real `DodoPayments` satisfies it. */
 interface DodoPaymentsClientLike {
@@ -92,15 +92,16 @@ const SUBSCRIPTION_STATE_BY_DODO_STATUS: Record<string, SubscriptionState> = {
     // Treat them as non-entitling `past_due`; Dodo has no trial status in this enum.
     failed: "past_due",
     on_hold: "past_due",
+    // A paused subscription is non-entitling until it resumes, but distinct from dunning — it maps to
+    // the `paused` state so a `subscription.paused` webhook routes to `subscription.paused` (not the
+    // generic `subscription.updated`) and stays consistent with `subscriptionFromDodo`.
+    paused: "paused",
     pending: "past_due",
 };
 
 const notSupported = (operation: string): never => {
     throw new LunoraPaymentError("PROVIDER_ERROR", `dodopayments (merchant-of-record) does not support ${operation}`);
 };
-
-/** Dodo nests the reference under the object's `metadata`; we pin it there on checkout. */
-const referenceFromMetadata = (object: Record<string, unknown>): string | undefined => readString(asRecord(object.metadata), "referenceId");
 
 const customerIdOf = (object: Record<string, unknown>): string | undefined =>
     readString(asRecord(object.customer), "customer_id") ?? readString(object, "customer_id");
@@ -128,7 +129,9 @@ const subscriptionFromDodo = (subscription: Record<string, unknown>): Subscripti
 const paymentFromDodo = (payment: Record<string, unknown>): PaymentSession => {
     const now = Date.now();
     const currency = readString(payment, "currency") ?? "usd";
-    const amount = money(BigInt(readNumber(payment, "total_amount") ?? 0), currency);
+    // Round before BigInt: Dodo documents integer minor units, but a stray fractional amount would
+    // throw a RangeError out of the parse path (a webhook 400 → provider retry loop). Match Autumn.
+    const amount = money(BigInt(Math.round(readNumber(payment, "total_amount") ?? 0)), currency);
     const state = PAYMENT_STATE_BY_DODO_STATUS[readString(payment, "status") ?? ""] ?? "initiated";
 
     return {
@@ -142,24 +145,6 @@ const paymentFromDodo = (payment: Record<string, unknown>): PaymentSession => {
         state,
         updatedAt: now,
     };
-};
-
-const subscriptionEventType = (status: string | undefined): WebhookActionType => {
-    const state = status ? SUBSCRIPTION_STATE_BY_DODO_STATUS[status] : undefined;
-
-    if (state === "canceled") {
-        return "subscription.canceled";
-    }
-
-    if (state === "past_due") {
-        return "subscription.past_due";
-    }
-
-    if (state === "active") {
-        return "subscription.active";
-    }
-
-    return "subscription.updated";
 };
 
 const mapEvent = (eventId: string, eventType: string, object: Record<string, unknown>): WebhookAction => {
@@ -176,7 +161,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         case "payment.succeeded": {
             return {
                 ...base,
-                amount: money(BigInt(readNumber(object, "total_amount") ?? 0), currency),
+                amount: money(BigInt(Math.round(readNumber(object, "total_amount") ?? 0)), currency),
                 customerId: customerIdOf(object),
                 referenceId: referenceFromMetadata(object),
                 sessionId: readString(object, "payment_id"),
@@ -188,7 +173,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         case "refund.succeeded": {
             return {
                 ...base,
-                amount: money(BigInt(readNumber(object, "amount") ?? 0), currency),
+                amount: money(BigInt(Math.round(readNumber(object, "amount") ?? 0)), currency),
                 referenceId: referenceFromMetadata(object),
                 sessionId: readString(object, "payment_id"),
                 type: "payment.refunded",
@@ -216,7 +201,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 quantity: readNumber(object, "quantity"),
                 referenceId: referenceFromMetadata(object) ?? customerIdOf(object),
                 subscriptionId: readString(object, "subscription_id"),
-                type: subscriptionEventType(status),
+                type: stateToEventType(SUBSCRIPTION_STATE_BY_DODO_STATUS[status ?? ""]),
             };
         }
 
@@ -314,7 +299,7 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
                 reason: input.reason,
             });
             const currency = readString(refund, "currency") ?? input.amount?.currency ?? "usd";
-            const refundedAmount = input.amount ?? money(BigInt(readNumber(refund, "amount") ?? 0), currency);
+            const refundedAmount = input.amount ?? money(BigInt(Math.round(readNumber(refund, "amount") ?? 0)), currency);
 
             return {
                 amount: refundedAmount,

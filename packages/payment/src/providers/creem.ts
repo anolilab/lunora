@@ -16,7 +16,7 @@
  */
 import type { PaymentAdapter, WebhookInput } from "../adapter";
 import { LunoraPaymentError } from "../errors";
-import { asRecord, parseTimestamp, readBoolean, readNumber, readString } from "../json";
+import { asRecord, parseTimestamp, readBoolean, readNumber, readString, referenceFromMetadata } from "../json";
 import { money, zeroMoney } from "../money";
 import type {
     CaptureInput,
@@ -31,9 +31,9 @@ import type {
     SubscriptionPatch,
     SubscriptionState,
     WebhookAction,
-    WebhookActionType,
 } from "../types";
 import { verifyCreemSignature } from "../webhook";
+import stateToEventType from "./subscription-event";
 
 /** The subset of the Creem SDK surface this adapter calls. A structural shim over `new Creem()` satisfies it. */
 interface CreemClientLike {
@@ -44,6 +44,8 @@ interface CreemClientLike {
     readonly customers: {
         readonly create: (request: Record<string, unknown>) => Promise<Record<string, unknown>>;
         readonly generateBillingLinks: (request: Record<string, unknown>) => Promise<Record<string, unknown>>;
+        /** Look an existing customer up (by email) — used to recover from a duplicate-email `create`. */
+        readonly retrieve?: (request: Record<string, unknown>) => Promise<Record<string, unknown>>;
     };
     readonly subscriptions: {
         readonly cancel: (subscriptionId: string) => Promise<Record<string, unknown>>;
@@ -93,9 +95,6 @@ const notSupported = (operation: string): never => {
 /** Creem `product`/`customer` fields are either an expanded object or a bare id string. */
 const idOf = (value: unknown): string | undefined => (typeof value === "string" ? value : readString(asRecord(value), "id"));
 
-/** Read the framework reference id, pinned into `metadata.referenceId` on checkout. */
-const referenceFromMetadata = (object: Record<string, unknown>): string | undefined => readString(asRecord(object.metadata), "referenceId");
-
 const readCheckoutUrl = (checkout: Record<string, unknown>): string => readString(checkout, "checkout_url") ?? readString(checkout, "checkoutUrl") ?? "";
 
 const isCanceling = (subscription: Record<string, unknown>): boolean =>
@@ -128,7 +127,7 @@ const checkoutToSession = (checkout: Record<string, unknown>): PaymentSession =>
     const now = Date.now();
     const order = asRecord(checkout.order);
     const currency = readString(order, "currency") ?? readString(checkout, "currency") ?? "usd";
-    const amount = money(BigInt(readNumber(order, "amount") ?? readNumber(checkout, "amount") ?? 0), currency);
+    const amount = money(BigInt(Math.round(readNumber(order, "amount") ?? readNumber(checkout, "amount") ?? 0)), currency);
     const state = PAYMENT_STATE_BY_CREEM_STATUS[readString(order, "status") ?? readString(checkout, "status") ?? ""] ?? "initiated";
     const settled = state === "captured" || state === "partially_refunded" || state === "refunded";
 
@@ -145,28 +144,6 @@ const checkoutToSession = (checkout: Record<string, unknown>): PaymentSession =>
     };
 };
 
-const subscriptionEventType = (status: string | undefined): WebhookActionType => {
-    const state = status ? SUBSCRIPTION_STATE_BY_CREEM_STATUS[status] : undefined;
-
-    if (state === "canceled") {
-        return "subscription.canceled";
-    }
-
-    if (state === "past_due") {
-        return "subscription.past_due";
-    }
-
-    if (state === "paused") {
-        return "subscription.paused";
-    }
-
-    if (state === "active" || state === "trialing") {
-        return "subscription.active";
-    }
-
-    return "subscription.updated";
-};
-
 const mapEvent = (eventId: string, eventType: string, object: Record<string, unknown>): WebhookAction => {
     const base = { eventId, provider: "creem" as const, raw: { object, type: eventType } };
     const order = asRecord(object.order);
@@ -178,7 +155,9 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
 
             return {
                 ...base,
-                amount: amount === undefined ? undefined : money(BigInt(amount), currency),
+                // Round before BigInt: Creem documents integer minor units, but a stray fractional amount
+                // would throw a RangeError out of `parseWebhook` (a 400 → provider retry loop). Match Autumn.
+                amount: amount === undefined ? undefined : money(BigInt(Math.round(amount)), currency),
                 customerId: idOf(object.customer),
                 referenceId: referenceFromMetadata(object),
                 sessionId: readString(object, "id"),
@@ -192,7 +171,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
 
             return {
                 ...base,
-                amount: amount === undefined ? undefined : money(BigInt(amount), currency),
+                amount: amount === undefined ? undefined : money(BigInt(Math.round(amount)), currency),
                 referenceId: referenceFromMetadata(object),
                 sessionId: idOf(object.order) ?? idOf(object.checkout) ?? readString(object, "id"),
                 type: "payment.refunded",
@@ -220,7 +199,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 priceId: idOf(object.product),
                 referenceId: referenceFromMetadata(object) ?? idOf(object.customer),
                 subscriptionId: readString(object, "id"),
-                type: subscriptionEventType(status),
+                type: stateToEventType(SUBSCRIPTION_STATE_BY_CREEM_STATUS[status ?? ""]),
             };
         }
 
@@ -267,15 +246,28 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
         },
 
         getOrCreateCustomer: async (ref: CustomerRef): Promise<Customer> => {
-            const customer = await client.customers.create({ email: ref.email, name: ref.metadata?.name });
-
-            return {
-                createdAt: Date.now(),
-                email: readString(customer, "email") ?? ref.email,
-                id: readString(customer, "id") ?? "",
-                provider: "creem",
-                referenceId: ref.referenceId,
+            const toCustomer = (record: Record<string, unknown>): Customer => {
+                return {
+                    createdAt: Date.now(),
+                    email: readString(record, "email") ?? ref.email,
+                    id: readString(record, "id") ?? "",
+                    provider: "creem",
+                    referenceId: ref.referenceId,
+                };
             };
+
+            // Creem's `customers.create` is NOT idempotent by email — it returns 400 when a customer with
+            // that email already exists, so a retried/raced first checkout would fail. Recover by looking
+            // the existing customer up by email (the facade also gates this behind a store lookup first).
+            try {
+                return toCustomer(await client.customers.create({ email: ref.email, name: ref.metadata?.name }));
+            } catch (error) {
+                if (client.customers.retrieve && ref.email !== undefined) {
+                    return toCustomer(await client.customers.retrieve({ email: ref.email }));
+                }
+
+                throw error;
+            }
         },
 
         getPaymentStatus: async (sessionId) => checkoutToSession(await client.checkouts.retrieve(sessionId)),
