@@ -177,8 +177,8 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         };
 
         /** Read chunk #0's bookkeeping metadata (content hash + chunk count) for a source. */
-        const readHead = async (sourceId: string): Promise<{ chunks?: number; hash?: string }> => {
-            const [head] = await context.vectors.getByIds(config.index, [chunkVectorId(sourceId, 0)]);
+        const readHead = async (sourceId: string, namespace?: string): Promise<{ chunks?: number; hash?: string }> => {
+            const [head] = await context.vectors.getByIds(config.index, [chunkVectorId(sourceId, 0)], namespace);
             const hash = head?.metadata?.[HASH_KEY];
             const chunks = head?.metadata?.[COUNT_KEY];
 
@@ -195,7 +195,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 return;
             }
 
-            await context.vectors.deleteByIds(config.index, ids);
+            await context.vectors.deleteByIds(config.index, ids, namespace);
             await textStore?.remove?.(ids, { namespace });
         };
 
@@ -207,7 +207,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             }
 
             const hash = await sha256Hex(input.text);
-            const previous = await readHead(input.id);
+            const previous = await readHead(input.id, input.namespace);
 
             // Unchanged content is a no-op re-sync: skip chunking, embedding,
             // and every write. (Vectorize applies mutations asynchronously, so
@@ -281,7 +281,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         const remove = async (input: RemoveInput): Promise<void> => {
             checkNamespace(input.namespace);
 
-            const previous = await readHead(input.id);
+            const previous = await readHead(input.id, input.namespace);
 
             // Without a head record there is nothing reliable to delete; a
             // head without a count (never written by this helper) still has
@@ -311,7 +311,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 return texts;
             }
 
-            const records = await context.vectors.getByIds(config.index, ids);
+            const records = await context.vectors.getByIds(config.index, ids, namespace);
 
             for (const record of records) {
                 const text = record.metadata?.[TEXT_KEY];

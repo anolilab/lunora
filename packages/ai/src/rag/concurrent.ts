@@ -21,6 +21,10 @@ export const concurrentMap = async <T, R>(
     limit: number,
     function_: (item: T, index: number) => Promise<R>,
 ): Promise<ReadonlyArray<R>> => {
+    if (!Number.isInteger(limit) || limit < 1) {
+        throw new RangeError("concurrentMap: `limit` must be a positive integer");
+    }
+
     const results: R[] = Array.from({ length: items.length });
     let cursor = 0;
 

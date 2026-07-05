@@ -57,8 +57,8 @@ export interface RagVectorUpsertInput {
  * satisfy it — declared here so `@lunora/ai` depends on neither package.
  */
 export interface RagVectors {
-    deleteByIds: (indexName: string, ids: ReadonlyArray<string>) => Promise<unknown>;
-    getByIds: (indexName: string, ids: ReadonlyArray<string>) => Promise<ReadonlyArray<RagVectorRecord>>;
+    deleteByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string) => Promise<unknown>;
+    getByIds: (indexName: string, ids: ReadonlyArray<string>, namespace?: string) => Promise<ReadonlyArray<RagVectorRecord>>;
     query: (indexName: string, input: RagVectorQueryInput) => Promise<RagVectorMatches>;
     upsert: (indexName: string, input: RagVectorUpsertInput) => Promise<unknown>;
 }
