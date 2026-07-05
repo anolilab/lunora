@@ -41,6 +41,8 @@ export type {
     UsageEventPoint,
 } from "./providers/autumn-features";
 export { createAutumnFeatures } from "./providers/autumn-features";
+export type { CreemAdapterOptions, CreemClientLike } from "./providers/creem";
+export { createCreemAdapter } from "./providers/creem";
 export type { DodoPaymentsAdapterOptions, DodoPaymentsClientLike } from "./providers/dodopayments";
 export { createDodoPaymentsAdapter } from "./providers/dodopayments";
 export type { PolarAdapterOptions, PolarClientLike } from "./providers/polar";
@@ -93,4 +95,4 @@ export type {
     WebhookAction,
     WebhookActionType,
 } from "./types";
-export { constantTimeEqual, hmacSha256Hex, parseStripeSignatureHeader, verifyStandardWebhook, verifyStripeSignature } from "./webhook";
+export { constantTimeEqual, hmacSha256Hex, parseStripeSignatureHeader, verifyCreemSignature, verifyStandardWebhook, verifyStripeSignature } from "./webhook";

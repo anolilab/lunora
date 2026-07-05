@@ -1,9 +1,9 @@
 ---
 title: "@lunora/payment"
-description: Provider-agnostic payments for Lunora — Stripe/Polar/Autumn/Dodo Payments adapters, webhook sync, and a payment/subscription state machine.
+description: Provider-agnostic payments for Lunora — Stripe/Polar/Autumn/Dodo/Creem adapters, webhook sync, and a payment/subscription state machine.
 ---
 
-`@lunora/payment` is one provider-agnostic API over Stripe, Polar, Autumn, and Dodo Payments. Webhook
+`@lunora/payment` is one provider-agnostic API over Stripe, Polar, Autumn, Dodo Payments, and Creem. Webhook
 events are verified, normalized, and applied through an explicit
 payment/subscription state machine that makes duplicate and out-of-order
 deliveries safe by construction — synced into a durable store that rides the
@@ -70,37 +70,61 @@ export const ShardDO = createShardDO({
 
 The thunk returns `PaymentsFromContextOptions`:
 
-| Option          | Type                 | Notes                                                                                                                    |
-| --------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `adapter`       | `PaymentAdapter`     | Built with `createStripeAdapter` / `createPolarAdapter` / `createAutumnAdapter` / `createDodoPaymentsAdapter`. Required. |
-| `authorize`     | `AuthorizeReference` | `(referenceId) => boolean \| Promise<boolean>`. Defaults to "caller owns reference".                                     |
-| `entitlements`  | `EntitlementsConfig` | Plan → features/limits map. Required to use `check` / `listBalances`.                                                    |
-| `observability` | `PaymentObserver`    | Telemetry sink for webhook applies, failed payments, past-due subscriptions.                                             |
+| Option          | Type                 | Notes                                                                                                                                           |
+| --------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `adapter`       | `PaymentAdapter`     | Built with `createStripeAdapter` / `createPolarAdapter` / `createAutumnAdapter` / `createDodoPaymentsAdapter` / `createCreemAdapter`. Required. |
+| `authorize`     | `AuthorizeReference` | `(referenceId) => boolean \| Promise<boolean>`. Defaults to "caller owns reference".                                                            |
+| `entitlements`  | `EntitlementsConfig` | Plan → features/limits map. Required to use `check` / `listBalances`.                                                                           |
+| `observability` | `PaymentObserver`    | Telemetry sink for webhook applies, failed payments, past-due subscriptions.                                                                    |
 
 ### Provider adapters
 
 Every adapter takes its client by injection and verifies inbound webhooks:
 
 ```ts
-import { createAutumnAdapter, createDodoPaymentsAdapter, createPolarAdapter, createStripeAdapter } from "@lunora/payment";
+import { createAutumnAdapter, createCreemAdapter, createDodoPaymentsAdapter, createPolarAdapter, createStripeAdapter } from "@lunora/payment";
 
 const stripe = createStripeAdapter({ client, webhookSecret, webhookToleranceSeconds: 300 });
 const polar = createPolarAdapter({ client, webhookSecret });
 const autumn = createAutumnAdapter({ client, webhookSecret });
 const dodo = createDodoPaymentsAdapter({ client, webhookSecret });
+const creem = createCreemAdapter({ client, webhookSecret });
 ```
 
-| Option                    | Stripe | Polar | Autumn | Dodo | Notes                                                                                              |
-| ------------------------- | :----: | :---: | :----: | :--: | -------------------------------------------------------------------------------------------------- |
-| `client`                  |   ✓    |   ✓   |   ✓    |  ✓   | Structural `StripeClientLike` / `PolarClientLike` / `AutumnClientLike` / `DodoPaymentsClientLike`. |
-| `webhookSecret`           |   ✓    |   ✓   |   ✓    |  ✓   | Signing secret for inbound webhook verification.                                                   |
-| `webhookToleranceSeconds` |   ✓    |   ✓   |   ✓    |  ✓   | Optional clock-skew tolerance for the timestamp check.                                             |
+| Option                    | Stripe | Polar | Autumn | Dodo | Creem | Notes                                                                             |
+| ------------------------- | :----: | :---: | :----: | :--: | :---: | --------------------------------------------------------------------------------- |
+| `client`                  |   ✓    |   ✓   |   ✓    |  ✓   |   ✓   | Structural `…ClientLike` per provider (`StripeClientLike`, `CreemClientLike`, …). |
+| `webhookSecret`           |   ✓    |   ✓   |   ✓    |  ✓   |   ✓   | Signing secret for inbound webhook verification.                                  |
+| `webhookToleranceSeconds` |   ✓    |   ✓   |   ✓    |  ✓   |       | Optional clock-skew tolerance (schemes that sign a timestamp).                    |
 
-Stripe is a PSP (manual authorize/capture available). Polar and Dodo Payments
-are Merchants-of-Record — `merchantOfRecord` is `true` and they own tax/invoices,
-so manual capture isn't part of their flow. Stripe webhooks use Stripe's
-signature scheme; Polar, Autumn, and Dodo Payments use Standard Webhooks
-(`webhook-id` / `webhook-timestamp` / `webhook-signature`).
+Stripe is a PSP (manual authorize/capture available). Polar, Dodo Payments, and
+Creem are Merchants-of-Record — `merchantOfRecord` is `true` and they own
+tax/invoices, so manual capture isn't part of their flow. Stripe webhooks use
+Stripe's signature scheme; Polar, Autumn, and Dodo Payments use Standard Webhooks
+(`webhook-id` / `webhook-timestamp` / `webhook-signature`); Creem uses a single
+`creem-signature` HMAC-SHA256 header.
+
+### Creem
+
+[Creem](https://creem.io) is a Merchant-of-Record for software with an
+EU-friendly global footprint. Unlike a raw PSP, it is **product-based** (real
+product ids), so it slots into the `priceId` interface directly like Polar/Dodo:
+hosted checkout sessions, first-class subscriptions (cancel at period end,
+pause/resume, plan upgrades), and a genuine hosted billing portal via
+`customers.generateBillingLinks` (`portal` is `true`). Refunds are issued from
+the Creem dashboard (no SDK endpoint), so `refundPayment` throws. Webhooks are
+verified with the `creem-signature` HMAC-SHA256 header.
+
+```ts
+import type { CreemClientLike } from "@lunora/payment";
+import { createCreemAdapter } from "@lunora/payment";
+import { Creem } from "creem";
+
+const creem = createCreemAdapter({
+    client: new Creem() as unknown as CreemClientLike,
+    webhookSecret: env.CREEM_WEBHOOK_SECRET,
+});
+```
 
 ### Autumn
 

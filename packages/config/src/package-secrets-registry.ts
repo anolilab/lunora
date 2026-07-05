@@ -147,6 +147,18 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             key: "DODO_PAYMENTS_WEBHOOK_KEY",
             placeholderValue: "<your-dodo-payments-webhook-secret>",
         },
+        {
+            description: "Creem API key for the Creem payment adapter. Obtain at https://www.creem.io/dashboard/developers",
+            docsUrl: "https://lunora.sh/docs/packages/payment#creem",
+            key: "CREEM_API_KEY",
+            placeholderValue: "<your-creem-api-key>",
+        },
+        {
+            description: "Creem webhook signing secret for verifying the creem-signature header. Obtain from your Creem dashboard webhook settings.",
+            docsUrl: "https://lunora.sh/docs/packages/payment#creem",
+            key: "CREEM_WEBHOOK_SECRET",
+            placeholderValue: "<your-creem-webhook-secret>",
+        },
     ],
 };
 

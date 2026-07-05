@@ -185,3 +185,34 @@ export const verifyStandardWebhook = async (input: VerifyStandardWebhookInput): 
         throw new LunoraPaymentError("WEBHOOK_SIGNATURE_INVALID", "no matching signature");
     }
 };
+
+export interface VerifyCreemSignatureInput {
+    /** Raw request body, exactly as received. */
+    readonly payload: string;
+    /** Creem webhook signing secret. */
+    readonly secret: string;
+    /** The `creem-signature` header value. */
+    readonly signature: string;
+}
+
+/**
+ * Verify a Creem webhook signature: `hex(HMAC_SHA256(secret, rawBody))` compared against the
+ * `creem-signature` header. Creem's scheme signs the raw body with no timestamp, so there is no
+ * replay-window check. Throws a {@link LunoraPaymentError} on any failure.
+ */
+export const verifyCreemSignature = async (input: VerifyCreemSignatureInput): Promise<void> => {
+    // Fail closed on an empty/missing secret: a zero-length HMAC key is attacker-known and forgeable.
+    if (!input.secret) {
+        throw new LunoraPaymentError("CONFIG_INVALID", "webhook secret not configured");
+    }
+
+    if (!input.signature) {
+        throw new LunoraPaymentError("WEBHOOK_SIGNATURE_INVALID", "missing creem-signature header");
+    }
+
+    const expected = await hmacSha256Hex(input.secret, input.payload);
+
+    if (!constantTimeEqual(input.signature, expected)) {
+        throw new LunoraPaymentError("WEBHOOK_SIGNATURE_INVALID", "no matching signature");
+    }
+};

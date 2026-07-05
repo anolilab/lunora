@@ -20,8 +20,8 @@ export interface Money {
     readonly minorUnits: bigint;
 }
 
-/** Stable provider identifier (Medusa-style). Scoped to what Convex ships: Stripe + Polar + Autumn + Dodo Payments. */
-export type ProviderId = "autumn" | "dodopayments" | "polar" | "stripe";
+/** Stable provider identifier (Medusa-style). Convex ships Stripe/Polar/Autumn/Dodo; Creem adds an EU-friendly MoR. */
+export type ProviderId = "autumn" | "creem" | "dodopayments" | "polar" | "stripe";
 
 /** What a provider can do — encoded in types so tax/UX assumptions aren't tribal knowledge. */
 export interface ProviderCapabilities {
