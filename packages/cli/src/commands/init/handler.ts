@@ -324,12 +324,24 @@ const stampLunoraDeps = (packageJsonText: string, distTag: string, versions: Rea
 };
 
 /**
- * Native build scripts the scaffold's toolchain needs to run on install
- * (esbuild/sharp/workerd, pulled in by Vite + Wrangler). pnpm v10+ blocks
- * post-install build scripts by default; pre-approving them lets `pnpm install`
- * run exactly these without the interactive `pnpm approve-builds` step.
+ * Native build scripts the scaffold's toolchain needs to run on install, pulled
+ * in by Vite + Wrangler: `workerd`/`esbuild`/`@parcel/watcher`/`msgpackr-extract`
+ * (wrangler + miniflare), `unrs-resolver`/`rs-module-lexer` (Vite 8 / rolldown),
+ * and `sharp` (image handling). pnpm v10+ blocks post-install build scripts by
+ * default; pre-approving them lets `pnpm install` run exactly these without the
+ * interactive `pnpm approve-builds` step — otherwise the user's first install
+ * halts with `ERR_PNPM_IGNORED_BUILDS`. Kept in sync with the repo root's
+ * `allowBuilds` set and `scripts/template-build-smoke.sh`.
  */
-const PNPM_BUILT_DEPENDENCIES: ReadonlyArray<string> = ["esbuild", "sharp", "workerd"];
+const PNPM_BUILT_DEPENDENCIES: ReadonlyArray<string> = [
+    "@parcel/watcher",
+    "esbuild",
+    "msgpackr-extract",
+    "rs-module-lexer",
+    "sharp",
+    "unrs-resolver",
+    "workerd",
+];
 
 /** File pnpm reads its settings from. */
 const PNPM_WORKSPACE_FILENAME = "pnpm-workspace.yaml";

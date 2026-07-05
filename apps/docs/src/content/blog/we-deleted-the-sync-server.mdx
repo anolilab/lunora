@@ -1,0 +1,145 @@
+---
+title: "we deleted the sync server"
+description: local-first sync on Cloudflare Durable Objects, with no separate sync service to run.
+publishedAt: 2026-07-07
+author: Daniel Bannert
+category: Engineering
+tags:
+    - local-first
+    - sync
+    - durable-objects
+    - cloudflare
+---
+
+Optimistic UI, offline writes that survive a dropped connection, and data that updates live. Those three are what make an app feel instant instead of like a form you submit to a server. They are also the reason "local-first" stopped being a niche word this year.
+
+And they almost always come with a piece of infrastructure you did not set out to run: a sync server.
+
+Zero runs `zero-cache`, a service that tails your Postgres write-ahead log and pushes changes to clients. Replicache gives you a push/pull endpoint pair to implement and host. PowerSync and ElectricSQL put a sync service in front of Postgres. The developer experience is good. The catch is that your data and the engine that syncs it now live on a box you operate, secure, and pay for, separate from where your app already runs.
+
+lunora went local-first this cycle. It does not have a sync-server tier. Not a hidden service, not a managed one. There is no separate process tailing a log. Deleted from the architecture, not from a repo, because there was never a separate service to write in the first place. The reason it can skip that whole tier is a property of Cloudflare that most sync engines were not built to use, and it is worth writing down.
+
+## a Durable Object is already a sync server
+
+A Durable Object is single threaded. Each instance owns its own SQLite database, and only one execution runs against it at a time. lunora leans on that hard: it runs each write inside `state.blockConcurrencyWhile` and a storage transaction, so writes to a shard are strictly serialized. There is no interleaving, no read-modify-write race between two requests, no clock to reconcile.
+
+In the same transaction as every write, lunora appends a row to an append-only changelog table:
+
+```sql
+CREATE TABLE __cdc_log (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts REAL NOT NULL,
+  "table" TEXT NOT NULL,
+  id TEXT NOT NULL,
+  op TEXT NOT NULL,
+  doc TEXT                 -- post-image JSON for insert/update, NULL for delete
+);
+```
+
+`seq` is an `AUTOINCREMENT` primary key, so it only ever goes up. That single number is the whole ballgame. Because the DO is serialized, the order rows land in `__cdc_log` _is_ the order the writes happened. There is no separate log to tail and no logical-replication stream to reconcile against the primary, because the log and the data are the same SQLite database, written in the same transaction, on the same single-threaded object.
+
+So the thing every other stack stands up a service for, an ordered stream of committed changes, lunora already has as a side effect of how a Durable Object works. The DO is the log. The DO is also the WebSocket fan-out point for the clients subscribed to it. That is the sync server, and it is the same object that holds your data.
+
+The rest of the engine is three pieces on top of that: shapes, custom mutators, and a poke protocol.
+
+## shapes: the client picks the partition, the server picks the rows
+
+Partial replication is the first hard problem in local-first. You do not want every client to sync the entire table. You want each client to pull the slice it needs, and you need the server to enforce that a client can only ever pull rows it is allowed to see. Those two requirements usually fight each other, because the client is choosing the slice and the client cannot be trusted.
+
+A shape in lunora is a table, a predicate, and an optional column projection:
+
+```ts
+// lunora/shapes.ts
+import { defineShape, v } from "lunorash/server";
+
+export const messagesByChannel = defineShape({
+    table: "messages",
+    args: { channelId: v.id("channels") },
+    where: (ctx, { channelId }) => ({ channelId }),
+    columns: ["text", "authorId", "channelId"],
+});
+```
+
+The client subscribes by name and passes validated `args`. The `where` runs on the Durable Object, with a `ctx` the client cannot forge, and lunora AND-composes its result with the table's row-level-security read predicate through the same WHERE compiler the rest of the query layer uses. There is no second predicate engine and no place for the two to disagree.
+
+The way the source describes it is the cleanest one-liner for what a shape is: a _read-as-permission_. "The client chooses which partition to replicate, the server decides which rows it is allowed to see." A malformed `args` envelope is rejected at the subscription boundary before `where` ever runs. So partial sync and authorization are the same mechanism, not a feature and a patch bolted next to it. That is exactly the objection the loudest local-first threads keep raising, and it is answered here by construction rather than by a checklist.
+
+## custom mutators: optimistic in the browser, authoritative in the DO
+
+The second hard problem is writes. You want the local edit to render immediately, and you want the server to be the final word, and you do not want the reconciliation between those two to flicker or lose data.
+
+A mutator pairs an optimistic client implementation with an authoritative server one:
+
+```ts
+// lunora/mutators.ts
+import { defineMutator, v } from "lunorash/server";
+
+export const sendMessage = defineMutator({
+    args: { channelId: v.id("channels"), text: v.string() },
+    server: (ctx, { channelId, text }) => ctx.db.insert("messages", { channelId, text, authorId: ctx.auth.userId }),
+});
+```
+
+The `server` impl is the source of truth. It runs inside the shard DO with a full mutation context and a real `ctx.db` writer, and its writes are the ones that append to `__cdc_log` and poke back to every subscriber. You can add an optional `client` impl next to it, an optimistic twin that runs in the browser against the local collections inside a transaction. lunora applies that optimistic write instantly, then rebases it over the authoritative result as it syncs back. Omit the client impl and the write just falls through to a normal server round-trip with no local preview. Note that `authorId` is stamped from `ctx.auth.userId` on the server, never from `args`, which is the same ownership rule the security advisor flags at codegen.
+
+Here is where the serialized DO pays off a second time. Because the shard runs one write at a time, there is no server-side optimistic-concurrency retry loop. The source is blunt about it: "a `ConflictError` here is a deterministic self-conflict, not a race to retry." Most sync backends spend real complexity on conflict resolution under concurrent writers. lunora spends none, because the Durable Object removed the concurrency that would have caused the conflict.
+
+The client rebase is free for the same structural reason it is on-device. lunora does not re-run your queries on the server and diff the results. It hands the client an ordered stream of row operations and lets the client maintain the views.
+
+## the poke protocol: row-ops, not re-run queries
+
+When a write commits, the DO reads the new `__cdc_log` page once and sends the membership diff to subscribers as row operations, framed in Zero-style pokes (`pokeStart`, `pokePart`, `pokeEnd`) and versioned by the `__cdc_log` `seq` cursor. The client applies the whole poke in one transaction, so a subscriber never sees a half-applied update.
+
+The important inversion: the Durable Object never runs a dataflow pipeline. It ships facts. The client runs the incremental dataflow, via TanStack DB, and derives your live views on-device. That is what keeps the server side cheap. A write is "read one page of the log, send the diff," not "re-execute every subscribed query and compare."
+
+One honest limit to state plainly, because it matters if you are evaluating this: pokes ship whole-row post-images today, not per-column deltas. So do not expect column-delta bandwidth savings yet. Concurrent edits to different columns of the same row still converge, as long as your server impl patches only the fields it changes with `ctx.db.patch(id, { field })` rather than replacing the whole row (an advisor lint nags you toward the patch). The optimistic overlay rebases over the synced base each tick, and two offline edits to different fields of the same row both survive. Per-column convergence without a CRDT, but the wire format is still a full row for now.
+
+## the client: a collection, a binder, a hook
+
+On the client, a shape becomes a TanStack DB collection, and reads stay on the query hook you already use. There is no new read API to learn:
+
+```tsx
+import { bindMutators } from "@lunora/db/mutators";
+import { useMutator } from "@lunora/react";
+import { useLiveQuery } from "@tanstack/react-db";
+
+// wire once: bindMutators owns the optimistic transaction and the watermarked push
+const send = bindMutators(client, { collections, checkpoints }, mutators);
+
+// in a component:
+const { data: messages } = useLiveQuery((q) => q.from({ m: collections.messages }));
+const { mutate: sendMessage, pending } = useMutator(send.sendMessage);
+```
+
+The wiring is three small pieces. `lunoraCollectionOptions({ shape })` from `@lunora/db` syncs a shape into a collection. `bindMutators` from `@lunora/db` runs the optimistic transaction and the watermarked push to the server, and hands back bound handles. `useMutator` from `@lunora/react` wraps one of those handles in React state, `{ mutate, pending, error }`. Reads are a plain `useLiveQuery`. So the client surface is one collection helper, one binder, and one hook, on top of a query hook you were already going to write.
+
+## reactive queries that hibernate
+
+This is the most Cloudflare-native part, and it is the one that is hard to do anywhere else.
+
+A subscription is state attached to a WebSocket. Normally, keeping thousands of idle subscriptions open means keeping the process that owns them warm, which means paying for it. Durable Objects have a way out. When a DO goes idle, the runtime can hibernate it, evict it from memory, and stop billing for the compute, while keeping its WebSockets open. lunora stores each socket's subscription with `serializeAttachment` so it survives that hibernation, and idle sockets are answered by the runtime's auto-response mechanism without waking the object at all.
+
+The result: a channel full of connected-but-quiet clients costs about nothing while nothing is happening (storage is still metered, but there is no compute to pay for). The object wakes on the next write, reads one log page, pokes the diff, and goes back to sleep. Real-time subscriptions that cost roughly zero compute while idle is the version of "reactive backend" that only works when the platform gives you hibernation. Cloudflare does.
+
+## where it stops
+
+This is alpha, and the sync engine is the newest thing in the repo, so here is where it currently stops. Naming the edges is the point.
+
+- Cross-shard joins are rejected at shape registration. Two `.shardBy()` tables on different Durable Objects have no single serialized cut to diff against, so lunora will not pretend to give you one. The fix is to denormalize, or move a table to `.global()`.
+- `.global()` tables (backed by D1, or Postgres and MySQL through Hyperdrive) are poll-refreshed, not poke-live. Cross-region reads are latency-tiered on purpose.
+- Pokes are whole-row, as covered above.
+- There is no `useShape` hook. Reads are `useLiveQuery` over a collection wired with `lunoraCollectionOptions`, and the low-level client method is `subscribeShape`.
+
+None of these are permanent, and a couple will change fast. But they are true today, and you should know them before you build on it.
+
+## try it
+
+If you are building anything collaborative or offline-capable, this is the release I would most like broken on a real side project.
+
+```bash
+pnpm dlx lunorash@alpha init my-app
+```
+
+Star it if the approach is interesting, it is the honest signal that keeps an alpha moving: [github.com/anolilab/lunora](https://github.com/anolilab/lunora). The concept docs are at [lunora.sh/docs/concepts/local-first](https://lunora.sh/docs/concepts/local-first).
+
+One real question to close on, because I am steering by it: what is your current local-first or sync stack, and what actually hurts about running it? The sync-server tier is the part I think most people quietly resent. I would like to know if I am right.

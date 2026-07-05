@@ -413,14 +413,14 @@ peerDependencyRules:
 allowBuilds:
   '@parcel/watcher': true
   core-js: false
-  cpu-features: false
+  cpu-features: true
   esbuild: true
   msgpackr-extract: true
   msw: false
-  protobufjs: false
+  protobufjs: true
   rs-module-lexer: true
   sharp: true
-  ssh2: false
+  ssh2: true
   unrs-resolver: true
   vue-demi: false
   workerd: true

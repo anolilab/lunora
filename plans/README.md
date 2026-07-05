@@ -727,6 +727,14 @@ Vetted against live code and dropped — recorded so they aren't re-audited:
   advisor-through-MCP (S–M, not selected); angular adapter parity (roadmap
   choice, each primitive maps to an existing shared core).
 
+## User-requested direction plans (post-Wave 12)
+
+Plans initiated by direct user request rather than an advisor wave.
+
+| Plan | Title                                            | Category  | Pri | Effort | Risk     | Status                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ---- | ------------------------------------------------ | --------- | --- | ------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 134  | `@lunora/x402` — agentic payments (charge + pay) | direction | P2  | L      | MED–HIGH | TODO — new package plan authored at `b7d361358`. Both rails + new `@lunora/x402` package (locked). Reuses `@x402/core` + `@x402/evm` (+ `@x402/fetch`), all Apache-2.0; ports Cloudflare's `withX402`/`paidTool`/`withX402Client` (does NOT depend on the `agents` SDK). MVP = Phases 0/1/4 (scaffold → charge core + HTTP-action rail → pay core + wallet); Phase 2 needs a runtime 402 seam on `/_lunora/rpc`, Phase 3 gated on a remote MCP-over-HTTP transport, Phase 5 (spend caps) security-critical. See [134-x402-agentic-payments.md](134-x402-agentic-payments.md) |
+
 ## Notes for executors (carried from prior waves)
 
 - `dist/` is gitignored and built on demand. Build deps first:
