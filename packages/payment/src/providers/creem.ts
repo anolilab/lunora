@@ -48,7 +48,7 @@ interface CreemClientLike {
         readonly retrieve?: (request: Record<string, unknown>) => Promise<Record<string, unknown>>;
     };
     readonly subscriptions: {
-        readonly cancel: (subscriptionId: string) => Promise<Record<string, unknown>>;
+        readonly cancel: (subscriptionId: string, request?: Record<string, unknown>) => Promise<Record<string, unknown>>;
         readonly get: (subscriptionId: string) => Promise<Record<string, unknown>>;
         readonly resume: (subscriptionId: string) => Promise<Record<string, unknown>>;
         readonly upgrade: (subscriptionId: string, request: Record<string, unknown>) => Promise<Record<string, unknown>>;
@@ -167,13 +167,20 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         }
 
         case "refund.created": {
-            const amount = readNumber(object, "amount") ?? readNumber(order, "amount");
+            // Creem's refund object is flat: the amount lives in `refund_amount`/`refund_currency`
+            // (not `amount`), and it references the original payment via a nested `transaction`
+            // (fallback `subscription`), not an `order`. Read those first, keeping the legacy fields
+            // as defensive fallbacks. Each event carries this single refund's amount, so the sync
+            // layer's default "delta" interpretation is correct.
+            const amount =
+                readNumber(object, "refund_amount") ?? readNumber(object, "refundAmount") ?? readNumber(object, "amount") ?? readNumber(order, "amount");
+            const refundCurrency = readString(object, "refund_currency") ?? readString(object, "refundCurrency") ?? currency;
 
             return {
                 ...base,
-                amount: amount === undefined ? undefined : money(BigInt(Math.round(amount)), currency),
+                amount: amount === undefined ? undefined : money(BigInt(Math.round(amount)), refundCurrency),
                 referenceId: referenceFromMetadata(object),
-                sessionId: idOf(object.order) ?? idOf(object.checkout) ?? readString(object, "id"),
+                sessionId: idOf(object.transaction) ?? idOf(object.subscription) ?? idOf(object.order) ?? idOf(object.checkout) ?? readString(object, "id"),
                 type: "payment.refunded",
             };
         }
@@ -217,10 +224,11 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
         // Creem is a Merchant-of-Record: it moves the money, so there is no manual payment-intent flow.
         cancelPayment: () => notSupported("manual payment cancellation"),
 
-        cancelSubscription: async (subscriptionId) =>
-            // Creem cancels at the end of the billing period (scheduled_cancel) and reports the real
-            // resulting state — return that rather than assuming immediate cancellation.
-            subscriptionFromCreem(await client.subscriptions.cancel(subscriptionId)),
+        cancelSubscription: async (subscriptionId, cancelOptions) =>
+            // Creem supports both immediate and period-end cancellation via `mode`; omitting it defers
+            // to the store's configured default, so pass it explicitly. Default (no `atPeriodEnd`) is
+            // immediate, matching the other adapters. Creem reports the resulting state, which we return.
+            subscriptionFromCreem(await client.subscriptions.cancel(subscriptionId, { mode: cancelOptions?.atPeriodEnd === true ? "scheduled" : "immediate" })),
         capabilities: { merchantOfRecord: true, portal: true, usageMetering: false },
 
         capturePayment: (_input: CaptureInput) => notSupported("manual capture"),

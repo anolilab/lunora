@@ -386,20 +386,23 @@ export const createAutumnAdapter = (options: AutumnAdapterOptions): PaymentAdapt
         identifier: "autumn",
 
         parseWebhook: async ({ headers, payload }: WebhookInput): Promise<WebhookAction> => {
-            const webhookId = headers.get("webhook-id") ?? "";
+            // Autumn delivers through Svix, whose canonical headers are `svix-id` / `svix-timestamp` /
+            // `svix-signature`. Accept those first (falling back to the bare `webhook-*` aliases some
+            // Standard-Webhooks gateways forward) so a genuine Autumn delivery verifies instead of 400ing.
+            const webhookId = headers.get("svix-id") ?? headers.get("webhook-id") ?? "";
 
             await verifyStandardWebhook({
                 payload,
                 secret: webhookSecret,
                 toleranceSeconds: options.webhookToleranceSeconds,
                 webhookId,
-                webhookSignature: headers.get("webhook-signature") ?? "",
-                webhookTimestamp: headers.get("webhook-timestamp") ?? "",
+                webhookSignature: headers.get("svix-signature") ?? headers.get("webhook-signature") ?? "",
+                webhookTimestamp: headers.get("svix-timestamp") ?? headers.get("webhook-timestamp") ?? "",
             });
 
             const event = asRecord(JSON.parse(payload));
 
-            // Standard Webhooks carries no body id, so the `webhook-id` header is our idempotency key.
+            // Standard Webhooks carries no body id, so the delivery id header is our idempotency key.
             return mapEvent(webhookId, readString(event, "type") ?? "", asRecord(event.data));
         },
 

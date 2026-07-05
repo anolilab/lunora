@@ -328,6 +328,19 @@ describe("dodopayments adapter", () => {
         expect(action.amount?.minorUnits).toBe(1000n);
     });
 
+    it("treats a lost chargeback as a funds reversal, not an unhandled event (regression)", async () => {
+        expect.assertions(3);
+
+        const adapter = createDodoPaymentsAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const payload = JSON.stringify({ data: { amount: 2500, currency: "USD", payment_id: "pay_1" }, type: "dispute.lost" });
+        const action = await adapter.parseWebhook({ headers: headersFor("m8", timestamp, sign("m8", timestamp, payload)), payload });
+
+        expect(action.type).toBe("payment.refunded");
+        expect(action.amount?.minorUnits).toBe(2500n);
+        expect(action.sessionId).toBe("pay_1");
+    });
+
     it("rejects a bad signature", async () => {
         expect.assertions(1);
 

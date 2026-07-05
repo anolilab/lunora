@@ -152,6 +152,20 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
     const currency = readString(object, "currency") ?? "usd";
 
     switch (eventType) {
+        // A lost chargeback (`dispute.lost`) is a definitive funds reversal carrying `amount` +
+        // `payment_id` — economically a refund, so it shares the refund mapping (record it so a customer
+        // who charges back doesn't stay entitled). Provisional dispute stages move no money and stay
+        // `unhandled`; a won dispute needs no transition.
+        case "dispute.lost":
+        case "refund.succeeded": {
+            return {
+                ...base,
+                amount: money(BigInt(Math.round(readNumber(object, "amount") ?? 0)), currency),
+                referenceId: referenceFromMetadata(object),
+                sessionId: readString(object, "payment_id"),
+                type: "payment.refunded",
+            };
+        }
         // A cancelled payment never settled — record it as a non-entitling failure (there is no
         // dedicated `payment.canceled` action; `failed` is the closest terminal, non-entitling state).
         case "payment.cancelled":
@@ -167,16 +181,6 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 sessionId: readString(object, "payment_id"),
                 subscriptionId: readString(object, "subscription_id"),
                 type: "payment.captured",
-            };
-        }
-
-        case "refund.succeeded": {
-            return {
-                ...base,
-                amount: money(BigInt(Math.round(readNumber(object, "amount") ?? 0)), currency),
-                referenceId: referenceFromMetadata(object),
-                sessionId: readString(object, "payment_id"),
-                type: "payment.refunded",
             };
         }
 
@@ -206,7 +210,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         }
 
         default: {
-            // payment.processing, refund.failed, dispute.*, license_key.* — no state transition here.
+            // payment.processing, refund.failed, other dispute.*, license_key.* — no state transition here.
             return { ...base, type: "unhandled" };
         }
     }

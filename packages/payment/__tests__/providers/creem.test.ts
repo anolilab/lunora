@@ -44,8 +44,8 @@ const makeClient = (calls: RecordedCall[] = []): CreemClientLike => {
             },
         },
         subscriptions: {
-            cancel: async (id) => {
-                calls.push({ args: [id], name: "cancel" });
+            cancel: async (id, request) => {
+                calls.push({ args: [id, request], name: "cancel" });
 
                 return { canceled_at: "2026-07-05T00:00:00Z", id, product: "prod_pro", status: "scheduled_cancel" };
             },
@@ -116,16 +116,31 @@ describe("creem adapter", () => {
         expect(calls.find((call) => call.name === "billing")?.args[0]).toEqual({ customerId: "cust_1" });
     });
 
-    it("cancels at period end and reflects the scheduled-cancel state", async () => {
-        expect.assertions(2);
+    it("cancels at period end via mode=scheduled and reflects the scheduled-cancel state", async () => {
+        expect.assertions(3);
 
-        const adapter = createCreemAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const calls: RecordedCall[] = [];
+        const adapter = createCreemAdapter({ client: makeClient(calls), webhookSecret: SECRET });
 
-        const subscription = await adapter.cancelSubscription("sub_1");
+        const subscription = await adapter.cancelSubscription("sub_1", { atPeriodEnd: true });
 
+        // atPeriodEnd must be threaded through as Creem's `mode`, not dropped.
+        expect((calls.find((call) => call.name === "cancel")?.args[1] as Record<string, unknown>).mode).toBe("scheduled");
         // scheduled_cancel is still entitling (active until period end) but flagged cancelAtPeriodEnd.
         expect(subscription.state).toBe("active");
         expect(subscription.cancelAtPeriodEnd).toBe(true);
+    });
+
+    it("cancels immediately via mode=immediate by default (regression)", async () => {
+        expect.assertions(1);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createCreemAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+
+        await adapter.cancelSubscription("sub_1");
+
+        // No atPeriodEnd → immediate, matching the other adapters (not left to the store default).
+        expect((calls.find((call) => call.name === "cancel")?.args[1] as Record<string, unknown>).mode).toBe("immediate");
     });
 
     it("upgrades the plan on update, then reflects the new product", async () => {
@@ -196,6 +211,31 @@ describe("creem adapter", () => {
         const canceled = await adapter.parseWebhook({ headers: headersFor(sign(canceledBody)), payload: canceledBody });
 
         expect(canceled.type).toBe("subscription.canceled");
+    });
+
+    it("normalizes a refund.created webhook from Creem's flat refund fields (regression)", async () => {
+        expect.assertions(4);
+
+        const adapter = createCreemAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const payload = JSON.stringify({
+            eventType: "refund.created",
+            id: "evt_refund",
+            object: {
+                id: "rf_1",
+                metadata: { referenceId: "user_1" },
+                refund_amount: 1500,
+                refund_currency: "EUR",
+                transaction: { id: "tx_1" },
+            },
+        });
+        const action = await adapter.parseWebhook({ headers: headersFor(sign(payload)), payload });
+
+        // The amount/currency come from `refund_amount`/`refund_currency`, and the session keys back to
+        // the original `transaction.id` — not the refund's own id (which the old field reads produced).
+        expect(action.type).toBe("payment.refunded");
+        expect(action.amount?.minorUnits).toBe(1500n);
+        expect(action.amount?.currency).toBe("EUR");
+        expect(action.sessionId).toBe("tx_1");
     });
 
     it("rounds a fractional webhook amount instead of throwing on the BigInt conversion (regression)", async () => {
