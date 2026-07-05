@@ -5,6 +5,14 @@
  * `RagConfig.chunk`.
  */
 const fixedWindowChunks = (text: string, size: number, overlap: number): ReadonlyArray<string> => {
+    if (!Number.isInteger(size) || size < 1) {
+        throw new RangeError("fixedWindowChunks: `size` must be a positive integer");
+    }
+
+    if (!Number.isInteger(overlap) || overlap < 0 || overlap >= size) {
+        throw new RangeError("fixedWindowChunks: `overlap` must be a non-negative integer smaller than `size`");
+    }
+
     const trimmed = text.trim();
 
     if (trimmed.length === 0) {
