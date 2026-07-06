@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { spawn as nodeSpawn } from "node:child_process";
 
+import { runCodegen } from "@lunora/codegen";
 import type { ContainerLogStreamHandle } from "@lunora/config";
 import {
     AGENT_RULES_HINT,
@@ -52,6 +53,17 @@ import { createTuiConfirm } from "../../util/tui-prompts";
 import type { DevOptions } from "./index";
 import type { DevFlavor } from "./lifecycle";
 import { detectDevFlavor, reportExistingServer, runLifecycleSubcommand, startBackground, viteDevCommand } from "./lifecycle";
+
+/**
+ * The dev-only wrangler config the `framework-worker` sidecar runs (`wrangler dev
+ * -c wrangler.dev.jsonc`). Committed in the SvelteKit / Nuxt templates: its
+ * `main` is the Lunora-only `lunora/server.ts` worker (`.build()`, exporting
+ * `ShardDO`), and its `dev.port` pins the sidecar port the framework front end
+ * proxies to (SvelteKit) or the client points at (Nuxt). Kept separate from the
+ * deploy `wrangler.jsonc` (whose `main` is the framework adapter's built output,
+ * which doesn't exist in dev).
+ */
+const DEV_WRANGLER_CONFIG = "wrangler.dev.jsonc";
 
 /** Default port the embedded studio server listens on (the URL you open). */
 const DEFAULT_STUDIO_PORT = 6173;
@@ -149,11 +161,21 @@ interface DevCommandPlan {
     ipv4LoopbackForced: boolean;
     /** The remote-binding decision: which D1/KV/R2 bindings hit the deployed worker. */
     remote: DevRemotePlan;
+
+    /**
+     * The `wrangler dev` sidecar for the `framework-worker` flavor (SvelteKit /
+     * Nuxt): a second child that owns the real `ShardDO` in `workerd`, wired via
+     * the committed `wrangler.dev.jsonc`. `undefined` for every other flavor —
+     * only the two-process class-B stack has a sidecar. When present, `wrangler`
+     * (above) is the framework's own dev server (the front door / HMR) and this
+     * is the Lunora realtime plane.
+     */
+    sidecar?: SpawnDescriptor & { tag: string };
     studioEnabled: boolean;
     studioPort: number;
     workerOrigin: string;
     workerPort: number;
-    /** The single child process `lunora dev` spawns: `wrangler dev` (or `vite dev` for the vite flavor). */
+    /** The primary child `lunora dev` spawns: `wrangler dev` (wrangler flavor) or the framework/`vite dev` server (vite / framework-worker). */
     wrangler: SpawnDescriptor & { tag: string };
 }
 
@@ -252,11 +274,11 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
     const manager = detectPackageManager(cwd);
     const flavor = options.flavor ?? detectDevFlavor(cwd);
 
-    if (flavor === "vite") {
+    if (flavor === "vite" || flavor === "framework-worker") {
         // `@lunora/vite` already runs the worker + studio + codegen (and remote
         // bindings, dev vars, container logs) inside the Vite dev server — the
         // CLI's own siblings would duplicate them, so they're all disabled and
-        // the one child is the project's own dev server. Remote mode is
+        // the primary child is the project's own dev server. Remote mode is
         // forwarded as env (`LUNORA_REMOTE=1`) for the plugin's remote-bindings
         // handling; no temp wrangler config is materialized here. The Vite
         // plugin writes the authoritative `.lunora/dev.json` (real resolved URL
@@ -264,11 +286,29 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
         // pre-listen default.
         const exec = viteDevCommand(cwd);
 
+        // The `framework-worker` flavor (SvelteKit / Nuxt) adds a `wrangler dev`
+        // sidecar that owns the real `ShardDO`, run from the committed
+        // `wrangler.dev.jsonc` (its `dev.port` pins the port). On a host without
+        // IPv6 loopback, prepend `--ip 127.0.0.1` so workerd doesn't abort
+        // binding its default `[::1]`. `--var WORKER_ENV:development` streams the
+        // sidecar's RPC dispatch summaries to the terminal (mirrors the wrangler
+        // flavor). One-shot codegen runs in `runDevCommand` before the sidecar
+        // spawns, so `lunora/server.ts`'s `_generated` imports resolve.
+        let sidecar: (SpawnDescriptor & { tag: string }) | undefined;
+
+        if (flavor === "framework-worker") {
+            const loopbackArgs = resolveLoopbackArgs(cwd, options.hasIpv6Loopback ?? hasIpv6Loopback);
+            const sidecarExec = execArgsFor(manager, "wrangler", ["dev", "--config", DEV_WRANGLER_CONFIG, ...loopbackArgs, "--var", "WORKER_ENV:development"]);
+
+            sidecar = { args: sidecarExec.args, command: sidecarExec.command, cwd, tag: "worker" };
+        }
+
         return {
             codegenEnabled: false,
             flavor,
             ipv4LoopbackForced: false,
             remote: { bindings: [], cleanup: () => {}, enabled: options.remote === true },
+            ...(sidecar ? { sidecar } : {}),
             studioEnabled: false,
             studioPort: options.port ?? DEFAULT_STUDIO_PORT,
             workerOrigin: `http://localhost:${String(DEFAULT_VITE_PORT)}`,
@@ -707,10 +747,12 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
             return { code: 0, plan };
         }
 
-        if (plan.flavor === "vite") {
+        if (plan.flavor === "vite" || plan.flavor === "framework-worker") {
             // Hand the provisional record down so the dev-state plugin inside
-            // the Vite child may supersede it (and only it) with the
-            // authoritative resolved URL + Vite's own PID.
+            // the framework's Vite child may supersede it (and only it) with the
+            // authoritative resolved URL + Vite's own PID. For framework-worker
+            // the front door is the framework dev server (`plan.wrangler`), not
+            // the sidecar, so the handoff rides on it.
             plan.wrangler.env = { ...plan.wrangler.env, [DEV_HANDOFF_ENV]: String(process.pid) };
         }
 
@@ -756,7 +798,25 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
             logger.warn(plan.frameworkHint);
         }
 
-        const worker = (options.startWorker ?? defaultWorkerSpawner)(plan.wrangler, logger);
+        // Two-process framework-worker flavor (SvelteKit / Nuxt): the sidecar's
+        // `wrangler dev` bundles `lunora/server.ts`, which imports `_generated/*`.
+        // The framework's own `@lunora/vite` plugin owns the ongoing codegen
+        // watch, but there's a startup race — run codegen once up front so the
+        // sidecar bundle resolves. Best-effort: a failure is surfaced but not
+        // fatal (the framework plugin regenerates on its next tick).
+        if (plan.sidecar !== undefined) {
+            try {
+                runCodegen({ apiSpec: options.apiSpec, lunoraDirectory: "lunora", projectRoot: cwd });
+            } catch (error: unknown) {
+                logger.warn(`codegen (pre-sidecar) failed: ${error instanceof Error ? error.message : String(error)} — the framework dev server will retry`);
+            }
+        }
+
+        const spawn = options.startWorker ?? defaultWorkerSpawner;
+        const worker = spawn(plan.wrangler, logger);
+        // The Lunora realtime sidecar (`wrangler dev`, owns ShardDO) for the
+        // framework-worker flavor — `undefined` for every single-process flavor.
+        const sidecar = plan.sidecar === undefined ? undefined : spawn(plan.sidecar, logger);
 
         handles.containerLogs = afterWorkerSpawn(plan, cwd, logger, studioUrl);
         printAgentRulesHint(logger, cwd);
@@ -764,28 +824,66 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         let sigintCount = 0;
         let escalationTimer: NodeJS.Timeout | undefined;
 
+        // Both children are signalled together so Ctrl-C tears down the whole
+        // stack (framework dev server + sidecar) — never orphans one holding a port.
+        const killChildren = (signal: NodeJS.Signals): void => {
+            worker.kill(signal);
+            sidecar?.kill(signal);
+        };
+
         const onSigint = (): void => {
             sigintCount += 1;
 
             if (sigintCount === 1) {
                 logger.info("received SIGINT — shutting down (press Ctrl-C again to force-kill)");
-                worker.kill("SIGTERM");
+                killChildren("SIGTERM");
                 escalationTimer = setTimeout(() => {
-                    worker.kill("SIGKILL");
+                    killChildren("SIGKILL");
                 }, SIGINT_GRACE_MS);
                 escalationTimer.unref();
             } else {
-                worker.kill("SIGKILL");
+                killChildren("SIGKILL");
             }
         };
         const onSigterm = (): void => {
-            worker.kill("SIGTERM");
+            killChildren("SIGTERM");
         };
 
         process.on("SIGINT", onSigint);
         process.on("SIGTERM", onSigterm);
 
-        const code = await worker.exited;
+        // Exit when EITHER child exits: a stopped framework dev server and a
+        // crashed sidecar both mean "dev is over". Then tear the other down and
+        // await it so neither is orphaned. With no sidecar the race has one entry
+        // and this collapses to the original single-child behaviour.
+        const exits: Promise<{ code: number; who: "sidecar" | "worker" }>[] = [
+            worker.exited.then((code) => {
+                return { code, who: "worker" as const };
+            }),
+        ];
+
+        if (sidecar !== undefined) {
+            exits.push(
+                sidecar.exited.then((code) => {
+                    return { code, who: "sidecar" as const };
+                }),
+            );
+        }
+
+        const first = await Promise.race(exits);
+
+        if (sidecar !== undefined) {
+            if (first.who === "sidecar") {
+                logger.warn("[worker] the Lunora sidecar (wrangler dev) exited — shutting down the framework dev server");
+                worker.kill("SIGTERM");
+            } else {
+                sidecar.kill("SIGTERM");
+            }
+
+            await Promise.allSettled([worker.exited, sidecar.exited]);
+        }
+
+        const { code } = first;
 
         if (escalationTimer) {
             clearTimeout(escalationTimer);

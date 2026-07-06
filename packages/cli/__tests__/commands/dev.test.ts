@@ -263,6 +263,42 @@ describe("lunora dev", () => {
             expect(plan.remote.enabled).toBe(true);
         });
 
+        it.each([
+            ["sveltekit", { "@sveltejs/kit": "^2.0.0" }],
+            ["nuxt", { nuxt: "^4.0.0" }],
+        ])("plans the two-process framework-worker stack for %s (front-door dev + wrangler sidecar)", (_name, dependencies) => {
+            expect.assertions(7);
+
+            // Class-B frameworks whose dev server can't host ShardDO. They also
+            // declare `@lunora/vite` (their dev server uses it for codegen), but
+            // the framework check wins so the flavor is `framework-worker`.
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({
+                    dependencies,
+                    devDependencies: { "@lunora/vite": "workspace:*" },
+                    name: "app",
+                    packageManager: "pnpm@11.0.0",
+                    scripts: { dev: "vite" },
+                }),
+                "utf8",
+            );
+
+            expect(detectDevFlavor(workdir)).toBe("framework-worker");
+
+            const plan = planDevCommand({ cwd: workdir, hasIpv6Loopback: () => true, logger: silentLogger() });
+
+            expect(plan.flavor).toBe("framework-worker");
+            // Primary child = the framework's own dev server (front door + HMR).
+            expect(plan.wrangler.tag).toBe("vite");
+            // Sidecar = `wrangler dev` on the dev-only config, owning ShardDO.
+            expect(plan.sidecar?.tag).toBe("worker");
+            expect(plan.sidecar?.args.join(" ")).toContain("dev --config wrangler.dev.jsonc");
+            // Codegen/studio are owned by the framework's own @lunora/vite plugin.
+            expect(plan.codegenEnabled).toBe(false);
+            expect(plan.studioEnabled).toBe(false);
+        });
+
         it("threads the materializer's cleanup disposer onto the remote plan", () => {
             expect.assertions(1);
 
@@ -370,7 +406,12 @@ describe("lunora dev", () => {
         it("logs the framework redirect hint but still spawns the worker", async () => {
             expect.assertions(3);
 
-            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { nuxt: "^3.0.0" } }), "utf8");
+            // A class-A framework WITHOUT `@lunora/vite` still takes the wrangler
+            // flavor (the worker runs inside the framework's own Vite dev server,
+            // so `lunora dev` gives just the worker + a redirect hint). SvelteKit /
+            // Nuxt are class-B and take the two-process `framework-worker` flavor
+            // instead — covered separately below.
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: { "@tanstack/react-start": "^1.0.0" } }), "utf8");
 
             const warnings: string[] = [];
             let workerSpawned = false;
@@ -394,7 +435,58 @@ describe("lunora dev", () => {
 
             expect(result.code).toBe(0);
             expect(workerSpawned).toBe(true);
-            expect(warnings.some((line) => line.includes("nuxt") && line.includes("lunora dev"))).toBe(true);
+            expect(warnings.some((line) => line.includes("tanstack-start") && line.includes("lunora dev"))).toBe(true);
+        });
+
+        it("framework-worker: spawns the framework dev server + wrangler sidecar and tears the sidecar down on exit", async () => {
+            expect.assertions(4);
+
+            // SvelteKit (class-B): two-process dev — the framework's own dev
+            // server (front door) + a `wrangler dev` sidecar owning ShardDO.
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({
+                    dependencies: { "@sveltejs/kit": "^2.0.0" },
+                    devDependencies: { "@lunora/vite": "workspace:*" },
+                    name: "app",
+                    packageManager: "pnpm@11.0.0",
+                    scripts: { dev: "vite" },
+                }),
+                "utf8",
+            );
+
+            const spawned: string[] = [];
+            let sidecarKilled = false;
+            let resolveSidecar: (code: number) => void = () => {};
+            const sidecarExited = new Promise<number>((resolve) => {
+                resolveSidecar = resolve;
+            });
+
+            const startWorker: NonNullable<DevCommandOptions["startWorker"]> = (descriptor) => {
+                spawned.push(descriptor.tag);
+
+                // The sidecar runs until killed; killing it resolves its exit so
+                // the orchestrator's `allSettled` teardown can complete.
+                if (descriptor.tag === "worker") {
+                    return {
+                        exited: sidecarExited,
+                        kill: () => {
+                            sidecarKilled = true;
+                            resolveSidecar(0);
+                        },
+                    };
+                }
+
+                // The framework dev server (primary) exits cleanly straight away.
+                return { exited: Promise.resolve(0), kill: () => {} };
+            };
+
+            const result = await runDevCommand({ cwd: workdir, logger: silentLogger(), startWorker });
+
+            expect(result.code).toBe(0);
+            expect(spawned).toContain("vite"); // framework dev server (front door)
+            expect(spawned).toContain("worker"); // wrangler sidecar (ShardDO)
+            expect(sidecarKilled).toBe(true); // primary exit tore the sidecar down
         });
 
         it("fills empty .dev.vars secrets + the admin token before the worker boots", async () => {

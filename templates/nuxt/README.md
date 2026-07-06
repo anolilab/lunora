@@ -53,17 +53,27 @@ deploy, a same-origin client.
 
 ## Develop
 
-Start the dev server with your package manager (`npm`, `pnpm`, `yarn`, or `bun`):
+Install dependencies, then start the dev server with the Lunora CLI:
 
 ```bash
-<pm> run dev
+<pm> install
+<pm> exec lunora dev
 ```
 
-`nuxt dev` serves the app and the `/_lunora/**` route together. Live queries
-need the Cloudflare bindings (the `SHARD` Durable Object) in dev — Nuxt surfaces
-them through Nitro's Cloudflare dev runtime; if a live query reports
-`LUNORA_RUNTIME_UNAVAILABLE`, enable the Cloudflare Nitro dev runtime (e.g.
-`nitro-cloudflare-dev`) so `event.context.cloudflare` is populated.
+`lunora dev` runs **two processes** for you: `nuxt dev` (the app + HMR at
+`http://localhost:3000`) and a `wrangler dev` sidecar (`wrangler.dev.jsonc`,
+`:8788`) running in `workerd` that owns the real `ShardDO` Durable Object. In
+dev the browser `LunoraClient` talks to the sidecar directly (see
+`plugins/lunora.client.ts`); the sidecar's `LUNORA_ALLOWED_ORIGINS` allows that
+cross-origin call. Open `http://localhost:3000`. `Ctrl-C` stops both.
+
+> Why the sidecar: `nuxt dev` runs Nitro's SSR in Node, and Cloudflare bindings
+> in dev come from wrangler's `getPlatformProxy`, which cannot emulate an
+> internal Durable Object — and WebSocket realtime needs `workerd`'s
+> `WebSocketPair`, absent under Node. So the `/_lunora/**` route mounted in Nitro
+> is a prod-only path; in dev the client hits the real `workerd` sidecar instead.
+> (If you add auth, add `http://localhost:3000` to the app's
+> `security.csrf.trustedOrigins` so the cookie-bearing WebSocket handshake passes.)
 
 ## Build and deploy
 

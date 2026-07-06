@@ -9,13 +9,26 @@ server (read-your-writes SSR), the HTML ships with it, and on the client the
 
 ## Develop
 
-Install dependencies and start the dev server with your package manager
-(`npm`, `pnpm`, `yarn`, or `bun`):
+Install dependencies, then start the dev server with the Lunora CLI:
 
 ```bash
 <pm> install
-<pm> run dev
+<pm> exec lunora dev
 ```
+
+`lunora dev` runs **two processes** for you: SvelteKit's own Vite dev server
+(the front door at `http://localhost:5173`, with HMR) and a `wrangler dev`
+sidecar (`wrangler.dev.jsonc`, `:8787`) running in `workerd` that owns the real
+`ShardDO` Durable Object. Vite proxies `/_lunora/*` (RPC + the WebSocket) to the
+sidecar — see `vite.config.ts` — so the browser client stays same-origin and
+realtime works with live DOs in dev, not just after deploy. Open
+`http://localhost:5173`. `Ctrl-C` tears both processes down.
+
+> Why two processes: SvelteKit's dev server runs SSR in Node, and
+> `@sveltejs/adapter-cloudflare` gets its bindings from wrangler's
+> `getPlatformProxy`, which cannot emulate an internal Durable Object. The
+> sidecar is a real `workerd` so `ShardDO` behaves exactly as it does deployed.
+> Running `<pm> run dev` (bare `vite`) works for UI/HMR but has no live `ShardDO`.
 
 ## What's wired
 

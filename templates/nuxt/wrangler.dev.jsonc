@@ -1,0 +1,29 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    // DEV-ONLY sidecar config (not used by `lunora deploy`).
+    //
+    // Nuxt is a class-B framework: `nuxt dev` runs Nitro's SSR in Node, and its
+    // Cloudflare bindings come from wrangler's `getPlatformProxy`, which can't
+    // emulate the `ShardDO` Durable Object (empty-script Miniflare) — and WebSocket
+    // realtime needs `workerd`'s `WebSocketPair`, absent under Node. So `lunora dev`
+    // runs a `wrangler dev --config wrangler.dev.jsonc` sidecar (:8788) in `workerd`
+    // that owns the real `ShardDO`, alongside `nuxt dev` (:3000, SSR + HMR).
+    //
+    // In dev the browser `LunoraClient` talks to this sidecar directly (cross-origin
+    // :3000 → :8788), so `LUNORA_ALLOWED_ORIGINS` enables CORS for the Nuxt dev
+    // origin. The WebSocket handshake is exempt from the origin guard while the app
+    // is unauthenticated (no cookie); once you add auth, add the dev origin to the
+    // app's `security.csrf.trustedOrigins` too. `main` reuses the same Lunora-only
+    // `lunora/server.ts` (`.build()`) that Nitro mounts in prod.
+    "name": "{{name}}-lunora-dev",
+    "main": "lunora/server.ts",
+    "compatibility_date": "2026-06-10",
+    "compatibility_flags": ["nodejs_compat"],
+    "dev": { "port": 8788 },
+    "vars": { "LUNORA_ALLOWED_ORIGINS": "http://localhost:3000" },
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
+}
