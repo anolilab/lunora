@@ -1,5 +1,4 @@
-import type { StripeClientLike } from "@lunora/payment";
-import { createStripeAdapter } from "@lunora/payment";
+import { createStripeAdapter } from "@lunora/payment/stripe";
 import type { ExecutionContextLike, ShardNamespaceLike } from "lunorash/runtime";
 import { createWorker } from "lunorash/runtime";
 import Stripe from "stripe";
@@ -26,9 +25,10 @@ export const ShardDO = createShardDO({
 
         return {
             adapter: createStripeAdapter({
-                // A real `Stripe` instance satisfies the structural client; the cast
-                // keeps the package free of a hard `stripe` dependency.
-                client: new Stripe(environment.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() }) as unknown as StripeClientLike,
+                // `stripe` is an optional peer dependency; the adapter types the client as the real
+                // `Stripe` instance, so it is passed straight through (the fetch HTTP client is required
+                // on workerd).
+                client: new Stripe(environment.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() }),
                 webhookSecret: environment.STRIPE_WEBHOOK_SECRET,
             }),
             authorize: () => true,

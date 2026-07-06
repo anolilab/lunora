@@ -50,8 +50,24 @@ const GENERATED = {
 // Umbrella `lunorash/<sub>` re-exports the base packages.
 const UMBRELLA = new Set(["client", "do", "runtime", "server", "values"]);
 
-// Subpath → source entry file (relative to a package's src/).
-const SUBPATH_ENTRY = { "": "index", plugins: "plugins", server: "server", worker: "worker", testing: "testing", do: "do", bridge: "bridge", client: "client" };
+// Subpath → source entry file (relative to a package's src/). The `@lunora/payment` provider
+// adapters ship as per-provider subpaths (`@lunora/payment/stripe`, …) mapping to `src/providers/*`.
+const SUBPATH_ENTRY = {
+    "": "index",
+    autumn: "providers/autumn",
+    "autumn-features": "providers/autumn-features",
+    bridge: "bridge",
+    client: "client",
+    creem: "providers/creem",
+    do: "do",
+    dodopayments: "providers/dodopayments",
+    plugins: "plugins",
+    polar: "providers/polar",
+    server: "server",
+    stripe: "providers/stripe",
+    testing: "testing",
+    worker: "worker",
+};
 
 /**
  * Collect exported names from a TS source file. Returns null if it can't be

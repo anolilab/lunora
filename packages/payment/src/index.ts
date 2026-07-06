@@ -26,10 +26,9 @@ export {
     zeroMoney,
 } from "./money";
 export type { PaymentEvent, PaymentObserver } from "./observability";
-export type { PolarAdapterOptions, PolarClientLike } from "./providers/polar";
-export { createPolarAdapter } from "./providers/polar";
-export type { StripeAdapterOptions, StripeClientLike } from "./providers/stripe";
-export { createStripeAdapter } from "./providers/stripe";
+// Provider adapters ship as per-provider subpaths (`@lunora/payment/stripe`, `/polar`, `/autumn`,
+// `/dodopayments`, `/creem`) so each provider's SDK stays an isolated optional peer dependency —
+// importing one adapter never loads the others (or their SDKs). They are NOT re-exported here.
 export type { ReconcileInput, ReconcileResult } from "./reconcile";
 export { reconcile } from "./reconcile";
 export { default as paymentTables } from "./schema";
@@ -76,4 +75,4 @@ export type {
     WebhookAction,
     WebhookActionType,
 } from "./types";
-export { constantTimeEqual, hmacSha256Hex, parseStripeSignatureHeader, verifyStandardWebhook, verifyStripeSignature } from "./webhook";
+export { constantTimeEqual, hmacSha256Hex, verifyCreemSignature, verifyStandardWebhook } from "./webhook";

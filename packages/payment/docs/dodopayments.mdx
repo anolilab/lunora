@@ -1,0 +1,516 @@
+---
+title: "@lunora/payment — Dodo Payments"
+description: Merchant-of-Record payments on Lunora with Dodo Payments — checkout, subscriptions, first-class refunds, usage metering, and Standard-Webhooks sync.
+---
+
+[Dodo Payments](https://dodopayments.com) is a **Merchant-of-Record (MoR)** for
+software, SaaS, and digital products. Unlike a raw payment processor, Dodo is the
+**legal seller** of your product: it runs hosted checkout, calculates, collects,
+and remits sales tax / VAT / GST across 190+ jurisdictions, issues compliant
+invoices, and owns chargebacks and disputes. Your app never touches card data or
+a tax engine — you sell to Dodo's checkout, Dodo sells to the customer.
+
+The `@lunora/payment` Dodo adapter (`createDodoPaymentsAdapter`) normalizes Dodo
+onto the same provider-agnostic `ctx.payments` surface as every other provider:
+hosted checkout, subscriptions, **first-class refunds**, usage metering, a native
+customer portal, and webhook sync through the shared payment/subscription state
+machine. As with every adapter, the package **never imports the `dodopayments`
+SDK** — you inject a client, so `dodopayments` stays an optional peer dependency.
+
+The adapter advertises these capabilities:
+
+| Capability         | Value  | What it means                                                                           |
+| ------------------ | :----: | --------------------------------------------------------------------------------------- |
+| `merchantOfRecord` | `true` | Dodo owns tax/VAT/GST, invoices, and disputes. Manual authorize/capture is not a thing. |
+| `portal`           | `true` | Native hosted customer portal (`customers.customerPortal.create`).                      |
+| `usageMetering`    | `true` | Usage-based billing via Dodo's event ingestion (`usageEvents.ingest`).                  |
+
+## Dodo Payments vs. Stripe — when to choose it
+
+<Callout type="info">
+    Choose **Dodo Payments** (or another MoR — Polar, Creem) when you want tax/VAT/GST handled for you and don't want to register for sales tax in every
+    jurisdiction you sell into. Choose **Stripe** (a PSP) when you need direct control over the money movement, manual authorize/capture, or you already run
+    your own tax and invoicing. Because the provider is a stateless translator and the store owns all state, switching later is a configuration change, not a
+    rewrite.
+</Callout>
+
+Practical consequences of the MoR model in this adapter:
+
+- **No manual capture / authorize.** Dodo captures at checkout. `capturePayment`
+  and `cancelPayment` throw `PROVIDER_ERROR` — they are not part of an MoR flow.
+- **Refunds are first-class.** Unlike some MoRs (Creem's `refundPayment` throws),
+  Dodo exposes `refunds.create`, so the adapter's `refundPayment` really issues a
+  refund. It flows back in through the `refund.succeeded` webhook — see
+  [Refunds](#refunds).
+- **Product-based, not price-based.** Dodo checkout takes **product ids**; the
+  cross-provider `priceId` field carries a Dodo `product_id`.
+
+## Prerequisites
+
+<Steps>
+<Step>
+
+**A Dodo Payments account.** Sign up at [dodopayments.com](https://dodopayments.com)
+and create at least one product. Dodo ships a
+[**test mode**](https://docs.dodopayments.com/miscellaneous/testing-process) —
+develop against it first, then flip to live mode.
+
+</Step>
+<Step>
+
+**An API key (bearer token).** In the Dodo dashboard open
+**Developer → API Keys** ([app.dodopayments.com/developer/api-keys](https://app.dodopayments.com/developer/api-keys))
+and create a key. This is the `DODO_PAYMENTS_API_KEY` the SDK authenticates with.
+See [Introduction](https://docs.dodopayments.com/api-reference/introduction).
+
+</Step>
+<Step>
+
+**A webhook signing secret.** You get this when you create a webhook endpoint
+under **Developer → Webhooks** ([app.dodopayments.com/developer/webhooks](https://app.dodopayments.com/developer/webhooks)) —
+see [Webhooks](#webhooks) below. It becomes `DODO_PAYMENTS_WEBHOOK_KEY`.
+
+</Step>
+</Steps>
+
+Both secrets are scaffolded into your `.dev.vars` when `@lunora/payment`
+is detected:
+
+```bash title=".dev.vars"
+DODO_PAYMENTS_API_KEY=<your-dodo-payments-api-key>
+DODO_PAYMENTS_WEBHOOK_KEY=<your-dodo-payments-webhook-secret>
+```
+
+## Install
+
+Add the package and the Dodo SDK (an optional peer — the adapter takes the
+client by injection):
+
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```bash tab="pnpm"
+pnpm add @lunora/payment dodopayments
+```
+
+```bash tab="npm"
+npm install @lunora/payment dodopayments
+```
+
+```bash tab="yarn"
+yarn add @lunora/payment dodopayments
+```
+
+```bash tab="bun"
+bun add @lunora/payment dodopayments
+```
+
+</Tabs>
+
+## Configure
+
+`ctx.payments` is wired by codegen onto `ActionCtx` whenever a `lunora/` source
+imports `@lunora/payment` or reads `ctx.payments`. The adapter — which carries
+your Dodo secrets — comes from a `payment(env)` thunk you pass to
+`createShardDO()`.
+
+<Steps>
+<Step>
+
+**Construct and inject the Dodo SDK client.** A real `DodoPayments` instance
+satisfies the structural `DodoPaymentsClientLike`; the cast keeps this package
+free of a hard `dodopayments` dependency. Pass `environment: "test_mode"` while
+developing.
+
+```ts title="lunora/server.ts"
+import type { DodoPaymentsClientLike } from "@lunora/payment/dodopayments";
+import { createDodoPaymentsAdapter } from "@lunora/payment/dodopayments";
+import DodoPayments from "dodopayments";
+import { createShardDO } from "./_generated/shard";
+
+export const ShardDO = createShardDO({
+    payment: (env) => ({
+        adapter: createDodoPaymentsAdapter({
+            client: new DodoPayments({
+                bearerToken: env.DODO_PAYMENTS_API_KEY,
+                // Drop `environment` (or set "live_mode") for production.
+                environment: "test_mode",
+            }) as unknown as DodoPaymentsClientLike,
+            webhookSecret: env.DODO_PAYMENTS_WEBHOOK_KEY,
+            // Optional clock-skew tolerance for the signed webhook timestamp (seconds; default 300).
+            webhookToleranceSeconds: 300,
+        }),
+        // Plan → features/limits map. Required only if you gate features with `check` / `listBalances`.
+        entitlements: {
+            plans: {
+                pro: { features: ["export"], limits: { api_calls: 1000 }, priceIds: ["<dodo-product-id>"] },
+            },
+        },
+        observability: (event) => console.log("[payment]", event.type, event),
+    }),
+});
+```
+
+</Step>
+<Step>
+
+**Mirror the payment tables into your `lunora/schema.ts`.** Codegen resolves
+tables from your schema AST, so declare the columns inline mirroring
+`@lunora/payment`'s exported `paymentTables` (see
+[Data it stores](/docs/packages/payment#data-it-stores)). The store — built per
+request from `ctx.db` — owns all synced state; Dodo stays a stateless
+translator.
+
+</Step>
+</Steps>
+
+`createDodoPaymentsAdapter` accepts:
+
+<TypeTable
+    type={{
+        client: {
+            type: "DodoPaymentsClientLike",
+            description: "An injected `dodopayments` DodoPayments instance (structural). The package never imports the SDK itself.",
+        },
+        webhookSecret: {
+            type: "string",
+            description: "The Standard-Webhooks signing secret from your Dodo webhook settings; verifies inbound events (DODO_PAYMENTS_WEBHOOK_KEY).",
+        },
+        webhookToleranceSeconds: {
+            type: "number",
+            default: "300",
+            description: "Whole-second tolerance for the signed webhook timestamp — rejects replays outside the window.",
+        },
+    }}
+/>
+
+## Checkout & subscribe
+
+Call the facade from an **action**. Every method authorizes the caller against
+the `referenceId` first (the default rule ties `referenceId` to
+`ctx.auth.userId`), so a caller can only act on its own subscriptions. `attach`
+is the plan-oriented alias of `createCheckout` with `mode` defaulting to
+`"subscription"`.
+
+```ts title="lunora/checkout.ts"
+import { action, v } from "./_generated/server";
+
+// `priceId` is a Dodo PRODUCT id — Dodo is product-based.
+export const subscribe = action.input({ productId: v.string() }).action(async ({ ctx, args: { productId } }): Promise<{ url: string }> => {
+    const { url } = await ctx.payments.attach({
+        referenceId: ctx.auth.userId,
+        priceId: productId,
+        successUrl: "https://app.test/done",
+        cancelUrl: "https://app.test/cancel",
+    });
+
+    return { url };
+});
+```
+
+Under the hood the adapter calls Dodo's
+[`checkoutSessions.create`](https://docs.dodopayments.com/api-reference/checkout-sessions/create)
+with `product_cart: [{ product_id, quantity }]` and returns the session's
+`checkout_url` (as `url`) and `session_id` (as `id`). It reuses the reference's
+stored Dodo customer — attaching it by `customer.customer_id` when known — and
+pins the framework-controlled `referenceId` into checkout **metadata** last, so
+caller-supplied metadata can never override the attributed owner. Redirect the
+browser to the returned `url`; Dodo hosts the checkout.
+
+<Callout type="info">
+    Dodo checkout sessions accept a **single** `return_url`, which the adapter maps from `successUrl`. The `cancelUrl` field is accepted for cross-provider
+    interface parity but Dodo does not use a separate cancel URL — a customer who abandons checkout returns via the same flow (and Dodo can emit
+    `abandoned_checkout.detected`).
+</Callout>
+
+<Callout type="warn">
+    Dodo Payments is a Merchant-of-Record, so there is **no** manual authorize/capture step — Dodo captures at checkout. `capturePayment` and `cancelPayment` on
+    the Dodo adapter throw `PROVIDER_ERROR` ("dodopayments (merchant-of-record) does not support …"). Don't build an auth-then-capture flow on Dodo; use
+    one-shot checkout.
+</Callout>
+
+### Manage subscriptions
+
+```ts
+// Cancel now, or at period end.
+await ctx.payments.cancelSubscription(subscriptionId, { atPeriodEnd: true });
+
+// List a reference's synced subscriptions.
+const subs = await ctx.payments.listSubscriptions(ctx.auth.userId);
+```
+
+The adapter maps these onto Dodo's subscriptions API:
+
+- **Cancel at period end** → `subscriptions.update(id, { cancel_at_next_billing_date: true })`
+  (the subscription runs to the end of the paid period, then stops).
+- **Cancel immediately** → `subscriptions.update(id, { status: "cancelled" })`.
+
+### Change plan or quantity
+
+An upgrade / downgrade or a seat-count change goes through Dodo's dedicated
+[**change-plan**](https://docs.dodopayments.com/api-reference/subscriptions/change-plan)
+endpoint, which is prorated immediately:
+
+```ts
+// Adapter surface reached through `ctx.payments.adapter` — a plan and/or quantity change.
+await ctx.payments.adapter.updateSubscription(subscriptionId, { priceId: "<new-dodo-product-id>", quantity: 3 });
+```
+
+<Callout type="info">
+    Dodo's change-plan endpoint **requires both** `product_id` and `quantity` (plus a `proration_billing_mode`). The adapter sends `proration_billing_mode:
+    "prorated_immediately"` and, when your patch sets only one side (plan-only **or** quantity-only), fills the other from the current subscription — so a
+    quantity-only change never silently resets the product, and vice-versa. It then re-reads the authoritative subscription with `subscriptions.retrieve`.
+</Callout>
+
+## Entitlements: `check` and `track`
+
+Entitlements are derived from already-synced subscription state — cheap and
+in-Worker, no extra call to Dodo. A plan is granted when an active subscription
+holds one of its configured `priceIds` (Dodo product ids).
+
+```ts title="lunora/usage.ts"
+import { action } from "./_generated/server";
+
+// Is this reference allowed to consume one api_call right now?
+export const canCall = action.action(async ({ ctx }): Promise<{ allowed: boolean; balance?: number }> => {
+    const result = await ctx.payments.check({ referenceId: ctx.auth.userId, featureId: "api_calls" });
+
+    return { allowed: result.allowed, balance: result.balance };
+});
+
+// Record one unit of metered usage (exactly-once by idempotency key).
+export const recordCall = action.action(async ({ ctx }): Promise<{ recorded: boolean }> => {
+    const result = await ctx.payments.track({ referenceId: ctx.auth.userId, featureId: "api_calls" });
+
+    return { recorded: result.recorded };
+});
+```
+
+`track` writes a durable, append-only usage ledger that `check` sums over the
+current billing period. Because Dodo advertises `usageMetering`, each recorded
+delta is **also** forwarded to Dodo's
+[usage-event ingestion](https://docs.dodopayments.com/developer-resources/usage-based-billing)
+(`usageEvents.ingest`) — one event per usage record, `event_name` = your
+`featureId`, keyed to the Dodo customer by `customer_id`, with the amount carried
+in `metadata.value` and a stable `event_id` (the idempotency key) that dedupes
+retries. This forward is **best-effort**: a Dodo reporting failure is observed,
+never thrown, and the local ledger `check` reads is always updated.
+
+## Webhooks
+
+Dodo signs webhooks with the [**Standard Webhooks**](https://www.standardwebhooks.com)
+scheme (the same scheme svix and Polar use): three headers — `webhook-id`,
+`webhook-timestamp`, and `webhook-signature` — over
+`base64(HMAC_SHA256(secret, "{id}.{timestamp}.{body}"))`. The adapter verifies
+them against `webhookSecret` (the `whsec_` prefix is stripped and the remainder
+base64-decoded to the key) with a replay-window check.
+
+### Create the endpoint in Dodo
+
+<Steps>
+<Step>
+
+In the Dodo dashboard open **Developer → Webhooks → Add Endpoint**
+([app.dodopayments.com/developer/webhooks](https://app.dodopayments.com/developer/webhooks)).
+Set the URL to your Worker's webhook route (e.g.
+`https://your-app.workers.dev/payment/webhook`). See
+[Webhooks](https://docs.dodopayments.com/developer-resources/webhooks).
+
+</Step>
+<Step>
+
+Copy the endpoint's **signing secret** and store it as
+`DODO_PAYMENTS_WEBHOOK_KEY`.
+
+</Step>
+<Step>
+
+Subscribe to the events you need — at minimum `payment.succeeded`,
+`refund.succeeded`, `dispute.lost`, and the `subscription.*` family (see the
+table below). Consult the
+[Webhook Events Guide](https://docs.dodopayments.com/developer-resources/webhooks/intents/webhook-events-guide)
+for the full catalog.
+
+</Step>
+</Steps>
+
+### Route the raw body into a Lunora action
+
+Signature verification needs the **raw** request body, so the endpoint runs at
+the Worker edge via `httpAction` (no `ctx.db`), forwarding the raw body and the
+three Standard-Webhooks headers into the shard via `ctx.runAction`, where
+`ctx.payments` and its store exist:
+
+```ts title="lunora/http.ts"
+import { httpAction, httpRouter } from "lunorash/server";
+import { processDodoWebhook } from "./billing";
+
+export const app = httpRouter();
+
+app.post(
+    "/payment/webhook",
+    httpAction(async (ctx, request) => {
+        const body = await request.text();
+
+        return Response.json(
+            await ctx.runAction(processDodoWebhook, {
+                body,
+                webhookId: request.headers.get("webhook-id") ?? "",
+                webhookTimestamp: request.headers.get("webhook-timestamp") ?? "",
+                webhookSignature: request.headers.get("webhook-signature") ?? "",
+            }),
+        );
+    }),
+);
+```
+
+```ts title="lunora/billing.ts"
+import { internalAction, v } from "./_generated/server";
+
+export const processDodoWebhook = internalAction
+    .input({ body: v.string(), webhookId: v.string(), webhookTimestamp: v.string(), webhookSignature: v.string() })
+    .action(async ({ ctx, args }): Promise<{ applied: boolean; status: number }> => {
+        const request = new Request("https://internal/payment/webhook", {
+            body: args.body,
+            headers: {
+                "webhook-id": args.webhookId,
+                "webhook-timestamp": args.webhookTimestamp,
+                "webhook-signature": args.webhookSignature,
+            },
+            method: "POST",
+        });
+        const response = await ctx.payments.handleWebhook(request);
+        const result = (await response.json()) as { applied?: boolean };
+
+        return { applied: result.applied ?? false, status: response.status };
+    });
+```
+
+`handleWebhook` verifies the signature, normalizes the Dodo event into a
+`WebhookAction`, and applies it through the state machine. Once verified it
+always returns `200` so Dodo stops retrying — a duplicate or out-of-order event
+is acknowledged, not re-applied. Standard Webhooks carries no body id, so the
+adapter uses the `webhook-id` header as the idempotency key backing the
+append-only `events` log.
+
+### Event mapping
+
+The adapter translates these Dodo events into normalized transitions:
+
+| Dodo event                                                                                                                                                                    | Normalized action                                   | Notes                                                                                                       |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `payment.succeeded`                                                                                                                                                           | `payment.captured`                                  | Amount from `total_amount`, currency from `currency`; carries `customer.customer_id`, `subscription_id`.    |
+| `payment.failed`, `payment.cancelled`                                                                                                                                         | `payment.failed`                                    | `sessionId` from `payment_id`; a cancelled payment never settled — terminal, non-entitling.                 |
+| `refund.succeeded`                                                                                                                                                            | `payment.refunded` (delta)                          | `amount` is this single refund; `sessionId` from `payment_id`. Accumulates against the captured total.      |
+| `dispute.lost`                                                                                                                                                                | `payment.refunded` (delta)                          | A lost chargeback is a definitive funds reversal — recorded so a charged-back customer isn't left entitled. |
+| `subscription.active`, `subscription.renewed`                                                                                                                                 | `subscription.active`                               | `status: "active"`; a renewal is a legal self-loop that rolls the period forward.                           |
+| `subscription.plan_changed`                                                                                                                                                   | `subscription.active`                               | Carries the new `product_id` / `quantity`, applied on the transition.                                       |
+| `subscription.on_hold`, `subscription.failed`                                                                                                                                 | `subscription.past_due`                             | Dunning / failed payment → non-entitling `past_due` (fail-closed).                                          |
+| `subscription.cancelled`, `subscription.expired`                                                                                                                              | `subscription.canceled`                             | Terminal cancel.                                                                                            |
+| `subscription.updated`                                                                                                                                                        | derived from `status` (else `subscription.updated`) | A pure metadata/period change with no state move is `subscription.updated`.                                 |
+| `payment.processing`, `refund.failed`, `dispute.opened` / `.challenged` / `.won` / …, `license_key.*`, `credit.*`, `entitlement_grant.*`, `abandoned_checkout.*`, `dunning.*` | `unhandled`                                         | Verified and logged for idempotency, but no state change (no money moved / not a lifecycle transition).     |
+
+Dodo's subscription `status` values —
+[`pending`, `active`, `on_hold`, `cancelled`, `failed`, `expired`](https://docs.dodopayments.com/developer-resources/webhooks/intents/subscription) —
+map onto Lunora's subscription states. For safety, `pending` (first payment not
+completed), `failed`, and `on_hold` (dunning) all map to non-entitling
+`past_due`, **not** an entitling state — an unrecognized status also fails closed
+to `past_due`.
+
+## Refunds
+
+Unlike some Merchants-of-Record, Dodo refunds are **first-class**: the adapter's
+`refundPayment` calls
+[`refunds.create`](https://docs.dodopayments.com/features/transactions/refunds)
+with `payment_id`, an optional minor-unit `amount` (omit for a full refund), and
+an optional `reason`. Reach it through the adapter on the facade:
+
+```ts
+// Full refund of a payment session.
+await ctx.payments.adapter.refundPayment({ sessionId: paymentId, reason: "customer_request" });
+
+// Partial refund — amount is Money (integer minor units + currency).
+import { money } from "@lunora/payment";
+
+await ctx.payments.adapter.refundPayment({ sessionId: paymentId, amount: money(500n, "USD") });
+```
+
+<Callout type="info">
+    The provider-agnostic `ctx.payments` facade does not expose a top-level refund method — refunds go through `ctx.payments.adapter.refundPayment` (or the Dodo
+    dashboard). Either way, the **authoritative** state comes from the `refund.succeeded` webhook, which the adapter normalizes to `payment.refunded` with the
+    **delta** amount of that single refund (`amountKind` defaults to `"delta"`), so multiple partial refunds accumulate correctly against the payment's captured
+    total in the store.
+</Callout>
+
+<Callout type="warn">
+    A Dodo refund can settle asynchronously (it may pass through `pending` / review before emitting `refund.succeeded` — or `refund.failed`). The synchronous
+    return value of `refundPayment` is optimistic; treat the **webhook-synced store** as the source of truth for whether a payment is actually refunded, not the
+    immediate return.
+</Callout>
+
+## Billing portal
+
+Dodo ships a native hosted customer portal. `createPortalSession` mints a Dodo
+[customer portal session](https://docs.dodopayments.com/api-reference/customers/create-customer-portal-session)
+(`customers.customerPortal.create`) and returns its `link`:
+
+```ts
+const { url } = await ctx.payments.createPortalSession(ctx.auth.userId, "https://app.test/account");
+```
+
+The customer is derived from the store (never a caller-supplied id — no IDOR).
+Dodo's portal is a session URL, so the `returnUrl` argument is accepted for
+interface parity but Dodo controls the in-portal navigation.
+
+## Tax, invoices & the MoR model
+
+Because `merchantOfRecord` is `true`, Dodo — not you — is the seller of record:
+it calculates and remits VAT / sales tax / GST across 190+ jurisdictions,
+generates compliant invoices, and absorbs chargebacks and disputes. Your Lunora
+app only records the normalized payment/subscription state; it never stores tax
+lines or card data. The stored `Money` is Dodo's `total_amount` (tax-inclusive)
+in integer minor units.
+
+## Limitations
+
+<Callout type="info">
+    - **No manual capture/authorize.** `capturePayment` / `cancelPayment` throw `PROVIDER_ERROR` — MoR captures at checkout. - **Product-based.** The
+    cross-provider `priceId` carries a Dodo **product** id, not a separate price id. - **Single `return_url`.** Dodo checkout uses `successUrl` only;
+    `cancelUrl` is accepted for interface parity but unused. - **No pause/resume.** Dodo has no paused subscription status; `resumeSubscription` un-schedules a
+    period-end cancellation (`cancel_at_next_billing_date: false`), it does not un-pause. - **Refunds are async.** `refundPayment` returns optimistically; the
+    store reflects the truth once `refund.succeeded` arrives.
+</Callout>
+
+## Troubleshooting
+
+<Callout type="warn">
+    **`WEBHOOK_SIGNATURE_INVALID` / `no matching signature`.** The signature is computed over the **raw** body. Make sure you forward `await request.text()`
+    unchanged (never a re-`JSON.stringify`'d object) and pass all three headers — `webhook-id`, `webhook-timestamp`, `webhook-signature`. Confirm
+    `DODO_PAYMENTS_WEBHOOK_KEY` matches the secret shown for **that** endpoint in Dodo.
+</Callout>
+
+<Callout type="warn">
+    **`WEBHOOK_TIMESTAMP_INVALID` / outside tolerance.** The signed timestamp is older/newer than `webhookToleranceSeconds` (default 300s). Fix the Worker's
+    clock or widen the tolerance — don't disable the replay check.
+</Callout>
+
+<Callout type="info">
+    **`CONFIG_INVALID` / webhook secret not configured.** `DODO_PAYMENTS_WEBHOOK_KEY` is empty or unset. The adapter fails closed rather than MAC with an
+    attacker-known zero-length key. Set it in `.dev.vars` (dev) or `wrangler secret put` (prod).
+</Callout>
+
+<Callout type="info">
+    **`PROVIDER_ERROR` / "does not support manual capture".** You called a PSP-only flow (authorize/capture) on Dodo. Use one-shot `createCheckout` / `attach`
+    instead.
+</Callout>
+
+<Callout type="warn">
+    **A subscription looks out of date after a change made in the Dodo portal.** Webhooks are eventually-but-not-guaranteed. Pair a
+    [`@lunora/scheduler`](/docs/packages/scheduler) sweep with `reconcile` to re-fetch Dodo's current truth for non-terminal rows and overwrite drift.
+</Callout>
+
+## See also
+
+- [@lunora/payment](/docs/packages/payment) — the provider-agnostic `ctx.payments` API and data model
+- [@lunora/scheduler](/docs/packages/scheduler) — drive the reconciliation sweep
+- [Studio](/docs/packages/studio) — the Payments panel (synced customers, subscriptions, webhook events)
+- [Dodo Payments docs](https://docs.dodopayments.com) · [Webhook events](https://docs.dodopayments.com/developer-resources/webhooks/intents/webhook-events-guide) · [Standard Webhooks](https://www.standardwebhooks.com)

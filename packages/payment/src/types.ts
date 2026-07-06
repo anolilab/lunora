@@ -20,12 +20,12 @@ export interface Money {
     readonly minorUnits: bigint;
 }
 
-/** Stable provider identifier (Medusa-style). Scoped to what Convex ships: Stripe + Polar. */
-export type ProviderId = "polar" | "stripe";
+/** Stable provider identifier (Medusa-style). Ships Stripe/Polar/Autumn/Dodo plus Creem, an EU-friendly MoR. */
+export type ProviderId = "autumn" | "creem" | "dodopayments" | "polar" | "stripe";
 
 /** What a provider can do — encoded in types so tax/UX assumptions aren't tribal knowledge. */
 export interface ProviderCapabilities {
-    /** True for Polar / Lemon Squeezy / Paddle; false for Stripe (PSP). Drives tax/invoice ownership. */
+    /** True for Polar / Lemon Squeezy / Paddle; false for Stripe (PSP) and Autumn (runs on your own Stripe). Drives tax/invoice ownership. */
     readonly merchantOfRecord: boolean;
     /** Native hosted customer/billing portal. */
     readonly portal: boolean;
@@ -87,6 +87,12 @@ export interface CheckoutInput {
     readonly cancelUrl: string;
     /** Existing provider customer id, if known. */
     readonly customerId?: string;
+
+    /**
+     * Customer email, used when the reference has no provider customer yet. Some Merchant-of-Record
+     * providers (e.g. Dodo Payments) require an email to mint a customer, so pass it on first checkout.
+     */
+    readonly email?: string;
     /** Outbound idempotency key for the provider call; auto-derived when omitted. */
     readonly idempotencyKey?: string;
     readonly metadata?: Record<string, string>;

@@ -2,10 +2,13 @@ import { LunoraPaymentError } from "./errors";
 import type {
     CancelSubscriptionOptions,
     CaptureInput,
+    CheckInput,
     CheckoutInput,
     CheckoutResult,
+    CheckResult,
     Customer,
     CustomerRef,
+    FeatureBalance,
     PaymentSession,
     PortalInput,
     ProviderCapabilities,
@@ -40,8 +43,27 @@ export interface PaymentAdapter {
     cancelSubscription: (subscriptionId: string, options?: CancelSubscriptionOptions) => Promise<Subscription>;
     readonly capabilities: ProviderCapabilities;
     capturePayment: (input: CaptureInput) => Promise<PaymentSession>;
+
+    /**
+     * Ask the provider whether a reference may consume `quantity` units of a feature (or holds active
+     * access to a product) right now — for providers that own entitlement truth themselves (e.g.
+     * Autumn computes balances, credits, and limits from its plan config). Optional: when absent, the
+     * facade's `check` evaluates locally from the synced store + the app's `entitlements` config. When
+     * present, the facade delegates `check` to it, so `entitlements` need not be configured.
+     */
+    checkEntitlement?: (input: CheckInput) => Promise<CheckResult>;
+
     createCheckout: (input: CheckoutInput) => Promise<CheckoutResult>;
     createPortalSession: (input: PortalInput) => Promise<{ url: string }>;
+
+    /**
+     * Resolve every feature allowance for a reference straight from the provider — the optional
+     * companion to `checkEntitlement` that powers `listBalances`. Present only on providers that
+     * own entitlement truth; when absent, the facade evaluates balances locally from the store + the
+     * app's `entitlements` config.
+     */
+    getBalances?: (referenceId: string) => Promise<FeatureBalance[]>;
+
     getOrCreateCustomer: (ref: CustomerRef) => Promise<Customer>;
     /** Fetch the provider's current truth for a payment session — the basis for reconciliation. */
     getPaymentStatus: (sessionId: string) => Promise<PaymentSession>;

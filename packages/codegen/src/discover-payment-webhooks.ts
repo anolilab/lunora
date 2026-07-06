@@ -7,12 +7,13 @@ import type { PaymentWebhookIR } from "./ir";
 
 /**
  * Payment-adapter factories that accept a `webhookToleranceSeconds` replay
- * window (`createStripeAdapter` / `createPolarAdapter`). Matched by callee name
- * (`import`-agnostic, matching the other config feeders), so an aliased import
- * or a namespace access still resolves. `createPayment` is excluded — its
- * options carry no tolerance knob.
+ * window (`createStripeAdapter` / `createPolarAdapter` / `createAutumnAdapter` /
+ * `createDodoPaymentsAdapter`). Matched by callee name (`import`-agnostic,
+ * matching the other config feeders), so an aliased import or a namespace access
+ * still resolves. `createPayment` is excluded — its options carry no tolerance
+ * knob.
  */
-const WEBHOOK_ADAPTER_CALLEES = new Set(["createPolarAdapter", "createStripeAdapter"]);
+const WEBHOOK_ADAPTER_CALLEES = new Set(["createAutumnAdapter", "createDodoPaymentsAdapter", "createPolarAdapter", "createStripeAdapter"]);
 
 /** A node's numeric literal value (`300`), or `undefined` when it isn't a plain numeric literal (`60 * 60`, an identifier, an env read — not statically knowable, so never flagged). */
 const numericLiteralValue = (node: TsNode | undefined): number | undefined => (node && Node.isNumericLiteral(node) ? Number(node.getText()) : undefined);
