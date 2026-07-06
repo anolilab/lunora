@@ -10,13 +10,21 @@ loading flash.
 
 ## Develop
 
-Install dependencies and start the dev server with your package manager
-(`npm`, `pnpm`, `yarn`, or `bun`):
+Install dependencies, then start the dev server with the Lunora CLI:
 
 ```bash
 <pm> install
-<pm> run dev
+<pm> exec lunora dev
 ```
+
+Astro needs **no sidecar**: `astro dev` runs the whole app — SSR, `/_lunora/*`,
+and the `ShardDO` Durable Object — in `workerd` via `@astrojs/cloudflare`'s
+embedded Cloudflare Vite plugin (Astro 6+), so a single process gives you
+realtime + HMR with live DOs in dev. `lunora dev` runs `astro dev` and, through
+the `@lunora/vite` plugins wired in `astro.config.mjs` (with `cloudflare: false`,
+so no second Cloudflare plugin), keeps `lunora/_generated/*`, Studio, and dev
+state in sync. Open the URL Astro prints. (Bare `<pm> run dev` also works — it
+runs the same `astro dev`.)
 
 ## Why an island adapter?
 
