@@ -122,8 +122,8 @@ free of a hard `dodopayments` dependency. Pass `environment: "test_mode"` while
 developing.
 
 ```ts title="lunora/server.ts"
-import type { DodoPaymentsClientLike } from "@lunora/payment";
-import { createDodoPaymentsAdapter } from "@lunora/payment";
+import type { DodoPaymentsClientLike } from "@lunora/payment/dodopayments";
+import { createDodoPaymentsAdapter } from "@lunora/payment/dodopayments";
 import DodoPayments from "dodopayments";
 import { createShardDO } from "./_generated/shard";
 

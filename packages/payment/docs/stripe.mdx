@@ -142,7 +142,7 @@ const stripe = new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetc
 the adapter's `client` is typed as the real `Stripe`, so there is no cast:
 
 ```ts
-import { createStripeAdapter } from "@lunora/payment";
+import { createStripeAdapter } from "@lunora/payment/stripe";
 
 const adapter = createStripeAdapter({
     client: stripe,
@@ -158,7 +158,7 @@ const adapter = createStripeAdapter({
 your entitlement plans, and an optional authorizer/observer:
 
 ```ts
-import { createStripeAdapter } from "@lunora/payment";
+import { createStripeAdapter } from "@lunora/payment/stripe";
 import { createShardDO } from "./_generated/shard";
 import Stripe from "stripe";
 

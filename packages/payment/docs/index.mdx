@@ -44,7 +44,7 @@ provider secrets — comes from a `config.payment(env)` thunk you pass to
 authorizer ties `referenceId` to `ctx.auth.userId`.
 
 ```ts
-import { createStripeAdapter } from "@lunora/payment";
+import { createStripeAdapter } from "@lunora/payment/stripe";
 import { createShardDO } from "./_generated/shard";
 import Stripe from "stripe";
 
@@ -79,10 +79,15 @@ The thunk returns `PaymentsFromContextOptions`:
 
 ### Provider adapters
 
-Every adapter takes its client by injection and verifies inbound webhooks:
+Every adapter takes its client by injection and verifies inbound webhooks. Each
+lives at its **own subpath** so importing one never loads another provider's SDK:
 
 ```ts
-import { createAutumnAdapter, createCreemAdapter, createDodoPaymentsAdapter, createPolarAdapter, createStripeAdapter } from "@lunora/payment";
+import { createAutumnAdapter } from "@lunora/payment/autumn";
+import { createCreemAdapter } from "@lunora/payment/creem";
+import { createDodoPaymentsAdapter } from "@lunora/payment/dodopayments";
+import { createPolarAdapter } from "@lunora/payment/polar";
+import { createStripeAdapter } from "@lunora/payment/stripe";
 
 const stripe = createStripeAdapter({ client, webhookSecret, webhookToleranceSeconds: 300 });
 const polar = createPolarAdapter({ client, webhookSecret });
@@ -116,8 +121,8 @@ the Creem dashboard (no SDK endpoint), so `refundPayment` throws. Webhooks are
 verified with the `creem-signature` HMAC-SHA256 header.
 
 ```ts
-import type { CreemClientLike } from "@lunora/payment";
-import { createCreemAdapter } from "@lunora/payment";
+import type { CreemClientLike } from "@lunora/payment/creem";
+import { createCreemAdapter } from "@lunora/payment/creem";
 import { Creem } from "creem";
 
 const creem = createCreemAdapter({
@@ -131,8 +136,8 @@ const creem = createCreemAdapter({
 [Autumn](https://useautumn.com) is an entitlement-first billing layer that runs
 on **your own** Stripe account, so it is _not_ a Merchant-of-Record, but — like
 Polar — it abstracts the money movement, so manual authorize/capture/refund
-throw. It keys a subscription on the `(customerId, productId)` pair, which the
-adapter encodes as the composite id `"<customerId>::<productId>"`.
+throw. It keys a subscription on the `(customerId, planId)` pair, which the
+adapter encodes as the composite id `"<customerId>::<planId>"`.
 
 Autumn **owns entitlement truth** — balances, credits, limits, and rollovers are
 computed on its side from your plan config. The adapter implements the optional
@@ -148,8 +153,8 @@ Construct the client from `autumn-js` and inject it (the cast keeps the package
 free of a hard `autumn-js` dependency):
 
 ```ts
-import type { AutumnClientLike } from "@lunora/payment";
-import { createAutumnAdapter } from "@lunora/payment";
+import type { AutumnClientLike } from "@lunora/payment/autumn";
+import { createAutumnAdapter } from "@lunora/payment/autumn";
 import { Autumn } from "autumn-js";
 
 const autumn = createAutumnAdapter({
@@ -160,21 +165,22 @@ const autumn = createAutumnAdapter({
 
 Autumn-native concepts that have no cross-provider equivalent — **entities**
 (per-seat/per-workspace sub-customers), **referrals**, usage-**events** analytics,
-the **product catalog**, and a native **checkout** (free trials, prepaid feature
-quantities, entity scoping, reward codes) — live in a companion facade,
+the **plan catalog**, and a native **checkout** (prepaid feature quantities, entity
+scoping, reward codes, opting out of a plan's trial) — live in a companion facade,
 `createAutumnFeatures`, kept separate so the provider-agnostic surface stays
 generic. Share the same injected client between the two. (Credit systems need no
 extra method — Autumn models them as features, so their balances flow through
 `check` / `listBalances` like any other.)
 
 ```ts
-import { createAutumnFeatures } from "@lunora/payment";
+import type { AutumnFeaturesClientLike } from "@lunora/payment/autumn-features";
+import { createAutumnFeatures } from "@lunora/payment/autumn-features";
 
-const autumnFeatures = createAutumnFeatures({ client });
+const autumnFeatures = createAutumnFeatures({ client: client as unknown as AutumnFeaturesClientLike });
 
-await autumnFeatures.entities.create(userId, { featureId: "seats", name: "Workspace A" });
+await autumnFeatures.entities.create(userId, { featureId: "seats", id: "workspace_a", name: "Workspace A" });
 const usage = await autumnFeatures.events.aggregate(userId, { featureId: "api_calls", range: "30d" });
-const { url } = await autumnFeatures.checkout(userId, { productId: "pro", freeTrial: true });
+const { url } = await autumnFeatures.checkout(userId, { planId: "pro" });
 ```
 
 ### Dodo Payments
@@ -192,8 +198,8 @@ Construct the client from `dodopayments` and inject it (the cast keeps the
 package free of a hard `dodopayments` dependency):
 
 ```ts
-import type { DodoPaymentsClientLike } from "@lunora/payment";
-import { createDodoPaymentsAdapter } from "@lunora/payment";
+import type { DodoPaymentsClientLike } from "@lunora/payment/dodopayments";
+import { createDodoPaymentsAdapter } from "@lunora/payment/dodopayments";
 import DodoPayments from "dodopayments";
 
 const dodo = createDodoPaymentsAdapter({

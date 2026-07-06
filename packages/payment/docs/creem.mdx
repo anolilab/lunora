@@ -177,7 +177,7 @@ for upgrades). Only two need translation:
 - The SDK's `customers` resource has **no `create`** (only `list`, `retrieve`, `generateBillingLinks`). Creem's REST API does expose `POST /v1/customers`, so provide `create` via a direct call (or drop it and rely on implicit creation at checkout — see [Customers](#customers-and-getorcreatecustomer)).
 
 ```ts
-import type { CreemClientLike } from "@lunora/payment";
+import type { CreemClientLike } from "@lunora/payment/creem";
 
 const client: CreemClientLike = {
     checkouts: {
@@ -214,7 +214,7 @@ request from `ctx.db`, and the default authorizer ties `referenceId` to
 `ctx.auth.userId`.
 
 ```ts
-import { createCreemAdapter } from "@lunora/payment";
+import { createCreemAdapter } from "@lunora/payment/creem";
 import { Creem } from "creem";
 import { createShardDO } from "./_generated/shard";
 

@@ -155,8 +155,8 @@ satisfies the structural `AutumnClientLike`; the cast keeps the package free of 
 hard `autumn-js` dependency:
 
 ```ts
-import type { AutumnClientLike } from "@lunora/payment";
-import { createAutumnAdapter } from "@lunora/payment";
+import type { AutumnClientLike } from "@lunora/payment/autumn";
+import { createAutumnAdapter } from "@lunora/payment/autumn";
 
 const adapter = createAutumnAdapter({
     client: client as unknown as AutumnClientLike,
@@ -172,8 +172,8 @@ const adapter = createAutumnAdapter({
 **not** pass an `entitlements` map — `check` / `listBalances` delegate to Autumn:
 
 ```ts
-import type { AutumnClientLike } from "@lunora/payment";
-import { createAutumnAdapter } from "@lunora/payment";
+import type { AutumnClientLike } from "@lunora/payment/autumn";
+import { createAutumnAdapter } from "@lunora/payment/autumn";
 import { createShardDO } from "./_generated/shard";
 import { Autumn } from "autumn-js";
 
@@ -221,19 +221,20 @@ and usage. Autumn also ships concepts with no cross-provider equivalent —
 **referrals** (codes and redemptions), usage-**events** analytics
 ([list](https://docs.useautumn.com/api-reference/events/listEvents) /
 [aggregate](https://docs.useautumn.com/api-reference/events/aggregateEvents)), the
-**product catalog**, and a native **checkout** (free trials, prepaid feature
-quantities, entity scoping, reward codes). These live in a companion facade,
+**plan catalog**, and a native **checkout** (prepaid feature quantities, entity
+scoping, reward codes, opting out of a plan's trial). These live in a companion facade,
 `createAutumnFeatures`, kept separate so the provider-agnostic surface stays
 generic. Share the same injected client between the two:
 
 ```ts
-import { createAutumnFeatures } from "@lunora/payment";
+import type { AutumnFeaturesClientLike } from "@lunora/payment/autumn-features";
+import { createAutumnFeatures } from "@lunora/payment/autumn-features";
 
 const autumnFeatures = createAutumnFeatures({ client: client as unknown as AutumnFeaturesClientLike });
 
-await autumnFeatures.entities.create(userId, { featureId: "seats", name: "Workspace A" });
+await autumnFeatures.entities.create(userId, { featureId: "seats", id: "workspace_a", name: "Workspace A" });
 const usage = await autumnFeatures.events.aggregate(userId, { featureId: "api_calls", range: "30d" });
-const { url } = await autumnFeatures.checkout(userId, { productId: "pro", freeTrial: true });
+const { url } = await autumnFeatures.checkout(userId, { planId: "pro" });
 ```
 
 <Callout type="warn">
@@ -267,12 +268,11 @@ export const subscribe = action.input({ productId: v.string() }).action(async ({
 });
 ```
 
-Under the hood the adapter calls Autumn's **attach** with `customer_id` (your
-`referenceId`), `product_id`, and the framework-controlled `referenceId` pinned
-into `metadata` so caller metadata can never override it. The facade reuses a
-reference's stored Autumn customer — Autumn's customer create is idempotent, so
-the app-supplied id _is_ the customer id — and attaches an outbound idempotency
-key automatically.
+Under the hood the adapter calls Autumn's **`billing.attach`** with `customerId`
+(your `referenceId`) and `planId` (the product/plan id). Autumn keys everything on
+the customer id — which _is_ your reference id — so there is no metadata to pin and
+no separate customer to look up: `customers.getOrCreate` is idempotent on the
+app-supplied id.
 
 **Gate a feature** with `check`. Because Autumn owns entitlement truth, `check`
 delegates to Autumn's live balance math ([gating docs](https://docs.useautumn.com/documentation/getting-started/gating))
@@ -289,7 +289,7 @@ export const apiCallsRemaining = action.action(async ({ ctx }): Promise<{ allowe
 
 The adapter maps Autumn's balance fields onto `CheckResult`:
 `remaining → balance`, `granted → limit`, `usage → used`, plus `unlimited`. The
-`quantity` you pass becomes Autumn's `required_balance` (default `1`) — the check
+`quantity` you pass becomes Autumn's `requiredBalance` (default `1`) — the check
 passes only when at least that many units remain.
 
 **Meter usage** with `track`. Because Autumn advertises `usageMetering`, `track`
@@ -398,23 +398,23 @@ as the reference for the scheme.
 
 ## Composite ids and what throws
 
-Autumn identifies a subscription by the **pair** `(customer_id, product_id)`
+Autumn identifies a subscription by the **pair** `(customerId, planId)`
 rather than a single id. The adapter therefore encodes the Lunora
-`Subscription.id` as the composite `"<customerId>::<productId>"` and splits it
+`Subscription.id` as the composite `"<customerId>::<planId>"` and splits it
 back apart (on the last `::`) for `getSubscriptionStatus`, `cancelSubscription`,
 `updateSubscription`, and `resumeSubscription`. `createCheckout` returns this
 composite id as its `CheckoutResult.id`.
 
-Lifecycle operations map onto Autumn's attach/cancel model:
+Lifecycle operations map onto Autumn's `billing.*` model:
 
-- **Cancel** (`cancelSubscription`) — cancels the customer's product, immediately
-  or at period end (`atPeriodEnd: true`). A cancel-at-period-end re-reads Autumn's
-  real status and only flips the schedule flag, so a `past_due` / `paused` grant is
-  never silently promoted to `active`.
-- **Update / switch plan** (`updateSubscription`) — a plan change is an `attach` of
-  the new product; the adapter then re-reads Autumn's authoritative state.
-- **Resume** (`resumeSubscription`) — re-attaches the product to undo a scheduled
-  cancellation, then re-reads the real state.
+- **Cancel** (`cancelSubscription`) — `billing.update` with a `cancelAction`:
+  `cancel_immediately`, or `cancel_end_of_cycle` when `atPeriodEnd: true`. A
+  cancel-at-period-end re-reads Autumn's real status and only flips the schedule
+  flag, so a `past_due` / `paused` grant is never silently promoted to `active`.
+- **Update / switch plan** (`updateSubscription`) — a plan change is a
+  `billing.attach` of the new plan; the adapter then re-reads Autumn's authoritative state.
+- **Resume** (`resumeSubscription`) — `billing.update` with `cancelAction: "uncancel"`
+  to undo a scheduled cancellation, then re-reads the real state.
 
 Because Autumn abstracts the money movement through Stripe, there is **no** payment
 intent to act on directly. These adapter methods **throw** `PROVIDER_ERROR`:
@@ -436,8 +436,8 @@ Autumn dashboard instead.
 </Callout>
 
 <Callout type="warn">
-    **"malformed autumn subscription id".** `cancelSubscription` / `getSubscriptionStatus` expect the composite `"<customerId>::<productId>"` id the adapter
-    minted (returned by `attach` / `createCheckout` and stored on the subscription row). Pass that id back verbatim — don't reconstruct it from a bare product id.
+    **"malformed autumn subscription id".** `cancelSubscription` / `getSubscriptionStatus` expect the composite `"<customerId>::<planId>"` id the adapter
+    minted (returned by `attach` / `createCheckout` and stored on the subscription row). Pass that id back verbatim — don't reconstruct it from a bare plan id.
 </Callout>
 
 <Callout type="info">

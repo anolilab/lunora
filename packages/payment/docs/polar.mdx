@@ -119,8 +119,8 @@ the structural `PolarClientLike`; the cast keeps this package free of a hard
 `@polar-sh/sdk` dependency. Pass `server: "sandbox"` while developing.
 
 ```ts title="lunora/server.ts"
-import type { PolarClientLike } from "@lunora/payment";
-import { createPolarAdapter } from "@lunora/payment";
+import type { PolarClientLike } from "@lunora/payment/polar";
+import { createPolarAdapter } from "@lunora/payment/polar";
 import { Polar } from "@polar-sh/sdk";
 import { createShardDO } from "./_generated/shard";
 
