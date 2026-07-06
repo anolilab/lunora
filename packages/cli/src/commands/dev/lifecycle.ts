@@ -55,23 +55,21 @@ const LOG_TAIL_MAX_BYTES = 256 * 1024;
 const READY_TIMEOUT_ENV = "LUNORA_DEV_READY_TIMEOUT_MS";
 
 /**
- * How the dev child runs.
- *
- * - `wrangler` — the classic `lunora dev` stack (wrangler worker + embedded
- *   studio + codegen watch), for a standalone (class-C) project.
- * - `vite` — a project on `@lunora/vite`: the Vite plugin already runs the
- *   worker, studio, and codegen inside the Vite dev server, so `lunora dev` runs
- *   the project's own dev script and gets out of the way. This also covers the
- *   class-B frameworks whose own dev server runs the worker in `workerd` (Astro
- *   6 + `@astrojs/cloudflare`, which embeds `@cloudflare/vite-plugin` in
- *   `astro dev` — SSR + `/_lunora/*` + `ShardDO` in one process, HMR intact).
- * - `framework-worker` — a class-B framework whose dev server CANNOT host the
- *   `ShardDO` Durable Object (SvelteKit / Nuxt: their adapters use wrangler's
- *   `getPlatformProxy()`, which runs an empty-script Miniflare and does not
- *   emulate internal DOs). `lunora dev` runs the framework's own dev server
- *   (front door, HMR, and — via its `@lunora/vite` plugin — studio + codegen)
- *   AND a second `wrangler dev` sidecar that owns the real `ShardDO` in
- *   `workerd`, wired via the committed `wrangler.dev.jsonc`.
+ * How the dev child runs. `wrangler` is the classic `lunora dev` stack (wrangler
+ * worker + embedded studio + codegen watch) for a standalone class-C project.
+ * `vite` is a project on `@lunora/vite`: the plugin already runs the worker,
+ * studio, and codegen inside the Vite dev server, so `lunora dev` runs the
+ * project's own dev script and gets out of the way — this also covers class-B
+ * frameworks whose own dev server runs the worker in `workerd` (Astro 6 +
+ * `@astrojs/cloudflare`, which embeds `@cloudflare/vite-plugin` in `astro dev`:
+ * SSR + `/_lunora/*` + `ShardDO` in one process, HMR intact). `framework-worker`
+ * is a class-B framework whose dev server CANNOT host the `ShardDO` Durable
+ * Object (SvelteKit / Nuxt: their adapters use wrangler's `getPlatformProxy()`,
+ * which runs an empty-script Miniflare and does not emulate internal DOs); there
+ * `lunora dev` runs the framework's own dev server (front door, HMR, and — via
+ * its `@lunora/vite` plugin — studio + codegen) AND a second `wrangler dev`
+ * sidecar that owns the real `ShardDO` in `workerd`, wired via the committed
+ * `wrangler.dev.jsonc`.
  */
 type DevFlavor = "framework-worker" | "vite" | "wrangler";
 
