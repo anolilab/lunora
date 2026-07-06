@@ -49,7 +49,7 @@ interface StripeSubscriptionLike {
     readonly current_period_start?: number;
     readonly customer?: null | string;
     readonly id: string;
-    readonly items?: { data: ReadonlyArray<{ price?: { id?: string }; quantity?: number }> };
+    readonly items?: { data: ReadonlyArray<{ current_period_end?: number; current_period_start?: number; price?: { id?: string }; quantity?: number }> };
     readonly metadata?: Record<string, string>;
     readonly status: string;
 }
@@ -125,14 +125,17 @@ const firstPriceId = (object: Record<string, unknown>): string | undefined => re
 
 const firstQuantity = (object: Record<string, unknown>): number | undefined => readNumber(firstItem(object), "quantity");
 
+// The current billing period moved from the top-level Subscription to the subscription item in
+// Stripe API 2025-03-31.basil (`items.data[].current_period_*`). Read the item first, falling back
+// to the top level for apps pinned to an older API version.
 const periodEndMs = (object: Record<string, unknown>): number | undefined => {
-    const seconds = readNumber(object, "current_period_end");
+    const seconds = readNumber(firstItem(object), "current_period_end") ?? readNumber(object, "current_period_end");
 
     return seconds === undefined ? undefined : seconds * 1000;
 };
 
 const periodStartMs = (object: Record<string, unknown>): number | undefined => {
-    const seconds = readNumber(object, "current_period_start");
+    const seconds = readNumber(firstItem(object), "current_period_start") ?? readNumber(object, "current_period_start");
 
     return seconds === undefined ? undefined : seconds * 1000;
 };
@@ -157,12 +160,17 @@ const intentToSession = (intent: StripePaymentIntentLike): PaymentSession => {
 
 const subscriptionFromStripe = (subscription: StripeSubscriptionLike): Subscription => {
     const now = Date.now();
+    // Since Stripe API 2025-03-31.basil the billing period lives on the subscription item, not the
+    // subscription root — read the item first, falling back to the top level for older pinned versions.
+    const item = subscription.items?.data[0];
+    const periodEnd = item?.current_period_end ?? subscription.current_period_end;
+    const periodStart = item?.current_period_start ?? subscription.current_period_start;
 
     return {
         cancelAtPeriodEnd: subscription.cancel_at_period_end ?? false,
         createdAt: now,
-        currentPeriodEnd: subscription.current_period_end ? subscription.current_period_end * 1000 : undefined,
-        currentPeriodStart: subscription.current_period_start ? subscription.current_period_start * 1000 : undefined,
+        currentPeriodEnd: periodEnd ? periodEnd * 1000 : undefined,
+        currentPeriodStart: periodStart ? periodStart * 1000 : undefined,
         id: subscription.id,
         priceId: subscription.items?.data[0]?.price?.id ?? "",
         provider: "stripe",

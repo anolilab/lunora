@@ -1,0 +1,464 @@
+---
+title: "@lunora/payment — Autumn"
+description: End-to-end tutorial for wiring the Autumn adapter into ctx.payments — attach a product, check/track features Autumn owns, verify Svix webhooks, and reconcile.
+---
+
+[Autumn](https://useautumn.com) is an open-source, **entitlement-first** billing
+layer that runs on **your own** Stripe account. This page is a standalone,
+copy-pasteable walkthrough: install the adapter, wire it onto `ctx.payments`,
+attach your first product, gate features and meter usage (both of which Autumn
+computes for you), verify inbound webhooks, and reconcile. Every API detail below
+maps to a real method on the adapter — nothing is invented. For the
+provider-agnostic concepts (`ctx.payments` surface, the state machine, the store,
+`reconcile`) read the [package overview](/docs/packages/payment) first.
+
+## Autumn is entitlement-first — and runs on your own Stripe
+
+Autumn sits between your app and **your** Stripe account and becomes your source
+of truth for subscription state, credit balances, feature entitlements, and usage
+enforcement ([docs.useautumn.com/welcome](https://docs.useautumn.com/welcome)).
+Two facts shape everything else:
+
+1. **It is not a Merchant-of-Record.** Because Autumn charges through your Stripe
+   account, **you** remain the merchant of record — you own tax calculation,
+   invoicing, and remittance, exactly as with the raw Stripe adapter. This is the
+   opposite of Polar / Dodo Payments / Creem, where the provider is the legal
+   seller. But like those providers, Autumn abstracts the money movement, so the
+   adapter exposes **no** manual authorize / capture / refund.
+2. **Autumn owns entitlement truth.** Balances, credits, limits, and rollovers are
+   computed on Autumn's side from your plan config. The model is
+   _attach a product, then check / track features_
+   ([gating docs](https://docs.useautumn.com/documentation/getting-started/gating)).
+
+The adapter advertises its shape in `capabilities`:
+
+<TypeTable
+    type={{
+        merchantOfRecord: { type: "false", description: "Autumn runs on your own Stripe — you own tax, invoicing, and remittance. Not a Merchant-of-Record." },
+        portal: { type: "true", description: "Native hosted billing portal — createPortalSession opens Autumn's Stripe-backed portal." },
+        usageMetering: { type: "true", description: "Metered/usage-based features via track — reportUsage forwards usage to Autumn." },
+    }}
+/>
+
+Because Autumn owns entitlements, the adapter implements the optional
+`checkEntitlement` / `getBalances` hooks, and the facade delegates **`check` and
+`listBalances` straight to Autumn's live API** — you do **not** configure a local
+`entitlements` map for an Autumn app. The consequence for keeping your store in
+sync: the authoritative path is **live queries + `reconcile`**, not webhook
+fan-in. Autumn's dashboard can emit Standard Webhooks over
+[Svix](https://docs.useautumn.com/documentation/webhooks), so `parseWebhook` is
+provided as a **best-effort** convenience; `reconcile` (built on
+`getSubscriptionStatus`) remains the reliable path for subscription drift.
+
+**Choose Autumn when** you want to own your Stripe relationship and tax posture
+but offload pricing/entitlement modelling (credits, prepaid quantities, per-seat
+entities, usage alerts, auto top-ups) to a purpose-built layer, and drive it all
+through one `ctx.payments` API.
+
+## Prerequisites
+
+<Steps>
+<Step>
+
+**An Autumn account.** Create one at [useautumn.com](https://useautumn.com) and
+connect your Stripe account in the Autumn dashboard. Keep Autumn in its
+**sandbox** environment while you build.
+
+</Step>
+<Step>
+
+**Your secret key.** Autumn dashboard → **Developer**
+([app.useautumn.com/dev](https://app.useautumn.com/dev)). Copy the **secret key**
+(it looks like `am_sk_…`). This is the value for `AUTUMN_SECRET_KEY`.
+
+</Step>
+<Step>
+
+**A webhook signing secret.** Autumn dashboard → **webhook settings** → add an
+endpoint (see [Webhooks](#webhooks) below), then copy its **signing secret**.
+Autumn delivers via Svix, so this is a Standard Webhooks signing secret. This is
+the value for `AUTUMN_WEBHOOK_SECRET`.
+
+</Step>
+<Step>
+
+**At least one product/plan.** In the Autumn dashboard, model a product with the
+features and prices you want to sell, and note its **product id** (a slug you
+choose, e.g. `pro`). You'll pass this to `attach` / `createCheckout` as the
+`priceId`.
+
+</Step>
+</Steps>
+
+Lunora scaffolds the two secrets into your `.dev.vars` automatically when it
+detects `@lunora/payment`:
+
+```bash
+# .dev.vars
+AUTUMN_SECRET_KEY=am_sk_...          # Autumn dashboard → Developer
+AUTUMN_WEBHOOK_SECRET=...            # Autumn dashboard → webhook settings (signing secret)
+```
+
+<Callout type="info">
+    These are the exact env-var names Lunora's `.dev.vars` scaffolder writes for the Autumn adapter. Add them to your production secrets with `wrangler secret
+    put AUTUMN_SECRET_KEY` / `wrangler secret put AUTUMN_WEBHOOK_SECRET` before deploying.
+</Callout>
+
+## Install
+
+The package never imports the `autumn-js` SDK — you inject the client, so
+`autumn-js` stays an optional peer dependency you install alongside it:
+
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```bash tab="pnpm"
+pnpm add @lunora/payment autumn-js
+```
+
+```bash tab="npm"
+npm install @lunora/payment autumn-js
+```
+
+```bash tab="yarn"
+yarn add @lunora/payment autumn-js
+```
+
+```bash tab="bun"
+bun add @lunora/payment autumn-js
+```
+
+</Tabs>
+
+## Configure
+
+`ctx.payments` is wired by codegen onto `ActionCtx` whenever a `lunora/` source
+imports `@lunora/payment` or reads `ctx.payments`. The Autumn adapter — which
+carries your secret key — comes from a `config.payment(env)` thunk you pass to
+`createShardDO()`.
+
+<Steps>
+<Step>
+
+**Construct an `Autumn` client** from `env.AUTUMN_SECRET_KEY`:
+
+```ts
+import { Autumn } from "autumn-js";
+
+const client = new Autumn({ secretKey: env.AUTUMN_SECRET_KEY });
+```
+
+</Step>
+<Step>
+
+**Build the adapter** with `createAutumnAdapter`. A real `Autumn` instance
+satisfies the structural `AutumnClientLike`; the cast keeps the package free of a
+hard `autumn-js` dependency:
+
+```ts
+import type { AutumnClientLike } from "@lunora/payment";
+import { createAutumnAdapter } from "@lunora/payment";
+
+const adapter = createAutumnAdapter({
+    client: client as unknown as AutumnClientLike,
+    webhookSecret: env.AUTUMN_WEBHOOK_SECRET,
+    webhookToleranceSeconds: 300, // optional clock-skew tolerance for the signed timestamp
+});
+```
+
+</Step>
+<Step>
+
+**Wire it into `createShardDO`.** Because Autumn owns entitlement truth, you do
+**not** pass an `entitlements` map — `check` / `listBalances` delegate to Autumn:
+
+```ts
+import type { AutumnClientLike } from "@lunora/payment";
+import { createAutumnAdapter } from "@lunora/payment";
+import { createShardDO } from "./_generated/shard";
+import { Autumn } from "autumn-js";
+
+export const ShardDO = createShardDO({
+    payment: (env) => ({
+        adapter: createAutumnAdapter({
+            client: new Autumn({ secretKey: env.AUTUMN_SECRET_KEY }) as unknown as AutumnClientLike,
+            webhookSecret: env.AUTUMN_WEBHOOK_SECRET,
+        }),
+        // Override the default "caller owns the referenceId" rule for org/workspace keys.
+        // authorize: (referenceId) => referenceId === ctx.auth.orgId,
+        // No `entitlements` map: Autumn is authoritative for check/listBalances.
+        observability: (event) => console.log("[payment]", event.type, event),
+    }),
+});
+```
+
+</Step>
+</Steps>
+
+The adapter options:
+
+<TypeTable
+    type={{
+        client: { type: "AutumnClientLike", description: "An injected Autumn instance (structural subset). Required." },
+        webhookSecret: { type: "string", description: "The Svix (Standard Webhooks) signing secret used to verify inbound webhooks. Required." },
+        webhookToleranceSeconds: {
+            type: "number",
+            default: "300",
+            description: "Clock-skew tolerance for the signed timestamp, in whole seconds. Rejects replays outside the window.",
+        },
+    }}
+/>
+
+<Callout type="info">
+    Pin the store's read-heavy tables (e.g. `subscriptions`) with `.global()` in your own `lunora/schema.ts` for cross-region reads — see [Data it
+    stores](/docs/packages/payment#data-it-stores). The provider is stateless; the store owns all state.
+</Callout>
+
+### Autumn-native features
+
+The generic `ctx.payments` surface covers checkout, subscriptions, entitlements,
+and usage. Autumn also ships concepts with no cross-provider equivalent —
+**entities** (per-seat / per-workspace sub-customers with their own balances),
+**referrals** (codes and redemptions), usage-**events** analytics
+([list](https://docs.useautumn.com/api-reference/events/listEvents) /
+[aggregate](https://docs.useautumn.com/api-reference/events/aggregateEvents)), the
+**product catalog**, and a native **checkout** (free trials, prepaid feature
+quantities, entity scoping, reward codes). These live in a companion facade,
+`createAutumnFeatures`, kept separate so the provider-agnostic surface stays
+generic. Share the same injected client between the two:
+
+```ts
+import { createAutumnFeatures } from "@lunora/payment";
+
+const autumnFeatures = createAutumnFeatures({ client: client as unknown as AutumnFeaturesClientLike });
+
+await autumnFeatures.entities.create(userId, { featureId: "seats", name: "Workspace A" });
+const usage = await autumnFeatures.events.aggregate(userId, { featureId: "api_calls", range: "30d" });
+const { url } = await autumnFeatures.checkout(userId, { productId: "pro", freeTrial: true });
+```
+
+<Callout type="warn">
+    **`createAutumnFeatures` does not authorize the caller.** Unlike the `ctx.payments` facade — which checks the caller owns the `referenceId` on every call —
+    these methods take the `referenceId` (and `entityId`) positionally and trust them. Forwarding an unvalidated reference straight from a request is an
+    app-layer IDOR: before exposing any of these on a handler, match the reference against the authenticated user (e.g. `ctx.auth.userId`). Credit systems need
+    no method here — Autumn models them as features, so their balances flow through `check` / `listBalances` like any other.
+</Callout>
+
+## Attach a product, then check and track
+
+Call the facade from an action. `attach` (or `createCheckout`) starts Autumn's
+attach flow: when the change needs a payment it returns a **hosted checkout URL**
+to redirect the browser to; when Autumn can apply the change directly (e.g. a free
+plan or an update within an existing subscription) the `url` is empty. `attach` is
+the plan-oriented alias with `mode` defaulting to `"subscription"`, so attaching a
+product is just `{ referenceId, priceId, successUrl, cancelUrl }`:
+
+```ts
+import { action, v } from "./_generated/server";
+
+export const subscribe = action.input({ productId: v.string() }).action(async ({ ctx, args: { productId } }): Promise<{ url: string }> => {
+    const { url } = await ctx.payments.attach({
+        referenceId: ctx.auth.userId,
+        priceId: productId, // an Autumn product id, e.g. "pro"
+        successUrl: "https://app.test/done",
+        cancelUrl: "https://app.test/cancel",
+    });
+
+    return { url };
+});
+```
+
+Under the hood the adapter calls Autumn's **attach** with `customer_id` (your
+`referenceId`), `product_id`, and the framework-controlled `referenceId` pinned
+into `metadata` so caller metadata can never override it. The facade reuses a
+reference's stored Autumn customer — Autumn's customer create is idempotent, so
+the app-supplied id _is_ the customer id — and attaches an outbound idempotency
+key automatically.
+
+**Gate a feature** with `check`. Because Autumn owns entitlement truth, `check`
+delegates to Autumn's live balance math ([gating docs](https://docs.useautumn.com/documentation/getting-started/gating))
+— pass a `featureId` for a feature allowance:
+
+```ts
+export const apiCallsRemaining = action.action(async ({ ctx }): Promise<{ allowed: boolean; balance?: number }> => {
+    const result = await ctx.payments.check({ referenceId: ctx.auth.userId, featureId: "api_calls" });
+
+    // For a metered feature Autumn returns balance/limit/used; a boolean feature returns { allowed, unlimited }.
+    return { allowed: result.allowed, balance: result.balance };
+});
+```
+
+The adapter maps Autumn's balance fields onto `CheckResult`:
+`remaining → balance`, `granted → limit`, `usage → used`, plus `unlimited`. The
+`quantity` you pass becomes Autumn's `required_balance` (default `1`) — the check
+passes only when at least that many units remain.
+
+**Meter usage** with `track`. Because Autumn advertises `usageMetering`, `track`
+writes the durable local ledger **and** forwards the event to Autumn (which then
+decrements the balance `check` reads). Upstream metering is **best-effort**: a
+reporting failure is observed, never thrown, and the local ledger is always
+updated.
+
+```ts
+export const recordApiCall = action.action(async ({ ctx }): Promise<{ recorded: boolean }> => {
+    // `mode: "add"` (default) increments; `"set"` reconciles the period total.
+    const result = await ctx.payments.track({ referenceId: ctx.auth.userId, featureId: "api_calls" });
+
+    return { recorded: result.recorded };
+});
+```
+
+<Callout type="info">
+    Pass a stable `idempotencyKey` to `track` for any usage event you might retry (e.g. keyed on a message/request id). The local Lunora ledger dedupes on it
+    exactly-once, so a retried action never double-counts in your store. See the [correctness note](#composite-ids-and-what-throws) on how Autumn itself
+    dedupes.
+</Callout>
+
+## Webhooks
+
+Autumn delivers state changes over [Svix](https://docs.useautumn.com/documentation/webhooks)
+(Standard Webhooks). Signature verification needs the **raw** request body, so the
+endpoint runs at the Worker edge via `httpAction` (no `ctx.db`) and forwards the
+raw body + the Svix headers into the shard, where `ctx.payments` and its store
+exist. Autumn's canonical headers are `svix-id`, `svix-timestamp`, and
+`svix-signature`:
+
+```ts
+// lunora/http.ts
+import { httpAction, httpRouter } from "lunorash/server";
+import { processWebhook } from "./billing";
+
+export const app = httpRouter();
+
+app.post(
+    "/payment/webhook",
+    httpAction(async (ctx, request) => {
+        const body = await request.text();
+
+        return Response.json(
+            await ctx.runAction(processWebhook, {
+                body,
+                svixId: request.headers.get("svix-id") ?? "",
+                svixSignature: request.headers.get("svix-signature") ?? "",
+                svixTimestamp: request.headers.get("svix-timestamp") ?? "",
+            }),
+        );
+    }),
+);
+```
+
+```ts
+// lunora/billing.ts
+import { internalAction, v } from "./_generated/server";
+
+export const processWebhook = internalAction
+    .input({ body: v.string(), svixId: v.string(), svixSignature: v.string(), svixTimestamp: v.string() })
+    .action(async ({ ctx, args }): Promise<{ applied: boolean; status: number }> => {
+        const request = new Request("https://internal/payment/webhook", {
+            body: args.body,
+            headers: {
+                "svix-id": args.svixId,
+                "svix-signature": args.svixSignature,
+                "svix-timestamp": args.svixTimestamp,
+            },
+            method: "POST",
+        });
+        const response = await ctx.payments.handleWebhook(request);
+        const result = (await response.json()) as { applied?: boolean };
+
+        return { applied: result.applied ?? false, status: response.status };
+    });
+```
+
+### Register the endpoint
+
+In the Autumn dashboard → **webhook settings** → add an endpoint pointing at your
+deployed route (e.g. `https://your-worker.example.com/payment/webhook`), then copy
+its signing secret into `AUTUMN_WEBHOOK_SECRET`. Autumn's event catalog is
+dashboard-configured; the events it can emit are
+`billing.updated`, `balances.limit_reached`, `balances.usage_alert_triggered`, and
+`billing.auto_topup_succeeded`
+([webhooks docs](https://docs.useautumn.com/documentation/webhooks)).
+
+### The signature scheme
+
+`parseWebhook` reads the `svix-id` / `svix-timestamp` / `svix-signature` headers
+(falling back to the bare `webhook-*` aliases some Standard-Webhooks gateways
+forward) and verifies the HMAC over `{svix-id}.{svix-timestamp}.{rawBody}` against
+the signing secret, rejecting any delivery outside `webhookToleranceSeconds`
+(default **300s**). Verification runs over the **raw** body; never re-serialize the
+JSON before verifying. Use the [Svix libraries](https://docs.svix.com/receiving/verifying-payloads/how)
+as the reference for the scheme.
+
+<Callout type="warn">
+    **Reconcile, not webhooks, is the authoritative sync path for Autumn.** Autumn owns entitlement truth, and its outbound event catalog is best-effort — an
+    endpoint down past the retry window can drop an event for good. Pair `handleWebhook` with a [`@lunora/scheduler`](/docs/packages/scheduler) sweep that calls
+    `reconcile`: it re-fetches Autumn's current subscription truth (via `getSubscriptionStatus`) for given subscription ids and overwrites the store when it has
+    drifted. Because `check` / `listBalances` already read Autumn live, entitlement decisions are never stale even when the store is.
+</Callout>
+
+## Composite ids and what throws
+
+Autumn identifies a subscription by the **pair** `(customer_id, product_id)`
+rather than a single id. The adapter therefore encodes the Lunora
+`Subscription.id` as the composite `"<customerId>::<productId>"` and splits it
+back apart (on the last `::`) for `getSubscriptionStatus`, `cancelSubscription`,
+`updateSubscription`, and `resumeSubscription`. `createCheckout` returns this
+composite id as its `CheckoutResult.id`.
+
+Lifecycle operations map onto Autumn's attach/cancel model:
+
+- **Cancel** (`cancelSubscription`) — cancels the customer's product, immediately
+  or at period end (`atPeriodEnd: true`). A cancel-at-period-end re-reads Autumn's
+  real status and only flips the schedule flag, so a `past_due` / `paused` grant is
+  never silently promoted to `active`.
+- **Update / switch plan** (`updateSubscription`) — a plan change is an `attach` of
+  the new product; the adapter then re-reads Autumn's authoritative state.
+- **Resume** (`resumeSubscription`) — re-attaches the product to undo a scheduled
+  cancellation, then re-reads the real state.
+
+Because Autumn abstracts the money movement through Stripe, there is **no** payment
+intent to act on directly. These adapter methods **throw** `PROVIDER_ERROR`:
+
+- `capturePayment` (manual capture)
+- `cancelPayment` (manual payment cancellation)
+- `refundPayment` (refunds)
+- `getPaymentStatus` (one-time payment-session reconciliation)
+
+Issue refunds and one-off payment operations from your Stripe dashboard or the
+Autumn dashboard instead.
+
+## Troubleshooting
+
+<Callout type="warn">
+    **Signature verification fails (400).** The most common cause is a body that was parsed/re-serialized before verification — always verify the **raw**
+    request text. Confirm you forward all three `svix-id` / `svix-timestamp` / `svix-signature` headers intact, and that `AUTUMN_WEBHOOK_SECRET` is the signing
+    secret of the *specific* endpoint receiving the event (each endpoint has its own secret).
+</Callout>
+
+<Callout type="warn">
+    **"malformed autumn subscription id".** `cancelSubscription` / `getSubscriptionStatus` expect the composite `"<customerId>::<productId>"` id the adapter
+    minted (returned by `attach` / `createCheckout` and stored on the subscription row). Pass that id back verbatim — don't reconstruct it from a bare product id.
+</Callout>
+
+<Callout type="info">
+    **`check` throws "requires a featureId or priceId".** The facade validates the argument shape before delegating to Autumn, so a bare `check({referenceId})`
+    is rejected the same way on every provider. Pass a `featureId` for a feature allowance (the common Autumn case).
+</Callout>
+
+<Callout type="info">
+    **Subscription looks active but a balance is wrong.** Autumn owns the balance math, so `check` / `listBalances` read it live — a stale store row never
+    affects an entitlement decision. If a stored `subscriptions` row itself drifts (e.g. after a missed webhook), run the `reconcile` sweep to re-fetch Autumn's
+    truth.
+</Callout>
+
+<Callout type="info">
+    **Sandbox vs production.** An Autumn sandbox secret key only sees sandbox customers and products, and its webhook endpoint has its own signing secret. Keep
+    sandbox and production keys/secrets in separate environments — mixing them yields empty results or signature failures.
+</Callout>
+
+## See also
+
+- [@lunora/payment](/docs/packages/payment) — the provider-agnostic overview and `ctx.payments` surface
+- [@lunora/scheduler](/docs/packages/scheduler) — drive the `reconcile` sweep
+- [Studio](/docs/packages/studio) — the Payments panel (synced customers, subscriptions, webhook events)
+- [Autumn docs](https://docs.useautumn.com/welcome) · [Autumn webhooks](https://docs.useautumn.com/documentation/webhooks) · [gating: check & track](https://docs.useautumn.com/documentation/getting-started/gating)

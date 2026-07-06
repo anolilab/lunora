@@ -69,10 +69,12 @@ interface PolarAdapterOptions {
 }
 
 const PAYMENT_STATE_BY_POLAR_ORDER_STATUS: Record<string, PaymentState> = {
+    draft: "initiated",
     paid: "captured",
     partially_refunded: "partially_refunded",
     pending: "initiated",
     refunded: "refunded",
+    void: "canceled",
 };
 
 const SUBSCRIPTION_STATE_BY_POLAR_STATUS: Record<string, SubscriptionState> = {
@@ -138,6 +140,13 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
     switch (eventType) {
         case "order.created":
         case "order.paid": {
+            // `order.paid` is definitionally settled. `order.created` also fires for not-yet-paid orders
+            // (e.g. a pending subscription renewal), so for it require a settled `status` before emitting
+            // a capture — a still-pending order is a no-op, and the later `order.paid` is the settle signal.
+            if (eventType === "order.created" && PAYMENT_STATE_BY_POLAR_ORDER_STATUS[readString(object, "status") ?? ""] !== "captured") {
+                return { ...base, type: "unhandled" };
+            }
+
             return {
                 ...base,
                 amount: money(BigInt(readNumber(object, "total_amount") ?? readNumber(object, "amount") ?? 0), currency),
@@ -163,6 +172,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         case "subscription.canceled":
         case "subscription.created":
         case "subscription.revoked":
+        case "subscription.uncanceled":
         case "subscription.updated": {
             const type =
                 eventType === "subscription.revoked"

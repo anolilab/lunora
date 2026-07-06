@@ -87,6 +87,12 @@ export interface CheckoutInput {
     readonly cancelUrl: string;
     /** Existing provider customer id, if known. */
     readonly customerId?: string;
+
+    /**
+     * Customer email, used when the reference has no provider customer yet. Some Merchant-of-Record
+     * providers (e.g. Dodo Payments) require an email to mint a customer, so pass it on first checkout.
+     */
+    readonly email?: string;
     /** Outbound idempotency key for the provider call; auto-derived when omitted. */
     readonly idempotencyKey?: string;
     readonly metadata?: Record<string, string>;

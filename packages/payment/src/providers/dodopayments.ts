@@ -305,6 +305,17 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
             const currency = readString(refund, "currency") ?? input.amount?.currency ?? "usd";
             const refundedAmount = input.amount ?? money(BigInt(Math.round(readNumber(refund, "amount") ?? 0)), currency);
 
+            // Dodo refunds can settle asynchronously (`pending`/`review` → later `refund.succeeded` or
+            // `refund.failed`). Reflect the refund's real status instead of optimistically claiming
+            // "refunded"; the webhook-synced store stays authoritative for the final state.
+            const status = readString(refund, "status");
+            const isPartial = readBoolean(refund, "is_partial") ?? input.amount !== undefined;
+            let state: PaymentState = "captured";
+
+            if (status === "succeeded") {
+                state = isPartial ? "partially_refunded" : "refunded";
+            }
+
             return {
                 amount: refundedAmount,
                 capturedAmount: refundedAmount,
@@ -313,7 +324,7 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
                 provider: "dodopayments",
                 referenceId: "",
                 refundedAmount,
-                state: "refunded",
+                state,
                 updatedAt: Date.now(),
             };
         },

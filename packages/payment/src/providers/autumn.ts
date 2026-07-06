@@ -87,6 +87,15 @@ const SUBSCRIPTION_STATE_BY_AUTUMN_STATUS: Record<string, SubscriptionState> = {
     trialing: "trialing",
 };
 
+/** `billing.updated` reports each plan change via an `action`; map it to a state when no `status` is present. */
+const SUBSCRIPTION_STATE_BY_AUTUMN_ACTION: Record<string, SubscriptionState> = {
+    activated: "active",
+    canceled: "canceled",
+    cancelled: "canceled",
+    expired: "canceled",
+    scheduled: "paused",
+};
+
 const SUBSCRIPTION_ID_SEPARATOR = "::";
 
 const notSupported = (operation: string): never => {
@@ -143,8 +152,13 @@ const isCanceling = (product: Record<string, unknown>): boolean =>
 
 const productToSubscription = (customerId: string, product: Record<string, unknown>): Subscription => {
     const now = Date.now();
-    const productId = readAny(product, "id", "product_id", "productId") ?? "";
+    // Newer Autumn generations key the plan as `plan_id` under a `subscriptions` row; classic ones use
+    // `id`/`product_id` under `products`. Read across both so an active subscriber is never missed.
+    const productId = readAny(product, "id", "product_id", "productId", "plan_id", "planId") ?? "";
     const status = readAny(product, "status") ?? "active";
+    // Current Autumn exposes past-due as a separate boolean rather than a status — honor it so an
+    // otherwise-`active` row that is past due is treated as non-entitling (fail closed), never entitling.
+    const pastDue = readBoolean(product, "past_due") ?? readBoolean(product, "pastDue") ?? false;
 
     return {
         cancelAtPeriodEnd: isCanceling(product),
@@ -156,17 +170,22 @@ const productToSubscription = (customerId: string, product: Record<string, unkno
         provider: "autumn",
         quantity: readAnyNumber(product, "quantity") ?? 1,
         referenceId: customerId,
-        // Fail closed: an unrecognized Autumn status is treated as non-entitling `past_due`.
-        state: SUBSCRIPTION_STATE_BY_AUTUMN_STATUS[status] ?? "past_due",
+        // Fail closed: a past-due flag, or an unrecognized Autumn status, is non-entitling `past_due`.
+        state: pastDue ? "past_due" : (SUBSCRIPTION_STATE_BY_AUTUMN_STATUS[status] ?? "past_due"),
         updatedAt: now,
     };
 };
 
-/** Find a customer's product row by product id across the (possibly variously-named) list. */
-const findProduct = (customer: Record<string, unknown>, productId: string): Record<string, unknown> | undefined => {
-    const products = Array.isArray(customer.products) ? customer.products : [];
+/**
+ * Find a customer's plan row by product/plan id. Scans both the classic `products` array and the
+ * newer `subscriptions` array, matching on any of the id field names those generations use.
+ */
+const asRecordList = (value: unknown): Record<string, unknown>[] => (Array.isArray(value) ? value.map((entry) => asRecord(entry)) : []);
 
-    return products.map((entry) => asRecord(entry)).find((entry) => (readAny(entry, "id", "product_id", "productId") ?? "") === productId);
+const findProduct = (customer: Record<string, unknown>, productId: string): Record<string, unknown> | undefined => {
+    const rows = [...asRecordList(customer.products), ...asRecordList(customer.subscriptions)];
+
+    return rows.find((entry) => (readAny(entry, "id", "product_id", "productId", "plan_id", "planId") ?? "") === productId);
 };
 
 /**
@@ -217,11 +236,62 @@ const readSubscription = async (client: AutumnClientLike, customerId: string, pr
 // customer id, which is our reference id) and the product/subscription details defensively.
 const referenceFromEvent = (object: Record<string, unknown>): string | undefined => readAny(object, "customer_id", "customerId");
 
+/**
+ * Autumn's primary subscription-lifecycle event. `data` carries `customer_id` and a `plan_changes[]`
+ * array of `{ action, subscription: { plan_id, status, past_due, … } }`; older shapes inline the row.
+ * Read across both — reconcile stays authoritative (see the header note).
+ */
+const mapBillingUpdated = (eventId: string, object: Record<string, unknown>): WebhookAction => {
+    const base = { eventId, provider: "autumn" as const, raw: { object, type: "billing.updated" } };
+    const customerId = referenceFromEvent(object);
+    const change = asRecordList(object.plan_changes)[0] ?? object;
+    const subscription = change.subscription ? asRecord(change.subscription) : change;
+    const planId = readAny(subscription, "plan_id", "planId", "product_id", "productId", "id");
+    const status = readAny(subscription, "status");
+    const action = readAny(change, "action");
+    const pastDue = readBoolean(subscription, "past_due") ?? readBoolean(subscription, "pastDue") ?? false;
+    const fromStatus = status === undefined ? undefined : SUBSCRIPTION_STATE_BY_AUTUMN_STATUS[status];
+    const fromAction = action === undefined ? undefined : SUBSCRIPTION_STATE_BY_AUTUMN_ACTION[action];
+    const state: SubscriptionState | undefined = pastDue ? "past_due" : (fromStatus ?? fromAction);
+
+    return {
+        ...base,
+        cancelAtPeriodEnd: readBoolean(subscription, "cancel_at_period_end") ?? isCanceling(subscription),
+        currentPeriodEnd: readAnyNumber(subscription, "current_period_end", "currentPeriodEnd"),
+        currentPeriodStart: readAnyNumber(subscription, "current_period_start", "currentPeriodStart"),
+        customerId,
+        priceId: planId,
+        referenceId: customerId,
+        subscriptionId: customerId === undefined || planId === undefined ? undefined : autumnSubscriptionId(customerId, planId),
+        type: stateToEventType(state),
+    };
+};
+
 const mapEvent = (eventId: string, eventType: string, object: Record<string, unknown>): WebhookAction => {
     const base = { eventId, provider: "autumn" as const, raw: { object, type: eventType } };
     const currency = readAny(object, "currency") ?? "usd";
 
     switch (eventType) {
+        // Auto-topup settles a real invoice — surface it as a captured payment.
+        case "billing.auto_topup_succeeded": {
+            const invoice = asRecord(object.invoice);
+            const amount = readAnyNumber(invoice, "total", "amount") ?? readAnyNumber(object, "total", "amount");
+            const invoiceCurrency = readAny(invoice, "currency") ?? currency;
+
+            return {
+                ...base,
+                amount: amount === undefined ? undefined : money(BigInt(Math.round(amount)), invoiceCurrency),
+                customerId: referenceFromEvent(object),
+                referenceId: referenceFromEvent(object),
+                sessionId: readAny(invoice, "id", "stripe_id", "invoice_id") ?? readAny(object, "id"),
+                type: "payment.captured",
+            };
+        }
+
+        case "billing.updated": {
+            return mapBillingUpdated(eventId, object);
+        }
+
         // Product lifecycle — the entitling truth. `data` is the product row (or wraps it).
         case "customer.product.added":
         case "customer.product.canceled":

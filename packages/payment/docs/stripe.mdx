@@ -1,0 +1,456 @@
+---
+title: "@lunora/payment — Stripe"
+description: End-to-end tutorial for wiring the Stripe adapter into ctx.payments — checkout, subscriptions, entitlements, metered usage, refunds, and verified webhooks.
+---
+
+[Stripe](https://stripe.com) is the default provider for `@lunora/payment`. This
+page is a standalone, copy-pasteable walkthrough: install the adapter, wire it
+onto `ctx.payments`, run your first checkout, gate features and meter usage, and
+verify inbound webhooks. Every API detail below maps to a real method on the
+adapter — nothing is invented. For the provider-agnostic concepts (`ctx.payments`
+surface, the state machine, the store, `reconcile`) read the
+[package overview](/docs/packages/payment) first.
+
+## Stripe is a PSP — you are the merchant of record
+
+Stripe is a **payment service provider**, not a Merchant-of-Record. That is the
+one fact that shapes everything else: **you** are the merchant of record, so
+**you** own tax calculation, invoicing, and remittance (Stripe Tax and Invoicing
+are add-on products you enable on your own account — the adapter does not do this
+for you). This is the opposite of Polar, Dodo Payments, and Creem, where the
+provider is the legal seller and owns tax/invoices.
+
+The adapter advertises this in its `capabilities`:
+
+<TypeTable
+    type={{
+        merchantOfRecord: { type: "false", description: "Stripe is a PSP — you own tax, invoicing, and remittance. Not a Merchant-of-Record." },
+        portal: { type: "true", description: "Native hosted billing portal via billingPortal.sessions — createPortalSession works." },
+        usageMetering: { type: "true", description: "Usage-based billing via Stripe Meter Events — track forwards usage upstream." },
+    }}
+/>
+
+**Choose Stripe when** you want the broadest payment-method and pricing coverage,
+direct control of the money flow (including manual authorize/capture), and you are
+prepared to handle tax/invoicing yourself. If you would rather offload tax and
+sales-of-record liability, reach for a Merchant-of-Record provider (Polar / Dodo
+Payments / Creem) — same `ctx.payments` API, different adapter.
+
+Because Stripe is a PSP, **manual authorize/capture is available**: a checkout in
+`mode: "payment"` can hold funds (`requires_capture`) and you capture later. The
+Merchant-of-Record providers don't expose this.
+
+## Prerequisites
+
+<Steps>
+<Step>
+
+**A Stripe account.** Create one at [dashboard.stripe.com](https://dashboard.stripe.com).
+Keep it in **Test mode** while you build (the toggle is in the dashboard) — test
+keys start `sk_test_…`, live keys `sk_live_…`.
+
+</Step>
+<Step>
+
+**Your secret key.** Dashboard → **Developers → API keys**
+([dashboard.stripe.com/apikeys](https://dashboard.stripe.com/apikeys)). Copy the
+**Secret key**. This is the value for `STRIPE_SECRET_KEY`.
+
+</Step>
+<Step>
+
+**A webhook signing secret.** Dashboard → **Developers → Webhooks**
+([dashboard.stripe.com/webhooks](https://dashboard.stripe.com/webhooks)) → add an
+endpoint (see [Webhooks](#webhooks) below), then copy its **Signing secret**
+(`whsec_…`). This is the value for `STRIPE_WEBHOOK_SECRET`. For local dev you can
+instead run `stripe listen` (the [Stripe CLI](https://docs.stripe.com/stripe-cli))
+— it prints a `whsec_…` to use.
+
+</Step>
+<Step>
+
+**At least one Price.** Dashboard → **Product catalog** → create a product with a
+recurring or one-time price; copy its price id (`price_…`). You'll pass this to
+`createCheckout` / `attach`.
+
+</Step>
+</Steps>
+
+Lunora scaffolds the two secrets into your `.dev.vars` automatically when it
+detects `@lunora/payment`:
+
+```bash
+# .dev.vars
+STRIPE_SECRET_KEY=sk_test_...       # Developers → API keys
+STRIPE_WEBHOOK_SECRET=whsec_...     # Developers → Webhooks (endpoint signing secret)
+```
+
+<Callout type="info">
+    These are the exact env-var names Lunora's `.dev.vars` scaffolder writes for the Stripe adapter. Add them to your production secrets with `wrangler secret
+    put STRIPE_SECRET_KEY` / `wrangler secret put STRIPE_WEBHOOK_SECRET` before deploying.
+</Callout>
+
+## Install
+
+The package never imports the `stripe` SDK — you inject the client, so `stripe`
+stays an optional peer dependency you install alongside it:
+
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```bash tab="pnpm"
+pnpm add @lunora/payment stripe
+```
+
+```bash tab="npm"
+npm install @lunora/payment stripe
+```
+
+```bash tab="yarn"
+yarn add @lunora/payment stripe
+```
+
+```bash tab="bun"
+bun add @lunora/payment stripe
+```
+
+</Tabs>
+
+## Configure
+
+`ctx.payments` is wired by codegen onto `ActionCtx` whenever a `lunora/` source
+imports `@lunora/payment` or reads `ctx.payments`. The Stripe adapter — which
+carries your secret key — comes from a `config.payment(env)` thunk you pass to
+`createShardDO()`.
+
+<Steps>
+<Step>
+
+**Construct a `Stripe` client** from `env.STRIPE_SECRET_KEY`. On Workers, use the
+fetch-based HTTP client so the SDK runs on `workerd`:
+
+```ts
+import Stripe from "stripe";
+
+const stripe = new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() });
+```
+
+</Step>
+<Step>
+
+**Build the adapter** with `createStripeAdapter`. A real `Stripe` instance
+satisfies the structural `StripeClientLike`; the cast keeps the package free of a
+hard `stripe` dependency:
+
+```ts
+import type { StripeClientLike } from "@lunora/payment";
+import { createStripeAdapter } from "@lunora/payment";
+
+const adapter = createStripeAdapter({
+    client: stripe as unknown as StripeClientLike,
+    webhookSecret: env.STRIPE_WEBHOOK_SECRET,
+    webhookToleranceSeconds: 300, // optional; default 300 (five minutes)
+});
+```
+
+</Step>
+<Step>
+
+**Wire it into `createShardDO`** exactly as the overview shows — pass the adapter,
+your entitlement plans, and an optional authorizer/observer:
+
+```ts
+import type { StripeClientLike } from "@lunora/payment";
+import { createStripeAdapter } from "@lunora/payment";
+import { createShardDO } from "./_generated/shard";
+import Stripe from "stripe";
+
+export const ShardDO = createShardDO({
+    payment: (env) => ({
+        adapter: createStripeAdapter({
+            client: new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() }) as unknown as StripeClientLike,
+            webhookSecret: env.STRIPE_WEBHOOK_SECRET,
+        }),
+        // Override the default "caller owns the referenceId" rule for org/workspace keys.
+        // authorize: (referenceId) => referenceId === ctx.auth.orgId,
+        entitlements: {
+            plans: {
+                pro: { features: ["export"], limits: { api_calls: 1000 }, priceIds: ["price_123"] },
+            },
+        },
+        observability: (event) => console.log("[payment]", event.type, event),
+    }),
+});
+```
+
+</Step>
+</Steps>
+
+The adapter options:
+
+<TypeTable
+    type={{
+        client: { type: "StripeClientLike", description: "An injected Stripe instance (structural subset). Required." },
+        webhookSecret: { type: "string", description: "The endpoint signing secret (whsec_…) used to verify inbound webhooks. Required." },
+        webhookToleranceSeconds: {
+            type: "number",
+            default: "300",
+            description: "Clock-skew tolerance for the signed timestamp, in whole seconds. Rejects replays outside the window.",
+        },
+    }}
+/>
+
+<Callout type="info">
+    Pin the store's read-heavy tables (e.g. `subscriptions`) with `.global()` in your own `lunora/schema.ts` for cross-region reads — see [Data it
+    stores](/docs/packages/payment#data-it-stores). The provider is stateless; the store owns all state.
+</Callout>
+
+## First checkout / subscription
+
+Call the facade from an action. `createCheckout` returns a hosted Stripe Checkout
+URL to redirect the browser to. Use `mode: "subscription"` for recurring plans and
+`mode: "payment"` for one-time charges. `attach` is the plan-oriented alias with
+`mode` defaulting to `"subscription"`, so a subscription is just
+`{ referenceId, priceId, successUrl, cancelUrl }`:
+
+```ts
+import { action, v } from "./_generated/server";
+
+export const subscribe = action.input({ priceId: v.string() }).action(async ({ ctx, args: { priceId } }): Promise<{ url: string }> => {
+    const { url } = await ctx.payments.attach({
+        referenceId: ctx.auth.userId,
+        priceId, // e.g. "price_123"
+        successUrl: "https://app.test/done",
+        cancelUrl: "https://app.test/cancel",
+    });
+
+    return { url };
+});
+```
+
+Under the hood the adapter calls Stripe's
+[Create Checkout Session](https://docs.stripe.com/api/checkout/sessions/create)
+with `line_items: [{ price, quantity }]`, `client_reference_id`, and the
+framework-controlled `referenceId` pinned into both the session and the
+subscription `metadata`. The facade reuses a reference's stored Stripe customer —
+minting a new one via [Create Customer](https://docs.stripe.com/api/customers/create)
+only on first checkout — and attaches an outbound idempotency key automatically
+(override via `input.idempotencyKey`), so a double-submit never double-charges.
+
+The subscription only becomes **active** in your store once Stripe confirms
+payment through a webhook (see below) — `createCheckout` just starts the flow.
+
+## Entitlements and metered usage
+
+Once a subscription is synced, entitlements are derived **in-Worker** from stored
+subscription state — no extra call to Stripe. A plan is granted when an active (or
+genuine trialing) subscription holds one of its configured `priceIds`.
+
+**Gate a feature** with `check` — pass a `featureId` (feature grant/allowance) or a
+`priceId` (active product access):
+
+```ts
+export const apiCallsRemaining = action.action(async ({ ctx }): Promise<{ allowed: boolean; balance?: number }> => {
+    const result = await ctx.payments.check({ referenceId: ctx.auth.userId, featureId: "api_calls" });
+
+    return { allowed: result.allowed, balance: result.balance };
+});
+```
+
+**Meter usage** with `track`. Because Stripe advertises `usageMetering`, `track`
+writes the durable local ledger **and** forwards the event to Stripe's
+[Meter Events](https://docs.stripe.com/api/billing/meter-event/create) API
+(`event_name` = your `featureId`, `payload.stripe_customer_id` = the stored Stripe
+customer, `payload.value` = the quantity, `identifier` = the idempotency key that
+dedupes within Stripe's aggregation window). Upstream metering is **best-effort**:
+a reporting failure is observed, never thrown, and the local ledger `check` reads is
+always updated.
+
+```ts
+export const recordApiCall = action.action(async ({ ctx }): Promise<{ recorded: boolean }> => {
+    // `mode: "add"` (default) increments; `"set"` reconciles the period total.
+    const result = await ctx.payments.track({ referenceId: ctx.auth.userId, featureId: "api_calls" });
+
+    return { recorded: result.recorded };
+});
+```
+
+For `track` to feed a Stripe meter, create the meter in the dashboard
+(**Product catalog → Meters**) with an `event_name` matching your `featureId`, and
+attach it to a usage-based Price. A metered `check` subtracts usage tracked this
+period (`{ allowed, balance, limit, used }`) — the period window comes from the
+synced subscription's current billing period, so webhook sync (next) must be
+working for the window to be correct.
+
+## Webhooks
+
+Stripe delivers state changes as webhooks. Signature verification needs the **raw**
+request body, so the endpoint runs at the Worker edge via `httpAction` (no
+`ctx.db`) and forwards the raw body + signature into the shard, where
+`ctx.payments` and its store exist. Note the header is `stripe-signature`:
+
+```ts
+// lunora/http.ts
+import { httpAction, httpRouter } from "lunorash/server";
+import { processWebhook } from "./billing";
+
+export const app = httpRouter();
+
+app.post(
+    "/payment/webhook",
+    httpAction(async (ctx, request) => {
+        const body = await request.text();
+        const signature = request.headers.get("stripe-signature") ?? "";
+
+        return Response.json(await ctx.runAction(processWebhook, { body, signature }));
+    }),
+);
+```
+
+```ts
+// lunora/billing.ts
+import { internalAction, v } from "./_generated/server";
+
+export const processWebhook = internalAction
+    .input({ body: v.string(), signature: v.string() })
+    .action(async ({ ctx, args: { body, signature } }): Promise<{ applied: boolean; status: number }> => {
+        const request = new Request("https://internal/payment/webhook", {
+            body,
+            headers: { "stripe-signature": signature },
+            method: "POST",
+        });
+        const response = await ctx.payments.handleWebhook(request);
+        const result = (await response.json()) as { applied?: boolean };
+
+        return { applied: result.applied ?? false, status: response.status };
+    });
+```
+
+### Register the endpoint
+
+In the Stripe dashboard → **Developers → Webhooks → Add endpoint**, set the URL to
+your deployed route (e.g. `https://your-worker.example.com/payment/webhook`), then
+copy the endpoint's **Signing secret** (`whsec_…`) into `STRIPE_WEBHOOK_SECRET`.
+Locally, `stripe listen --forward-to localhost:8787/payment/webhook` prints a
+signing secret and streams events to your dev worker.
+
+Select at least these events when creating the endpoint:
+
+- `checkout.session.completed`
+- `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`
+- `payment_intent.succeeded`, `payment_intent.payment_failed`, `payment_intent.amount_capturable_updated`
+- `charge.refunded`
+
+### The signature scheme + tolerance
+
+Stripe signs each delivery with the
+[`Stripe-Signature`](https://docs.stripe.com/webhooks#verify-manually) header —
+`t=<unix-seconds>,v1=<hex-hmac>`. The adapter recomputes
+`HMAC-SHA256(webhookSecret, "{t}.{rawBody}")` and constant-time-compares it against
+every `v1` value, then rejects any delivery whose signed timestamp is more than
+`webhookToleranceSeconds` (default **300s**) from now — Stripe's own replay-window
+default. Verification runs over the **raw** body; never re-serialize the JSON
+before verifying.
+
+### Events → normalized transitions
+
+`handleWebhook` verifies, normalizes each event into a `WebhookAction`, and applies
+it through the state machine. Once verified it **always returns 200** so Stripe
+stops retrying — a duplicate or no-op is acknowledged, not re-applied (the Stripe
+event id keys an append-only `events` log for idempotency and audit).
+
+| Stripe event                                 | Normalized transition                                                                                           | Notes                                                                                           |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `checkout.session.completed` (payment mode)  | `payment.captured`                                                                                              | `amount_total` recorded; `payment_intent` (or session id) is the session key.                   |
+| `checkout.session.completed` (subscription)  | `subscription.active` **only if** `payment_status` is `paid`/`no_payment_required`; else `subscription.updated` | Fails closed — an `unpaid` session never entitles.                                              |
+| `customer.subscription.created` / `.updated` | `subscription.active` / `.past_due` / `.paused` / `.canceled` / `.updated`                                      | Routed by the subscription `status`; `updated` is a no-op metadata patch when no state changes. |
+| `customer.subscription.deleted`              | `subscription.canceled`                                                                                         |                                                                                                 |
+| `payment_intent.succeeded`                   | `payment.captured`                                                                                              | Uses `amount_received` (falls back to `amount`).                                                |
+| `payment_intent.payment_failed`              | `payment.failed`                                                                                                | Emits an alertable `payment.failed` observer signal.                                            |
+| `payment_intent.amount_capturable_updated`   | `payment.authorized`                                                                                            | Manual-capture flow: funds held awaiting capture.                                               |
+| `charge.refunded`                            | `payment.refunded`                                                                                              | `amount_refunded` (cumulative) applied as an **absolute** total, so partials never over-count.  |
+| anything else                                | `unhandled`                                                                                                     | Verified and 200-acked, but no state change.                                                    |
+
+<Callout type="info">
+    Subscription status changes — including pause/resume, renewals, and moving to `past_due` after a failed invoice — reach the store through
+    `customer.subscription.updated` (Stripe emits it alongside the more specific `customer.subscription.paused` / `.resumed` / `invoice.*` events, which the
+    adapter itself treats as `unhandled`). Keep `customer.subscription.updated` selected on your endpoint.
+</Callout>
+
+<Callout type="warn">
+    Webhooks are eventually-but-not-guaranteed: an endpoint down past Stripe's retry window can drop an event for good. Pair `handleWebhook` with a
+    [`@lunora/scheduler`](/docs/packages/scheduler) sweep that calls `reconcile` — it re-fetches Stripe's current truth for given payment/subscription ids and
+    overwrites the store when it has drifted.
+</Callout>
+
+## Refunds, portal, and manual capture
+
+**Refunds** are first-class. `refundPayment` (exposed via the adapter) calls Stripe
+[Create Refund](https://docs.stripe.com/api/refunds/create) against the payment
+intent — omit `amount` for a full refund, pass a `Money` for a partial one — then
+re-reads the intent to resolve `partially_refunded` vs `refunded`. The
+`charge.refunded` webhook keeps the store in sync afterward.
+
+**Customer portal.** `capabilities.portal` is `true`, so `createPortalSession`
+opens Stripe's hosted [Billing Portal](https://docs.stripe.com/api/customer_portal/sessions/create)
+where customers manage payment methods, invoices, and cancellations. The customer
+is derived from the store (never a caller-supplied id — no IDOR):
+
+```ts
+export const openPortal = action.action(async ({ ctx }): Promise<{ url: string }> => {
+    return ctx.payments.createPortalSession(ctx.auth.userId, "https://app.test/account");
+});
+```
+
+Enable and configure the portal once in the dashboard under
+**Settings → Billing → Customer portal**.
+
+**Manual authorize/capture.** Because Stripe is a PSP, a `mode: "payment"` checkout
+can authorize-only (`requires_capture`) and you capture later — the adapter exposes
+`capturePayment` (optional partial `amount`) and `cancelPayment` over Stripe's
+PaymentIntent [capture](https://docs.stripe.com/api/payment_intents/capture) /
+[cancel](https://docs.stripe.com/api/payment_intents/cancel) endpoints.
+
+### Limitations
+
+- **You own tax and invoicing.** Stripe Tax and Invoicing are separate products you
+  enable on your own account; the adapter does not compute or file tax.
+- **Metering is best-effort upstream.** A failed forward to Stripe Meter Events is
+  observed, not thrown — the local ledger stays authoritative for `check` until
+  `reconcile` reconciles.
+- **Out-of-band cancellations of one-time payments** (`payment_intent.canceled`) are
+  not mapped — they arrive as `unhandled`. Subscriptions handle cancellation via
+  `customer.subscription.deleted`.
+
+## Troubleshooting
+
+<Callout type="warn">
+    **Signature verification fails (400 "no matching signature").** The most common cause is a body that was parsed/re-serialized before verification — always
+    verify the **raw** request text. Also confirm `STRIPE_WEBHOOK_SECRET` is the signing secret of the *specific* endpoint receiving the event (each endpoint,
+    and the `stripe listen` CLI, has its own `whsec_…`), and that you read the `stripe-signature` header (not `Stripe-Signature` — header lookups are
+    case-insensitive, but the value must be forwarded intact).
+</Callout>
+
+<Callout type="warn">
+    **"signature timestamp outside tolerance" (WEBHOOK_TIMESTAMP_INVALID).** The signed `t=` timestamp is more than `webhookToleranceSeconds` (default 300s)
+    from your worker's clock. This is usually a replayed/late delivery — good. If it fires on live traffic, check for a skewed clock; only raise
+    `webhookToleranceSeconds` deliberately, as a larger window weakens replay protection.
+</Callout>
+
+<Callout type="info">
+    **Test vs live keys.** A `sk_test_…` key and its test-mode webhook secret only see test-mode events; `sk_live_…` needs a *separately created* live-mode
+    endpoint and its own `whsec_…`. Mixing test keys with a live endpoint (or vice-versa) yields signature failures or empty results. Keep the two sets of
+    secrets in separate environments.
+</Callout>
+
+<Callout type="info">
+    **Subscription shows active but `check`/metered balance is wrong.** Metered `check` sums usage over the synced billing period, which comes from the
+    subscription's current-period fields. If those are empty, ensure `customer.subscription.updated` is selected on your endpoint and that your Stripe API
+    version matches your SDK (recent Stripe API versions expose the billing period on subscription **items**).
+</Callout>
+
+## See also
+
+- [@lunora/payment](/docs/packages/payment) — the provider-agnostic overview and `ctx.payments` surface
+- [@lunora/scheduler](/docs/packages/scheduler) — drive the `reconcile` sweep
+- [Studio](/docs/packages/studio) — the Payments panel (synced customers, subscriptions, webhook events)
+- [Stripe API reference](https://docs.stripe.com/api) · [Stripe webhooks](https://docs.stripe.com/webhooks)

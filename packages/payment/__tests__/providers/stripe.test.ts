@@ -216,6 +216,39 @@ describe("stripe adapter", () => {
         expect(action.type).toBe("subscription.past_due");
     });
 
+    it("reads the billing period from the subscription item, not the top level (Stripe basil) (regression)", async () => {
+        expect.assertions(2);
+
+        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+
+        const start = 1_750_000_000;
+        const end = 1_752_592_000;
+        const event = {
+            data: {
+                object: {
+                    customer: "cus_1",
+                    id: "sub_1",
+                    items: { data: [{ current_period_end: end, current_period_start: start, price: { id: "price_1" }, quantity: 1 }] },
+                    metadata: { referenceId: "user_1" },
+                    status: "active",
+                },
+            },
+            id: "evt_period",
+            type: "customer.subscription.updated",
+        };
+        const payload = JSON.stringify(event);
+        const timestamp = Math.floor(Date.now() / 1000);
+        const signature = await hmacSha256Hex("whsec", `${String(timestamp)}.${payload}`);
+        const signatureHeader = `t=${String(timestamp)},v1=${signature}`;
+        const headers = { get: (name: string) => (name === "stripe-signature" ? signatureHeader : null) };
+
+        const action = await adapter.parseWebhook({ headers, payload });
+
+        // API 2025-03-31.basil moved current_period_* onto the item — they must still surface (in ms).
+        expect(action.currentPeriodStart).toBe(start * 1000);
+        expect(action.currentPeriodEnd).toBe(end * 1000);
+    });
+
     it("does not mark an `unpaid` subscription checkout active (regression)", async () => {
         expect.assertions(1);
 

@@ -126,7 +126,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             if (existing) {
                 customerId = existing.id;
             } else {
-                const customer = await adapter.getOrCreateCustomer({ referenceId: input.referenceId });
+                const customer = await adapter.getOrCreateCustomer({ email: input.email, referenceId: input.referenceId });
 
                 customerId = customer.id;
                 await store.upsertCustomer(customer);

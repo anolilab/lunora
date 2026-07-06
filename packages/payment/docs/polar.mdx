@@ -1,0 +1,457 @@
+---
+title: "@lunora/payment — Polar"
+description: Merchant-of-Record payments on Lunora with Polar — checkout, subscriptions, entitlements, usage metering, and Standard-Webhooks sync.
+---
+
+[Polar](https://polar.sh) is a **Merchant-of-Record (MoR)** for digital
+products and SaaS. Unlike a raw payment processor, Polar is the **legal seller**
+of your product: it runs checkout, calculates and remits sales tax / VAT
+worldwide, issues invoices, and owns chargebacks and disputes. Your app never
+touches card data or a tax engine — you sell to Polar's checkout, Polar sells to
+the customer.
+
+The `@lunora/payment` Polar adapter (`createPolarAdapter`) normalizes Polar onto
+the same provider-agnostic `ctx.payments` surface as every other provider:
+hosted checkout, subscriptions, entitlement checks, usage metering, a native
+billing portal, and webhook sync through the shared payment/subscription state
+machine. As with every adapter, the package **never imports the Polar SDK** — you
+inject a client, so `@polar-sh/sdk` stays an optional peer dependency.
+
+The adapter advertises these capabilities:
+
+| Capability         | Value  | What it means                                                                        |
+| ------------------ | :----: | ------------------------------------------------------------------------------------ |
+| `merchantOfRecord` | `true` | Polar owns tax/VAT, invoices, and disputes. Manual authorize/capture is not a thing. |
+| `portal`           | `true` | Native hosted customer portal (`customerSessions.create`).                           |
+| `usageMetering`    | `true` | Usage-based billing via Polar's event ingestion (`events.ingest`).                   |
+
+## Polar vs. Stripe — when to choose it
+
+<Callout type="info">
+    Choose **Polar** (or another MoR — Dodo Payments, Creem) when you want tax/VAT handled for you and don't want to register for sales tax in every
+    jurisdiction you sell into. Choose **Stripe** (a PSP) when you need direct control over the money movement, manual authorize/capture, or you already run
+    your own tax and invoicing. Because the provider is a stateless translator and the store owns all state, switching later is a configuration change, not a
+    rewrite.
+</Callout>
+
+Practical consequences of the MoR model in this adapter:
+
+- **No manual capture / authorize.** Polar captures at checkout. `capturePayment`
+  and `cancelPayment` throw `PROVIDER_ERROR` — they are not part of an MoR flow.
+- **Refunds are issued in Polar** (dashboard or API) and flow back in through the
+  `refund.created` webhook — see [Refunds](#refunds).
+- **Product-based, not price-based.** Polar checkout takes **product ids**; the
+  cross-provider `priceId` field carries a Polar product id.
+
+## Prerequisites
+
+<Steps>
+<Step>
+
+**A Polar organization.** Create one at [polar.sh](https://polar.sh) and add at
+least one product. Polar offers a fully isolated
+[**sandbox**](https://polar.sh/docs/integrate/sandbox) at `sandbox.polar.sh` —
+develop against it first, then flip to production.
+
+</Step>
+<Step>
+
+**An access token.** In the Polar dashboard, open your organization
+**Settings → General → Developers** and create an **Organization Access Token**.
+This is the `POLAR_ACCESS_TOKEN` the SDK authenticates with. See
+[Authentication](https://polar.sh/docs/integrate/authentication).
+
+</Step>
+<Step>
+
+**A webhook signing secret.** You get this when you create a webhook endpoint
+under **Settings → Webhooks** — see [Webhooks](#webhooks) below. It becomes
+`POLAR_WEBHOOK_SECRET`.
+
+</Step>
+</Steps>
+
+Both secrets are scaffolded into your `.dev.vars.example` when `@lunora/payment`
+is detected:
+
+```bash title=".dev.vars"
+POLAR_ACCESS_TOKEN=<your-polar-access-token>
+POLAR_WEBHOOK_SECRET=<your-polar-webhook-secret>
+```
+
+## Install
+
+Add the package and the Polar SDK (an optional peer — the adapter takes the
+client by injection):
+
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```bash tab="pnpm"
+pnpm add @lunora/payment @polar-sh/sdk
+```
+
+```bash tab="npm"
+npm install @lunora/payment @polar-sh/sdk
+```
+
+```bash tab="yarn"
+yarn add @lunora/payment @polar-sh/sdk
+```
+
+```bash tab="bun"
+bun add @lunora/payment @polar-sh/sdk
+```
+
+</Tabs>
+
+## Configure
+
+`ctx.payments` is wired by codegen onto `ActionCtx` whenever a `lunora/` source
+imports `@lunora/payment` or reads `ctx.payments`. The adapter — which carries
+your Polar secrets — comes from a `payment(env)` thunk you pass to
+`createShardDO()`.
+
+<Steps>
+<Step>
+
+**Construct and inject the Polar SDK client.** A real `Polar` instance satisfies
+the structural `PolarClientLike`; the cast keeps this package free of a hard
+`@polar-sh/sdk` dependency. Pass `server: "sandbox"` while developing.
+
+```ts title="lunora/server.ts"
+import type { PolarClientLike } from "@lunora/payment";
+import { createPolarAdapter } from "@lunora/payment";
+import { Polar } from "@polar-sh/sdk";
+import { createShardDO } from "./_generated/shard";
+
+export const ShardDO = createShardDO({
+    payment: (env) => ({
+        adapter: createPolarAdapter({
+            client: new Polar({
+                accessToken: env.POLAR_ACCESS_TOKEN,
+                // Drop `server` (or set "production") for live mode.
+                server: "sandbox",
+            }) as unknown as PolarClientLike,
+            webhookSecret: env.POLAR_WEBHOOK_SECRET,
+            // Optional clock-skew tolerance for the signed webhook timestamp (seconds; default 300).
+            webhookToleranceSeconds: 300,
+        }),
+        // Plan → features/limits map. Required only if you gate features with `check` / `listBalances`.
+        entitlements: {
+            plans: {
+                pro: { features: ["export"], limits: { api_calls: 1000 }, priceIds: ["<polar-product-id>"] },
+            },
+        },
+        observability: (event) => console.log("[payment]", event.type, event),
+    }),
+});
+```
+
+</Step>
+<Step>
+
+**Mirror the payment tables into your `lunora/schema.ts`.** Codegen resolves
+tables from your schema AST, so declare the columns inline mirroring
+`@lunora/payment`'s exported `paymentTables` (see
+[Data it stores](/docs/packages/payment#data-it-stores)). The store — built per
+request from `ctx.db` — owns all synced state; Polar stays a stateless
+translator.
+
+</Step>
+</Steps>
+
+`createPolarAdapter` accepts:
+
+<TypeTable
+    type={{
+        client: { type: "PolarClientLike", description: "An injected @polar-sh/sdk Polar instance (structural). The package never imports the SDK itself." },
+        webhookSecret: {
+            type: "string",
+            description: "The endpoint signing secret from your Polar webhook settings; verifies inbound events (POLAR_WEBHOOK_SECRET).",
+        },
+        webhookToleranceSeconds: {
+            type: "number",
+            default: "300",
+            description: "Whole-second tolerance for the signed webhook timestamp — rejects replays outside the window.",
+        },
+    }}
+/>
+
+## Checkout & subscribe
+
+Call the facade from an **action**. Every method authorizes the caller against
+the `referenceId` first (the default rule ties `referenceId` to
+`ctx.auth.userId`), so a caller can only act on its own subscriptions. `attach`
+is the plan-oriented alias of `createCheckout` with `mode` defaulting to
+`"subscription"`.
+
+```ts title="lunora/checkout.ts"
+import { action, v } from "./_generated/server";
+
+// `priceId` is a Polar PRODUCT id — Polar is product-based.
+export const subscribe = action.input({ productId: v.string() }).action(async ({ ctx, args: { productId } }): Promise<{ url: string }> => {
+    const { url } = await ctx.payments.attach({
+        referenceId: ctx.auth.userId,
+        priceId: productId,
+        successUrl: "https://app.test/done",
+        cancelUrl: "https://app.test/cancel",
+    });
+
+    return { url };
+});
+```
+
+`createCheckout` reuses the reference's stored Polar customer — minting one via
+`customers.create` only on first checkout, keyed by `externalId` = your
+`referenceId` — and pins the framework-controlled `referenceId` into checkout
+metadata **last**, so caller-supplied metadata can never override the attributed
+owner. Redirect the browser to the returned `url`; Polar hosts the checkout.
+
+<Callout type="warn">
+    Polar is a Merchant-of-Record, so there is **no** manual authorize/capture step — Polar captures at checkout. `capturePayment` and `cancelPayment` on the
+    Polar adapter throw `PROVIDER_ERROR` ("polar (merchant-of-record) does not support …"). Don't build an auth-then-capture flow on Polar; use one-shot
+    checkout.
+</Callout>
+
+### Manage subscriptions
+
+```ts
+// Cancel now, or at period end.
+await ctx.payments.cancelSubscription(subscriptionId, { atPeriodEnd: true });
+
+// List a reference's synced subscriptions.
+const subs = await ctx.payments.listSubscriptions(ctx.auth.userId);
+```
+
+Under the hood the adapter maps these onto Polar's SDK: `atPeriodEnd` →
+`subscriptions.update({ subscriptionUpdate: { cancelAtPeriodEnd: true } })`, an
+immediate cancel → `subscriptions.revoke(...)`, a plan change →
+`subscriptions.update({ subscriptionUpdate: { productId } })`.
+
+## Entitlements: `check` and `track`
+
+Entitlements are derived from already-synced subscription state — cheap and
+in-Worker, no extra call to Polar. A plan is granted when an active (or
+trialing) subscription holds one of its configured `priceIds` (Polar product
+ids).
+
+```ts title="lunora/usage.ts"
+import { action } from "./_generated/server";
+
+// Is this reference allowed to consume one api_call right now?
+export const canCall = action.action(async ({ ctx }): Promise<{ allowed: boolean; balance?: number }> => {
+    const result = await ctx.payments.check({ referenceId: ctx.auth.userId, featureId: "api_calls" });
+
+    return { allowed: result.allowed, balance: result.balance };
+});
+
+// Record one unit of metered usage (exactly-once by idempotency key).
+export const recordCall = action.action(async ({ ctx }): Promise<{ recorded: boolean }> => {
+    const result = await ctx.payments.track({ referenceId: ctx.auth.userId, featureId: "api_calls" });
+
+    return { recorded: result.recorded };
+});
+```
+
+`track` writes a durable, append-only usage ledger that `check` sums over the
+current billing period. Because Polar advertises `usageMetering`, each recorded
+delta is **also** forwarded to Polar's event ingestion
+([`events.ingest`](https://polar.sh/docs/api-reference/events/ingest)) — one
+event per usage record, `name` = your `featureId`, keyed to the Polar customer by
+`externalCustomerId` = your `referenceId`, with the amount carried in
+`metadata.value`. This forward is **best-effort**: a Polar reporting failure is
+observed, never thrown, and the local ledger `check` reads is always updated. Map
+`metadata.value` to a [Polar meter](https://polar.sh/docs/features/usage-based-billing/meters)
+if you bill on it.
+
+## Webhooks
+
+Polar signs webhooks with the [**Standard Webhooks**](https://www.standardwebhooks.com)
+scheme (the same scheme svix uses): three headers — `webhook-id`,
+`webhook-timestamp`, and `webhook-signature` — over
+`base64(HMAC_SHA256(secret, "{id}.{timestamp}.{body}"))`. The adapter verifies
+them against `webhookSecret` (the `whsec_` prefix is stripped and the remainder
+base64-decoded to the key) with a replay-window check.
+
+### Create the endpoint in Polar
+
+<Steps>
+<Step>
+
+In the Polar dashboard open **Settings → Webhooks → Add Endpoint**. Set the URL
+to your Worker's webhook route (e.g. `https://your-app.workers.dev/payment/webhook`),
+and choose the **Raw** delivery format (JSON — not the Discord/Slack formatters).
+See [Webhook endpoints](https://polar.sh/docs/integrate/webhooks/endpoints).
+
+</Step>
+<Step>
+
+Set or generate the **signing secret** and store it as `POLAR_WEBHOOK_SECRET`.
+
+</Step>
+<Step>
+
+Subscribe to the events you need — at minimum `order.paid`, `refund.created`,
+and the `subscription.*` family (see the table below).
+
+</Step>
+</Steps>
+
+### Route the raw body into a Lunora action
+
+Signature verification needs the **raw** request body, so the endpoint runs at
+the Worker edge via `httpAction` (no `ctx.db`), forwarding the raw body and the
+three Standard-Webhooks headers into the shard via `ctx.runAction`, where
+`ctx.payments` and its store exist:
+
+```ts title="lunora/http.ts"
+import { httpAction, httpRouter } from "lunorash/server";
+import { processPolarWebhook } from "./billing";
+
+export const app = httpRouter();
+
+app.post(
+    "/payment/webhook",
+    httpAction(async (ctx, request) => {
+        const body = await request.text();
+
+        return Response.json(
+            await ctx.runAction(processPolarWebhook, {
+                body,
+                webhookId: request.headers.get("webhook-id") ?? "",
+                webhookTimestamp: request.headers.get("webhook-timestamp") ?? "",
+                webhookSignature: request.headers.get("webhook-signature") ?? "",
+            }),
+        );
+    }),
+);
+```
+
+```ts title="lunora/billing.ts"
+import { internalAction, v } from "./_generated/server";
+
+export const processPolarWebhook = internalAction
+    .input({ body: v.string(), webhookId: v.string(), webhookTimestamp: v.string(), webhookSignature: v.string() })
+    .action(async ({ ctx, args }): Promise<{ applied: boolean; status: number }> => {
+        const request = new Request("https://internal/payment/webhook", {
+            body: args.body,
+            headers: {
+                "webhook-id": args.webhookId,
+                "webhook-timestamp": args.webhookTimestamp,
+                "webhook-signature": args.webhookSignature,
+            },
+            method: "POST",
+        });
+        const response = await ctx.payments.handleWebhook(request);
+        const result = (await response.json()) as { applied?: boolean };
+
+        return { applied: result.applied ?? false, status: response.status };
+    });
+```
+
+`handleWebhook` verifies the signature, normalizes the Polar event into a
+`WebhookAction`, and applies it through the state machine. Once verified it
+always returns `200` so Polar stops retrying — a duplicate or out-of-order event
+is acknowledged, not re-applied. Standard Webhooks carries no body id, so the
+adapter uses the `webhook-id` header as the idempotency key backing the
+append-only `events` log.
+
+### Event mapping
+
+The adapter translates these Polar events into normalized transitions:
+
+| Polar event                                   | Normalized action                                              | Notes                                                                           |
+| --------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `order.created`, `order.paid`                 | `payment.captured`                                             | Amount from `total_amount` (falls back to `amount`); currency from `currency`.  |
+| `refund.created`                              | `payment.refunded` (delta)                                     | `amount` is this single refund; `sessionId` from `order_id`.                    |
+| `subscription.created`, `subscription.active` | `subscription.active`                                          | Routed by the subscription's `status` field.                                    |
+| `subscription.updated`                        | `subscription.active` / `.past_due` / `.canceled` / `.updated` | Derived from `status`; a pure metadata/period change is `subscription.updated`. |
+| `subscription.canceled`                       | derived from `status`                                          | Status-driven.                                                                  |
+| `subscription.revoked`                        | `subscription.canceled`                                        | Access revoked → terminal cancel.                                               |
+| anything else                                 | `unhandled`                                                    | Verified and logged (idempotency), but no state change.                         |
+
+Polar's subscription `status` values (`active`, `trialing`, `past_due`,
+`canceled`, `incomplete`, `incomplete_expired`, `unpaid`) map onto Lunora's
+subscription states. For safety, `incomplete` (first payment not completed) maps
+to non-entitling `past_due`, **not** an entitling state — only a genuine
+`trialing` grants access before payment.
+
+## Refunds
+
+Refunds are issued in Polar — from the dashboard, or via the API — because Polar
+is the merchant of record. Polar then emits `refund.created`, which the adapter
+normalizes to `payment.refunded` with the **delta** amount of that single refund
+(`amountKind` defaults to `"delta"`), so multiple partial refunds accumulate
+correctly against the order's captured total in the store. The `sessionId` is the
+Polar `order_id`, which matches the payment session created from `order.paid`.
+
+The adapter's `refundPayment` (`refunds.create`) exists and defaults `reason` to
+`customer_request` (a valid Polar
+[refund reason](https://polar.sh/docs/api-reference/refunds/create)), but the
+provider-agnostic `ctx.payments` facade does not expose a refund method — the
+supported path is **issue in Polar → sync via webhook**.
+
+## Billing portal
+
+Polar ships a native hosted customer portal. `createPortalSession` mints a Polar
+customer session and returns its `customerPortalUrl`:
+
+```ts
+const { url } = await ctx.payments.createPortalSession(ctx.auth.userId, "https://app.test/account");
+```
+
+The customer is derived from the store (never a caller-supplied id — no IDOR).
+Polar's portal is a session URL, so the `returnUrl` argument is accepted for
+interface parity but Polar controls the in-portal navigation.
+
+## Tax, invoices & the MoR model
+
+Because `merchantOfRecord` is `true`, Polar — not you — is the seller of record:
+it calculates and remits VAT/sales tax across jurisdictions, generates
+compliant invoices, and absorbs chargebacks and disputes. Your Lunora app only
+records the normalized payment/subscription state; it never stores tax lines or
+card data. The stored `Money` is Polar's `total_amount` (after discounts and
+tax) in integer minor units.
+
+## Limitations
+
+<Callout type="info">
+    - **No manual capture/authorize.** `capturePayment` / `cancelPayment` throw — MoR captures at checkout. - **Product-based.** The cross-provider `priceId`
+    carries a Polar **product** id, not a separate price id. - **Refunds are dashboard/API-initiated in Polar**, synced back via `refund.created`; the facade
+    exposes no refund call. - **Portal `returnUrl` is advisory** — Polar controls the hosted portal's navigation.
+</Callout>
+
+## Troubleshooting
+
+<Callout type="warn">
+    **`WEBHOOK_SIGNATURE_INVALID` / `no matching signature`.** The signature is computed over the **raw** body. Make sure you forward `await request.text()`
+    unchanged (never a re-`JSON.stringify`'d object) and pass all three headers — `webhook-id`, `webhook-timestamp`, `webhook-signature`. Confirm
+    `POLAR_WEBHOOK_SECRET` matches the secret shown for **that** endpoint in Polar.
+</Callout>
+
+<Callout type="warn">
+    **`WEBHOOK_TIMESTAMP_INVALID` / outside tolerance.** The signed timestamp is older/newer than `webhookToleranceSeconds` (default 300s). Fix the Worker's
+    clock or widen the tolerance — don't disable the replay check.
+</Callout>
+
+<Callout type="info">
+    **`CONFIG_INVALID` / webhook secret not configured.** `POLAR_WEBHOOK_SECRET` is empty or unset. The adapter fails closed rather than MAC with an
+    attacker-known zero-length key. Set it in `.dev.vars` (dev) or `wrangler secret put` (prod).
+</Callout>
+
+<Callout type="info">
+    **`PROVIDER_ERROR` / "does not support manual capture".** You called a PSP-only flow (authorize/capture) on Polar. Use one-shot `createCheckout` / `attach`
+    instead.
+</Callout>
+
+<Callout type="warn">
+    **A subscription looks out of date after a change made in the Polar portal.** Webhooks are eventually-but-not-guaranteed. Pair a
+    [`@lunora/scheduler`](/docs/packages/scheduler) sweep with `reconcile` to re-fetch Polar's current truth for non-terminal rows and overwrite drift.
+</Callout>
+
+## See also
+
+- [@lunora/payment](/docs/packages/payment) — the provider-agnostic `ctx.payments` API and data model
+- [@lunora/scheduler](/docs/packages/scheduler) — drive the reconciliation sweep
+- [Studio](/docs/packages/studio) — the Payments panel (synced customers, subscriptions, webhook events)
+- [Polar docs](https://polar.sh/docs) · [Webhook events](https://polar.sh/docs/integrate/webhooks/events) · [Standard Webhooks](https://www.standardwebhooks.com)

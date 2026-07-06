@@ -177,6 +177,36 @@ describe("autumn adapter", () => {
         expect(subscription.currentPeriodEnd).toBe(1_900_000_000_000);
     });
 
+    it("reads subscription status from the newer `subscriptions`/`plan_id` customer shape (regression)", async () => {
+        expect.assertions(2);
+
+        const client = makeClient([], {
+            customerGet: { id: "user_1", subscriptions: [{ plan_id: "pro", status: "active" }] },
+        });
+        const adapter = createAutumnAdapter({ client, webhookSecret: SECRET });
+
+        const subscription = await adapter.getSubscriptionStatus("user_1::pro");
+
+        // Current Autumn keys plans under `subscriptions[].plan_id`; an active subscriber must resolve
+        // (not fail closed to canceled because only `products`/`product_id` was scanned).
+        expect(subscription.state).toBe("active");
+        expect(subscription.priceId).toBe("pro");
+    });
+
+    it("fails closed: a separate past_due boolean overrides an active status (regression)", async () => {
+        expect.assertions(1);
+
+        const client = makeClient([], {
+            customerGet: { id: "user_1", subscriptions: [{ past_due: true, plan_id: "pro", status: "active" }] },
+        });
+        const adapter = createAutumnAdapter({ client, webhookSecret: SECRET });
+
+        const subscription = await adapter.getSubscriptionStatus("user_1::pro");
+
+        // Autumn exposes past-due as a boolean beside an `active` status — it must not stay entitling.
+        expect(subscription.state).toBe("past_due");
+    });
+
     it("fails closed: a scheduled (not-yet-active) product is non-entitling", async () => {
         expect.assertions(1);
 
@@ -286,6 +316,55 @@ describe("autumn adapter", () => {
         expect(action.type).toBe("payment.captured");
         expect(action.amount?.minorUnits).toBe(2500n);
         expect(action.sessionId).toBe("inv_1");
+    });
+
+    it("maps a verified billing.updated webhook (plan_changes shape) to a subscription transition (regression)", async () => {
+        expect.assertions(3);
+
+        const adapter = createAutumnAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const payload = JSON.stringify({
+            data: { customer_id: "user_1", plan_changes: [{ action: "activated", subscription: { plan_id: "pro", status: "active" } }] },
+            type: "billing.updated",
+        });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const action = await adapter.parseWebhook({ headers: headersFor("msg_bu", timestamp, sign("msg_bu", timestamp, payload)), payload });
+
+        // billing.updated is Autumn's real primary lifecycle event — it must not fall to `unhandled`.
+        expect(action.type).toBe("subscription.active");
+        expect(action.priceId).toBe("pro");
+        expect(action.subscriptionId).toBe("user_1::pro");
+    });
+
+    it("billing.updated honors the nested past_due flag as non-entitling (regression)", async () => {
+        expect.assertions(1);
+
+        const adapter = createAutumnAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const payload = JSON.stringify({
+            data: { customer_id: "user_1", plan_changes: [{ subscription: { past_due: true, plan_id: "pro", status: "active" } }] },
+            type: "billing.updated",
+        });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const action = await adapter.parseWebhook({ headers: headersFor("msg_bd", timestamp, sign("msg_bd", timestamp, payload)), payload });
+
+        expect(action.type).toBe("subscription.past_due");
+    });
+
+    it("accepts Svix's svix-* headers, not just the webhook-* aliases (regression)", async () => {
+        expect.assertions(1);
+
+        const adapter = createAutumnAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const payload = JSON.stringify({
+            data: { customer_id: "user_1", plan_changes: [{ subscription: { plan_id: "pro", status: "active" } }] },
+            type: "billing.updated",
+        });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const signature = sign("msg_svix", timestamp, payload);
+        const headers = {
+            get: (name: string): null | string => ({ "svix-id": "msg_svix", "svix-signature": signature, "svix-timestamp": timestamp })[name] ?? null,
+        };
+        const action = await adapter.parseWebhook({ headers, payload });
+
+        expect(action.type).toBe("subscription.active");
     });
 
     it("rejects a bad signature", async () => {
