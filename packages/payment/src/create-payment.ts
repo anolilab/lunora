@@ -227,6 +227,8 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
                 return { allowed: hasActivePrice(subscriptions, input.priceId), unlimited: false };
             }
 
+            // Unreachable at runtime — the arg-shape guard above already rejected "neither", and the
+            // priceId branch returned. This narrows `featureId` to `string` for `evaluateFeature` below.
             if (input.featureId === undefined) {
                 throw new LunoraPaymentError("CONFIG_INVALID", "check() requires a featureId or priceId");
             }

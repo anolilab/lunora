@@ -15,7 +15,6 @@
  * the SDK's camelCase surface vs. raw webhook snake_case, so responses are read defensively.
  */
 import type { PaymentAdapter, WebhookInput } from "../adapter";
-import { LunoraPaymentError } from "../errors";
 import { asRecord, parseTimestamp, readBoolean, readNumber, readString, referenceFromMetadata } from "../json";
 import { money, zeroMoney } from "../money";
 import type {
@@ -33,6 +32,7 @@ import type {
     WebhookAction,
 } from "../types";
 import { verifyCreemSignature } from "../webhook";
+import makeNotSupported from "./not-supported";
 import stateToEventType from "./subscription-event";
 
 /** The subset of the Creem SDK surface this adapter calls. A structural shim over `new Creem()` satisfies it. */
@@ -88,9 +88,7 @@ const SUBSCRIPTION_STATE_BY_CREEM_STATUS: Record<string, SubscriptionState> = {
     unpaid: "past_due",
 };
 
-const notSupported = (operation: string): never => {
-    throw new LunoraPaymentError("PROVIDER_ERROR", `creem (merchant-of-record) does not support ${operation}`);
-};
+const notSupported = makeNotSupported("creem (merchant-of-record)");
 
 /** Creem `product`/`customer` fields are either an expanded object or a bare id string. */
 const idOf = (value: unknown): string | undefined => (typeof value === "string" ? value : readString(asRecord(value), "id"));

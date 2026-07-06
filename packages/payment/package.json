@@ -86,7 +86,7 @@
         "autumn-js": "^1.2.0",
         "creem": "^1.5.0",
         "dodopayments": "^2.41.0",
-        "stripe": "^19.0.0 || ^20.0.0 || ^21.0.0 || ^22.0.0"
+        "stripe": "^22.0.0"
     },
     "peerDependenciesMeta": {
         "@polar-sh/sdk": {

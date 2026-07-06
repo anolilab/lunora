@@ -13,7 +13,6 @@
  * integer minor units (matching `Money` 1:1), and its billing dates are ISO-8601 strings.
  */
 import type { PaymentAdapter, WebhookInput } from "../adapter";
-import { LunoraPaymentError } from "../errors";
 import idempotencyKey from "../idempotency";
 import { asRecord, parseTimestamp, readBoolean, readNumber, readString, referenceFromMetadata } from "../json";
 import { money, zeroMoney } from "../money";
@@ -34,6 +33,7 @@ import type {
     WebhookAction,
 } from "../types";
 import { verifyStandardWebhook } from "../webhook";
+import makeNotSupported from "./not-supported";
 import stateToEventType from "./subscription-event";
 
 /** The subset of the Dodo Payments SDK surface this adapter calls. A real `DodoPayments` satisfies it. */
@@ -99,9 +99,7 @@ const SUBSCRIPTION_STATE_BY_DODO_STATUS: Record<string, SubscriptionState> = {
     pending: "past_due",
 };
 
-const notSupported = (operation: string): never => {
-    throw new LunoraPaymentError("PROVIDER_ERROR", `dodopayments (merchant-of-record) does not support ${operation}`);
-};
+const notSupported = makeNotSupported("dodopayments (merchant-of-record)");
 
 const customerIdOf = (object: Record<string, unknown>): string | undefined =>
     readString(asRecord(object.customer), "customer_id") ?? readString(object, "customer_id");

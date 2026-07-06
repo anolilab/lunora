@@ -95,4 +95,4 @@ export type {
     WebhookAction,
     WebhookActionType,
 } from "./types";
-export { constantTimeEqual, hmacSha256Hex, parseStripeSignatureHeader, verifyCreemSignature, verifyStandardWebhook, verifyStripeSignature } from "./webhook";
+export { constantTimeEqual, hmacSha256Hex, verifyCreemSignature, verifyStandardWebhook } from "./webhook";

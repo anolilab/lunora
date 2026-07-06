@@ -8,7 +8,6 @@
  * responses are SDK-camelCased; raw webhook bodies are snake_case — handled accordingly.
  */
 import type { PaymentAdapter, WebhookInput } from "../adapter";
-import { LunoraPaymentError } from "../errors";
 import { asRecord, parseTimestamp, readBoolean, readNumber, readString, referenceFromMetadata } from "../json";
 import { money, zeroMoney } from "../money";
 import type {
@@ -27,6 +26,7 @@ import type {
     WebhookAction,
 } from "../types";
 import { verifyStandardWebhook } from "../webhook";
+import makeNotSupported from "./not-supported";
 import stateToEventType from "./subscription-event";
 
 interface PolarSubscriptionLike {
@@ -90,9 +90,7 @@ const SUBSCRIPTION_STATE_BY_POLAR_STATUS: Record<string, SubscriptionState> = {
     unpaid: "past_due",
 };
 
-const notSupported = (operation: string): never => {
-    throw new LunoraPaymentError("PROVIDER_ERROR", `polar (merchant-of-record) does not support ${operation}`);
-};
+const notSupported = makeNotSupported("polar (merchant-of-record)");
 
 const subscriptionFromPolar = (subscription: PolarSubscriptionLike): Subscription => {
     const now = Date.now();

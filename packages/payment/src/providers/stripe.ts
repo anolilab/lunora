@@ -8,7 +8,7 @@
  * `webhooks.constructEventAsync` (workerd SubtleCrypto provider). Stripe amounts are already integer
  * minor units (zero-decimal currencies included), matching money 1:1.
  */
-import { Stripe } from "stripe";
+import type { Stripe } from "stripe";
 
 import type { PaymentAdapter, WebhookInput } from "../adapter";
 import { LunoraPaymentError } from "../errors";
@@ -241,8 +241,6 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
 
 export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapter => {
     const { client, webhookSecret } = options;
-    // WebCrypto-backed verification so `constructEventAsync` runs on workerd (not just Node).
-    const cryptoProvider = Stripe.createSubtleCryptoProvider();
 
     return {
         cancelPayment: async (sessionId, paymentOptions) => {
@@ -317,8 +315,10 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
             let event: Stripe.Event;
 
             try {
-                // The SDK's own verification: HMAC over the raw body + timestamp tolerance, WebCrypto on workerd.
-                event = await client.webhooks.constructEventAsync(payload, signatureHeader, webhookSecret, options.webhookToleranceSeconds, cryptoProvider);
+                // The SDK's own verification: HMAC over the raw body + timestamp tolerance. It selects
+                // its crypto provider from the loaded platform build — SubtleCrypto (WebCrypto) on
+                // workerd, Node crypto on Node — so no explicit provider (or value `import`) is needed.
+                event = await client.webhooks.constructEventAsync(payload, signatureHeader, webhookSecret, options.webhookToleranceSeconds);
             } catch (error) {
                 throw new LunoraPaymentError("WEBHOOK_SIGNATURE_INVALID", error instanceof Error ? error.message : "invalid webhook signature");
             }
