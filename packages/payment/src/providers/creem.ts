@@ -14,6 +14,8 @@
  * `creem-signature` HMAC-SHA256 scheme via {@link verifyCreemSignature}. Field casing varies across
  * the SDK's camelCase surface vs. raw webhook snake_case, so responses are read defensively.
  */
+import type { Creem } from "creem";
+
 import type { PaymentAdapter, WebhookInput } from "../adapter";
 import { asRecord, parseTimestamp, readBoolean, readNumber, readString, referenceFromMetadata } from "../json";
 import { money, zeroMoney } from "../money";
@@ -35,24 +37,15 @@ import { verifyCreemSignature } from "../webhook";
 import makeNotSupported from "./not-supported";
 import stateToEventType from "./subscription-event";
 
-/** The subset of the Creem SDK surface this adapter calls. A structural shim over `new Creem()` satisfies it. */
+/**
+ * The `creem` SDK surface the adapter uses, as a structural type — a real `Creem` instance satisfies
+ * it without a cast. Resources are `unknown` (the adapter re-types the client as the real `Creem`
+ * internally); this keeps the SDK's full type out of the published declarations.
+ */
 interface CreemClientLike {
-    readonly checkouts: {
-        readonly create: (request: Record<string, unknown>) => Promise<Record<string, unknown>>;
-        readonly retrieve: (checkoutId: string) => Promise<Record<string, unknown>>;
-    };
-    readonly customers: {
-        readonly create: (request: Record<string, unknown>) => Promise<Record<string, unknown>>;
-        readonly generateBillingLinks: (request: Record<string, unknown>) => Promise<Record<string, unknown>>;
-        /** Look an existing customer up (by email) — used to recover from a duplicate-email `create`. */
-        readonly retrieve?: (request: Record<string, unknown>) => Promise<Record<string, unknown>>;
-    };
-    readonly subscriptions: {
-        readonly cancel: (subscriptionId: string, request?: Record<string, unknown>) => Promise<Record<string, unknown>>;
-        readonly get: (subscriptionId: string) => Promise<Record<string, unknown>>;
-        readonly resume: (subscriptionId: string) => Promise<Record<string, unknown>>;
-        readonly upgrade: (subscriptionId: string, request: Record<string, unknown>) => Promise<Record<string, unknown>>;
-    };
+    readonly checkouts: unknown;
+    readonly customers: unknown;
+    readonly subscriptions: unknown;
 }
 
 interface CreemAdapterOptions {
@@ -100,7 +93,8 @@ const isCanceling = (subscription: Record<string, unknown>): boolean =>
     readString(subscription, "canceledAt") !== undefined ||
     readString(subscription, "status") === "scheduled_cancel";
 
-const subscriptionFromCreem = (subscription: Record<string, unknown>): Subscription => {
+const subscriptionFromCreem = (input: unknown): Subscription => {
+    const subscription = asRecord(input);
     const now = Date.now();
     const status = readString(subscription, "status") ?? "";
 
@@ -121,7 +115,8 @@ const subscriptionFromCreem = (subscription: Record<string, unknown>): Subscript
 };
 
 /** A checkout/order carries the settled money — read it from the order when present, else the checkout. */
-const checkoutToSession = (checkout: Record<string, unknown>): PaymentSession => {
+const checkoutToSession = (input: unknown): PaymentSession => {
+    const checkout = asRecord(input);
     const now = Date.now();
     const order = asRecord(checkout.order);
     const currency = readString(order, "currency") ?? readString(checkout, "currency") ?? "usd";
@@ -216,7 +211,9 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
 };
 
 export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter => {
-    const { client, webhookSecret } = options;
+    const { webhookSecret } = options;
+    // Use the injected client as the real `Creem` internally so every call is checked against the SDK.
+    const client = options.client as unknown as Creem;
 
     return {
         // Creem is a Merchant-of-Record: it moves the money, so there is no manual payment-intent flow.
@@ -264,12 +261,13 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
 
             // Creem's `customers.create` is NOT idempotent by email — it returns 400 when a customer with
             // that email already exists, so a retried/raced first checkout would fail. Recover by looking
-            // the existing customer up by email (the facade also gates this behind a store lookup first).
+            // the existing customer up by email (Creem's `retrieve(customerId?, email?)` is positional).
+            // The facade also gates this behind a store lookup first.
             try {
-                return toCustomer(await client.customers.create({ email: ref.email, name: ref.metadata?.name }));
+                return toCustomer(asRecord(await client.customers.create({ email: ref.email ?? "", name: ref.metadata?.name ?? ref.referenceId })));
             } catch (error) {
-                if (client.customers.retrieve && ref.email !== undefined) {
-                    return toCustomer(await client.customers.retrieve({ email: ref.email }));
+                if (ref.email !== undefined) {
+                    return toCustomer(asRecord(await client.customers.retrieve(undefined, ref.email)));
                 }
 
                 throw error;

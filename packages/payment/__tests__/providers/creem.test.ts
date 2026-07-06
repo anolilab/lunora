@@ -22,42 +22,42 @@ interface RecordedCall {
 const makeClient = (calls: RecordedCall[] = []): CreemClientLike => {
     return {
         checkouts: {
-            create: async (request) => {
+            create: async (request: Record<string, unknown>) => {
                 calls.push({ args: [request], name: "checkout" });
 
                 return { checkout_url: "https://creem.test/checkout", id: "ch_1", status: "pending" };
             },
-            retrieve: async (id) => {
+            retrieve: async (id: string) => {
                 return { id, order: { amount: 2500, currency: "EUR", status: "paid" }, status: "completed" };
             },
         },
         customers: {
-            create: async (request) => {
+            create: async (request: Record<string, unknown>) => {
                 calls.push({ args: [request], name: "customer" });
 
                 return { email: "a@b.test", id: "cust_1" };
             },
-            generateBillingLinks: async (request) => {
+            generateBillingLinks: async (request: Record<string, unknown>) => {
                 calls.push({ args: [request], name: "billing" });
 
                 return { customer_portal_link: "https://creem.test/portal" };
             },
         },
         subscriptions: {
-            cancel: async (id, request) => {
+            cancel: async (id: string, request?: Record<string, unknown>) => {
                 calls.push({ args: [id, request], name: "cancel" });
 
                 return { canceled_at: "2026-07-05T00:00:00Z", id, product: "prod_pro", status: "scheduled_cancel" };
             },
-            get: async (id) => {
+            get: async (id: string) => {
                 return { id, product: { id: "prod_pro" }, status: "active" };
             },
-            resume: async (id) => {
+            resume: async (id: string) => {
                 calls.push({ args: [id], name: "resume" });
 
                 return { id, product: "prod_pro", status: "active" };
             },
-            upgrade: async (id, request) => {
+            upgrade: async (id: string, request: Record<string, unknown>) => {
                 calls.push({ args: [id, request], name: "upgrade" });
 
                 return { id, product: "prod_enterprise", status: "active" };
@@ -271,8 +271,8 @@ describe("creem adapter", () => {
                 generateBillingLinks: async () => {
                     return {};
                 },
-                retrieve: async (request) => {
-                    calls.push({ args: [request], name: "retrieve" });
+                retrieve: async (customerId?: string, email?: string) => {
+                    calls.push({ args: [customerId, email], name: "retrieve" });
 
                     return { email: "a@b.test", id: "cust_existing" };
                 },
@@ -284,7 +284,8 @@ describe("creem adapter", () => {
 
         expect(customer.id).toBe("cust_existing");
         expect(calls.some((call) => call.name === "create")).toBe(true);
-        expect((calls.find((call) => call.name === "retrieve")?.args[0] as Record<string, unknown>).email).toBe("a@b.test");
+        // Creem's retrieve is positional `(customerId?, email?)` — the email lands in the second arg.
+        expect(calls.find((call) => call.name === "retrieve")?.args[1]).toBe("a@b.test");
     });
 
     it("rejects a bad signature", async () => {
