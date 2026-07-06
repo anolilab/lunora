@@ -343,9 +343,9 @@ Select at least these events when creating the endpoint:
 Stripe signs each delivery with the
 [`Stripe-Signature`](https://docs.stripe.com/webhooks#verify-manually) header —
 `t=<unix-seconds>,v1=<hex-hmac>`. The adapter verifies it with the SDK's own
-`webhooks.constructEventAsync(rawBody, header, secret, tolerance, cryptoProvider)`, using
-`Stripe.createSubtleCryptoProvider()` so verification runs on `workerd` (WebCrypto) as well as
-Node. It rejects any delivery whose signed timestamp is more than `webhookToleranceSeconds`
+`webhooks.constructEventAsync(rawBody, header, secret, tolerance)` — no explicit crypto
+provider: the `stripe` SDK's platform build selects the right implementation (WebCrypto on
+`workerd`, Node's `crypto` on Node). It rejects any delivery whose signed timestamp is more than `webhookToleranceSeconds`
 (default **300s**) from now — Stripe's replay-window default — and a failed check surfaces as a
 `WEBHOOK_SIGNATURE_INVALID` error (a 400). Verification runs over the **raw** body; never
 re-serialize the JSON before verifying.
