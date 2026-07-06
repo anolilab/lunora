@@ -24,20 +24,20 @@ interface RecordedCall {
 const makeClient = (calls: RecordedCall[] = []): DodoPaymentsClientLike => {
     return {
         checkoutSessions: {
-            create: async (body) => {
+            create: async (body: Record<string, unknown>) => {
                 calls.push({ args: [body], name: "checkout" });
 
                 return { checkout_url: "https://dodo.test/checkout", session_id: "cks_1" };
             },
         },
         customers: {
-            create: async (body, options) => {
+            create: async (body: Record<string, unknown>, options?: { idempotencyKey?: string }) => {
                 calls.push({ args: [body, options], name: "customer" });
 
                 return { customer_id: "cus_1", email: "a@b.test" };
             },
             customerPortal: {
-                create: async (customerId, body) => {
+                create: async (customerId: string, body?: Record<string, unknown>) => {
                     calls.push({ args: [customerId, body], name: "portal" });
 
                     return { link: "https://dodo.test/portal" };
@@ -45,27 +45,27 @@ const makeClient = (calls: RecordedCall[] = []): DodoPaymentsClientLike => {
             },
         },
         payments: {
-            retrieve: async (id) => {
+            retrieve: async (id: string) => {
                 return { currency: "USD", payment_id: id, status: "succeeded", total_amount: 2500 };
             },
         },
         refunds: {
-            create: async (body) => {
+            create: async (body: Record<string, unknown>) => {
                 calls.push({ args: [body], name: "refund" });
 
                 return { amount: 2500, currency: "USD", payment_id: "pay_1", refund_id: "ref_1", status: "succeeded" };
             },
         },
         subscriptions: {
-            changePlan: async (id, body) => {
+            changePlan: async (id: string, body: Record<string, unknown>) => {
                 calls.push({ args: [id, body], name: "changePlan" });
 
                 return { changed: true };
             },
-            retrieve: async (id) => {
+            retrieve: async (id: string) => {
                 return { cancel_at_next_billing_date: false, product_id: "pro", quantity: 1, status: "active", subscription_id: id };
             },
-            update: async (id, body) => {
+            update: async (id: string, body: Record<string, unknown>) => {
                 calls.push({ args: [id, body], name: "update" });
                 const cancelling = body.status === "cancelled";
 
@@ -79,7 +79,7 @@ const makeClient = (calls: RecordedCall[] = []): DodoPaymentsClientLike => {
             },
         },
         usageEvents: {
-            ingest: async (body) => {
+            ingest: async (body: Record<string, unknown>) => {
                 calls.push({ args: [body], name: "ingest" });
 
                 return { ingested_count: 1 };
@@ -167,7 +167,7 @@ describe("dodopayments adapter", () => {
         const client = {
             ...base,
             subscriptions: {
-                ...base.subscriptions,
+                ...(base.subscriptions as Record<string, unknown>),
                 retrieve: async (id: string) => {
                     return { cancel_at_next_billing_date: false, product_id: "pro", quantity: 5, status: "active", subscription_id: id };
                 },
@@ -189,7 +189,7 @@ describe("dodopayments adapter", () => {
         const client = {
             ...base,
             subscriptions: {
-                ...base.subscriptions,
+                ...(base.subscriptions as Record<string, unknown>),
                 retrieve: async (id: string) => {
                     return { cancel_at_next_billing_date: false, product_id: "pro", quantity: 2, status: "active", subscription_id: id };
                 },

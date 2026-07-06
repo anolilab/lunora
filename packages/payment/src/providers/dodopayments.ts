@@ -12,7 +12,10 @@
  * `dodopayments` SDK); pass `new DodoPayments({ bearerToken })` from the app. Dodo amounts are
  * integer minor units (matching `Money` 1:1), and its billing dates are ISO-8601 strings.
  */
+import type DodoPayments from "dodopayments";
+
 import type { PaymentAdapter, WebhookInput } from "../adapter";
+import { LunoraPaymentError } from "../errors";
 import idempotencyKey from "../idempotency";
 import { asRecord, parseTimestamp, readBoolean, readNumber, readString, referenceFromMetadata } from "../json";
 import { money, zeroMoney } from "../money";
@@ -36,31 +39,18 @@ import { verifyStandardWebhook } from "../webhook";
 import makeNotSupported from "./not-supported";
 import stateToEventType from "./subscription-event";
 
-/** The subset of the Dodo Payments SDK surface this adapter calls. A real `DodoPayments` satisfies it. */
+/**
+ * The `dodopayments` SDK surface the adapter uses, as a structural type — a real `DodoPayments`
+ * instance satisfies it without a cast. Resources are `unknown` (the adapter re-types the client as
+ * the real `DodoPayments` internally); this keeps the SDK's full type out of the published declarations.
+ */
 interface DodoPaymentsClientLike {
-    readonly checkoutSessions: {
-        readonly create: (body: Record<string, unknown>) => Promise<Record<string, unknown>>;
-    };
-    readonly customers: {
-        readonly create: (body: Record<string, unknown>, options?: { idempotencyKey?: string }) => Promise<Record<string, unknown>>;
-        readonly customerPortal: {
-            readonly create: (customerId: string, body?: Record<string, unknown>) => Promise<Record<string, unknown>>;
-        };
-    };
-    readonly payments: {
-        readonly retrieve: (paymentId: string) => Promise<Record<string, unknown>>;
-    };
-    readonly refunds: {
-        readonly create: (body: Record<string, unknown>) => Promise<Record<string, unknown>>;
-    };
-    readonly subscriptions: {
-        readonly changePlan: (subscriptionId: string, body: Record<string, unknown>) => Promise<unknown>;
-        readonly retrieve: (subscriptionId: string) => Promise<Record<string, unknown>>;
-        readonly update: (subscriptionId: string, body: Record<string, unknown>) => Promise<Record<string, unknown>>;
-    };
-    readonly usageEvents: {
-        readonly ingest: (body: Record<string, unknown>) => Promise<unknown>;
-    };
+    readonly checkoutSessions: unknown;
+    readonly customers: unknown;
+    readonly payments: unknown;
+    readonly refunds: unknown;
+    readonly subscriptions: unknown;
+    readonly usageEvents: unknown;
 }
 
 interface DodoPaymentsAdapterOptions {
@@ -104,7 +94,8 @@ const notSupported = makeNotSupported("dodopayments (merchant-of-record)");
 const customerIdOf = (object: Record<string, unknown>): string | undefined =>
     readString(asRecord(object.customer), "customer_id") ?? readString(object, "customer_id");
 
-const subscriptionFromDodo = (subscription: Record<string, unknown>): Subscription => {
+const subscriptionFromDodo = (input: unknown): Subscription => {
+    const subscription = asRecord(input);
     const now = Date.now();
     const status = readString(subscription, "status") ?? "";
 
@@ -124,7 +115,8 @@ const subscriptionFromDodo = (subscription: Record<string, unknown>): Subscripti
     };
 };
 
-const paymentFromDodo = (payment: Record<string, unknown>): PaymentSession => {
+const paymentFromDodo = (input: unknown): PaymentSession => {
+    const payment = asRecord(input);
     const now = Date.now();
     const currency = readString(payment, "currency") ?? "usd";
     // Round before BigInt: Dodo documents integer minor units, but a stray fractional amount would
@@ -215,7 +207,9 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
 };
 
 export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): PaymentAdapter => {
-    const { client, webhookSecret } = options;
+    const { webhookSecret } = options;
+    // Use the injected client as the real `DodoPayments` internally so every call is checked against the SDK.
+    const client = options.client as unknown as DodoPayments;
 
     return {
         // Dodo is a Merchant-of-Record: it moves the money, so there is no manual payment-intent
@@ -223,8 +217,9 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
         cancelPayment: () => notSupported("manual payment cancellation"),
 
         cancelSubscription: async (subscriptionId, cancelOptions) => {
-            // Same endpoint either way — only the body differs (schedule vs. immediate).
-            const body = cancelOptions?.atPeriodEnd ? { cancel_at_next_billing_date: true } : { status: "cancelled" };
+            // Same endpoint either way — only the body differs (schedule vs. immediate). `as const` keeps
+            // "cancelled" a literal so it satisfies Dodo's `SubscriptionStatus` enum, not a widened string.
+            const body = cancelOptions?.atPeriodEnd ? { cancel_at_next_billing_date: true } : { status: "cancelled" as const };
 
             return subscriptionFromDodo(await client.subscriptions.update(subscriptionId, body));
         },
@@ -234,20 +229,22 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
         capturePayment: (_input: CaptureInput) => notSupported("manual capture"),
 
         createCheckout: async (input: CheckoutInput): Promise<CheckoutResult> => {
-            const session = await client.checkoutSessions.create({
-                // An existing Dodo customer is attached by id; otherwise Dodo collects one at checkout.
-                customer: input.customerId ? { customer_id: input.customerId } : undefined,
-                // Pin the framework-controlled `referenceId` LAST so caller metadata can never override it.
-                metadata: { ...input.metadata, referenceId: input.referenceId },
-                product_cart: [{ product_id: input.priceId, quantity: input.quantity ?? 1 }],
-                return_url: input.successUrl,
-            });
+            const session = asRecord(
+                await client.checkoutSessions.create({
+                    // An existing Dodo customer is attached by id; otherwise Dodo collects one at checkout.
+                    customer: input.customerId ? { customer_id: input.customerId } : undefined,
+                    // Pin the framework-controlled `referenceId` LAST so caller metadata can never override it.
+                    metadata: { ...input.metadata, referenceId: input.referenceId },
+                    product_cart: [{ product_id: input.priceId, quantity: input.quantity ?? 1 }],
+                    return_url: input.successUrl,
+                }),
+            );
 
             return { id: readString(session, "session_id") ?? "", provider: "dodopayments", url: readString(session, "checkout_url") ?? "" };
         },
 
         createPortalSession: async (input: PortalInput) => {
-            const session = await client.customers.customerPortal.create(input.customerId, { return_url: input.returnUrl });
+            const session = asRecord(await client.customers.customerPortal.create(input.customerId, { return_url: input.returnUrl }));
 
             return { url: readString(session, "link") ?? readString(session, "url") ?? "" };
         },
@@ -256,9 +253,11 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
             // Dodo's `customers.create` is NOT idempotent by email, so a retried/raced first checkout
             // for the same reference would mint duplicate customers. Key the create on the reference so
             // repeats return the same customer (the facade also gates this behind a store lookup).
-            const customer = await client.customers.create(
-                { email: ref.email, name: ref.metadata?.name ?? ref.referenceId },
-                { idempotencyKey: idempotencyKey("customer", "dodopayments", ref.referenceId) },
+            const customer = asRecord(
+                await client.customers.create(
+                    { email: ref.email ?? "", name: ref.metadata?.name ?? ref.referenceId },
+                    { idempotencyKey: idempotencyKey("customer", "dodopayments", ref.referenceId) },
+                ),
             );
 
             return {
@@ -295,23 +294,27 @@ export const createDodoPaymentsAdapter = (options: DodoPaymentsAdapterOptions): 
         },
 
         refundPayment: async (input: RefundInput) => {
-            const refund = await client.refunds.create({
-                amount: input.amount ? Number(input.amount.minorUnits) : undefined,
-                payment_id: input.sessionId,
-                reason: input.reason,
-            });
-            const currency = readString(refund, "currency") ?? input.amount?.currency ?? "usd";
-            const refundedAmount = input.amount ?? money(BigInt(Math.round(readNumber(refund, "amount") ?? 0)), currency);
+            // Dodo's refund API takes no flat amount — a partial refund is expressed per line item
+            // (`items[].item_id` + amount), which this amount-based interface can't supply. Fail loudly
+            // rather than silently issuing a FULL refund when a partial one was requested.
+            if (input.amount !== undefined) {
+                throw new LunoraPaymentError(
+                    "PROVIDER_ERROR",
+                    "dodopayments refunds a payment in full; partial refunds require line items and aren't supported here",
+                );
+            }
+
+            const refund = asRecord(await client.refunds.create({ payment_id: input.sessionId, reason: input.reason }));
+            const currency = readString(refund, "currency") ?? "usd";
+            const refundedAmount = money(BigInt(Math.round(readNumber(refund, "amount") ?? 0)), currency);
 
             // Dodo refunds can settle asynchronously (`pending`/`review` → later `refund.succeeded` or
             // `refund.failed`). Reflect the refund's real status instead of optimistically claiming
             // "refunded"; the webhook-synced store stays authoritative for the final state.
-            const status = readString(refund, "status");
-            const isPartial = readBoolean(refund, "is_partial") ?? input.amount !== undefined;
             let state: PaymentState = "captured";
 
-            if (status === "succeeded") {
-                state = isPartial ? "partially_refunded" : "refunded";
+            if (readString(refund, "status") === "succeeded") {
+                state = "refunded";
             }
 
             return {
