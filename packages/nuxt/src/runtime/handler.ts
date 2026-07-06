@@ -15,8 +15,8 @@
  * boot required. The thin H3 adapter that reads `env`/`ctx` off the event and
  * the raw `Request`/`Response` lives in the `[...].ts` route module.
  */
-import type { ExecutionContextLike } from "../../../../shared/execution-context";
-import { NOOP_EXECUTION_CONTEXT } from "../../../../shared/execution-context";
+import type { ExecutionContextLike } from "@lunora/runtime";
+import { NOOP_EXECUTION_CONTEXT } from "@lunora/runtime";
 
 /**
  * Structural view of the Lunora worker the route delegates to — just the
@@ -59,4 +59,4 @@ const delegateToLunora = async (
 export type { LunoraWorkerLike };
 export { delegateToLunora };
 
-export { NOOP_EXECUTION_CONTEXT } from "../../../../shared/execution-context";
+export { NOOP_EXECUTION_CONTEXT } from "@lunora/runtime";
