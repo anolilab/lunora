@@ -16,15 +16,17 @@
  * a **best-effort** convenience — the exact event catalog is dashboard-configured and unverified
  * here, so `reconcile` (built on `getSubscriptionStatus`) remains the reliable path.
  *
- * Like the Polar adapter, this takes an injected, structural `AutumnClientLike` (so this package
- * never imports `autumn-js`); pass `new Autumn({ secretKey })` from the app. Autumn identifies a
- * subscription by the pair `(customer_id, product_id)` rather than a single id, so this adapter
- * encodes the Lunora `Subscription.id` as the composite `customerId::productId` and splits it
- * back apart for `cancel` / `getSubscriptionStatus` / `update` / `resume`. Autumn abstracts the
- * money movement through Stripe, so manual authorize/capture/cancel/refund of a payment intent has
- * no API surface and those throw. Field casing varies across autumn-js generations (classic
- * snake_case vs. the newer camelCase SDK), so responses are read defensively.
+ * The public `client` is the small structural {@link AutumnClientLike} (a real `autumn-js` `Autumn`
+ * instance satisfies it, no cast); internally it is used as the real `Autumn` so calls are checked
+ * against the SDK. The SDK is resource-based (`billing.attach` / `billing.update` with a
+ * `cancelAction` / `billing.openCustomerPortal`, `customers.getOrCreate` / `customers.get`, top-level
+ * `check` / `track`). Autumn identifies a subscription by the pair `(customerId, planId)`, so this
+ * adapter encodes the Lunora `Subscription.id` as the composite `customerId::planId`. Autumn abstracts
+ * money movement through Stripe, so manual authorize/capture/refund throw. Responses are read
+ * defensively (fields vary across `autumn-js` generations).
  */
+import type { Autumn } from "autumn-js";
+
 import type { PaymentAdapter, WebhookInput } from "../adapter";
 import { LunoraPaymentError } from "../errors";
 import { asRecord, readBoolean, readNumber, readString } from "../json";
@@ -48,21 +50,16 @@ import type {
 import { verifyStandardWebhook } from "../webhook";
 import stateToEventType from "./subscription-event";
 
-/** The subset of the Autumn SDK surface this adapter calls. A real `Autumn` instance satisfies it. */
+/**
+ * The `autumn-js` SDK surface the adapter uses, as a structural type — a real `Autumn` instance
+ * satisfies it without a cast. Resources/methods are `unknown` (the adapter re-types the client as
+ * the real `Autumn` internally); this keeps the SDK's full type out of the published declarations.
+ */
 interface AutumnClientLike {
-    /** Attach a product to a customer — starts a checkout (hosted URL) or applies the change directly. */
-    readonly attach: (parameters: Record<string, unknown>) => Promise<Record<string, unknown>>;
-    /** Cancel a customer's product, immediately or at period end. */
-    readonly cancel: (parameters: Record<string, unknown>) => Promise<Record<string, unknown>>;
-    /** Ask Autumn whether a customer may use a feature / holds a product right now (its balance math). */
-    readonly check: (parameters: Record<string, unknown>) => Promise<Record<string, unknown>>;
-    readonly customers: {
-        readonly billingPortal: (customerId: string, parameters?: Record<string, unknown>) => Promise<Record<string, unknown>>;
-        readonly create: (parameters: Record<string, unknown>) => Promise<Record<string, unknown>>;
-        readonly get: (customerId: string, parameters?: Record<string, unknown>) => Promise<Record<string, unknown>>;
-    };
-    /** Record metered usage for a customer's feature. */
-    readonly track: (parameters: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    readonly billing: unknown;
+    readonly check: unknown;
+    readonly customers: unknown;
+    readonly track: unknown;
 }
 
 interface AutumnAdapterOptions {
@@ -225,8 +222,8 @@ const constructedSubscription = (customerId: string, productId: string, state: S
  * Cancel / update / resume re-read through this (rather than fabricating a state/quantity) so the
  * store is never desynced and a non-entitling status is never silently promoted to `active`.
  */
-const readSubscription = async (client: AutumnClientLike, customerId: string, productId: string): Promise<Subscription> => {
-    const customer = await client.customers.get(customerId);
+const readSubscription = async (client: Autumn, customerId: string, productId: string): Promise<Subscription> => {
+    const customer = asRecord(await client.customers.get({ customerId }));
     const product = findProduct(customer, productId);
 
     return product ? productToSubscription(customerId, product) : constructedSubscription(customerId, productId, "canceled", false);
@@ -343,7 +340,9 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
 const checkoutUrlFrom = (result: Record<string, unknown>): string => readAny(result, "checkout_url", "checkoutUrl", "payment_url", "paymentUrl", "url") ?? "";
 
 export const createAutumnAdapter = (options: AutumnAdapterOptions): PaymentAdapter => {
-    const { client, webhookSecret } = options;
+    const { webhookSecret } = options;
+    // Use the injected client as the real `Autumn` internally so every call is checked against the SDK.
+    const client = options.client as unknown as Autumn;
 
     return {
         // Autumn abstracts Stripe money movement; there is no payment intent to cancel/capture/refund.
@@ -352,11 +351,17 @@ export const createAutumnAdapter = (options: AutumnAdapterOptions): PaymentAdapt
         cancelSubscription: async (subscriptionId, cancelOptions) => {
             const { customerId, productId } = parseAutumnSubscriptionId(subscriptionId);
 
-            await client.cancel({ cancel_immediately: cancelOptions?.atPeriodEnd !== true, customer_id: customerId, product_id: productId });
+            // Autumn cancels via `billing.update` with a `cancelAction`; `cancel_end_of_cycle` schedules
+            // the cancellation, `cancel_immediately` ends it now (with a prorated refund).
+            await client.billing.update({
+                cancelAction: cancelOptions?.atPeriodEnd ? "cancel_end_of_cycle" : "cancel_immediately",
+                customerId,
+                planId: productId,
+            });
 
-            // An immediate cancel is terminal — canceled, unambiguously. A cancel-at-period-end leaves
-            // the product active-until-end, so re-read Autumn's real status and only flip the schedule
-            // flag: never assume `active` (a `past_due`/`paused` grant must not be re-entitled here).
+            // A cancel-at-period-end leaves the product active-until-end, so re-read Autumn's real status
+            // and only flip the schedule flag: never assume `active` (a `past_due`/`paused` grant must
+            // not be re-entitled here). An immediate cancel is terminal.
             if (cancelOptions?.atPeriodEnd) {
                 return { ...(await readSubscription(client, customerId, productId)), cancelAtPeriodEnd: true };
             }
@@ -369,27 +374,25 @@ export const createAutumnAdapter = (options: AutumnAdapterOptions): PaymentAdapt
         capturePayment: (_input: CaptureInput) => notSupported("manual capture"),
 
         checkEntitlement: async (input: CheckInput): Promise<CheckResult> => {
-            // Autumn owns the balance math — ask it directly. `required_balance` is how many units the
-            // caller intends to consume; default it to 1 to match the local evaluator's semantics (an
-            // omitted quantity means "is at least one unit available?"), never fail open on undefined.
-            // `feature_id` gates a feature, `product_id` gates product access.
-            const result = await client.check({
-                customer_id: input.referenceId,
-                feature_id: input.featureId,
-                product_id: input.priceId,
-                required_balance: input.quantity ?? 1,
-            });
-            const allowed = readBoolean(result, "allowed") ?? false;
-
-            // A product check has no numeric balance — return the bare allow/deny.
+            // Autumn's `check` is feature-scoped (no product-id param). For a product-access check
+            // (priceId, no featureId), read the customer's plans and test whether the product is
+            // present and entitling — fail closed otherwise.
             if (input.featureId === undefined) {
-                return { allowed, unlimited: false };
+                const customer = asRecord(await client.customers.get({ customerId: input.referenceId }));
+                const product = findProduct(customer, input.priceId ?? "");
+                const state = product ? productToSubscription(input.referenceId, product).state : undefined;
+
+                return { allowed: state === "active" || state === "trialing", unlimited: false };
             }
 
-            // The feature balance may be a nested object (newer SDK: `balance: { remaining, granted, … }`)
-            // or inlined on the response as a top-level number (`balance: 100` + `included_usage`/`usage`).
-            // Only descend into `balance` when it is an object; otherwise read the fields off the response
-            // itself — so a numeric top-level `balance` is not lost to `asRecord(number) === {}`.
+            // Feature check — Autumn owns the balance math. `requiredBalance` is how many units the caller
+            // intends to consume; default it to 1 (an omitted quantity means "is at least one available?").
+            const result = asRecord(await client.check({ customerId: input.referenceId, featureId: input.featureId, requiredBalance: input.quantity ?? 1 }));
+            const allowed = readBoolean(result, "allowed") ?? false;
+
+            // The feature balance may be a nested object (`balance: { remaining, granted, … }`) or inlined
+            // as a top-level number (`balance: 100` + `includedUsage`/`usage`). Only descend into `balance`
+            // when it is an object; otherwise read the fields off the response itself.
             const rawBalance = result.balance;
             const balance = typeof rawBalance === "object" && rawBalance !== null ? asRecord(rawBalance) : result;
 
@@ -397,28 +400,24 @@ export const createAutumnAdapter = (options: AutumnAdapterOptions): PaymentAdapt
         },
 
         createCheckout: async (input: CheckoutInput): Promise<CheckoutResult> => {
-            const result = await client.attach({
-                customer_id: input.referenceId,
-                // Pin the framework-controlled `referenceId` LAST so caller metadata can never override it.
-                metadata: { ...input.metadata, referenceId: input.referenceId },
-                product_id: input.priceId,
-                success_url: input.successUrl,
-            });
+            // Autumn keys everything on the customer id (our reference id), so there is no metadata to pin;
+            // `attach` returns a hosted `paymentUrl` when a payment step is needed.
+            const result = asRecord(await client.billing.attach({ customerId: input.referenceId, planId: input.priceId }));
 
             return { id: autumnSubscriptionId(input.referenceId, input.priceId), provider: "autumn", url: checkoutUrlFrom(result) };
         },
 
         createPortalSession: async (input: PortalInput) => {
-            const result = await client.customers.billingPortal(input.customerId, { return_url: input.returnUrl });
-            const data = asRecord(result.data);
+            // Autumn's portal is a top-level billing method (no return URL — that is configured in Autumn).
+            const result = asRecord(await client.billing.openCustomerPortal({ customerId: input.customerId }));
 
-            return { url: readAny(result, "url") ?? readAny(data, "url") ?? "" };
+            return { url: readAny(result, "url") ?? "" };
         },
 
         getBalances: async (referenceId): Promise<FeatureBalance[]> => {
             // Autumn returns every feature balance on the customer, keyed by feature id. Newer SDKs put
             // it under `balances`; classic ones under `features`.
-            const customer = await client.customers.get(referenceId);
+            const customer = asRecord(await client.customers.get({ customerId: referenceId }));
             const balances = asRecord(customer.balances ?? customer.features);
 
             return Object.entries(balances).map(([key, raw]) => {
@@ -432,8 +431,8 @@ export const createAutumnAdapter = (options: AutumnAdapterOptions): PaymentAdapt
         },
 
         getOrCreateCustomer: async (ref: CustomerRef): Promise<Customer> => {
-            // Autumn's create is idempotent — the app-supplied `id` (our reference id) IS the customer id.
-            const customer = await client.customers.create({ email: ref.email, id: ref.referenceId, name: ref.metadata?.name });
+            // Autumn's `getOrCreate` is idempotent — the app-supplied `customerId` (our reference id) IS the id.
+            const customer = asRecord(await client.customers.getOrCreate({ customerId: ref.referenceId, email: ref.email, name: ref.metadata?.name }));
 
             return {
                 createdAt: Date.now(),
@@ -479,21 +478,18 @@ export const createAutumnAdapter = (options: AutumnAdapterOptions): PaymentAdapt
         refundPayment: () => notSupported("refunds"),
 
         reportUsage: async (input: ReportUsageInput) => {
-            // Autumn `track`: record `value` units of `feature_id` for the customer, deduped by the key.
-            await client.track({
-                customer_id: input.referenceId,
-                feature_id: input.featureId,
-                idempotency_key: input.idempotencyKey,
-                value: input.quantity,
-            });
+            // Autumn `track`: record `value` units of `featureId` for the customer. Note the SDK exposes
+            // no request-body idempotency key, so exactly-once is enforced by the local ledger (the
+            // facade dedupes on the caller key before forwarding here).
+            await client.track({ customerId: input.referenceId, featureId: input.featureId, value: input.quantity });
         },
 
         resumeSubscription: async (subscriptionId) => {
             const { customerId, productId } = parseAutumnSubscriptionId(subscriptionId);
 
-            // Re-attaching the product undoes a scheduled cancellation; re-read the real state rather
-            // than assuming `active`, and clear the schedule flag.
-            await client.attach({ customer_id: customerId, product_id: productId });
+            // `uncancel` reverses a pending scheduled cancellation; re-read the real state rather than
+            // assuming `active`, and clear the schedule flag.
+            await client.billing.update({ cancelAction: "uncancel", customerId, planId: productId });
 
             return { ...(await readSubscription(client, customerId, productId)), cancelAtPeriodEnd: false };
         },
@@ -505,7 +501,7 @@ export const createAutumnAdapter = (options: AutumnAdapterOptions): PaymentAdapt
             // A plan change is an `attach` of the new product. Autumn keys prepaid quantity by feature,
             // so a bare `quantity` patch has no direct attach mapping; re-read Autumn's authoritative
             // subscription (its real state AND quantity) instead of fabricating `quantity: 1` / `active`.
-            await client.attach({ customer_id: customerId, product_id: targetProduct });
+            await client.billing.attach({ customerId, planId: targetProduct });
 
             return readSubscription(client, customerId, targetProduct);
         },

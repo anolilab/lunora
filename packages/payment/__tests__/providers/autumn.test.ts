@@ -27,49 +27,53 @@ const makeClient = (
     calls: RecordedCall[] = [],
     overrides: Partial<{ check: Record<string, unknown>; customerGet: Record<string, unknown> }> = {},
 ): AutumnClientLike => {
+    const customerGet = async (parameters: Record<string, unknown>) => {
+        calls.push({ args: [parameters], name: "get" });
+
+        return (
+            overrides.customerGet ?? {
+                balances: {
+                    api_calls: { feature_id: "api_calls", granted: 1000, remaining: 940, unlimited: false, usage: 60 },
+                    export: { feature_id: "export", unlimited: true },
+                },
+                id: "user_1",
+                products: [{ current_period_end: 1_900_000_000_000, current_period_start: 1_800_000_000_000, id: "pro", status: "active" }],
+            }
+        );
+    };
+
     return {
-        attach: async (parameters) => {
-            calls.push({ args: [parameters], name: "attach" });
+        billing: {
+            attach: async (parameters: Record<string, unknown>) => {
+                calls.push({ args: [parameters], name: "attach" });
 
-            return { checkout_url: "https://autumn.test/checkout", customer_id: "user_1" };
-        },
-        cancel: async (parameters) => {
-            calls.push({ args: [parameters], name: "cancel" });
+                return { customerId: "user_1", paymentUrl: "https://autumn.test/checkout" };
+            },
+            openCustomerPortal: async (parameters: Record<string, unknown>) => {
+                calls.push({ args: [parameters], name: "portal" });
 
-            return { success: true };
+                return { customerId: "user_1", url: "https://autumn.test/portal" };
+            },
+            update: async (parameters: Record<string, unknown>) => {
+                calls.push({ args: [parameters], name: "update" });
+
+                return { success: true };
+            },
         },
-        check: async (parameters) => {
+        check: async (parameters: Record<string, unknown>) => {
             calls.push({ args: [parameters], name: "check" });
 
             return overrides.check ?? { allowed: true, balance: { granted: 1000, remaining: 940, unlimited: false, usage: 60 }, customer_id: "user_1" };
         },
         customers: {
-            billingPortal: async (customerId, parameters) => {
-                calls.push({ args: [customerId, parameters], name: "billingPortal" });
-
-                return { data: { url: "https://autumn.test/portal" } };
-            },
-            create: async (parameters) => {
+            get: customerGet,
+            getOrCreate: async (parameters: Record<string, unknown>) => {
                 calls.push({ args: [parameters], name: "create" });
 
                 return { email: "a@b.test", id: "user_1" };
             },
-            get: async (customerId, parameters) => {
-                calls.push({ args: [customerId, parameters], name: "get" });
-
-                return (
-                    overrides.customerGet ?? {
-                        balances: {
-                            api_calls: { feature_id: "api_calls", granted: 1000, remaining: 940, unlimited: false, usage: 60 },
-                            export: { feature_id: "export", unlimited: true },
-                        },
-                        id: customerId,
-                        products: [{ current_period_end: 1_900_000_000_000, current_period_start: 1_800_000_000_000, id: "pro", status: "active" }],
-                    }
-                );
-            },
         },
-        track: async (parameters) => {
+        track: async (parameters: Record<string, unknown>) => {
             calls.push({ args: [parameters], name: "track" });
 
             return { id: "evt_1" };
@@ -89,15 +93,14 @@ describe("autumn adapter", () => {
         expect(() => adapter.refundPayment({ sessionId: "x" })).toThrow(/does not support/);
     });
 
-    it("creates a checkout via attach, carrying the pinned reference metadata", async () => {
-        expect.assertions(4);
+    it("creates a checkout via billing.attach keyed on the customer + plan", async () => {
+        expect.assertions(3);
 
         const calls: RecordedCall[] = [];
         const adapter = createAutumnAdapter({ client: makeClient(calls), webhookSecret: SECRET });
 
         const result = await adapter.createCheckout({
             cancelUrl: "https://x/cancel",
-            metadata: { referenceId: "attacker_wins" },
             mode: "subscription",
             priceId: "pro",
             referenceId: "user_1",
@@ -108,14 +111,13 @@ describe("autumn adapter", () => {
 
         const attach = calls.find((call) => call.name === "attach")?.args[0] as Record<string, unknown>;
 
-        expect(attach.product_id).toBe("pro");
-        expect(attach.customer_id).toBe("user_1");
-        // The framework-controlled referenceId is pinned last — caller metadata cannot override it.
-        expect((attach.metadata as { referenceId?: string }).referenceId).toBe("user_1");
+        expect(attach.planId).toBe("pro");
+        // Autumn keys everything on the customer id (our reference id) — no caller metadata to smuggle.
+        expect(attach.customerId).toBe("user_1");
     });
 
-    it("reports usage through track keyed on the reference and dedupe key", async () => {
-        expect.assertions(4);
+    it("reports usage through track keyed on the reference", async () => {
+        expect.assertions(3);
 
         const calls: RecordedCall[] = [];
         const adapter = createAutumnAdapter({ client: makeClient(calls), webhookSecret: SECRET });
@@ -124,30 +126,30 @@ describe("autumn adapter", () => {
 
         const track = calls.find((call) => call.name === "track")?.args[0] as Record<string, unknown>;
 
-        expect(track.feature_id).toBe("api_calls");
-        expect(track.customer_id).toBe("user_1");
+        // Autumn's track has no request-body idempotency key — exactly-once is the local ledger's job.
+        expect(track.featureId).toBe("api_calls");
+        expect(track.customerId).toBe("user_1");
         expect(track.value).toBe(3);
-        expect(track.idempotency_key).toBe("usage_1");
     });
 
-    it("cancels immediately by default and at period end when asked", async () => {
+    it("cancels immediately by default and at period end via billing.update cancelAction", async () => {
         expect.assertions(4);
 
         const calls: RecordedCall[] = [];
         const adapter = createAutumnAdapter({ client: makeClient(calls), webhookSecret: SECRET });
 
         const immediate = await adapter.cancelSubscription("user_1::pro");
-        const immediateCancel = calls.findLast((call) => call.name === "cancel")?.args[0] as Record<string, unknown>;
+        const immediateCancel = calls.findLast((call) => call.name === "update")?.args[0] as Record<string, unknown>;
 
         expect(immediate.state).toBe("canceled");
-        expect(immediateCancel.cancel_immediately).toBe(true);
+        expect(immediateCancel.cancelAction).toBe("cancel_immediately");
 
         // At-period-end re-reads Autumn's real status (still "active" here) and only flips the schedule flag.
         const atPeriodEnd = await adapter.cancelSubscription("user_1::pro", { atPeriodEnd: true });
-        const scheduledCancel = calls.findLast((call) => call.name === "cancel")?.args[0] as Record<string, unknown>;
+        const scheduledCancel = calls.findLast((call) => call.name === "update")?.args[0] as Record<string, unknown>;
 
         expect(atPeriodEnd).toMatchObject({ cancelAtPeriodEnd: true, state: "active" });
-        expect(scheduledCancel.cancel_immediately).toBe(false);
+        expect(scheduledCancel.cancelAction).toBe("cancel_end_of_cycle");
     });
 
     it("cancel-at-period-end does NOT re-entitle a non-active subscription (regression)", async () => {
@@ -240,10 +242,10 @@ describe("autumn adapter", () => {
 
         expect(subscription.id).toBe("user_1::enterprise");
         expect(subscription.priceId).toBe("enterprise");
-        expect(calls.find((call) => call.name === "attach")?.args[0]).toMatchObject({ product_id: "enterprise" });
+        expect(calls.find((call) => call.name === "attach")?.args[0]).toMatchObject({ planId: "enterprise" });
     });
 
-    it("resumes by re-attaching the product", async () => {
+    it("resumes by uncancelling via billing.update", async () => {
         expect.assertions(2);
 
         const calls: RecordedCall[] = [];
@@ -252,7 +254,7 @@ describe("autumn adapter", () => {
         const subscription = await adapter.resumeSubscription("user_1::pro");
 
         expect(subscription).toMatchObject({ cancelAtPeriodEnd: false, state: "active" });
-        expect(calls.find((call) => call.name === "attach")?.args[0]).toMatchObject({ customer_id: "user_1", product_id: "pro" });
+        expect(calls.find((call) => call.name === "update")?.args[0]).toMatchObject({ cancelAction: "uncancel", customerId: "user_1", planId: "pro" });
     });
 
     it("throws on a malformed composite subscription id", async () => {
@@ -380,7 +382,7 @@ describe("autumn adapter", () => {
 
     describe("entitlement delegation", () => {
         it("checkEntitlement reads Autumn's balance math for a metered feature", async () => {
-            expect.assertions(5);
+            expect.assertions(4);
 
             const calls: RecordedCall[] = [];
             const adapter = createAutumnAdapter({ client: makeClient(calls), webhookSecret: SECRET });
@@ -391,21 +393,21 @@ describe("autumn adapter", () => {
 
             const check = calls.find((call) => call.name === "check")?.args[0] as Record<string, unknown>;
 
-            expect(check.customer_id).toBe("user_1");
-            expect(check.feature_id).toBe("api_calls");
-            expect(check.required_balance).toBe(10);
-            expect(check.product_id).toBeUndefined();
+            expect(check.customerId).toBe("user_1");
+            expect(check.featureId).toBe("api_calls");
+            expect(check.requiredBalance).toBe(10);
         });
 
-        it("checkEntitlement returns a bare allow/deny for a product (priceId) check", async () => {
+        it("checkEntitlement resolves a product (priceId) check from the customer's plans", async () => {
             expect.assertions(2);
 
-            const client = makeClient([], { check: { allowed: false, customer_id: "user_1" } });
-            const adapter = createAutumnAdapter({ client, webhookSecret: SECRET });
+            // Autumn's `check` is feature-only, so a product check reads the customer's plans; the default
+            // customer holds an active "pro" product → allowed, with no numeric balance.
+            const adapter = createAutumnAdapter({ client: makeClient(), webhookSecret: SECRET });
 
             const result = await adapter.checkEntitlement?.({ priceId: "pro", referenceId: "user_1" });
 
-            expect(result).toEqual({ allowed: false, unlimited: false });
+            expect(result).toEqual({ allowed: true, unlimited: false });
             expect(result?.balance).toBeUndefined();
         });
 
@@ -423,7 +425,7 @@ describe("autumn adapter", () => {
             expect(result?.balance).toBe(100);
         });
 
-        it("checkEntitlement defaults required_balance to 1 when quantity is omitted (fail-closed)", async () => {
+        it("checkEntitlement defaults requiredBalance to 1 when quantity is omitted (fail-closed)", async () => {
             expect.assertions(1);
 
             const calls: RecordedCall[] = [];
@@ -431,7 +433,7 @@ describe("autumn adapter", () => {
 
             await adapter.checkEntitlement?.({ featureId: "api_calls", referenceId: "user_1" });
 
-            expect((calls.find((call) => call.name === "check")?.args[0] as Record<string, unknown>).required_balance).toBe(1);
+            expect((calls.find((call) => call.name === "check")?.args[0] as Record<string, unknown>).requiredBalance).toBe(1);
         });
 
         it("getBalances maps every Autumn feature balance, including unlimited", async () => {

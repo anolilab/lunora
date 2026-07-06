@@ -5,14 +5,16 @@
  * cross-provider vocabulary. Autumn also ships concepts with no provider-agnostic equivalent:
  * `entities` (per-seat / per-workspace sub-customers with their own feature balances), `referrals`
  * (codes and redemptions), events analytics (query/aggregate a reference's raw usage over a range),
- * the product catalog, and a native checkout with Autumn-only options (free trials, prepaid feature
+ * the plan catalog, and a native checkout with Autumn-only options (free trials, prepaid feature
  * quantities, entity scoping, reward codes).
  *
  * These live in this companion facade — deliberately separate from `createAutumnAdapter` — so the
- * provider-agnostic path stays generic and only Autumn apps reach for them. Like the adapter, the
- * client is injected structurally (no `autumn-js` dependency). The facade mirrors the `autumn-js`
- * calling convention: top-level actions take a single params object carrying `customer_id`, while
- * sub-resource getters are positional (id first). If your client differs, pass a thin shim.
+ * provider-agnostic path stays generic and only Autumn apps reach for them. The public `client` is
+ * the small structural {@link AutumnFeaturesClientLike} (a real `autumn-js` `Autumn` instance
+ * satisfies it, no cast); internally it is used as the real `Autumn` so calls are checked against
+ * the SDK. It is resource-based — `billing.attach`, `entities.*`, `events.*`, `plans.list`,
+ * `referrals.*` — and every call takes a single camelCase params object. Share the same underlying
+ * `Autumn` client between this facade and `createAutumnAdapter`.
  *
  * SECURITY: unlike the `ctx.payments` facade, these methods do **not** authorize the caller — each
  * takes the `referenceId` (and `entityId`) positionally and trusts it. Before exposing any of them on
@@ -22,6 +24,8 @@
  * Credit systems need no method here — Autumn models them as features, so credit balances flow
  * through the adapter's `checkEntitlement` / `getBalances` like any other feature.
  */
+import type { Autumn } from "autumn-js";
+
 import { asRecord, readNumber, readString } from "../json";
 
 /** A per-seat / per-workspace sub-customer with its own feature balances. */
@@ -36,8 +40,8 @@ interface AutumnEntity {
 interface CreateEntityInput {
     /** The feature the entity consumes a seat/allowance of (e.g. `"seats"`). */
     readonly featureId: string;
-    /** Caller-chosen stable id; Autumn generates one when omitted. */
-    readonly id?: string;
+    /** Caller-chosen stable id — Autumn requires an entity id on create. */
+    readonly id: string;
     readonly name?: string;
 }
 
@@ -68,52 +72,47 @@ interface PrepaidOption {
 interface AutumnCheckoutInput {
     /** Scope the checkout to a specific entity (seat/workspace) rather than the top-level customer. */
     readonly entityId?: string;
-    /** Start on a free trial when the plan defines one. */
+
+    /**
+     * Autumn applies a plan's configured free trial automatically. Pass `false` to opt out of that
+     * trial for this checkout; leave unset (or `true`) to keep the plan default.
+     */
     readonly freeTrial?: boolean;
     /** Prepaid feature quantities to purchase up front. */
     readonly options?: ReadonlyArray<PrepaidOption>;
-    readonly productId: string;
-    /** A reward / referral code to apply. */
+    /** The plan to attach (Autumn's plan id — the successor to the classic "product" id). */
+    readonly planId: string;
+    /** An Autumn reward id to apply as a discount. */
     readonly reward?: string;
     readonly successUrl?: string;
 }
 
 /** The subset of the Autumn SDK surface the native facade calls. A real `Autumn` instance satisfies it. */
 interface AutumnFeaturesClientLike {
-    /** Attach a product to a customer with native options (trials, prepaid quantities, rewards). */
-    readonly attach: (parameters: Record<string, unknown>) => Promise<Record<string, unknown>>;
-    readonly entities: {
-        readonly create: (customerId: string, parameters: Record<string, unknown>) => Promise<Record<string, unknown>>;
-        readonly delete: (customerId: string, entityId: string) => Promise<unknown>;
-        readonly get: (customerId: string, entityId: string, parameters?: Record<string, unknown>) => Promise<Record<string, unknown>>;
-    };
-    readonly events: {
-        readonly aggregate: (parameters: Record<string, unknown>) => Promise<Record<string, unknown>>;
-        readonly list: (parameters: Record<string, unknown>) => Promise<Record<string, unknown>>;
-    };
-    readonly products: {
-        readonly list: (parameters?: Record<string, unknown>) => Promise<Record<string, unknown>>;
-    };
-    readonly referrals: {
-        readonly createCode: (parameters: Record<string, unknown>) => Promise<Record<string, unknown>>;
-        readonly redeemCode: (parameters: Record<string, unknown>) => Promise<Record<string, unknown>>;
-    };
+    readonly billing: unknown;
+    readonly entities: unknown;
+    readonly events: unknown;
+    readonly plans: unknown;
+    readonly referrals: unknown;
 }
 
 interface AutumnFeaturesOptions {
     readonly client: AutumnFeaturesClientLike;
 }
 
+/** The SDK's `featureId` param is `string | string[]` (mutable); copy the readonly input into it. */
+const toFeatureId = (featureId: ReadonlyArray<string> | string): string | string[] => (typeof featureId === "string" ? featureId : [...featureId]);
+
 const entityFrom = (record: Record<string, unknown>): AutumnEntity => {
     return {
-        featureId: readString(record, "feature_id") ?? readString(record, "featureId"),
+        featureId: readString(record, "featureId") ?? readString(record, "feature_id"),
         id: readString(record, "id") ?? "",
         name: readString(record, "name"),
         raw: record,
     };
 };
 
-/** Autumn returns either an array under `list`/`data` or a bare array — normalize to points. */
+/** Autumn returns the rows under `list` (aggregate/list responses); normalize to points. */
 const pointsFrom = (result: Record<string, unknown>): UsageEventPoint[] => {
     const list = result.list ?? result.data ?? result.events;
     const rows = Array.isArray(list) ? list : [];
@@ -131,14 +130,14 @@ interface AutumnFeatures {
     readonly entities: {
         readonly create: (referenceId: string, input: CreateEntityInput) => Promise<AutumnEntity>;
         readonly delete: (referenceId: string, entityId: string) => Promise<void>;
-        readonly get: (referenceId: string, entityId: string, expand?: ReadonlyArray<"invoices">) => Promise<AutumnEntity>;
+        readonly get: (referenceId: string, entityId: string) => Promise<AutumnEntity>;
     };
     readonly events: {
         readonly aggregate: (referenceId: string, input: EventsAggregateInput) => Promise<UsageEventPoint[]>;
         readonly list: (referenceId: string, input: EventsListInput) => Promise<UsageEventPoint[]>;
     };
-    readonly products: {
-        readonly list: (referenceId?: string) => Promise<Record<string, unknown>[]>;
+    readonly plans: {
+        readonly list: () => Promise<Record<string, unknown>[]>;
     };
     readonly referrals: {
         readonly createCode: (referenceId: string, programId: string) => Promise<{ code: string; raw: Record<string, unknown> }>;
@@ -148,36 +147,35 @@ interface AutumnFeatures {
 
 /**
  * Build the Autumn-native feature facade over an injected client. Companion to `createAutumnAdapter`;
- * share the same underlying `autumn-js` client between them.
+ * share the same underlying `autumn-js` `Autumn` client between them.
  */
 export const createAutumnFeatures = (options: AutumnFeaturesOptions): AutumnFeatures => {
-    const { client } = options;
+    // Public param is the tiny structural shim; internally it is the real SDK so calls are checked.
+    const client = options.client as unknown as Autumn;
 
     return {
         /**
-         * Native Autumn checkout — supports free trials, prepaid feature quantities, entity scoping,
-         * and reward codes. Returns the hosted checkout URL (empty when Autumn applied the change
-         * directly without a payment step).
+         * Native Autumn checkout — supports opting out of a plan's free trial, prepaid feature
+         * quantities, entity scoping, and reward codes. Returns the hosted checkout URL (empty when
+         * Autumn applied the change directly without a payment step).
          */
         checkout: async (referenceId: string, input: AutumnCheckoutInput): Promise<{ raw: Record<string, unknown>; url: string }> => {
-            const result = await client.attach({
-                customer_id: referenceId,
-                entity_id: input.entityId,
-                free_trial: input.freeTrial,
-                options: input.options?.map((option) => {
-                    return { feature_id: option.featureId, quantity: option.quantity };
+            const result = asRecord(
+                await client.billing.attach({
+                    customerId: referenceId,
+                    // Autumn applies the plan's configured trial by default; `null` opts this checkout out.
+                    // eslint-disable-next-line unicorn/no-null -- the SDK's customize.freeTrial requires null (not undefined) to disable
+                    ...(input.freeTrial === false ? { customize: { freeTrial: null } } : {}),
+                    discounts: input.reward ? [{ rewardId: input.reward }] : undefined,
+                    entityId: input.entityId,
+                    featureQuantities: input.options?.map((option) => {
+                        return { featureId: option.featureId, quantity: option.quantity };
+                    }),
+                    planId: input.planId,
+                    successUrl: input.successUrl,
                 }),
-                product_id: input.productId,
-                reward: input.reward,
-                success_url: input.successUrl,
-            });
-            const url =
-                readString(result, "checkout_url") ??
-                readString(result, "checkoutUrl") ??
-                readString(result, "payment_url") ??
-                readString(result, "paymentUrl") ??
-                readString(result, "url") ??
-                "";
+            );
+            const url = readString(result, "paymentUrl") ?? readString(result, "checkoutUrl") ?? readString(result, "url") ?? "";
 
             return { raw: result, url };
         },
@@ -185,61 +183,61 @@ export const createAutumnFeatures = (options: AutumnFeaturesOptions): AutumnFeat
         entities: {
             /** Create a per-seat / per-workspace sub-customer under a reference. */
             create: async (referenceId: string, input: CreateEntityInput): Promise<AutumnEntity> => {
-                const created = await client.entities.create(referenceId, { feature_id: input.featureId, id: input.id, name: input.name });
+                const created = await client.entities.create({ customerId: referenceId, entityId: input.id, featureId: input.featureId, name: input.name });
 
-                return entityFrom(created);
+                return entityFrom(asRecord(created));
             },
 
             /** Remove an entity — frees its seat/allowance. */
             delete: async (referenceId: string, entityId: string): Promise<void> => {
-                await client.entities.delete(referenceId, entityId);
+                await client.entities.delete({ customerId: referenceId, entityId });
             },
 
-            /** Fetch one entity and its balances. Pass `expand: ["invoices"]` for billing detail. */
-            get: async (referenceId: string, entityId: string, expand?: ReadonlyArray<"invoices">): Promise<AutumnEntity> => {
-                const entity = await client.entities.get(referenceId, entityId, expand ? { expand } : undefined);
+            /** Fetch one entity and its balances. */
+            get: async (referenceId: string, entityId: string): Promise<AutumnEntity> => {
+                const entity = await client.entities.get({ customerId: referenceId, entityId });
 
-                return entityFrom(entity);
+                return entityFrom(asRecord(entity));
             },
         },
 
         events: {
             /** Bucketed usage aggregation for a reference's feature(s) over a range. */
             aggregate: async (referenceId: string, input: EventsAggregateInput): Promise<UsageEventPoint[]> => {
-                const result = await client.events.aggregate({ customer_id: referenceId, feature_id: input.featureId, range: input.range });
+                const result = await client.events.aggregate({ customerId: referenceId, featureId: toFeatureId(input.featureId), range: input.range });
 
-                return pointsFrom(result);
+                return pointsFrom(asRecord(result));
             },
 
             /** Raw usage events for a reference's feature(s). */
             list: async (referenceId: string, input: EventsListInput): Promise<UsageEventPoint[]> => {
-                const result = await client.events.list({ customer_id: referenceId, feature_id: input.featureId });
+                const result = await client.events.list({ customerId: referenceId, featureId: toFeatureId(input.featureId) });
 
-                return pointsFrom(result);
+                return pointsFrom(asRecord(result));
             },
         },
 
-        products: {
-            /** The configured product/plan catalog (optionally scoped to a reference's eligibility). */
-            list: async (referenceId?: string): Promise<Record<string, unknown>[]> => {
-                const result = await client.products.list(referenceId ? { customer_id: referenceId } : undefined);
-                const list = result.list ?? result.data ?? result.products;
+        plans: {
+            /** The configured plan catalog. */
+            list: async (): Promise<Record<string, unknown>[]> => {
+                const result = asRecord(await client.plans.list());
+                const list = result.list ?? result.data ?? result.plans;
 
                 return Array.isArray(list) ? list.map((entry) => asRecord(entry)) : [];
             },
         },
 
         referrals: {
-            /** Mint a referral code for a reference in a referral program. */
+            /** Mint (or fetch) a referral code for a reference in a referral program. */
             createCode: async (referenceId: string, programId: string): Promise<{ code: string; raw: Record<string, unknown> }> => {
-                const result = await client.referrals.createCode({ customer_id: referenceId, program_id: programId });
+                const result = asRecord(await client.referrals.createCode({ customerId: referenceId, programId }));
 
                 return { code: readString(result, "code") ?? "", raw: result };
             },
 
             /** Redeem a referral code on behalf of a reference. */
             redeemCode: async (referenceId: string, code: string): Promise<Record<string, unknown>> =>
-                client.referrals.redeemCode({ code, customer_id: referenceId }),
+                asRecord(await client.referrals.redeemCode({ code, customerId: referenceId })),
         },
     };
 };

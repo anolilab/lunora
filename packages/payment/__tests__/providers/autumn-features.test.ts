@@ -10,30 +10,32 @@ interface RecordedCall {
 
 const makeClient = (calls: RecordedCall[] = []): AutumnFeaturesClientLike => {
     return {
-        attach: async (parameters) => {
-            calls.push({ args: [parameters], name: "attach" });
+        billing: {
+            attach: async (parameters: Record<string, unknown>) => {
+                calls.push({ args: [parameters], name: "billing.attach" });
 
-            return { checkout_url: "https://autumn.test/checkout" };
+                return { customerId: "user_1", paymentUrl: "https://autumn.test/checkout" };
+            },
         },
         entities: {
-            create: async (customerId, parameters) => {
-                calls.push({ args: [customerId, parameters], name: "entities.create" });
+            create: async (parameters: Record<string, unknown>) => {
+                calls.push({ args: [parameters], name: "entities.create" });
 
-                return { feature_id: "seats", id: "ent_1", name: "Workspace A" };
+                return { featureId: "seats", id: "ent_1", name: "Workspace A" };
             },
-            delete: async (customerId, entityId) => {
-                calls.push({ args: [customerId, entityId], name: "entities.delete" });
+            delete: async (parameters: Record<string, unknown>) => {
+                calls.push({ args: [parameters], name: "entities.delete" });
 
                 return { success: true };
             },
-            get: async (customerId, entityId, parameters) => {
-                calls.push({ args: [customerId, entityId, parameters], name: "entities.get" });
+            get: async (parameters: Record<string, unknown>) => {
+                calls.push({ args: [parameters], name: "entities.get" });
 
-                return { feature_id: "seats", id: entityId, name: "Workspace A" };
+                return { featureId: "seats", id: parameters.entityId, name: "Workspace A" };
             },
         },
         events: {
-            aggregate: async (parameters) => {
+            aggregate: async (parameters: Record<string, unknown>) => {
                 calls.push({ args: [parameters], name: "events.aggregate" });
 
                 return {
@@ -43,26 +45,26 @@ const makeClient = (calls: RecordedCall[] = []): AutumnFeaturesClientLike => {
                     ],
                 };
             },
-            list: async (parameters) => {
+            list: async (parameters: Record<string, unknown>) => {
                 calls.push({ args: [parameters], name: "events.list" });
 
                 return { list: [{ count: 1 }, { count: 1 }] };
             },
         },
-        products: {
-            list: async (parameters) => {
-                calls.push({ args: [parameters], name: "products.list" });
+        plans: {
+            list: async () => {
+                calls.push({ args: [], name: "plans.list" });
 
                 return { list: [{ id: "pro" }, { id: "enterprise" }] };
             },
         },
         referrals: {
-            createCode: async (parameters) => {
+            createCode: async (parameters: Record<string, unknown>) => {
                 calls.push({ args: [parameters], name: "referrals.createCode" });
 
                 return { code: "FRIEND-123" };
             },
-            redeemCode: async (parameters) => {
+            redeemCode: async (parameters: Record<string, unknown>) => {
                 calls.push({ args: [parameters], name: "referrals.redeemCode" });
 
                 return { redeemed: true };
@@ -81,16 +83,20 @@ describe("autumn native features", () => {
         const created = await features.entities.create("user_1", { featureId: "seats", id: "ent_1", name: "Workspace A" });
 
         expect(created).toMatchObject({ featureId: "seats", id: "ent_1", name: "Workspace A" });
-        expect(calls[0]).toMatchObject({ args: ["user_1", { feature_id: "seats", id: "ent_1", name: "Workspace A" }], name: "entities.create" });
+        // The reference is threaded as customerId, the caller id as entityId — both camelCase params.
+        expect(calls[0]).toMatchObject({
+            args: [{ customerId: "user_1", entityId: "ent_1", featureId: "seats", name: "Workspace A" }],
+            name: "entities.create",
+        });
 
-        const fetched = await features.entities.get("user_1", "ent_1", ["invoices"]);
+        const fetched = await features.entities.get("user_1", "ent_1");
 
         expect(fetched.id).toBe("ent_1");
-        expect(calls[1]?.args[2]).toEqual({ expand: ["invoices"] });
+        expect(calls[1]?.args[0]).toEqual({ customerId: "user_1", entityId: "ent_1" });
 
         await features.entities.delete("user_1", "ent_1");
 
-        expect(calls.at(-1)).toEqual({ args: ["user_1", "ent_1"], name: "entities.delete" });
+        expect(calls.at(-1)).toEqual({ args: [{ customerId: "user_1", entityId: "ent_1" }], name: "entities.delete" });
     });
 
     it("mints and redeems referral codes", async () => {
@@ -102,11 +108,11 @@ describe("autumn native features", () => {
         const minted = await features.referrals.createCode("user_1", "launch-program");
 
         expect(minted.code).toBe("FRIEND-123");
-        expect(calls[0]).toEqual({ args: [{ customer_id: "user_1", program_id: "launch-program" }], name: "referrals.createCode" });
+        expect(calls[0]).toEqual({ args: [{ customerId: "user_1", programId: "launch-program" }], name: "referrals.createCode" });
 
         await features.referrals.redeemCode("user_2", "FRIEND-123");
 
-        expect(calls[1]).toEqual({ args: [{ code: "FRIEND-123", customer_id: "user_2" }], name: "referrals.redeemCode" });
+        expect(calls[1]).toEqual({ args: [{ code: "FRIEND-123", customerId: "user_2" }], name: "referrals.redeemCode" });
     });
 
     it("lists and aggregates usage events into points", async () => {
@@ -122,21 +128,21 @@ describe("autumn native features", () => {
         const aggregated = await features.events.aggregate("user_1", { featureId: "api_calls", range: "7d" });
 
         expect(aggregated[0]).toMatchObject({ count: 12, period: "2026-07-01" });
-        expect(calls.at(-1)?.args[0]).toMatchObject({ customer_id: "user_1", feature_id: "api_calls", range: "7d" });
+        expect(calls.at(-1)?.args[0]).toMatchObject({ customerId: "user_1", featureId: "api_calls", range: "7d" });
     });
 
-    it("lists the product catalog", async () => {
+    it("lists the plan catalog", async () => {
         expect.assertions(2);
 
         const features = createAutumnFeatures({ client: makeClient() });
 
-        const products = await features.products.list("user_1");
+        const plans = await features.plans.list();
 
-        expect(products).toHaveLength(2);
-        expect(products.map((product) => product.id)).toEqual(["pro", "enterprise"]);
+        expect(plans).toHaveLength(2);
+        expect(plans.map((plan) => plan.id)).toEqual(["pro", "enterprise"]);
     });
 
-    it("runs a native checkout with a free trial, prepaid options, entity scope, and reward", async () => {
+    it("runs a native checkout with prepaid options, entity scope, and a reward, opting out of the trial", async () => {
         expect.assertions(2);
 
         const calls: RecordedCall[] = [];
@@ -144,22 +150,22 @@ describe("autumn native features", () => {
 
         const result = await features.checkout("user_1", {
             entityId: "ent_1",
-            freeTrial: true,
+            freeTrial: false,
             options: [{ featureId: "seats", quantity: 5 }],
-            productId: "pro",
+            planId: "pro",
             reward: "FRIEND-123",
             successUrl: "https://x/ok",
         });
 
         expect(result.url).toBe("https://autumn.test/checkout");
         expect(calls[0]?.args[0]).toEqual({
-            customer_id: "user_1",
-            entity_id: "ent_1",
-            free_trial: true,
-            options: [{ feature_id: "seats", quantity: 5 }],
-            product_id: "pro",
-            reward: "FRIEND-123",
-            success_url: "https://x/ok",
+            customerId: "user_1",
+            customize: { freeTrial: null },
+            discounts: [{ rewardId: "FRIEND-123" }],
+            entityId: "ent_1",
+            featureQuantities: [{ featureId: "seats", quantity: 5 }],
+            planId: "pro",
+            successUrl: "https://x/ok",
         });
     });
 });
