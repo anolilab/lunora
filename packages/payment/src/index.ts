@@ -26,29 +26,9 @@ export {
     zeroMoney,
 } from "./money";
 export type { PaymentEvent, PaymentObserver } from "./observability";
-export type { AutumnAdapterOptions, AutumnClientLike } from "./providers/autumn";
-export { createAutumnAdapter } from "./providers/autumn";
-export type {
-    AutumnCheckoutInput,
-    AutumnEntity,
-    AutumnFeatures,
-    AutumnFeaturesClientLike,
-    AutumnFeaturesOptions,
-    CreateEntityInput,
-    EventsAggregateInput,
-    EventsListInput,
-    PrepaidOption,
-    UsageEventPoint,
-} from "./providers/autumn-features";
-export { createAutumnFeatures } from "./providers/autumn-features";
-export type { CreemAdapterOptions, CreemClientLike } from "./providers/creem";
-export { createCreemAdapter } from "./providers/creem";
-export type { DodoPaymentsAdapterOptions, DodoPaymentsClientLike } from "./providers/dodopayments";
-export { createDodoPaymentsAdapter } from "./providers/dodopayments";
-export type { PolarAdapterOptions, PolarClientLike } from "./providers/polar";
-export { createPolarAdapter } from "./providers/polar";
-export type { StripeAdapterOptions } from "./providers/stripe";
-export { createStripeAdapter } from "./providers/stripe";
+// Provider adapters ship as per-provider subpaths (`@lunora/payment/stripe`, `/polar`, `/autumn`,
+// `/dodopayments`, `/creem`) so each provider's SDK stays an isolated optional peer dependency —
+// importing one adapter never loads the others (or their SDKs). They are NOT re-exported here.
 export type { ReconcileInput, ReconcileResult } from "./reconcile";
 export { reconcile } from "./reconcile";
 export { default as paymentTables } from "./schema";

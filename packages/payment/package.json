@@ -41,6 +41,30 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./stripe": {
+            "types": "./dist/providers/stripe.d.ts",
+            "import": "./dist/providers/stripe.mjs"
+        },
+        "./polar": {
+            "types": "./dist/providers/polar.d.ts",
+            "import": "./dist/providers/polar.mjs"
+        },
+        "./autumn": {
+            "types": "./dist/providers/autumn.d.ts",
+            "import": "./dist/providers/autumn.mjs"
+        },
+        "./autumn-features": {
+            "types": "./dist/providers/autumn-features.d.ts",
+            "import": "./dist/providers/autumn-features.mjs"
+        },
+        "./dodopayments": {
+            "types": "./dist/providers/dodopayments.d.ts",
+            "import": "./dist/providers/dodopayments.mjs"
+        },
+        "./creem": {
+            "types": "./dist/providers/creem.d.ts",
+            "import": "./dist/providers/creem.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {

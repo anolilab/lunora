@@ -53,7 +53,8 @@ pnpm add @lunora/payment stripe
 Build a facade from an adapter and a store, then start a hosted checkout:
 
 ```ts
-import { createPayment, createStripeAdapter, MemoryPaymentStore } from "@lunora/payment";
+import { createPayment, MemoryPaymentStore } from "@lunora/payment";
+import { createStripeAdapter } from "@lunora/payment/stripe";
 import Stripe from "stripe";
 
 const payment = createPayment({

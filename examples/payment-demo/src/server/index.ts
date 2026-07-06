@@ -1,4 +1,4 @@
-import { createStripeAdapter } from "@lunora/payment";
+import { createStripeAdapter } from "@lunora/payment/stripe";
 import type { ExecutionContextLike, ShardNamespaceLike } from "lunorash/runtime";
 import { createWorker } from "lunorash/runtime";
 import Stripe from "stripe";
