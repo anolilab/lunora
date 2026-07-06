@@ -3,10 +3,11 @@
  *
  * Takes a `Stripe` client by injection — `stripe` is an optional peer dependency, so pass
  * `new Stripe(key, { httpClient: Stripe.createFetchHttpClient() })` from the app (the fetch HTTP
- * client is required on workerd). The adapter types the client as the real `Stripe` instance, so
- * every call is checked against the SDK, and verifies webhooks with the SDK's own
- * `webhooks.constructEventAsync` (workerd SubtleCrypto provider). Stripe amounts are already integer
- * minor units (zero-decimal currencies included), matching money 1:1.
+ * client is required on workerd). The public `client` is typed as the small structural
+ * {@link StripeClientLike} (a real `Stripe` instance satisfies it, no cast) to keep the published
+ * declarations lean; internally it is used as the real `Stripe` type so every call is checked
+ * against the SDK, and webhooks are verified with the SDK's own `webhooks.constructEventAsync`.
+ * Stripe amounts are already integer minor units (zero-decimal currencies included), matching money 1:1.
  */
 import type { Stripe } from "stripe";
 
@@ -33,8 +34,24 @@ import type {
 } from "../types";
 import stateToEventType from "./subscription-event";
 
+/**
+ * The Stripe SDK surface the adapter uses, as a structural type — a real `Stripe` instance satisfies
+ * it without a cast. Resources are `unknown` here (the adapter re-types the client as the real
+ * `Stripe` internally); this keeps the SDK's full type out of the published declaration files.
+ */
+interface StripeClientLike {
+    readonly billing: unknown;
+    readonly billingPortal: unknown;
+    readonly checkout: unknown;
+    readonly customers: unknown;
+    readonly paymentIntents: unknown;
+    readonly refunds: unknown;
+    readonly subscriptions: unknown;
+    readonly webhooks: unknown;
+}
+
 interface StripeAdapterOptions {
-    readonly client: Stripe;
+    readonly client: StripeClientLike;
     readonly webhookSecret: string;
     readonly webhookToleranceSeconds?: number;
 }
@@ -240,7 +257,10 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
 };
 
 export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapter => {
-    const { client, webhookSecret } = options;
+    const { webhookSecret } = options;
+    // Use the injected client as the real `Stripe` internally so every call below is checked against
+    // the SDK (drift-proof), while the public `client` param stays the lean structural shim.
+    const client = options.client as unknown as Stripe;
 
     return {
         cancelPayment: async (sessionId, paymentOptions) => {
@@ -384,4 +404,4 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
     };
 };
 
-export type { StripeAdapterOptions };
+export type { StripeAdapterOptions, StripeClientLike };
