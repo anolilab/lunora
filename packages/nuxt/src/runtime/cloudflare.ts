@@ -18,7 +18,7 @@
  * so this seam stays pure (no Nitro types needed) and unit-testable with a plain
  * object — a real `H3Event` is still assignable here.
  */
-import type { ExecutionContextLike } from "../../../../shared/execution-context";
+import type { ExecutionContextLike } from "@lunora/runtime";
 
 /** The `{ env, context|ctx }` payload Nitro attaches for the Cloudflare runtime. */
 interface CloudflareEventBag {
@@ -68,4 +68,4 @@ const resolveCloudflare = (event: H3EventLike): ResolvedCloudflare => {
 export type { H3EventLike, ResolvedCloudflare };
 export { resolveCloudflare };
 
-export { type ExecutionContextLike } from "../../../../shared/execution-context";
+export { type ExecutionContextLike } from "@lunora/runtime";
