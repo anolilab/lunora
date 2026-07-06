@@ -705,6 +705,48 @@ describe("lunora dev", () => {
             expect(warns.some((line) => line.includes("already running"))).toBe(true);
         });
 
+        it("supersedes the background parent's provisional record (does not self-detect as already-running)", async () => {
+            expect.assertions(3);
+
+            // The auto-background daemon inherits DEV_HANDOFF_PID = its parent's
+            // PID, and that parent wrote a provisional record (its own, live PID)
+            // before spawning the daemon. The daemon must claim OVER it and start,
+            // not report "already running" and bail — which is how `lunora dev`
+            // launches under AI-agent auto-background. Use `process.ppid` as the
+            // live "parent" PID (the same trick as the lockfile test above).
+            writeDevServerState(workdir, { mode: "cli", pid: process.ppid, url: "http://localhost:5173" });
+            const previous = process.env.LUNORA_DEV_HANDOFF_PID;
+            process.env.LUNORA_DEV_HANDOFF_PID = String(process.ppid);
+
+            let spawned = false;
+            const warns: string[] = [];
+            const logger: Logger = { error: () => {}, info: () => {}, success: () => {}, warn: (message) => warns.push(message) };
+
+            try {
+                const result = await runDevCommand({
+                    codegen: false,
+                    cwd: workdir,
+                    logger,
+                    startWorker: () => {
+                        spawned = true;
+
+                        return { exited: Promise.resolve(0), kill: () => {} };
+                    },
+                    studio: false,
+                });
+
+                expect(result.code).toBe(0);
+                expect(spawned).toBe(true); // claimed over the parent's provisional record and started
+                expect(warns.some((line) => line.includes("already running"))).toBe(false);
+            } finally {
+                if (previous === undefined) {
+                    delete process.env.LUNORA_DEV_HANDOFF_PID;
+                } else {
+                    process.env.LUNORA_DEV_HANDOFF_PID = previous;
+                }
+            }
+        });
+
         it("logs an actionable .dev.vars hint when the scaffolder is declined non-interactively", async () => {
             expect.assertions(2);
 

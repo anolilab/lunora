@@ -29,6 +29,13 @@ realtime works with live DOs in dev, not just after deploy. Open
 > `getPlatformProxy`, which cannot emulate an internal Durable Object. The
 > sidecar is a real `workerd` so `ShardDO` behaves exactly as it does deployed.
 > Running `<pm> run dev` (bare `vite`) works for UI/HMR but has no live `ShardDO`.
+>
+> Harmless startup noise: because the adapter's `getPlatformProxy` reads the same
+> `wrangler.jsonc`, dev logs a `"…internal Durable Objects…will not work in local
+development"` / `"ShardDO…not exported"` warning. That's the adapter's own empty
+> binding stub — your `ShardDO` runs in the sidecar and `/_lunora/*` reaches it
+> through the Vite proxy, so realtime works regardless. SvelteKit `load`/`+server`
+> code must reach Lunora via `/_lunora/*` (same origin), not `platform.env.SHARD`.
 
 ## What's wired
 

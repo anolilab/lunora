@@ -711,6 +711,135 @@ const buildDevPlan = async (options: DevCommandOptions): Promise<DevCommandPlan>
 };
 
 /**
+ * Supervise the spawned dev children until dev ends. Wires SIGINT/SIGTERM to
+ * signal BOTH the framework dev server and the sidecar together (Ctrl-C once →
+ * SIGTERM, again → SIGKILL; a grace timer escalates the first SIGINT), then
+ * resolves when the FIRST child exits — a stopped framework dev server and a
+ * crashed sidecar both mean "dev is over" — tearing the other down and awaiting
+ * it so neither is orphaned holding a port. Returns that first child's exit
+ * code. With no sidecar (single-process flavors) this collapses to plain
+ * single-child supervision. Extracted from {@link runDevCommand} to keep its
+ * orchestration legible (and under the cognitive-complexity budget).
+ */
+const superviseWorkers = async (worker: WorkerProcess, sidecar: WorkerProcess | undefined, logger: Logger): Promise<number> => {
+    let sigintCount = 0;
+    let escalationTimer: NodeJS.Timeout | undefined;
+
+    const killChildren = (signal: NodeJS.Signals): void => {
+        worker.kill(signal);
+        sidecar?.kill(signal);
+    };
+    const onSigint = (): void => {
+        sigintCount += 1;
+
+        if (sigintCount === 1) {
+            logger.info("received SIGINT — shutting down (press Ctrl-C again to force-kill)");
+            killChildren("SIGTERM");
+            escalationTimer = setTimeout(() => {
+                killChildren("SIGKILL");
+            }, SIGINT_GRACE_MS);
+            escalationTimer.unref();
+        } else {
+            killChildren("SIGKILL");
+        }
+    };
+    const onSigterm = (): void => {
+        killChildren("SIGTERM");
+    };
+
+    process.on("SIGINT", onSigint);
+    process.on("SIGTERM", onSigterm);
+
+    const exits: Promise<{ code: number; who: "sidecar" | "worker" }>[] = [
+        worker.exited.then((code) => {
+            return { code, who: "worker" as const };
+        }),
+    ];
+
+    if (sidecar !== undefined) {
+        exits.push(
+            sidecar.exited.then((code) => {
+                return { code, who: "sidecar" as const };
+            }),
+        );
+    }
+
+    const first = await Promise.race(exits);
+
+    if (sidecar !== undefined) {
+        if (first.who === "sidecar") {
+            logger.warn("[worker] the Lunora sidecar (wrangler dev) exited — shutting down the framework dev server");
+            worker.kill("SIGTERM");
+        } else {
+            sidecar.kill("SIGTERM");
+        }
+
+        await Promise.allSettled([worker.exited, sidecar.exited]);
+    }
+
+    if (escalationTimer) {
+        clearTimeout(escalationTimer);
+    }
+
+    process.off("SIGINT", onSigint);
+    process.off("SIGTERM", onSigterm);
+
+    return first.code;
+};
+
+/**
+ * Start the embedded studio server for the wrangler/framework-worker flavors —
+ * best-effort: a start failure is logged and dev continues without it. Returns
+ * the handle (for teardown), or `undefined` when studio is disabled or failed.
+ */
+const startStudioBestEffort = async (
+    options: DevCommandOptions,
+    plan: DevCommandPlan,
+    cwd: string,
+    logger: Logger,
+): Promise<StudioServerHandle | undefined> => {
+    if (!plan.studioEnabled) {
+        return undefined;
+    }
+
+    try {
+        return await (options.startStudio ?? startStudioServer)({
+            cwd,
+            logger: {
+                warnOnce: (message) => {
+                    logger.warn(message);
+                },
+            },
+            port: plan.studioPort,
+            workerOrigin: plan.workerOrigin,
+        });
+    } catch (error: unknown) {
+        logger.warn(`studio server failed to start (${error instanceof Error ? error.message : String(error)}) — continuing without it`);
+
+        return undefined;
+    }
+};
+
+/**
+ * For the two-process framework-worker flavor (SvelteKit / Nuxt), regenerate
+ * `_generated/*` once up front so the sidecar's `wrangler dev` can bundle
+ * `lunora/server.ts` immediately — the framework's own `@lunora/vite` plugin
+ * owns the ongoing watch, but there's a startup race. Best-effort + a no-op for
+ * every single-process flavor. A failure is surfaced but non-fatal.
+ */
+const ensureSidecarGenerated = (plan: DevCommandPlan, options: DevCommandOptions, cwd: string, logger: Logger): void => {
+    if (plan.sidecar === undefined) {
+        return;
+    }
+
+    try {
+        runCodegen({ apiSpec: options.apiSpec, lunoraDirectory: "lunora", projectRoot: cwd });
+    } catch (error: unknown) {
+        logger.warn(`codegen (pre-sidecar) failed: ${error instanceof Error ? error.message : String(error)} — the framework dev server will retry`);
+    }
+};
+
+/**
  * Start codegen watch + the studio server, spawn `wrangler dev`, print the
  * banner, and resolve when the worker exits or the user interrupts — tearing
  * down the sibling servers either way. The three side-effecting pieces (worker,
@@ -729,9 +858,19 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         // already running — report it and succeed (idempotent start) instead of
         // spawning a conflicting sibling. A stale record (dead PID) was already
         // cleared by the read.
+        //
+        // A background daemon inherits DEV_HANDOFF_ENV = its parent's PID, and
+        // that parent wrote a PROVISIONAL record (its own PID) before spawning
+        // us. Skip that record here — `claimStartRecord` below supersedes it via
+        // `supersedePid`. Without this skip the daemon sees its own parent's
+        // claim, reports "already running", and never starts (this is the path
+        // `lunora dev` takes under AI-agent auto-background, so it would silently
+        // fail to launch). A genuine other server has a PID that is neither ours
+        // nor the handoff parent's, so it still short-circuits correctly.
+        const handoffPid = Number(process.env[DEV_HANDOFF_ENV]);
         const existing = readLiveDevServerState(cwd);
 
-        if (existing !== undefined && existing.pid !== process.pid) {
+        if (existing !== undefined && existing.pid !== process.pid && existing.pid !== handoffPid) {
             reportExistingServer(logger, existing);
 
             return { code: 0, plan };
@@ -772,25 +911,8 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
             handles.codegen = (options.startCodegen ?? startCodegenWatch)({ apiSpec: options.apiSpec, logger, projectRoot: cwd });
         }
 
-        let studioUrl: string | undefined;
-
-        if (plan.studioEnabled) {
-            try {
-                handles.studio = await (options.startStudio ?? startStudioServer)({
-                    cwd,
-                    logger: {
-                        warnOnce: (message) => {
-                            logger.warn(message);
-                        },
-                    },
-                    port: plan.studioPort,
-                    workerOrigin: plan.workerOrigin,
-                });
-                studioUrl = handles.studio.url;
-            } catch (error: unknown) {
-                logger.warn(`studio server failed to start (${error instanceof Error ? error.message : String(error)}) — continuing without it`);
-            }
-        }
+        handles.studio = await startStudioBestEffort(options, plan, cwd, logger);
+        const studioUrl = handles.studio?.url;
 
         // A Vite/meta-framework was detected: nudge the user to their framework
         // dev script for the full app before wrangler starts (the worker still runs).
@@ -798,19 +920,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
             logger.warn(plan.frameworkHint);
         }
 
-        // Two-process framework-worker flavor (SvelteKit / Nuxt): the sidecar's
-        // `wrangler dev` bundles `lunora/server.ts`, which imports `_generated/*`.
-        // The framework's own `@lunora/vite` plugin owns the ongoing codegen
-        // watch, but there's a startup race — run codegen once up front so the
-        // sidecar bundle resolves. Best-effort: a failure is surfaced but not
-        // fatal (the framework plugin regenerates on its next tick).
-        if (plan.sidecar !== undefined) {
-            try {
-                runCodegen({ apiSpec: options.apiSpec, lunoraDirectory: "lunora", projectRoot: cwd });
-            } catch (error: unknown) {
-                logger.warn(`codegen (pre-sidecar) failed: ${error instanceof Error ? error.message : String(error)} — the framework dev server will retry`);
-            }
-        }
+        ensureSidecarGenerated(plan, options, cwd, logger);
 
         const spawn = options.startWorker ?? defaultWorkerSpawner;
         const worker = spawn(plan.wrangler, logger);
@@ -821,76 +931,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         handles.containerLogs = afterWorkerSpawn(plan, cwd, logger, studioUrl);
         printAgentRulesHint(logger, cwd);
 
-        let sigintCount = 0;
-        let escalationTimer: NodeJS.Timeout | undefined;
-
-        // Both children are signalled together so Ctrl-C tears down the whole
-        // stack (framework dev server + sidecar) — never orphans one holding a port.
-        const killChildren = (signal: NodeJS.Signals): void => {
-            worker.kill(signal);
-            sidecar?.kill(signal);
-        };
-
-        const onSigint = (): void => {
-            sigintCount += 1;
-
-            if (sigintCount === 1) {
-                logger.info("received SIGINT — shutting down (press Ctrl-C again to force-kill)");
-                killChildren("SIGTERM");
-                escalationTimer = setTimeout(() => {
-                    killChildren("SIGKILL");
-                }, SIGINT_GRACE_MS);
-                escalationTimer.unref();
-            } else {
-                killChildren("SIGKILL");
-            }
-        };
-        const onSigterm = (): void => {
-            killChildren("SIGTERM");
-        };
-
-        process.on("SIGINT", onSigint);
-        process.on("SIGTERM", onSigterm);
-
-        // Exit when EITHER child exits: a stopped framework dev server and a
-        // crashed sidecar both mean "dev is over". Then tear the other down and
-        // await it so neither is orphaned. With no sidecar the race has one entry
-        // and this collapses to the original single-child behaviour.
-        const exits: Promise<{ code: number; who: "sidecar" | "worker" }>[] = [
-            worker.exited.then((code) => {
-                return { code, who: "worker" as const };
-            }),
-        ];
-
-        if (sidecar !== undefined) {
-            exits.push(
-                sidecar.exited.then((code) => {
-                    return { code, who: "sidecar" as const };
-                }),
-            );
-        }
-
-        const first = await Promise.race(exits);
-
-        if (sidecar !== undefined) {
-            if (first.who === "sidecar") {
-                logger.warn("[worker] the Lunora sidecar (wrangler dev) exited — shutting down the framework dev server");
-                worker.kill("SIGTERM");
-            } else {
-                sidecar.kill("SIGTERM");
-            }
-
-            await Promise.allSettled([worker.exited, sidecar.exited]);
-        }
-
-        const { code } = first;
-
-        if (escalationTimer) {
-            clearTimeout(escalationTimer);
-        }
-
-        process.off("SIGINT", onSigint);
-        process.off("SIGTERM", onSigterm);
+        const code = await superviseWorkers(worker, sidecar, logger);
 
         return { code, plan };
     } finally {
