@@ -92,8 +92,9 @@ STRIPE_WEBHOOK_SECRET=whsec_...     # Developers → Webhooks (endpoint signing 
 
 ## Install
 
-The package never imports the `stripe` SDK — you inject the client, so `stripe`
-stays an optional peer dependency you install alongside it:
+The Stripe adapter uses the real `stripe` SDK — the adapter types its client as a `Stripe`
+instance and verifies webhooks with the SDK's own verifier. `stripe` is an **optional peer
+dependency** (the adapter tree-shakes away when unused), so install it alongside the package:
 
 <Tabs items={["pnpm","npm","yarn","bun"]}>
 
@@ -137,16 +138,14 @@ const stripe = new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetc
 </Step>
 <Step>
 
-**Build the adapter** with `createStripeAdapter`. A real `Stripe` instance
-satisfies the structural `StripeClientLike`; the cast keeps the package free of a
-hard `stripe` dependency:
+**Build the adapter** with `createStripeAdapter`. Pass the `Stripe` instance straight through —
+the adapter's `client` is typed as the real `Stripe`, so there is no cast:
 
 ```ts
-import type { StripeClientLike } from "@lunora/payment";
 import { createStripeAdapter } from "@lunora/payment";
 
 const adapter = createStripeAdapter({
-    client: stripe as unknown as StripeClientLike,
+    client: stripe,
     webhookSecret: env.STRIPE_WEBHOOK_SECRET,
     webhookToleranceSeconds: 300, // optional; default 300 (five minutes)
 });
@@ -159,7 +158,6 @@ const adapter = createStripeAdapter({
 your entitlement plans, and an optional authorizer/observer:
 
 ```ts
-import type { StripeClientLike } from "@lunora/payment";
 import { createStripeAdapter } from "@lunora/payment";
 import { createShardDO } from "./_generated/shard";
 import Stripe from "stripe";
@@ -167,7 +165,7 @@ import Stripe from "stripe";
 export const ShardDO = createShardDO({
     payment: (env) => ({
         adapter: createStripeAdapter({
-            client: new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() }) as unknown as StripeClientLike,
+            client: new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() }),
             webhookSecret: env.STRIPE_WEBHOOK_SECRET,
         }),
         // Override the default "caller owns the referenceId" rule for org/workspace keys.
@@ -189,7 +187,7 @@ The adapter options:
 
 <TypeTable
     type={{
-        client: { type: "StripeClientLike", description: "An injected Stripe instance (structural subset). Required." },
+        client: { type: "Stripe", description: "An injected `stripe` SDK instance (typed as the real Stripe). Required." },
         webhookSecret: { type: "string", description: "The endpoint signing secret (whsec_…) used to verify inbound webhooks. Required." },
         webhookToleranceSeconds: {
             type: "number",
@@ -344,12 +342,13 @@ Select at least these events when creating the endpoint:
 
 Stripe signs each delivery with the
 [`Stripe-Signature`](https://docs.stripe.com/webhooks#verify-manually) header —
-`t=<unix-seconds>,v1=<hex-hmac>`. The adapter recomputes
-`HMAC-SHA256(webhookSecret, "{t}.{rawBody}")` and constant-time-compares it against
-every `v1` value, then rejects any delivery whose signed timestamp is more than
-`webhookToleranceSeconds` (default **300s**) from now — Stripe's own replay-window
-default. Verification runs over the **raw** body; never re-serialize the JSON
-before verifying.
+`t=<unix-seconds>,v1=<hex-hmac>`. The adapter verifies it with the SDK's own
+`webhooks.constructEventAsync(rawBody, header, secret, tolerance, cryptoProvider)`, using
+`Stripe.createSubtleCryptoProvider()` so verification runs on `workerd` (WebCrypto) as well as
+Node. It rejects any delivery whose signed timestamp is more than `webhookToleranceSeconds`
+(default **300s**) from now — Stripe's replay-window default — and a failed check surfaces as a
+`WEBHOOK_SIGNATURE_INVALID` error (a 400). Verification runs over the **raw** body; never
+re-serialize the JSON before verifying.
 
 ### Events → normalized transitions
 

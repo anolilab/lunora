@@ -11,8 +11,9 @@ request's `ctx.db`. Switching providers is a configuration change: the provider
 is a stateless translator; the store owns all state.
 
 Outbound calls carry idempotency keys (no double-charge), and every mutation is
-authorized per-caller. The package never imports a provider SDK — you inject the
-client, so `stripe` stays an optional peer dependency.
+authorized per-caller. Each adapter takes the provider's SDK client by injection —
+the provider SDKs are **optional peer dependencies**, so you install (and bundle) only
+the providers you actually use.
 
 <Tabs items={["pnpm","npm","yarn","bun"]}>
 
@@ -43,7 +44,6 @@ provider secrets — comes from a `config.payment(env)` thunk you pass to
 authorizer ties `referenceId` to `ctx.auth.userId`.
 
 ```ts
-import type { StripeClientLike } from "@lunora/payment";
 import { createStripeAdapter } from "@lunora/payment";
 import { createShardDO } from "./_generated/shard";
 import Stripe from "stripe";
@@ -51,9 +51,9 @@ import Stripe from "stripe";
 export const ShardDO = createShardDO({
     payment: (env) => ({
         adapter: createStripeAdapter({
-            // A real `Stripe` instance satisfies the structural client; the cast keeps
-            // the package free of a hard `stripe` dependency.
-            client: new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() }) as unknown as StripeClientLike,
+            // The adapter types its client as the real `Stripe` instance (an optional peer dependency),
+            // so it's passed straight through — the fetch HTTP client is required on workerd.
+            client: new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() }),
             webhookSecret: env.STRIPE_WEBHOOK_SECRET,
         }),
         // Override the default "caller owns the referenceId" rule for org/workspace keys.
@@ -91,11 +91,11 @@ const dodo = createDodoPaymentsAdapter({ client, webhookSecret });
 const creem = createCreemAdapter({ client, webhookSecret });
 ```
 
-| Option                    | Stripe | Polar | Autumn | Dodo | Creem | Notes                                                                             |
-| ------------------------- | :----: | :---: | :----: | :--: | :---: | --------------------------------------------------------------------------------- |
-| `client`                  |   ✓    |   ✓   |   ✓    |  ✓   |   ✓   | Structural `…ClientLike` per provider (`StripeClientLike`, `CreemClientLike`, …). |
-| `webhookSecret`           |   ✓    |   ✓   |   ✓    |  ✓   |   ✓   | Signing secret for inbound webhook verification.                                  |
-| `webhookToleranceSeconds` |   ✓    |   ✓   |   ✓    |  ✓   |       | Optional clock-skew tolerance (schemes that sign a timestamp).                    |
+| Option                    | Stripe | Polar | Autumn | Dodo | Creem | Notes                                                          |
+| ------------------------- | :----: | :---: | :----: | :--: | :---: | -------------------------------------------------------------- |
+| `client`                  |   ✓    |   ✓   |   ✓    |  ✓   |   ✓   | The provider's injected SDK client (e.g. a `Stripe` instance). |
+| `webhookSecret`           |   ✓    |   ✓   |   ✓    |  ✓   |   ✓   | Signing secret for inbound webhook verification.               |
+| `webhookToleranceSeconds` |   ✓    |   ✓   |   ✓    |  ✓   |       | Optional clock-skew tolerance (schemes that sign a timestamp). |
 
 Stripe is a PSP (manual authorize/capture available). Polar, Dodo Payments, and
 Creem are Merchants-of-Record — `merchantOfRecord` is `true` and they own
