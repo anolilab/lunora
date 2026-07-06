@@ -30,22 +30,22 @@ module.
 **How?** `@lunora/nuxt` mounts Lunora _inside_ Nitro: it registers a server route
 at `/_lunora/**` (`addServerHandler`) that forwards every RPC / WebSocket / admin
 request to the Lunora app in-process, and aliases the `#lunora/app` virtual to
-`lunora/server`. The `ShardDO` Durable Object class reaches the emitted Cloudflare
-worker entry through the project-root `exports.cloudflare.ts` (the Nitro
-`cloudflare_module` preset appends its named exports). One `wrangler.jsonc`, one
-deploy, a same-origin client.
+`lunora/server`. Nitro's `cloudflare_module` output (`.output/server/index.mjs`)
+exports only the SSR handler, so a thin root **`worker.ts`** wraps it — re-exporting
+Nitro's handler as `default` plus the `ShardDO` class — and `wrangler.jsonc`
+deploys that wrapper. One `wrangler.jsonc`, one deploy, a same-origin client.
 
 ### Key files
 
 - **`nuxt.config.ts`** — registers `modules: ["@lunora/nuxt"]` and the
   `cloudflare_module` Nitro preset; runs Lunora codegen through the Vite plugin.
-- **`exports.cloudflare.ts`** — re-exports `ShardDO` onto the Nitro worker entry
-  so the `SHARD` binding resolves. (If your Nitro/Nuxt version doesn't pick this
-  file up, see **Verify before deploy** below.)
+- **`worker.ts`** — the deploy entry (`wrangler.jsonc`'s `main`): re-exports
+  Nitro's SSR handler (`.output/server/index.mjs`) as `default` plus the
+  `ShardDO` class, so the composed worker exports the DO the `SHARD` binding needs.
 - **`lunora/server.ts`** — the Lunora app (`defineApp().build()`); exports the
   app as `default` and the bound `ShardDO` class. `@lunora/nuxt` mounts this.
-- **`wrangler.jsonc`** — the single worker config: `main` points at Nitro's
-  output (`.output/server/index.mjs`), with the `SHARD` DO binding + migration.
+- **`wrangler.jsonc`** — the single worker config: `main` points at the
+  `worker.ts` wrapper, with the `SHARD` DO binding + migration.
 - **`server/api/messages.get.ts`** — SSR loader; calls `/_lunora/rpc` at the
   request's own origin (a same-origin sub-request into the in-worker Lunora app).
 - **`plugins/lunora.client.ts`** — the browser `LunoraClient`, pointed at the
@@ -83,17 +83,15 @@ pnpm deploy        # nuxt build && wrangler deploy
 
 ## Verify before deploy
 
-Single-worker composition rides on two Nitro behaviours that vary across versions
-— check them against the toolchain this template pins for you:
+The `worker.ts` wrapper makes the `ShardDO` export version-independent (it wraps
+Nitro's output rather than relying on a Nitro export hook). Two Nitro behaviours
+still vary across versions — check them against the toolchain this template pins:
 
-1. **`exports.cloudflare.ts` hook** — the `cloudflare_module` preset must append
-   this file's exports onto `.output/server/index.mjs`. If `wrangler deploy` fails
-   with "ShardDO class not exported", your Nitro version may use a different hook
-   (`nitro.cloudflare.additionalModules`, or a `rollupConfig` output export).
-2. **`main` target** — some Nitro versions emit `dist/server/index.mjs` instead of
-   `.output/server/index.mjs`; point `wrangler.jsonc`'s `main` at whatever
-   `nuxt build` actually produces.
-3. **WebSocket upgrade pass-through** — the live feed needs Nitro to return the
+1. **Nitro output path** — `worker.ts` imports `./.output/server/index.mjs`, and
+   `wrangler.jsonc`'s `main` is `worker.ts`. Some Nitro versions emit
+   `dist/server/index.mjs` instead; if the import can't resolve at deploy, point
+   `worker.ts`'s import at whatever `nuxt build` actually produces.
+2. **WebSocket upgrade pass-through** — the live feed needs Nitro to return the
    Lunora app's `101 Switching Protocols` response (carrying its Cloudflare
    `webSocket`) untouched. RPC (plain JSON) works regardless; if live
    subscriptions never connect while RPC does, Nitro is normalising the upgrade
