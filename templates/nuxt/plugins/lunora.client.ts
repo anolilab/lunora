@@ -13,10 +13,17 @@ import { createLunora } from "@lunora/vue";
  * attaches after hydration.
  */
 export default defineNuxtPlugin((nuxtApp) => {
-    // Single-worker deploy: Lunora is mounted in this same Nitro worker by
+    // Prod (single-worker deploy): Lunora is mounted in this same Nitro worker by
     // `@lunora/nuxt`, so the client talks to the page's own origin — it appends
     // `/_lunora/ws` (and `/_lunora/rpc`) itself, which the module's route serves.
-    const client = new LunoraClient({ url: window.location.origin });
+    //
+    // Dev: `nuxt dev` (Node) can't host the `ShardDO` Durable Object, so
+    // `lunora dev` runs a `wrangler dev` sidecar (:8788, see `wrangler.dev.jsonc`)
+    // that owns it. Point the client straight at that sidecar in dev — RPC + the
+    // WebSocket hit `workerd` directly with no Node hop. The sidecar's
+    // `LUNORA_ALLOWED_ORIGINS` allows this cross-origin request.
+    const url = import.meta.dev ? "http://localhost:8788" : window.location.origin;
+    const client = new LunoraClient({ url });
 
     nuxtApp.vueApp.use(createLunora(client));
 });

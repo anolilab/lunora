@@ -20,6 +20,7 @@ import type { DevServerState } from "@lunora/config";
 import {
     claimDevServerState,
     clearDevServerState,
+    detectFramework,
     DEV_DAEMON_ENV,
     DEV_HANDOFF_ENV,
     DEV_LOG_FILE,
@@ -54,17 +55,50 @@ const LOG_TAIL_MAX_BYTES = 256 * 1024;
 const READY_TIMEOUT_ENV = "LUNORA_DEV_READY_TIMEOUT_MS";
 
 /**
- * How the dev child runs. `wrangler` is the classic `lunora dev` stack
- * (wrangler worker + embedded studio + codegen watch). `vite` is a project on
- * `@lunora/vite`: the Vite plugin already runs the worker, studio, and codegen
- * inside the Vite dev server, so `lunora dev` runs the project's own dev
- * script and gets out of the way — that's what makes `--background` / `stop` /
- * `status` / `logs` work uniformly for Vite projects too.
+ * How the dev child runs. `wrangler` is the classic `lunora dev` stack (wrangler
+ * worker + embedded studio + codegen watch) for a standalone class-C project.
+ * `vite` is a project on `@lunora/vite`: the plugin already runs the worker,
+ * studio, and codegen inside the Vite dev server, so `lunora dev` runs the
+ * project's own dev script and gets out of the way — this also covers class-B
+ * frameworks whose own dev server runs the worker in `workerd` (Astro 6 +
+ * `@astrojs/cloudflare`, which embeds `@cloudflare/vite-plugin` in `astro dev`:
+ * SSR + `/_lunora/*` + `ShardDO` in one process, HMR intact). `framework-worker`
+ * is a class-B framework whose dev server CANNOT host the `ShardDO` Durable
+ * Object (SvelteKit / Nuxt: their adapters use wrangler's `getPlatformProxy()`,
+ * which runs an empty-script Miniflare and does not emulate internal DOs); there
+ * `lunora dev` runs the framework's own dev server (front door, HMR, and — via
+ * its `@lunora/vite` plugin — studio + codegen) AND a second `wrangler dev`
+ * sidecar that owns the real `ShardDO` in `workerd`, wired via the committed
+ * `wrangler.dev.jsonc`.
  */
-type DevFlavor = "vite" | "wrangler";
+type DevFlavor = "framework-worker" | "vite" | "wrangler";
 
-/** Detect the dev flavor: a declared `@lunora/vite` dependency means Vite owns the dev server. */
-const detectDevFlavor = (cwd: string): DevFlavor => (readProjectDependencyNames(cwd).has("@lunora/vite") ? "vite" : "wrangler");
+/**
+ * The class-B frameworks whose dev server cannot host the `ShardDO` Durable
+ * Object (Node-based SSR + `getPlatformProxy` bindings), so `lunora dev` must
+ * run a `wrangler dev` sidecar alongside the framework dev server. Astro is
+ * deliberately excluded: Astro 6's `@astrojs/cloudflare` runs the whole app
+ * (incl. DOs) in `workerd` inside `astro dev`, so it needs no sidecar.
+ */
+const SIDECAR_FRAMEWORKS = new Set(["nuxt", "sveltekit"]);
+
+/**
+ * Detect the dev flavor.
+ *
+ * A SvelteKit / Nuxt project needs the two-process `framework-worker` stack even
+ * though it also declares `@lunora/vite` (which its framework dev server uses for
+ * codegen/studio) — so the framework check comes FIRST. Everything else on
+ * `@lunora/vite` (class-A frameworks + Astro + standalone Vite) delegates to the
+ * project's own dev server (`vite`); a project without `@lunora/vite` is the
+ * classic standalone `wrangler` stack.
+ */
+const detectDevFlavor = (cwd: string): DevFlavor => {
+    if (SIDECAR_FRAMEWORKS.has(detectFramework(cwd).framework)) {
+        return "framework-worker";
+    }
+
+    return readProjectDependencyNames(cwd).has("@lunora/vite") ? "vite" : "wrangler";
+};
 
 /**
  * The dev-server exec for the vite flavor — shared by the foreground plan and
@@ -491,7 +525,9 @@ const startBackground = async (context: {
     const flavor = detectDevFlavor(cwd);
     // Pre-listen default URL — cosmetic (shown only if a concurrent starter
     // loses to this claim); the child's superseding record carries the real one.
-    const url = flavor === "vite" ? "http://localhost:5173" : `http://localhost:${String(options.workerPort ?? 8787)}`;
+    // For `vite`/`framework-worker` the front door is the framework's own dev
+    // server; only the standalone `wrangler` flavor opens the worker port here.
+    const url = flavor === "wrangler" ? `http://localhost:${String(options.workerPort ?? 8787)}` : "http://localhost:5173";
 
     const claim = claimDevServerState(cwd, {
         background: true,

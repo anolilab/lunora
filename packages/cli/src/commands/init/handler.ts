@@ -343,6 +343,18 @@ const PNPM_BUILT_DEPENDENCIES: ReadonlyArray<string> = [
     "workerd",
 ];
 
+/**
+ * Build scripts present in the dependency tree (via `wrangler`'s transitive deps)
+ * that we explicitly DENY rather than run: they're optional native
+ * optimizations, not needed by a scaffolded app, and building them would require
+ * a C/C++ toolchain a fresh clone may not have (`cpu-features` → node-gyp).
+ * `ssh2` falls back to pure JS without its optional `cpu-features`; `protobufjs`'s
+ * postinstall is a codegen the CLI paths don't need. They must still be LISTED —
+ * pnpm v11 errors on any unlisted build script when an `allowBuilds` map exists —
+ * so denying (`false`) keeps `pnpm install` non-interactive AND compiler-free.
+ */
+const PNPM_DENIED_BUILD_DEPENDENCIES: ReadonlyArray<string> = ["cpu-features", "protobufjs", "ssh2"];
+
 /** File pnpm reads its settings from. */
 const PNPM_WORKSPACE_FILENAME = "pnpm-workspace.yaml";
 
@@ -351,17 +363,21 @@ const PNPM_WORKSPACE_FILENAME = "pnpm-workspace.yaml";
  * toolchain's native deps without `pnpm approve-builds`. This is the new home for
  * the setting — pnpm v10.16+ NO LONGER reads the `package.json` `pnpm` field.
  *
- * Uses the `allowBuilds` map (`name: true`) — the key pnpm v11's `approve-builds`
- * writes and honours; the older `onlyBuiltDependencies` array is NOT honoured by
- * pnpm 11.x at install time. npm/yarn ignore the file.
+ * Uses the `allowBuilds` map (`name: true|false`) — the key pnpm v11's
+ * `approve-builds` writes and honours; the older `onlyBuiltDependencies` array is
+ * NOT honoured by pnpm 11.x at install time. Every build-script package in the
+ * tree must be listed (allowed or denied) or pnpm halts with
+ * `ERR_PNPM_IGNORED_BUILDS`. npm/yarn ignore the file.
  */
 const pnpmWorkspaceYaml = (): string =>
     [
         "# pnpm reads its settings from here (the package.json `pnpm` field is no longer read).",
         "# Pre-approve the toolchain's native build scripts so `pnpm install` runs them",
-        "# without the interactive `pnpm approve-builds` step.",
+        "# without the interactive `pnpm approve-builds` step; deny the optional native",
+        "# builds a scaffold doesn't need (so no C/C++ toolchain is required).",
         "allowBuilds:",
         ...PNPM_BUILT_DEPENDENCIES.map((name) => `    ${name}: true`),
+        ...PNPM_DENIED_BUILD_DEPENDENCIES.map((name) => `    ${name}: false`),
         "",
     ].join("\n");
 
