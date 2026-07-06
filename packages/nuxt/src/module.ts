@@ -5,9 +5,11 @@
  * `/_lunora/**`) forwards every RPC / WebSocket / admin request to the project's
  * Lunora app (`createWorker(...)` / `defineApp().build()`), which runs in the
  * same worker Nuxt deploys as. The `ShardDO` Durable Object class is carried to
- * the generated worker entrypoint by the project's root `exports.cloudflare.ts`
- * (a documented Nitro `cloudflare_module` hook) — so one `wrangler.jsonc`, one
- * deploy, and a same-origin client.
+ * the deployed worker by a root `worker.ts` wrapper (`wrangler.jsonc`'s `main`)
+ * that re-exports Nitro's SSR handler plus `ShardDO` — so one `wrangler.jsonc`,
+ * one deploy, and a same-origin client. (Nitro's `cloudflare_module` output
+ * exports only the SSR handler, so `main` must point at the wrapper, not the raw
+ * `.output/server/index.mjs`, or `wrangler deploy` fails on the missing DO.)
  *
  * Add it in `nuxt.config.ts`:
  *
@@ -18,9 +20,11 @@
  * });
  * ```
  *
- * and add `exports.cloudflare.ts` to the project root:
+ * and add a `worker.ts` wrapper at the project root, pointed at by
+ * `wrangler.jsonc`'s `main`:
  *
  * ```ts
+ * export { default } from "./.output/server/index.mjs";
  * export { ShardDO } from "./lunora/server";
  * ```
  */
@@ -167,12 +171,14 @@ export default defineNuxtModule<ModuleOptions>({
             route: `${options.prefix}/**`,
         });
 
-        // The `ShardDO` class must reach the generated Cloudflare worker via a
-        // root `exports.cloudflare.ts`. We can't write the user's file, so warn
-        // when it's missing rather than fail an otherwise-valid build.
-        if (!existsSync(join(nuxt.options.rootDir, "exports.cloudflare.ts"))) {
+        // The `ShardDO` class must reach the deployed Cloudflare worker: Nitro's
+        // `cloudflare_module` output exports only the SSR handler, so the project
+        // needs a root `worker.ts` wrapper (pointed at by `wrangler.jsonc`'s
+        // `main`) that re-exports `ShardDO` too. We can't write the user's file,
+        // so warn when it's missing rather than fail an otherwise-valid build.
+        if (!existsSync(join(nuxt.options.rootDir, "worker.ts"))) {
             useLogger("@lunora/nuxt").warn(
-                'missing exports.cloudflare.ts at the project root — add `export { ShardDO } from "./lunora/server";` so the SHARD Durable Object is exported from the worker.',
+                'missing worker.ts at the project root — add a wrapper that re-exports Nitro\'s handler and `ShardDO` (`export { default } from "./.output/server/index.mjs"; export { ShardDO } from "./lunora/server";`) and point wrangler\'s `main` at it, so the SHARD Durable Object is exported from the deployed worker.',
             );
         }
     },

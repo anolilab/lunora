@@ -3,12 +3,15 @@
     // `cloudflare_module` preset) AND the Lunora realtime plane (`/_lunora/*`
     // + ShardDO, mounted inside Nitro by `@lunora/nuxt`) in one deploy.
     //
-    // `main` points at Nitro's emitted worker entry (produced by `nuxt build`).
-    // The `ShardDO` Durable Object class is re-exported onto that entry by the
-    // project-root `exports.cloudflare.ts`, so the `SHARD` binding below resolves.
+    // `main` points at `worker.ts`, a thin wrapper that re-exports Nitro's SSR
+    // handler (`.output/server/index.mjs`, built by `nuxt build`) as `default`
+    // AND the `ShardDO` Durable Object class. Nitro's own output exports only the
+    // SSR handler, so pointing `main` straight at it makes `wrangler deploy` fail
+    // ("Durable Objects … not exported"); the wrapper supplies the missing export
+    // so the `SHARD` binding below resolves.
     "$schema": "node_modules/wrangler/config-schema.json",
     "name": "{{name}}",
-    "main": ".output/server/index.mjs",
+    "main": "worker.ts",
     "compatibility_date": "2026-06-10",
     "compatibility_flags": ["nodejs_compat"],
     "durable_objects": {
