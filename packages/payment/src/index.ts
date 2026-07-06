@@ -47,7 +47,7 @@ export type { DodoPaymentsAdapterOptions, DodoPaymentsClientLike } from "./provi
 export { createDodoPaymentsAdapter } from "./providers/dodopayments";
 export type { PolarAdapterOptions, PolarClientLike } from "./providers/polar";
 export { createPolarAdapter } from "./providers/polar";
-export type { StripeAdapterOptions, StripeClientLike } from "./providers/stripe";
+export type { StripeAdapterOptions } from "./providers/stripe";
 export { createStripeAdapter } from "./providers/stripe";
 export type { ReconcileInput, ReconcileResult } from "./reconcile";
 export { reconcile } from "./reconcile";

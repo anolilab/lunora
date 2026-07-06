@@ -68,18 +68,39 @@
     },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",
+        "@polar-sh/sdk": "0.48.1",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
+        "autumn-js": "1.2.34",
+        "creem": "1.5.3",
+        "dodopayments": "2.41.0",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
+        "stripe": "22.3.0",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
     },
     "peerDependencies": {
+        "@polar-sh/sdk": "^0.48.0",
+        "autumn-js": "^1.2.0",
+        "creem": "^1.5.0",
+        "dodopayments": "^2.41.0",
         "stripe": "^19.0.0 || ^20.0.0 || ^21.0.0 || ^22.0.0"
     },
     "peerDependenciesMeta": {
+        "@polar-sh/sdk": {
+            "optional": true
+        },
+        "autumn-js": {
+            "optional": true
+        },
+        "creem": {
+            "optional": true
+        },
+        "dodopayments": {
+            "optional": true
+        },
         "stripe": {
             "optional": true
         }

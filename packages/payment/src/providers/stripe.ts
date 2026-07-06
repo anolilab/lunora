@@ -1,12 +1,17 @@
 /**
  * Stripe adapter.
  *
- * Takes a `Stripe` client by injection (a minimal structural `StripeClientLike`), so this
- * package never imports the `stripe` SDK — keep `stripe` as an optional peer dependency and pass
- * `new Stripe(key)` from the app. Stripe amounts are already integer minor units (zero-decimal
- * currencies included), matching money 1:1.
+ * Takes a `Stripe` client by injection — `stripe` is an optional peer dependency, so pass
+ * `new Stripe(key, { httpClient: Stripe.createFetchHttpClient() })` from the app (the fetch HTTP
+ * client is required on workerd). The adapter types the client as the real `Stripe` instance, so
+ * every call is checked against the SDK, and verifies webhooks with the SDK's own
+ * `webhooks.constructEventAsync` (workerd SubtleCrypto provider). Stripe amounts are already integer
+ * minor units (zero-decimal currencies included), matching money 1:1.
  */
+import { Stripe } from "stripe";
+
 import type { PaymentAdapter, WebhookInput } from "../adapter";
+import { LunoraPaymentError } from "../errors";
 import idempotencyKey from "../idempotency";
 import { asRecord, readBoolean, readNumber, readString } from "../json";
 import { compareMoney, money, zeroMoney } from "../money";
@@ -26,59 +31,10 @@ import type {
     SubscriptionState,
     WebhookAction,
 } from "../types";
-import { verifyStripeSignature } from "../webhook";
 import stateToEventType from "./subscription-event";
 
-interface StripeRequestOptions {
-    readonly idempotencyKey?: string;
-}
-
-interface StripePaymentIntentLike {
-    readonly amount: number;
-    readonly amount_received?: number;
-    readonly currency: string;
-    readonly customer?: null | string;
-    readonly id: string;
-    readonly metadata?: Record<string, string>;
-    readonly status: string;
-}
-
-interface StripeSubscriptionLike {
-    readonly cancel_at_period_end?: boolean;
-    readonly current_period_end?: number;
-    readonly current_period_start?: number;
-    readonly customer?: null | string;
-    readonly id: string;
-    readonly items?: { data: ReadonlyArray<{ current_period_end?: number; current_period_start?: number; price?: { id?: string }; quantity?: number }> };
-    readonly metadata?: Record<string, string>;
-    readonly status: string;
-}
-
-/** The subset of the Stripe SDK surface this adapter calls. A real `Stripe` instance satisfies it. */
-interface StripeClientLike {
-    readonly billing: { meterEvents: { create: (parameters: Record<string, unknown>, options?: StripeRequestOptions) => Promise<{ identifier?: string }> } };
-    readonly billingPortal: { sessions: { create: (parameters: Record<string, unknown>) => Promise<{ url: string }> } };
-    readonly checkout: {
-        sessions: { create: (parameters: Record<string, unknown>, options?: StripeRequestOptions) => Promise<{ id: string; url: null | string }> };
-    };
-    readonly customers: {
-        create: (parameters: Record<string, unknown>, options?: StripeRequestOptions) => Promise<{ email: null | string; id: string }>;
-    };
-    readonly paymentIntents: {
-        cancel: (id: string, parameters?: Record<string, unknown>, options?: StripeRequestOptions) => Promise<StripePaymentIntentLike>;
-        capture: (id: string, parameters?: Record<string, unknown>, options?: StripeRequestOptions) => Promise<StripePaymentIntentLike>;
-        retrieve: (id: string) => Promise<StripePaymentIntentLike>;
-    };
-    readonly refunds: { create: (parameters: Record<string, unknown>, options?: StripeRequestOptions) => Promise<{ id: string }> };
-    readonly subscriptions: {
-        cancel: (id: string, parameters?: Record<string, unknown>, options?: StripeRequestOptions) => Promise<StripeSubscriptionLike>;
-        retrieve: (id: string) => Promise<StripeSubscriptionLike>;
-        update: (id: string, parameters: Record<string, unknown>, options?: StripeRequestOptions) => Promise<StripeSubscriptionLike>;
-    };
-}
-
 interface StripeAdapterOptions {
-    readonly client: StripeClientLike;
+    readonly client: Stripe;
     readonly webhookSecret: string;
     readonly webhookToleranceSeconds?: number;
 }
@@ -140,43 +96,44 @@ const periodStartMs = (object: Record<string, unknown>): number | undefined => {
     return seconds === undefined ? undefined : seconds * 1000;
 };
 
-const intentToSession = (intent: StripePaymentIntentLike): PaymentSession => {
-    const amount = money(BigInt(intent.amount), intent.currency);
-    const state = PAYMENT_STATE_BY_STRIPE_STATUS[intent.status] ?? "initiated";
+/** Normalize a Stripe PaymentIntent (typed return read defensively) into a {@link PaymentSession}. */
+const intentToSession = (input: unknown): PaymentSession => {
+    const intent = asRecord(input);
+    const currency = readString(intent, "currency") ?? "usd";
+    const amountValue = readNumber(intent, "amount") ?? 0;
+    const amount = money(BigInt(Math.round(amountValue)), currency);
+    const state = PAYMENT_STATE_BY_STRIPE_STATUS[readString(intent, "status") ?? ""] ?? "initiated";
     const now = Date.now();
 
     return {
         amount,
-        capturedAmount: state === "captured" ? money(BigInt(intent.amount_received ?? intent.amount), intent.currency) : zeroMoney(intent.currency),
+        capturedAmount: state === "captured" ? money(BigInt(Math.round(readNumber(intent, "amount_received") ?? amountValue)), currency) : zeroMoney(currency),
         createdAt: now,
-        id: intent.id,
+        id: readString(intent, "id") ?? "",
         provider: "stripe",
-        referenceId: intent.metadata?.referenceId ?? "",
-        refundedAmount: zeroMoney(intent.currency),
+        referenceId: readReferenceId(intent) ?? "",
+        refundedAmount: zeroMoney(currency),
         state,
         updatedAt: now,
     };
 };
 
-const subscriptionFromStripe = (subscription: StripeSubscriptionLike): Subscription => {
+/** Normalize a Stripe Subscription (typed return read defensively) into a {@link Subscription}. */
+const subscriptionFromStripe = (input: unknown): Subscription => {
+    const subscription = asRecord(input);
     const now = Date.now();
-    // Since Stripe API 2025-03-31.basil the billing period lives on the subscription item, not the
-    // subscription root — read the item first, falling back to the top level for older pinned versions.
-    const item = subscription.items?.data[0];
-    const periodEnd = item?.current_period_end ?? subscription.current_period_end;
-    const periodStart = item?.current_period_start ?? subscription.current_period_start;
 
     return {
-        cancelAtPeriodEnd: subscription.cancel_at_period_end ?? false,
+        cancelAtPeriodEnd: readBoolean(subscription, "cancel_at_period_end") ?? false,
         createdAt: now,
-        currentPeriodEnd: periodEnd ? periodEnd * 1000 : undefined,
-        currentPeriodStart: periodStart ? periodStart * 1000 : undefined,
-        id: subscription.id,
-        priceId: subscription.items?.data[0]?.price?.id ?? "",
+        currentPeriodEnd: periodEndMs(subscription),
+        currentPeriodStart: periodStartMs(subscription),
+        id: readString(subscription, "id") ?? "",
+        priceId: firstPriceId(subscription) ?? "",
         provider: "stripe",
-        quantity: subscription.items?.data[0]?.quantity ?? 1,
-        referenceId: subscription.metadata?.referenceId ?? "",
-        state: SUBSCRIPTION_STATE_BY_STRIPE_STATUS[subscription.status] ?? "active",
+        quantity: firstQuantity(subscription) ?? 1,
+        referenceId: readReferenceId(subscription) ?? "",
+        state: SUBSCRIPTION_STATE_BY_STRIPE_STATUS[readString(subscription, "status") ?? ""] ?? "active",
         updatedAt: now,
     };
 };
@@ -192,7 +149,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
             // layer sets — rather than adds — the running refunded total and never over-counts.
             return {
                 ...base,
-                amount: money(BigInt(readNumber(object, "amount_refunded") ?? 0), currency),
+                amount: money(BigInt(Math.round(readNumber(object, "amount_refunded") ?? 0)), currency),
                 amountKind: "absolute",
                 referenceId: readReferenceId(object),
                 sessionId: readString(object, "payment_intent") ?? readString(object, "id"),
@@ -202,15 +159,11 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
 
         case "checkout.session.completed": {
             if (readString(object, "mode") === "subscription") {
-                // SECURITY: a completed subscription checkout is only ACTIVE when
-                // Stripe confirms it was paid (or no payment was required). An
-                // `unpaid` session (async payment still processing) must not grant
-                // entitlements — emit a non-entitling `subscription.updated` (a
-                // metadata patch that no-ops without an existing row); the
-                // authoritative active state still arrives via `customer.subscription.*`.
-                // Only promote to ACTIVE when Stripe EXPLICITLY confirms payment.
-                // An `unpaid` session (async payment still processing) — or a
-                // missing/unknown `payment_status` — must NOT entitle; fail closed.
+                // SECURITY: a completed subscription checkout is only ACTIVE when Stripe confirms it was
+                // paid (or no payment was required). An `unpaid` session (async payment still processing) —
+                // or a missing/unknown `payment_status` — must NOT entitle; fail closed to a non-entitling
+                // `subscription.updated` (a no-op metadata patch); the authoritative active state still
+                // arrives via `customer.subscription.*`.
                 const paymentStatus = readString(object, "payment_status");
                 const paid = paymentStatus === "paid" || paymentStatus === "no_payment_required";
 
@@ -227,7 +180,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
 
             return {
                 ...base,
-                amount: amountTotal === undefined ? undefined : money(BigInt(amountTotal), currency),
+                amount: amountTotal === undefined ? undefined : money(BigInt(Math.round(amountTotal)), currency),
                 customerId: readString(object, "customer"),
                 referenceId: readReferenceId(object),
                 sessionId: readString(object, "payment_intent") ?? readString(object, "id"),
@@ -258,7 +211,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         case "payment_intent.amount_capturable_updated": {
             return {
                 ...base,
-                amount: money(BigInt(readNumber(object, "amount") ?? 0), currency),
+                amount: money(BigInt(Math.round(readNumber(object, "amount") ?? 0)), currency),
                 referenceId: readReferenceId(object),
                 sessionId: readString(object, "id"),
                 type: "payment.authorized",
@@ -272,7 +225,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         case "payment_intent.succeeded": {
             return {
                 ...base,
-                amount: money(BigInt(readNumber(object, "amount_received") ?? readNumber(object, "amount") ?? 0), currency),
+                amount: money(BigInt(Math.round(readNumber(object, "amount_received") ?? readNumber(object, "amount") ?? 0)), currency),
                 customerId: readString(object, "customer"),
                 referenceId: readReferenceId(object),
                 sessionId: readString(object, "id"),
@@ -288,6 +241,8 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
 
 export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapter => {
     const { client, webhookSecret } = options;
+    // WebCrypto-backed verification so `constructEventAsync` runs on workerd (not just Node).
+    const cryptoProvider = Stripe.createSubtleCryptoProvider();
 
     return {
         cancelPayment: async (sessionId, paymentOptions) => {
@@ -359,12 +314,18 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
         parseWebhook: async ({ headers, payload }: WebhookInput): Promise<WebhookAction> => {
             const signatureHeader = headers.get("stripe-signature") ?? "";
 
-            await verifyStripeSignature({ payload, secret: webhookSecret, signatureHeader, toleranceSeconds: options.webhookToleranceSeconds });
+            let event: Stripe.Event;
 
-            const event = asRecord(JSON.parse(payload));
+            try {
+                // The SDK's own verification: HMAC over the raw body + timestamp tolerance, WebCrypto on workerd.
+                event = await client.webhooks.constructEventAsync(payload, signatureHeader, webhookSecret, options.webhookToleranceSeconds, cryptoProvider);
+            } catch (error) {
+                throw new LunoraPaymentError("WEBHOOK_SIGNATURE_INVALID", error instanceof Error ? error.message : "invalid webhook signature");
+            }
+
             const object = asRecord(asRecord(event.data).object);
 
-            return mapEvent(readString(event, "id") ?? "", readString(event, "type") ?? "", object);
+            return mapEvent(event.id, event.type, object);
         },
 
         refundPayment: async (input: RefundInput) => {
@@ -372,7 +333,7 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
                 {
                     amount: input.amount ? Number(input.amount.minorUnits) : undefined,
                     payment_intent: input.sessionId,
-                    reason: input.reason,
+                    reason: input.reason as Stripe.RefundCreateParams.Reason | undefined,
                 },
                 { idempotencyKey: input.idempotencyKey },
             );
@@ -392,7 +353,7 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
                 {
                     event_name: input.featureId,
                     identifier: input.idempotencyKey,
-                    payload: { stripe_customer_id: input.customerId, value: String(input.quantity) },
+                    payload: { stripe_customer_id: input.customerId ?? "", value: String(input.quantity) },
                     timestamp: input.timestamp === undefined ? undefined : Math.floor(input.timestamp / 1000),
                 },
                 { idempotencyKey: input.idempotencyKey },
@@ -406,14 +367,14 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
         },
 
         updateSubscription: async (subscriptionId, patch: SubscriptionPatch) => {
-            const parameters: Record<string, unknown> = {};
+            // Stripe updates price/quantity on the subscription ITEM, not the subscription root. Carry the
+            // current item id so a plan-only or quantity-only patch updates the existing item in place.
+            const parameters: Stripe.SubscriptionUpdateParams = {};
 
-            if (patch.quantity !== undefined) {
-                parameters.quantity = patch.quantity;
-            }
+            if (patch.priceId !== undefined || patch.quantity !== undefined) {
+                const current = await client.subscriptions.retrieve(subscriptionId);
 
-            if (patch.priceId) {
-                parameters.items = [{ price: patch.priceId }];
+                parameters.items = [{ id: current.items.data[0]?.id, price: patch.priceId, quantity: patch.quantity }];
             }
 
             const subscription = await client.subscriptions.update(subscriptionId, parameters);
@@ -423,4 +384,4 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
     };
 };
 
-export type { StripeAdapterOptions, StripeClientLike };
+export type { StripeAdapterOptions };
