@@ -19,7 +19,7 @@ const headersFor = (id: string, timestamp: string, signature: string) => {
 const makeClient = (created: Record<string, unknown>[] = []): PolarClientLike => {
     return {
         checkouts: {
-            create: async (parameters) => {
+            create: async (parameters: Record<string, unknown>) => {
                 created.push(parameters);
 
                 return { id: "co_1", url: "https://polar.test/co_1" };
@@ -31,7 +31,7 @@ const makeClient = (created: Record<string, unknown>[] = []): PolarClientLike =>
             },
         },
         events: {
-            ingest: async (parameters) => {
+            ingest: async (parameters: Record<string, unknown>) => {
                 created.push(parameters);
 
                 return { inserted: 1 };
