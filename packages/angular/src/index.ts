@@ -1,3 +1,6 @@
+export type { AuthOptions, AuthResult } from "./auth";
+export { auth } from "./auth";
+
 /**
  * The Angular adapter for Lunora.
  *
@@ -12,19 +15,31 @@
  * `DestroyRef.onDestroy`. `mutate` runs a mutation (optimistic updates + offline
  * queue pass through to the client). `connectionStatus` is a `signal` of the
  * aggregate live-socket status.
- *
- * The API is deliberately small and signal-first; parity extras (paginated query,
- * optimistic mutator handles, rate-limit, flags, auth) mirror the other framework
- * adapters and can be layered on top of the same client.
  */
 export type { ProvideLunoraOptions } from "./client";
 export { injectLunoraClient, LUNORA_CLIENT, provideLunora } from "./client";
 export type { ConnectionStatusOptions } from "./connection-status";
 export { connectionStatus } from "./connection-status";
+export type { FlagOptions, FlagsOptions } from "./flag";
+export { flag, flags } from "./flag";
+export type { HydratePreloadedOptions, HydratePreloadedResult } from "./hydrate-preloaded";
+export { hydratePreloaded } from "./hydrate-preloaded";
 export type { LiveQueryOptions } from "./live-query";
 export { liveQuery } from "./live-query";
 export type { MutateOptions } from "./mutate";
 export { mutate } from "./mutate";
+export type { MutatorResult } from "./mutator";
+export { mutator } from "./mutator";
+export type { PaginatedQueryOptions, PaginatedQueryResult } from "./paginated-query";
+export type { InfiniteQueryResult } from "./paginated-query";
+export { paginatedQuery } from "./paginated-query";
+export { infiniteQuery } from "./paginated-query";
+export type { PresenceOptions, PresenceResult } from "./presence";
+export { presence } from "./presence";
+export type { RateLimitOptions, RateLimitResult } from "./rate-limit";
+export { rateLimit } from "./rate-limit";
+export type { SubscriptionOptions, SubscriptionResult } from "./subscription";
+export { subscription } from "./subscription";
 export type {
     ArgsOf,
     ConnectionStatus,

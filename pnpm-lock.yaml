@@ -1618,6 +1618,9 @@ importers:
       '@lunora/client':
         specifier: workspace:*
         version: link:../client
+      '@lunora/ratelimit':
+        specifier: workspace:*
+        version: link:../ratelimit
     devDependencies:
       '@angular/core':
         specifier: ^22.0.5
