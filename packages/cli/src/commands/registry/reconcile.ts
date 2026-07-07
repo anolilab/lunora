@@ -270,7 +270,7 @@ const findWorkerEntry = (projectRoot: string): { entryPath: string; main: string
  */
 const logClassAFallback = (entrypointReexports: ReadonlyArray<EntrypointReexport>, logger: Logger): 0 => {
     for (const reexport of entrypointReexports) {
-        const specifier = `./lunora/${reexport.module}`;
+        const specifier = `./lunora/${reexport.module}.js`;
         const instruction = `Add \`export * from "${specifier}"\` to your worker entry`;
         const suffix = reexport.comment ? ` (${reexport.comment})` : "";
 
