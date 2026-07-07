@@ -10,7 +10,8 @@ const fixedTime = 1_700_000_000_000;
 // The batch methods are declared optional on `DatabaseWriterLike` (the `.global()`
 // twins omit them — see ctx-db.ts), but the concrete DO writer always implements
 // them. Narrow to the required shape so the test calls them without `?.`.
-type BatchWriter = DatabaseWriterLike & Required<Pick<DatabaseWriterLike, "deleteMany" | "insertMany" | "insertManyUnsafe" | "patchMany">>;
+type BatchWriter = DatabaseWriterLike &
+    Required<Pick<DatabaseWriterLike, "deleteMany" | "deleteWhere" | "insertMany" | "insertManyUnsafe" | "patchMany" | "patchWhere">>;
 
 const setupWriter = (
     overrides: {
@@ -127,6 +128,32 @@ describe("ctx-db batch writes", () => {
 
             await expect(writer.insertMany("messages", [row(1), row(2), row(3)], { limit: 2 })).rejects.toThrow(/batch of 3 exceeds the limit of 2/);
         });
+
+        it("skipDuplicates turns unique breaches into null results without failing the batch", async () => {
+            expect.assertions(4);
+
+            const { writer } = setupWriter();
+
+            // The messages schema has a unique index on `text`, so a duplicate
+            // text triggers a unique-constraint breach.
+            await writer.insertMany("messages", [row(1)]);
+            const second = await writer.insertMany(
+                "messages",
+                [
+                    { authorId: "a1", channelId: "c1", text: "t1" }, // duplicate text
+                    { authorId: "a2", channelId: "c1", text: "t2" },
+                ],
+                { skipDuplicates: true },
+            );
+
+            expect(second).toStrictEqual([null, expect.any(String)]);
+            expect(second[1]).not.toBeNull();
+
+            const page = await writer.findMany("messages", {});
+
+            expect(page.page).toHaveLength(2);
+            expect(new Set(page.page.map((document) => document["text"]))).toStrictEqual(new Set(["t1", "t2"]));
+        });
     });
 
     describe("deleteMany", () => {
@@ -134,7 +161,7 @@ describe("ctx-db batch writes", () => {
             expect.assertions(2);
 
             const { writer } = setupWriter();
-            const ids = await writer.insertMany("messages", [row(1), row(2), row(3)]);
+            const ids = (await writer.insertMany("messages", [row(1), row(2), row(3)])) as string[];
 
             const result = await writer.deleteMany(ids);
 
@@ -150,16 +177,33 @@ describe("ctx-db batch writes", () => {
 
             await expect(writer.deleteMany(ids)).rejects.toThrow(/exceeds the limit of 500/);
         });
+
+        it("deleteWhere removes every row matching the predicate", async () => {
+            expect.assertions(2);
+
+            const { writer } = setupWriter();
+
+            await writer.insertMany("messages", [
+                { authorId: "a1", channelId: "c1", text: "x" },
+                { authorId: "a1", channelId: "c2", text: "y" },
+                { authorId: "a2", channelId: "c1", text: "z" },
+            ]);
+
+            const result = await writer.deleteWhere("messages", { authorId: "a1" });
+
+            expect(result).toStrictEqual({ deleted: 2 });
+            await expect(writer.findMany("messages", {}).then((page) => page.page)).resolves.toHaveLength(1);
+        });
     });
 
     describe("patchMany", () => {
-        it("applies each patch by id", async () => {
-            expect.assertions(1);
+        it("applies each patch by id and returns the patched count", async () => {
+            expect.assertions(2);
 
             const { writer } = setupWriter();
-            const ids = await writer.insertMany("messages", [row(1), row(2)]);
+            const ids = (await writer.insertMany("messages", [row(1), row(2)])) as string[];
 
-            await writer.patchMany(
+            const result = await writer.patchMany(
                 ids.map((id, index) => {
                     return { id, patch: { text: `patched-${String(index)}` } };
                 }),
@@ -169,6 +213,7 @@ describe("ctx-db batch writes", () => {
 
             // Order-independent: every row received its patch (read-back order is by table sort).
             expect(texts).toStrictEqual(new Set(["patched-0", "patched-1"]));
+            expect(result).toStrictEqual({ patched: 2 });
         });
 
         it("rejects a batch larger than the limit", async () => {
@@ -180,6 +225,26 @@ describe("ctx-db batch writes", () => {
             });
 
             await expect(writer.patchMany(patches)).rejects.toThrow(/exceeds the limit of 500/);
+        });
+
+        it("patchWhere applies the same patch to every row matching the predicate", async () => {
+            expect.assertions(2);
+
+            const { writer } = setupWriter();
+
+            await writer.insertMany("messages", [
+                { authorId: "a1", channelId: "c1", text: "x" },
+                { authorId: "a1", channelId: "c2", text: "y" },
+                { authorId: "a2", channelId: "c1", text: "z" },
+            ]);
+
+            const result = await writer.patchWhere("messages", { where: { authorId: "a1" }, patch: { channelId: "patched" } });
+
+            expect(result).toStrictEqual({ patched: 2 });
+
+            const channelIds = await writer.findMany("messages", {}).then((page) => new Set(page.page.map((document) => document["channelId"])));
+
+            expect(channelIds).toStrictEqual(new Set(["c1", "patched"]));
         });
     });
 

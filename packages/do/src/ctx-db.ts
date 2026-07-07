@@ -608,10 +608,7 @@ interface DatabaseWriterLike {
      * batched per-row through the DO writer's loop, which routes each `insert()`
      * to the global writer, so no global batch method is needed.
      */
-    insertMany?: {
-        (tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options: { limit?: number; skipDuplicates: true }): Promise<Array<string | null>>;
-        (tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number; skipDuplicates?: boolean }): Promise<string[]>;
-    };
+    insertMany?: (tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number; skipDuplicates?: boolean }) => Promise<(string | null)[]>;
 
     /**
      * Trusted bulk insert: one multi-row `INSERT` that **skips per-row `.check()`
@@ -2396,8 +2393,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             assertBatchLimit(ids.length, batchOptions?.limit, "deleteWhere");
 
             // Reuse the id-based pipeline so triggers, companions, CDC, and
-            // broadcast all fire correctly.
-            return writer.deleteMany(ids, batchOptions);
+            // broadcast all fire correctly. The concrete DO writer always
+            // implements deleteMany; the optional type is for global/D1 twins.
+            return writer.deleteMany!(ids, batchOptions);
         },
 
         async findFirst(tableName, args = {}) {
@@ -2916,7 +2914,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // The win is one caller round-trip, not fewer SQLite writes. Order is
             // preserved so an FK reference to an earlier row in the same batch resolves.
             const skipDuplicates = batchOptions?.skipDuplicates === true;
-            const ids: Array<string | null> = [];
+            const ids: (string | null)[] = [];
 
             for (const document of documents) {
                 try {
@@ -3041,14 +3039,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         async patchWhere(tableName, args, batchOptions) {
             const global = globalWriterFor(tableName, "patchWhere");
 
-            let patches: Array<{ id: string; patch: Record<string, unknown> }>;
+            let patches: { id: string; patch: Record<string, unknown> }[];
 
             if (global) {
                 // Global tables have no native batch primitive; resolve ids and
                 // route each patch through the DO's single-row pipeline, which
                 // forwards to the global writer.
                 const rows = await global.findMany(tableName, { where: args.where });
-                patches = rows.page.map((row) => ({ id: String(row["_id"]), patch: args.patch }));
+                patches = rows.page.map((row) => {return { id: String(row["_id"]), patch: args.patch }});
             } else {
                 if (!schema.tables[tableName]) {
                     throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
@@ -3057,14 +3055,15 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // Resolve matching rows first. The mutation-span (if any) keeps
                 // the read and the subsequent patches consistent.
                 const page = await writer.findMany(tableName, { where: args.where });
-                patches = page.page.map((row) => ({ id: String(row["_id"]), patch: args.patch }));
+                patches = page.page.map((row) => {return { id: String(row["_id"]), patch: args.patch }});
             }
 
             assertBatchLimit(patches.length, batchOptions?.limit, "patchWhere");
 
             // Reuse the id-based pipeline so OCC, triggers, companions, CDC, and
-            // broadcast all fire correctly.
-            await writer.patchMany(patches, batchOptions);
+            // broadcast all fire correctly. The concrete DO writer always
+            // implements patchMany; the optional type is for global/D1 twins.
+            await writer.patchMany!(patches, batchOptions);
 
             return { patched: patches.length };
         },

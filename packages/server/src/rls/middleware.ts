@@ -171,7 +171,7 @@ interface DatabaseWriterLike {
      */
     groupBy: (tableName: string, options: GroupByArgs) => Promise<ReadonlyArray<{ key: Record<string, unknown>; value: null | number }>>;
     insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
-    insertMany: (tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number; skipDuplicates?: boolean }) => Promise<Array<string | null>>;
+    insertMany: (tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number; skipDuplicates?: boolean }) => Promise<(string | null)[]>;
     insertManyUnsafe: (
         tableName: string,
         documents: ReadonlyArray<Record<string, unknown>>,
@@ -1060,7 +1060,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
             // delete. The read + writes share the mutation-span (if any).
             const { baseWhere } = readBase(tableName);
             const resolved = await route(tableName).findMany(tableName, {
-                baseWhere: mergeBaseWhere(where as QueryArgs["where"], baseWhere),
+                baseWhere: mergeBaseWhere(where, baseWhere),
                 relationBaseWhere: relationReadFilter,
             });
             const ids = resolved.page.map((row) => String(row["_id"]));
@@ -1269,10 +1269,10 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
             // patch. The read + writes share the mutation-span (if any).
             const { baseWhere } = readBase(tableName);
             const resolved = await route(tableName).findMany(tableName, {
-                baseWhere: mergeBaseWhere(args.where as QueryArgs["where"], baseWhere),
+                baseWhere: mergeBaseWhere(args.where, baseWhere),
                 relationBaseWhere: relationReadFilter,
             });
-            const patches = resolved.page.map((row) => ({ id: String(row["_id"]), patch: args.patch }));
+            const patches = resolved.page.map((row) => {return { id: String(row["_id"]), patch: args.patch }});
 
             assertBatchLimit(patches.length, options?.limit, "patchWhere");
 

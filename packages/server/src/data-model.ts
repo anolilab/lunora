@@ -391,6 +391,7 @@ export interface TableWriterFacade<
      * {@link TableWriterFacade.hardDelete} to force physical removal.
      */
     delete: (id: Id<string & T>) => Promise<void>;
+
     /**
      * Delete many rows in this table. Pass an array of ids (requested count is
      * returned; unknown ids are no-ops) or `{ where }` to delete matching rows
@@ -413,16 +414,18 @@ export interface TableWriterFacade<
         (values: IM[T], options: { skipDuplicates: true }): Promise<Id<string & T> | null>;
         (values: IM[T], options?: { skipDuplicates?: boolean }): Promise<Id<string & T>>;
     };
+
     /**
      * Insert many documents into this table in one call, returning the minted ids
      * in input order. With `{ skipDuplicates: true }`, UNIQUE breaches resolve to
      * `null` for that row instead of failing the batch. Atomic within a mutation.
      */
     insertMany: {
-        (values: ReadonlyArray<IM[T]>, options: { limit?: number; skipDuplicates: true }): Promise<Array<Id<string & T> | null>>;
+        (values: ReadonlyArray<IM[T]>, options: { limit?: number; skipDuplicates: true }): Promise<(Id<string & T> | null)[]>;
         (values: ReadonlyArray<IM[T]>, options?: { limit?: number; skipDuplicates?: boolean }): Promise<Id<string & T>[]>;
     };
     patch: (id: Id<string & T>, values: Partial<IM[T]>) => Promise<void>;
+
     /**
      * Patch many rows in this table. Pass an array of `{ id, values }` or
      * `{ where, values }` to patch matching rows with the same values. Returns

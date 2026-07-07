@@ -650,7 +650,7 @@ interface DatabaseWriter extends DatabaseReader {
      * so the prior inserts persist; the in-memory test harness mirrors the span.)
      */
     insertMany: {
-        <T extends string>(tableName: T, documents: ReadonlyArray<Record<string, unknown>>, options: { skipDuplicates: true } & BatchWriteOptions): Promise<Array<Id<T> | null>>;
+        <T extends string>(tableName: T, documents: ReadonlyArray<Record<string, unknown>>, options: BatchWriteOptions & { skipDuplicates: true }): Promise<(Id<T> | null)[]>;
         <T extends string>(tableName: T, documents: ReadonlyArray<Record<string, unknown>>, options?: InsertManyOptions): Promise<Id<T>[]>;
     };
 
