@@ -19,6 +19,7 @@
  * real physical columns.
  */
 import type { SchemaLike } from "@lunora/do";
+import { LunoraError } from "@lunora/errors";
 
 import type { D1Exec } from "./d1-ctx-db";
 import { decodeGlobalRow, runD1GlobalTableMigrations } from "./d1-ctx-db";
@@ -180,7 +181,7 @@ const buildEqPredicate = (
 
     for (const filter of filters) {
         if (!displayColumns.includes(filter.column)) {
-            throw Object.assign(new Error(`unknown column: ${filter.column}`), { code: "UNKNOWN_COLUMN", name: "LunoraError", status: 404 });
+            throw new LunoraError("UNKNOWN_COLUMN", `unknown column: ${filter.column}`, { status: 404 });
         }
 
         const quoted = quoteIdentifier(physicalColumnName(schema, table, filter.column));
@@ -303,7 +304,7 @@ const readGlobalTablePage = async (exec: D1Exec, schema: SchemaLike, options: Re
     const tableNames = await listTableNames(exec);
 
     if (!tableNames.includes(table)) {
-        throw Object.assign(new Error(`unknown table: ${table}`), { code: "UNKNOWN_TABLE", name: "LunoraError", status: 404 });
+        throw new LunoraError("UNKNOWN_TABLE", `unknown table: ${table}`, { status: 404 });
     }
 
     const limit = clamp(Math.trunc(options.limit ?? DEFAULT_PAGE_SIZE), 1, MAX_PAGE_SIZE);
@@ -343,13 +344,13 @@ const facetGlobalColumn = async (exec: D1Exec, schema: SchemaLike, options: Face
     const tableNames = await listTableNames(exec);
 
     if (!tableNames.includes(table)) {
-        throw Object.assign(new Error(`unknown table: ${table}`), { code: "UNKNOWN_TABLE", name: "LunoraError", status: 404 });
+        throw new LunoraError("UNKNOWN_TABLE", `unknown table: ${table}`, { status: 404 });
     }
 
     const columns = await resolveColumns(exec, schema, table);
 
     if (!columns.includes(column)) {
-        throw Object.assign(new Error(`unknown column: ${column}`), { code: "UNKNOWN_COLUMN", name: "LunoraError", status: 404 });
+        throw new LunoraError("UNKNOWN_COLUMN", `unknown column: ${column}`, { status: 404 });
     }
 
     const quoted = quoteIdentifier(table);

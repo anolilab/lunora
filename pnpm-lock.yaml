@@ -2375,6 +2375,9 @@ importers:
       '@lunora/do':
         specifier: workspace:*
         version: link:../do
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
       '@lunora/sql-store':
         specifier: workspace:*
         version: link:../sql-store

@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import { describe, expect, it, vi } from "vitest";
 
 import type { AuthAdmin, AuthIntrospector, ExecutionContextLike } from "../src/create-worker";
@@ -210,10 +211,10 @@ describe("createWorker — auth admin mutation endpoints", () => {
         const banUser = vi.mocked(plane.banUser as NonNullable<AuthAdmin["banUser"]>);
 
         banUser.mockImplementationOnce(async () => {
-            throw Object.assign(new Error("nope"), { code: "USER_NOT_FOUND" });
+            throw new LunoraError("USER_NOT_FOUND", "nope");
         });
         banUser.mockImplementationOnce(async () => {
-            throw Object.assign(new Error("driver exploded"), { code: "SQLITE_IOERR" });
+            throw new LunoraError("SQLITE_IOERR", "driver exploded");
         });
 
         const error = vi.spyOn(console, "error").mockImplementation(() => {});

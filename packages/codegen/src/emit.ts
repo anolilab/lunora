@@ -772,11 +772,7 @@ const CALL_REGISTERED_HELPER = `const callRegistered = async <R>(context: Caller
     const registered = LUNORA_FUNCTIONS[functionPath];
 
     if (!registered) {
-        throw Object.assign(new Error(\`function not registered: \${functionPath}\`), {
-            name: "LunoraError",
-            code: "FUNCTION_NOT_FOUND",
-            status: 404,
-        });
+        throw new LunoraError("FUNCTION_NOT_FOUND", \`function not registered: \${functionPath}\`);
     }
 
     return (await registered.handler(context, args ?? {})) as R;
@@ -1530,7 +1526,7 @@ const emitFunctions = (
     const callerParameter = hasFunctions ? "context" : "_context";
     const callRegisteredHelper = hasFunctions ? `${CALL_REGISTERED_HELPER}\n\n` : "";
 
-    return `${GENERATED_HEADER}${importBlock}${compiledArgsImport}${shapeTypeImport}import type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";
+    return `${GENERATED_HEADER}${importBlock}${compiledArgsImport}${shapeTypeImport}import { LunoraError } from "${base.server}";\nimport type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";
 ${dataModelImport}
 /**
  * Single registered function, narrowed to the shape \`handleRpc\` needs.
@@ -1578,11 +1574,7 @@ export const dispatchLunoraFunction = async (functionPath: string, context: unkn
     const registered = LUNORA_FUNCTIONS[functionPath];
 
     if (!registered || registered.visibility === "internal") {
-        throw Object.assign(new Error(\`function not registered: \${functionPath}\`), {
-            name: "LunoraError",
-            code: "FUNCTION_NOT_FOUND",
-            status: 404,
-        });
+        throw new LunoraError("FUNCTION_NOT_FOUND", \`function not registered: \${functionPath}\`);
     }
 
     return registered.handler(context, args);
@@ -3117,8 +3109,8 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
         // read-registry builder + `composeShapeReadWhere` so `resolveShape` can
         // AND-merge a shape's predicate with the table's read base-where.
         hasShapes
-            ? `import { asBucketStorage, buildRlsReadRegistry, composeShapeReadWhere, createSecrets } from "${base.server}";`
-            : `import { asBucketStorage, createSecrets } from "${base.server}";`,
+            ? `import { asBucketStorage, buildRlsReadRegistry, composeShapeReadWhere, createSecrets, LunoraError } from "${base.server}";`
+            : `import { asBucketStorage, createSecrets, LunoraError } from "${base.server}";`,
     ];
 
     // The per-table facade binding lives in `@lunora/server` so codegen and the
@@ -3673,11 +3665,7 @@ const dispatchRun = async (expected: FunctionKind, functionPath: string, args: R
     }
 
     if (runDepth >= MAX_RUN_DEPTH) {
-        throw Object.assign(new Error(\`ctx.run*: composition depth limit (\${MAX_RUN_DEPTH}) exceeded — likely a cyclic runQuery/runMutation\`), {
-            name: "LunoraError",
-            code: "RUN_DEPTH_EXCEEDED",
-            status: 500,
-        });
+        throw new LunoraError("RUN_DEPTH_EXCEEDED", \`ctx.run*: composition depth limit (\${MAX_RUN_DEPTH}) exceeded — likely a cyclic runQuery/runMutation\`);
     }
 
     runDepth += 1;
@@ -3705,11 +3693,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // \`isSystemDispatch()\`). A client RPC never carries that flag, so its
             // internals stay not-found and never leak across the external boundary.
             if (!registered || (registered.visibility === "internal" && !this.isSystemDispatch())) {
-                throw Object.assign(new Error(\`function not registered: \${functionPath}\`), {
-                    name: "LunoraError",
-                    code: "FUNCTION_NOT_FOUND",
-                    status: 404,
-                });
+                throw new LunoraError("FUNCTION_NOT_FOUND", \`function not registered: \${functionPath}\`);
             }
 
             this.ensureMigrated();
@@ -3819,11 +3803,7 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
             const migration = LUNORA_MIGRATIONS[args.id];
 
             if (!migration) {
-                throw Object.assign(new Error(\`data migration "\${args.id}" is not registered\`), {
-                    name: "LunoraError",
-                    code: "MIGRATION_NOT_FOUND",
-                    status: 404,
-                });
+                throw new LunoraError("MIGRATION_NOT_FOUND", \`data migration "\${args.id}" is not registered\`, { status: 404 });
             }
 
             this.ensureMigrated();
@@ -3859,18 +3839,14 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
             const definition = (schema as unknown as SchemaLike).tables[args.table];
 
             if (!definition) {
-                throw Object.assign(new Error(\`unknown table: \${args.table}\`), { name: "LunoraError", code: "UNKNOWN_TABLE", status: 404 });
+                throw new LunoraError("UNKNOWN_TABLE", \`unknown table: \${args.table}\`, { status: 404 });
             }
 
             // \`.global()\` tables live in D1, not this DO's SQLite — editing them
             // here would corrupt nothing but would fail confusingly, so reject up
             // front with a clear code the studio can surface.
             if (definition.shardMode?.kind === "global") {
-                throw Object.assign(new Error(\`table "\${args.table}" is global; edit it through D1, not the shard\`), {
-                    name: "LunoraError",
-                    code: "GLOBAL_TABLE_NOT_EDITABLE",
-                    status: 400,
-                });
+                throw new LunoraError("GLOBAL_TABLE_NOT_EDITABLE", \`table "\${args.table}" is global; edit it through D1, not the shard\`, { status: 400 });
             }
 
             this.ensureMigrated();
@@ -3914,17 +3890,13 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
             const definition = (schema as unknown as SchemaLike).tables[table];
 
             if (!definition) {
-                throw Object.assign(new Error(\`unknown table: \${table}\`), { name: "LunoraError", code: "UNKNOWN_TABLE", status: 404 });
+                throw new LunoraError("UNKNOWN_TABLE", \`unknown table: \${table}\`, { status: 404 });
             }
 
             // \`.global()\` tables live in D1, not this DO's SQLite — the same
             // guard \`runShardWrite\` applies to single-row edits.
             if (definition.shardMode?.kind === "global") {
-                throw Object.assign(new Error(\`table "\${table}" is global; edit it through D1, not the shard\`), {
-                    name: "LunoraError",
-                    code: "GLOBAL_TABLE_NOT_EDITABLE",
-                    status: 400,
-                });
+                throw new LunoraError("GLOBAL_TABLE_NOT_EDITABLE", \`table "\${table}" is global; edit it through D1, not the shard\`, { status: 400 });
             }
 
             this.ensureMigrated();
@@ -3965,7 +3937,7 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
             // \`rankBefore\` is optional on \`DatabaseWriterLike\` (the D1 twin omits it),
             // but the shard writer from \`createShardCtxDb\` always defines it.
             if (!writer.rankBefore) {
-                throw Object.assign(new Error("rankBefore is unavailable on the shard writer"), { name: "LunoraError", code: "NOT_IMPLEMENTED", status: 500 });
+                throw new LunoraError("NOT_IMPLEMENTED", "rankBefore is unavailable on the shard writer", { status: 500 });
             }
 
             return writer.rankBefore(args.table, args.index, {
@@ -3995,7 +3967,7 @@ ${flagsOverrides.evaluateOverride}${flagsOverrides.subscriptionOverride}${workfl
             // directions live in the schema's rankIndex, so the shard reads them itself;
             // \`args.directions\` is only the coordinator's comparator hint and isn't forwarded.
             if (!writer.rankPageRows) {
-                throw Object.assign(new Error("rankPage is unavailable on the shard writer"), { name: "LunoraError", code: "NOT_IMPLEMENTED", status: 500 });
+                throw new LunoraError("NOT_IMPLEMENTED", "rankPage is unavailable on the shard writer", { status: 500 });
             }
 
             return writer.rankPageRows(args.table, args.index, {

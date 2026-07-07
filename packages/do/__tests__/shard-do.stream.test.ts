@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { encodeWire } from "../../../shared/wire-codec";
@@ -298,7 +299,7 @@ describe("shardDO streaming queries", () => {
             // A full LunoraError shape (code + numeric status) is the developer-facing
             // error the redaction gate echoes; a code-only value would (correctly) be
             // redacted now, since a bare `.code` also rides Node errors like `ENOENT`.
-            throw Object.assign(new Error("kaboom"), { code: "FORBIDDEN", status: 403 });
+            throw new LunoraError("FORBIDDEN", "kaboom", { status: 403 });
         });
 
         const ws = createFakeWebSocket();

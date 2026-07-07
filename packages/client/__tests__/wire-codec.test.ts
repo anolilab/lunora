@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
@@ -123,7 +124,7 @@ describe("wireCodec round-trips", () => {
 
         // A subclass whose ctor is not on the allow-list (e.g. a server LunoraError)
         // rebuilds as a generic Error with its `.name` and `.message` preserved.
-        const source = Object.assign(new Error("nope"), { name: "LunoraError" });
+        const source = new LunoraError("INTERNAL", "nope");
         const decoded = wire(source) as Error;
 
         expect(decoded).toBeInstanceOf(Error);

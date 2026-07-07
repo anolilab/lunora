@@ -4,6 +4,7 @@
 import * as lunora_documents_0 from "../documents.js";
 
 import { DEFER_VALIDATION as DEFER, installCompiledValidatorMap } from "lunorash/values";
+import { LunoraError } from "lunorash/server";
 import type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";
 import type { Id } from "./dataModel.js";
 
@@ -74,11 +75,7 @@ export const dispatchLunoraFunction = async (functionPath: string, context: unkn
     const registered = LUNORA_FUNCTIONS[functionPath];
 
     if (!registered || registered.visibility === "internal") {
-        throw Object.assign(new Error(`function not registered: ${functionPath}`), {
-            name: "LunoraError",
-            code: "FUNCTION_NOT_FOUND",
-            status: 404,
-        });
+        throw new LunoraError("FUNCTION_NOT_FOUND", `function not registered: ${functionPath}`);
     }
 
     return registered.handler(context, args);
@@ -107,11 +104,7 @@ const callRegistered = async <R>(context: CallerCtx, functionPath: string, args:
     const registered = LUNORA_FUNCTIONS[functionPath];
 
     if (!registered) {
-        throw Object.assign(new Error(`function not registered: ${functionPath}`), {
-            name: "LunoraError",
-            code: "FUNCTION_NOT_FOUND",
-            status: 404,
-        });
+        throw new LunoraError("FUNCTION_NOT_FOUND", `function not registered: ${functionPath}`);
     }
 
     return (await registered.handler(context, args ?? {})) as R;

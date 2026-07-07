@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { ExecutionContextLike } from "../src/create-worker";
@@ -251,7 +252,7 @@ describe("observabilitySink", () => {
 
             // Structural ConflictError shape (name/code/status) — mirrors what
             // `@lunora/do` throws without taking a runtime dependency on it.
-            const conflict = Object.assign(new Error("write conflict"), { code: "CONFLICT", name: "ConflictError", status: 409 });
+            const conflict = new LunoraError("CONFLICT", "write conflict", { name: "ConflictError", status: 409 });
 
             shard.throwOnFetch = conflict;
             const worker = createWorker({ observability: sink, shardDO: shard.namespace });

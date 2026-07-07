@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import { describe, expect, it, vi } from "vitest";
 
 import type { FacadeWriterLike } from "../src/facade";
@@ -85,7 +86,12 @@ describe("bindTableFacade — per-table batch forms", () => {
 });
 
 /** A ConflictError-shaped value (matched structurally by the facade, no `@lunora/do` import). */
-const uniqueConflict = (): Error => Object.assign(new Error(`unique constraint violation on "users"`), { code: "CONFLICT", kind: "unique" });
+const uniqueConflict = (): LunoraError & { kind: string } => {
+    const err = new LunoraError("CONFLICT", `unique constraint violation on "users"`) as LunoraError & { kind: string };
+    err.kind = "unique";
+
+    return err;
+};
 
 /** A writer with individually-controllable findFirst/insert/patch, bound to the `users` table. */
 const makeComposingWriter = () => {

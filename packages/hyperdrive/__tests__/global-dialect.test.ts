@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
 import { mysqlDialect, postgresDialect } from "../src/global-dialect";
@@ -22,7 +23,7 @@ describe("postgresDialect", () => {
     it("detects SQLSTATE 23505 unique violations", () => {
         expect.assertions(2);
 
-        expect(postgresDialect.isUniqueViolation(Object.assign(new Error("dup"), { code: "23505" }))).toBe(true);
+        expect(postgresDialect.isUniqueViolation(new LunoraError("23505", "dup"))).toBe(true);
         expect(postgresDialect.isUniqueViolation(new Error("nope"))).toBe(false);
     });
 });

@@ -107,13 +107,12 @@
                       pnpm run test:affected
                   fi
 
-            # INVARIANT: studio's `unit` vitest project must stay runtime-dist-free
-            # (node-env, DOM-free, at most TYPE-only imports of @lunora/* — types
-            # are erased at runtime). This step runs on every packages-affected PR
-            # without building studio's deps; a unit test that VALUE-imports an
-            # @lunora/* package would fail here whenever the affected build didn't
-            # include studio's dependency graph. If that need ever arises, move
-            # this step behind a studio-affected gate + a dep build instead.
+            # `derive-runtime-advisories.ts` value-imports `runAdvisor`/`RUNTIME_LINTS`
+            # from `@lunora/advisor`, so its dist must exist for the unit tests to
+            # resolve. Build it unconditionally (it's small) before running.
+            - "name": "Build @lunora/advisor for studio unit tests"
+              "run": |
+                  pnpm --filter "@lunora/advisor" run build
             - "name": "Run studio unit tests"
               "run": |
                   pnpm --filter "@lunora/studio" run test:unit
