@@ -2724,9 +2724,7 @@ class LunoraClient {
                 const droppedStream = droppedId ? this.streams.get(droppedId) : undefined;
 
                 if (droppedStream) {
-                    droppedStream.handle.fail(
-                        new LunoraError("STREAM_QUEUE_OVERFLOW", "stream-start frame evicted while socket was unreachable"),
-                    );
+                    droppedStream.handle.fail(new LunoraError("STREAM_QUEUE_OVERFLOW", "stream-start frame evicted while socket was unreachable"));
                     this.streams.delete(droppedId as string);
                 }
             }

@@ -1334,9 +1334,7 @@ class MigrationShard extends ShardDO {
         const migration = MIGRATIONS[args.id];
 
         if (!migration) {
-            return Promise.reject(
-                new LunoraError("MIGRATION_NOT_FOUND", `data migration "${args.id}" is not registered`, { status: 404 }),
-            );
+            return Promise.reject(new LunoraError("MIGRATION_NOT_FOUND", `data migration "${args.id}" is not registered`, { status: 404 }));
         }
 
         const writer = createShardContextDatabase({

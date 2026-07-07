@@ -500,7 +500,11 @@ const assertBatchLimit = (count: number, limit: number | undefined, op: string):
     const cap = limit ?? DEFAULT_BATCH_LIMIT;
 
     if (count > cap) {
-        throw new LunoraError("BATCH_LIMIT_EXCEEDED", `${op}: batch of ${String(count)} exceeds the limit of ${String(cap)} (raise options.limit or chunk the call)`, { status: 400 });
+        throw new LunoraError(
+            "BATCH_LIMIT_EXCEEDED",
+            `${op}: batch of ${String(count)} exceeds the limit of ${String(cap)} (raise options.limit or chunk the call)`,
+            { status: 400 },
+        );
     }
 };
 

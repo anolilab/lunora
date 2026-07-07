@@ -82,7 +82,10 @@ const rateLimit =
             const mapped = STATUS_BY_REASON[reason];
             const retryAfter = Number.isFinite(status.retryAfter) ? Math.ceil(status.retryAfter) : undefined;
 
-            throw new LunoraError(mapped.code, options.message ?? defaultMessage(name, reason, retryAfter), { status: mapped.status, data: retryAfter === undefined ? undefined : { retryAfter } });
+            throw new LunoraError(mapped.code, options.message ?? defaultMessage(name, reason, retryAfter), {
+                status: mapped.status,
+                data: retryAfter === undefined ? undefined : { retryAfter },
+            });
         }
 
         return next();

@@ -110,14 +110,11 @@ specific language governing permissions and limitations under the License.
 <!-- TYPE_DEPENDENCIES -->
 
 # Licenses of bundled types
-
 The published @lunora/cloudflare-access artifact additionally contains code with the following licenses:
 FSL-1.1-Apache-2.0
 
 # Bundled types:
-
 ## @lunora/server
-
 License: FSL-1.1-Apache-2.0
 By: Daniel Bannert
 Repository: git+https://github.com/anolilab/lunora.git

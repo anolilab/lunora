@@ -346,7 +346,9 @@ const assertUniqueNames = (crons: ReadonlyArray<CronJobIR>): void => {
 
     for (const cron of crons) {
         if (seen.has(cron.name)) {
-            throw new LunoraError("DUPLICATE_CRON_NAME", `Duplicate cron job name "${cron.name}": cron names must be unique across the project.`, { status: 500 });
+            throw new LunoraError("DUPLICATE_CRON_NAME", `Duplicate cron job name "${cron.name}": cron names must be unique across the project.`, {
+                status: 500,
+            });
         }
 
         seen.add(cron.name);

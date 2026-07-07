@@ -129,7 +129,10 @@ const createStream = <T>(options: { maxBuffer?: number; onCancel: () => void }):
 
             if (buffer.length >= maxBuffer) {
                 handle.fail(
-                    new LunoraError("STREAM_BACKPRESSURE", `stream buffer overflow (max=${maxBuffer.toString()}); the consumer cannot keep up with the producer`),
+                    new LunoraError(
+                        "STREAM_BACKPRESSURE",
+                        `stream buffer overflow (max=${maxBuffer.toString()}); the consumer cannot keep up with the producer`,
+                    ),
                 );
 
                 return;

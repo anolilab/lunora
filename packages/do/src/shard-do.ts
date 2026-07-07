@@ -2624,7 +2624,9 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with a schema-aware reader that uses `this`
     protected runRelationFanoutRead(_functionPath: string, _args: Record<string, unknown>): Promise<unknown> {
-        throw new LunoraError("NOT_IMPLEMENTED", "__lunora_relation__: no schema bound — the base ShardDO cannot serve cross-shard relation reads", { status: 500 });
+        throw new LunoraError("NOT_IMPLEMENTED", "__lunora_relation__: no schema bound — the base ShardDO cannot serve cross-shard relation reads", {
+            status: 500,
+        });
     }
 
     /**
@@ -5229,13 +5231,20 @@ abstract class ShardDO {
         // Refuse to replay a lossy body rather than deliver a corrupted message the
         // producer never sent.
         if (isLossyBody(row.body)) {
-            throw new LunoraError("BAD_REQUEST", `replayQueueMessage: captured message "${parsed.id}" has a truncated or unserializable body and can't be replayed faithfully`, { status: 422 });
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `replayQueueMessage: captured message "${parsed.id}" has a truncated or unserializable body and can't be replayed faithfully`,
+                { status: 422 },
+            );
         }
 
         const target = parsed.target ?? this.resolveReplayTarget(row.queue) ?? row.exportName;
 
         if (typeof target !== "string" || target === "") {
-            throw new LunoraError("BAD_REQUEST", `replayQueueMessage: captured message "${parsed.id}" has no declared producer to replay onto (pass \`target\`)`);
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `replayQueueMessage: captured message "${parsed.id}" has no declared producer to replay onto (pass \`target\`)`,
+            );
         }
 
         const { binding } = this.resolveQueueBinding(target);
