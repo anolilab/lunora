@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import type { Middleware } from "@lunora/server";
 
 import type { FetchLike, TurnstileVerifyResult } from "./turnstile";
@@ -120,7 +121,7 @@ export const verifyTurnstileMiddleware =
         }
 
         if (!result.success || (options.validate !== undefined && !options.validate(result))) {
-            throw new LunoraError("FORBIDDEN", options.message ?? "turnstile verification failed", { data: result.errorCodes ? { errorCodes: result.errorCodes } : undefined });
+            throw new LunoraError("FORBIDDEN", options.message ?? "turnstile verification failed", { data: result.errorCodes.length > 0 ? { errorCodes: result.errorCodes } : undefined });
         }
 
         return next();

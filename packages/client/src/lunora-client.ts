@@ -363,7 +363,7 @@ const buildStreamError = (message: ServerErrorMessage): Error => {
     const nestedMessage = typeof errorEnvelope?.message === "string" ? errorEnvelope.message : undefined;
     const messageText = (typeof message.message === "string" ? message.message : undefined) ?? nestedMessage ?? "stream error";
 
-    return code !== undefined ? new LunoraError(code, messageText) : new Error(messageText);
+    return code === undefined ? new Error(messageText) : new LunoraError(code, messageText);
 };
 
 /**

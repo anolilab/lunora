@@ -1,6 +1,6 @@
+import { LunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
-import { LunoraError } from "@lunora/errors";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 
 /** JSON round-trip of the encoded form, mirroring what the transport actually does. */
