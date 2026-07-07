@@ -1188,6 +1188,39 @@ describe("createWorker — HTTP actions", () => {
         expect(action).not.toHaveBeenCalled();
     });
 
+    it("exposes ctx.cache on c.var.lunora.cache for HTTP action handlers", async () => {
+        expect.assertions(3);
+
+        const purgedTags: string[] = [];
+        const fakeCacheContext: ExecutionContextLike = {
+            ...fakeContext,
+            cache: {
+                purge: async (options: { purgeEverything?: boolean; tags?: string[] }) => {
+                    if (options.tags) {
+                        purgedTags.push(...options.tags);
+                    }
+                },
+            },
+        };
+
+        const worker = createWorker({
+            httpRouter: honoApp((app) =>
+                app.post("/purge", async (c) => {
+                    await c.var.lunora.cache!.purge({ tags: ["products", "users"] });
+
+                    return new Response("ok");
+                }),
+            ),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/purge", { method: "POST" }), {}, fakeCacheContext);
+
+        expect(res.status).toBe(200);
+        await expect(res.text()).resolves.toBe("ok");
+        expect(purgedTags).toEqual(["products", "users"]);
+    });
+
     it("the internal RPC path is never shadowed by a catch-all router", async () => {
         expect.assertions(3);
 

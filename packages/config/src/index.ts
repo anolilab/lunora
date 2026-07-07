@@ -56,6 +56,8 @@ export type { MultiSelectOption, SelectOption } from "./prompt";
 export { createConfirm, isInteractive, promptMultiSelect, promptSelect, promptYesNo } from "./prompt";
 export type { ExportGap, ReconcileBindingsResult } from "./reconcile-bindings";
 export { reconcileWranglerBindings } from "./reconcile-bindings";
+export type { ReconcileCompatibilityDateResult } from "./reconcile-compatibility-date";
+export { reconcileWranglerCompatibilityDate } from "./reconcile-compatibility-date";
 export type { MaterializeOptions, MaterializeResult, RemoteBindingPlan, RemoteEnableInputs, RemoteWranglerShape } from "./remote-bindings";
 export {
     injectRemoteFlags,

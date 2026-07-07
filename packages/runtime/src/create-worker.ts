@@ -64,6 +64,7 @@ type Route = (request: Request, env: unknown, context: ExecutionContextLike) => 
  */
 interface HttpActionContext {
     auth: { getIdentity: () => Promise<Record<string, unknown> | null>; userId: null | string };
+    cache?: { purge: (options: { purgeEverything?: boolean; tags?: string[] }) => Promise<unknown> };
     fetch: typeof globalThis.fetch;
     runAction: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runMutation: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
@@ -2032,7 +2033,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         requireAdminOption,
     });
 
-    const buildHttpActionContext = async (request: Request, env: unknown): Promise<HttpActionContext> => {
+    const buildHttpActionContext = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<HttpActionContext> => {
         const { claims, headers, userId } = await resolveForwardContext(request, env, publicResolveIdentity);
 
         const run = async <R>(reference: unknown, args: Record<string, unknown> = {}): Promise<R> => {
@@ -2066,6 +2067,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 getIdentity: () => Promise.resolve(claims),
                 userId,
             },
+            cache: context.cache,
             fetch: globalThis.fetch.bind(globalThis),
             runAction: run,
             runMutation: run,
@@ -2081,7 +2083,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // Build the action context up front and inject it on a private env
         // binding; the router's middleware lifts it into the handler's context.
         // hono then matches/dispatches and returns its own response (incl. 404).
-        const httpContext = await buildHttpActionContext(request, env);
+        const httpContext = await buildHttpActionContext(request, env, context);
 
         // In-process serverQuery fast-path (PLAN4 §2.2 / §5.3): an SSR loader
         // running inside this worker can call `worker.serverQuery(request, env,

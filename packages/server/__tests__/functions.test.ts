@@ -37,6 +37,7 @@ const makeMutationContext = (): MutationContext => {
 const makeActionContext = (): ActionContext => {
     return {
         auth: { getIdentity: async () => null, userId: null },
+        cache: { purge: async () => undefined },
         secrets: { get: async () => "secret" },
         db: {} as ActionContext["db"],
         fetch: globalThis.fetch,

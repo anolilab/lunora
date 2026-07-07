@@ -327,4 +327,42 @@ describe("httpRoute composition", () => {
 
         expect(seen[0]).toBe(marker);
     });
+
+    it("attaches Cache-Control, Cache-Tag, and Vary headers when declared on the route", async () => {
+        expect.assertions(4);
+
+        const route = httpRoute
+            .get("/api/products/:id")
+            .params({ id: v.string() })
+            .cacheControl("public, max-age=300")
+            .cacheTag("products")
+            .vary("Accept-Encoding")
+            .handler(({ params }) => {
+                return { id: params.id };
+            });
+
+        const response = await dispatch(route, "GET", "/api/products/:id", new Request("https://x/api/products/123"));
+
+        expect(response.status).toBe(200);
+        expect(response.headers.get("cache-control")).toBe("public, max-age=300");
+        expect(response.headers.get("cache-tag")).toBe("products");
+        expect(response.headers.get("vary")).toBe("Accept-Encoding");
+    });
+
+    it("attaches cache headers on a 204 No Content response", async () => {
+        expect.assertions(4);
+
+        const route = httpRoute
+            .delete("/api/cache")
+            .cacheControl("private, no-store")
+            .cacheTag("session")
+            .handler(() => undefined);
+
+        const response = await dispatch(route, "DELETE", "/api/cache", new Request("https://x/api/cache", { method: "DELETE" }));
+
+        expect(response.status).toBe(204);
+        expect(response.headers.get("cache-control")).toBe("private, no-store");
+        expect(response.headers.get("cache-tag")).toBe("session");
+        await expect(response.text()).resolves.toBe("");
+    });
 });

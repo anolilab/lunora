@@ -14,6 +14,7 @@ import {
     readLinkedProject,
     readWranglerJsonc,
     reconcileWranglerBindings,
+    reconcileWranglerCompatibilityDate,
     requiredSecrets,
 } from "@lunora/config";
 import { join } from "@visulima/path";
@@ -352,6 +353,20 @@ const provisionBindings = async (cwd: string, logger: Logger): Promise<void> => 
         const message = error instanceof Error ? error.message : String(error);
 
         logger.warn(`binding inference skipped: ${message}`);
+    }
+
+    try {
+        const reconciled = reconcileWranglerCompatibilityDate(cwd);
+
+        if (reconciled.changed) {
+            logger.success(
+                `bumped compatibility_date to ${reconciled.date ?? "unknown"} (Workers Cache enabled) → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`,
+            );
+        }
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        logger.warn(`compatibility date sync skipped: ${message}`);
     }
 };
 

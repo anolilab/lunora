@@ -20,7 +20,7 @@ type HttpMethod = "DELETE" | "GET" | "HEAD" | "OPTIONS" | "PATCH" | "POST" | "PU
  * `runAction`, which forward to the owning shard.
  */
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
-type HttpActionCtx = Pick<ActionContext, "auth" | "fetch" | "runAction" | "runMutation" | "runQuery">;
+type HttpActionCtx = Pick<ActionContext, "auth" | "cache" | "fetch" | "runAction" | "runMutation" | "runQuery">;
 
 /** A raw handler wrapped by {@link httpAction}. Receives the raw request, returns the raw response. */
 type HttpActionHandler = (context: HttpActionCtx, request: Request) => Promise<Response> | Response;
@@ -131,6 +131,18 @@ interface HttpStreamHandlerOptions<SearchParams extends ArgsValidator, Params ex
  */
 interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends ArgsValidator, Params extends ArgsValidator, Output = undefined> {
     body: <B extends ArgsValidator>(validators: B) => HttpRouteBuilder<SearchParams, B & Body, Params, Output>;
+
+    /**
+     * Attach a `Cache-Control` header to the response. Only meaningful when
+     * Workers Cache is enabled in `wrangler.jsonc` (`"cache": { "enabled": true }`).
+     */
+    cacheControl: (value: string) => HttpRouteBuilder<SearchParams, Body, Params, Output>;
+
+    /**
+     * Attach a `Cache-Tag` header to the response for tag-based purging via
+     * `ctx.cache.purge({ tags: [...] })`.
+     */
+    cacheTag: (value: string) => HttpRouteBuilder<SearchParams, Body, Params, Output>;
     handler: [Output] extends [undefined]
         ? <R>(handler: (options: HttpRouteHandlerOptions<SearchParams, Body, Params>) => Promise<R> | R) => LunoraRouteHandler
         : (handler: (options: HttpRouteHandlerOptions<SearchParams, Body, Params>) => Output | Promise<Output>) => LunoraRouteHandler;
@@ -148,6 +160,12 @@ interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends Args
      * handler's yielded type.
      */
     stream: <R>(handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<R, void, void> | AsyncIterable<R>) => LunoraRouteHandler;
+
+    /**
+     * Attach a `Vary` header to the response so Cloudflare stores separate
+     * cached variants per distinct value of the listed request headers.
+     */
+    vary: (value: string) => HttpRouteBuilder<SearchParams, Body, Params, Output>;
 }
 
 /** Opens a fresh {@link HttpRouteBuilder}. The `path` documents intent; hono owns the actual routing at mount. */
@@ -167,11 +185,14 @@ interface HttpRoute {
 /** Accumulated route state threaded through the chain. */
 interface RouteState {
     body: ArgsValidator;
+    cacheControl?: string;
+    cacheTag?: string;
     method: HttpMethod;
     output?: Validator;
     params: ArgsValidator;
     path: string;
     searchParams: ArgsValidator;
+    vary?: string;
 }
 
 /** Internal view exposing `_meta.inner` so search-param coercion can read the wrapped validator. */
@@ -361,8 +382,28 @@ const buildRouteHandler =
             const result = await userHandler({ body, ctx: context, params, searchParams });
             const payload = state.output ? applyOutput(state.output, result) : result;
 
-            // eslint-disable-next-line unicorn/no-null -- Response body must be `null` for an empty 204 (the Fetch API rejects `undefined`)
-            return payload === undefined ? new Response(null, { status: 204 }) : Response.json(payload);
+            const headers: Record<string, string> = {};
+
+            if (state.cacheControl) {
+                headers["cache-control"] = state.cacheControl;
+            }
+
+            if (state.cacheTag) {
+                headers["cache-tag"] = state.cacheTag;
+            }
+
+            if (state.vary) {
+                headers.vary = state.vary;
+            }
+
+            const hasCacheHeaders = Object.keys(headers).length > 0;
+
+            if (payload === undefined) {
+                // eslint-disable-next-line unicorn/no-null -- Response body must be `null` for an empty 204 (the Fetch API rejects `undefined`)
+                return new Response(null, { headers: hasCacheHeaders ? headers : undefined, status: 204 });
+            }
+
+            return Response.json(payload, { headers: hasCacheHeaders ? headers : undefined });
         } catch (error: unknown) {
             return errorResponse(error);
         }
@@ -484,25 +525,32 @@ const buildStreamHandler =
             },
         });
 
-        return new Response(stream, {
-            headers: {
-                "cache-control": "no-cache, no-transform",
-                "content-type": "text/event-stream; charset=utf-8",
-                // Hint to proxies (including Cloudflare's own buffering layer)
-                // that this response must not be coalesced.
-                "x-accel-buffering": "no",
-            },
-        });
+        const headers: Record<string, string> = {
+            // SSE responses must stay uncacheable so proxies don't buffer or
+            // coalesce live frames. `cacheControl()` is intentionally ignored
+            // for stream() routes; `cacheTag`/`vary` are also omitted because
+            // they only make sense alongside a cacheable response.
+            "cache-control": "no-cache, no-transform",
+            "content-type": "text/event-stream; charset=utf-8",
+            // Hint to proxies (including Cloudflare's own buffering layer)
+            // that this response must not be coalesced.
+            "x-accel-buffering": "no",
+        };
+
+        return new Response(stream, { headers });
     };
 
 const makeRouteBuilder = (state: RouteState): Record<string, unknown> => {
     return {
         body: (validators: ArgsValidator) => makeRouteBuilder({ ...state, body: { ...state.body, ...validators } }),
+        cacheControl: (value: string) => makeRouteBuilder({ ...state, cacheControl: value }),
+        cacheTag: (value: string) => makeRouteBuilder({ ...state, cacheTag: value }),
         handler: (userHandler: LooseHandler): LunoraRouteHandler => buildRouteHandler(state, userHandler),
         output: (validator: Validator) => makeRouteBuilder({ ...state, output: validator }),
         params: (validators: ArgsValidator) => makeRouteBuilder({ ...state, params: { ...state.params, ...validators } }),
         searchParams: (validators: ArgsValidator) => makeRouteBuilder({ ...state, searchParams: { ...state.searchParams, ...validators } }),
         stream: (userHandler: LooseStreamHandler): LunoraRouteHandler => buildStreamHandler(state, userHandler),
+        vary: (value: string) => makeRouteBuilder({ ...state, vary: value }),
     };
 };
 

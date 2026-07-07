@@ -3,7 +3,14 @@ import { basename, join, resolve, sep } from "node:path";
 
 import { CodegenDiagnosticError, createCodegenProject, refreshCodegenProject, runCodegen } from "@lunora/codegen";
 import type { ExportGap } from "@lunora/config";
-import { collectWranglerSecretVariables, inferLunoraBindings, LUNORA_CONFIG_FILE, reconcileWranglerBindings, WRANGLER_FILES } from "@lunora/config";
+import {
+    collectWranglerSecretVariables,
+    inferLunoraBindings,
+    LUNORA_CONFIG_FILE,
+    reconcileWranglerBindings,
+    reconcileWranglerCompatibilityDate,
+    WRANGLER_FILES,
+} from "@lunora/config";
 import type { Project } from "ts-morph";
 import type { Plugin, ViteDevServer } from "vite";
 import { isRunnableDevEnvironment } from "vite";
@@ -86,6 +93,42 @@ interface OverlayCallbacks {
 }
 
 /**
+ * Reconcile cron triggers and compatibility date into wrangler.jsonc.
+ * Extracted to keep {@link runCodegenSafely}'s cognitive complexity bounded.
+ */
+const reconcileWranglerExtras = (
+    projectRoot: string,
+    cronTriggers: ReadonlyArray<string>,
+    logger: { info?: (message: string) => void; warn: (message: string) => void },
+): void => {
+    try {
+        const reconciled = reconcileWranglerCrons(projectRoot, cronTriggers);
+
+        if (reconciled.changed) {
+            logger.info?.(`${LUNORA_TAG} synced ${cronTriggers.length.toFixed(0)} cron trigger(s) into ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
+        }
+    } catch (cronError: unknown) {
+        const message = cronError instanceof Error ? cronError.message : String(cronError);
+
+        logger.warn(`${LUNORA_TAG} cron trigger sync skipped: ${message}`);
+    }
+
+    try {
+        const reconciled = reconcileWranglerCompatibilityDate(projectRoot);
+
+        if (reconciled.changed) {
+            logger.info?.(
+                `${LUNORA_TAG} bumped compatibility_date to ${reconciled.date ?? "unknown"} (Workers Cache enabled) → ${reconciled.wranglerPath ?? "wrangler.jsonc"}`,
+            );
+        }
+    } catch (dateError: unknown) {
+        const message = dateError instanceof Error ? dateError.message : String(dateError);
+
+        logger.warn(`${LUNORA_TAG} compatibility date sync skipped: ${message}`);
+    }
+};
+
+/**
  * Run codegen, returning the absolute directory codegen actually wrote to
  * (so callers can invalidate the *real* output, not an independently-guessed
  * path), or `undefined` when codegen was skipped or failed.
@@ -117,22 +160,7 @@ const runCodegenSafely = (
             wranglerVariables: collectWranglerSecretVariables(options.projectRoot),
         });
 
-        // Reconcile code-first cron definitions into wrangler.jsonc so the user
-        // never hand-edits `triggers.crons`. Best-effort: a wrangler problem
-        // must not abort codegen (the wrangler validator plugin reports those).
-        try {
-            const reconciled = reconcileWranglerCrons(options.projectRoot, result.cronTriggers);
-
-            if (reconciled.changed) {
-                logger.info?.(
-                    `${LUNORA_TAG} synced ${result.cronTriggers.length.toFixed(0)} cron trigger(s) into ${reconciled.wranglerPath ?? "wrangler.jsonc"}`,
-                );
-            }
-        } catch (cronError: unknown) {
-            const message = cronError instanceof Error ? cronError.message : String(cronError);
-
-            logger.warn(`${LUNORA_TAG} cron trigger sync skipped: ${message}`);
-        }
+        reconcileWranglerExtras(options.projectRoot, result.cronTriggers, logger);
 
         // Surface static schema advisories (unindexed FKs, …) in the dev/build
         // log. Codegen returns them without printing; the richer error-overlay

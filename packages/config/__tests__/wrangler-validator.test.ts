@@ -1019,5 +1019,61 @@ describe("wrangler-validator", () => {
                 "assets.binding must be a non-empty string",
             );
         });
+
+        it("accepts a well-formed cache block and rejects bad shapes", () => {
+            expect.assertions(5);
+
+            expect(validateWranglerConfig(validBase({ cache: { enabled: true }, compatibility_date: "2026-05-01" })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ cache: { enabled: false } })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ cache: "yes" as never })).errors.join(" ")).toContain("cache must be an object");
+            expect(validateWranglerConfig(validBase({ cache: null })).errors.join(" ")).toContain("cache must be an object");
+            expect(validateWranglerConfig(validBase({ cache: { enabled: "yes" as never } })).errors.join(" ")).toContain("cache.enabled must be a boolean");
+        });
+
+        it("requires compatibility_date >= 2026-05-01 when cache.enabled is true", () => {
+            expect.assertions(7);
+
+            const withCache = { cache: { enabled: true }, compatibility_date: "2026-05-01" };
+            const withCacheOld = { cache: { enabled: true }, compatibility_date: "2026-04-07" };
+            const withoutCache = { compatibility_date: "2026-04-07" };
+            const exportsCacheOld = { exports: { default: { type: "worker", cache: { enabled: true } } }, compatibility_date: "2026-04-07" };
+            const cacheWithMalformedDate = { cache: { enabled: true }, compatibility_date: "2026-4-7" };
+            const nullExportsCache = { exports: null, cache: { enabled: true }, compatibility_date: "2026-04-07" };
+
+            expect(validateWranglerConfig(validBase(withCache)).valid).toBe(true);
+            expect(validateWranglerConfig(validBase(withCacheOld)).errors.join(" ")).toContain('cache.enabled requires compatibility_date >= "2026-05-01"');
+            expect(validateWranglerConfig(validBase(withoutCache)).valid).toBe(true);
+            expect(validateWranglerConfig(validBase(exportsCacheOld)).errors.join(" ")).toContain('cache.enabled requires compatibility_date >= "2026-05-01"');
+
+            const malformedReport = validateWranglerConfig(validBase(cacheWithMalformedDate));
+
+            expect(malformedReport.errors.join(" ")).toContain("YYYY-MM-DD");
+            expect(malformedReport.errors.join(" ")).not.toContain('cache.enabled requires compatibility_date >= "2026-05-01"');
+
+            // `exports: null` should not crash and should still surface the top-level cache date error.
+            expect(validateWranglerConfig(validBase(nullExportsCache)).errors.join(" ")).toContain('cache.enabled requires compatibility_date >= "2026-05-01"');
+        });
+
+        it("accepts a well-formed exports block and rejects malformed entry shapes", () => {
+            expect.assertions(8);
+
+            expect(
+                validateWranglerConfig(validBase({ exports: { default: { type: "worker", cache: { enabled: true } } }, compatibility_date: "2026-05-01" }))
+                    .valid,
+            ).toBe(true);
+            expect(validateWranglerConfig(validBase({ exports: { CachedBackend: { type: "worker", cache: { enabled: false } } } })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ exports: "bad" as never })).errors.join(" ")).toContain("exports must be an object");
+            expect(validateWranglerConfig(validBase({ exports: null })).errors.join(" ")).toContain("exports must be an object");
+            expect(validateWranglerConfig(validBase({ exports: { default: "bad" as never } })).errors.join(" ")).toContain(
+                'exports["default"] must be an object',
+            );
+            expect(validateWranglerConfig(validBase({ exports: { default: null } })).errors.join(" ")).toContain('exports["default"] must be an object');
+            expect(validateWranglerConfig(validBase({ exports: { default: { type: "worker", cache: { enabled: 1 as never } } } })).errors.join(" ")).toContain(
+                'exports["default"].cache.enabled must be a boolean',
+            );
+            expect(validateWranglerConfig(validBase({ exports: { default: { type: "worker", cache: null } } })).errors.join(" ")).toContain(
+                'exports["default"].cache must be an object',
+            );
+        });
     });
 });
