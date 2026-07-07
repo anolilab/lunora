@@ -13,6 +13,9 @@ const FLAGS_EVAL_PATH = "__lunora_flags__:eval";
 /** The value kinds a flag resolves to — OpenFeature's boolean / number / string / structured (JSON) flags. */
 type FlagValue = boolean | number | string | Record<string, unknown> | unknown[] | null;
 
+/** Targeting context bag forwarded to the OpenFeature provider. */
+type FlagContext = Record<string, unknown>;
+
 /** Wire args the generated flag-subscription read override reads. */
 interface FlagSubscribeArgs extends Record<string, unknown> {
     context?: Record<string, unknown>;
@@ -43,7 +46,7 @@ export interface FlagOptions {
      * Per-call targeting context merged on top of the app's default `identify`
      * targeting key.
      */
-    context?: Record<string, unknown>;
+    context?: FlagContext;
 
     /** `DestroyRef` whose `onDestroy` tears down the subscription. Defaults to `inject(DestroyRef)`. */
     destroyRef?: DestroyRef;
@@ -107,7 +110,7 @@ export interface FlagsOptions {
      * Targeting context shared by every flag in the set, merged on top of the
      * app's default `identify` targeting key.
      */
-    context?: Record<string, unknown>;
+    context?: FlagContext;
 
     /** `DestroyRef` whose `onDestroy` tears down the subscriptions. Defaults to `inject(DestroyRef)`. */
     destroyRef?: DestroyRef;
@@ -162,3 +165,5 @@ export const flags = <T extends Record<string, FlagValue>>(flagDefaults: T, opti
 
     return values.asReadonly();
 };
+
+export type { FlagContext, FlagValue };

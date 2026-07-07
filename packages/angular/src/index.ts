@@ -20,7 +20,7 @@ export type { ProvideLunoraOptions } from "./client";
 export { injectLunoraClient, LUNORA_CLIENT, provideLunora } from "./client";
 export type { ConnectionStatusOptions } from "./connection-status";
 export { connectionStatus } from "./connection-status";
-export type { FlagOptions, FlagsOptions } from "./flag";
+export type { FlagContext, FlagOptions, FlagsOptions, FlagValue } from "./flag";
 export { flag, flags } from "./flag";
 export type { HydratePreloadedOptions, HydratePreloadedResult } from "./hydrate-preloaded";
 export { hydratePreloaded } from "./hydrate-preloaded";
@@ -34,7 +34,7 @@ export type { PaginatedQueryOptions, PaginatedQueryResult } from "./paginated-qu
 export type { InfiniteQueryResult } from "./paginated-query";
 export { paginatedQuery } from "./paginated-query";
 export { infiniteQuery } from "./paginated-query";
-export type { PresenceOptions, PresenceResult } from "./presence";
+export type { HeartbeatReference, ListPresentReference, PresenceOptions, PresenceResult } from "./presence";
 export { presence } from "./presence";
 export type { RateLimitOptions, RateLimitResult } from "./rate-limit";
 export { rateLimit } from "./rate-limit";
@@ -47,6 +47,7 @@ export type {
     LunoraClient,
     LunoraClientOptions,
     MutationCallOptions,
+    Preloaded,
     ReturnOf,
     SubscriptionError,
     Unsubscribe,
