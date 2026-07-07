@@ -122,6 +122,43 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             key: "POLAR_WEBHOOK_SECRET",
             placeholderValue: "<your-polar-webhook-secret>",
         },
+        {
+            description: "Autumn secret key (am_sk_…) for the Autumn payment adapter. Obtain at https://app.useautumn.com/dev",
+            docsUrl: "https://lunora.sh/docs/packages/payment#autumn",
+            key: "AUTUMN_SECRET_KEY",
+            placeholderValue: "<your-autumn-secret-key>",
+        },
+        {
+            description: "Autumn webhook signing secret for verifying Standard Webhooks event payloads. Obtain from your Autumn dashboard webhook settings.",
+            docsUrl: "https://lunora.sh/docs/packages/payment#autumn",
+            key: "AUTUMN_WEBHOOK_SECRET",
+            placeholderValue: "<your-autumn-webhook-secret>",
+        },
+        {
+            description: "Dodo Payments API key (bearer token) for the Dodo Payments adapter. Obtain at https://app.dodopayments.com/developer/api-keys",
+            docsUrl: "https://lunora.sh/docs/packages/payment#dodo-payments",
+            key: "DODO_PAYMENTS_API_KEY",
+            placeholderValue: "<your-dodo-payments-api-key>",
+        },
+        {
+            description:
+                "Dodo Payments webhook signing secret (whsec_…) for verifying event payloads. Obtain at https://app.dodopayments.com/developer/webhooks",
+            docsUrl: "https://lunora.sh/docs/packages/payment#dodo-payments",
+            key: "DODO_PAYMENTS_WEBHOOK_KEY",
+            placeholderValue: "<your-dodo-payments-webhook-secret>",
+        },
+        {
+            description: "Creem API key for the Creem payment adapter. Obtain at https://www.creem.io/dashboard/developers",
+            docsUrl: "https://lunora.sh/docs/packages/payment#creem",
+            key: "CREEM_API_KEY",
+            placeholderValue: "<your-creem-api-key>",
+        },
+        {
+            description: "Creem webhook signing secret for verifying the creem-signature header. Obtain from your Creem dashboard webhook settings.",
+            docsUrl: "https://lunora.sh/docs/packages/payment#creem",
+            key: "CREEM_WEBHOOK_SECRET",
+            placeholderValue: "<your-creem-webhook-secret>",
+        },
     ],
 };
 

@@ -1,15 +1,17 @@
 /**
  * Polar adapter.
  *
- * Mirrors the Stripe adapter's shape — an injected, structural `PolarClientLike` (so this package
- * never imports `@polar-sh/sdk`) — but Polar is a Merchant-of-Record: there is no manual
- * authorize/capture, so those throw. Webhooks use the Standard Webhooks scheme (`webhook-id` /
- * `webhook-timestamp` / `webhook-signature`), verified by {@link verifyStandardWebhook}. Client
- * responses are SDK-camelCased; raw webhook bodies are snake_case — handled accordingly.
+ * Polar is a Merchant-of-Record: there is no manual authorize/capture, so those throw. The public
+ * `client` is the small structural {@link PolarClientLike} (a real `@polar-sh/sdk` `Polar` instance
+ * satisfies it with no cast); internally it is used as the real `Polar`, so every call is checked
+ * against the SDK. Webhooks use the Standard Webhooks scheme (`webhook-id` / `webhook-timestamp` /
+ * `webhook-signature`), verified by {@link verifyStandardWebhook}. Client responses are camelCase
+ * (period fields are `Date`s); raw webhook bodies are snake_case — handled accordingly.
  */
+import type { Polar } from "@polar-sh/sdk";
+
 import type { PaymentAdapter, WebhookInput } from "../adapter";
-import { LunoraPaymentError } from "../errors";
-import { asRecord, readBoolean, readNumber, readString } from "../json";
+import { asRecord, parseTimestamp, readBoolean, readNumber, readString, referenceFromMetadata } from "../json";
 import { money, zeroMoney } from "../money";
 import type {
     CaptureInput,
@@ -25,41 +27,24 @@ import type {
     SubscriptionPatch,
     SubscriptionState,
     WebhookAction,
-    WebhookActionType,
 } from "../types";
 import { verifyStandardWebhook } from "../webhook";
+import makeNotSupported from "./not-supported";
+import stateToEventType from "./subscription-event";
 
-interface PolarSubscriptionLike {
-    readonly cancelAtPeriodEnd?: boolean;
-    readonly currentPeriodEnd?: null | string;
-    readonly currentPeriodStart?: null | string;
-    readonly customerId?: null | string;
-    readonly id: string;
-    readonly metadata?: Record<string, string>;
-    readonly productId?: string;
-    readonly status: string;
-}
-
-interface PolarOrderLike {
-    readonly amount?: number;
-    readonly currency?: string;
-    readonly id: string;
-    readonly status: string;
-    readonly totalAmount?: number;
-}
-
+/**
+ * The `@polar-sh/sdk` surface the adapter uses, as a structural type — a real `Polar` instance
+ * satisfies it without a cast. Resources are `unknown` (the adapter re-types the client as the real
+ * `Polar` internally); this keeps the SDK's full type out of the published declarations.
+ */
 interface PolarClientLike {
-    readonly checkouts: { create: (parameters: Record<string, unknown>) => Promise<{ id: string; url: string }> };
-    readonly customers: { create: (parameters: Record<string, unknown>) => Promise<{ email: null | string; id: string }> };
-    readonly customerSessions: { create: (parameters: Record<string, unknown>) => Promise<{ customerPortalUrl: string }> };
-    readonly events: { ingest: (parameters: Record<string, unknown>) => Promise<{ inserted?: number }> };
-    readonly orders: { get: (parameters: Record<string, unknown>) => Promise<PolarOrderLike> };
-    readonly refunds: { create: (parameters: Record<string, unknown>) => Promise<{ id: string }> };
-    readonly subscriptions: {
-        get: (parameters: Record<string, unknown>) => Promise<PolarSubscriptionLike>;
-        revoke: (parameters: Record<string, unknown>) => Promise<PolarSubscriptionLike>;
-        update: (parameters: Record<string, unknown>) => Promise<PolarSubscriptionLike>;
-    };
+    readonly checkouts: unknown;
+    readonly customers: unknown;
+    readonly customerSessions: unknown;
+    readonly events: unknown;
+    readonly orders: unknown;
+    readonly refunds: unknown;
+    readonly subscriptions: unknown;
 }
 
 interface PolarAdapterOptions {
@@ -68,11 +53,22 @@ interface PolarAdapterOptions {
     readonly webhookToleranceSeconds?: number;
 }
 
+/** Polar client responses carry `Date` period fields; webhook bodies carry ISO strings. Handle both. */
+const toEpochMs = (value: unknown): number | undefined => {
+    if (value instanceof Date) {
+        return value.getTime();
+    }
+
+    return parseTimestamp(typeof value === "string" ? value : undefined);
+};
+
 const PAYMENT_STATE_BY_POLAR_ORDER_STATUS: Record<string, PaymentState> = {
+    draft: "initiated",
     paid: "captured",
     partially_refunded: "partially_refunded",
     pending: "initiated",
     refunded: "refunded",
+    void: "canceled",
 };
 
 const SUBSCRIPTION_STATE_BY_POLAR_STATUS: Record<string, SubscriptionState> = {
@@ -88,46 +84,40 @@ const SUBSCRIPTION_STATE_BY_POLAR_STATUS: Record<string, SubscriptionState> = {
     unpaid: "past_due",
 };
 
-const notSupported = (operation: string): never => {
-    throw new LunoraPaymentError("PROVIDER_ERROR", `polar (merchant-of-record) does not support ${operation}`);
-};
+const notSupported = makeNotSupported("polar (merchant-of-record)");
 
-const parseTimestamp = (value: null | string | undefined): number | undefined => {
-    const parsed = typeof value === "string" ? Date.parse(value) : Number.NaN;
-
-    return Number.isNaN(parsed) ? undefined : parsed;
-};
-
-const subscriptionFromPolar = (subscription: PolarSubscriptionLike): Subscription => {
+const subscriptionFromPolar = (input: unknown): Subscription => {
+    const subscription = asRecord(input);
     const now = Date.now();
 
     return {
-        cancelAtPeriodEnd: subscription.cancelAtPeriodEnd ?? false,
+        cancelAtPeriodEnd: readBoolean(subscription, "cancelAtPeriodEnd") ?? false,
         createdAt: now,
-        currentPeriodEnd: parseTimestamp(subscription.currentPeriodEnd),
-        currentPeriodStart: parseTimestamp(subscription.currentPeriodStart),
-        id: subscription.id,
-        priceId: subscription.productId ?? "",
+        currentPeriodEnd: toEpochMs(subscription.currentPeriodEnd),
+        currentPeriodStart: toEpochMs(subscription.currentPeriodStart),
+        id: readString(subscription, "id") ?? "",
+        priceId: readString(subscription, "productId") ?? "",
         provider: "polar",
         quantity: 1,
-        referenceId: subscription.metadata?.referenceId ?? "",
-        state: SUBSCRIPTION_STATE_BY_POLAR_STATUS[subscription.status] ?? "active",
+        referenceId: referenceFromMetadata(subscription) ?? "",
+        state: SUBSCRIPTION_STATE_BY_POLAR_STATUS[readString(subscription, "status") ?? ""] ?? "active",
         updatedAt: now,
     };
 };
 
-const orderToSession = (order: PolarOrderLike): PaymentSession => {
+const orderToSession = (input: unknown): PaymentSession => {
+    const order = asRecord(input);
     const now = Date.now();
-    const currency = order.currency ?? "usd";
-    const amount = money(BigInt(order.totalAmount ?? order.amount ?? 0), currency);
-    const state = PAYMENT_STATE_BY_POLAR_ORDER_STATUS[order.status] ?? "initiated";
+    const currency = readString(order, "currency") ?? "usd";
+    const amount = money(BigInt(Math.round(readNumber(order, "totalAmount") ?? readNumber(order, "amount") ?? 0)), currency);
+    const state = PAYMENT_STATE_BY_POLAR_ORDER_STATUS[readString(order, "status") ?? ""] ?? "initiated";
     const settled = state === "captured" || state === "partially_refunded" || state === "refunded";
 
     return {
         amount,
         capturedAmount: settled ? amount : zeroMoney(currency),
         createdAt: now,
-        id: order.id,
+        id: readString(order, "id") ?? "",
         provider: "polar",
         referenceId: "",
         refundedAmount: state === "refunded" ? amount : zeroMoney(currency),
@@ -136,27 +126,7 @@ const orderToSession = (order: PolarOrderLike): PaymentSession => {
     };
 };
 
-const subscriptionEventType = (status: string | undefined): WebhookActionType => {
-    const state = status ? SUBSCRIPTION_STATE_BY_POLAR_STATUS[status] : undefined;
-
-    if (state === "canceled") {
-        return "subscription.canceled";
-    }
-
-    if (state === "past_due") {
-        return "subscription.past_due";
-    }
-
-    if (state === "active" || state === "trialing") {
-        return "subscription.active";
-    }
-
-    return "subscription.updated";
-};
-
 // Webhook bodies are raw snake_case.
-const referenceFromMetadata = (object: Record<string, unknown>): string | undefined => readString(asRecord(object.metadata), "referenceId");
-
 const mapEvent = (eventId: string, eventType: string, object: Record<string, unknown>): WebhookAction => {
     const base = { eventId, provider: "polar" as const, raw: { object, type: eventType } };
     const currency = readString(object, "currency") ?? "usd";
@@ -164,6 +134,13 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
     switch (eventType) {
         case "order.created":
         case "order.paid": {
+            // `order.paid` is definitionally settled. `order.created` also fires for not-yet-paid orders
+            // (e.g. a pending subscription renewal), so for it require a settled `status` before emitting
+            // a capture — a still-pending order is a no-op, and the later `order.paid` is the settle signal.
+            if (eventType === "order.created" && PAYMENT_STATE_BY_POLAR_ORDER_STATUS[readString(object, "status") ?? ""] !== "captured") {
+                return { ...base, type: "unhandled" };
+            }
+
             return {
                 ...base,
                 amount: money(BigInt(readNumber(object, "total_amount") ?? readNumber(object, "amount") ?? 0), currency),
@@ -189,8 +166,12 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
         case "subscription.canceled":
         case "subscription.created":
         case "subscription.revoked":
+        case "subscription.uncanceled":
         case "subscription.updated": {
-            const type = eventType === "subscription.revoked" ? "subscription.canceled" : subscriptionEventType(readString(object, "status"));
+            const type =
+                eventType === "subscription.revoked"
+                    ? "subscription.canceled"
+                    : stateToEventType(SUBSCRIPTION_STATE_BY_POLAR_STATUS[readString(object, "status") ?? ""]);
 
             return {
                 ...base,
@@ -212,7 +193,9 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
 };
 
 export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter => {
-    const { client, webhookSecret } = options;
+    const { webhookSecret } = options;
+    // Use the injected client as the real `Polar` internally so every call is checked against the SDK.
+    const client = options.client as unknown as Polar;
 
     return {
         cancelPayment: () => notSupported("manual payment cancellation"),
@@ -248,10 +231,13 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
         },
 
         getOrCreateCustomer: async (ref: CustomerRef): Promise<Customer> => {
+            // Polar requires an email to mint a customer (pass it on first checkout via `CheckoutInput.email`);
+            // `type: "individual"` selects the individual variant of Polar's customer-create union.
             const customer = await client.customers.create({
-                email: ref.email,
+                email: ref.email ?? "",
                 externalId: ref.referenceId,
                 metadata: { ...ref.metadata, referenceId: ref.referenceId },
+                type: "individual",
             });
 
             return { createdAt: Date.now(), email: customer.email ?? undefined, id: customer.id, provider: "polar", referenceId: ref.referenceId };
@@ -282,14 +268,19 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
         },
 
         refundPayment: async (input) => {
+            // Polar's refund requires an explicit amount; for a full refund, read the order's total.
+            const order = input.amount ? undefined : await client.orders.get({ id: input.sessionId });
+            const currency = input.amount?.currency ?? order?.currency ?? "usd";
+            const amountMinor = input.amount ? Number(input.amount.minorUnits) : (order?.totalAmount ?? 0);
+
             await client.refunds.create({
-                amount: input.amount ? Number(input.amount.minorUnits) : undefined,
+                amount: amountMinor,
                 orderId: input.sessionId,
-                reason: input.reason ?? "customer_request",
+                // `reason` is an open enum; a caller-supplied string is cast onto it (defaults to customer_request).
+                reason: (input.reason ?? "customer_request") as Parameters<typeof client.refunds.create>[0]["reason"],
             });
 
-            // Polar refunds are reported terminally; reflect the requested amount.
-            const refundedAmount = input.amount ?? money(0, "usd");
+            const refundedAmount = input.amount ?? money(BigInt(Math.round(amountMinor)), currency);
 
             return {
                 amount: refundedAmount,
@@ -313,7 +304,7 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
                         externalCustomerId: input.referenceId,
                         metadata: { value: input.quantity },
                         name: input.featureId,
-                        timestamp: input.timestamp === undefined ? undefined : new Date(input.timestamp).toISOString(),
+                        timestamp: input.timestamp === undefined ? undefined : new Date(input.timestamp),
                     },
                 ],
             });

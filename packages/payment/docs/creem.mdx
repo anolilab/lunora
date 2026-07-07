@@ -1,0 +1,466 @@
+---
+title: "@lunora/payment — Creem"
+description: Accept payments and subscriptions through Creem — an EU-friendly, product-based Merchant-of-Record — with hosted checkout, a billing portal, and verified webhooks synced through Lunora's payment state machine.
+---
+
+[Creem](https://creem.io) is a **Merchant-of-Record (MoR)** for software. Like
+Polar and Dodo Payments, Creem is the _legal seller_ of your product: it prices,
+collects, and remits sales tax / EU VAT across 190+ jurisdictions, issues the
+invoice under its own entity, and owns chargebacks and disputes. You never touch
+a tax table. This page is a complete, standalone guide to wiring Creem into a
+Lunora app through `@lunora/payment` — everything below is grounded in the actual
+`createCreemAdapter` surface and Creem's [official docs](https://docs.creem.io).
+
+## What Creem is, and when to choose it
+
+Creem is **product-based**: you create real products (with prices) in the Creem
+dashboard and reference them by product id at checkout — exactly the shape
+`@lunora/payment`'s `priceId` interface expects, so Creem slots in like Polar and
+Dodo rather than like a raw PSP. Checkout is a hosted, Creem-branded page;
+subscriptions are first-class objects (cancel, pause/resume, upgrade with
+proration); and there is a genuine hosted **billing portal** customers can open
+to manage their own payment methods and subscriptions.
+
+<TypeTable
+    type={{
+        merchantOfRecord: {
+            type: "true",
+            description:
+                "Creem is the legal seller — it calculates, collects, and remits tax/VAT and owns invoices, chargebacks, and disputes. Manual authorize/capture are therefore not part of the flow.",
+        },
+        portal: { type: "true", description: "Native hosted billing portal via `customers.generateBillingLinks` — no self-built billing UI." },
+        usageMetering: {
+            type: "false",
+            description:
+                "Creem is product/seat-based, not usage-metered. `track` still works locally (Lunora's own append-only ledger), but nothing is forwarded to a Creem metering API.",
+        },
+    }}
+/>
+
+**Choose Creem when** you want a MoR (no tax registration, no VAT filing) with a
+strong EU footprint and a clean product/subscription model, and you don't need
+programmatic refunds or usage-based billing.
+
+| Provider  | Model         | Tax / MoR                        | Notable                                                           |
+| --------- | ------------- | -------------------------------- | ----------------------------------------------------------------- |
+| **Creem** | Product-based | ✅ Merchant-of-Record (EU-first) | Hosted portal, upgrade proration; refunds are **dashboard-only**. |
+| Stripe    | Price/PSP     | ❌ You are the seller (you file) | Full control, manual capture/refund, richest API.                 |
+| Polar     | Product-based | ✅ Merchant-of-Record            | Standard Webhooks; first-class refunds.                           |
+| Dodo      | Product-based | ✅ Merchant-of-Record            | First-class refunds **and** usage metering.                       |
+
+<Callout type="info">
+    Switching providers in `@lunora/payment` is a configuration change: the provider is a stateless translator, and the store owns all state. If you outgrow
+    Creem's constraints (e.g. you need programmatic refunds or metered billing), swap the adapter — your `ctx.payments` call sites don't change.
+</Callout>
+
+## Prerequisites
+
+<Steps>
+<Step>
+
+**A Creem account.** Sign up at [creem.io](https://creem.io) and create at least
+one **product** (and, for recurring plans, a price). You'll reference products by
+their `prod_…` id when starting a checkout.
+
+</Step>
+<Step>
+
+**An API key.** In the Creem dashboard open **Developers** ([dashboard →
+developers](https://www.creem.io/dashboard/developers)) and copy your API key.
+Creem exposes a separate **test-mode** key and a `https://test-api.creem.io`
+server — use test mode while you build.
+
+</Step>
+<Step>
+
+**A webhook signing secret.** Under **Developers → Webhooks**, add an endpoint
+pointing at your app's webhook route (below) and copy the generated **signing
+secret**. Creem signs every delivery with it. See
+[docs.creem.io/code/webhooks](https://docs.creem.io/code/webhooks).
+
+</Step>
+</Steps>
+
+Store both as environment variables. Lunora's secrets registry declares the exact
+names `@lunora/payment` expects:
+
+| Env var                | Purpose                                                             |
+| ---------------------- | ------------------------------------------------------------------- |
+| `CREEM_API_KEY`        | API key for the Creem SDK. From **Developers**.                     |
+| `CREEM_WEBHOOK_SECRET` | Signing secret for the `creem-signature` header. From **Webhooks**. |
+
+## Install
+
+Install the payment package alongside the official `creem` SDK. `@lunora/payment`
+never imports `creem` itself — you inject the client — so the SDK stays an
+ordinary dependency of _your_ app, not a hard dependency of the package.
+
+<Tabs items={["pnpm","npm","yarn","bun"]}>
+
+```bash tab="pnpm"
+pnpm add @lunora/payment creem
+```
+
+```bash tab="npm"
+npm install @lunora/payment creem
+```
+
+```bash tab="yarn"
+yarn add @lunora/payment creem
+```
+
+```bash tab="bun"
+bun add @lunora/payment creem
+```
+
+</Tabs>
+
+## Configure
+
+The adapter takes a structural **`CreemClientLike`** shim by injection. This keeps
+`@lunora/payment` free of a hard `creem` dependency and — importantly — lets you
+map the real SDK's argument shapes onto the small, stable surface the adapter
+calls. The shim shape is:
+
+```ts
+interface CreemClientLike {
+    checkouts: {
+        create: (request) => Promise<Record<string, unknown>>;
+        retrieve: (checkoutId: string) => Promise<Record<string, unknown>>;
+    };
+    customers: {
+        create: (request) => Promise<Record<string, unknown>>;
+        generateBillingLinks: (request) => Promise<Record<string, unknown>>;
+        retrieve?: (request) => Promise<Record<string, unknown>>; // optional: recover a duplicate-email create
+    };
+    subscriptions: {
+        cancel: (subscriptionId: string, request?) => Promise<Record<string, unknown>>;
+        get: (subscriptionId: string) => Promise<Record<string, unknown>>;
+        resume: (subscriptionId: string) => Promise<Record<string, unknown>>;
+        upgrade: (subscriptionId: string, request) => Promise<Record<string, unknown>>;
+    };
+}
+```
+
+<Callout type="warn">
+    Do **not** just cast `new Creem()` to `CreemClientLike`. Two methods on the real SDK don't match the shim's shape and one isn't on the SDK's `customers`
+    resource at all — see [The client shim](#the-client-shim). Write the small translating shim below instead; the pass-through methods are one-liners.
+</Callout>
+
+<Steps>
+<Step>
+
+**Construct the real Creem SDK client.** The current `creem` SDK takes the API key
+at construction (not per call) and selects test mode via `serverIdx: 1` (or an
+explicit `serverURL`):
+
+```ts
+import { Creem } from "creem";
+
+const creem = new Creem({
+    apiKey: env.CREEM_API_KEY,
+    // serverIdx: 1, // → https://test-api.creem.io while developing
+});
+```
+
+</Step>
+<Step>
+
+<a id="the-client-shim" />
+
+**Build the `CreemClientLike` shim.** Most methods pass straight through — the
+adapter already sends the SDK's camelCase field names (`productId`, `units`,
+`customer`, `metadata`, `successUrl`, `requestId`, and `{ productId, updateBehavior }`
+for upgrades). Only two need translation:
+
+- `customers.retrieve` on the real SDK is **positional** — `retrieve(customerId?, email?)`, _not_ `retrieve({ email })`. Map the email lookup.
+- The SDK's `customers` resource has **no `create`** (only `list`, `retrieve`, `generateBillingLinks`). Creem's REST API does expose `POST /v1/customers`, so provide `create` via a direct call (or drop it and rely on implicit creation at checkout — see [Customers](#customers-and-getorcreatecustomer)).
+
+```ts
+import type { CreemClientLike } from "@lunora/payment/creem";
+
+const client: CreemClientLike = {
+    checkouts: {
+        create: (request) => creem.checkouts.create(request),
+        retrieve: (checkoutId) => creem.checkouts.retrieve(checkoutId),
+    },
+    customers: {
+        generateBillingLinks: (request) => creem.customers.generateBillingLinks(request),
+        // Real SDK signature is positional: retrieve(customerId?, email?)
+        retrieve: (request) => creem.customers.retrieve(undefined, request.email as string),
+        // Not on the SDK's `customers` resource — call the REST endpoint directly.
+        create: async (request) =>
+            (await fetch("https://api.creem.io/v1/customers", {
+                body: JSON.stringify({ email: request.email, name: request.name }),
+                headers: { "content-type": "application/json", "x-api-key": env.CREEM_API_KEY },
+                method: "POST",
+            }).then((response) => response.json())) as Record<string, unknown>,
+    },
+    subscriptions: {
+        cancel: (id, request) => creem.subscriptions.cancel(id, request ?? {}),
+        get: (id) => creem.subscriptions.get(id),
+        resume: (id) => creem.subscriptions.resume(id),
+        upgrade: (id, request) => creem.subscriptions.upgrade(id, request),
+    },
+};
+```
+
+</Step>
+<Step>
+
+**Wire the adapter into `ctx.payments`.** The adapter and its secrets come from a
+`config.payment(env)` thunk you pass to `createShardDO()`. The store is built per
+request from `ctx.db`, and the default authorizer ties `referenceId` to
+`ctx.auth.userId`.
+
+```ts
+import { createCreemAdapter } from "@lunora/payment/creem";
+import { Creem } from "creem";
+import { createShardDO } from "./_generated/shard";
+
+export const ShardDO = createShardDO({
+    payment: (env) => {
+        const creem = new Creem({ apiKey: env.CREEM_API_KEY });
+        const client = buildCreemShim(creem, env); // the shim from the previous step
+
+        return {
+            adapter: createCreemAdapter({ client, webhookSecret: env.CREEM_WEBHOOK_SECRET }),
+            // Grant plans from active/trialing subscriptions on these product ids.
+            entitlements: {
+                plans: { pro: { features: ["export"], priceIds: ["prod_pro"] } },
+            },
+            observability: (event) => console.log("[payment]", event.type, event),
+        };
+    },
+});
+```
+
+</Step>
+</Steps>
+
+`ctx.payments` is then wired by codegen onto `ActionCtx` wherever a `lunora/`
+source imports `@lunora/payment` or reads `ctx.payments`.
+
+## Hosted checkout
+
+Call the facade from an action. `createCheckout` reuses the reference's stored
+Creem customer (minting one only on first checkout), attaches an outbound
+idempotency key automatically, and returns a hosted `url` to redirect to. The
+`priceId` is a Creem **product id**.
+
+```ts
+import { action, v } from "./_generated/server";
+
+export const subscribe = action.input({ productId: v.string() }).action(async ({ ctx, args: { productId } }): Promise<{ url: string }> => {
+    const { url } = await ctx.payments.createCheckout({
+        referenceId: ctx.auth.userId,
+        priceId: productId, // Creem product id (prod_…)
+        mode: "subscription", // or "payment" for a one-time purchase
+        successUrl: "https://app.test/done",
+        cancelUrl: "https://app.test/cancel",
+        quantity: 1, // → the checkout's `units`
+    });
+
+    return { url };
+});
+```
+
+<Callout type="info">
+    Creem checkout only has a **success URL** — there is no separate cancel URL in Creem's checkout model — so the adapter forwards `successUrl` and drops
+    `cancelUrl`. Keep passing `cancelUrl` for cross-provider portability; it's simply unused here. The framework-controlled `referenceId` is pinned into
+    checkout metadata and can never be overridden by caller-supplied metadata.
+</Callout>
+
+## Subscriptions
+
+All subscription methods return the provider's reported truth, which the facade
+persists to the store.
+
+### Cancel — immediate vs. at period end
+
+```ts
+// Cancel immediately (default): access ends now.
+await ctx.payments.cancelSubscription(subscriptionId);
+
+// Cancel at period end: the customer keeps access until the current period ends.
+await ctx.payments.cancelSubscription(subscriptionId, { atPeriodEnd: true });
+```
+
+The adapter maps this onto Creem's cancel `mode`: `atPeriodEnd: true` →
+`{ mode: "scheduled" }`, otherwise `{ mode: "immediate" }`. A scheduled cancel
+leaves Creem's subscription in `scheduled_cancel`, which the adapter still treats
+as **active** (it entitles until period end) while surfacing the pending
+cancellation via `cancelAtPeriodEnd: true`.
+
+### Upgrade / downgrade with proration
+
+A plan change is expressed as a `priceId` patch and issued as a Creem **upgrade**
+to the new product, prorated and charged immediately:
+
+```ts
+// Adapter calls subscriptions.upgrade(id, { productId, updateBehavior: "proration-charge-immediately" })
+const updated = await ctx.payments.adapter.updateSubscription(subscriptionId, { priceId: "prod_enterprise" });
+```
+
+`proration-charge-immediately` means the plan takes effect at once and the prorated
+difference is billed right away (Creem also supports `proration-none`). See
+[Managing subscriptions](https://docs.creem.io/features/subscriptions/managing).
+
+### Resume
+
+```ts
+await ctx.payments.adapter.resumeSubscription(subscriptionId); // → subscriptions.resume(id)
+```
+
+## Billing portal
+
+Give a customer a self-service portal to manage payment methods and subscriptions.
+The facade derives the customer from the store (never a caller-supplied id — no
+IDOR) and calls Creem's `generateBillingLinks`:
+
+```ts
+export const portal = action.action(async ({ ctx }): Promise<{ url: string }> => {
+    return ctx.payments.createPortalSession(ctx.auth.userId, "https://app.test/account");
+});
+```
+
+The adapter reads the portal URL from Creem's `customer_portal_link` response
+field. See [Customer Portal](https://docs.creem.io/features/customer-portal).
+
+## Webhooks
+
+Creem signs every webhook with a single **`creem-signature`** header:
+`hex(HMAC_SHA256(signingSecret, rawBody))` — the HMAC-SHA256 of the **raw request
+body**, hex-encoded, with **no timestamp** in the scheme. The adapter verifies it
+with a constant-time comparison and fails closed on a missing secret or header.
+
+<Steps>
+<Step>
+
+**Register the endpoint** in **Developers → Webhooks** and copy the signing secret
+into `CREEM_WEBHOOK_SECRET`.
+
+</Step>
+<Step>
+
+**Verify at the edge.** Signature verification needs the untouched raw body, so
+the endpoint runs in an `httpAction` and forwards the raw body + signature into the
+shard, where `ctx.payments` and its store exist:
+
+```ts title="lunora/http.ts"
+import { httpAction, httpRouter } from "lunorash/server";
+import { processWebhook } from "./billing";
+
+export const app = httpRouter();
+
+app.post(
+    "/payment/webhook",
+    httpAction(async (ctx, request) => {
+        const body = await request.text();
+        const signature = request.headers.get("creem-signature") ?? "";
+
+        return Response.json(await ctx.runAction(processWebhook, { body, signature }));
+    }),
+);
+```
+
+```ts title="lunora/billing.ts"
+import { internalAction, v } from "./_generated/server";
+
+export const processWebhook = internalAction
+    .input({ body: v.string(), signature: v.string() })
+    .action(async ({ ctx, args: { body, signature } }): Promise<{ applied: boolean; status: number }> => {
+        const request = new Request("https://internal/payment/webhook", {
+            body,
+            headers: { "creem-signature": signature },
+            method: "POST",
+        });
+        const response = await ctx.payments.handleWebhook(request);
+        const result = (await response.json()) as { applied?: boolean };
+
+        return { applied: result.applied ?? false, status: response.status };
+    });
+```
+
+</Step>
+</Steps>
+
+Once verified, `handleWebhook` normalizes the event through Lunora's state machine
+and always returns `200` so Creem stops retrying — duplicate or out-of-order
+deliveries are safe by construction (the event `id` keys an append-only log).
+
+### Event mapping
+
+Creem's top-level event carries `id`, `eventType`, and `object`. The adapter maps
+each `eventType` to a normalized transition:
+
+| Creem `eventType`                                                   | Normalized action                                                                                   |
+| ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `checkout.completed`                                                | `payment.captured` (reads the settled `order` amount)                                               |
+| `subscription.active`, `subscription.paid`, `subscription.trialing` | `subscription.active`                                                                               |
+| `subscription.past_due`, `subscription.unpaid`                      | `subscription.past_due` (non-entitling)                                                             |
+| `subscription.paused`                                               | `subscription.paused`                                                                               |
+| `subscription.canceled`, `subscription.expired`                     | `subscription.canceled`                                                                             |
+| `subscription.scheduled_cancel`                                     | `subscription.active` + `cancelAtPeriodEnd: true`                                                   |
+| `subscription.update`                                               | recomputed from the object's `status`                                                               |
+| `refund.created`                                                    | `payment.refunded` (reads `refund_amount`/`refund_currency`, references the original `transaction`) |
+| `dispute.created` (and any future families)                         | `unhandled` (no state transition)                                                                   |
+
+<Callout type="info">
+    Note Creem's event name is `subscription.update` (no trailing "d"), distinct from Lunora's internal `subscription.updated` action — the adapter handles the
+    Creem spelling. A `subscription.past_due` / `unpaid` subscription is deliberately mapped to a **non-entitling** state, matching the Stripe/Polar adapters.
+</Callout>
+
+## Limitations
+
+Creem is a Merchant-of-Record, so it owns money movement — several PSP-style
+operations therefore throw a `PROVIDER_ERROR` rather than silently no-op:
+
+- **Refunds are dashboard-only.** Creem exposes no SDK/API endpoint to _initiate_ a refund, so `refundPayment` throws. Issue refunds from the Creem dashboard; the resulting `refund.created` webhook syncs the refunded amount back into the store.
+- **No usage metering.** `usageMetering` is `false`. `track` still records to Lunora's own durable ledger (and `check` reads it), but nothing is forwarded to Creem.
+- **No manual capture / payment cancellation.** `capturePayment` and `cancelPayment` throw — Creem captures at checkout and owns the payment lifecycle.
+
+## Troubleshooting
+
+<Callout type="warn">
+    **`WEBHOOK_SIGNATURE_INVALID` / "no matching signature".** The signature is computed over the **raw** body. If any middleware re-parses or re-serializes
+    JSON before you read `request.text()`, the bytes change and verification fails. Forward the exact raw string end-to-end, and confirm `CREEM_WEBHOOK_SECRET`
+    matches the endpoint's secret in **Developers → Webhooks** (test vs. live secrets differ).
+</Callout>
+
+<Callout type="warn">
+    **`create is not a function` / customer creation errors.** The `creem` SDK's `customers` resource has no `create` — a bare `new Creem()` cast leaves
+    `customers.create` undefined. Use the translating shim above (which calls `POST /v1/customers`, or omit `create` and let checkout create the customer
+    implicitly).
+</Callout>
+
+<Callout type="warn">
+    **Wrong customer returned by `retrieve`.** The real SDK's `retrieve` is positional — `retrieve(customerId?, email?)`. Passing `{email}` directly puts the
+    object in the `customerId` slot. The shim maps `{email}` → `retrieve(undefined, email)`.
+</Callout>
+
+<Callout type="warn">
+    **Seat quantities read as 1.** Creem stores per-item quantity under `items[].units`, not a top-level `units`. If you sell seat-based plans, verify the
+    subscription's `quantity` after sync — see the note in the [correctness report].
+</Callout>
+
+<Callout type="info">
+    **Test mode.** Build against `serverIdx: 1` (`https://test-api.creem.io`) with your test API key and a test webhook endpoint before switching to live keys.
+</Callout>
+
+## Customers and `getOrCreateCustomer`
+
+The facade only calls `getOrCreateCustomer` when a reference has no stored Creem
+customer and no `customerId` was passed — i.e. the first checkout. The adapter
+tries `customers.create` first, then (on the duplicate-email error Creem returns
+for an existing email) falls back to `customers.retrieve` by email — an idempotent
+get-or-create. Because Creem also creates the customer implicitly at checkout (the
+checkout accepts `customer.email`), you can alternatively omit `create` from the
+shim and let checkout mint the customer.
+
+## Related
+
+- [`@lunora/payment`](/docs/packages/payment) — the provider-agnostic API, `ctx.payments`, entitlements, and the store schema.
+- [`@lunora/scheduler`](/docs/packages/scheduler) — drive the `reconcile` sweep that re-fetches provider truth for drifted rows.
+- [Studio](/docs/packages/studio) — the Payments panel (under Logs) shows synced customers, subscriptions, and Creem webhook events.
+- [Creem docs](https://docs.creem.io) · [Webhooks](https://docs.creem.io/code/webhooks) · [Managing subscriptions](https://docs.creem.io/features/subscriptions/managing) · [Customer Portal](https://docs.creem.io/features/customer-portal)

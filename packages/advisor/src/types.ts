@@ -411,7 +411,7 @@ export interface LintContext {
 
     /**
      * Payment webhook-adapter constructions (`createStripeAdapter` /
-     * `createPolarAdapter`) — the payment-webhook wide-tolerance lint's input. Each row's
+     * `createPolarAdapter` / `createAutumnAdapter` / `createDodoPaymentsAdapter`) — the payment-webhook wide-tolerance lint's input. Each row's
      * `toleranceSeconds` is the statically-known `webhookToleranceSeconds` replay
      * window (default 300s); the lint fires only above a conservative ceiling, where
      * the endpoint would accept stale, replayable signed payloads. Supplied by the

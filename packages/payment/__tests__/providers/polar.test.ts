@@ -19,7 +19,7 @@ const headersFor = (id: string, timestamp: string, signature: string) => {
 const makeClient = (created: Record<string, unknown>[] = []): PolarClientLike => {
     return {
         checkouts: {
-            create: async (parameters) => {
+            create: async (parameters: Record<string, unknown>) => {
                 created.push(parameters);
 
                 return { id: "co_1", url: "https://polar.test/co_1" };
@@ -31,7 +31,7 @@ const makeClient = (created: Record<string, unknown>[] = []): PolarClientLike =>
             },
         },
         events: {
-            ingest: async (parameters) => {
+            ingest: async (parameters: Record<string, unknown>) => {
                 created.push(parameters);
 
                 return { inserted: 1 };
@@ -140,6 +140,39 @@ describe("polar adapter", () => {
         // `incomplete` (first payment not completed) must NOT map to the entitling
         // `subscription.active` — it maps to non-entitling `subscription.past_due`.
         expect(action.type).toBe("subscription.past_due");
+    });
+
+    it("does not capture a still-pending order.created (regression)", async () => {
+        expect.assertions(1);
+
+        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+
+        const payload = JSON.stringify({
+            data: { currency: "usd", id: "ord_2", metadata: { referenceId: "user_1" }, status: "pending", total_amount: 2500 },
+            type: "order.created",
+        });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const action = await adapter.parseWebhook({ headers: headersFor("msg_pending", timestamp, sign("msg_pending", timestamp, payload)), payload });
+
+        // A pending order.created must not be applied as a capture — order.paid is the settle signal.
+        expect(action.type).toBe("unhandled");
+    });
+
+    it("re-activates a subscription on subscription.uncanceled (regression)", async () => {
+        expect.assertions(2);
+
+        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+
+        const payload = JSON.stringify({
+            data: { cancel_at_period_end: false, id: "sub_1", metadata: { referenceId: "user_1" }, status: "active" },
+            type: "subscription.uncanceled",
+        });
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const action = await adapter.parseWebhook({ headers: headersFor("msg_uncancel", timestamp, sign("msg_uncancel", timestamp, payload)), payload });
+
+        // Un-canceling via the Polar portal must re-emit an active subscription, not fall to `unhandled`.
+        expect(action.type).toBe("subscription.active");
+        expect(action.cancelAtPeriodEnd).toBe(false);
     });
 
     it("ingests usage as an event keyed on the external customer id", async () => {

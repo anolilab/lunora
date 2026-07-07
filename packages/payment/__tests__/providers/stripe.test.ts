@@ -1,19 +1,25 @@
+import type { Stripe } from "stripe";
 import { describe, expect, it } from "vitest";
 
-import type { StripeClientLike } from "../../src/providers/stripe";
 import { createStripeAdapter } from "../../src/providers/stripe";
-import { hmacSha256Hex } from "../../src/webhook";
 
 interface RecordedCall {
     args: unknown[];
     name: string;
 }
 
-const makeClient = (calls: RecordedCall[]): StripeClientLike => {
-    return {
+/** A non-empty `stripe-signature` header — the fake `constructEventAsync` only checks for presence. */
+const webhookHeaders = { get: (name: string): null | string => (name === "stripe-signature" ? "t=1,v1=sig" : null) };
+
+/**
+ * A structural fake cast to the real `Stripe` type. `webhooks.constructEventAsync` stands in for the
+ * SDK's signature verification: it throws when the signature header is empty, else parses the body.
+ */
+const makeClient = (calls: RecordedCall[]): Stripe =>
+    ({
         billing: {
             meterEvents: {
-                create: async (parameters, options) => {
+                create: async (parameters: Record<string, unknown>, options?: { idempotencyKey?: string }) => {
                     calls.push({ args: [parameters, options], name: "meterEvent" });
 
                     return { identifier: "mev_1" };
@@ -22,7 +28,7 @@ const makeClient = (calls: RecordedCall[]): StripeClientLike => {
         },
         billingPortal: {
             sessions: {
-                create: async (parameters) => {
+                create: async (parameters: Record<string, unknown>) => {
                     calls.push({ args: [parameters], name: "portal" });
 
                     return { url: "https://portal.test" };
@@ -31,7 +37,7 @@ const makeClient = (calls: RecordedCall[]): StripeClientLike => {
         },
         checkout: {
             sessions: {
-                create: async (parameters, options) => {
+                create: async (parameters: Record<string, unknown>, options?: { idempotencyKey?: string }) => {
                     calls.push({ args: [parameters, options], name: "checkout" });
 
                     return { id: "cs_1", url: "https://checkout.test" };
@@ -39,47 +45,55 @@ const makeClient = (calls: RecordedCall[]): StripeClientLike => {
             },
         },
         customers: {
-            create: async (parameters, options) => {
+            create: async (parameters: Record<string, unknown>, options?: { idempotencyKey?: string }) => {
                 calls.push({ args: [parameters, options], name: "customer" });
 
                 return { email: "a@b.test", id: "cus_1" };
             },
         },
         paymentIntents: {
-            cancel: async (id) => {
+            cancel: async (id: string) => {
                 return { amount: 1000, currency: "usd", id, status: "canceled" };
             },
-            capture: async (id, parameters, options) => {
+            capture: async (id: string, parameters?: unknown, options?: unknown) => {
                 calls.push({ args: [id, parameters, options], name: "capture" });
 
                 return { amount: 1000, amount_received: 1000, currency: "usd", id, status: "succeeded" };
             },
-            retrieve: async (id) => {
+            retrieve: async (id: string) => {
                 return { amount: 1000, amount_received: 1000, currency: "usd", id, status: "succeeded" };
             },
         },
         refunds: {
-            create: async (parameters, options) => {
+            create: async (parameters: Record<string, unknown>, options?: { idempotencyKey?: string }) => {
                 calls.push({ args: [parameters, options], name: "refund" });
 
                 return { id: "re_1" };
             },
         },
         subscriptions: {
-            cancel: async (id) => {
+            cancel: async (id: string) => {
                 return { id, metadata: { referenceId: "user_1" }, status: "canceled" };
             },
-            retrieve: async (id) => {
-                return { id, items: { data: [{ price: { id: "price_1" }, quantity: 1 }] }, metadata: { referenceId: "user_1" }, status: "active" };
+            retrieve: async (id: string) => {
+                return { id, items: { data: [{ id: "si_1", price: { id: "price_1" }, quantity: 1 }] }, metadata: { referenceId: "user_1" }, status: "active" };
             },
-            update: async (id, parameters, options) => {
+            update: async (id: string, parameters?: unknown, options?: unknown) => {
                 calls.push({ args: [id, parameters, options], name: "sub.update" });
 
                 return { id, items: { data: [{ price: { id: "price_1" }, quantity: 2 }] }, metadata: { referenceId: "user_1" }, status: "active" };
             },
         },
-    };
-};
+        webhooks: {
+            constructEventAsync: async (payload: string, signature: string) => {
+                if (!signature) {
+                    throw new Error("No signatures found matching the expected signature for payload");
+                }
+
+                return JSON.parse(payload) as unknown;
+            },
+        },
+    }) as unknown as Stripe;
 
 describe("stripe adapter", () => {
     it("forwards an idempotency key and reference metadata on checkout", async () => {
@@ -147,13 +161,7 @@ describe("stripe adapter", () => {
             id: "evt_1",
             type: "payment_intent.succeeded",
         };
-        const payload = JSON.stringify(event);
-        const timestamp = Math.floor(Date.now() / 1000);
-        const signature = await hmacSha256Hex("whsec", `${String(timestamp)}.${payload}`);
-        const signatureHeader = `t=${String(timestamp)},v1=${signature}`;
-        const headers = { get: (name: string) => (name === "stripe-signature" ? signatureHeader : null) };
-
-        const action = await adapter.parseWebhook({ headers, payload });
+        const action = await adapter.parseWebhook({ headers: webhookHeaders, payload: JSON.stringify(event) });
 
         expect(action.type).toBe("payment.captured");
         expect(action.sessionId).toBe("pi_1");
@@ -171,13 +179,7 @@ describe("stripe adapter", () => {
             id: "evt_refund",
             type: "charge.refunded",
         };
-        const payload = JSON.stringify(event);
-        const timestamp = Math.floor(Date.now() / 1000);
-        const signature = await hmacSha256Hex("whsec", `${String(timestamp)}.${payload}`);
-        const signatureHeader = `t=${String(timestamp)},v1=${signature}`;
-        const headers = { get: (name: string) => (name === "stripe-signature" ? signatureHeader : null) };
-
-        const action = await adapter.parseWebhook({ headers, payload });
+        const action = await adapter.parseWebhook({ headers: webhookHeaders, payload: JSON.stringify(event) });
 
         expect(action.type).toBe("payment.refunded");
         expect(action.amountKind).toBe("absolute");
@@ -203,17 +205,38 @@ describe("stripe adapter", () => {
             id: "evt_incomplete",
             type: "customer.subscription.created",
         };
-        const payload = JSON.stringify(event);
-        const timestamp = Math.floor(Date.now() / 1000);
-        const signature = await hmacSha256Hex("whsec", `${String(timestamp)}.${payload}`);
-        const signatureHeader = `t=${String(timestamp)},v1=${signature}`;
-        const headers = { get: (name: string) => (name === "stripe-signature" ? signatureHeader : null) };
-
-        const action = await adapter.parseWebhook({ headers, payload });
+        const action = await adapter.parseWebhook({ headers: webhookHeaders, payload: JSON.stringify(event) });
 
         // `incomplete` = first payment not completed → must NOT be the entitling
         // `subscription.active` (ACTIVE_STATES) — it is non-entitling `past_due`.
         expect(action.type).toBe("subscription.past_due");
+    });
+
+    it("reads the billing period from the subscription item, not the top level (Stripe basil) (regression)", async () => {
+        expect.assertions(2);
+
+        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+
+        const start = 1_750_000_000;
+        const end = 1_752_592_000;
+        const event = {
+            data: {
+                object: {
+                    customer: "cus_1",
+                    id: "sub_1",
+                    items: { data: [{ current_period_end: end, current_period_start: start, price: { id: "price_1" }, quantity: 1 }] },
+                    metadata: { referenceId: "user_1" },
+                    status: "active",
+                },
+            },
+            id: "evt_period",
+            type: "customer.subscription.updated",
+        };
+        const action = await adapter.parseWebhook({ headers: webhookHeaders, payload: JSON.stringify(event) });
+
+        // API 2025-03-31.basil moved current_period_* onto the item — they must still surface (in ms).
+        expect(action.currentPeriodStart).toBe(start * 1000);
+        expect(action.currentPeriodEnd).toBe(end * 1000);
     });
 
     it("does not mark an `unpaid` subscription checkout active (regression)", async () => {
@@ -226,13 +249,7 @@ describe("stripe adapter", () => {
             id: "evt_cs_unpaid",
             type: "checkout.session.completed",
         };
-        const payload = JSON.stringify(event);
-        const timestamp = Math.floor(Date.now() / 1000);
-        const signature = await hmacSha256Hex("whsec", `${String(timestamp)}.${payload}`);
-        const signatureHeader = `t=${String(timestamp)},v1=${signature}`;
-        const headers = { get: (name: string) => (name === "stripe-signature" ? signatureHeader : null) };
-
-        const action = await adapter.parseWebhook({ headers, payload });
+        const action = await adapter.parseWebhook({ headers: webhookHeaders, payload: JSON.stringify(event) });
 
         // An unpaid subscription checkout must not assert `subscription.active`.
         expect(action.type).toBe("subscription.updated");

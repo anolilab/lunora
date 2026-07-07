@@ -1,0 +1,24 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    // DEV-ONLY sidecar config (not used by `lunora deploy`).
+    //
+    // SvelteKit is a class-B framework: its own dev server (`vite`) runs SSR in
+    // Node and can't host the `ShardDO` Durable Object. So `lunora dev` runs a
+    // `wrangler dev --config wrangler.dev.jsonc` sidecar in `workerd` that owns
+    // the real `ShardDO` and serves `/_lunora/*`, while `vite` (the front door,
+    // :5173) proxies `/_lunora/*` to it — see `vite.config.ts`'s `server.proxy`.
+    //
+    // `main` is the Lunora-only `lunora/server.ts` (`.build()`), NOT the composed
+    // `src/worker.ts` (which imports SvelteKit's built adapter output that only
+    // exists after `vite build`). Deploy still uses the top-level `wrangler.jsonc`.
+    "name": "{{name}}-lunora-dev",
+    "main": "lunora/server.ts",
+    "compatibility_date": "2026-06-10",
+    "compatibility_flags": ["nodejs_compat"],
+    "dev": { "port": 8787 },
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
+}

@@ -14,12 +14,13 @@ export default defineNuxtConfig({
     // server route, so the whole app — Nuxt SSR + Lunora — ships as ONE
     // Cloudflare Worker and one deploy. The `@lunora/nuxt` module registers the
     // `/_lunora/**` handler and aliases the `#lunora/app` virtual to
-    // `lunora/server`; the `ShardDO` Durable Object class reaches the worker
-    // entrypoint via the project-root `exports.cloudflare.ts`.
+    // `lunora/server`; the `ShardDO` Durable Object class reaches the deployed
+    // worker via the root `worker.ts` wrapper (`wrangler.jsonc`'s `main`).
     modules: ["@lunora/nuxt"],
 
-    // Nitro emits a Cloudflare module worker (`.output/server/index.mjs`); the
-    // `cloudflare_module` preset appends `exports.cloudflare.ts`'s exports onto it.
+    // Nitro emits a Cloudflare module worker at `.output/server/index.mjs`
+    // (exporting only the SSR handler). The root `worker.ts` wraps it to also
+    // export `ShardDO`, and `wrangler.jsonc` deploys that wrapper.
     nitro: {
         preset: "cloudflare_module",
     },

@@ -1,6 +1,6 @@
 {
     "name": "@lunora/payment",
-    "version": "1.0.0-alpha.17",
+    "version": "1.0.0-alpha.18",
     "description": "Provider-agnostic payments for Lunora: Stripe-first adapter, webhook sync, and subscription/payment state machine",
     "keywords": [
         "billing",
@@ -41,6 +41,30 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./stripe": {
+            "types": "./dist/providers/stripe.d.ts",
+            "import": "./dist/providers/stripe.mjs"
+        },
+        "./polar": {
+            "types": "./dist/providers/polar.d.ts",
+            "import": "./dist/providers/polar.mjs"
+        },
+        "./autumn": {
+            "types": "./dist/providers/autumn.d.ts",
+            "import": "./dist/providers/autumn.mjs"
+        },
+        "./autumn-features": {
+            "types": "./dist/providers/autumn-features.d.ts",
+            "import": "./dist/providers/autumn-features.mjs"
+        },
+        "./dodopayments": {
+            "types": "./dist/providers/dodopayments.d.ts",
+            "import": "./dist/providers/dodopayments.mjs"
+        },
+        "./creem": {
+            "types": "./dist/providers/creem.d.ts",
+            "import": "./dist/providers/creem.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {
@@ -51,8 +75,8 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint .",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check .",
-        "lint:prettier:fix": "prettier --write .",
+        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
+        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
@@ -68,18 +92,39 @@
     },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",
+        "@polar-sh/sdk": "0.48.1",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
+        "autumn-js": "1.2.34",
+        "creem": "1.5.3",
+        "dodopayments": "2.41.0",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
+        "stripe": "22.3.0",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
     },
     "peerDependencies": {
-        "stripe": "^19.0.0 || ^20.0.0 || ^21.0.0 || ^22.0.0"
+        "@polar-sh/sdk": "^0.48.0",
+        "autumn-js": "^1.2.0",
+        "creem": "^1.5.0",
+        "dodopayments": "^2.41.0",
+        "stripe": "^22.0.0"
     },
     "peerDependenciesMeta": {
+        "@polar-sh/sdk": {
+            "optional": true
+        },
+        "autumn-js": {
+            "optional": true
+        },
+        "creem": {
+            "optional": true
+        },
+        "dodopayments": {
+            "optional": true
+        },
         "stripe": {
             "optional": true
         }

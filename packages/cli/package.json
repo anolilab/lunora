@@ -1,6 +1,6 @@
 {
     "name": "@lunora/cli",
-    "version": "1.0.0-alpha.70",
+    "version": "1.0.0-alpha.72",
     "description": "The Lunora CLI: init, dev, deploy, codegen, run, reset, and migrate commands",
     "keywords": [
         "agent-skills",
@@ -55,8 +55,8 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint .",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check .",
-        "lint:prettier:fix": "prettier --write .",
+        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
+        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
         "lint:types": "tsc --noEmit",
         "test:bench": "vitest bench --run --config vitest.bench.config.ts",
         "test": "vitest run",
@@ -67,8 +67,8 @@
     },
     "dependencies": {
         "@bomb.sh/tab": "0.0.16",
-        "@lunora/codegen": "1.0.0-alpha.34",
-        "@lunora/config": "1.0.0-alpha.56",
+        "@lunora/codegen": "1.0.0-alpha.35",
+        "@lunora/config": "1.0.0-alpha.57",
         "@lunora/container": "1.0.0-alpha.7",
         "@lunora/d1": "1.0.0-alpha.24",
         "@lunora/errors": "1.0.0-alpha.2",
