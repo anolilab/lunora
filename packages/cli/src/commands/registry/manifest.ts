@@ -28,6 +28,13 @@ const VALID_ENV_NAME = /^[A-Za-z_]\w*$/u;
  */
 const VALID_ITEM_NAME = /^[A-Za-z0-9][\w-]*$/u;
 
+/**
+ * A valid registry item `entrypointReexports[].module` path. Restricting it to
+ * relative module paths consisting of safe alphanumeric, `_`, `.`, `-` segments
+ * separated by `/` stops path traversals and breakout character injections.
+ */
+const VALID_MODULE_PATH = /^[\w.-]+(?:\/[\w.-]+)*$/u;
+
 /** Validate + narrow a parsed JSON value into a {@link RegistryManifest}. */
 const parseManifest = (raw: unknown, itemName: string): RegistryManifest => {
     if (typeof raw !== "object" || raw === null) {
@@ -116,9 +123,19 @@ const parseManifest = (raw: unknown, itemName: string): RegistryManifest => {
                       typeof value === "object" && value !== null && typeof (value as { module?: unknown }).module === "string",
               )
               .map((entry) => {
+                  if (entry.module.includes("..") || entry.module.startsWith("/") || !VALID_MODULE_PATH.test(entry.module)) {
+                      throw new LunoraError(
+                          "INTERNAL",
+                          `registry.json "${itemName}": entrypointReexports[].module "${entry.module}" must be a safe relative module path without path traversal or unsafe characters`,
+                      );
+                  }
+
                   const reexport: EntrypointReexport = { module: entry.module };
 
                   if (typeof entry.comment === "string") {
+                      if (NEWLINE_PRESENT.test(entry.comment)) {
+                          throw new LunoraError("INTERNAL", `registry.json "${itemName}": entrypointReexports[].comment must not contain a newline`);
+                      }
                       reexport.comment = entry.comment;
                   }
 

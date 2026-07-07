@@ -299,9 +299,10 @@ const buildReexportLines = (entrypointReexports: ReadonlyArray<EntrypointReexpor
 
     for (const reexport of entrypointReexports) {
         const specifier = computeRelativeSpecifier(entryPath, projectRoot, reexport.module);
+        const escapedSpecifier = specifier.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
         // Quote-bounded exact match so a longer path (e.g. `../../lunora/foo-bar`)
         // is not mistaken for an existing `../../lunora/foo` re-export.
-        const existingRe = new RegExp(String.raw`export\s+\*\s+from\s+["']${specifier}\.js["']`, "u");
+        const existingRe = new RegExp(String.raw`export\s+\*\s+from\s+["']${escapedSpecifier}\.js["']`, "u");
 
         if (existingRe.test(source)) {
             continue;
@@ -357,7 +358,7 @@ const applyEntrypointReexports = (entrypointReexports: ReadonlyArray<EntrypointR
     const separator = entry.source.endsWith("\n") ? "" : "\n";
 
     writeFileSync(entry.entryPath, `${entry.source}${separator}${linesToAppend.join("\n")}\n`, "utf8");
-    logger.success(`wrote ${String(linesToAppend.length)} entrypoint re-export(s) to ${entry.main}`);
+    logger.success(`wrote ${String(linesToAppend.length)} entrypoint re-export(s) to ${relative(projectRoot, entry.entryPath)}`);
 
     return linesToAppend.length;
 };

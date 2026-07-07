@@ -263,7 +263,7 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
 
             const whereArgs = first as { limit?: number; where: Record<string, unknown> };
 
-            return writer.deleteWhere(tableName, { limit: whereArgs.limit, where: whereArgs.where });
+            return writer.deleteWhere(tableName, whereArgs.where, { limit: whereArgs.limit });
         },
         // `exists` reuses `findFirst` (RLS-filtered, indexed when a `.withIndex`-able
         // `where` is supplied) and only asks whether a row came back — no count scan.
@@ -310,7 +310,7 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
 
             const whereArgs = first as { limit?: number; values: Record<string, unknown>; where: Record<string, unknown> };
 
-            return writer.patchWhere(tableName, { limit: whereArgs.limit, patch: whereArgs.values, where: whereArgs.where });
+            return writer.patchWhere(tableName, { patch: whereArgs.values, where: whereArgs.where }, { limit: whereArgs.limit });
         },
         rank: (indexName, options) => writer.rank(tableName, indexName, options),
         rankPage: (indexName, options) => writer.rankPage(tableName, indexName, options),
