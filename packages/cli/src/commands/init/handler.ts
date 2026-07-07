@@ -336,6 +336,7 @@ const stampLunoraDeps = (packageJsonText: string, distTag: string, versions: Rea
 const PNPM_BUILT_DEPENDENCIES: ReadonlyArray<string> = [
     "@parcel/watcher",
     "esbuild",
+    "lmdb",
     "msgpackr-extract",
     "rs-module-lexer",
     "sharp",

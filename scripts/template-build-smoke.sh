@@ -142,6 +142,7 @@ $OVERRIDES_YAML
 allowBuilds:
   "@parcel/watcher": true
   esbuild: true
+  lmdb: true
   msgpackr-extract: true
   rs-module-lexer: true
   sharp: true
