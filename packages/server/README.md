@@ -107,10 +107,11 @@ Lunora supports Cloudflare Workers Cache for HTTP actions (`httpRoute`). RPC que
 
 ```jsonc
 {
-    "compatibility_date": "2026-05-01",
     "cache": { "enabled": true },
 }
 ```
+
+The dev server and CLI automatically bump `compatibility_date` to the minimum required when cache is enabled — you do not need to set it manually.
 
 **Set cache headers declaratively** on an `httpRoute`:
 
