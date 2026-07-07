@@ -56,7 +56,8 @@
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
-        "@lunora/client": "1.0.0-alpha.19"
+        "@lunora/client": "1.0.0-alpha.19",
+        "@lunora/ratelimit": "1.0.0-alpha.7"
     },
     "devDependencies": {
         "@angular/core": "^22.0.5",
