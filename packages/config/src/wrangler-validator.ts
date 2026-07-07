@@ -89,8 +89,10 @@ interface WranglerConfig {
     assets?: { binding?: string; directory?: string; html_handling?: string; not_found_handling?: string };
     // Browser Rendering binding (`env.BROWSER`). Self-describing { binding }.
     browser?: { binding?: string };
-    // Workers Cache toggle (`"cache": { "enabled": true }`). See `validateCache`.
-    cache?: { enabled?: boolean };
+    // Workers Cache toggle (`"cache": { "enabled": true }`). Parsed from
+    // untrusted JSONC, so it may be `null` or malformed; `validateCache` guards
+    // against that at runtime.
+    cache?: { enabled?: boolean } | null;
     compatibility_date?: string;
     compatibility_flags?: ReadonlyArray<string>;
     // Parsed from untrusted JSONC, so individual entries may be `null` or
@@ -104,8 +106,9 @@ interface WranglerConfig {
     durable_objects?: { bindings?: ReadonlyArray<WranglerDurableObjectBinding> };
     // Per-entrypoint cache control for named `WorkerEntrypoint`s. Lunora apps
     // typically use a single `export default` entrypoint, so this is passthrough.
-    // See `validateExports`.
-    exports?: Record<string, { cache?: { enabled?: boolean }; type?: string }>;
+    // Parsed from untrusted JSONC, so the map or any entry may be `null`;
+    // `validateExports` guards against that at runtime.
+    exports?: Record<string, { cache?: { enabled?: boolean } | null; type?: string } | null> | null;
     // Cloudflare Flagship feature-flag bindings (`@lunora/flags` binding mode).
     // The `app_id` is a remote Flagship app Lunora can't mint — warn, don't fail.
     // See `HINT_BINDING_RULES`.
@@ -816,7 +819,7 @@ const validateCache = (wrangler: WranglerConfig, errors: string[]): void => {
         return;
     }
 
-    if (typeof cache !== "object" || Array.isArray(cache)) {
+    if (typeof cache !== "object" || cache === null || Array.isArray(cache)) {
         errors.push('cache must be an object (e.g. { "enabled": true })');
 
         return;
@@ -840,14 +843,14 @@ const validateExports = (wrangler: WranglerConfig, errors: string[]): void => {
         return;
     }
 
-    if (typeof exports !== "object" || Array.isArray(exports)) {
+    if (typeof exports !== "object" || exports === null || Array.isArray(exports)) {
         errors.push("exports must be an object keyed by entrypoint name");
 
         return;
     }
 
     for (const [name, entry] of Object.entries(exports)) {
-        if (typeof entry !== "object") {
+        if (typeof entry !== "object" || entry === null) {
             errors.push(`exports["${name}"] must be an object`);
 
             continue;
@@ -858,7 +861,7 @@ const validateExports = (wrangler: WranglerConfig, errors: string[]): void => {
         }
 
         if (entry.cache !== undefined) {
-            if (typeof entry.cache !== "object" || Array.isArray(entry.cache)) {
+            if (typeof entry.cache !== "object" || entry.cache === null || Array.isArray(entry.cache)) {
                 errors.push(`exports["${name}"].cache must be an object`);
             } else if (entry.cache.enabled !== undefined && typeof entry.cache.enabled !== "boolean") {
                 errors.push(`exports["${name}"].cache.enabled must be a boolean`);
@@ -1023,13 +1026,16 @@ const validateWranglerConfig = (wrangler: WranglerConfig | undefined, schema?: S
 
     // Workers Cache requires compatibility_date >= 2026-05-01. Only enforce
     // this when the cache block is actually enabled, so non-cache apps aren't
-    // forced to bump.
+    // forced to bump. Malformed dates already produced a format error above, so
+    // skip the date comparison unless the shape is valid.
     const WORKERS_CACHE_MIN_DATE = "2026-05-01";
-    const cacheEnabled = typeof wrangler.cache === "object" && wrangler.cache.enabled === true;
+    const cacheEnabled = typeof wrangler.cache === "object" && wrangler.cache !== null && wrangler.cache.enabled === true;
     const exportsWithCache =
-        typeof wrangler.exports === "object" && Object.values(wrangler.exports).some((entry) => typeof entry === "object" && entry.cache?.enabled === true);
+        typeof wrangler.exports === "object" &&
+        wrangler.exports !== null &&
+        Object.values(wrangler.exports).some((entry) => typeof entry === "object" && entry !== null && entry.cache?.enabled === true);
 
-    if ((cacheEnabled || exportsWithCache) && compatibilityDate < WORKERS_CACHE_MIN_DATE) {
+    if ((cacheEnabled || exportsWithCache) && ISO_DATE_PATTERN.test(compatibilityDate) && compatibilityDate < WORKERS_CACHE_MIN_DATE) {
         errors.push(`cache.enabled requires compatibility_date >= "${WORKERS_CACHE_MIN_DATE}" (got "${compatibilityDate || "<missing>"}")`);
     }
 

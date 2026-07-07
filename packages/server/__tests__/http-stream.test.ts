@@ -139,4 +139,24 @@ describe("httpRoute stream() terminal", () => {
 
         expect(response.status).toBe(400);
     });
+
+    it("keeps SSE responses uncacheable even when cache headers are declared on the route", async () => {
+        expect.assertions(4);
+
+        const route = httpRoute
+            .get("/api/ticks")
+            .cacheControl("public, max-age=300")
+            .cacheTag("ticks")
+            .vary("Accept-Encoding")
+            .stream(async function* ticksGen() {
+                yield { tick: 1 };
+            });
+
+        const response = await dispatch(route, "GET", "/api/ticks", new Request("https://x/api/ticks"));
+
+        expect(response.status).toBe(200);
+        expect(response.headers.get("cache-control")).toBe("no-cache, no-transform");
+        expect(response.headers.get("cache-tag")).toBeNull();
+        expect(response.headers.get("vary")).toBeNull();
+    });
 });

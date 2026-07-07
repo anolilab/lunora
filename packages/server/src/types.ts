@@ -1283,8 +1283,9 @@ interface ActionCtx {
      * Programmatic Workers Cache purge; see {@link CachePurge}.
      * **Action-only** — actions run in the Worker, which has a `cache` binding.
      * Queries and mutations run inside the Durable Object and do not expose this.
+     * Optional at runtime because Workers Cache is only present when enabled.
      */
-    readonly cache: CachePurge;
+    readonly cache?: CachePurge;
 
     readonly db: DatabaseWriter;
 

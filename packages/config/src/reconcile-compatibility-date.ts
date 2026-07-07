@@ -39,9 +39,9 @@ export const reconcileWranglerCompatibilityDate = (projectRoot: string): Reconci
     }
 
     const { parsed, text } = readWranglerJsonc<{
-        cache?: { enabled?: boolean };
+        cache?: { enabled?: boolean } | null;
         compatibility_date?: string;
-        exports?: Record<string, { cache?: { enabled?: boolean } }>;
+        exports?: Record<string, { cache?: { enabled?: boolean } | null } | null> | null;
     }>(wranglerPath);
 
     if (parsed === undefined) {
@@ -51,9 +51,11 @@ export const reconcileWranglerCompatibilityDate = (projectRoot: string): Reconci
     const currentDate = parsed.compatibility_date ?? "";
 
     // Determine if cache is enabled anywhere (top-level or in exports).
-    const cacheEnabledTopLevel = typeof parsed.cache === "object" && parsed.cache.enabled === true;
+    const cacheEnabledTopLevel = typeof parsed.cache === "object" && parsed.cache !== null && parsed.cache.enabled === true;
     const cacheEnabledInExports =
-        typeof parsed.exports === "object" && Object.values(parsed.exports).some((entry) => typeof entry === "object" && entry.cache?.enabled === true);
+        typeof parsed.exports === "object" &&
+        parsed.exports !== null &&
+        Object.values(parsed.exports).some((entry) => typeof entry === "object" && entry !== null && entry.cache?.enabled === true);
 
     const needsCacheDate = cacheEnabledTopLevel || cacheEnabledInExports;
 

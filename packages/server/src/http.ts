@@ -526,24 +526,16 @@ const buildStreamHandler =
         });
 
         const headers: Record<string, string> = {
+            // SSE responses must stay uncacheable so proxies don't buffer or
+            // coalesce live frames. `cacheControl()` is intentionally ignored
+            // for stream() routes; `cacheTag`/`vary` are also omitted because
+            // they only make sense alongside a cacheable response.
             "cache-control": "no-cache, no-transform",
             "content-type": "text/event-stream; charset=utf-8",
             // Hint to proxies (including Cloudflare's own buffering layer)
             // that this response must not be coalesced.
             "x-accel-buffering": "no",
         };
-
-        if (state.cacheControl) {
-            headers["cache-control"] = state.cacheControl;
-        }
-
-        if (state.cacheTag) {
-            headers["cache-tag"] = state.cacheTag;
-        }
-
-        if (state.vary) {
-            headers.vary = state.vary;
-        }
 
         return new Response(stream, { headers });
     };

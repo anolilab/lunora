@@ -134,6 +134,10 @@ export const getProduct = httpRoute
 import { action } from "./_generated/server";
 
 export const refreshProducts = action.action(async ({ ctx }) => {
+    if (!ctx.cache) {
+        throw new Error("Workers Cache is not enabled in wrangler.jsonc");
+    }
+
     await ctx.cache.purge({ tags: ["products"] });
     return { ok: true };
 });
