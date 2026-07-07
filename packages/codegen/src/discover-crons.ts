@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import { compileCronSchedule, CRON_SCHEDULE_KINDS, isValidCronExpression } from "@lunora/scheduler";
 import type { CallExpression, Identifier, ObjectLiteralExpression, Project, PropertyAccessExpression, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
@@ -345,11 +346,7 @@ const assertUniqueNames = (crons: ReadonlyArray<CronJobIR>): void => {
 
     for (const cron of crons) {
         if (seen.has(cron.name)) {
-            throw Object.assign(new Error(`Duplicate cron job name "${cron.name}": cron names must be unique across the project.`), {
-                code: "DUPLICATE_CRON_NAME",
-                name: "LunoraError",
-                status: 500,
-            });
+            throw new LunoraError("DUPLICATE_CRON_NAME", `Duplicate cron job name "${cron.name}": cron names must be unique across the project.`, { status: 500 });
         }
 
         seen.add(cron.name);

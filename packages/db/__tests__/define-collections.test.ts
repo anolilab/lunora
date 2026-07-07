@@ -1,5 +1,6 @@
 /* eslint-disable no-underscore-dangle -- `_id`/`_creationTime` are Lunora document fields the fixtures mirror */
 import type { OfflineExecutor } from "@tanstack/offline-transactions";
+import { LunoraError } from "@lunora/errors";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollections } from "../src";
@@ -230,7 +231,7 @@ describe(defineCollections, () => {
     it("reports a permanently-rejected write on onWriteRejected (fire-and-forget safe)", async () => {
         // The server rejects the write with a coded application error — a
         // permanent verdict the outbox surfaces as a NonRetriableError.
-        const coded = Object.assign(new Error("duplicate name"), { code: "CONFLICT" });
+        const coded = new LunoraError("CONFLICT", "duplicate name");
         const { client } = makeClient(async () => {
             throw coded;
         });

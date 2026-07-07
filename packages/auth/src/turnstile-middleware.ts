@@ -92,11 +92,7 @@ export const verifyTurnstileMiddleware =
         const token = options.token(ctx);
 
         if (token === undefined || token === "") {
-            throw Object.assign(new Error(options.message ?? "turnstile token missing"), {
-                code: "FORBIDDEN",
-                name: "LunoraError",
-                status: 403,
-            });
+            throw new LunoraError("FORBIDDEN", options.message ?? "turnstile token missing");
         }
 
         let result;
@@ -120,21 +116,11 @@ export const verifyTurnstileMiddleware =
                 return next();
             }
 
-            throw Object.assign(new Error(options.message ?? "turnstile verification unavailable"), {
-                cause: error,
-                code: "FORBIDDEN",
-                name: "LunoraError",
-                status: 403,
-            });
+            throw new LunoraError("FORBIDDEN", options.message ?? "turnstile verification unavailable", { cause: error });
         }
 
         if (!result.success || (options.validate !== undefined && !options.validate(result))) {
-            throw Object.assign(new Error(options.message ?? "turnstile verification failed"), {
-                code: "FORBIDDEN",
-                errorCodes: result.errorCodes,
-                name: "LunoraError",
-                status: 403,
-            });
+            throw new LunoraError("FORBIDDEN", options.message ?? "turnstile verification failed", { data: result.errorCodes ? { errorCodes: result.errorCodes } : undefined });
         }
 
         return next();

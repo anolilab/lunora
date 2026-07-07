@@ -1,4 +1,5 @@
 /* eslint-disable no-underscore-dangle -- `_id` is the Lunora document-id field; test fixtures mirror it verbatim */
+import { LunoraError } from "@lunora/errors";
 import { NonRetriableError } from "@tanstack/offline-transactions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -250,7 +251,7 @@ describe(runOutboxMutation, () => {
     });
 
     it("wraps a coded server rejection in NonRetriableError so the optimistic insert rolls back", async () => {
-        const rejected = Object.assign(new Error("duplicate name"), { code: "CONFLICT" });
+        const rejected = new LunoraError("CONFLICT", "duplicate name");
 
         await expect(runOutboxMutation(() => Promise.reject(rejected))).rejects.toBeInstanceOf(NonRetriableError);
     });

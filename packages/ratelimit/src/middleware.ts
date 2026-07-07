@@ -73,12 +73,7 @@ const rateLimit =
                 return next();
             }
 
-            throw Object.assign(new Error(`rate limiter unavailable for "${name}"`), {
-                cause: error,
-                code: "SERVICE_UNAVAILABLE",
-                name: "LunoraError",
-                status: 503,
-            });
+            throw new LunoraError("SERVICE_UNAVAILABLE", `rate limiter unavailable for "${name}"`, { cause: error, status: 503 });
         }
 
         if (!status.ok) {
@@ -86,12 +81,7 @@ const rateLimit =
             const mapped = STATUS_BY_REASON[reason];
             const retryAfter = Number.isFinite(status.retryAfter) ? Math.ceil(status.retryAfter) : undefined;
 
-            throw Object.assign(new Error(options.message ?? defaultMessage(name, reason, retryAfter)), {
-                code: mapped.code,
-                name: "LunoraError",
-                retryAfter,
-                status: mapped.status,
-            });
+            throw new LunoraError(mapped.code, options.message ?? defaultMessage(name, reason, retryAfter), { status: mapped.status, data: retryAfter !== undefined ? { retryAfter } : undefined });
         }
 
         return next();

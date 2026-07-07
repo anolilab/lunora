@@ -363,7 +363,7 @@ const buildStreamError = (message: ServerErrorMessage): Error => {
     const nestedMessage = typeof errorEnvelope?.message === "string" ? errorEnvelope.message : undefined;
     const messageText = (typeof message.message === "string" ? message.message : undefined) ?? nestedMessage ?? "stream error";
 
-    return Object.assign(new Error(messageText), code === undefined ? undefined : { code });
+    return code !== undefined ? new LunoraError(code, messageText) : new Error(messageText);
 };
 
 /**
@@ -2725,7 +2725,7 @@ class LunoraClient {
 
                 if (droppedStream) {
                     droppedStream.handle.fail(
-                        Object.assign(new Error("stream-start frame evicted while socket was unreachable"), { code: "STREAM_QUEUE_OVERFLOW" }),
+                        new LunoraError("STREAM_QUEUE_OVERFLOW", "stream-start frame evicted while socket was unreachable"),
                     );
                     this.streams.delete(droppedId as string);
                 }
@@ -2748,7 +2748,7 @@ class LunoraClient {
         // termination instead of an iterator that hangs forever after the
         // underlying socket goes away.
         for (const stream of this.streams.values()) {
-            stream.handle.fail(Object.assign(new Error("LunoraClient closed"), { code: "CLIENT_CLOSED" }));
+            stream.handle.fail(new LunoraError("CLIENT_CLOSED", "LunoraClient closed"));
         }
 
         this.streams.clear();

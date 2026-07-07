@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AggregateIndexDefinitionLike } from "../src/aggregates";
@@ -1334,7 +1335,7 @@ class MigrationShard extends ShardDO {
 
         if (!migration) {
             return Promise.reject(
-                Object.assign(new Error(`data migration "${args.id}" is not registered`), { code: "MIGRATION_NOT_FOUND", name: "LunoraError", status: 404 }),
+                new LunoraError("MIGRATION_NOT_FOUND", `data migration "${args.id}" is not registered`, { status: 404 }),
             );
         }
 

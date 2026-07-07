@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
 import type { AuditEntry } from "./audit-log";
 import type { SqlExec } from "./ctx-db";
@@ -993,7 +994,7 @@ const readTablePage = (sql: SqlExec, options: ReadTablePageOptions): TablePage =
     const { table } = options;
 
     if (isInternalTable(table) || !tableExists(sql, table)) {
-        throw Object.assign(new Error(`unknown table: ${table}`), { code: "UNKNOWN_TABLE", name: "LunoraError", status: 404 });
+        throw new LunoraError("UNKNOWN_TABLE", `unknown table: ${table}`, { status: 404 });
     }
 
     const limit = clamp(Math.trunc(options.limit ?? DEFAULT_PAGE_SIZE), 1, MAX_PAGE_SIZE);
@@ -1071,7 +1072,7 @@ const selectMatchingIds = (sql: SqlExec, options: SelectMatchingIdsOptions): { h
     const { table } = options;
 
     if (isInternalTable(table) || !tableExists(sql, table)) {
-        throw Object.assign(new Error(`unknown table: ${table}`), { code: "UNKNOWN_TABLE", name: "LunoraError", status: 404 });
+        throw new LunoraError("UNKNOWN_TABLE", `unknown table: ${table}`, { status: 404 });
     }
 
     const limit = clamp(Math.trunc(options.limit ?? MAX_PAGE_SIZE), 1, MAX_PAGE_SIZE);
@@ -1148,7 +1149,7 @@ const facetColumn = (sql: SqlExec, options: FacetColumnOptions): FacetColumnResu
     const { column, table } = options;
 
     if (isInternalTable(table) || !tableExists(sql, table)) {
-        throw Object.assign(new Error(`unknown table: ${table}`), { code: "UNKNOWN_TABLE", name: "LunoraError", status: 404 });
+        throw new LunoraError("UNKNOWN_TABLE", `unknown table: ${table}`, { status: 404 });
     }
 
     const quoted = quoteIdentifier(table);
@@ -1158,7 +1159,7 @@ const facetColumn = (sql: SqlExec, options: FacetColumnOptions): FacetColumnResu
         .map((info) => info.name);
 
     if (!knownDisplayColumns(sql, quoted, physicalColumns).has(column)) {
-        throw Object.assign(new Error(`unknown column: ${column}`), { code: "UNKNOWN_COLUMN", name: "LunoraError", status: 404 });
+        throw new LunoraError("UNKNOWN_COLUMN", `unknown column: ${column}`, { status: 404 });
     }
 
     const resolved = resolveColumnExpression(column, physicalColumns);
@@ -1166,7 +1167,7 @@ const facetColumn = (sql: SqlExec, options: FacetColumnOptions): FacetColumnResu
     if (resolved === undefined) {
         // Defensive: a known column always resolves; if it somehow doesn't, fail
         // closed rather than build SQL without a bound expression.
-        throw Object.assign(new Error(`unknown column: ${column}`), { code: "UNKNOWN_COLUMN", name: "LunoraError", status: 404 });
+        throw new LunoraError("UNKNOWN_COLUMN", `unknown column: ${column}`, { status: 404 });
     }
 
     const limit = clamp(Math.trunc(options.limit ?? DEFAULT_FACET_LIMIT), 1, MAX_FACET_LIMIT);

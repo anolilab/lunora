@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { LunoraError } from "@lunora/errors";
 import type { ExecutionContextLike, HttpActionContext, HttpRouterLike, Route } from "../src/create-worker";
 import { composeWorker, createLunoraHandler, createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
@@ -846,7 +847,7 @@ describe("createWorker — RPC batch forward failure (Plan 118 toErrorBody migra
     it("still surfaces a recognized LunoraError's real code + message on a shard-forward failure", async () => {
         expect.assertions(2);
 
-        const structured = Object.assign(new Error("cross-shard join guard tripped"), { code: "CONFLICT", name: "LunoraError", status: 409 });
+        const structured = new LunoraError("CONFLICT", "cross-shard join guard tripped", { status: 409 });
         const worker = createWorker({ shardDO: unreachableNamespace(structured) });
 
         const res = await worker.fetch(

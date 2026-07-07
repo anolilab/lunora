@@ -9,6 +9,8 @@
  * @see https://developers.cloudflare.com/turnstile/get-started/server-side-validation/
  */
 
+import { LunoraError } from "@lunora/errors";
+
 /** Cloudflare's public Turnstile `siteverify` endpoint. */
 const TURNSTILE_VERIFY_ENDPOINT = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
 
@@ -129,20 +131,11 @@ const verifyTurnstile = async ({
             method: "POST",
         });
     } catch (error) {
-        throw Object.assign(new Error("turnstile siteverify request failed"), {
-            cause: error,
-            code: "SERVICE_UNAVAILABLE",
-            name: "LunoraError",
-            status: 503,
-        });
+        throw new LunoraError("SERVICE_UNAVAILABLE", "turnstile siteverify request failed", { cause: error, status: 503 });
     }
 
     if (!response.ok) {
-        throw Object.assign(new Error(`turnstile siteverify returned ${String(response.status)}`), {
-            code: "SERVICE_UNAVAILABLE",
-            name: "LunoraError",
-            status: 503,
-        });
+        throw new LunoraError("SERVICE_UNAVAILABLE", `turnstile siteverify returned ${String(response.status)}`, { status: 503 });
     }
 
     const raw: RawSiteverifyResponse = await response.json();
