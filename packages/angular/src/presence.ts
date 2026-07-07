@@ -146,3 +146,5 @@ export const presence = <H extends HeartbeatReference, L extends ListPresentRefe
 
     return { present: present.asReadonly(), sessionId, setData };
 };
+
+export type { HeartbeatReference, ListPresentReference };
