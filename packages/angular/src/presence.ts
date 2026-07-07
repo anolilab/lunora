@@ -8,17 +8,8 @@ type HeartbeatReference = FunctionReference<"mutation", { data?: Record<string, 
 
 type ListPresentReference = FunctionReference<"query", { roomId: string }>;
 
-/* eslint-disable n/no-unsupported-features/node-builtins -- crypto.randomUUID is available in all target browsers and Node 19+; the fallback below handles older runtimes. */
-/* eslint-disable sonarjs/pseudo-random -- the fallback session id is a non-cryptographic correlation key, not a security primitive. */
-const makeSessionId = (): string => {
-    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-        return crypto.randomUUID();
-    }
-
-    return `sess-${Math.random().toString(36).slice(2)}-${String(Date.now())}`;
-};
-/* eslint-enable n/no-unsupported-features/node-builtins */
-/* eslint-enable sonarjs/pseudo-random */
+/* eslint-disable-next-line n/no-unsupported-features/node-builtins -- crypto.randomUUID is available in all target browsers, workerd, and Node 22+. */
+const makeSessionId = (): string => crypto.randomUUID();
 
 const DEFAULT_INTERVAL_MS = 10_000;
 
