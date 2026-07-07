@@ -54,7 +54,9 @@ export const ${camel} = httpRoute
     .handler(async ({ ctx, searchParams }) => {
         // ctx.runQuery(api.<file>.<query>, { ... })
         // ctx.runMutation(api.<file>.<mutation>, { ... })
-        // await ctx.cache.purge({ tags: ["${camel}"] });
+        // if (ctx.cache) {
+        //     await ctx.cache.purge({ tags: ["${camel}"] });
+        // }
         return { ok: true, searchParams };
     });
 `,
