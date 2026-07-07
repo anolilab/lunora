@@ -5,7 +5,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import type { RegistryBinding, RegistryFile, RegistryManifest } from "./types";
+import type { EntrypointReexport, RegistryBinding, RegistryFile, RegistryManifest } from "./types";
 
 /** A CR or LF — illegal in a `.dev.vars` value (it would inject a spurious line). */
 const NEWLINE_PRESENT = /[\r\n]/u;
@@ -27,6 +27,13 @@ const VALID_ENV_NAME = /^[A-Za-z_]\w*$/u;
  * from injecting a path separator or breaking out of the import to smuggle code.
  */
 const VALID_ITEM_NAME = /^[A-Za-z0-9][\w-]*$/u;
+
+/**
+ * A valid registry item `entrypointReexports[].module` path. Restricting it to
+ * relative module paths consisting of safe alphanumeric, `_`, `.`, `-` segments
+ * separated by `/` stops path traversals and breakout character injections.
+ */
+const VALID_MODULE_PATH = /^[\w.-]+(?:\/[\w.-]+)*$/u;
 
 /** Validate + narrow a parsed JSON value into a {@link RegistryManifest}. */
 const parseManifest = (raw: unknown, itemName: string): RegistryManifest => {
@@ -109,6 +116,33 @@ const parseManifest = (raw: unknown, itemName: string): RegistryManifest => {
           })
         : undefined;
 
+    const entrypointReexports = Array.isArray(record.entrypointReexports)
+        ? (record.entrypointReexports as unknown[])
+              .filter(
+                  (value): value is Record<string, unknown> & { module: string } =>
+                      typeof value === "object" && value !== null && typeof (value as { module?: unknown }).module === "string",
+              )
+              .map((entry) => {
+                  if (entry.module.includes("..") || entry.module.startsWith("/") || !VALID_MODULE_PATH.test(entry.module)) {
+                      throw new LunoraError(
+                          "INTERNAL",
+                          `registry.json "${itemName}": entrypointReexports[].module "${entry.module}" must be a safe relative module path without path traversal or unsafe characters`,
+                      );
+                  }
+
+                  const reexport: EntrypointReexport = { module: entry.module };
+
+                  if (typeof entry.comment === "string") {
+                      if (NEWLINE_PRESENT.test(entry.comment)) {
+                          throw new LunoraError("INTERNAL", `registry.json "${itemName}": entrypointReexports[].comment must not contain a newline`);
+                      }
+                      reexport.comment = entry.comment;
+                  }
+
+                  return reexport;
+              })
+        : undefined;
+
     const envVariables = Array.isArray(record.envVars)
         ? (record.envVars as unknown[])
               .filter(
@@ -157,6 +191,7 @@ const parseManifest = (raw: unknown, itemName: string): RegistryManifest => {
         description: typeof record.description === "string" ? record.description : undefined,
         devDependencies,
         docs: typeof record.docs === "string" ? record.docs : undefined,
+        entrypointReexports,
         envVars: envVariables,
         files,
         name,

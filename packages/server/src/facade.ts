@@ -66,6 +66,7 @@ export interface FacadeWriterLike {
     // Optional: some writers (e.g. the `.global()` path) have no batch method and
     // delete row-by-row instead, mirroring `@lunora/do`'s `DatabaseWriterLike`.
     deleteMany?(ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string): Promise<{ deleted: number }>;
+    deleteWhere?(tableName: string, where: Record<string, unknown>, options?: { limit?: number }): Promise<{ deleted: number }>;
     findFirst(tableName: string, args?: unknown): Promise<unknown>;
     findFirstOrThrow(tableName: string, args?: unknown): Promise<unknown>;
     findMany(tableName: string, args?: unknown): Promise<unknown>;
@@ -73,10 +74,25 @@ export interface FacadeWriterLike {
     groupBy(tableName: string, options: unknown): Promise<unknown>;
     insert(tableName: string, document: Record<string, unknown>): Promise<string>;
     // Optional: see `deleteMany` above — not every writer provides a batch insert.
-    insertMany?(tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number }): Promise<string[]>;
+    // Returns (id | null)[] so skipDuplicates can slot nulls in input order; the
+    // typed facade narrows to Id<T>[] when skipDuplicates is not requested.
+    insertMany?(
+        tableName: string,
+        documents: ReadonlyArray<Record<string, unknown>>,
+        options?: { limit?: number; skipDuplicates?: boolean },
+    ): Promise<(string | null)[]>;
     patch(id: string, patch: Record<string, unknown>, expectedTable?: string): Promise<void>;
     // Optional: see `deleteMany` above.
-    patchMany?(patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }, expectedTable?: string): Promise<void>;
+    patchMany?(
+        patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>,
+        options?: { limit?: number },
+        expectedTable?: string,
+    ): Promise<{ patched: number }>;
+    patchWhere?(
+        tableName: string,
+        args: { patch: Record<string, unknown>; where: Record<string, unknown> },
+        options?: { limit?: number },
+    ): Promise<{ patched: number }>;
     query(tableName: string): { withSearchIndex(indexName: string, search: (q: unknown) => unknown): unknown };
     rank(tableName: string, indexName: string, options: unknown): Promise<unknown>;
     rankPage(tableName: string, indexName: string, options?: unknown): Promise<unknown>;
@@ -91,7 +107,10 @@ export interface FacadeEntry {
     aggregate: (options: unknown) => Promise<unknown>;
     count: (where?: unknown) => Promise<number>;
     delete: (id: string) => Promise<void>;
-    deleteMany: (ids: ReadonlyArray<string>, options?: { limit?: number }) => Promise<{ deleted: number }>;
+    deleteMany: {
+        (ids: ReadonlyArray<string>, options?: { limit?: number }): Promise<{ deleted: number }>;
+        (args: { limit?: number; where: Record<string, unknown> }): Promise<{ deleted: number }>;
+    };
     /** `true` when at least one row matches `where` (or any row exists when omitted). Honors RLS like `findFirst`. */
     exists: (where?: unknown) => Promise<boolean>;
     findFirst: (args?: unknown) => Promise<unknown>;
@@ -102,7 +121,14 @@ export interface FacadeEntry {
     /** Physically remove a row (and physically cascade), bypassing `.softDelete()`. */
     hardDelete: (id: string) => Promise<void>;
     insert: (document: Record<string, unknown>, options?: FacadeInsertOptions) => Promise<null | string>;
-    insertMany: (documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number }) => Promise<string[]>;
+
+    /**
+     * Insert many documents into this table in one call. With
+     * `{ skipDuplicates: true }`, UNIQUE breaches resolve to `null` for that row
+     * instead of failing the batch. The typed facade narrows the return to
+     * `Id&lt;T>[]` when skipDuplicates is not requested.
+     */
+    insertMany: (documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number; skipDuplicates?: boolean }) => Promise<(string | null)[]>;
     // NOTE: `insertManyUnsafe` is DELIBERATELY absent from the per-table facade
     // (and `ctx.orm`). It's a trusted, validation/trigger-skipping escape hatch and
     // stays on the flat top-level `ctx.db.insertManyUnsafe(table, …)` only — it
@@ -110,7 +136,10 @@ export interface FacadeEntry {
     // use. Keep it off `FacadeEntry`/`FacadeWriterLike` on purpose; do not "add it
     // for parity".
     patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
-    patchMany: (patches: ReadonlyArray<{ id: string; values: Record<string, unknown> }>, options?: { limit?: number }) => Promise<void>;
+    patchMany: {
+        (patches: ReadonlyArray<{ id: string; values: Record<string, unknown> }>, options?: { limit?: number }): Promise<{ patched: number }>;
+        (args: { limit?: number; values: Record<string, unknown>; where: Record<string, unknown> }): Promise<{ patched: number }>;
+    };
     rank: (indexName: string, options: unknown) => Promise<unknown>;
     rankPage: (indexName: string, options?: unknown) => Promise<unknown>;
     replace: (id: string, document: Record<string, unknown>) => Promise<void>;
@@ -217,16 +246,28 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
         count: (where) => writer.count(tableName, where),
         delete: (id) => writer.delete(id, tableName),
         // `deleteMany`/`patchMany` forward the bound `tableName` as `expectedTable`
-        // (threaded through the writer + the RLS middleware's per-id gate) so every
-        // batched id is scoped to this table — the same IDOR guard the single-row
-        // `delete`/`patch` apply. `patchMany` maps the facade's `values` payload to
-        // the writer's `{ id, patch }` shape.
-        deleteMany: (ids, options) => {
-            if (writer.deleteMany === undefined) {
-                throw new LunoraError("INTERNAL", `ctx.db.${tableName}.deleteMany is unavailable: this writer has no batch delete`);
+        // for id-based calls (threaded through the writer + the RLS middleware's
+        // per-id gate) so every batched id is scoped to this table — the same IDOR
+        // guard the single-row `delete`/`patch` apply. The where-based form routes
+        // through the structural writer's `deleteMany(tableName, { where })`.
+        // `patchMany` maps the facade's `values` payload to the writer's
+        // `{ id, patch }` shape.
+        deleteMany: (first: ReadonlyArray<string> | { limit?: number; where: Record<string, unknown> }, options?: { limit?: number }) => {
+            if (Array.isArray(first)) {
+                if (writer.deleteMany === undefined) {
+                    throw new LunoraError("INTERNAL", `ctx.db.${tableName}.deleteMany is unavailable: this writer has no batch delete`);
+                }
+
+                return writer.deleteMany(first, options, tableName);
             }
 
-            return writer.deleteMany(ids, options, tableName);
+            if (writer.deleteWhere === undefined) {
+                throw new LunoraError("INTERNAL", `ctx.db.${tableName}.deleteMany({ where }) is unavailable: this writer has no where-based delete`);
+            }
+
+            const whereArgs = first as { limit?: number; where: Record<string, unknown> };
+
+            return writer.deleteWhere(tableName, whereArgs.where, { limit: whereArgs.limit });
         },
         // `exists` reuses `findFirst` (RLS-filtered, indexed when a `.withIndex`-able
         // `where` is supplied) and only asks whether a row came back — no count scan.
@@ -239,7 +280,7 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
         // Physical removal — bypasses `.softDelete()`. RLS gates it as a delete.
         hardDelete: (id) => writer.delete(id, tableName, { hard: true }),
         insert,
-        insertMany: (documents, options) => {
+        insertMany: (documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number; skipDuplicates?: boolean }) => {
             if (writer.insertMany === undefined) {
                 throw new LunoraError("INTERNAL", `ctx.db.${tableName}.insertMany is unavailable: this writer has no batch insert`);
             }
@@ -247,18 +288,33 @@ export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): Fa
             return writer.insertMany(tableName, documents, options);
         },
         patch: (id, patch) => writer.patch(id, patch, tableName),
-        patchMany: (patches, options) => {
-            if (writer.patchMany === undefined) {
-                throw new LunoraError("INTERNAL", `ctx.db.${tableName}.patchMany is unavailable: this writer has no batch patch`);
+        patchMany: (
+            first:
+                | ReadonlyArray<{ id: string; values: Record<string, unknown> }>
+                | { limit?: number; values: Record<string, unknown>; where: Record<string, unknown> },
+            options?: { limit?: number },
+        ) => {
+            if (Array.isArray(first)) {
+                if (writer.patchMany === undefined) {
+                    throw new LunoraError("INTERNAL", `ctx.db.${tableName}.patchMany is unavailable: this writer has no batch patch`);
+                }
+
+                return writer.patchMany(
+                    first.map((entry: { id: string; values: Record<string, unknown> }) => {
+                        return { id: entry.id, patch: entry.values };
+                    }),
+                    options,
+                    tableName,
+                );
             }
 
-            return writer.patchMany(
-                patches.map((entry) => {
-                    return { id: entry.id, patch: entry.values };
-                }),
-                options,
-                tableName,
-            );
+            if (writer.patchWhere === undefined) {
+                throw new LunoraError("INTERNAL", `ctx.db.${tableName}.patchMany({ where, values }) is unavailable: this writer has no where-based patch`);
+            }
+
+            const whereArgs = first as { limit?: number; values: Record<string, unknown>; where: Record<string, unknown> };
+
+            return writer.patchWhere(tableName, { patch: whereArgs.values, where: whereArgs.where }, { limit: whereArgs.limit });
         },
         rank: (indexName, options) => writer.rank(tableName, indexName, options),
         rankPage: (indexName, options) => writer.rankPage(tableName, indexName, options),

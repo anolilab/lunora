@@ -47,6 +47,13 @@ const printPlan = (logger: Logger, manifest: RegistryManifest): void => {
 
         logger.info(`  env   ${variable.name}${valueSuffix}`);
     }
+
+    for (const reexport of manifest.entrypointReexports ?? []) {
+        const specifier = `./lunora/${reexport.module}`;
+        const suffix = reexport.comment ? `  // ${reexport.comment}` : "";
+
+        logger.info(`  entry ${specifier}${suffix}`);
+    }
 };
 
 /** Emit the `--json` plan snapshot for the resolved items to stdout. */
@@ -60,6 +67,9 @@ const printJsonPlan = (items: ReadonlyArray<{ manifest: RegistryManifest }>): vo
             }),
             deps: Object.keys(manifest.deps ?? {}),
             devDependencies: Object.keys(manifest.devDependencies ?? {}),
+            entrypointReexports: (manifest.entrypointReexports ?? []).map((reexport) => {
+                return { module: reexport.module, ...(reexport.comment ? { comment: reexport.comment } : {}) };
+            }),
             envVars: (manifest.envVars ?? []).map((variable) => {
                 return { name: variable.name, ...(variable.secret ? { secret: true } : { value: variable.value ?? "" }) };
             }),

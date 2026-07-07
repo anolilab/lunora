@@ -391,8 +391,16 @@ export interface TableWriterFacade<
      * {@link TableWriterFacade.hardDelete} to force physical removal.
      */
     delete: (id: Id<string & T>) => Promise<void>;
-    /** Delete many rows in this table by id in one call; returns the *requested* id count (unknown ids are no-ops). Atomic within a mutation (a throw rolls the mutation back); an action has no transaction span. */
-    deleteMany: (ids: ReadonlyArray<Id<string & T>>, options?: { limit?: number }) => Promise<{ deleted: number }>;
+
+    /**
+     * Delete many rows in this table. Pass an array of ids (requested count is
+     * returned; unknown ids are no-ops) or `{ where }` to delete matching rows
+     * (actual removed count is returned). Atomic within a mutation.
+     */
+    deleteMany: {
+        (ids: ReadonlyArray<Id<string & T>>, options?: { limit?: number }): Promise<{ deleted: number }>;
+        (args: { limit?: number; where: Partial<DM[T]> }): Promise<{ deleted: number }>;
+    };
 
     /** Physically remove a row (and physically cascade `onDelete`), bypassing `.softDelete()`. Same as `delete()` on a non-soft table. */
     hardDelete: (id: Id<string & T>) => Promise<void>;
@@ -406,11 +414,27 @@ export interface TableWriterFacade<
         (values: IM[T], options: { skipDuplicates: true }): Promise<Id<string & T> | null>;
         (values: IM[T], options?: { skipDuplicates?: boolean }): Promise<Id<string & T>>;
     };
-    /** Insert many documents into this table in one call, returning the minted ids in input order. Atomic within a mutation (a throw rolls the mutation back); an action has no transaction span. */
-    insertMany: (values: ReadonlyArray<IM[T]>, options?: { limit?: number }) => Promise<Id<string & T>[]>;
+
+    /**
+     * Insert many documents into this table in one call, returning the minted ids
+     * in input order. With `{ skipDuplicates: true }`, UNIQUE breaches resolve to
+     * `null` for that row instead of failing the batch. Atomic within a mutation.
+     */
+    insertMany: {
+        (values: ReadonlyArray<IM[T]>, options: { limit?: number; skipDuplicates: true }): Promise<(Id<string & T> | null)[]>;
+        (values: ReadonlyArray<IM[T]>, options?: { limit?: number; skipDuplicates?: boolean }): Promise<Id<string & T>[]>;
+    };
     patch: (id: Id<string & T>, values: Partial<IM[T]>) => Promise<void>;
-    /** Patch many rows in this table by id in one call. Atomic within a mutation (a throw rolls the mutation back); an action has no transaction span. */
-    patchMany: (patches: ReadonlyArray<{ id: Id<string & T>; values: Partial<IM[T]> }>, options?: { limit?: number }) => Promise<void>;
+
+    /**
+     * Patch many rows in this table. Pass an array of `{ id, values }` or
+     * `{ where, values }` to patch matching rows with the same values. Returns
+     * the actual patched count. Atomic within a mutation.
+     */
+    patchMany: {
+        (patches: ReadonlyArray<{ id: Id<string & T>; values: Partial<IM[T]> }>, options?: { limit?: number }): Promise<{ patched: number }>;
+        (args: { limit?: number; values: Partial<IM[T]>; where: Partial<DM[T]> }): Promise<{ patched: number }>;
+    };
     replace: (id: Id<string & T>, values: IM[T]) => Promise<void>;
 
     /** Un-soft-delete a row by id: clears the `.softDelete()` marker so list reads see it again. Throws on a non-soft table. */

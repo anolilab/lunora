@@ -40,13 +40,18 @@ interface FakeDatabase {
         count: (tableName: string, whereOrArgs?: unknown) => Promise<number>;
         delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => Promise<void>;
         deleteMany: (ids: ReadonlyArray<string>, options?: { limit?: number }) => Promise<{ deleted: number }>;
+        deleteWhere: (tableName: string, args: { limit?: number; where: Record<string, unknown> }) => Promise<{ deleted: number }>;
         findFirst: (tableName: string, args?: unknown) => Promise<Record<string, unknown> | null>;
         findFirstOrThrow: (tableName: string, args?: unknown) => Promise<Record<string, unknown>>;
         findMany: (tableName: string, args?: unknown) => Promise<{ continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }>;
         get: (id: string) => Promise<Record<string, unknown> | null>;
         groupBy: (tableName: string, options: unknown) => Promise<ReadonlyArray<{ key: Record<string, unknown>; value: null | number }>>;
         insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
-        insertMany: (tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number }) => Promise<string[]>;
+        insertMany: (
+            tableName: string,
+            documents: ReadonlyArray<Record<string, unknown>>,
+            options?: { limit?: number; skipDuplicates?: boolean },
+        ) => Promise<(string | null)[]>;
         insertManyUnsafe: (
             tableName: string,
             documents: ReadonlyArray<Record<string, unknown>>,
@@ -54,7 +59,11 @@ interface FakeDatabase {
         ) => Promise<string[]>;
         lookupById?: (id: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
         patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
-        patchMany: (patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }) => Promise<void>;
+        patchMany: (patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }) => Promise<{ patched: number }>;
+        patchWhere: (
+            tableName: string,
+            args: { limit?: number; patch: Record<string, unknown>; where: Record<string, unknown> },
+        ) => Promise<{ patched: number }>;
         query: (tableName: string) => never;
         rank: (tableName: string, indexName: string, options: unknown) => Promise<null | { position: number; total: number }>;
         rankBefore: (tableName: string, indexName: string, options: unknown) => Promise<{ before: number; total: number }>;
@@ -100,6 +109,11 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
 
                 return { deleted: ids.length };
             },
+            async deleteWhere(tableName, args) {
+                calls.push({ args, method: "deleteWhere", tableOrId: tableName });
+
+                return { deleted: rowsOfTable(tableName).length };
+            },
             async findFirst(tableName, args) {
                 calls.push({ args, method: "findFirst", tableOrId: tableName });
                 const rowsList = rowsOfTable(tableName);
@@ -140,10 +154,16 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
 
                 return (document["_id"] as string | undefined) ?? "new-id";
             },
-            async insertMany(tableName, documents) {
+            async insertMany(tableName, documents, options) {
                 calls.push({ args: documents, method: "insertMany", tableOrId: tableName });
 
-                return documents.map((document, index) => (document["_id"] as string | undefined) ?? `new-id-${String(index)}`);
+                return documents.map((document, index) => {
+                    if (options?.skipDuplicates === true && index === 0 && document["_id"] === "dup") {
+                        return null;
+                    }
+
+                    return (document["_id"] as string | undefined) ?? `new-id-${String(index)}`;
+                });
             },
             async insertManyUnsafe(tableName, documents) {
                 calls.push({ args: documents, method: "insertManyUnsafe", tableOrId: tableName });
@@ -155,6 +175,13 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
             },
             async patchMany(patches) {
                 calls.push({ args: patches, method: "patchMany", tableOrId: "" });
+
+                return { patched: patches.length };
+            },
+            async patchWhere(tableName, args) {
+                calls.push({ args, method: "patchWhere", tableOrId: tableName });
+
+                return { patched: rowsOfTable(tableName).length };
             },
             query() {
                 throw new Error("query() not used in these tests");

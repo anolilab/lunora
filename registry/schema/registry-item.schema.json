@@ -74,6 +74,25 @@
             "type": "string",
             "description": "Post-install guidance printed after the item is added."
         },
+        "entrypointReexports": {
+            "type": "array",
+            "description": "Worker-entry re-exports the item needs (class-B/C only). Each entry injects `export * from './lunora/<module>'` into the worker entry.",
+            "items": {
+                "type": "object",
+                "required": ["module"],
+                "additionalProperties": false,
+                "properties": {
+                    "module": {
+                        "type": "string",
+                        "description": "Module specifier (e.g. '_generated/workflows')."
+                    },
+                    "comment": {
+                        "type": "string",
+                        "description": "Optional JS comment above the re-export line."
+                    }
+                }
+            }
+        },
         "files": {
             "type": "array",
             "minItems": 1,

@@ -586,6 +586,17 @@ interface BatchWriteOptions {
     limit?: number;
 }
 
+/** Options accepted by {@link DatabaseWriter.insertMany} and the per-table facade. */
+interface InsertManyOptions extends BatchWriteOptions {
+    /**
+     * When `true`, a UNIQUE-constraint breach for a row resolves to `null`
+     * instead of throwing — the rest of the batch is still inserted. Skipped rows
+     * keep their input-order slot with `null` in the returned array. Mirrors
+     * better-drizzle's `createMany({ skipDuplicates: true })`.
+     */
+    skipDuplicates?: boolean;
+}
+
 interface DatabaseWriter extends DatabaseReader {
     delete: <T extends string>(id: Id<T>) => Promise<void>;
 
@@ -603,6 +614,17 @@ interface DatabaseWriter extends DatabaseReader {
     deleteMany: <T extends string>(ids: ReadonlyArray<Id<T>>, options?: BatchWriteOptions) => Promise<{ deleted: number }>;
 
     /**
+     * Delete every row matching `where` in one call. Matching rows are resolved
+     * first, then each row is deleted through the single-row delete pipeline
+     * (triggers, companion sync, CDC, broadcast) so reactive subscriptions and
+     * search/aggregate companions stay correct.
+     *
+     * **Atomic within a mutation:** the DO wraps a mutation's dispatch in a
+     * BEGIN/COMMIT span, so a mid-batch failure rolls back the whole mutation.
+     */
+    deleteWhere: (tableName: string, where: Record<string, unknown>, options?: BatchWriteOptions) => Promise<{ deleted: number }>;
+
+    /**
      * Insert a document, returning its server id.
      *
      * Pass `options.clientId` (a UUID) to key the row yourself — for an
@@ -618,12 +640,23 @@ interface DatabaseWriter extends DatabaseReader {
      * row gets defaults, validators, triggers, and a per-row RLS check — but the
      * caller pays one round-trip instead of N.
      *
+     * Pass `{ skipDuplicates: true }` to turn UNIQUE-constraint breaches into
+     * `null` results for that row instead of failing the whole batch; the rest of
+     * the batch is still inserted and order is preserved.
+     *
      * **Atomic within a mutation:** the DO wraps a mutation's dispatch in a
      * BEGIN/COMMIT span, so a mid-batch failure (an invalid or RLS-denied row)
      * rolls back the whole mutation. (In an action there is no transaction span,
      * so the prior inserts persist; the in-memory test harness mirrors the span.)
      */
-    insertMany: <T extends string>(tableName: T, documents: ReadonlyArray<Record<string, unknown>>, options?: BatchWriteOptions) => Promise<Id<T>[]>;
+    insertMany: {
+        <T extends string>(
+            tableName: T,
+            documents: ReadonlyArray<Record<string, unknown>>,
+            options: BatchWriteOptions & { skipDuplicates: true },
+        ): Promise<(Id<T> | null)[]>;
+        <T extends string>(tableName: T, documents: ReadonlyArray<Record<string, unknown>>, options?: InsertManyOptions): Promise<Id<T>[]>;
+    };
 
     /**
      * **Trusted** bulk insert: one multi-row `INSERT` that **skips per-row
@@ -647,14 +680,33 @@ interface DatabaseWriter extends DatabaseReader {
 
     /**
      * Patch many rows by id in one call. Each `{ id, patch }` is applied like a
-     * single `patch()` (per-row triggers + RLS).
+     * single `patch()` (per-row triggers + RLS). Returns the number of rows
+     * actually patched.
      *
      * **Atomic within a mutation:** the DO wraps a mutation's dispatch in a
      * BEGIN/COMMIT span, so a mid-batch failure rolls back the whole mutation.
      * (In an action there is no transaction span, so the prior patches persist;
      * the in-memory test harness mirrors the span.)
      */
-    patchMany: <T extends string>(patches: ReadonlyArray<{ id: Id<T>; patch: Record<string, unknown> }>, options?: BatchWriteOptions) => Promise<void>;
+    patchMany: <T extends string>(
+        patches: ReadonlyArray<{ id: Id<T>; patch: Record<string, unknown> }>,
+        options?: BatchWriteOptions,
+    ) => Promise<{ patched: number }>;
+
+    /**
+     * Patch every row matching `where` with the same `patch` in one call. The
+     * matching rows are resolved first, then each row is updated through the
+     * single-row patch pipeline (OCC, triggers, companion sync, CDC, broadcast)
+     * so reactive subscriptions and search/aggregate companions stay correct.
+     *
+     * **Atomic within a mutation:** the DO wraps a mutation's dispatch in a
+     * BEGIN/COMMIT span, so a mid-batch failure rolls back the whole mutation.
+     */
+    patchWhere: (
+        tableName: string,
+        args: { patch: Record<string, unknown>; where: Record<string, unknown> },
+        options?: BatchWriteOptions,
+    ) => Promise<{ patched: number }>;
     replace: <T extends string>(id: Id<T>, document: Record<string, unknown>) => Promise<void>;
 }
 

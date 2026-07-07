@@ -72,13 +72,14 @@ interface GuardableWriter {
     count: (tableName: string, whereOrArgs?: unknown) => unknown;
     delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => unknown;
     deleteMany: (ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string) => unknown;
+    deleteWhere?: (tableName: string, where: Record<string, unknown>, options?: { limit?: number }) => unknown;
     findFirst: (tableName: string, args?: unknown) => unknown;
     findFirstOrThrow: (tableName: string, args?: unknown) => unknown;
     findMany: (tableName: string, args?: unknown) => unknown;
     get: (id: string, expectedTable?: string) => unknown;
     groupBy: (tableName: string, options: unknown) => unknown;
     insert: (tableName: string, document: unknown, options?: unknown) => unknown;
-    insertMany: (tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number }) => unknown;
+    insertMany: (tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number; skipDuplicates?: boolean }) => unknown;
     insertManyUnsafe: (
         tableName: string,
         documents: ReadonlyArray<Record<string, unknown>>,
@@ -86,6 +87,7 @@ interface GuardableWriter {
     ) => unknown;
     patch: (id: string, patch: unknown, expectedTable?: string) => unknown;
     patchMany: (patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }, expectedTable?: string) => unknown;
+    patchWhere?: (tableName: string, args: { patch: Record<string, unknown>; where: Record<string, unknown> }, options?: { limit?: number }) => unknown;
     query: (tableName: string) => unknown;
     rank: (tableName: string, indexName: string, options: unknown) => unknown;
     rankBefore?: (tableName: string, indexName: string, options: unknown) => unknown;
@@ -184,6 +186,15 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId): 
 
             return base.deleteMany(ids, options, expectedTable);
         },
+        deleteWhere: base.deleteWhere
+            ? async (tableName: string, where: Record<string, unknown>, options?: { limit?: number }) => {
+                  // Where-based: gate the table, then delegate. Per-row policy
+                  // checks happen in the RLS middleware layer above this guard.
+                  guardTable(tableName);
+
+                  return await base.deleteWhere?.(tableName, where, options);
+              }
+            : undefined,
         findFirst: (tableName: string, args?: unknown) => {
             guardTable(tableName);
 
@@ -214,7 +225,7 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId): 
 
             return base.insert(tableName, document, options);
         },
-        insertMany: (tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number }) => {
+        insertMany: (tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number; skipDuplicates?: boolean }) => {
             // Every row targets the same table, so one table-level guard covers
             // the batch; the payload cap is enforced by the delegated writer.
             guardTable(tableName);
@@ -243,6 +254,15 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId): 
 
             return base.patchMany(patches, options, expectedTable);
         },
+        patchWhere: base.patchWhere
+            ? async (tableName: string, args: { patch: Record<string, unknown>; where: Record<string, unknown> }, options?: { limit?: number }) => {
+                  // Where-based: gate the table, then delegate. Per-row policy
+                  // checks happen in the RLS middleware layer above this guard.
+                  guardTable(tableName);
+
+                  return await base.patchWhere?.(tableName, args, options);
+              }
+            : undefined,
         query: (tableName: string) => {
             guardTable(tableName);
 

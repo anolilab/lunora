@@ -13,7 +13,9 @@ import { bindTableFacade } from "../src/facade";
  */
 const makeWriter = () => {
     const deleteMany = vi.fn<NonNullable<FacadeWriterLike["deleteMany"]>>();
+    const deleteWhere = vi.fn<NonNullable<FacadeWriterLike["deleteWhere"]>>();
     const patchMany = vi.fn<NonNullable<FacadeWriterLike["patchMany"]>>();
+    const patchWhere = vi.fn<NonNullable<FacadeWriterLike["patchWhere"]>>();
     const insertMany = vi.fn<NonNullable<FacadeWriterLike["insertMany"]>>();
     const deleteOne = vi.fn<FacadeWriterLike["delete"]>();
     const patchOne = vi.fn<FacadeWriterLike["patch"]>();
@@ -23,6 +25,7 @@ const makeWriter = () => {
         count: vi.fn<FacadeWriterLike["count"]>(),
         delete: deleteOne,
         deleteMany,
+        deleteWhere,
         findFirst: vi.fn<FacadeWriterLike["findFirst"]>(),
         findFirstOrThrow: vi.fn<FacadeWriterLike["findFirstOrThrow"]>(),
         findMany: vi.fn<FacadeWriterLike["findMany"]>(),
@@ -32,17 +35,18 @@ const makeWriter = () => {
         insertMany,
         patch: patchOne,
         patchMany,
+        patchWhere,
         query: vi.fn<FacadeWriterLike["query"]>(),
         rank: vi.fn<FacadeWriterLike["rank"]>(),
         rankPage: vi.fn<FacadeWriterLike["rankPage"]>(),
         replace: vi.fn<FacadeWriterLike["replace"]>(),
     } as unknown as FacadeWriterLike;
 
-    return { deleteMany, deleteOne, entry: bindTableFacade(writer, "messages"), insertMany, patchMany, patchOne };
+    return { deleteMany, deleteOne, deleteWhere, entry: bindTableFacade(writer, "messages"), insertMany, patchMany, patchOne, patchWhere };
 };
 
 describe("bindTableFacade — per-table batch forms", () => {
-    it("deleteMany forwards the bound table as expectedTable", async () => {
+    it("deleteMany(ids) forwards the bound table as expectedTable", async () => {
         expect.assertions(1);
 
         const { deleteMany, entry } = makeWriter();
@@ -52,7 +56,17 @@ describe("bindTableFacade — per-table batch forms", () => {
         expect(deleteMany).toHaveBeenCalledWith(["a", "b"], { limit: 5 }, "messages");
     });
 
-    it("patchMany maps `values` to `{ id, patch }` and forwards the bound table", async () => {
+    it("deleteMany({ where }) routes to the writer's deleteWhere with the bound table", async () => {
+        expect.assertions(1);
+
+        const { deleteWhere, entry } = makeWriter();
+
+        await entry.deleteMany({ where: { authorId: "a1" } });
+
+        expect(deleteWhere).toHaveBeenCalledWith("messages", { authorId: "a1" }, { limit: undefined });
+    });
+
+    it("patchMany([...]) maps `values` to `{ id, patch }` and forwards the bound table", async () => {
         expect.assertions(1);
 
         const { entry, patchMany } = makeWriter();
@@ -60,6 +74,16 @@ describe("bindTableFacade — per-table batch forms", () => {
         await entry.patchMany([{ id: "a", values: { body: "x" } }], { limit: 5 });
 
         expect(patchMany).toHaveBeenCalledWith([{ id: "a", patch: { body: "x" } }], { limit: 5 }, "messages");
+    });
+
+    it("patchMany({ where, values }) routes to the writer's patchWhere with the bound table", async () => {
+        expect.assertions(1);
+
+        const { entry, patchWhere } = makeWriter();
+
+        await entry.patchMany({ where: { authorId: "a1" }, values: { body: "x" } });
+
+        expect(patchWhere).toHaveBeenCalledWith("messages", { where: { authorId: "a1" }, patch: { body: "x" } }, { limit: undefined });
     });
 
     it("insertMany forwards the table as the first argument (table-scoped by construction)", async () => {
