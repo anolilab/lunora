@@ -758,6 +758,21 @@ interface Workflows {
     get: <Params = Record<string, unknown>>(name: string) => WorkflowHandle<Params>;
 }
 
+// --- Workers Cache (action-only) --------------------------------------------
+
+/**
+ * Programmatic cache purge surface exposed on {@link ActionCtx}. Actions run
+ * in the Worker (not the DO), so they can reach the Worker's `ctx.cache.purge`.
+ * Queries and mutations do not expose this — they run inside the Durable Object.
+ */
+interface CachePurge {
+    /**
+     * Purge cached responses matching the given tags, or everything when
+     * `purgeEverything` is true. Only available in action handlers.
+     */
+    purge: (options: { purgeEverything?: boolean; tags?: string[] }) => Promise<unknown>;
+}
+
 // --- Secrets Store (core built-in) -------------------------------------------
 
 /**
@@ -1264,6 +1279,13 @@ interface MutationCtx {
 interface ActionCtx {
     readonly auth: AuthState;
 
+    /**
+     * Programmatic Workers Cache purge; see {@link CachePurge}.
+     * **Action-only** — actions run in the Worker, which has a `cache` binding.
+     * Queries and mutations run inside the Durable Object and do not expose this.
+     */
+    readonly cache: CachePurge;
+
     readonly db: DatabaseWriter;
 
     /**
@@ -1361,6 +1383,7 @@ export type {
     AnyApi,
     ArgsValidator,
     AuthState,
+    CachePurge,
     DatabaseReader,
     DatabaseWriter,
     DurableObjectJurisdiction,

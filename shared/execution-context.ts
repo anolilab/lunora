@@ -21,6 +21,9 @@
  * fall back to {@link NOOP_EXECUTION_CONTEXT}.
  */
 export interface ExecutionContextLike {
+    cache?: {
+        purge: (options: { purgeEverything?: boolean; tags?: string[] }) => Promise<unknown>;
+    };
     passThroughOnException?: () => void;
     waitUntil?: (promise: Promise<unknown>) => void;
 }

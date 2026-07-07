@@ -89,6 +89,8 @@ interface WranglerConfig {
     assets?: { binding?: string; directory?: string; html_handling?: string; not_found_handling?: string };
     // Browser Rendering binding (`env.BROWSER`). Self-describing { binding }.
     browser?: { binding?: string };
+    // Workers Cache toggle (`"cache": { "enabled": true }`). See `validateCache`.
+    cache?: { enabled?: boolean };
     compatibility_date?: string;
     compatibility_flags?: ReadonlyArray<string>;
     // Parsed from untrusted JSONC, so individual entries may be `null` or
@@ -100,6 +102,10 @@ interface WranglerConfig {
     // `validateDispatchNamespaces`.
     dispatch_namespaces?: ReadonlyArray<{ binding?: string; namespace?: string; outbound?: unknown } | null | undefined>;
     durable_objects?: { bindings?: ReadonlyArray<WranglerDurableObjectBinding> };
+    // Per-entrypoint cache control for named `WorkerEntrypoint`s. Lunora apps
+    // typically use a single `export default` entrypoint, so this is passthrough.
+    // See `validateExports`.
+    exports?: Record<string, { cache?: { enabled?: boolean }; type?: string }>;
     // Cloudflare Flagship feature-flag bindings (`@lunora/flags` binding mode).
     // The `app_id` is a remote Flagship app Lunora can't mint — warn, don't fail.
     // See `HINT_BINDING_RULES`.
@@ -799,6 +805,69 @@ const validateObservability = (wrangler: WranglerConfig, errors: string[]): void
 };
 
 /**
+ * `cache` is the Workers Cache toggle (`{ "enabled": true }`). A present block
+ * must have `enabled` be a boolean if it is set. Unknown shapes are rejected so
+ * a typo like `"cache": { "enable": true }` is caught before deploy.
+ */
+const validateCache = (wrangler: WranglerConfig, errors: string[]): void => {
+    const { cache } = wrangler;
+
+    if (cache === undefined) {
+        return;
+    }
+
+    if (typeof cache !== "object" || Array.isArray(cache)) {
+        errors.push('cache must be an object (e.g. { "enabled": true })');
+
+        return;
+    }
+
+    if (cache.enabled !== undefined && typeof cache.enabled !== "boolean") {
+        errors.push("cache.enabled must be a boolean (true or false)");
+    }
+};
+
+/**
+ * `exports` is the per-entrypoint cache-control map for named `WorkerEntrypoint`s.
+ * Lunora apps typically use a single `export default` entrypoint, so this is
+ * passthrough/shape-check only. Each value must be an object with an optional
+ * `type` (string) and optional `cache.enabled` (boolean).
+ */
+const validateExports = (wrangler: WranglerConfig, errors: string[]): void => {
+    const { exports } = wrangler;
+
+    if (exports === undefined) {
+        return;
+    }
+
+    if (typeof exports !== "object" || Array.isArray(exports)) {
+        errors.push("exports must be an object keyed by entrypoint name");
+
+        return;
+    }
+
+    for (const [name, entry] of Object.entries(exports)) {
+        if (typeof entry !== "object") {
+            errors.push(`exports["${name}"] must be an object`);
+
+            continue;
+        }
+
+        if (entry.type !== undefined && typeof entry.type !== "string") {
+            errors.push(`exports["${name}"].type must be a string`);
+        }
+
+        if (entry.cache !== undefined) {
+            if (typeof entry.cache !== "object" || Array.isArray(entry.cache)) {
+                errors.push(`exports["${name}"].cache must be an object`);
+            } else if (entry.cache.enabled !== undefined && typeof entry.cache.enabled !== "boolean") {
+                errors.push(`exports["${name}"].cache.enabled must be a boolean`);
+            }
+        }
+    }
+};
+
+/**
  * `assets` is the Workers Static Assets block — serves the client build from the
  * same worker (Cloudflare serves files for free, only invoking the worker on a
  * miss, so the Lunora SSR/API handler is unaffected). NOT Cloudflare Pages,
@@ -952,6 +1021,18 @@ const validateWranglerConfig = (wrangler: WranglerConfig | undefined, schema?: S
         errors.push(`compatibility_date must be >= "${REQUIRED_COMPATIBILITY_DATE}" (got "${compatibilityDate || "<missing>"}")`);
     }
 
+    // Workers Cache requires compatibility_date >= 2026-05-01. Only enforce
+    // this when the cache block is actually enabled, so non-cache apps aren't
+    // forced to bump.
+    const WORKERS_CACHE_MIN_DATE = "2026-05-01";
+    const cacheEnabled = typeof wrangler.cache === "object" && wrangler.cache.enabled === true;
+    const exportsWithCache =
+        typeof wrangler.exports === "object" && Object.values(wrangler.exports).some((entry) => typeof entry === "object" && entry.cache?.enabled === true);
+
+    if ((cacheEnabled || exportsWithCache) && compatibilityDate < WORKERS_CACHE_MIN_DATE) {
+        errors.push(`cache.enabled requires compatibility_date >= "${WORKERS_CACHE_MIN_DATE}" (got "${compatibilityDate || "<missing>"}")`);
+    }
+
     // `web_socket_auto_reply_to_close` became the default on 2026-04-07, the
     // same date REQUIRED_COMPATIBILITY_DATE enforces — so requiring it
     // explicitly is redundant and workerd now warns when it's set. Any
@@ -998,6 +1079,8 @@ const validateWranglerConfig = (wrangler: WranglerConfig | undefined, schema?: S
     validatePlacement(wrangler, errors);
     validateObservability(wrangler, errors);
     validateAssets(wrangler, errors);
+    validateCache(wrangler, errors);
+    validateExports(wrangler, errors);
     validateCorsVariables(wrangler, errors);
 
     return { errors, valid: errors.length === 0, warnings };

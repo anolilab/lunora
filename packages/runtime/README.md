@@ -86,6 +86,19 @@ export { ShardDO };
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/runtime)**.
 
+### Workers Cache
+
+When `cache: { enabled: true }` is present in `wrangler.jsonc` and `compatibility_date >= "2026-05-01"`, the runtime forwards the Worker's `ExecutionContext.cache` into action handlers as `ctx.cache`. This lets you purge cache by tag from HTTP action handlers:
+
+```ts
+export const refreshProducts = action.action(async ({ ctx }) => {
+    await ctx.cache.purge({ tags: ["products"] });
+    return { ok: true };
+});
+```
+
+The `ctx.cache` binding is only available in **action** handlers (not query/mutation), because actions run in the Worker while queries/mutations run inside the Durable Object. Cache header declarations on `httpRoute` (`.cacheControl()`, `.cacheTag()`, `.vary()`) are attached by `@lunora/server` before the response leaves the handler.
+
 ## Related
 
 - [`@lunora/do`](https://www.npmjs.com/package/@lunora/do) — the `ShardDO` / `SessionDO` Durable Objects this runtime routes to.
