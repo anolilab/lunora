@@ -12,6 +12,7 @@ export default defineConfig(({ mode }) => ({
     },
     plugins: [
         analog({
+            tsconfig: "tsconfig.json",
             // Analog runs SSR through Nitro. The `cloudflare-module` preset emits
             // a Cloudflare module worker at `dist/analog/server/index.mjs`. The
             // project-root `exports.cloudflare.ts` re-exports `ShardDO` onto that
