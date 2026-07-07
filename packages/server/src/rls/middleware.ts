@@ -158,6 +158,7 @@ interface DatabaseWriterLike {
     count: (tableName: string, whereOrArgs?: CountArgs | WhereInput) => Promise<number>;
     delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => Promise<void>;
     deleteMany: (ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string) => Promise<{ deleted: number }>;
+    deleteWhere?: (tableName: string, where: WhereInput, options?: { limit?: number }) => Promise<{ deleted: number }>;
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
@@ -170,7 +171,7 @@ interface DatabaseWriterLike {
      */
     groupBy: (tableName: string, options: GroupByArgs) => Promise<ReadonlyArray<{ key: Record<string, unknown>; value: null | number }>>;
     insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
-    insertMany: (tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number }) => Promise<string[]>;
+    insertMany: (tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number; skipDuplicates?: boolean }) => Promise<Array<string | null>>;
     insertManyUnsafe: (
         tableName: string,
         documents: ReadonlyArray<Record<string, unknown>>,
@@ -187,7 +188,8 @@ interface DatabaseWriterLike {
      */
     lookupById?: (id: string, expectedTable?: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
     patch: (id: string, patch: Record<string, unknown>, expectedTable?: string) => Promise<void>;
-    patchMany: (patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }, expectedTable?: string) => Promise<void>;
+    patchMany: (patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }, expectedTable?: string) => Promise<{ patched: number }>;
+    patchWhere?: (tableName: string, args: { patch: Record<string, unknown>; where: WhereInput }, options?: { limit?: number }) => Promise<{ patched: number }>;
     query: (tableName: string) => TableReaderLike;
 
     /**
@@ -1052,6 +1054,22 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
             return { deleted: ids.length };
         },
 
+        async deleteWhere(tableName, where, options) {
+            // Where-based delete: resolve matching rows through the RLS-filtered
+            // reader so hidden rows are excluded, then gate each id like a single
+            // delete. The read + writes share the mutation-span (if any).
+            const { baseWhere } = readBase(tableName);
+            const resolved = await route(tableName).findMany(tableName, {
+                baseWhere: mergeBaseWhere(where as QueryArgs["where"], baseWhere),
+                relationBaseWhere: relationReadFilter,
+            });
+            const ids = resolved.page.map((row) => String(row["_id"]));
+
+            assertBatchLimit(ids.length, options?.limit, "deleteWhere");
+
+            return wrapped.deleteMany(ids, options);
+        },
+
         async findFirst(tableName, args) {
             const { baseWhere } = readBase(tableName);
 
@@ -1241,6 +1259,24 @@ const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Ma
                     expectedTable,
                 );
             }
+
+            return { patched: patches.length };
+        },
+
+        async patchWhere(tableName, args, options) {
+            // Where-based patch: resolve matching rows through the RLS-filtered
+            // reader so hidden rows are excluded, then gate each id like a single
+            // patch. The read + writes share the mutation-span (if any).
+            const { baseWhere } = readBase(tableName);
+            const resolved = await route(tableName).findMany(tableName, {
+                baseWhere: mergeBaseWhere(args.where as QueryArgs["where"], baseWhere),
+                relationBaseWhere: relationReadFilter,
+            });
+            const patches = resolved.page.map((row) => ({ id: String(row["_id"]), patch: args.patch }));
+
+            assertBatchLimit(patches.length, options?.limit, "patchWhere");
+
+            return wrapped.patchMany(patches, options);
         },
 
         query(tableName) {

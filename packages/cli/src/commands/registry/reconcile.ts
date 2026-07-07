@@ -9,7 +9,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 import { LunoraError } from "@lunora/errors";
-import { dirname, join } from "@visulima/path";
+import { dirname, join, relative } from "@visulima/path";
 
 import { insertSchemaExtension } from "../../util/insert-schema-extension";
 import type { Logger } from "../../util/logger";
@@ -265,11 +265,24 @@ const findWorkerEntry = (projectRoot: string): { entryPath: string; main: string
 };
 
 /**
+ * Compute the relative import specifier from a worker entry file to
+ * `lunora/&lt;module&gt;`. E.g. for `src/server/index.ts` the result is
+ * `../../lunora/&lt;module&gt;`.
+ */
+const computeRelativeSpecifier = (entryPath: string, projectRoot: string, moduleName: string): string => {
+    const importPath = relative(dirname(entryPath), join(projectRoot, "lunora", moduleName)).replaceAll("\\", "/");
+
+    return importPath.startsWith(".") ? importPath : `./${importPath}`;
+};
+
+/**
  * Log instructions for class-A projects where entrypoint re-exports must be
  * added by hand. Returns 0 (no re-exports injected).
  */
 const logClassAFallback = (entrypointReexports: ReadonlyArray<EntrypointReexport>, logger: Logger): 0 => {
     for (const reexport of entrypointReexports) {
+        // Class-A fallback cannot know the worker entry path, so show the
+        // project-root-relative specifier as a clear starting point.
         const specifier = `./lunora/${reexport.module}.js`;
         const instruction = `Add \`export * from "${specifier}"\` to your worker entry`;
         const suffix = reexport.comment ? ` (${reexport.comment})` : "";
@@ -281,13 +294,13 @@ const logClassAFallback = (entrypointReexports: ReadonlyArray<EntrypointReexport
 };
 
 /** Build the re-export lines to append, skipping modules already present. */
-const buildReexportLines = (entrypointReexports: ReadonlyArray<EntrypointReexport>, source: string): string[] => {
+const buildReexportLines = (entrypointReexports: ReadonlyArray<EntrypointReexport>, entryPath: string, projectRoot: string, source: string): string[] => {
     const lines: string[] = [];
 
     for (const reexport of entrypointReexports) {
-        const specifier = `./lunora/${reexport.module}`;
-        // Quote-bounded exact match so a longer path (e.g. `./lunora/foo-bar`) is
-        // not mistaken for an existing `./lunora/foo` re-export.
+        const specifier = computeRelativeSpecifier(entryPath, projectRoot, reexport.module);
+        // Quote-bounded exact match so a longer path (e.g. `../../lunora/foo-bar`)
+        // is not mistaken for an existing `../../lunora/foo` re-export.
         const existingRe = new RegExp(String.raw`export\s+\*\s+from\s+["']${specifier}\.js["']`, "u");
 
         if (existingRe.test(source)) {
@@ -325,7 +338,7 @@ const applyEntrypointReexports = (entrypointReexports: ReadonlyArray<EntrypointR
         return logClassAFallback(entrypointReexports, logger);
     }
 
-    const linesToAppend = buildReexportLines(entrypointReexports, entry.source);
+    const linesToAppend = buildReexportLines(entrypointReexports, entry.entryPath, projectRoot, entry.source);
 
     if (linesToAppend.length === 0) {
         return 0;

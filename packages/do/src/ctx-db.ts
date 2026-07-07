@@ -550,6 +550,15 @@ interface DatabaseWriterLike {
      * to the global writer, so no global batch method is needed.
      */
     deleteMany?: (ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string) => Promise<{ deleted: number }>;
+
+    /**
+     * Delete every row matching `where` in one call. Matching rows are resolved
+     * first, then each row is deleted through the single-row delete pipeline so
+     * companions, CDC, and broadcast stay correct. **Atomic within a mutation** —
+     * the DO wraps a mutation's dispatch in a BEGIN/COMMIT span, so a mid-batch
+     * throw rolls the whole mutation back. (An action has no transaction span.)
+     */
+    deleteWhere?: (tableName: string, where: WhereInput, options?: { limit?: number }) => Promise<{ deleted: number }>;
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
@@ -585,11 +594,13 @@ interface DatabaseWriterLike {
      * Insert many documents into one table (a loop over `insert()`),
      * returning the minted ids in input order. Each row gets defaults,
      * validators, triggers, companion sync, CDC, and broadcast exactly as a
-     * single insert; the caller pays one round-trip instead of N. **Atomic within
-     * a mutation** — the DO wraps a mutation's dispatch in a BEGIN/COMMIT span, so
-     * a mid-batch throw rolls the whole mutation back. (An action has no
-     * transaction span — there, the prior inserts persist; the in-memory test
-     * harness mirrors the span.)
+     * single insert; the caller pays one round-trip instead of N. Pass
+     * `options.skipDuplicates: true` to turn UNIQUE-constraint breaches into
+     * `null` results for that row instead of failing the whole batch.
+     * **Atomic within a mutation** — the DO wraps a mutation's dispatch in a
+     * BEGIN/COMMIT span, so a mid-batch throw rolls the whole mutation back. (An
+     * action has no transaction span — there, the prior inserts persist; the
+     * in-memory test harness mirrors the span.)
      * Rejects a batch larger than `options.limit` (default {@link DEFAULT_BATCH_LIMIT}).
      *
      * Optional on the interface (like `rankBefore`): the DO writer implements it;
@@ -597,7 +608,10 @@ interface DatabaseWriterLike {
      * batched per-row through the DO writer's loop, which routes each `insert()`
      * to the global writer, so no global batch method is needed.
      */
-    insertMany?: (tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number }) => Promise<string[]>;
+    insertMany?: {
+        (tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options: { limit?: number; skipDuplicates: true }): Promise<Array<string | null>>;
+        (tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number; skipDuplicates?: boolean }): Promise<string[]>;
+    };
 
     /**
      * Trusted bulk insert: one multi-row `INSERT` that **skips per-row `.check()`
@@ -649,7 +663,17 @@ interface DatabaseWriterLike {
      * batched per-row through the DO writer's loop, which routes each `patch()`
      * to the global writer, so no global batch method is needed.
      */
-    patchMany?: (patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }, expectedTable?: string) => Promise<void>;
+    patchMany?: (patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }, expectedTable?: string) => Promise<{ patched: number }>;
+
+    /**
+     * Patch every row matching `where` with the same `patch` in one call.
+     * Matching rows are resolved first, then each row is patched through the
+     * single-row patch pipeline so companions, CDC, and broadcast stay correct.
+     * **Atomic within a mutation** — the DO wraps a mutation's dispatch in a
+     * BEGIN/COMMIT span, so a mid-batch throw rolls the whole mutation back. (An
+     * action has no transaction span.)
+     */
+    patchWhere?: (tableName: string, args: { patch: Record<string, unknown>; where: WhereInput }, options?: { limit?: number }) => Promise<{ patched: number }>;
     query: (tableName: string) => TableReaderLike;
 
     /**
@@ -2347,6 +2371,35 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             return { deleted: ids.length };
         },
 
+        async deleteWhere(tableName, where, batchOptions) {
+            const global = globalWriterFor(tableName, "deleteWhere");
+
+            let ids: string[];
+
+            if (global) {
+                // Global tables have no native batch primitive; resolve ids and
+                // route each delete through the DO's single-row pipeline, which
+                // forwards to the global writer.
+                const rows = await global.findMany(tableName, { where });
+                ids = rows.page.map((row) => String(row["_id"]));
+            } else {
+                if (!schema.tables[tableName]) {
+                    throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
+                }
+
+                // Resolve matching rows first. The mutation-span (if any) keeps
+                // the read and the subsequent deletes consistent.
+                const page = await writer.findMany(tableName, { where });
+                ids = page.page.map((row) => String(row["_id"]));
+            }
+
+            assertBatchLimit(ids.length, batchOptions?.limit, "deleteWhere");
+
+            // Reuse the id-based pipeline so triggers, companions, CDC, and
+            // broadcast all fire correctly.
+            return writer.deleteMany(ids, batchOptions);
+        },
+
         async findFirst(tableName, args = {}) {
             const result = await writer.findMany(tableName, { ...args, limit: 1 });
 
@@ -2862,11 +2915,22 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // mid-loop throw; in an action (no span) prior inserts persist.
             // The win is one caller round-trip, not fewer SQLite writes. Order is
             // preserved so an FK reference to an earlier row in the same batch resolves.
-            const ids: string[] = [];
+            const skipDuplicates = batchOptions?.skipDuplicates === true;
+            const ids: Array<string | null> = [];
 
             for (const document of documents) {
-                // eslint-disable-next-line no-await-in-loop -- sequential by design: preserves insert order + the single-threaded SQLite transaction
-                ids.push(await writer.insert(tableName, document));
+                try {
+                    // eslint-disable-next-line no-await-in-loop -- sequential by design: preserves insert order + the single-threaded SQLite transaction
+                    ids.push(await writer.insert(tableName, document));
+                } catch (error) {
+                    if (skipDuplicates && error instanceof ConflictError && error.kind === "unique") {
+                        // Preserve the input-order slot with null so callers can
+                        // line up skipped duplicates by index.
+                        ids.push(null);
+                    } else {
+                        throw error;
+                    }
+                }
             }
 
             return ids;
@@ -2970,6 +3034,39 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // eslint-disable-next-line no-await-in-loop -- sequential by design: single-threaded SQLite transaction
                 await writer.patch(entry.id, entry.patch, expectedTable);
             }
+
+            return { patched: patches.length };
+        },
+
+        async patchWhere(tableName, args, batchOptions) {
+            const global = globalWriterFor(tableName, "patchWhere");
+
+            let patches: Array<{ id: string; patch: Record<string, unknown> }>;
+
+            if (global) {
+                // Global tables have no native batch primitive; resolve ids and
+                // route each patch through the DO's single-row pipeline, which
+                // forwards to the global writer.
+                const rows = await global.findMany(tableName, { where: args.where });
+                patches = rows.page.map((row) => ({ id: String(row["_id"]), patch: args.patch }));
+            } else {
+                if (!schema.tables[tableName]) {
+                    throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
+                }
+
+                // Resolve matching rows first. The mutation-span (if any) keeps
+                // the read and the subsequent patches consistent.
+                const page = await writer.findMany(tableName, { where: args.where });
+                patches = page.page.map((row) => ({ id: String(row["_id"]), patch: args.patch }));
+            }
+
+            assertBatchLimit(patches.length, batchOptions?.limit, "patchWhere");
+
+            // Reuse the id-based pipeline so OCC, triggers, companions, CDC, and
+            // broadcast all fire correctly.
+            await writer.patchMany(patches, batchOptions);
+
+            return { patched: patches.length };
         },
 
         query(tableName) {

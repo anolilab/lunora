@@ -5,7 +5,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import type { RegistryBinding, RegistryFile, RegistryManifest } from "./types";
+import type { EntrypointReexport, RegistryBinding, RegistryFile, RegistryManifest } from "./types";
 
 /** A CR or LF — illegal in a `.dev.vars` value (it would inject a spurious line). */
 const NEWLINE_PRESENT = /[\r\n]/u;
@@ -109,6 +109,23 @@ const parseManifest = (raw: unknown, itemName: string): RegistryManifest => {
           })
         : undefined;
 
+    const entrypointReexports = Array.isArray(record.entrypointReexports)
+        ? (record.entrypointReexports as unknown[])
+              .filter(
+                  (value): value is Record<string, unknown> & { module: string } =>
+                      typeof value === "object" && value !== null && typeof (value as { module?: unknown }).module === "string",
+              )
+              .map((entry) => {
+                  const reexport: EntrypointReexport = { module: entry.module };
+
+                  if (typeof entry.comment === "string") {
+                      reexport.comment = entry.comment;
+                  }
+
+                  return reexport;
+              })
+        : undefined;
+
     const envVariables = Array.isArray(record.envVars)
         ? (record.envVars as unknown[])
               .filter(
@@ -157,6 +174,7 @@ const parseManifest = (raw: unknown, itemName: string): RegistryManifest => {
         description: typeof record.description === "string" ? record.description : undefined,
         devDependencies,
         docs: typeof record.docs === "string" ? record.docs : undefined,
+        entrypointReexports,
         envVars: envVariables,
         files,
         name,
