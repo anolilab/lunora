@@ -93,6 +93,7 @@ export type {
     AnyApi,
     ArgsValidator,
     AuthState,
+    CachePurge,
     DatabaseReader,
     DatabaseWriter,
     DurableObjectJurisdiction,

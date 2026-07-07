@@ -1,0 +1,124 @@
+---
+title: Caching
+description: Edge caching with Cloudflare Workers Cache — declarative headers on HTTP routes and programmatic cache purging from actions.
+---
+
+Lunora supports **Cloudflare Workers Cache** for HTTP routes. RPC queries and mutations are `POST /_lunora/rpc` by design — not cacheable at the edge — so caching is exposed only on `httpRoute` HTTP endpoints and `httpAction` handlers.
+
+## Enabling Workers Cache
+
+Add the `cache` block to `wrangler.jsonc`:
+
+```jsonc
+{
+    "name": "my-app",
+    "cache": { "enabled": true },
+    // ...
+}
+```
+
+When `cache.enabled` is `true`, the dev server (`lunora dev` or the Vite plugin) and the CLI (`lunora prepare` / `lunora deploy`) automatically bump `compatibility_date` to at least `2026-05-01` if it is lower. You do not need to know or set the date manually — Lunora reconciles it for you, preserving comments and formatting in `wrangler.jsonc`.
+
+You can also enable cache per entrypoint in `exports`:
+
+```jsonc
+{
+    "exports": {
+        "default": {
+            "type": "webpack",
+            "cache": { "enabled": true },
+        },
+    },
+}
+```
+
+## Declarative cache headers on `httpRoute`
+
+The `httpRoute` builder carries three chainable methods for cache headers. They attach automatically to the response — both JSON and streaming (SSE) responses.
+
+| Method                 | Header          | Purpose                                             |
+| ---------------------- | --------------- | --------------------------------------------------- |
+| `.cacheControl(value)` | `Cache-Control` | TTL, public/private, stale-while-revalidate, etc.   |
+| `.cacheTag(value)`     | `Cache-Tag`     | Logical tag for bulk purging via `ctx.cache.purge`. |
+| `.vary(value)`         | `Vary`          | Store separate cached variants per request header.  |
+
+```ts
+import { httpRoute, v } from "lunorash/server";
+
+export const getProduct = httpRoute
+    .get("/api/products/:id")
+    .params({ id: v.string() })
+    .cacheControl("public, max-age=300, stale-while-revalidate=3600")
+    .cacheTag("products")
+    .vary("Accept-Encoding")
+    .handler(async ({ ctx, params }) => {
+        const product = await ctx.runQuery(api.products.get, params);
+
+        return product ?? new Response("Not Found", { status: 404 });
+    });
+```
+
+The headers are sent on both **200 OK** and **204 No Content** responses, as well as streaming SSE responses.
+
+## Programmatic cache purging
+
+Actions run in the Worker (not inside the Durable Object), so they receive the `ctx.cache` binding. Purge by tag, or purge everything:
+
+```ts
+import { action } from "@/lunora/_generated/server";
+
+export const refreshProducts = action.action(async ({ ctx }) => {
+    if (!ctx.cache) {
+        throw new Error("Workers Cache is not enabled in wrangler.jsonc");
+    }
+
+    await ctx.cache.purge({ tags: ["products"] });
+
+    return { ok: true };
+});
+```
+
+`ctx.cache.purge` accepts:
+
+- `tags?: string[]` — purge every cached response whose `Cache-Tag` matches any listed tag.
+- `purgeEverything?: boolean` — wipe the entire cache for this worker.
+
+## Why only actions?
+
+Queries and mutations run inside the **Durable Object**, where the Cloudflare cache binding is not available. Actions run in the **Worker** itself, alongside the fetch handler, so they can reach `ExecutionContext.cache`. If you need to invalidate cache as a side effect of a mutation, schedule an action from the mutation or call `ctx.runAction` from the mutation's handler.
+
+## Scaffolding cache-aware routes
+
+Use the built-in generator to scaffold a route with cache examples commented in:
+
+```bash
+vis generate lunora-http-route --name=listProducts
+```
+
+This produces:
+
+```ts
+import { httpRoute, v } from "lunorash/server";
+
+export const listProducts = httpRoute
+    .get("/api/listProducts")
+    .searchParams({
+        // q: v.optional(v.string()),
+    })
+    // .cacheControl("public, max-age=300, stale-while-revalidate=3600")
+    // .cacheTag("listProducts")
+    // .vary("Accept-Encoding")
+    .handler(async ({ ctx, searchParams }) => {
+        return { ok: true, searchParams };
+    });
+```
+
+Uncomment the cache lines and adjust the values for your use case.
+
+## Best practices
+
+1. **Tag by entity, not by endpoint.** Use `cacheTag("products")` on every route that returns product data, then purge `"products"` once when anything changes. Don't create one tag per route.
+2. **Use `stale-while-revalidate` for reads.** `public, max-age=300, stale-while-revalidate=3600` means Cloudflare serves from cache for 5 minutes, then revalidates in the background for up to an hour. Your backend sees reduced load.
+3. **Vary on content negotiation.** If your endpoint returns different formats based on `Accept` or compresses differently per `Accept-Encoding`, add `.vary("Accept-Encoding")` so Cloudflare stores separate variants.
+4. **Invalidate eagerly, cache generously.** Cache reads for a long TTL, then purge immediately when a mutation changes the underlying data. A short TTL is a band-aid for missing invalidation.
+5. **Keep cache headers deterministic.** `.cacheControl()` and `.cacheTag()` accept plain strings. There's no built-in parsing or validation — a typo in the header value is sent verbatim. Test your headers with `curl -I` or the Cloudflare dashboard.

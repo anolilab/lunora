@@ -99,6 +99,52 @@ The builder chain is `<builder>.input(validators).<kind>(handler)`, plus `.use(m
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/packages/server)**.
 
+### Caching with Workers Cache
+
+Lunora supports Cloudflare Workers Cache for HTTP actions (`httpRoute`). RPC queries and mutations are `POST /_lunora/rpc` and are not cacheable at the edge by design.
+
+**Enable Workers Cache** in `wrangler.jsonc`:
+
+```jsonc
+{
+    "cache": { "enabled": true },
+}
+```
+
+The dev server and CLI automatically bump `compatibility_date` to the minimum required when cache is enabled — you do not need to set it manually.
+
+**Set cache headers declaratively** on an `httpRoute`:
+
+```ts
+import { httpRoute } from "./_generated/server";
+
+export const getProduct = httpRoute
+    .get("/api/products/:id")
+    .params({ id: v.string() })
+    .cacheControl("public, max-age=300, stale-while-revalidate=3600")
+    .cacheTag("products")
+    .handler(async ({ ctx, params }) => {
+        return { id: params.id, name: "Widget" };
+    });
+```
+
+**Purge cache by tag** from an action handler:
+
+```ts
+import { action } from "./_generated/server";
+
+export const refreshProducts = action.action(async ({ ctx }) => {
+    if (!ctx.cache) {
+        throw new Error("Workers Cache is not enabled in wrangler.jsonc");
+    }
+
+    await ctx.cache.purge({ tags: ["products"] });
+    return { ok: true };
+});
+```
+
+The `ctx.cache.purge` API accepts `{ tags?: string[]; purgeEverything?: boolean }`. Only action handlers expose `ctx.cache`; queries and mutations run inside the Durable Object and do not have access to the Worker-level cache binding.
+
 ## Related
 
 - [`@lunora/values`](https://www.npmjs.com/package/@lunora/values) — the `v.*` validators re-exported here.
