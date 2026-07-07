@@ -108,11 +108,19 @@ interface MaskDatabase {
     get: (id: string, expectedTable?: string) => Promise<Record<string, unknown> | null>;
     groupBy: (tableName: string, options: GroupByArgs) => Promise<ReadonlyArray<{ key: Record<string, unknown>; value: null | number }>>;
     insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
-    insertMany: (tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number; skipDuplicates?: boolean }) => Promise<(string | null)[]>;
+    insertMany: (
+        tableName: string,
+        documents: ReadonlyArray<Record<string, unknown>>,
+        options?: { limit?: number; skipDuplicates?: boolean },
+    ) => Promise<(string | null)[]>;
     lookupById?: (id: string, expectedTable?: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
     patch: (id: string, patch: Record<string, unknown>, expectedTable?: string) => Promise<void>;
     patchMany: (patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }) => Promise<{ patched: number }>;
-    patchWhere?: (tableName: string, args: { patch: Record<string, unknown>; where: Record<string, unknown> }, options?: { limit?: number }) => Promise<{ patched: number }>;
+    patchWhere?: (
+        tableName: string,
+        args: { patch: Record<string, unknown>; where: Record<string, unknown> },
+        options?: { limit?: number },
+    ) => Promise<{ patched: number }>;
     query: (tableName: string) => TableReaderLike;
     rank: (tableName: string, indexName: string, options: unknown) => Promise<null | { position: number; total: number }>;
     rankBefore?: (tableName: string, indexName: string, options: unknown) => Promise<{ before: number; total: number }>;

@@ -192,7 +192,7 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId): 
                   // checks happen in the RLS middleware layer above this guard.
                   guardTable(tableName);
 
-                  return base.deleteWhere?.(tableName, where, options);
+                  return await base.deleteWhere?.(tableName, where, options);
               }
             : undefined,
         findFirst: (tableName: string, args?: unknown) => {
@@ -260,7 +260,7 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId): 
                   // checks happen in the RLS middleware layer above this guard.
                   guardTable(tableName);
 
-                  return base.patchWhere?.(tableName, args, options);
+                  return await base.patchWhere?.(tableName, args, options);
               }
             : undefined,
         query: (tableName: string) => {

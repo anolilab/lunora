@@ -47,7 +47,11 @@ interface FakeDatabase {
         get: (id: string) => Promise<Record<string, unknown> | null>;
         groupBy: (tableName: string, options: unknown) => Promise<ReadonlyArray<{ key: Record<string, unknown>; value: null | number }>>;
         insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
-        insertMany: (tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number; skipDuplicates?: boolean }) => Promise<(string | null)[]>;
+        insertMany: (
+            tableName: string,
+            documents: ReadonlyArray<Record<string, unknown>>,
+            options?: { limit?: number; skipDuplicates?: boolean },
+        ) => Promise<(string | null)[]>;
         insertManyUnsafe: (
             tableName: string,
             documents: ReadonlyArray<Record<string, unknown>>,
@@ -56,7 +60,10 @@ interface FakeDatabase {
         lookupById?: (id: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
         patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
         patchMany: (patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }) => Promise<{ patched: number }>;
-        patchWhere: (tableName: string, args: { limit?: number; patch: Record<string, unknown>; where: Record<string, unknown> }) => Promise<{ patched: number }>;
+        patchWhere: (
+            tableName: string,
+            args: { limit?: number; patch: Record<string, unknown>; where: Record<string, unknown> },
+        ) => Promise<{ patched: number }>;
         query: (tableName: string) => never;
         rank: (tableName: string, indexName: string, options: unknown) => Promise<null | { position: number; total: number }>;
         rankBefore: (tableName: string, indexName: string, options: unknown) => Promise<{ before: number; total: number }>;

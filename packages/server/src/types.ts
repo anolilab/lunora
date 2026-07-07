@@ -622,7 +622,7 @@ interface DatabaseWriter extends DatabaseReader {
      * **Atomic within a mutation:** the DO wraps a mutation's dispatch in a
      * BEGIN/COMMIT span, so a mid-batch failure rolls back the whole mutation.
      */
-    deleteWhere: <T extends string>(tableName: T, where: Record<string, unknown>, options?: BatchWriteOptions) => Promise<{ deleted: number }>;
+    deleteWhere: (tableName: string, where: Record<string, unknown>, options?: BatchWriteOptions) => Promise<{ deleted: number }>;
 
     /**
      * Insert a document, returning its server id.
@@ -650,7 +650,11 @@ interface DatabaseWriter extends DatabaseReader {
      * so the prior inserts persist; the in-memory test harness mirrors the span.)
      */
     insertMany: {
-        <T extends string>(tableName: T, documents: ReadonlyArray<Record<string, unknown>>, options: BatchWriteOptions & { skipDuplicates: true }): Promise<(Id<T> | null)[]>;
+        <T extends string>(
+            tableName: T,
+            documents: ReadonlyArray<Record<string, unknown>>,
+            options: BatchWriteOptions & { skipDuplicates: true },
+        ): Promise<(Id<T> | null)[]>;
         <T extends string>(tableName: T, documents: ReadonlyArray<Record<string, unknown>>, options?: InsertManyOptions): Promise<Id<T>[]>;
     };
 
@@ -684,7 +688,10 @@ interface DatabaseWriter extends DatabaseReader {
      * (In an action there is no transaction span, so the prior patches persist;
      * the in-memory test harness mirrors the span.)
      */
-    patchMany: <T extends string>(patches: ReadonlyArray<{ id: Id<T>; patch: Record<string, unknown> }>, options?: BatchWriteOptions) => Promise<{ patched: number }>;
+    patchMany: <T extends string>(
+        patches: ReadonlyArray<{ id: Id<T>; patch: Record<string, unknown> }>,
+        options?: BatchWriteOptions,
+    ) => Promise<{ patched: number }>;
 
     /**
      * Patch every row matching `where` with the same `patch` in one call. The
@@ -695,8 +702,8 @@ interface DatabaseWriter extends DatabaseReader {
      * **Atomic within a mutation:** the DO wraps a mutation's dispatch in a
      * BEGIN/COMMIT span, so a mid-batch failure rolls back the whole mutation.
      */
-    patchWhere: <T extends string>(
-        tableName: T,
+    patchWhere: (
+        tableName: string,
         args: { patch: Record<string, unknown>; where: Record<string, unknown> },
         options?: BatchWriteOptions,
     ) => Promise<{ patched: number }>;

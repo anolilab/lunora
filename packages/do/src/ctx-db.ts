@@ -608,7 +608,11 @@ interface DatabaseWriterLike {
      * batched per-row through the DO writer's loop, which routes each `insert()`
      * to the global writer, so no global batch method is needed.
      */
-    insertMany?: (tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: { limit?: number; skipDuplicates?: boolean }) => Promise<(string | null)[]>;
+    insertMany?: (
+        tableName: string,
+        documents: ReadonlyArray<Record<string, unknown>>,
+        options?: { limit?: number; skipDuplicates?: boolean },
+    ) => Promise<(string | null)[]>;
 
     /**
      * Trusted bulk insert: one multi-row `INSERT` that **skips per-row `.check()`
@@ -660,7 +664,11 @@ interface DatabaseWriterLike {
      * batched per-row through the DO writer's loop, which routes each `patch()`
      * to the global writer, so no global batch method is needed.
      */
-    patchMany?: (patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>, options?: { limit?: number }, expectedTable?: string) => Promise<{ patched: number }>;
+    patchMany?: (
+        patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>,
+        options?: { limit?: number },
+        expectedTable?: string,
+    ) => Promise<{ patched: number }>;
 
     /**
      * Patch every row matching `where` with the same `patch` in one call.
@@ -2395,7 +2403,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // Reuse the id-based pipeline so triggers, companions, CDC, and
             // broadcast all fire correctly. The concrete DO writer always
             // implements deleteMany; the optional type is for global/D1 twins.
-            return writer.deleteMany!(ids, batchOptions);
+            if (writer.deleteMany === undefined) {
+                throw new LunoraError("INTERNAL", `ctx.db.${tableName}.deleteMany is unavailable: this writer has no batch delete`);
+            }
+
+            return writer.deleteMany(ids, batchOptions);
         },
 
         async findFirst(tableName, args = {}) {
@@ -2924,6 +2936,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     if (skipDuplicates && error instanceof ConflictError && error.kind === "unique") {
                         // Preserve the input-order slot with null so callers can
                         // line up skipped duplicates by index.
+                        // eslint-disable-next-line unicorn/no-null -- preserve slot with null for JSON compatibility/index alignment
                         ids.push(null);
                     } else {
                         throw error;
@@ -3046,7 +3059,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // route each patch through the DO's single-row pipeline, which
                 // forwards to the global writer.
                 const rows = await global.findMany(tableName, { where: args.where });
-                patches = rows.page.map((row) => {return { id: String(row["_id"]), patch: args.patch }});
+                patches = rows.page.map((row) => {
+                    return { id: String(row["_id"]), patch: args.patch };
+                });
             } else {
                 if (!schema.tables[tableName]) {
                     throw new LunoraError("INTERNAL", `unknown table: ${tableName}`);
@@ -3055,7 +3070,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // Resolve matching rows first. The mutation-span (if any) keeps
                 // the read and the subsequent patches consistent.
                 const page = await writer.findMany(tableName, { where: args.where });
-                patches = page.page.map((row) => {return { id: String(row["_id"]), patch: args.patch }});
+                patches = page.page.map((row) => {
+                    return { id: String(row["_id"]), patch: args.patch };
+                });
             }
 
             assertBatchLimit(patches.length, batchOptions?.limit, "patchWhere");
@@ -3063,7 +3080,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // Reuse the id-based pipeline so OCC, triggers, companions, CDC, and
             // broadcast all fire correctly. The concrete DO writer always
             // implements patchMany; the optional type is for global/D1 twins.
-            await writer.patchMany!(patches, batchOptions);
+            if (writer.patchMany === undefined) {
+                throw new LunoraError("INTERNAL", `ctx.db.${tableName}.patchMany is unavailable: this writer has no batch patch`);
+            }
+
+            await writer.patchMany(patches, batchOptions);
 
             return { patched: patches.length };
         },

@@ -17,8 +17,8 @@ const makeWriter = () => {
     const patchMany = vi.fn<NonNullable<FacadeWriterLike["patchMany"]>>();
     const patchWhere = vi.fn<NonNullable<FacadeWriterLike["patchWhere"]>>();
     const insertMany = vi.fn<NonNullable<FacadeWriterLike["insertMany"]>>();
-    const deleteOne = vi.fn<FacadeWriterLike["delete"]>()
-    const patchOne = vi.fn<FacadeWriterLike["patch"]>()
+    const deleteOne = vi.fn<FacadeWriterLike["delete"]>();
+    const patchOne = vi.fn<FacadeWriterLike["patch"]>();
 
     const writer = {
         aggregate: vi.fn<FacadeWriterLike["aggregate"]>(),
