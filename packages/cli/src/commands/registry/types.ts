@@ -39,10 +39,10 @@ interface RegistryEnvVariable {
 
 /** A re-export the item needs injected into the worker entry point (class-B/C only). */
 interface EntrypointReexport {
-    /** Module specifier (e.g. `"_generated/workflows"` → `export * from "./lunora/_generated/workflows"`). */
-    module: string;
     /** Optional JS comment placed above the re-export line. */
     comment?: string;
+    /** Module specifier (e.g. `"_generated/workflows"` → `export * from "./lunora/_generated/workflows"`). */
+    module: string;
 }
 
 /** The `registry.json` manifest shape. */

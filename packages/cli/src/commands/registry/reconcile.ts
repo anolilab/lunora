@@ -3,7 +3,7 @@
  * `create-or-skip` 3-way upgrade (base = last-written hash, yours = on-disk,
  * theirs = incoming). `--diff` previews; `--overwrite` force-takes theirs.
  *
- * Also handles `entrypointReexports` — injecting `export * from "./lunora/<module>"`
+ * Also handles `entrypointReexports` — injecting `export * from "./lunora/&lt;module&gt;"`
  * into the class-B/C worker entry file.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -214,6 +214,9 @@ const reconcileFile = (
  */
 const WORKER_ENTRY_FALLBACKS = ["src/server.ts", "src/server/index.ts", "src/index.ts", "src/worker.ts"];
 
+/** Regex to extract wrangler `main` field (tolerant of jsonc comments). */
+const WRANGLER_MAIN_RE = /"main"\s*:\s*"([^"]+)"/u;
+
 /** Read wrangler `main` field (regex-based, tolerant of jsonc comments). */
 const readWranglerMain = (projectRoot: string): string | undefined => {
     for (const file of ["wrangler.jsonc", "wrangler.json"]) {
@@ -223,7 +226,7 @@ const readWranglerMain = (projectRoot: string): string | undefined => {
             continue;
         }
 
-        const match = /"main"\s*:\s*"([^"]+)"/u.exec(readFileSync(path, "utf8"));
+        const match = WRANGLER_MAIN_RE.exec(readFileSync(path, "utf8"));
 
         if (match?.[1]) {
             return match[1];
@@ -234,28 +237,12 @@ const readWranglerMain = (projectRoot: string): string | undefined => {
 };
 
 /**
- * Apply an item's declared entrypoint re-exports: inject `export * from
- * "./lunora/<module>"` lines into the class-B/C worker entry (the file that
- * calls `createShardDO`). For class-A (Vite plugin / no such file), log a
- * post-add instruction instead. Idempotent — skips a module whose re-export
- * already exists.
- *
- * Returns the number of re-export lines injected, or 0 when class-A / none.
+ * Find the class-B/C worker entry file (the file calling `createShardDO`).
+ * Returns `{ entryPath, source }` or `undefined` when class-A / not found.
  */
-const applyEntrypointReexports = (
-    entrypointReexports: ReadonlyArray<EntrypointReexport>,
-    projectRoot: string,
-    logger: Logger,
-    diff: boolean,
-): number => {
-    if (entrypointReexports.length === 0) {
-        return 0;
-    }
-
+const findWorkerEntry = (projectRoot: string): { entryPath: string; main: string; source: string } | undefined => {
     const main = readWranglerMain(projectRoot);
     const candidates = main === undefined ? WORKER_ENTRY_FALLBACKS : [main, ...WORKER_ENTRY_FALLBACKS];
-    let entryPath: string | undefined;
-    let source: string | undefined;
 
     for (const candidate of candidates) {
         const absolute = join(projectRoot, candidate);
@@ -271,46 +258,73 @@ const applyEntrypointReexports = (
             break;
         }
 
-        entryPath = absolute;
-        source = content;
-        break;
+        return { entryPath: absolute, main: main ?? candidate, source: content };
     }
 
-    if (entryPath === undefined || source === undefined) {
-        // Class-A or no worker entry found — print instruction.
-        for (const reexport of entrypointReexports) {
-            const specifier = `./lunora/${reexport.module}`;
-            const instruction = `Add \`export * from "${specifier}"\` to your worker entry`;
-            const suffix = reexport.comment ? ` (${reexport.comment})` : "";
+    return undefined;
+};
 
-            logger.warn(`${instruction}${suffix}`);
-        }
+/**
+ * Log instructions for class-A projects where entrypoint re-exports must be
+ * added by hand. Returns 0 (no re-exports injected).
+ */
+const logClassAFallback = (entrypointReexports: ReadonlyArray<EntrypointReexport>, logger: Logger): 0 => {
+    for (const reexport of entrypointReexports) {
+        const specifier = `./lunora/${reexport.module}`;
+        const instruction = `Add \`export * from "${specifier}"\` to your worker entry`;
+        const suffix = reexport.comment ? ` (${reexport.comment})` : "";
 
-        return 0;
+        logger.warn(`${instruction}${suffix}`);
     }
 
-    const linesToAppend: string[] = [];
-    let count = 0;
+    return 0;
+};
+
+/** Build the re-export lines to append, skipping modules already present. */
+const buildReexportLines = (entrypointReexports: ReadonlyArray<EntrypointReexport>, source: string): string[] => {
+    const lines: string[] = [];
 
     for (const reexport of entrypointReexports) {
         const specifier = `./lunora/${reexport.module}`;
 
         if (source.includes(specifier)) {
-            logger.warn(`skip (exists): entrypoint reexport "${specifier}"`);
-
             continue;
         }
 
         if (reexport.comment) {
-            linesToAppend.push(`\n// ${reexport.comment}`);
+            lines.push(`\n// ${reexport.comment}`);
         }
 
         // Generated code uses `.js` extension (NodeNext).
-        linesToAppend.push(`export * from "${specifier}.js";`);
-        count++;
+        lines.push(`export * from "${specifier}.js";`);
     }
 
-    if (count === 0) {
+    return lines;
+};
+
+/**
+ * Apply an item's declared entrypoint re-exports: inject `export * from
+ * "./lunora/&lt;module&gt;"` lines into the class-B/C worker entry (the file that
+ * calls `createShardDO`). For class-A (Vite plugin / no such file), log a
+ * post-add instruction instead. Idempotent — skips a module whose re-export
+ * already exists.
+ *
+ * Returns the number of re-export lines injected, or 0 when class-A / none.
+ */
+const applyEntrypointReexports = (entrypointReexports: ReadonlyArray<EntrypointReexport>, projectRoot: string, logger: Logger, diff: boolean): number => {
+    if (entrypointReexports.length === 0) {
+        return 0;
+    }
+
+    const entry = findWorkerEntry(projectRoot);
+
+    if (entry === undefined) {
+        return logClassAFallback(entrypointReexports, logger);
+    }
+
+    const linesToAppend = buildReexportLines(entrypointReexports, entry.source);
+
+    if (linesToAppend.length === 0) {
         return 0;
     }
 
@@ -321,15 +335,15 @@ const applyEntrypointReexports = (
             }
         }
 
-        return count;
+        return linesToAppend.length;
     }
 
-    const separator = source.endsWith("\n") ? "" : "\n";
+    const separator = entry.source.endsWith("\n") ? "" : "\n";
 
-    writeFileSync(entryPath, `${source}${separator}${linesToAppend.join("\n")}\n`, "utf8");
-    logger.success(`wrote ${String(count)} entrypoint re-export(s) to ${main ?? candidates[0]}`);
+    writeFileSync(entry.entryPath, `${entry.source}${separator}${linesToAppend.join("\n")}\n`, "utf8");
+    logger.success(`wrote ${String(linesToAppend.length)} entrypoint re-export(s) to ${entry.main}`);
 
-    return count;
+    return linesToAppend.length;
 };
 
 /** Run the reconcile phase across every resolved item; returns the aggregate outcome. */
