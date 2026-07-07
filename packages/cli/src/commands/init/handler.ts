@@ -376,8 +376,8 @@ const pnpmWorkspaceYaml = (): string =>
         "# without the interactive `pnpm approve-builds` step; deny the optional native",
         "# builds a scaffold doesn't need (so no C/C++ toolchain is required).",
         "allowBuilds:",
-        ...PNPM_BUILT_DEPENDENCIES.map((name) => `    ${name}: true`),
-        ...PNPM_DENIED_BUILD_DEPENDENCIES.map((name) => `    ${name}: false`),
+        ...PNPM_BUILT_DEPENDENCIES.map((name) => `    '${name}': true`),
+        ...PNPM_DENIED_BUILD_DEPENDENCIES.map((name) => `    '${name}': false`),
         "",
     ].join("\n");
 

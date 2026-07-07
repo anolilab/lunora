@@ -133,10 +133,10 @@ describe("lunora init", () => {
             // `onlyBuiltDependencies:` array — so `pnpm install` runs the native
             // build scripts without the interactive `pnpm approve-builds` step.
             expect(workspace).toContain("allowBuilds:");
-            expect(workspace).toContain("esbuild: true");
+            expect(workspace).toContain("'esbuild': true");
             // Optional native builds a scaffold doesn't need are listed as denied
             // (so pnpm neither prompts nor requires a C/C++ toolchain).
-            expect(workspace).toContain("ssh2: false");
+            expect(workspace).toContain("'ssh2': false");
         });
 
         it("does not install when the user declines the offer", async () => {
