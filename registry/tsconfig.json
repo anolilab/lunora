@@ -18,6 +18,7 @@
         "crons/jobs.ts",
         "backup/backup.ts",
         "mail/mail.ts",
+        "payment/payment.ts",
         "presence/presence.ts",
         "ratelimit/ratelimit.ts",
         "storage/storage.ts"

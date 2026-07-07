@@ -63,7 +63,7 @@ describe("bindTableFacade — per-table batch forms", () => {
 
         await entry.deleteMany({ where: { authorId: "a1" } });
 
-        expect(deleteWhere).toHaveBeenCalledWith("messages", { where: { authorId: "a1" } });
+        expect(deleteWhere).toHaveBeenCalledWith("messages", { authorId: "a1" }, { limit: undefined });
     });
 
     it("patchMany([...]) maps `values` to `{ id, patch }` and forwards the bound table", async () => {
@@ -83,7 +83,7 @@ describe("bindTableFacade — per-table batch forms", () => {
 
         await entry.patchMany({ where: { authorId: "a1" }, values: { body: "x" } });
 
-        expect(patchWhere).toHaveBeenCalledWith("messages", { where: { authorId: "a1" }, patch: { body: "x" } });
+        expect(patchWhere).toHaveBeenCalledWith("messages", { where: { authorId: "a1" }, patch: { body: "x" } }, { limit: undefined });
     });
 
     it("insertMany forwards the table as the first argument (table-scoped by construction)", async () => {

@@ -66,7 +66,7 @@ export interface FacadeWriterLike {
     // Optional: some writers (e.g. the `.global()` path) have no batch method and
     // delete row-by-row instead, mirroring `@lunora/do`'s `DatabaseWriterLike`.
     deleteMany?(ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string): Promise<{ deleted: number }>;
-    deleteWhere?(tableName: string, args: { limit?: number; where: Record<string, unknown> }): Promise<{ deleted: number }>;
+    deleteWhere?(tableName: string, where: Record<string, unknown>, options?: { limit?: number }): Promise<{ deleted: number }>;
     findFirst(tableName: string, args?: unknown): Promise<unknown>;
     findFirstOrThrow(tableName: string, args?: unknown): Promise<unknown>;
     findMany(tableName: string, args?: unknown): Promise<unknown>;
@@ -88,7 +88,11 @@ export interface FacadeWriterLike {
         options?: { limit?: number },
         expectedTable?: string,
     ): Promise<{ patched: number }>;
-    patchWhere?(tableName: string, args: { limit?: number; patch: Record<string, unknown>; where: Record<string, unknown> }): Promise<{ patched: number }>;
+    patchWhere?(
+        tableName: string,
+        args: { patch: Record<string, unknown>; where: Record<string, unknown> },
+        options?: { limit?: number },
+    ): Promise<{ patched: number }>;
     query(tableName: string): { withSearchIndex(indexName: string, search: (q: unknown) => unknown): unknown };
     rank(tableName: string, indexName: string, options: unknown): Promise<unknown>;
     rankPage(tableName: string, indexName: string, options?: unknown): Promise<unknown>;
