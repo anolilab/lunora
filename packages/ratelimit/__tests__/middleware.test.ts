@@ -58,7 +58,7 @@ describe("rateLimit middleware", () => {
         expect(error.name).toBe("LunoraError");
         expect(error.code).toBe("TOO_MANY_REQUESTS");
         expect(error.status).toBe(429);
-        expect(error.retryAfter).toBeTypeOf("number");
+        expect((error as Record<string, { retryAfter: number }>).data?.retryAfter).toBeTypeOf("number");
     });
 
     it("maps a deny-list hit to FORBIDDEN (403) without a retryAfter", async () => {

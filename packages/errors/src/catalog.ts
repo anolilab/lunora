@@ -96,6 +96,11 @@ export const ERROR_CATALOG = {
         title: "RLS policy required",
     },
 
+    RUN_DEPTH_EXCEEDED: { internal: true, status: 500, title: "Run depth exceeded" },
+    MIGRATION_NOT_FOUND: { status: 404, title: "Data migration not found" },
+    UNKNOWN_TABLE: { status: 404, title: "Unknown table" },
+    GLOBAL_TABLE_NOT_EDITABLE: { status: 400, title: "Global table is not editable" },
+
     SHARD_ERROR: { status: 503, title: "Shard error" },
     SHARD_UNAVAILABLE: { status: 503, title: "Shard unavailable" },
     OFFLINE_IDENTITY_CHANGED: { status: 409, title: "Offline identity changed" },

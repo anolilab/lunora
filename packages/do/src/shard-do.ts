@@ -1,5 +1,5 @@
 import type { DurableObjectStorage } from "@cloudflare/workers-types";
-import { toErrorBody } from "@lunora/errors";
+import { LunoraError, toErrorBody } from "@lunora/errors";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
@@ -501,7 +501,7 @@ const parseRunMigrationArgs = (args: Record<string, unknown>): RunShardMigration
     const id = typeof args["id"] === "string" ? args["id"] : "";
 
     if (id.trim() === "") {
-        throw Object.assign(new Error("runMigration: `id` is required"), { code: "MIGRATION_ID_REQUIRED", name: "LunoraError", status: 400 });
+        throw new LunoraError("MIGRATION_ID_REQUIRED", "runMigration: `id` is required", { status: 400 });
     }
 
     return {
@@ -533,11 +533,11 @@ const parseWriteRowArgs = (args: Record<string, unknown>): RunShardWriteArgs => 
     const table = typeof args["table"] === "string" ? args["table"] : "";
 
     if (op !== "insert" && op !== "patch" && op !== "replace" && op !== "delete") {
-        throw Object.assign(new Error("writeRow: `op` must be insert|patch|replace|delete"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        throw new LunoraError("BAD_REQUEST", "writeRow: `op` must be insert|patch|replace|delete");
     }
 
     if (table.trim() === "") {
-        throw Object.assign(new Error("writeRow: `table` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        throw new LunoraError("BAD_REQUEST", "writeRow: `table` is required");
     }
 
     const id = typeof args["id"] === "string" ? args["id"] : undefined;
@@ -545,11 +545,11 @@ const parseWriteRowArgs = (args: Record<string, unknown>): RunShardWriteArgs => 
         typeof args["doc"] === "object" && args["doc"] !== null && !Array.isArray(args["doc"]) ? (args["doc"] as Record<string, unknown>) : undefined;
 
     if (op !== "insert" && (id === undefined || id === "")) {
-        throw Object.assign(new Error(`writeRow: \`id\` is required for op "${op}"`), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        throw new LunoraError("BAD_REQUEST", `writeRow: \`id\` is required for op "${op}"`);
     }
 
     if (op !== "delete" && record === undefined) {
-        throw Object.assign(new Error(`writeRow: \`doc\` is required for op "${op}"`), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        throw new LunoraError("BAD_REQUEST", `writeRow: \`doc\` is required for op "${op}"`);
     }
 
     return { doc: record, id, op, table };
@@ -594,7 +594,7 @@ const parseCreateWorkflowInstanceArgs = (args: Record<string, unknown>): CreateW
     const exportName = typeof args["exportName"] === "string" ? args["exportName"].trim() : "";
 
     if (exportName === "") {
-        throw Object.assign(new Error("createWorkflowInstance: `exportName` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        throw new LunoraError("BAD_REQUEST", "createWorkflowInstance: `exportName` is required");
     }
 
     const id = typeof args["id"] === "string" && args["id"] !== "" ? args["id"] : undefined;
@@ -618,11 +618,11 @@ const parseGetWorkflowInstanceStatusArgs = (args: Record<string, unknown>): GetW
     const id = typeof args["id"] === "string" ? args["id"].trim() : "";
 
     if (exportName === "") {
-        throw Object.assign(new Error("getWorkflowInstanceStatus: `exportName` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        throw new LunoraError("BAD_REQUEST", "getWorkflowInstanceStatus: `exportName` is required");
     }
 
     if (id === "") {
-        throw Object.assign(new Error("getWorkflowInstanceStatus: `id` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        throw new LunoraError("BAD_REQUEST", "getWorkflowInstanceStatus: `id` is required");
     }
 
     return { exportName, id };
@@ -727,7 +727,7 @@ const parseBulkDeleteArgs = (args: Record<string, unknown>): RunShardBulkDeleteA
     const table = typeof args["table"] === "string" ? args["table"] : "";
 
     if (table.trim() === "") {
-        throw Object.assign(new Error("deleteRows: `table` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        throw new LunoraError("BAD_REQUEST", "deleteRows: `table` is required");
     }
 
     return {
@@ -748,7 +748,7 @@ const parseClearTableArgs = (args: Record<string, unknown>): RunShardBulkDeleteA
     const table = typeof args["table"] === "string" ? args["table"] : "";
 
     if (table.trim() === "") {
-        throw Object.assign(new Error("clearTable: `table` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        throw new LunoraError("BAD_REQUEST", "clearTable: `table` is required");
     }
 
     return { limit: typeof args["limit"] === "number" ? args["limit"] : undefined, table };
@@ -765,7 +765,7 @@ const parseRecordAuthEventArgs = (args: Record<string, unknown>): { outcome: "fa
     const { outcome } = args;
 
     if (outcome !== "ok" && outcome !== "fail") {
-        throw Object.assign(new Error('recordAuthEvent: `outcome` must be "ok" or "fail"'), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        throw new LunoraError("BAD_REQUEST", 'recordAuthEvent: `outcome` must be "ok" or "fail"');
     }
 
     return { outcome };
@@ -792,7 +792,7 @@ const parseRecordContainerEventArgs = (args: Record<string, unknown>): Container
     const raw = args["event"];
 
     if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-        throw Object.assign(new Error("recordContainerEvent: `event` must be an object"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        throw new LunoraError("BAD_REQUEST", "recordContainerEvent: `event` must be an object");
     }
 
     const envelope = raw as Record<string, unknown>;
@@ -800,11 +800,7 @@ const parseRecordContainerEventArgs = (args: Record<string, unknown>): Container
     const event = typeof envelope["event"] === "string" ? envelope["event"] : "";
 
     if (container.trim() === "" || event.trim() === "") {
-        throw Object.assign(new Error("recordContainerEvent: `event.container` and `event.event` are required"), {
-            code: "BAD_REQUEST",
-            name: "LunoraError",
-            status: 400,
-        });
+        throw new LunoraError("BAD_REQUEST", "recordContainerEvent: `event.container` and `event.event` are required");
     }
 
     // Fold the envelope's `error`/`info` level into the buffer's level set
@@ -848,27 +844,27 @@ const parseRunAsArgs = (args: Record<string, unknown>): RunAsArgs => {
     const userId = typeof args["userId"] === "string" ? args["userId"] : "";
 
     if (functionPath.trim() === "") {
-        throw Object.assign(new Error("runAs: `functionPath` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        throw new LunoraError("BAD_REQUEST", "runAs: `functionPath` is required");
     }
 
     if (functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
-        throw Object.assign(new Error("runAs: cannot target a reserved admin function"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        throw new LunoraError("BAD_REQUEST", "runAs: cannot target a reserved admin function");
     }
 
     if (userId.trim() === "") {
-        throw Object.assign(new Error("runAs: `userId` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        throw new LunoraError("BAD_REQUEST", "runAs: `userId` is required");
     }
 
     const rawArgs = args["args"];
 
     if (rawArgs !== undefined && (typeof rawArgs !== "object" || rawArgs === null || Array.isArray(rawArgs))) {
-        throw Object.assign(new Error("runAs: `args` must be an object"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        throw new LunoraError("BAD_REQUEST", "runAs: `args` must be an object");
     }
 
     const rawIdentity = args["identity"];
 
     if (rawIdentity !== undefined && (typeof rawIdentity !== "object" || rawIdentity === null || Array.isArray(rawIdentity))) {
-        throw Object.assign(new Error("runAs: `identity` must be an object"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        throw new LunoraError("BAD_REQUEST", "runAs: `identity` must be an object");
     }
 
     return {
@@ -896,7 +892,7 @@ const parseRunAsArgs = (args: Record<string, unknown>): RunAsArgs => {
  */
 const parseRecordMailArgs = (args: Record<string, unknown>): RecordMailInput => {
     const bad = (message: string): never => {
-        throw Object.assign(new Error(`recordMail: ${message}`), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        throw new LunoraError("BAD_REQUEST", `recordMail: ${message}`);
     };
 
     const { bcc, cc, from, headers, html, replyTo, subject, text, to } = args;
@@ -959,7 +955,7 @@ const buildTestMailInput = (args: Record<string, unknown>): RecordMailInput => {
     const { to } = args;
 
     if (to !== undefined && typeof to !== "string") {
-        throw Object.assign(new Error("sendTestMail: `to` must be a string"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        throw new LunoraError("BAD_REQUEST", "sendTestMail: `to` must be a string");
     }
 
     const recipient = to ?? TEST_MAIL_DEFAULT_TO;
@@ -1004,7 +1000,7 @@ interface SendQueueMessageArgs {
  */
 const parseRecordQueueMessageArgs = (args: Record<string, unknown>): RecordQueueMessageInput[] => {
     const bad = (message: string): never => {
-        throw Object.assign(new Error(`recordQueueMessage: ${message}`), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        throw new LunoraError("BAD_REQUEST", `recordQueueMessage: ${message}`);
     };
 
     const raw = args["messages"];
@@ -1070,17 +1066,13 @@ const parseSendQueueMessageArgs = (args: Record<string, unknown>): SendQueueMess
     const exportName = typeof args["exportName"] === "string" ? args["exportName"].trim() : "";
 
     if (exportName === "") {
-        throw Object.assign(new Error("sendQueueMessage: `exportName` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        throw new LunoraError("BAD_REQUEST", "sendQueueMessage: `exportName` is required");
     }
 
     const delayRaw = args["delaySeconds"];
 
     if (delayRaw !== undefined && (typeof delayRaw !== "number" || !Number.isFinite(delayRaw) || delayRaw < 0)) {
-        throw Object.assign(new Error("sendQueueMessage: `delaySeconds` must be a non-negative number"), {
-            code: "BAD_REQUEST",
-            name: "LunoraError",
-            status: 400,
-        });
+        throw new LunoraError("BAD_REQUEST", "sendQueueMessage: `delaySeconds` must be a non-negative number");
     }
 
     const batch = Array.isArray(args["batch"]) ? (args["batch"] as unknown[]) : undefined;
@@ -1088,11 +1080,7 @@ const parseSendQueueMessageArgs = (args: Record<string, unknown>): SendQueueMess
     // Cloudflare's `sendBatch` rejects an empty or >100-message batch (BatchCountOutOfBounds).
     // Fail it on the existing 400 path so a malformed payload never reaches the queue API.
     if (batch !== undefined && (batch.length === 0 || batch.length > MAX_QUEUE_SEND_BATCH)) {
-        throw Object.assign(new Error(`sendQueueMessage: \`batch\` must contain between 1 and ${String(MAX_QUEUE_SEND_BATCH)} messages`), {
-            code: "BAD_REQUEST",
-            name: "LunoraError",
-            status: 400,
-        });
+        throw new LunoraError("BAD_REQUEST", `sendQueueMessage: \`batch\` must contain between 1 and ${String(MAX_QUEUE_SEND_BATCH)} messages`);
     }
 
     return {
@@ -1114,7 +1102,7 @@ const parseReplayQueueMessageArgs = (args: Record<string, unknown>): { id: strin
     const id = typeof args["id"] === "string" ? args["id"].trim() : "";
 
     if (id === "") {
-        throw Object.assign(new Error("replayQueueMessage: `id` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        throw new LunoraError("BAD_REQUEST", "replayQueueMessage: `id` is required");
     }
 
     const target = typeof args["target"] === "string" && args["target"].trim() !== "" ? args["target"].trim() : undefined;
@@ -1134,26 +1122,26 @@ const parseRankBeforeArgs = (args: Record<string, unknown>): RunShardRankBeforeA
     const rowId = typeof args["rowId"] === "string" ? args["rowId"] : "";
 
     if (table.trim() === "") {
-        throw Object.assign(new Error("rankBefore: `table` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        throw new LunoraError("BAD_REQUEST", "rankBefore: `table` is required");
     }
 
     if (index.trim() === "") {
-        throw Object.assign(new Error("rankBefore: `index` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        throw new LunoraError("BAD_REQUEST", "rankBefore: `index` is required");
     }
 
     // `partitionKey` is the encoded partition tuple — `""` is legitimate for a
     // rankIndex with no `partitionBy`, so only the type is enforced, not
     // non-emptiness.
     if (typeof args["partitionKey"] !== "string") {
-        throw Object.assign(new Error("rankBefore: `partitionKey` must be a string"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        throw new LunoraError("BAD_REQUEST", "rankBefore: `partitionKey` must be a string");
     }
 
     if (rowId.trim() === "") {
-        throw Object.assign(new Error("rankBefore: `rowId` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        throw new LunoraError("BAD_REQUEST", "rankBefore: `rowId` is required");
     }
 
     if (!Array.isArray(args["sortValues"])) {
-        throw Object.assign(new Error("rankBefore: `sortValues` must be an array"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        throw new LunoraError("BAD_REQUEST", "rankBefore: `sortValues` must be an array");
     }
 
     return { index, partitionKey: args["partitionKey"], rowId, sortValues: args["sortValues"], table };
@@ -1161,7 +1149,7 @@ const parseRankBeforeArgs = (args: Record<string, unknown>): RunShardRankBeforeA
 
 /** Throw a uniform 400 `LunoraError` for a malformed admin payload field. */
 const badRequest = (message: string): never => {
-    throw Object.assign(new Error(message), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+    throw new LunoraError("BAD_REQUEST", message);
 };
 
 /** Narrow a required non-empty string admin arg or 400 with `&lt;field> is required`. */
@@ -1285,7 +1273,7 @@ const parseApplyCdcArgs = (args: Record<string, unknown>): RunShardApplyCdcArgs 
     const raw = args["changes"];
 
     if (!Array.isArray(raw)) {
-        throw Object.assign(new Error("applyCdc: `changes` must be an array"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+        throw new LunoraError("BAD_REQUEST", "applyCdc: `changes` must be an array");
     }
 
     const changes = raw.map((entry, index): CdcChange => {
@@ -1295,11 +1283,7 @@ const parseApplyCdcArgs = (args: Record<string, unknown>): RunShardApplyCdcArgs 
         const id = typeof record["id"] === "string" ? record["id"] : "";
 
         if (table === "" || id === "" || (op !== "insert" && op !== "update" && op !== "delete")) {
-            throw Object.assign(new Error(`applyCdc: changes[${String(index)}] must have a table, id, and op of insert|update|delete`), {
-                code: "BAD_REQUEST",
-                name: "LunoraError",
-                status: 400,
-            });
+            throw new LunoraError("BAD_REQUEST", `applyCdc: changes[${String(index)}] must have a table, id, and op of insert|update|delete`);
         }
 
         const rawDocument = record["doc"];
@@ -1309,11 +1293,7 @@ const parseApplyCdcArgs = (args: Record<string, unknown>): RunShardApplyCdcArgs 
         // Record). Failing here surfaces the malformed change at the parse
         // boundary instead of mid-replay.
         if (rawDocument !== undefined && (typeof rawDocument !== "object" || rawDocument === null || Array.isArray(rawDocument))) {
-            throw Object.assign(new Error(`applyCdc: changes[${String(index)}].doc must be an object`), {
-                code: "BAD_REQUEST",
-                name: "LunoraError",
-                status: 400,
-            });
+            throw new LunoraError("BAD_REQUEST", `applyCdc: changes[${String(index)}].doc must be an object`);
         }
 
         const document = rawDocument as Record<string, unknown> | undefined;
@@ -1322,11 +1302,7 @@ const parseApplyCdcArgs = (args: Record<string, unknown>): RunShardApplyCdcArgs 
         // otherwise the replay would write a row whose id contradicts the CDC
         // cursor — reject the inconsistency at the boundary.
         if (document !== undefined && typeof document["_id"] === "string" && document["_id"] !== id) {
-            throw Object.assign(new Error(`applyCdc: changes[${String(index)}].doc._id must match the entry id`), {
-                code: "BAD_REQUEST",
-                name: "LunoraError",
-                status: 400,
-            });
+            throw new LunoraError("BAD_REQUEST", `applyCdc: changes[${String(index)}].doc._id must match the entry id`);
         }
 
         return {
@@ -2648,9 +2624,7 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with a schema-aware reader that uses `this`
     protected runRelationFanoutRead(_functionPath: string, _args: Record<string, unknown>): Promise<unknown> {
-        throw Object.assign(new Error("__lunora_relation__: no schema bound — the base ShardDO cannot serve cross-shard relation reads"), {
-            code: "NOT_IMPLEMENTED",
-            name: "LunoraError",
+        throw new LunoraError("NOT_IMPLEMENTED", "__lunora_relation__: no schema bound — the base ShardDO cannot serve cross-shard relation reads", {
             status: 500,
         });
     }
@@ -2820,21 +2794,13 @@ abstract class ShardDO {
      */
     protected async runInTransaction<T>(handler: () => Promise<T> | T): Promise<T> {
         if (this.transactionDepth > 0) {
-            throw Object.assign(new Error("nested transactions are not supported in SQLite-in-DO"), {
-                code: "NESTED_TRANSACTION",
-                name: "LunoraError",
-                status: 500,
-            });
+            throw new LunoraError("NESTED_TRANSACTION", "nested transactions are not supported in SQLite-in-DO", { status: 500 });
         }
 
         const sqlHandle = this.state.storage.sql as TransactionSqlLike | undefined;
 
         if (!sqlHandle || typeof sqlHandle.exec !== "function") {
-            throw Object.assign(new Error("storage.sql is not available on this ShardDO state"), {
-                code: "SQL_UNAVAILABLE",
-                name: "LunoraError",
-                status: 500,
-            });
+            throw new LunoraError("SQL_UNAVAILABLE", "storage.sql is not available on this ShardDO state", { status: 500 });
         }
 
         // workerd FORBIDS raw `BEGIN`/`COMMIT`/`SAVEPOINT` SQL inside a Durable
@@ -2940,9 +2906,7 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to reach the generated migration registry
     protected runShardDataMigration(args: RunShardMigrationArgs): Promise<MigrationRunResult> {
-        return Promise.reject(
-            Object.assign(new Error(`data migration "${args.id}" is not registered`), { code: "MIGRATION_NOT_FOUND", name: "LunoraError", status: 404 }),
-        );
+        return Promise.reject(new LunoraError("MIGRATION_NOT_FOUND", `data migration "${args.id}" is not registered`, { status: 404 }));
     }
 
     /**
@@ -3226,7 +3190,7 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
     protected runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult> {
-        return Promise.reject(Object.assign(new Error(`unknown table: ${args.table}`), { code: "UNKNOWN_TABLE", name: "LunoraError", status: 404 }));
+        return Promise.reject(new LunoraError("UNKNOWN_TABLE", `unknown table: ${args.table}`, { status: 404 }));
     }
 
     /**
@@ -3242,7 +3206,7 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
     protected deleteRowThroughWriter(_table: string, _id: string): Promise<void> {
-        return Promise.reject(Object.assign(new Error(`unknown table: ${_table}`), { code: "UNKNOWN_TABLE", name: "LunoraError", status: 404 }));
+        return Promise.reject(new LunoraError("UNKNOWN_TABLE", `unknown table: ${_table}`, { status: 404 }));
     }
 
     /**
@@ -3295,9 +3259,7 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
     protected runShardRankBefore(_args: RunShardRankBeforeArgs): Promise<{ before: number; total: number }> {
-        return Promise.reject(
-            Object.assign(new Error("rankBefore is not implemented in base ShardDO"), { code: "NOT_IMPLEMENTED", name: "LunoraError", status: 500 }),
-        );
+        return Promise.reject(new LunoraError("NOT_IMPLEMENTED", "rankBefore is not implemented in base ShardDO", { status: 500 }));
     }
 
     /**
@@ -3312,9 +3274,7 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
     protected runShardRankPage(_args: RunShardRankPageArgs): Promise<ShardRankPageResult> {
-        return Promise.reject(
-            Object.assign(new Error("rankPage is not implemented in base ShardDO"), { code: "NOT_IMPLEMENTED", name: "LunoraError", status: 500 }),
-        );
+        return Promise.reject(new LunoraError("NOT_IMPLEMENTED", "rankPage is not implemented in base ShardDO", { status: 500 }));
     }
 
     /**
@@ -3782,9 +3742,7 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
     protected runShardApplyCdc(_args: RunShardApplyCdcArgs): Promise<RunShardApplyCdcResult> {
-        return Promise.reject(
-            Object.assign(new Error("applyCdc is not implemented in base ShardDO"), { code: "NOT_IMPLEMENTED", name: "LunoraError", status: 500 }),
-        );
+        return Promise.reject(new LunoraError("NOT_IMPLEMENTED", "applyCdc is not implemented in base ShardDO", { status: 500 }));
     }
 
     /**
@@ -5043,7 +5001,7 @@ abstract class ShardDO {
         const metadata = this.workflowsMetadata().workflows.find((workflow) => workflow.exportName === exportName);
 
         if (!metadata) {
-            throw Object.assign(new Error(`workflow "${exportName}" is not declared`), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+            throw new LunoraError("BAD_REQUEST", `workflow "${exportName}" is not declared`);
         }
 
         const binding = (this.env as Record<string, unknown> | undefined)?.[metadata.binding];
@@ -5054,11 +5012,7 @@ abstract class ShardDO {
             typeof (binding as WorkflowBindingHandle).create !== "function" ||
             typeof (binding as WorkflowBindingHandle).get !== "function"
         ) {
-            throw Object.assign(new Error(`workflow binding "${metadata.binding}" is not available on this deployment`), {
-                code: "BAD_REQUEST",
-                name: "LunoraError",
-                status: 400,
-            });
+            throw new LunoraError("BAD_REQUEST", `workflow binding "${metadata.binding}" is not available on this deployment`);
         }
 
         return binding as WorkflowBindingHandle;
@@ -5269,11 +5223,7 @@ abstract class ShardDO {
         const row = readQueueMessageById(this.state.storage.sql as unknown as SqlExec, parsed.id);
 
         if (row === undefined) {
-            throw Object.assign(new Error(`replayQueueMessage: captured message "${parsed.id}" was not found`), {
-                code: "BAD_REQUEST",
-                name: "LunoraError",
-                status: 404,
-            });
+            throw new LunoraError("BAD_REQUEST", `replayQueueMessage: captured message "${parsed.id}" was not found`, { status: 404 });
         }
 
         // The catcher caps oversized bodies and stands in a marker for unserializable
@@ -5281,20 +5231,20 @@ abstract class ShardDO {
         // Refuse to replay a lossy body rather than deliver a corrupted message the
         // producer never sent.
         if (isLossyBody(row.body)) {
-            throw Object.assign(
-                new Error(`replayQueueMessage: captured message "${parsed.id}" has a truncated or unserializable body and can't be replayed faithfully`),
-                { code: "BAD_REQUEST", name: "LunoraError", status: 422 },
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `replayQueueMessage: captured message "${parsed.id}" has a truncated or unserializable body and can't be replayed faithfully`,
+                { status: 422 },
             );
         }
 
         const target = parsed.target ?? this.resolveReplayTarget(row.queue) ?? row.exportName;
 
         if (typeof target !== "string" || target === "") {
-            throw Object.assign(new Error(`replayQueueMessage: captured message "${parsed.id}" has no declared producer to replay onto (pass \`target\`)`), {
-                code: "BAD_REQUEST",
-                name: "LunoraError",
-                status: 400,
-            });
+            throw new LunoraError(
+                "BAD_REQUEST",
+                `replayQueueMessage: captured message "${parsed.id}" has no declared producer to replay onto (pass \`target\`)`,
+            );
         }
 
         const { binding } = this.resolveQueueBinding(target);
@@ -5318,17 +5268,13 @@ abstract class ShardDO {
         const metadata = this.queuesMetadata().queues.find((queue) => queue.exportName === exportName);
 
         if (!metadata) {
-            throw Object.assign(new Error(`queue "${exportName}" is not declared`), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+            throw new LunoraError("BAD_REQUEST", `queue "${exportName}" is not declared`);
         }
 
         const binding = (this.env as Record<string, unknown> | undefined)?.[metadata.binding];
 
         if (typeof binding !== "object" || binding === null || typeof (binding as QueueBindingHandle).send !== "function") {
-            throw Object.assign(new Error(`queue binding "${metadata.binding}" is not available on this deployment`), {
-                code: "BAD_REQUEST",
-                name: "LunoraError",
-                status: 400,
-            });
+            throw new LunoraError("BAD_REQUEST", `queue binding "${metadata.binding}" is not available on this deployment`);
         }
 
         return { binding: binding as QueueBindingHandle, metadata };

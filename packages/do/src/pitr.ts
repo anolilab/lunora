@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/errors";
+
 /**
  * Native Durable-Object point-in-time recovery (the "in-place ≤30-day" tier).
  *
@@ -82,11 +84,7 @@ const toTime = (time: number | string): Date | number => {
     const parsed = Date.parse(time);
 
     if (Number.isNaN(parsed)) {
-        throw Object.assign(new Error(`pitr: invalid time "${time}" — expected epoch-ms or an ISO timestamp`), {
-            code: "BAD_REQUEST",
-            name: "LunoraError",
-            status: 400,
-        });
+        throw new LunoraError("BAD_REQUEST", `pitr: invalid time "${time}" — expected epoch-ms or an ISO timestamp`);
     }
 
     return parsed;
@@ -126,11 +124,7 @@ const armRestore = async (storage: PitrStorage, args: PitrRestoreArgs): Promise<
 
     if (target === undefined) {
         if (args.time === undefined) {
-            throw Object.assign(new Error("pitrRestore: provide a `bookmark` or a `time` to restore to"), {
-                code: "BAD_REQUEST",
-                name: "LunoraError",
-                status: 400,
-            });
+            throw new LunoraError("BAD_REQUEST", "pitrRestore: provide a `bookmark` or a `time` to restore to");
         }
 
         if (!storage.getBookmarkForTime) {

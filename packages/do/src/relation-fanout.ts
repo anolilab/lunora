@@ -1,4 +1,6 @@
 /* eslint-disable no-secrets/no-secrets -- the `__lunora_relation__:` reserved-prefix template strings are framework constants, not credentials */
+import { LunoraError } from "@lunora/errors";
+
 import type { DatabaseWriterLike, SchemaLike } from "./ctx-db";
 import { RELATION_FUNCTION_PREFIX } from "./introspect";
 import type { QueryArgs } from "./query-args";
@@ -35,17 +37,13 @@ export const serveRelationFanout = async (
     const definition = schema.tables[table];
 
     if (!definition) {
-        throw Object.assign(new Error(`${RELATION_FUNCTION_PREFIX} unknown table "${table}"`), { code: "UNKNOWN_TABLE", name: "LunoraError", status: 404 });
+        throw new LunoraError("UNKNOWN_TABLE", `${RELATION_FUNCTION_PREFIX} unknown table "${table}"`, { status: 404 });
     }
 
     // Only shard-local tables live in a shard's SQLite; a `.global()` table lives
     // in D1 and must never be fanned out across shards.
     if (definition.shardMode?.kind === "global") {
-        throw Object.assign(new Error(`${RELATION_FUNCTION_PREFIX} table "${table}" is global, not shard-local`), {
-            code: "BAD_REQUEST",
-            name: "LunoraError",
-            status: 400,
-        });
+        throw new LunoraError("BAD_REQUEST", `${RELATION_FUNCTION_PREFIX} table "${table}" is global, not shard-local`);
     }
 
     const where = (args["where"] ?? undefined) as QueryArgs["where"];

@@ -1,9 +1,10 @@
+import { LunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
 import { CONFLICT_ERROR_CODE, getErrorCode, getRetryAfterMs, isConflictError, isForbiddenError, isRateLimitedError, isUnauthorizedError } from "../src/errors";
 
 /** Build an `Error` carrying the machine-readable `code` the client attaches when decoding the worker envelope. */
-const errorWithCode = (code: string): Error & { code: string } => Object.assign(new Error("boom"), { code });
+const errorWithCode = (code: string): LunoraError => new LunoraError(code, "boom");
 
 describe("isConflictError", () => {
     it("exposes CONFLICT_ERROR_CODE as the server's 409 code", () => {
@@ -15,7 +16,7 @@ describe("isConflictError", () => {
     it("a coded Error with code CONFLICT is a conflict", () => {
         expect.assertions(1);
 
-        const error = Object.assign(new Error("optimistic concurrency conflict"), { code: "CONFLICT" });
+        const error = new LunoraError("CONFLICT", "optimistic concurrency conflict");
 
         expect(isConflictError(error)).toBe(true);
     });
@@ -23,7 +24,7 @@ describe("isConflictError", () => {
     it("a coded Error with a different code is not a conflict", () => {
         expect.assertions(1);
 
-        const error = Object.assign(new Error("missing"), { code: "NOT_FOUND" });
+        const error = new LunoraError("NOT_FOUND", "missing");
 
         expect(isConflictError(error)).toBe(false);
     });
@@ -96,7 +97,7 @@ describe("getRetryAfterMs", () => {
 
         expect(getRetryAfterMs({ data: { retryAfterMs: 1500 } })).toBe(1500);
         // Works off a real reconstructed error too, not just a plain object.
-        expect(getRetryAfterMs(Object.assign(new Error("slow down"), { code: "TOO_MANY_REQUESTS", data: { retryAfterMs: 250 } }))).toBe(250);
+        expect(getRetryAfterMs(new LunoraError("TOO_MANY_REQUESTS", "slow down", { data: { retryAfterMs: 250 } }))).toBe(250);
     });
 
     it("returns undefined when absent or non-numeric", () => {

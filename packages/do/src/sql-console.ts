@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/errors";
+
 import type { SqlExec } from "./ctx-db";
 
 /**
@@ -40,7 +42,7 @@ const TRAILING_SEMICOLON = /;\s*$/u;
 const stripLeading = (sql: string): string => sql.replace(LEADING_NOISE, "");
 
 /** Build a tagged LunoraError the runtime serializes with its `status`. */
-const sqlError = (message: string, code: string): Error => Object.assign(new Error(message), { code, name: "LunoraError", status: 400 });
+const sqlError = (message: string, code: string): Error => new LunoraError(code, message, { status: 400 });
 
 /**
  * Reject anything that isn't a single read-only statement. Throws a 400
