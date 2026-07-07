@@ -258,7 +258,7 @@ const findWorkerEntry = (projectRoot: string): { entryPath: string; main: string
             break;
         }
 
-        return { entryPath: absolute, main: main ?? candidate, source: content };
+        return { entryPath: absolute, main: candidate, source: content };
     }
 
     return undefined;
@@ -286,8 +286,11 @@ const buildReexportLines = (entrypointReexports: ReadonlyArray<EntrypointReexpor
 
     for (const reexport of entrypointReexports) {
         const specifier = `./lunora/${reexport.module}`;
+        // Quote-bounded exact match so a longer path (e.g. `./lunora/foo-bar`) is
+        // not mistaken for an existing `./lunora/foo` re-export.
+        const existingRe = new RegExp(String.raw`export\s+\*\s+from\s+["']${specifier}\.js["']`, "u");
 
-        if (source.includes(specifier)) {
+        if (existingRe.test(source)) {
             continue;
         }
 
