@@ -37,6 +37,14 @@ interface RegistryEnvVariable {
     value?: string;
 }
 
+/** A re-export the item needs injected into the worker entry point (class-B/C only). */
+interface EntrypointReexport {
+    /** Module specifier (e.g. `"_generated/workflows"` → `export * from "./lunora/_generated/workflows"`). */
+    module: string;
+    /** Optional JS comment placed above the re-export line. */
+    comment?: string;
+}
+
 /** The `registry.json` manifest shape. */
 interface RegistryManifest {
     /** wrangler.jsonc additions (best-effort structural edits). */
@@ -48,6 +56,8 @@ interface RegistryManifest {
     devDependencies?: Readonly<Record<string, string>>;
     /** Post-install guidance printed after the item is added (per-item next steps). */
     docs?: string;
+    /** Worker-entry re-exports the item needs (class-B/C only). */
+    entrypointReexports?: ReadonlyArray<EntrypointReexport>;
     /** Environment variables the item needs; scaffolded into `.dev.vars`. */
     envVars?: ReadonlyArray<RegistryEnvVariable>;
     files: ReadonlyArray<RegistryFile>;
@@ -173,6 +183,7 @@ const setBindingField = (
 export type {
     AddCommandOptions,
     AddCommandResult,
+    EntrypointReexport,
     ReconcileOptions,
     ReconcileOutcome,
     RegistryBinding,

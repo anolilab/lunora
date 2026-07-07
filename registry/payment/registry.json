@@ -1,0 +1,26 @@
+{
+    "$schema": "../schema/registry-item.schema.json",
+    "name": "payment",
+    "title": "Payment",
+    "description": "Provider-agnostic payments for Lunora — Stripe-first checkout, metered usage tracking, entitlement checks, billing portal, and subscription queries built on @lunora/payment. Scaffolds the checkout / track / check / portal / subscriptions / webhook functions. The provider adapter is wired into createShardDO (see docs).",
+    "docs": "Wire the payment adapter into your Worker entry's createShardDO({ payment: (env) => ({ adapter: createStripeAdapter({ client: new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() }), webhookSecret: env.STRIPE_WEBHOOK_SECRET }), authorize: (ref) => ref === ctx.auth.userId, entitlements: { plans: { pro: { features: ['export'], limits: { api_calls: 1000 }, priceIds: ['price_xxx'] } } } }) }) — the adapter reads STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET from env. Then add the POST /payment/webhook HTTP route (see the generated file header for the snippet), run `lunora codegen`, and set the secrets in .dev.vars (locally) and wrangler secret put for production.",
+    "requires": [],
+    "deps": {
+        "@lunora/payment": "workspace:*",
+        "@lunora/server": "workspace:*",
+        "stripe": "^17.0.0"
+    },
+    "envVars": [
+        {
+            "name": "STRIPE_SECRET_KEY",
+            "description": "Stripe secret key (test mode: sk_test_...). Obtain from the Stripe dashboard.",
+            "secret": true
+        },
+        {
+            "name": "STRIPE_WEBHOOK_SECRET",
+            "description": "Stripe webhook signing secret (whsec_...). Set in the Stripe dashboard for your /payment/webhook endpoint.",
+            "secret": true
+        }
+    ],
+    "files": [{ "from": "payment.ts", "to": "lunora/payment/index.ts", "merge": "create-or-skip" }]
+}

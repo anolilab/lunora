@@ -42,6 +42,11 @@
             "title": "Mail"
         },
         {
+            "description": "Provider-agnostic payments for Lunora — Stripe-first checkout, metered usage tracking, entitlement checks, billing portal, and subscription queries built on @lunora/payment. Scaffolds the checkout / track / check / portal / subscriptions / webhook functions. The provider adapter is wired into createShardDO (see docs).",
+            "name": "payment",
+            "title": "Payment"
+        },
+        {
             "description": "Collaborative-awareness presence (who's here + cursors) — a TTL'd room/session table wired into your Lunora schema, with reactive listPresent and a heartbeat upsert.",
             "name": "presence",
             "title": "Presence"

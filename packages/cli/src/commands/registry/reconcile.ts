@@ -2,6 +2,9 @@
  * The file reconcile engine: `schema-extension` AST-merge and the lock-aware
  * `create-or-skip` 3-way upgrade (base = last-written hash, yours = on-disk,
  * theirs = incoming). `--diff` previews; `--overwrite` force-takes theirs.
+ *
+ * Also handles `entrypointReexports` — injecting `export * from "./lunora/<module>"`
+ * into the class-B/C worker entry file.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
@@ -14,7 +17,7 @@ import type { RegistryLock } from "../../util/registry-lock";
 import { hashContent, readLock, recordedHash, recordFile, writeLock } from "../../util/registry-lock";
 import renderDiff from "../../util/text-diff";
 import { applyItemResources, projectUsesUmbrella, rewriteUmbrellaImports } from "./apply";
-import type { ReconcileOptions, ReconcileOutcome, RegistryFile, ResolvedItem } from "./types";
+import type { EntrypointReexport, ReconcileOptions, ReconcileOutcome, RegistryFile, ResolvedItem } from "./types";
 
 /** Code files whose `@lunora/*` base imports are rewritten to `lunorash/*` for umbrella projects. */
 const CODE_FILE_RE = /\.[cm]?[jt]sx?$/u;
@@ -205,6 +208,130 @@ const reconcileFile = (
     return reconcileWholeFile(file, itemKey, itemDirectory, projectRoot, logger, lock, reconcileOptions, useUmbrella);
 };
 
+/**
+ * Conventional worker-entry locations probed when wrangler `main` doesn't resolve.
+ * Mirrors `.vis/templates/_helpers/wire-worker-entry.ts`.
+ */
+const WORKER_ENTRY_FALLBACKS = ["src/server.ts", "src/server/index.ts", "src/index.ts", "src/worker.ts"];
+
+/** Read wrangler `main` field (regex-based, tolerant of jsonc comments). */
+const readWranglerMain = (projectRoot: string): string | undefined => {
+    for (const file of ["wrangler.jsonc", "wrangler.json"]) {
+        const path = join(projectRoot, file);
+
+        if (!existsSync(path)) {
+            continue;
+        }
+
+        const match = /"main"\s*:\s*"([^"]+)"/u.exec(readFileSync(path, "utf8"));
+
+        if (match?.[1]) {
+            return match[1];
+        }
+    }
+
+    return undefined;
+};
+
+/**
+ * Apply an item's declared entrypoint re-exports: inject `export * from
+ * "./lunora/<module>"` lines into the class-B/C worker entry (the file that
+ * calls `createShardDO`). For class-A (Vite plugin / no such file), log a
+ * post-add instruction instead. Idempotent — skips a module whose re-export
+ * already exists.
+ *
+ * Returns the number of re-export lines injected, or 0 when class-A / none.
+ */
+const applyEntrypointReexports = (
+    entrypointReexports: ReadonlyArray<EntrypointReexport>,
+    projectRoot: string,
+    logger: Logger,
+    diff: boolean,
+): number => {
+    if (entrypointReexports.length === 0) {
+        return 0;
+    }
+
+    const main = readWranglerMain(projectRoot);
+    const candidates = main === undefined ? WORKER_ENTRY_FALLBACKS : [main, ...WORKER_ENTRY_FALLBACKS];
+    let entryPath: string | undefined;
+    let source: string | undefined;
+
+    for (const candidate of candidates) {
+        const absolute = join(projectRoot, candidate);
+
+        if (!existsSync(absolute)) {
+            continue;
+        }
+
+        const content = readFileSync(absolute, "utf8");
+
+        // Only touch class-B/C workers (contain `createShardDO(`).
+        if (!content.includes("createShardDO(")) {
+            break;
+        }
+
+        entryPath = absolute;
+        source = content;
+        break;
+    }
+
+    if (entryPath === undefined || source === undefined) {
+        // Class-A or no worker entry found — print instruction.
+        for (const reexport of entrypointReexports) {
+            const specifier = `./lunora/${reexport.module}`;
+            const instruction = `Add \`export * from "${specifier}"\` to your worker entry`;
+            const suffix = reexport.comment ? ` (${reexport.comment})` : "";
+
+            logger.warn(`${instruction}${suffix}`);
+        }
+
+        return 0;
+    }
+
+    const linesToAppend: string[] = [];
+    let count = 0;
+
+    for (const reexport of entrypointReexports) {
+        const specifier = `./lunora/${reexport.module}`;
+
+        if (source.includes(specifier)) {
+            logger.warn(`skip (exists): entrypoint reexport "${specifier}"`);
+
+            continue;
+        }
+
+        if (reexport.comment) {
+            linesToAppend.push(`\n// ${reexport.comment}`);
+        }
+
+        // Generated code uses `.js` extension (NodeNext).
+        linesToAppend.push(`export * from "${specifier}.js";`);
+        count++;
+    }
+
+    if (count === 0) {
+        return 0;
+    }
+
+    if (diff) {
+        for (const line of linesToAppend) {
+            if (line !== "") {
+                logger.info(`~ entrypoint: ${line}`);
+            }
+        }
+
+        return count;
+    }
+
+    const separator = source.endsWith("\n") ? "" : "\n";
+
+    writeFileSync(entryPath, `${source}${separator}${linesToAppend.join("\n")}\n`, "utf8");
+    logger.success(`wrote ${String(count)} entrypoint re-export(s) to ${main ?? candidates[0]}`);
+
+    return count;
+};
+
 /** Run the reconcile phase across every resolved item; returns the aggregate outcome. */
 const reconcileItems = (
     items: ReadonlyArray<ResolvedItem>,
@@ -233,6 +360,12 @@ const reconcileItems = (
             const outcome = reconcileFile(file, manifest.name, directory, cwd, logger, lock, reconcileOptions, useUmbrella);
 
             (outcome.kind === "written" ? written : skipped).push(outcome.path);
+        }
+
+        // Entrypoint re-exports must be shown in diff mode too (before the
+        // "skip resources" guard), since they modify a source file.
+        if (manifest.entrypointReexports !== undefined) {
+            applyEntrypointReexports(manifest.entrypointReexports, cwd, logger, reconcileOptions.diff === true);
         }
 
         // --diff is a read-only preview: don't mutate package.json / wrangler / .dev.vars.
