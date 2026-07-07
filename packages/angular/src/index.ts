@@ -22,7 +22,7 @@ export type { ConnectionStatusOptions } from "./connection-status";
 export { connectionStatus } from "./connection-status";
 export type { FlagOptions, FlagsOptions } from "./flag";
 export { flag, flags } from "./flag";
-export type { HydratePreloadedOptions } from "./hydrate-preloaded";
+export type { HydratePreloadedOptions, HydratePreloadedResult } from "./hydrate-preloaded";
 export { hydratePreloaded } from "./hydrate-preloaded";
 export type { LiveQueryOptions } from "./live-query";
 export { liveQuery } from "./live-query";

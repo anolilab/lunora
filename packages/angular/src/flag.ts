@@ -76,9 +76,18 @@ export const flag = <T extends FlagValue>(key: string, defaultValue: T, options:
     let unsubscribe: Unsubscribe | undefined;
 
     try {
-        unsubscribe = client.subscribe(flagsReference, { context: options.context, default: defaultValue, key, type }, (next) => {
-            value.set(next as T);
-        });
+        unsubscribe = client.subscribe(
+            flagsReference,
+            { context: options.context, default: defaultValue, key, type },
+            (next) => {
+                value.set(next as T);
+            },
+            {
+                onError: () => {
+                    value.set(defaultValue);
+                },
+            },
+        );
     } catch {
         // The attach threw (e.g. the client is closed). Keep the default.
     }
@@ -120,15 +129,24 @@ export const flags = <T extends Record<string, FlagValue>>(flagDefaults: T, opti
     const client = resolveLunoraClient(options.client);
     const destroyRef = options.destroyRef ?? inject(DestroyRef);
 
-    const values = signal<T>(flagDefaults);
+    const values = signal<T>({ ...flagDefaults });
 
     const unsubscribes: Unsubscribe[] = [];
 
     for (const [key, defaultValue] of Object.entries(flagDefaults)) {
         try {
-            const unsub = client.subscribe(flagsReference, { context: options.context, default: defaultValue, key, type: flagKind(defaultValue) }, (next) => {
-                values.set({ ...values(), [key]: next });
-            });
+            const unsub = client.subscribe(
+                flagsReference,
+                { context: options.context, default: defaultValue, key, type: flagKind(defaultValue) },
+                (next) => {
+                    values.set({ ...values(), [key]: next });
+                },
+                {
+                    onError: () => {
+                        values.set({ ...values(), [key]: defaultValue });
+                    },
+                },
+            );
 
             unsubscribes.push(unsub);
         } catch {

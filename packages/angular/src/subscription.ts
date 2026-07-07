@@ -30,7 +30,7 @@ export interface SubscriptionResult<T> {
     data: Signal<T | undefined>;
 
     /** The latest error, or `undefined`. */
-    error: Signal<Error | undefined>;
+    error: Signal<SubscriptionError | undefined>;
 }
 
 /**
@@ -58,7 +58,7 @@ export const subscription = <F extends FunctionReference>(
     const destroyRef = options.destroyRef ?? inject(DestroyRef);
 
     const data = signal<ReturnOf<F> | undefined>(undefined);
-    const error = signal<Error | undefined>(undefined);
+    const error = signal<SubscriptionError | undefined>(undefined);
 
     if (args !== "skip") {
         const userOnError = options.onError;
@@ -73,7 +73,7 @@ export const subscription = <F extends FunctionReference>(
                     error.set(undefined);
                 },
                 onError: (error_) => {
-                    error.set(new Error(error_.message));
+                    error.set(error_);
                     data.set(undefined);
                     userOnError?.(error_);
                 },

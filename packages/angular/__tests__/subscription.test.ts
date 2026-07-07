@@ -60,8 +60,7 @@ describe(subscription, () => {
         fake.subscriptions[0]?.emitError(subError);
 
         expect(onError).toHaveBeenCalledWith(subError);
-        expect(error()).toBeInstanceOf(Error);
-        expect(error()?.message).toBe("boom");
+        expect(error()).toStrictEqual(subError);
     });
 
     it("clears the error once a healthy value arrives after an error", () => {
@@ -70,9 +69,11 @@ describe(subscription, () => {
 
         const { data, error } = subscription(streamRef, { roomId: "r1" }, { client: fake.asClient, destroyRef: destroy.asDestroyRef });
 
-        fake.subscriptions[0]?.emitError({ code: "internal", message: "transient" });
+        const subError: SubscriptionError = { code: "internal", message: "transient" };
 
-        expect(error()).toBeInstanceOf(Error);
+        fake.subscriptions[0]?.emitError(subError);
+
+        expect(error()).toStrictEqual(subError);
 
         fake.subscriptions[0]?.push([{ id: "1" }]);
 

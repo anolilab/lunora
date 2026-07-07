@@ -46,8 +46,8 @@ export interface RateLimitResult {
  * math as `@lunora/ratelimit` on the server, so the prediction agrees with the
  * authoritative check; the server remains the source of truth.
  *
- * Does NOT require an injection context — `client` is only used when DI-based
- * resolution is needed (omit to use the injected client).
+ * Requires an Angular injection context unless a `DestroyRef` is passed
+ * explicitly via `options.destroyRef`.
  *
  * ```ts
  * readonly sendLimit = rateLimit({ kind: "token bucket", period: 1000, rate: 10 });

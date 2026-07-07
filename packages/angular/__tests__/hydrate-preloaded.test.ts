@@ -17,7 +17,7 @@ describe(hydratePreloaded, () => {
             value: { messages: ["a"] },
         };
 
-        const data = hydratePreloaded(preloaded, { client: fake.asClient, destroyRef: destroy.asDestroyRef });
+        const { data } = hydratePreloaded(preloaded, { client: fake.asClient, destroyRef: destroy.asDestroyRef });
 
         expect(data()).toStrictEqual({ messages: ["a"] });
         expect(fake.subscriptions).toHaveLength(1);

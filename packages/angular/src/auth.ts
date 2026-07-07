@@ -20,7 +20,7 @@ export interface AuthResult {
     /** The current auth token, or `null`. */
     token: Signal<string | null>;
 
-    /** The resolved user from `getCurrentUser()`, or `null`. */
+    /** The resolved user from `store.getUser()`, or `null`. */
     user: Signal<User | null>;
 }
 
@@ -36,7 +36,7 @@ export interface AuthResult {
  *
  * Call from an injection context (component/service field or constructor):
  * ```ts
- * readonly { token, user, setToken } = auth();
+ * const { token, user, setToken } = auth();
  * ```
  */
 export const auth = (options: AuthOptions = {}): AuthResult => {

@@ -164,10 +164,17 @@ const usePaginatedCore = <F extends FunctionReference>(
                             migrateResultsForRebalance(latestPages, next);
                             pages.set(next);
                             syncSubscriptions(next);
+                            doRebuildPageResults();
                         }
                     }
                 },
-                { shardKey },
+                {
+                    onError: () => {
+                        pendingPageKeys.delete(entry.currentKey);
+                        doRebuildPageResults();
+                    },
+                    shardKey,
+                },
             );
 
             entry.unsub = unsub;
@@ -210,9 +217,9 @@ const usePaginatedCore = <F extends FunctionReference>(
         }
 
         // `applyLoadMore` pins the open-ended tail: the last page's args shift
-        // from `endCursor: null` to `endCursor: cursor`. Re-key the existing
-        // subscription entry and the result map so both survive without
-        // closing/reopening the socket subscription.
+        // from `endCursor: null` to `endCursor: cursor`. Close the old
+        // subscription, carry the result to the new key, and let
+        // `syncSubscriptions` open a fresh sub for the pinned page.
         const oldTail = pages().at(-1);
         const newPinnedPage = next.at(-2);
 
@@ -222,16 +229,15 @@ const usePaginatedCore = <F extends FunctionReference>(
             const entry = activeSubs.get(oldKey);
 
             if (entry && oldKey !== newKey) {
-                entry.currentKey = newKey;
-                activeSubs.set(newKey, entry);
-                activeSubs.delete(oldKey);
-
                 const carried = resultsByKey.get(oldKey);
 
                 if (carried) {
                     resultsByKey.set(newKey, carried);
-                    resultsByKey.delete(oldKey);
                 }
+
+                entry.unsub();
+                activeSubs.delete(oldKey);
+                resultsByKey.delete(oldKey);
             }
         }
 

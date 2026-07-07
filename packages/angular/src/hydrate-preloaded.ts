@@ -1,6 +1,6 @@
 import type { Signal } from "@angular/core";
 import { DestroyRef, inject, signal } from "@angular/core";
-import type { FunctionReference, LunoraClient, Preloaded } from "@lunora/client";
+import type { FunctionReference, LunoraClient, Preloaded, SubscriptionError } from "@lunora/client";
 
 import { resolveLunoraClient } from "./client";
 
@@ -10,6 +10,14 @@ export interface HydratePreloadedOptions {
 
     /** `DestroyRef` whose `onDestroy` tears the subscription down. Defaults to `inject(DestroyRef)`. */
     destroyRef?: DestroyRef;
+}
+
+export interface HydratePreloadedResult<T> {
+    /** The latest value pushed by the server. Seeded synchronously from the preloaded value. */
+    data: Signal<T | undefined>;
+
+    /** The latest subscription error, or `undefined`. */
+    error: Signal<SubscriptionError | undefined>;
 }
 
 /**
@@ -27,16 +35,17 @@ export interface HydratePreloadedOptions {
  *
  * Call from an injection context:
  * ```ts
- * readonly messages = hydratePreloaded(preloadedMessages);
+ * readonly { data, error } = hydratePreloaded(preloadedMessages);
  * ```
  */
-export const hydratePreloaded = <T>(preloaded: Preloaded<T>, options: HydratePreloadedOptions = {}): Signal<T | undefined> => {
+export const hydratePreloaded = <T>(preloaded: Preloaded<T>, options: HydratePreloadedOptions = {}): HydratePreloadedResult<T> => {
     const client = resolveLunoraClient(options.client);
     const destroyRef = options.destroyRef ?? inject(DestroyRef);
 
     const { args, functionPath, shardKey, value } = preloaded;
 
     const data = signal<T | undefined>(value);
+    const error = signal<SubscriptionError | undefined>(undefined);
 
     const functionReference: FunctionReference = { __lunoraRef: functionPath };
 
@@ -45,11 +54,17 @@ export const hydratePreloaded = <T>(preloaded: Preloaded<T>, options: HydratePre
         args,
         (next) => {
             data.set(next as T);
+            error.set(undefined);
         },
-        { shardKey },
+        {
+            onError: (error_) => {
+                error.set(error_);
+            },
+            shardKey,
+        },
     );
 
     destroyRef.onDestroy(unsubscribe);
 
-    return data.asReadonly();
+    return { data: data.asReadonly(), error: error.asReadonly() };
 };

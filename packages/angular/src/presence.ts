@@ -80,21 +80,31 @@ export interface PresenceResult<L extends ListPresentReference> {
 export const presence = <H extends HeartbeatReference, L extends ListPresentReference>(roomId: string, options: PresenceOptions<H, L>): PresenceResult<L> => {
     const client = resolveLunoraClient(options.client);
     const destroyRef = options.destroyRef ?? inject(DestroyRef);
-    const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
+    const { heartbeat, listPresent, shardKey } = options;
+    const intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
 
     const sessionId = options.sessionId ?? makeSessionId();
     const present = signal<ReturnOf<L> | undefined>(undefined);
 
     // Latest awareness data — updated by `setData`; read at heartbeat time so
     // changing data never resets the interval or closes the subscription.
+    if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+        throw new RangeError(`presence intervalMs must be a positive number, got ${String(intervalMs)}`);
+    }
+
     let latestData: Record<string, unknown> | undefined = options.data;
 
+    // Register this room/session as the socket's connection context BEFORE the
+    // first heartbeat so the server's presence `onDisconnect` hook can delete
+    // the row instantly on socket drop.
+    const releaseConnectionContext = client.acquireConnectionContext({ roomId, sessionId }, { shardKey });
+
     const sendHeartbeat = (): void => {
-        const args = {
-            roomId,
-            sessionId,
-            ...(latestData === undefined ? {} : { data: latestData }),
-        } as ArgsOf<H>;
+        const args: ArgsOf<H> = { roomId, sessionId } as ArgsOf<H>;
+
+        if (latestData !== undefined) {
+            (args as Record<string, unknown>).data = latestData;
+        }
 
         // Fire-and-forget — a dropped heartbeat self-heals on the next tick.
         client.mutation(heartbeat, args, { shardKey }).catch(() => undefined);
@@ -119,14 +129,12 @@ export const presence = <H extends HeartbeatReference, L extends ListPresentRefe
         document.addEventListener("visibilitychange", onVisible);
     }
 
-    // Register this room/session as the socket's connection context so the server's
-    // presence `onDisconnect` hook can delete the row instantly on socket drop.
-    const releaseConnectionContext = client.acquireConnectionContext({ roomId, sessionId }, { shardKey });
-
     // Subscribe to the live present-list for the room.
+    const listArgs: ArgsOf<L> = { roomId } as ArgsOf<L>;
+
     const unsubscribe = client.subscribe(
         listPresent,
-        { roomId } as ArgsOf<L>,
+        listArgs,
         (value) => {
             present.set(value);
         },
