@@ -1,0 +1,25 @@
+{
+    "$schema": "../schema/registry-item.schema.json",
+    "name": "cloudflare-access",
+    "title": "Cloudflare Access",
+    "description": "Cloudflare Zero Trust identity for Lunora — verify the Cf-Access-Jwt-Assertion JWT against your team JWKS and feed the verified identity into ctx.auth via a resolveIdentity adapter. Ships with an admin gate for the Studio.",
+    "requires": [],
+    "deps": {
+        "@lunora/cloudflare-access": "workspace:*",
+        "@lunora/server": "workspace:*"
+    },
+    "envVars": [
+        {
+            "name": "CF_ACCESS_TEAM_DOMAIN",
+            "description": "Your Cloudflare Access team domain (e.g. 'acme' or 'acme.cloudflareaccess.com')",
+            "secret": false,
+            "value": "your-team"
+        },
+        {
+            "name": "CF_ACCESS_AUD",
+            "description": "The Access application AUD tag from the Cloudflare Zero Trust dashboard",
+            "secret": true
+        }
+    ],
+    "files": [{ "from": "access.ts", "to": "lunora/access/index.ts", "merge": "create-or-skip" }]
+}

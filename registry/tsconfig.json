@@ -11,12 +11,16 @@
             "better-auth/plugins/generic-oauth": ["../packages/auth/node_modules/better-auth/dist/plugins/generic-oauth/index.d.mts"]
         }
     },
-    "// exclude": "Function templates that import the per-app builders (`mutation`/`query`/`action`/`internal*`) from `./_generated/server` — the path codegen emits in a real project — can't be checked here: that relative path only exists after codegen, and ambient declarations can't stub a relative specifier (same reason `crons/crons.ts`, which imports `./_generated/api`, is excluded). Items that import only published `@lunora/*` surfaces stay in and are checked against the mapped dist declarations above.",
+    "// exclude": "Function templates that import the per-app builders (`mutation`/`query`/`action`/`internal*`) from `./_generated/server` — the path codegen emits in a real project — can't be checked here: that relative path only exists after codegen, and ambient declarations can't stub a relative specifier (same reason `crons/crons.ts`, which imports `./_generated/api`, is excluded). Items that import only published `@lunora/*` surfaces stay in and are checked against the mapped dist declarations above. Subpath-exports like `@lunora/flags/providers/memory` are also excluded because the single `@lunora/*` path mapping can't reach them.",
     "exclude": [
         "**/node_modules/**",
+        "ai/ai.ts",
+        "browser/browser.ts",
         "crons/crons.ts",
         "crons/jobs.ts",
         "backup/backup.ts",
+        "flags/flags.ts",
+        "hyperdrive/hyperdrive.ts",
         "mail/mail.ts",
         "payment/payment.ts",
         "presence/presence.ts",

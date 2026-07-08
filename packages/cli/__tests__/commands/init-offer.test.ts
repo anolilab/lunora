@@ -95,12 +95,12 @@ describe("offerRegistryExtras", () => {
         await offerRegistryExtras(
             baseDeps({
                 applyAll,
-                multiSelect: async () => ["storage", "ratelimit", "crons", "presence", "backup"],
+                multiSelect: async () => ["storage", "payment", "crons", "presence", "backup"],
             }),
         );
 
         // No sub-prompt for these — the picked value IS the registry item name.
-        expect(plans().map((plan) => [...plan.names])).toStrictEqual([["storage"], ["ratelimit"], ["crons"], ["presence"], ["backup"]]);
+        expect(plans().map((plan) => [...plan.names])).toStrictEqual([["storage"], ["payment"], ["crons"], ["presence"], ["backup"]]);
     });
 
     it("applies nothing when the multi-select returns an empty selection", async () => {

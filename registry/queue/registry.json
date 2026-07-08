@@ -1,0 +1,13 @@
+{
+    "$schema": "../schema/registry-item.schema.json",
+    "name": "queue",
+    "title": "Queues",
+    "description": "Cloudflare Queues for Lunora — declare push or pull consumers with `defineQueue`, and codegen wires typed `ctx.queues.<name>.send(...)` on mutation/action context plus the `queue()` Worker export. Scaffolds a sample email queue with a push consumer.",
+    "docs": "After installing, run `lunora codegen` — codegen discovers `defineQueue()` calls in lunora/queues.ts and generates typed `ctx.queues` producers on Mutation/ActionCtx, a `queue()` export in the Worker entry, and the matching `queues.producers[]` / `queues.consumers[]` entries in wrangler.jsonc. Add more queues by declaring additional `defineQueue()` exports. For pull consumers (HTTP), set `mode: \"pull\"` in the config and expose your own endpoint.",
+    "requires": [],
+    "deps": {
+        "@lunora/queue": "workspace:*",
+        "@lunora/server": "workspace:*"
+    },
+    "files": [{ "from": "queues.ts", "to": "lunora/queues.ts", "merge": "create-or-skip" }]
+}

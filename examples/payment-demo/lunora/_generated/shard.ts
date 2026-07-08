@@ -541,6 +541,26 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "name": "unbounded_string_arg",
         "remediation": "Add a max-length bound via `.check(...)` / `.meta({ maxLength })` on the string validator (e.g. cap a name at 256, a body at a few KB). Size the cap to the field's real-world maximum.",
         "title": "Public string argument has no length bound"
+    },
+    {
+        "cacheKey": "http_action_missing_auth_guard:http:17",
+        "categories": [
+            "SECURITY"
+        ],
+        "description": "An `httpAction`/`httpRoute` handler performs a side effect (`ctx.runMutation`/`ctx.runAction`/a `ctx.db` write) but never reads `ctx.auth` — an unauthenticated HTTP endpoint driving a state change, bypassing the identity/RLS checks that guard the rest of the app.",
+        "detail": "`httpAction` handler `<module>` (http:17) calls `ctx.runAction` but never reads `ctx.auth` — an anonymous caller can drive this write. Authenticate the request before the side effect.",
+        "facing": "EXTERNAL",
+        "level": "WARN",
+        "metadata": {
+            "exportName": "<module>",
+            "file": "http",
+            "kind": "httpAction",
+            "line": 17,
+            "sideEffect": "runAction"
+        },
+        "name": "http_action_missing_auth_guard",
+        "remediation": "Read `ctx.auth` in the handler before the side effect — call `await ctx.auth.getIdentity()` (or check `ctx.auth.userId`) and reject unauthenticated/unauthorized requests, or forward through a `mutation`/`action` whose RLS policies enforce access. If the endpoint is intentionally public (e.g. a signed webhook), verify the provider signature before the write.",
+        "title": "Unauthenticated HTTP handler performs a side effect"
     }
 ];
 

@@ -1,0 +1,19 @@
+{
+    "$schema": "../schema/registry-item.schema.json",
+    "name": "browser",
+    "title": "Browser rendering",
+    "description": "Cloudflare Browser Rendering for Lunora — headless browser screenshots, PDFs, and HTML scraping via ctx.browser in actions. Powered by @cloudflare/playwright over the BROWSER binding.",
+    "requires": [],
+    "deps": {
+        "@lunora/browser": "workspace:*",
+        "@lunora/server": "workspace:*",
+        "@cloudflare/playwright": ">=1.0.0"
+    },
+    "bindings": [
+        {
+            "path": ["browser"],
+            "value": [{ "binding": "BROWSER" }]
+        }
+    ],
+    "files": [{ "from": "browser.ts", "to": "lunora/browser/index.ts", "merge": "create-or-skip" }]
+}

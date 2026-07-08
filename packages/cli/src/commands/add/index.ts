@@ -5,12 +5,16 @@ import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/
  * project. A thin, discoverable front door over `lunora registry add`: the
  * friendly aliases (`auth` asks which provider, `email`/`mail` → the mail item)
  * resolve to registry item(s); any other name is passed straight to the
- * registry (e.g. `storage`, `crons`, `presence`, `ratelimit`, `backup`,
- * `auth-clerk`). One install path behind every front door.
+ * registry (e.g. `ai`, `storage`, `crons`, `presence`, `queue`, `backup`,
+ * `flags`, `workflow`, `auth-clerk`). One install path behind every front door.
  */
 const addCommand: Command = {
-    argument: { description: "Feature or registry item: auth | email | storage | crons | presence | ratelimit | backup | …", name: "feature", type: String },
-    description: "Add a feature or registry item (auth, email, storage, crons, …) to the current Lunora project",
+    argument: {
+        description: "Feature or registry item: ai | auth | email | storage | crons | presence | queue | workflow | flags | backup | …",
+        name: "feature",
+        type: String,
+    },
+    description: "Add a feature or registry item (ai, auth, email, storage, crons, …) to the current Lunora project",
     examples: [
         ["lunora add auth", "Add authentication (asks which provider)"],
         ["lunora add auth --provider clerk", "Add Clerk auth without prompting"],

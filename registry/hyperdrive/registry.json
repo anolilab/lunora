@@ -1,0 +1,20 @@
+{
+    "$schema": "../schema/registry-item.schema.json",
+    "name": "hyperdrive",
+    "title": "Hyperdrive",
+    "description": "Bring-your-own Postgres or MySQL to Lunora actions via Cloudflare Hyperdrive — ctx.sql over postgres.js, node-postgres, or mysql2. Includes createHyperdrive() binding reader and adapter helpers.",
+    "docs": "Wire the adapter in your action handler: import { createHyperdrive, fromPostgresJs } from \"@lunora/hyperdrive\"; import postgres from \"postgres\"; then const { connectionString } = createHyperdrive(env.HYPERDRIVE); const sql = fromPostgresJs(postgres(connectionString)); const rows = await sql`select ...`; (see the source file header for a full example).",
+    "requires": [],
+    "deps": {
+        "@lunora/hyperdrive": "workspace:*",
+        "@lunora/server": "workspace:*",
+        "postgres": "^3.4.0"
+    },
+    "bindings": [
+        {
+            "path": ["hyperdrive"],
+            "value": [{ "binding": "HYPERDRIVE" }]
+        }
+    ],
+    "files": [{ "from": "hyperdrive.ts", "to": "lunora/hyperdrive/index.ts", "merge": "create-or-skip" }]
+}

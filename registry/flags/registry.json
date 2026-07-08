@@ -1,0 +1,13 @@
+{
+    "$schema": "../schema/registry-item.schema.json",
+    "name": "flags",
+    "title": "Feature flags",
+    "description": "OpenFeature feature flags for Lunora — declare a `defineFlags` provider in lunora/flags.ts and codegen wires `ctx.flags` onto every query, mutation, and action context. Ships with an in-memory provider; swap to Cloudflare Flagship for production.",
+    "docs": "After installing, run `lunora codegen` — codegen discovers the `defineFlags()` call in lunora/flags.ts and wires `ctx.flags` onto every context. Add more flags to the `memoryProvider` as you develop; when ready for production, provision a Cloudflare Flagship account, add a `FLAGS` binding to wrangler.jsonc, and swap the provider to `flagshipProvider({ binding: \"FLAGS\" })`.",
+    "requires": [],
+    "deps": {
+        "@lunora/flags": "workspace:*",
+        "@lunora/server": "workspace:*"
+    },
+    "files": [{ "from": "flags.ts", "to": "lunora/flags.ts", "merge": "create-or-skip" }]
+}

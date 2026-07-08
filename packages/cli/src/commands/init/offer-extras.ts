@@ -21,19 +21,40 @@ import type { RegistryManifest } from "../registry/types";
  * sub-prompt or alias; every other value IS the registry item name applied
  * directly (`storage` → the `storage` registry item, etc.).
  */
-type StackFeature = "auth" | "backup" | "crons" | "email" | "presence" | "ratelimit" | "storage";
+type StackFeature =
+    | "ai"
+    | "auth"
+    | "backup"
+    | "browser"
+    | "cloudflare-access"
+    | "crons"
+    | "email"
+    | "flags"
+    | "hyperdrive"
+    | "payment"
+    | "presence"
+    | "queue"
+    | "storage"
+    | "workflow";
 
 /** Customize a resolved manifest before it is written (e.g. inject the chosen R2 bucket name). */
 type OfferTransformManifest = (manifest: RegistryManifest) => RegistryManifest;
 
 const STACK_FEATURE_OPTIONS: ReadonlyArray<{ description: string; label: string; value: StackFeature }> = [
+    { description: "LLMs via Workers AI (summarize, generate, stream)", label: "AI", value: "ai" },
     { description: "Sign-up / sign-in (asks which provider)", label: "Authentication", value: "auth" },
-    { description: "Cloudflare Email Workers + a dev mail catcher", label: "Transactional email", value: "email" },
-    { description: "Typed R2 buckets + signed URLs (@lunora/storage)", label: "File storage", value: "storage" },
-    { description: "Token-bucket / sliding-window limits (@lunora/ratelimit)", label: "Rate limiting", value: "ratelimit" },
-    { description: "Scheduled jobs via Cron Triggers (@lunora/scheduler)", label: "Cron jobs", value: "crons" },
-    { description: "Live presence / who's-online over hibernated WebSockets", label: "Presence", value: "presence" },
     { description: "Snapshot + restore your Durable Object data", label: "Backups", value: "backup" },
+    { description: "Headless browser screenshots + PDFs", label: "Browser rendering", value: "browser" },
+    { description: "Zero Trust identity via Cloudflare Access", label: "Cloudflare Access", value: "cloudflare-access" },
+    { description: "Scheduled jobs via Cron Triggers (@lunora/scheduler)", label: "Cron jobs", value: "crons" },
+    { description: "Cloudflare Email Workers + a dev mail catcher", label: "Transactional email", value: "email" },
+    { description: "OpenFeature feature flags (ctx.flags)", label: "Feature flags", value: "flags" },
+    { description: "External Postgres/MySQL via Hyperdrive", label: "Hyperdrive", value: "hyperdrive" },
+    { description: "Stripe-first payments (checkout, subscription, webhooks)", label: "Payments", value: "payment" },
+    { description: "Live presence / who's-online over hibernated WebSockets", label: "Presence", value: "presence" },
+    { description: "Async message queues (push/pull consumers)", label: "Queues", value: "queue" },
+    { description: "Typed R2 buckets + signed URLs (@lunora/storage)", label: "File storage", value: "storage" },
+    { description: "Durable long-running workflows (step.do, sleep, branch)", label: "Workflows", value: "workflow" },
 ];
 
 /** The selectable feature values, for validating a `--add` list. */
@@ -161,7 +182,9 @@ const FEATURE_COLLECTORS: Partial<Record<StackFeature, (deps: OfferDeps) => Prom
 };
 
 /**
- * Offer the stack features (auth, email, storage, rate limiting, crons,
+ * Offer the stack features (ai, auth, backup, browser, cloudflare-access,
+ * crons, email, flags, hyperdrive, payment, presence, queue, storage,
+ * workflow) in ONE multi-select after a successful scaffold. Auth,
  * presence, backups) in ONE multi-select after a successful scaffold. Auth,
  * email, and storage run a follow-up prompt (provider / destination / bucket
  * name); every other feature value is applied as its registry item directly.
@@ -185,8 +208,10 @@ const offerRegistryExtras = async (deps: OfferDeps): Promise<void> => {
     }
 
     if (!deps.interactive) {
-        // eslint-disable-next-line no-secrets/no-secrets -- a pipe-separated feature list, not a secret
-        deps.logger.info("tip: add features later with `lunora add <auth|email|storage|ratelimit|crons|presence|backup>`.");
+        deps.logger.info(
+            // eslint-disable-next-line no-secrets/no-secrets -- the pipe-separated feature list in this tip is a UI prompt, not a credential
+            "tip: add features later with `lunora add <ai|auth|backup|browser|cloudflare-access|crons|email|flags|hyperdrive|payment|presence|queue|storage|workflow>`.",
+        );
 
         return;
     }
