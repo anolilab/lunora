@@ -1,17 +1,12 @@
-import { RateLimiter, rateLimit } from "@lunora/ratelimit";
+import { RateLimiter, rateLimit, createDbStore } from "lunorash/ratelimit";
 
 import { mutation, query, v } from "#lunora/_generated/server.js";
 
-/**
- * One in-memory limiter so the public `send` mutation isn't an open flood target
- * out of the box. The default store is in-memory (per-isolate, resets on
- * eviction) — fine for a starter; run `lunora add ratelimit` for the durable,
- * `ctx.db`-backed store when you ship to production.
- */
-const limiter = new RateLimiter({
+const limiter = (ctx: { db: unknown }) => new RateLimiter({
     config: {
         send: { kind: "token bucket", period: 60_000, rate: 30 },
     },
+    store: createDbStore({ db: ctx.db as never, table: "ratelimit_buckets" }),
 });
 
 export const list = query.input({ channelId: v.string().meta({ schema: { maxLength: 256 } }), limit: v.optional(v.number()) }).query(async ({ args, ctx }) => {

@@ -35,7 +35,7 @@
  */
 import { env } from "cloudflare:workers";
 
-import { RateLimiter, rateLimit } from "@lunora/ratelimit";
+import { RateLimiter, rateLimit, createMemoryStore } from "@lunora/ratelimit";
 import { createStorage, scopeKey } from "@lunora/storage";
 import type { Storage } from "@lunora/storage";
 import { action, mutation, query, v } from "#lunora/_generated/server.js";
@@ -53,6 +53,7 @@ const limiter = new RateLimiter({
     config: {
         storage: { kind: "token bucket", period: 60_000, rate: 60 },
     },
+    store: createMemoryStore(),
 });
 
 /** Rate-limit key: the authenticated owner (every endpoint here requires one via {@link requireOwner}). */

@@ -22,7 +22,7 @@
  * The client half is `usePresence` in `@lunora/react`, which calls `heartbeat`
  * on an interval and subscribes to `listPresent`.
  */
-import { RateLimiter, rateLimit } from "@lunora/ratelimit";
+import { RateLimiter, rateLimit, createMemoryStore } from "@lunora/ratelimit";
 
 import { internalMutation, mutation, query, v } from "#lunora/_generated/server.js";
 
@@ -40,6 +40,7 @@ const limiter = new RateLimiter({
     config: {
         heartbeat: { kind: "token bucket", period: 60_000, rate: 120 },
     },
+    store: createMemoryStore(),
 });
 
 /** A single present member as returned by `listPresent`. */

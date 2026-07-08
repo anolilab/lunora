@@ -10,7 +10,7 @@
  * durable, `ctx.db`-backed store (see `./schema`). `consume` and `reset` are
  * mutations (they persist token state); `check` is a query (read-only peek).
  */
-import { RateLimiter, rateLimit } from "@lunora/ratelimit";
+import { RateLimiter, rateLimit, createMemoryStore } from "@lunora/ratelimit";
 
 import { mutation, query, v } from "#lunora/_generated/server.js";
 
@@ -30,6 +30,7 @@ const adminGuard = new RateLimiter({
     config: {
         admin: { kind: "token bucket", period: 60_000, rate: 120 },
     },
+    store: createMemoryStore(),
 });
 
 /** Rate-limit guard for the public management mutations, keyed by caller. */
