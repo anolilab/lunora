@@ -1,3 +1,10 @@
+## lunorash [1.0.0-alpha.78](https://github.com/anolilab/lunora/compare/lunorash%401.0.0-alpha.77...lunorash%401.0.0-alpha.78) (2026-07-08)
+
+
+### Dependencies
+
+* **@lunora/cli:** upgraded to 1.0.0-alpha.77
+
 ## lunorash [1.0.0-alpha.77](https://github.com/anolilab/lunora/compare/lunorash%401.0.0-alpha.76...lunorash%401.0.0-alpha.77) (2026-07-08)
 
 
