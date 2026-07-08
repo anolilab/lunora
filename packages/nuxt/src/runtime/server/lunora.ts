@@ -19,7 +19,11 @@
  * static `import { toWebRequest }` would throw at module-eval under v2 (missing
  * named export), so `resolveWebRequest` feature-detects it at runtime instead.
  */
-// eslint-disable-next-line import/no-namespace -- a namespace import is required to feature-detect `toWebRequest`, which v2 removed (a static named import would throw at module-eval).
+// `h3` ships no runtime type declarations — the module is resolved at runtime
+// by Nitro. `tsc --noEmit` would error here (and it's expected: the actual types
+// are applied by `nuxt-module-build`/vue-tsc, not by the project's tsc).
+// eslint-disable-next-line import/no-namespace, @typescript-eslint/prefer-ts-expect-error -- a namespace import is required to feature-detect `toWebRequest` (h3 v1→v2 break); `ts-ignore` because tsc can't resolve h3 declarations but the module builder does.
+// @ts-ignore -- h3 module is resolved by nuxt-module-build, not tsc
 import * as h3 from "h3";
 
 // `#lunora/app` is a virtual specifier the @lunora/nuxt module registers
@@ -37,15 +41,9 @@ import { delegateToLunora } from "../handler";
  * WebSocket `Upgrade` handshake), resolve the Cloudflare `env`/`ExecutionContext`
  * off the event, and return the worker's `Response` verbatim (H3 streams it,
  * including a `101 Switching Protocols` upgrade with its `webSocket`).
- *
- * The `h3` namespace import is inherently loosely typed (see the import comment
- * above) — `defineEventHandler`, `event`, and related accesses trigger
- * `@typescript-eslint/no-unsafe-*` rules which are expected here.
  */
-// eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access -- h3 namespace import is loosely typed by design (feature-detect toWebRequest across h3 v1→v2)
-export default h3.defineEventHandler(async (event) => {
+export default h3.defineEventHandler(async (event: unknown) => {
     const { ctx, env } = resolveCloudflare(event as never);
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- event type is opaque (h3 namespace import)
     const request = resolveWebRequest(h3, event);
 
     return delegateToLunora(lunoraApp, request, env, ctx);

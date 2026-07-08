@@ -67,7 +67,7 @@ const detectPackageManager = (startDirectory: string): PackageManager => {
 
     if (initiating !== undefined) {
         // `cnpm` (npminstall) is npm-compatible for our exec/run purposes.
-        return initiating.name === "cnpm" ? "npm" : initiating.name;
+        return initiating.name === "cnpm" ? "npm" : initiating.name as PackageManager;
     }
 
     const [installed] = detectInstalledManagers();
