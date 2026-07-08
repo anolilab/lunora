@@ -79,7 +79,7 @@ const initCommand: Command = {
             type: String,
         },
         {
-            description: "Add features non-interactively after scaffolding (comma-separated): auth | email | storage | ratelimit | crons | presence | backup",
+            description: "Add features non-interactively after scaffolding (comma-separated): auth | email | storage | payment | crons | presence | backup",
             name: "add",
             type: String,
         },

@@ -21,7 +21,7 @@ import type { RegistryManifest } from "../registry/types";
  * sub-prompt or alias; every other value IS the registry item name applied
  * directly (`storage` → the `storage` registry item, etc.).
  */
-type StackFeature = "auth" | "backup" | "crons" | "email" | "presence" | "ratelimit" | "storage";
+type StackFeature = "auth" | "backup" | "crons" | "email" | "payment" | "presence" | "storage";
 
 /** Customize a resolved manifest before it is written (e.g. inject the chosen R2 bucket name). */
 type OfferTransformManifest = (manifest: RegistryManifest) => RegistryManifest;
@@ -30,8 +30,8 @@ const STACK_FEATURE_OPTIONS: ReadonlyArray<{ description: string; label: string;
     { description: "Sign-up / sign-in (asks which provider)", label: "Authentication", value: "auth" },
     { description: "Cloudflare Email Workers + a dev mail catcher", label: "Transactional email", value: "email" },
     { description: "Typed R2 buckets + signed URLs (@lunora/storage)", label: "File storage", value: "storage" },
-    { description: "Token-bucket / sliding-window limits (@lunora/ratelimit)", label: "Rate limiting", value: "ratelimit" },
     { description: "Scheduled jobs via Cron Triggers (@lunora/scheduler)", label: "Cron jobs", value: "crons" },
+    { description: "Stripe-first payments (checkout, subscription, webhooks)", label: "Payments", value: "payment" },
     { description: "Live presence / who's-online over hibernated WebSockets", label: "Presence", value: "presence" },
     { description: "Snapshot + restore your Durable Object data", label: "Backups", value: "backup" },
 ];
@@ -161,7 +161,7 @@ const FEATURE_COLLECTORS: Partial<Record<StackFeature, (deps: OfferDeps) => Prom
 };
 
 /**
- * Offer the stack features (auth, email, storage, rate limiting, crons,
+ * Offer the stack features (auth, email, storage, payment, crons,
  * presence, backups) in ONE multi-select after a successful scaffold. Auth,
  * email, and storage run a follow-up prompt (provider / destination / bucket
  * name); every other feature value is applied as its registry item directly.
@@ -186,7 +186,7 @@ const offerRegistryExtras = async (deps: OfferDeps): Promise<void> => {
 
     if (!deps.interactive) {
         // eslint-disable-next-line no-secrets/no-secrets -- a pipe-separated feature list, not a secret
-        deps.logger.info("tip: add features later with `lunora add <auth|email|storage|ratelimit|crons|presence|backup>`.");
+        deps.logger.info("tip: add features later with `lunora add <auth|email|storage|payment|crons|presence|backup>`.");
 
         return;
     }
