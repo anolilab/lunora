@@ -3,8 +3,7 @@
  *
  * This file is YOURS ... you own and edit it.
  */
-import { generateText, tool } from "@lunora/ai";
-import { z } from "zod";
+import { generateText } from "@lunora/ai";
 import { action, v } from "#lunora/_generated/server.js";
 
 /**
