@@ -1,0 +1,19 @@
+{
+    "$schema": "../schema/registry-item.schema.json",
+    "name": "ai",
+    "title": "AI",
+    "description": "Workers AI for Lunora — bring LLMs to your functions with `ctx.ai`, powered by @lunora/ai (Vercel AI SDK over Cloudflare Workers AI). Scaffolds a summarise action and a sentiment analysis action as examples.",
+    "docs": "After installing, add the `AI` binding to your `wrangler.jsonc` (the registry item adds it for you). Then run `lunora codegen` to wire `ctx.ai` onto ActionCtx. The shipped `summarize` and `analyzeSentiment` actions surface in the generated `api` as `ai/summarize` and `ai/analyzeSentiment` — edit them or use them as templates for your own AI actions. The `@lunora/ai` package re-exports helpers from the Vercel AI SDK (`generateText`, `streamText`, `embed`, tool`, etc.), so you can build agentic flows directly.",
+    "requires": [],
+    "deps": {
+        "@lunora/ai": "workspace:*",
+        "@lunora/server": "workspace:*"
+    },
+    "bindings": [
+        {
+            "path": ["ai"],
+            "value": [{ "binding": "AI", "name": "AI" }]
+        }
+    ],
+    "files": [{ "from": "ai.ts", "to": "lunora/ai/index.ts", "merge": "create-or-skip" }]
+}

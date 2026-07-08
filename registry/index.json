@@ -2,6 +2,11 @@
     "$schema": "./schema/registry.schema.json",
     "items": [
         {
+            "description": "Workers AI for Lunora — bring LLMs to your functions with `ctx.ai`, powered by @lunora/ai (Vercel AI SDK over Cloudflare Workers AI). Scaffolds a summarise action and a sentiment analysis action as examples.",
+            "name": "ai",
+            "title": "AI"
+        },
+        {
             "description": "Cookie-session authentication for Lunora — email/password sign-up/sign-in on top of @lunora/auth (a thin wrapper over better-auth), with the auth instance + request handler wired into your project and verification / forgot-password mail routed through @lunora/mail (captured into the studio Mail tab in dev).",
             "name": "auth",
             "title": "Auth"
@@ -32,9 +37,29 @@
             "title": "Backup"
         },
         {
+            "description": "Cloudflare Browser Rendering for Lunora — headless browser screenshots, PDFs, and HTML scraping via ctx.browser in actions. Powered by @cloudflare/playwright over the BROWSER binding.",
+            "name": "browser",
+            "title": "Browser rendering"
+        },
+        {
+            "description": "Cloudflare Zero Trust identity for Lunora — verify the Cf-Access-Jwt-Assertion JWT against your team JWKS and feed the verified identity into ctx.auth via a resolveIdentity adapter. Ships with an admin gate for the Studio.",
+            "name": "cloudflare-access",
+            "title": "Cloudflare Access"
+        },
+        {
             "description": "Code-first cron starter for Lunora — a lunora/crons.ts that declares recurring jobs with cronJobs() (interval / daily / weekly / monthly / raw cron) plus an illustrative internal function they fire, discovered by codegen and synced into wrangler.jsonc.",
             "name": "crons",
             "title": "Crons"
+        },
+        {
+            "description": "OpenFeature feature flags for Lunora — declare a `defineFlags` provider in lunora/flags.ts and codegen wires `ctx.flags` onto every query, mutation, and action context. Ships with an in-memory provider; swap to Cloudflare Flagship for production.",
+            "name": "flags",
+            "title": "Feature flags"
+        },
+        {
+            "description": "Bring-your-own Postgres or MySQL to Lunora actions via Cloudflare Hyperdrive — ctx.sql over postgres.js, node-postgres, or mysql2. Includes createHyperdrive() binding reader and adapter helpers.",
+            "name": "hyperdrive",
+            "title": "Hyperdrive"
         },
         {
             "description": "Transactional email for Lunora — a sendEmail action (plus a fire-and-forget queueEmail) built on @lunora/mail's Cloudflare Email Workers transport, with CR/LF + header-injection-safe address handling and a dev mail catcher that surfaces every send in the studio.",
@@ -52,6 +77,11 @@
             "title": "Presence"
         },
         {
+            "description": "Cloudflare Queues for Lunora — declare push or pull consumers with `defineQueue`, and codegen wires typed `ctx.queues.<name>.send(...)` on mutation/action context plus the `queue()` Worker export. Scaffolds a sample email queue with a push consumer.",
+            "name": "queue",
+            "title": "Queues"
+        },
+        {
             "description": "Durable, ORM-backed rate limiting (token-bucket / fixed-window / sliding-window) wired into your Lunora schema and procedures.",
             "name": "ratelimit",
             "title": "Rate limit"
@@ -60,6 +90,11 @@
             "description": "R2-backed file storage for Lunora — direct-upload + worker-signed-URL helpers built on @lunora/storage over an R2 bucket binding, exposed as actions/queries so codegen surfaces them as api.storage.*.",
             "name": "storage",
             "title": "Storage"
+        },
+        {
+            "description": "Durable, long-running workflows for Lunora — declare a `defineWorkflow` export in lunora/workflows.ts with steps inspired by Temporal (step.do, step.sleep, fan-out via `branch()`). Codegen generates the WorkflowEntrypoint class and wires `ctx.workflows.<name>.start()` on mutation/action context.",
+            "name": "workflow",
+            "title": "Workflows"
         }
     ]
 }

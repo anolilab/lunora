@@ -1,0 +1,12 @@
+{
+    "$schema": "../schema/registry-item.schema.json",
+    "name": "workflow",
+    "title": "Workflows",
+    "description": "Durable, long-running workflows for Lunora — declare a `defineWorkflow` export in lunora/workflows.ts with steps inspired by Temporal (step.do, step.sleep, fan-out via `branch()`). Codegen generates the WorkflowEntrypoint class and wires `ctx.workflows.<name>.start()` on mutation/action context.",
+    "requires": [],
+    "deps": {
+        "@lunora/workflow": "workspace:*",
+        "@lunora/server": "workspace:*"
+    },
+    "files": [{ "from": "workflows.ts", "to": "lunora/workflows.ts", "merge": "create-or-skip" }]
+}
