@@ -30,9 +30,9 @@ Codegen discovers the `defineFlags()` call in `lunora/flags.ts` by AST and wires
 ```ts
 export default defineFlags({
     provider: memoryProvider({
-        "dark_mode": { defaultValue: false, type: "boolean" },
-        "page_size": { defaultValue: 25, type: "number" },
-        "beta_features": { defaultValue: false, type: "boolean" },
+        dark_mode: { defaultValue: false, type: "boolean" },
+        page_size: { defaultValue: 25, type: "number" },
+        beta_features: { defaultValue: false, type: "boolean" },
     }),
     identify: (auth) => auth.userId ?? undefined,
 });
@@ -100,11 +100,11 @@ The `identify` function is forwarded to Flagship as the targeting key, so gradua
 
 ## Providers reference
 
-| Provider              | Import                                  | Use case                          |
-|-----------------------|-----------------------------------------|-----------------------------------|
-| `memoryProvider`      | `@lunora/flags/providers/memory`        | Local dev, static overrides       |
-| `envProvider`         | `@lunora/flags/providers/env`           | Env-var-driven flags              |
-| `flagshipProvider`    | `@lunora/flags/providers/flagship`      | Production Flagship               |
+| Provider           | Import                             | Use case                    |
+| ------------------ | ---------------------------------- | --------------------------- |
+| `memoryProvider`   | `@lunora/flags/providers/memory`   | Local dev, static overrides |
+| `envProvider`      | `@lunora/flags/providers/env`      | Env-var-driven flags        |
+| `flagshipProvider` | `@lunora/flags/providers/flagship` | Production Flagship         |
 
 Any OpenFeature-compatible provider works — pass it to the `provider` key.
 

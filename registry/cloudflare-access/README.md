@@ -54,9 +54,9 @@ export default createWorker({
 
 1. Every request to your Worker includes a `Cf-Access-Jwt-Assertion` header (set by Cloudflare Access).
 2. On each request, the resolver:
-   - Fetches your team's JWKS from `https://<teamDomain>.cloudflareaccess.com/cdn-cgi/access/certs`.
-   - Verifies the JWT signature, expiry, and `aud` claim.
-   - Returns the verified identity (`{ userId, email, name, groups, ... }`).
+    - Fetches your team's JWKS from `https://<teamDomain>.cloudflareaccess.com/cdn-cgi/access/certs`.
+    - Verifies the JWT signature, expiry, and `aud` claim.
+    - Returns the verified identity (`{ userId, email, name, groups, ... }`).
 3. Lunora feeds this into `ctx.auth` — available in every query, mutation, and action.
 
 ### Admin gate
@@ -75,10 +75,10 @@ Users in the `lunora-admins` Access group will see the admin UI in Studio; every
 
 ## Environment variables
 
-| Variable               | Secret | Description                                                |
-|------------------------|--------|------------------------------------------------------------|
-| `CF_ACCESS_TEAM_DOMAIN` | No    | Your Cloudflare Access team domain (e.g. `acme`).          |
-| `CF_ACCESS_AUD`        | Yes    | The Access application AUD tag from the Zero Trust dashboard. |
+| Variable                | Secret | Description                                                   |
+| ----------------------- | ------ | ------------------------------------------------------------- |
+| `CF_ACCESS_TEAM_DOMAIN` | No     | Your Cloudflare Access team domain (e.g. `acme`).             |
+| `CF_ACCESS_AUD`         | Yes    | The Access application AUD tag from the Zero Trust dashboard. |
 
 `CF_ACCESS_TEAM_DOMAIN` is safe to put in `.dev.vars`. `CF_ACCESS_AUD` is sensitive (it's a proof of your application's identity) — set it via `wrangler secret put CF_ACCESS_AUD`.
 

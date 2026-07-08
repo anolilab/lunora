@@ -32,9 +32,9 @@ The functions surface in the generated `api` as `browser/screenshot` and `browse
 ## How it works
 
 - **`ctx.browser`** exposes three methods, each returning a `Promise`:
-  - **`screenshot(url, opts?)`** — returns a `Uint8Array` of the PNG screenshot.
-  - **`pdf(url, opts?)`** — returns a `Uint8Array` of the PDF.
-  - **`scrape(url, fn)`** — runs an arbitrary `page.evaluate`-like function in the browser and returns its result.
+    - **`screenshot(url, opts?)`** — returns a `Uint8Array` of the PNG screenshot.
+    - **`pdf(url, opts?)`** — returns a `Uint8Array` of the PDF.
+    - **`scrape(url, fn)`** — runs an arbitrary `page.evaluate`-like function in the browser and returns its result.
 - The browser is launched in a remote Cloudflare Browser Rendering instance. Bytes (screenshot/pdf) never touch your Worker — only the final output is returned.
 
 ### Screenshot
@@ -57,10 +57,7 @@ const pdfBytes = await ctx.browser.pdf("https://example.com/report", {
 ### Scraping
 
 ```ts
-const text = await ctx.browser.scrape(
-    "https://example.com",
-    async (page) => page.innerText("body"),
-);
+const text = await ctx.browser.scrape("https://example.com", async (page) => page.innerText("body"));
 ```
 
 The scraper function receives a Playwright `Page` — you can use any Playwright API (`page.$eval`, `page.content`, `page.locator`, etc.).

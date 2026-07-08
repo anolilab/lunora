@@ -20,9 +20,9 @@ export default defineFlags({
      * `flagshipProvider({ binding: "FLAGS" })` once you provision a
      * Cloudflare Flagship account for production. */
     provider: memoryProvider({
-        "dark_mode": { defaultValue: false, type: "boolean" },
-        "page_size": { defaultValue: 25, type: "number" },
-        "beta_features": { defaultValue: false, type: "boolean" },
+        dark_mode: { defaultValue: false, type: "boolean" },
+        page_size: { defaultValue: 25, type: "number" },
+        beta_features: { defaultValue: false, type: "boolean" },
     }),
 
     /** Derive the OpenFeature targeting key from the authenticated user. */

@@ -25,15 +25,13 @@ import { action, v } from "#lunora/_generated/server.js";
  * Query a users table by email. Demonstrates the `fromPostgresJs` adapter.
  * Swap to `fromNodePg` / `fromMysql2` for your driver of choice.
  */
-export const queryUsers = action
-    .input({ email: v.string().meta({ schema: { maxLength: 320 } }) })
-    .action(async ({ args: { email } }) => {
-        const { connectionString } = createHyperdrive(env.HYPERDRIVE);
-        const sql = fromPostgresJs(postgres(connectionString));
-        const rows = await sql`select id, name, email from users where email = ${email}`;
+export const queryUsers = action.input({ email: v.string().meta({ schema: { maxLength: 320 } }) }).action(async ({ args: { email } }) => {
+    const { connectionString } = createHyperdrive(env.HYPERDRIVE);
+    const sql = fromPostgresJs(postgres(connectionString));
+    const rows = await sql`select id, name, email from users where email = ${email}`;
 
-        return { users: rows as Array<{ email: string; id: string; name: string }> };
-    });
+    return { users: rows as Array<{ email: string; id: string; name: string }> };
+});
 
 /**
  * Run a raw SQL query.

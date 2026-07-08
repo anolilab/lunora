@@ -40,7 +40,9 @@ export const orderPipeline = defineWorkflow<{ orderId: string }, { status: strin
             return { id: ctx.params.orderId, total: 2999 };
         });
         await ctx.step.sleep("cool-off", "30 seconds");
-        await ctx.step.do("charge", async () => { /* ... */ });
+        await ctx.step.do("charge", async () => {
+            /* ... */
+        });
         return { status: "completed" };
     },
 });
@@ -79,10 +81,10 @@ export const reportWorkflow = defineWorkflow<{ userIds: string[] }, { results: u
 
 ## Configuration
 
-| Option      | Type                                  | Description                                          |
-|-------------|---------------------------------------|------------------------------------------------------|
-| `handler`   | `(ctx: WorkflowCtx) => Promise\<T\>` | The workflow logic — a function of steps.             |
-| `timeout`   | `string`                              | Max wall-clock duration (e.g. `"15 minutes"`).       |
+| Option    | Type                                 | Description                                    |
+| --------- | ------------------------------------ | ---------------------------------------------- |
+| `handler` | `(ctx: WorkflowCtx) => Promise\<T\>` | The workflow logic — a function of steps.      |
+| `timeout` | `string`                             | Max wall-clock duration (e.g. `"15 minutes"`). |
 
 Wrangler-level config (max concurrency, retry delays) is managed via the generated `wrangler.jsonc`.
 

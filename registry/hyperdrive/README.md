@@ -65,11 +65,11 @@ const rows = await sql.unsafe("select * from users where id = $1", [userId]);
 
 ### Other adapters
 
-| Adapter               | Import                                  | npm package     |
-|-----------------------|-----------------------------------------|-----------------|
-| `fromPostgresJs`      | `@lunora/hyperdrive`                    | `postgres`      |
-| `fromNodePg`          | `@lunora/hyperdrive`                    | `pg`            |
-| `fromMysql2`          | `@lunora/hyperdrive`                    | `mysql2`        |
+| Adapter          | Import               | npm package |
+| ---------------- | -------------------- | ----------- |
+| `fromPostgresJs` | `@lunora/hyperdrive` | `postgres`  |
+| `fromNodePg`     | `@lunora/hyperdrive` | `pg`        |
+| `fromMysql2`     | `@lunora/hyperdrive` | `mysql2`    |
 
 All three follow the same pattern: `createHyperdrive(env.MY_BINDING)` returns `{ connectionString }`, pass that to your driver, then wrap with the adapter.
 

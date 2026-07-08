@@ -9,7 +9,11 @@ import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/
  * `flags`, `workflow`, `auth-clerk`). One install path behind every front door.
  */
 const addCommand: Command = {
-    argument: { description: "Feature or registry item: ai | auth | email | storage | crons | presence | queue | workflow | flags | backup | …", name: "feature", type: String },
+    argument: {
+        description: "Feature or registry item: ai | auth | email | storage | crons | presence | queue | workflow | flags | backup | …",
+        name: "feature",
+        type: String,
+    },
     description: "Add a feature or registry item (ai, auth, email, storage, crons, …) to the current Lunora project",
     examples: [
         ["lunora add auth", "Add authentication (asks which provider)"],

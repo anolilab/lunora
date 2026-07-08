@@ -36,10 +36,8 @@ export const screenshot = action
 /**
  * Capture a PDF of a URL.
  */
-export const pdf = action
-    .input({ url: v.string().meta({ schema: { maxLength: 2048 } }) })
-    .action(async ({ args: { url }, ctx }) => {
-        const pdfBytes = await ctx.browser.pdf(url, { format: "A4" });
+export const pdf = action.input({ url: v.string().meta({ schema: { maxLength: 2048 } }) }).action(async ({ args: { url }, ctx }) => {
+    const pdfBytes = await ctx.browser.pdf(url, { format: "A4" });
 
-        return { pdf: [...pdfBytes] };
-    });
+    return { pdf: [...pdfBytes] };
+});
