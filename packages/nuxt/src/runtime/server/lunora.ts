@@ -37,9 +37,15 @@ import { delegateToLunora } from "../handler";
  * WebSocket `Upgrade` handshake), resolve the Cloudflare `env`/`ExecutionContext`
  * off the event, and return the worker's `Response` verbatim (H3 streams it,
  * including a `101 Switching Protocols` upgrade with its `webSocket`).
+ *
+ * The `h3` namespace import is inherently loosely typed (see the import comment
+ * above) — `defineEventHandler`, `event`, and related accesses trigger
+ * `@typescript-eslint/no-unsafe-*` rules which are expected here.
  */
+// eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access -- h3 namespace import is loosely typed by design (feature-detect toWebRequest across h3 v1→v2)
 export default h3.defineEventHandler(async (event) => {
     const { ctx, env } = resolveCloudflare(event as never);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- event type is opaque (h3 namespace import)
     const request = resolveWebRequest(h3, event);
 
     return delegateToLunora(lunoraApp, request, env, ctx);

@@ -19,6 +19,8 @@ export interface LunoraErrorLike extends Error {
     docsUrl?: string;
     hint?: ErrorHint;
     status: number;
+    /** Wire brand that distinguishes real `LunoraError`s from foreign errors. */
+    type: "VisulimaError";
 }
 
 /**

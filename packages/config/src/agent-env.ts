@@ -53,7 +53,7 @@ const detectAiAgent = (env: EnvLike = process.env): AgentDetection | undefined =
 
     const session = detectAiSession(env);
 
-    return session === undefined ? undefined : { name: session.agent, variable: session.variable };
+    return session === undefined ? undefined : { name: session.agent, variable: session.signal };
 };
 
 export type { AgentDetection };
