@@ -208,8 +208,8 @@ const offerRegistryExtras = async (deps: OfferDeps): Promise<void> => {
     }
 
     if (!deps.interactive) {
-        // eslint-disable-next-line no-secrets/no-secrets -- the pipe-separated feature list in this tip is a UI prompt, not a credential
         deps.logger.info(
+            // eslint-disable-next-line no-secrets/no-secrets -- the pipe-separated feature list in this tip is a UI prompt, not a credential
             "tip: add features later with `lunora add <ai|auth|backup|browser|cloudflare-access|crons|email|flags|hyperdrive|payment|presence|queue|storage|workflow>`.",
         );
 
