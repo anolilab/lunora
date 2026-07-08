@@ -21,7 +21,21 @@ import type { RegistryManifest } from "../registry/types";
  * sub-prompt or alias; every other value IS the registry item name applied
  * directly (`storage` → the `storage` registry item, etc.).
  */
-type StackFeature = "ai" | "auth" | "backup" | "browser" | "cloudflare-access" | "crons" | "email" | "flags" | "hyperdrive" | "payment" | "presence" | "queue" | "storage" | "workflow";
+type StackFeature =
+    | "ai"
+    | "auth"
+    | "backup"
+    | "browser"
+    | "cloudflare-access"
+    | "crons"
+    | "email"
+    | "flags"
+    | "hyperdrive"
+    | "payment"
+    | "presence"
+    | "queue"
+    | "storage"
+    | "workflow";
 
 /** Customize a resolved manifest before it is written (e.g. inject the chosen R2 bucket name). */
 type OfferTransformManifest = (manifest: RegistryManifest) => RegistryManifest;
@@ -194,8 +208,11 @@ const offerRegistryExtras = async (deps: OfferDeps): Promise<void> => {
     }
 
     if (!deps.interactive) {
-        // eslint-disable-next-line no-secrets/no-secrets -- a pipe-separated feature list, not a secret
-        deps.logger.info("tip: add features later with `lunora add <ai|auth|backup|browser|cloudflare-access|crons|email|flags|hyperdrive|payment|presence|queue|storage|workflow>`.");
+         
+        // eslint-disable-next-line no-secrets/no-secrets -- the pipe-separated feature list in this tip is a UI prompt, not a credential
+        deps.logger.info(
+            "tip: add features later with `lunora add <ai|auth|backup|browser|cloudflare-access|crons|email|flags|hyperdrive|payment|presence|queue|storage|workflow>`.",
+        );
 
         return;
     }
