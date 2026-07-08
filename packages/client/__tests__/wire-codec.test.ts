@@ -1,4 +1,4 @@
-import { isLunoraError,LunoraError } from "@lunora/errors";
+import { isLunoraError, LunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
