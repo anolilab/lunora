@@ -65,7 +65,7 @@
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/server": "1.0.0-alpha.17",
+        "@lunora/server": "1.0.0-alpha.19",
         "@lunora/values": "1.0.0-alpha.5",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",

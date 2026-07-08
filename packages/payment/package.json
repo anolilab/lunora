@@ -86,7 +86,7 @@
     },
     "dependencies": {
         "@lunora/errors": "1.0.0-alpha.2",
-        "@lunora/server": "1.0.0-alpha.18",
+        "@lunora/server": "1.0.0-alpha.19",
         "@lunora/values": "1.0.0-alpha.5",
         "dinero.js": "2.0.2"
     },
@@ -96,9 +96,9 @@
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
-        "autumn-js": "1.2.34",
+        "autumn-js": "1.2.36",
         "creem": "1.5.3",
-        "dodopayments": "2.41.0",
+        "dodopayments": "2.42.0",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
         "stripe": "22.3.0",

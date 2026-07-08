@@ -73,7 +73,7 @@
     },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",
-        "@lunora/server": "1.0.0-alpha.18",
+        "@lunora/server": "1.0.0-alpha.19",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

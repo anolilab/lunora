@@ -65,7 +65,7 @@
         "@lunora/errors": "1.0.0-alpha.2"
     },
     "devDependencies": {
-        "@lunora/server": "1.0.0-alpha.18",
+        "@lunora/server": "1.0.0-alpha.19",
         "@lunora/testing": "1.0.0-alpha.35",
         "@lunora/values": "1.0.0-alpha.5",
         "@types/node": "catalog:types",

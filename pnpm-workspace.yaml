@@ -99,10 +99,10 @@ catalogs:
     # `minimumReleaseAgeExclude` below. A caret would let pnpm drift to a newer
     # patch that is NOT excluded and would then be gated. To bump: update the
     # version here AND its matching exclude entry together.
-    ai: 7.0.14
+    ai: 7.0.16
     workers-ai-provider: 3.3.1
-    "@ai-sdk/anthropic": 4.0.7
-    "@ai-sdk/openai": 4.0.7
+    "@ai-sdk/anthropic": 4.0.8
+    "@ai-sdk/openai": 4.0.8
   build:
     "@babel/core": ^8.0.1
     "@babel/preset-react": ^8.0.1
@@ -118,12 +118,12 @@ catalogs:
     "@semantic-release/exec": ^7.1.0
     "@total-typescript/ts-reset": ^0.6.1
     "@tsconfig/node24": ^24.0.4
-    conventional-changelog-conventionalcommits: 10.2.0
+    conventional-changelog-conventionalcommits: 10.2.1
     cross-env: ^10.1.0
   lint:
-    "@anolilab/eslint-config": 28.0.0
+    "@anolilab/eslint-config": 28.0.1
     "@anolilab/prettier-config": 10.0.1
-    "@eslint-react/eslint-plugin": 5.10.2
+    "@eslint-react/eslint-plugin": 5.11.3
     "@ospm/eslint-plugin-react-unhookify": ^1.0.2
     eslint: 10.6.0
     eslint-plugin-jsx-a11y: ^6.10.2
@@ -136,7 +136,7 @@ catalogs:
     eslint-plugin-react-you-might-not-need-an-effect: 1.0.1
     eslint-plugin-testing-library: 7.16.2
     eslint-plugin-validate-jsx-nesting: ^0.1.1
-    fallow: 2.104.0
+    fallow: 3.2.0
     husky: ^9.1.7
     prettier: 3.9.4
     prettier-plugin-svelte: 4.1.1
@@ -146,19 +146,19 @@ catalogs:
   prod:
     "@anolilab/commitlint-config": 10.0.1
     "@anolilab/multi-semantic-release": ^4.4.5
-    "@anolilab/textlint-config": 13.0.3
+    "@anolilab/textlint-config": 13.0.4
     "@commitlint/cli": ^21.2.0
     "@commitlint/config-conventional": ^21.2.0
     cz-conventional-changelog: ^3.3.0
-    "@visulima/vis": 1.0.0-alpha.43
-    "@visulima/tabular": 4.0.0-alpha.14
-    "@visulima/error": 6.0.0-alpha.34
+    "@visulima/vis": 1.0.0
+    "@visulima/tabular": 4.0.0
+    "@visulima/error": 6.0.0
   test:
     "@codspeed/vitest-plugin": 5.7.1
-    "@vitest/coverage-v8": 4.1.9
-    "@vitest/ui": 4.1.9
+    "@vitest/coverage-v8": 4.1.10
+    "@vitest/ui": 4.1.10
     fake-indexeddb: 6.2.5
-    vitest: 4.1.9
+    vitest: 4.1.10
   tsc:
     typescript: 6.0.3
   types:
@@ -171,7 +171,7 @@ catalogs:
     # verified-good Playwright-on-Workers release; bumps are vetted against a live worker.
     "@cloudflare/playwright": 1.3.0
     "@cloudflare/vitest-pool-workers": ^0.18.0
-    "@cloudflare/workers-types": ^5.20260704.1
+    "@cloudflare/workers-types": ^5.20260708.1
     miniflare: ^4.20260701.0
     wrangler: ^4.107.0
   e2e:
@@ -202,7 +202,7 @@ catalogs:
     "@cloudflare/vite-plugin": 1.43.0
     "@tailwindcss/cli": ^4.3.2
     "@tailwindcss/vite": ^4.3.2
-    "@visulima/vite-overlay": 2.0.0-alpha.35
+    "@visulima/vite-overlay": 2.0.0
     es-module-lexer: ^2.3.0
     jsonc-parser: ^3.3.1
     tailwindcss: ^4.3.2
@@ -211,8 +211,8 @@ catalogs:
   data:
     "@faker-js/faker": ^10.5.0
   i18n:
-    "@lingui/core": ^6.4.0
-    "@lingui/message-utils": ^6.4.0
+    "@lingui/core": ^6.5.0
+    "@lingui/message-utils": ^6.5.0
   ui:
     "@base-ui/react": 1.6.0
     "@fontsource-variable/geist": ^5.2.9
@@ -220,12 +220,12 @@ catalogs:
     "@hugeicons/react": ^1.1.9
     class-variance-authority: ^0.7.1
     clsx: ^2.1.1
-    shadcn: ^4.12.0
+    shadcn: ^4.13.0
     tailwind-merge: ^3.6.0
   frontend:
     html-to-image: ^1.11.13
     motion: ^12.42.2
-    recharts: ^3.9.1
+    recharts: ^3.9.2
     "@solidjs/testing-library": ^0.8.10
     "@tanstack/db": ^0.6.14
     "@tanstack/offline-transactions": ^1.0.39
@@ -239,7 +239,7 @@ catalogs:
     "@testing-library/react": ^16.3.2
     "@types/react": ^19.2.17
     "@types/react-dom": ^19.2.3
-    "@xyflow/react": ^12.11.1
+    "@xyflow/react": ^12.11.2
     jsdom: ^29.1.1
     react: ^19.2.7
     react-dom: ^19.2.7
@@ -248,7 +248,7 @@ catalogs:
     vite-plugin-solid: ^2.11.12
     vue: ^3.5.39
   mail:
-    "@visulima/email": 1.0.0-alpha.41
+    "@visulima/email": 1.0.0
     "@react-email/render": 2.0.10
     "postal-mime": 2.7.5
   mcp:
@@ -257,17 +257,17 @@ catalogs:
   # Isolated catalog so the heavy web stack (three.js, fumadocs 17, radix, …)
   # never perturbs the framework packages' version pins.
   web:
-    "@anolilab/eslint-config": 28.0.0
+    "@anolilab/eslint-config": 28.0.1
     "@anolilab/prettier-config": 10.0.1
     "@babel/core": 8.0.1
-    "@eslint-react/eslint-plugin": 5.10.2
+    "@eslint-react/eslint-plugin": 5.11.3
     "@eslint/css": 1.4.0
     "@fuma-comment/react": 1.5.0
-    "@fumadocs/mdx-remote": 1.4.10
+    "@fumadocs/mdx-remote": 1.5.0
     "@icons-pack/react-simple-icons": 13.13.0
     "@netlify/vite-plugin-tanstack-start": 1.3.16
     "@radix-ui/react-icons": 1.3.2
-    "@radix-ui/react-presence": ^1.1.6
+    "@radix-ui/react-presence": ^1.1.7
     "@radix-ui/react-slot": ^1.3.0
     "@react-three/fiber": 9.6.1
     "@rolldown/plugin-babel": 0.2.3
@@ -289,7 +289,7 @@ catalogs:
     "@unpic/react": 1.0.2
     "@vidstack/react": 1.12.13
     "@vitejs/plugin-react": 6.0.3
-    "@vitest/ui": 4.1.9
+    "@vitest/ui": 4.1.10
     babel-plugin-react-compiler: 1.0.0
     class-variance-authority: 0.7.1
     clsx: 2.1.1
@@ -306,12 +306,12 @@ catalogs:
     eslint-plugin-react-you-might-not-need-an-effect: 1.0.1
     eslint-plugin-testing-library: 7.16.2
     eslint-plugin-validate-jsx-nesting: ^0.1.1
-    eslint-plugin-zod: 4.7.0
+    eslint-plugin-zod: 4.7.1
     fast-glob: ^3.3.3
-    fumadocs-core: 16.10.7
-    fumadocs-mdx: 15.0.13
-    fumadocs-twoslash: 3.2.1
-    fumadocs-ui: 16.10.7
+    fumadocs-core: 16.11.1
+    fumadocs-mdx: 15.1.0
+    fumadocs-twoslash: 3.3.0
+    fumadocs-ui: 16.11.1
     gray-matter: ^4.0.3
     happy-dom: 20.10.6
     lucide-react: 1.23.0
@@ -319,9 +319,9 @@ catalogs:
     media-icons: 1.1.5
     motion: 12.42.2
     next-themes: ^0.4.6
-    posthog-js: 1.396.5
+    posthog-js: 1.398.0
     prettier: 3.9.4
-    radix-ui: ^1.6.1
+    radix-ui: ^1.6.2
     react: 19.2.7
     react-dom: 19.2.7
     react-hook-inview: 4.5.1
@@ -330,7 +330,7 @@ catalogs:
     rimraf: 6.1.3
     secretlint: 13.0.2
     semantic-release: 25.0.5
-    shiki: ^4.3.0
+    shiki: ^4.3.1
     tailwind-csstree: 0.3.3
     tailwind-merge: 3.6.0
     tailwindcss: 4.3.2
@@ -342,7 +342,7 @@ catalogs:
     vite: 8.1.3
     vite-imagetools: 10.0.1
     vite-plugin-svgr: 5.2.0
-    vitest: 4.1.9
+    vitest: 4.1.10
     zod: 4.4.3
   auth:
     "@better-auth/passkey": ^1.6.23
@@ -351,9 +351,9 @@ catalogs:
   drizzle:
     drizzle-orm: ^0.45.2
   http:
-    hono: ^4.12.27
+    hono: ^4.12.28
   redact:
-    "@visulima/redact": 3.0.0-alpha.14
+    "@visulima/redact": 3.0.0
 
 preferWorkspacePackages: true
 
