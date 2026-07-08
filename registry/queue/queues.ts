@@ -11,7 +11,7 @@
  *   await ctx.queues.emailQueue.send({ to: "user@example.com" });
  */
 import { defineQueue } from "@lunora/queue";
-import type { QueueBatch } from "@lunora/queue";
+import type { MessageBatchLike } from "@lunora/queue";
 
 /**
  * A sample email queue. Push consumer: every message triggers the handler
@@ -19,7 +19,7 @@ import type { QueueBatch } from "@lunora/queue";
  * Tune `maxBatchSize`, `maxRetries`, etc. in the config.
  */
 export const emailQueue = defineQueue<{ to: string; subject: string; body: string }>({
-    handler: async (ctx, batch: QueueBatch<{ to: string; subject: string; body: string }>) => {
+    handler: async (_ctx, batch: MessageBatchLike<{ to: string; subject: string; body: string }>) => {
         for (const message of batch.messages) {
             // Replace with an internal mutation — see `lunora add mail`
             console.log(`sending to ${message.body.to}: ${message.body.subject}`);
