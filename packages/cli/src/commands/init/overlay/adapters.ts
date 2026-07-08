@@ -150,7 +150,7 @@ const ADAPTERS = {
     },
     solid: {
         adapter: "@lunora/solid",
-        createViteTemplate: "solid",
+        createViteTemplate: "solid-ts",
         files: [
             { contents: SOLID_INDEX, path: "src/index.tsx" },
             { contents: SOLID_APP, path: "src/App.tsx" },
