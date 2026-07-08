@@ -118,6 +118,10 @@
             "types": "./dist/flags/web.d.ts",
             "import": "./dist/flags/web.mjs"
         },
+        "./ratelimit": {
+            "types": "./dist/ratelimit.d.ts",
+            "import": "./dist/ratelimit.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {
@@ -143,6 +147,7 @@
         "@lunora/do": "1.0.0-alpha.25",
         "@lunora/errors": "1.0.0-alpha.2",
         "@lunora/flags": "1.0.0-alpha.10",
+        "@lunora/ratelimit": "1.0.0-alpha.3",
         "@lunora/runtime": "1.0.0-alpha.21",
         "@lunora/server": "1.0.0-alpha.19",
         "@lunora/values": "1.0.0-alpha.5"

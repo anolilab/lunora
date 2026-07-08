@@ -141,6 +141,7 @@ export const buildAuth = (env: AuthEnv): LunoraAuth =>
         database: lunoraD1Adapter(env.DB as never),
         emailAndPassword: {
             enabled: true,
+            requireEmailVerification: true,
             sendResetPassword: async ({ url, user }) => {
                 await sendAuthEmail(env, { subject: "Reset your password", text: `Reset your password:\n${url}`, to: user.email });
             },
@@ -165,7 +166,7 @@ const buildMigrationAuth = (env: AuthEnv): LunoraAuth =>
         baseURL: env.BETTER_AUTH_URL,
         // Raw D1 on purpose — the migration runner resolves Kysely itself.
         database: env.DB as never,
-        emailAndPassword: { enabled: true },
+        emailAndPassword: { enabled: true, requireEmailVerification: true },
         secret: env.BETTER_AUTH_SECRET,
     });
 

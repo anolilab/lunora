@@ -1,3 +1,4 @@
+import { ratelimit } from "./ratelimit/schema.js";
 import { defineSchema, defineTable, v } from "lunorash/server";
 
 export default defineSchema({
@@ -7,4 +8,4 @@ export default defineSchema({
     })
         .shardBy("channelId")
         .index("by_channel", ["channelId"]),
-});
+}).extend(ratelimit.extension);

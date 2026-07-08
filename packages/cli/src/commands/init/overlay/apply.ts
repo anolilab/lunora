@@ -18,8 +18,52 @@ import { patchViteConfig } from "../../../util/patch-vite-config";
 import { resolveTagVersions } from "../../../util/source-ref";
 import type { FrameworkAdapter } from "./adapters";
 
+/** Ratelimit schema extension — defines the `ratelimit_buckets` table for durable rate limiting. */
+const RATELIMIT_SCHEMA = `import type { Middleware } from "lunorash/server";
+import { defineSchemaExtension, defineTable, definePlugin, v } from "lunorash/server";
+import { createDbStore, RateLimiter } from "lunorash/ratelimit";
+import type { RateLimitConfigMap } from "lunorash/ratelimit";
+
+export const limits = {
+    default: { kind: "token bucket", period: 60_000, rate: 10 },
+} as const satisfies RateLimitConfigMap;
+
+export type LimitName = keyof typeof limits;
+
+export const makeRateLimiter = (ctx: { db: unknown }): RateLimiter<LimitName> =>
+    new RateLimiter<LimitName>({
+        config: limits,
+        store: createDbStore({ db: ctx.db as never, table: "ratelimit_buckets" }),
+    });
+
+const middleware: Middleware<{ api?: Record<string, unknown>; db: unknown }, { api: Record<string, unknown>; db: unknown }> = ({ ctx, next }) =>
+    next({
+        ctx: {
+            ...ctx,
+            api: { ...ctx.api, ratelimit: makeRateLimiter(ctx) },
+        },
+    });
+
+export const ratelimit = definePlugin("ratelimit", {
+    extension: defineSchemaExtension("ratelimit", {
+        tables: {
+            buckets: defineTable({
+                key: v.string(),
+                value: v.number(),
+                ts: v.number(),
+                prev: v.optional(v.number()),
+            })
+                .index("by_key", ["key"])
+                .externallyManaged(),
+        },
+    }),
+    middleware,
+});
+`;
+
 /** Canonical `lunora/schema.ts` — byte-identical to the bespoke templates' scaffold. */
-const LUNORA_SCHEMA = `import { defineSchema, defineTable, v } from "lunorash/server";
+const LUNORA_SCHEMA = `import { ratelimit } from "./ratelimit/schema.js";
+import { defineSchema, defineTable, v } from "lunorash/server";
 
 export default defineSchema({
     messages: defineTable({
@@ -28,7 +72,7 @@ export default defineSchema({
     })
         .shardBy("channelId")
         .index("by_channel", ["channelId"]),
-});
+}).extend(ratelimit.extension);
 `;
 
 /**
@@ -37,20 +81,15 @@ export default defineSchema({
  * Written to pass the advisor cleanly out of the box (bounded string args, a
  * real `ctx.db.insert`, and a rate limit on the public mutation).
  */
-const LUNORA_MESSAGES = `import { RateLimiter, rateLimit } from "@lunora/ratelimit";
+const LUNORA_MESSAGES = `import { RateLimiter, rateLimit, createDbStore } from "lunorash/ratelimit";
 
 import { mutation, query, v } from "#lunora/_generated/server.js";
 
-/**
- * One in-memory limiter so the public \`send\` mutation isn't an open flood target
- * out of the box. The default store is in-memory (per-isolate, resets on
- * eviction) — fine for a starter; run \`lunora add ratelimit\` for the durable,
- * \`ctx.db\`-backed store when you ship to production.
- */
-const limiter = new RateLimiter({
+const limiter = (ctx: { db: unknown }) => new RateLimiter({
     config: {
         send: { kind: "token bucket", period: 60_000, rate: 30 },
     },
+    store: createDbStore({ db: ctx.db as never, table: "ratelimit_buckets" }),
 });
 
 export const list = query.input({ channelId: v.string().meta({ schema: { maxLength: 256 } }), limit: v.optional(v.number()) }).query(async ({ args, ctx }) => {
@@ -271,6 +310,7 @@ const applyLunoraOverlay = async (options: ApplyOverlayOptions): Promise<Readonl
     const { adapter, distTag, logger, name, target } = options;
     const written: string[] = [];
 
+    writeFile(target, join("lunora", "ratelimit", "schema.ts"), RATELIMIT_SCHEMA, written);
     writeFile(target, join("lunora", "schema.ts"), LUNORA_SCHEMA, written);
     writeFile(target, join("lunora", "messages.ts"), LUNORA_MESSAGES, written);
     writeFile(target, join("src", "server.ts"), SERVER_ENTRY, written);

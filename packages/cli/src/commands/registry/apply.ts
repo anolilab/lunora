@@ -53,10 +53,10 @@ const resolveDepRange = (range: string): string => {
  * breakage). Add-ons the umbrella does not re-export (`@lunora/auth`,
  * `@lunora/mail`, framework adapters, …) stay granular `@lunora/*` installs.
  */
-const UMBRELLA_REEXPORTED_DEPS = new Set(["@lunora/client", "@lunora/do", "@lunora/runtime", "@lunora/server", "@lunora/values"]);
+const UMBRELLA_REEXPORTED_DEPS = new Set(["@lunora/client", "@lunora/do", "@lunora/ratelimit", "@lunora/runtime", "@lunora/server", "@lunora/values"]);
 
 /** Quoted module specifier for an umbrella-re-exported base package (with optional subpath). */
-const UMBRELLA_IMPORT_RE = /(['"])@lunora\/(client|do|runtime|server|values)(\/[^'"]*)?\1/gu;
+const UMBRELLA_IMPORT_RE = /(['"])@lunora\/(client|do|ratelimit|runtime|server|values)(\/[^'"]*)?\1/gu;
 
 /**
  * True when the project at `projectRoot` depends on the `lunorash` umbrella
