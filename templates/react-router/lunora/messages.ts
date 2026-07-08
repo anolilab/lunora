@@ -2,12 +2,13 @@ import { RateLimiter, rateLimit, createDbStore } from "lunorash/ratelimit";
 
 import { mutation, query, v } from "#lunora/_generated/server.js";
 
-const limiter = (ctx: { db: unknown }) => new RateLimiter({
-    config: {
-        send: { kind: "token bucket", period: 60_000, rate: 30 },
-    },
-    store: createDbStore({ db: ctx.db as never, table: "ratelimit_buckets" }),
-});
+const limiter = (ctx: { db: unknown }) =>
+    new RateLimiter({
+        config: {
+            send: { kind: "token bucket", period: 60_000, rate: 30 },
+        },
+        store: createDbStore({ db: ctx.db as never, table: "ratelimit_buckets" }),
+    });
 
 export const list = query.input({ channelId: v.string().meta({ schema: { maxLength: 256 } }), limit: v.optional(v.number()) }).query(async ({ args, ctx }) => {
     const messages = await ctx.db
