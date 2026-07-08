@@ -15,6 +15,7 @@
  * emitted as a {@link WhereInput} so the shared drizzle compiler
  * (`compileWhereSql`) renders it per dialect.
  */
+import { LunoraError } from "@lunora/errors";
 import type { WithInput } from "./relations";
 import type { WhereInput } from "./where-types";
 
@@ -161,7 +162,7 @@ const encodeCursor = (record: Record<string, unknown>, keys: OrderKey[]): string
  * mapper renders as a 400 (a raw `TypeError`/`SyntaxError` would fall through
  * to a generic 500).
  */
-const invalidCursor = (): Error => Object.assign(new TypeError("invalid cursor"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
+const invalidCursor = (): LunoraError => new LunoraError("BAD_REQUEST", "invalid cursor");
 
 /** Decode a cursor back into its ordered sort-key values (orderBy fields, then id). */
 const decodeCursor = (cursor: string): unknown[] => {
