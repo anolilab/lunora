@@ -1,4 +1,4 @@
-import { LunoraError } from "@lunora/errors";
+import { isLunoraError, LunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
@@ -130,6 +130,16 @@ describe("wireCodec round-trips", () => {
         expect(decoded).toBeInstanceOf(Error);
         expect(decoded.name).toBe("LunoraError");
         expect(decoded.message).toBe("nope");
+    });
+
+    it("round-trips a LunoraError with its wire brand intact (isLunoraError twin)", () => {
+        expect.assertions(2);
+
+        const source = new LunoraError("CONFLICT", "stale");
+        const decoded = wire(source) as LunoraError;
+
+        expect(isLunoraError(decoded)).toBe(true);
+        expect(decoded.message).toBe("stale");
     });
 
     it("round-trips an Error `cause` chain (non-enumerable, positional slot)", () => {

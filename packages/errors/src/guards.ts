@@ -19,15 +19,22 @@ export interface LunoraErrorLike extends Error {
     docsUrl?: string;
     hint?: ErrorHint;
     status: number;
+    /** Wire brand that distinguishes real `LunoraError`s from foreign errors. */
+    type: "VisulimaError";
 }
 
-/** True when `error` carries the Lunora transport shape (string `code` + numeric `status`). */
+/**
+ * True when `error` carries the Lunora transport shape (string `code` + numeric
+ * `status` + the `VisulimaError` brand). The `type` brand is what distinguishes
+ * a real `LunoraError` (or its wire-decoded twin) from a foreign error that
+ * happens to carry `code`/`status` — see plan 119 for the full rationale.
+ */
 export const isLunoraError = (error: unknown): error is LunoraErrorLike => {
     if (!(error instanceof Error)) {
         return false;
     }
 
-    const candidate = error as { code?: unknown; status?: unknown };
+    const candidate = error as { code?: unknown; status?: unknown; type?: unknown };
 
-    return typeof candidate.code === "string" && typeof candidate.status === "number";
+    return candidate.type === "VisulimaError" && typeof candidate.code === "string" && typeof candidate.status === "number";
 };

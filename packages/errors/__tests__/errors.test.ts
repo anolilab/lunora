@@ -72,8 +72,10 @@ describe("isLunoraError", () => {
         expect(isLunoraError(new LunoraError("FORBIDDEN"))).toBe(true);
     });
 
-    it("matches a wire-decoded twin (plain Error with code + status)", () => {
-        const twin = Object.assign(new Error("nope"), { code: "NOT_FOUND", status: 404 });
+    it("matches a wire-decoded twin (plain Error with brand + code + status)", () => {
+        // The wire codec copies all own enumerable props, including `type`,
+        // so a decoded twin carries the brand.
+        const twin = Object.assign(new Error("nope"), { code: "NOT_FOUND", status: 404, type: "VisulimaError" });
 
         expect(isLunoraError(twin)).toBe(true);
     });
@@ -98,6 +100,16 @@ describe("isInternalCode", () => {
         expect(isInternalCode("BAD_REQUEST")).toBe(false);
         expect(isInternalCode("CONFLICT")).toBe(false);
         expect(isInternalCode("NOT_FOUND")).toBe(false);
+    });
+});
+
+describe("toErrorBody — REGRESSION: foreign errors must not ride the echo path", () => {
+    it("does not echo a foreign error that merely has code+status (brand guard)", () => {
+        const foreign = Object.assign(new Error("internal driver detail: host=db-primary-1"), { code: "PROTOCOL_ERROR", status: 502 });
+        const { body, redacted } = toErrorBody(foreign);
+
+        expect(redacted).toBe(true);
+        expect(body.message).not.toContain("db-primary-1");
     });
 });
 
