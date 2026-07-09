@@ -55,6 +55,7 @@ overrides:
   "@lunora/queue": "workspace:*"
   "@lunora/ratelimit": "workspace:*"
   "@lunora/react": "workspace:*"
+  "@lunora/react-native": "workspace:*"
   "@lunora/runtime": "workspace:*"
   "@lunora/scheduler": "workspace:*"
   "@lunora/seed": "workspace:*"
