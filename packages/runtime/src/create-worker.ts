@@ -183,6 +183,18 @@ interface FunctionRegistryEntry {
      */
     kind: "action" | "mutation" | "query" | "stream";
     visibility?: "internal" | "public";
+
+    /**
+     * x402 payment tag set by the `.x402({ price })` builder modifier. Present
+     * only on paid public procedures; the origin worker answers an unpaid RPC
+     * for such a function with a real `402` challenge (via the injected
+     * {@link WorkerOptions.x402Charge} gate) before dispatching, then verifies +
+     * settles at the origin boundary so the shard never sees payment state.
+     * Rides along on the registered function object's identity — codegen casts
+     * the real `fn` into `LUNORA_FUNCTIONS`, so reading it needs no change to the
+     * generated shape (same as `fn.rls`).
+     */
+    x402?: { readonly price: number | string };
 }
 
 /**
@@ -190,6 +202,23 @@ interface FunctionRegistryEntry {
  * discovery endpoint reads. Pass the map straight from `_generated/functions.ts`.
  */
 type FunctionRegistryLike = Record<string, FunctionRegistryEntry>;
+
+/**
+ * Injected x402 charge gate — the seam that paywalls a `.x402({ price })`-tagged
+ * procedure at the origin worker without the runtime importing `@lunora/x402`
+ * (which would pull viem/solana into every worker bundle). Build it with
+ * `createProcedureChargeGate(config)` from `@lunora/x402/charge` and pass it as
+ * {@link WorkerOptions.x402Charge}.
+ *
+ * Given the inbound `request`, the paid procedure's `spec` (its `functionPath` —
+ * used as the x402 challenge `resource` — and USD `price`), and a `dispatch`
+ * that runs the real shard forward, it returns a real `402` + `PAYMENT-REQUIRED`
+ * challenge when the request is unpaid, or the dispatched response (with
+ * `X-PAYMENT-RESPONSE` attached) once the client's `X-PAYMENT` is verified and
+ * settled. `dispatch` runs only after payment is verified — an unpaid or
+ * invalid request never reaches the shard.
+ */
+type X402ChargeGate = (request: Request, spec: { functionPath: string; price: number | string }, dispatch: () => Promise<Response>) => Promise<Response>;
 
 /**
  * Lists objects in the storage bucket for the admin file browser. Structurally
@@ -897,6 +926,19 @@ interface WorkerOptions {
      * reports "not configured" and the studio shows the credentials empty state.
      */
     workflowsClient?: (env: unknown) => undefined | WorkflowsRestClient;
+
+    /**
+     * Injected x402 charge gate for paid (`.x402({ price })`) procedures. Build
+     * it with `createProcedureChargeGate(config)` from `@lunora/x402/charge` and
+     * pass it here; the runtime stays free of a hard `@lunora/x402` dependency
+     * (and its viem/solana deps).
+     *
+     * **Required whenever any registered function is `.x402()`-tagged.** The
+     * origin worker refuses to dispatch a paid procedure with a config error
+     * (`500`) when this is absent, rather than serving it free — the paywall is
+     * fail-closed by construction. See {@link X402ChargeGate}.
+     */
+    x402Charge?: X402ChargeGate;
 }
 
 interface RpcContext {
@@ -1208,6 +1250,40 @@ const logRpcDebug = (env: unknown, envelope: RpcEnvelope): void => {
 
     // eslint-disable-next-line no-console -- intentional, flag-gated dev request-loop diagnostic
     console.warn(`[lunora:rpc] ${envelope.fanOut ? "fan-out" : `shard=${envelope.shardKey ?? "(root)"}`} ${envelope.functionPath}`);
+};
+
+/**
+ * Resolve (and validate) the x402 charge tag for a single RPC: returns the paid
+ * function's `.x402({ price })` tag, or `undefined` when the function is free.
+ *
+ * Fail-closed by construction — a paid function that is fanned out, or one with
+ * no `x402Charge` gate configured on the worker, throws here rather than being
+ * dispatched free. Extracted from `handleRpc` so the paid-procedure guard
+ * doesn't inflate that hot path's cognitive complexity.
+ */
+const resolveX402Charge = (envelope: RpcEnvelope, options: WorkerOptions): FunctionRegistryEntry["x402"] => {
+    const x402Tag = options.functions?.[envelope.functionPath]?.x402;
+
+    if (!x402Tag) {
+        return undefined;
+    }
+
+    // Paid fan-out is unsupported: a challenge/settlement is one payment for one
+    // resource, not N shards. Refuse rather than charge once and fan out.
+    if (envelope.fanOut) {
+        throw new LunoraError("a paid (`.x402`) function cannot be fanned out", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    // Fail-closed: a paid function with no charge gate configured must NOT be
+    // served free. Refuse with a config error rather than dispatch.
+    if (!options.x402Charge) {
+        throw new LunoraError(`function "${envelope.functionPath}" is marked paid (.x402) but no x402Charge gate is configured on the worker`, {
+            code: "MISCONFIGURED",
+            status: 500,
+        });
+    }
+
+    return x402Tag;
 };
 
 const parseEnvelope = async (request: Request): Promise<RpcEnvelope> => {
@@ -2418,6 +2494,15 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         await authorizeRpcEnvelope(envelope, identity);
 
+        // x402 paid-procedure gate. A `.x402({ price })`-tagged function is
+        // paywalled at the origin worker: an unpaid RPC gets a real 402 +
+        // PAYMENT-REQUIRED challenge; a verified + settled `X-PAYMENT` dispatches
+        // as normal. Verify/settle stay HERE, at the origin boundary — the shard
+        // never sees payment state (plan 134 §Phase 2.4). Resolved off the
+        // registered function's identity (`fn.x402`), like `fn.rls`; the helper
+        // fail-closes on paid fan-out or a missing charge gate.
+        const x402Tag = resolveX402Charge(envelope, options);
+
         {
             // Timing wraps the dispatch only — envelope parse + coordinator
             // gate + identity resolution happen above and are not part of
@@ -2486,7 +2571,17 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
             const shardKey = envelope.shardKey ?? defaultShard;
 
-            return dispatchSingleShard(envelope.functionPath, envelope.args ?? {}, shardKey, forwardedHeaders, sinkContext);
+            const dispatch = (): Promise<Response> => dispatchSingleShard(envelope.functionPath, envelope.args ?? {}, shardKey, forwardedHeaders, sinkContext);
+
+            // Paid procedure: run the injected x402 gate around the shard
+            // dispatch (challenge / verify / dispatch / settle). The gate's
+            // presence was already asserted above when `x402Tag` is set, so the
+            // `x402Charge` re-check here is only for the type system.
+            if (x402Tag && options.x402Charge) {
+                return options.x402Charge(request, { functionPath: envelope.functionPath, price: x402Tag.price }, dispatch);
+            }
+
+            return dispatch();
         }
     };
 
@@ -2532,6 +2627,25 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         // Validate + group by target shard (throws on a malformed/reserved/oversized batch).
         const groups = groupBatchCallsByShard(calls, defaultShard);
+
+        // Paid (`.x402`) procedures are not allowed in a batch: one POST carries
+        // one `X-PAYMENT`, so a batch mixing free + paid (or several paid) calls
+        // can't be gated per-entry with a single 402 challenge. Refuse the whole
+        // batch if any entry is paid — callers dispatch paid functions
+        // individually over `/_lunora/rpc` (plan 134 §Phase 2.3).
+        for (const entries of groups.values()) {
+            for (const entry of entries) {
+                if (options.functions?.[entry.functionPath]?.x402) {
+                    throw new LunoraError(
+                        `paid (\`.x402\`) function "${entry.functionPath}" cannot be called in a batch; dispatch it individually over ${RPC_PATH}`,
+                        {
+                            code: "BAD_REQUEST",
+                            status: 400,
+                        },
+                    );
+                }
+            }
+        }
 
         // Per-shard authorization for every entry — same gate as the single-call
         // path — run in parallel (they share the resolved identity).

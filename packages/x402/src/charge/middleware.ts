@@ -135,13 +135,23 @@ export const withHeaders = (response: Response, extra: Record<string, string>): 
 };
 
 /**
+ * Route metadata a caller can layer onto the generated catch-all route. The
+ * procedure gate sets `resource` to the `functionPath` so the x402 challenge
+ * names the paid function (x402 core falls back to the request URL otherwise —
+ * every RPC POSTs to the same `/_lunora/rpc`, so the URL can't tell two paid
+ * procedures apart).
+ */
+export type ChargeRouteOverrides = Pick<RouteConfig, "description" | "resource">;
+
+/**
  * Build and initialise a {@link ChargeMiddleware} for `config`. Fetches
  * facilitator support once (via `initialize()`), so call this once per config
- * and reuse the result across requests.
+ * and reuse the result across requests. `routeOverrides` layers extra route
+ * metadata (e.g. `resource`) onto the generated catch-all route.
  */
-export const createChargeMiddleware = async (config: X402ChargeConfig): Promise<ChargeMiddleware> => {
+export const createChargeMiddleware = async (config: X402ChargeConfig, routeOverrides?: ChargeRouteOverrides): Promise<ChargeMiddleware> => {
     const server = await buildResourceServer(config);
-    const http = new X402HTTPResourceServer(server, buildRoute(config));
+    const http = new X402HTTPResourceServer(server, { ...buildRoute(config), ...routeOverrides });
 
     await http.initialize();
 
