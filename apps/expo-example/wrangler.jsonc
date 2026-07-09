@@ -1,0 +1,23 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "lunora-expo-example",
+    "main": "src/server/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+    },
+    "d1_databases": [
+        // better-auth identity + sessions live in D1. Create the database with
+        // `wrangler d1 create lunora-expo-example` and paste the id below.
+        { "binding": "DB", "database_name": "lunora-expo-example", "database_id": "REPLACE_WITH_D1_ID" },
+    ],
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    // `AUTH_SECRET` is a secret: `.dev.vars` locally (see `.dev.vars.example`),
+    // `wrangler secret put AUTH_SECRET` in production. `AUTH_URL` should be the
+    // deployed worker URL so better-auth resolves cookie origins correctly.
+    "vars": {
+        "AUTH_URL": "http://localhost:8787",
+    },
+}
