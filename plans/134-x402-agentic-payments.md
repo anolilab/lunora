@@ -220,7 +220,30 @@ recipient: \`0x\${string}\`; facilitator?: { url: string }; price:
 `base-sepolia`, a test agent (Phase 4) pays it end-to-end, and unpaid requests
 get a spec-correct 402.
 
-## Phase 2 — Charge: per-procedure `.x402({ price })` (runtime seam)
+## Phase 2 — Charge: per-procedure `.x402({ price })` (runtime seam) — ✅ shipped (2a `dbcd94a84`, 2b `ab3a10d3`)
+
+> **Implemented**: the `.x402({ price })` builder modifier tags a
+> query/mutation/action (2a, commit `dbcd94a84`), and the origin worker
+> paywalls it (2b, commit `ab3a10d3`). Codegen needs **no change** — the tag
+> rides along on the registered function object's identity (`fn.x402`, exactly
+> like `fn.rls`), so `handleRpc` reads it off `options.functions[path].x402`.
+>
+> `@lunora/x402/charge` ships `createProcedureChargeGate(config)`: an injectable
+> gate memoising one initialised charge middleware per `functionPath` (each
+> bakes that function's price and its `functionPath` as the challenge
+> `resource` — every RPC POSTs to the same `/_lunora/rpc`, so the URL can't tell
+> two paid procedures apart). `@lunora/runtime` wires it via
+> `WorkerOptions.x402Charge` (a **structural** type — the runtime never imports
+> `@lunora/x402`, keeping viem/solana out of every worker bundle). Verify +
+> settle stay at the **origin boundary** (`handleRpc`), before shard forwarding;
+> `dispatch` (the shard forward) runs only after payment is verified — the shard
+> never sees payment state, so item 4's STOP condition holds.
+>
+> **Fail-closed** (`resolveX402Charge`): a paid function with no gate configured
+> → `500` config error (never served free); paid fan-out → `400` (one payment is
+> for one resource, not N shards); paid function in a batch → `400` for the whole
+> batch (one POST carries one `X-PAYMENT`). Covered by `procedure-gate.test.ts`
+> (4 tests) + 5 runtime seam tests in `create-worker.test.ts`.
 
 1. Add a `.x402({ price })` modifier to the `query`/`mutation`/`action` builders
    (`@lunora/server`) that tags the function with an x402 price (analogous to
