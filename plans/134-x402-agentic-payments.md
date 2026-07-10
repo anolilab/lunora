@@ -74,14 +74,14 @@ into a tree-shaken package. It is a separate rail.
 All `@x402/*` are **Apache-2.0** (compatible with the repo's
 `FSL-1.1-Apache-2.0`). We write the Lunora glue and reuse the protocol/crypto:
 
-| Package             | v      | Runtime deps                | Rail | Notes                                                                                                                                                                                        |
-| ------------------- | ------ | --------------------------- | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **`@x402/core`**    | 2.17.0 | `zod` only                  | both | Protocol engine. Subpaths: `./server`, `./client`, `./facilitator`, `./http`, `./schemas`, `./types`. The heart.                                                                             |
-| **`@x402/evm`**     | 2.17.0 | `viem`, `@x402/core`, `zod` | both | "exact-EVM" scheme: signing (pay) + payload decode/verify (charge). `viem` is workerd-first.                                                                                                 |
-| **`@x402/fetch`**   | 2.17.0 | `@x402/core` only           | pay  | `wrapFetchWithPayment` — client fetch wrapper. Optional (can drive `@x402/core/client` directly).                                                                                            |
-| **`@x402/svm`**     | 2.17.0 | `@solana/*`, core, zod      | both | Solana scheme (multi-chain ruling). Second, non-viem signing path.                                                                                                                           |
-| `@coinbase/cdp-sdk` | latest | —                           | pay  | **Optional peer (deferred)** — the actual CDP **wallet** custody SDK. Only the CDP signer path needs it; a raw-key user must not pull it.                                                    |
-| `@coinbase/x402`    | 2.1.0  | `@coinbase/cdp-sdk`, `viem` | pay  | **Facilitator-auth helper, NOT a signer** — `createCdpAuthHeaders` / `createFacilitatorConfig` / `facilitator`. Use only for a CDP _facilitator_, not wallet custody (corrected 2026-07-04). |
+| Package             | v      | Runtime deps                | Rail | Notes                                                                                                                                                                                                                                          |
+| ------------------- | ------ | --------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`@x402/core`**    | 2.17.0 | `zod` only                  | both | Protocol engine. Subpaths: `./server`, `./client`, `./facilitator`, `./http`, `./schemas`, `./types`. The heart.                                                                                                                               |
+| **`@x402/evm`**     | 2.17.0 | `viem`, `@x402/core`, `zod` | both | "exact-EVM" scheme: signing (pay) + payload decode/verify (charge). `viem` is workerd-first.                                                                                                                                                   |
+| **`@x402/fetch`**   | 2.17.0 | `@x402/core` only           | pay  | `wrapFetchWithPayment` — client fetch wrapper. Optional (can drive `@x402/core/client` directly).                                                                                                                                              |
+| **`@x402/svm`**     | 2.17.0 | `@solana/*`, core, zod      | both | Solana scheme (multi-chain ruling). Second, non-viem signing path.                                                                                                                                                                             |
+| `@coinbase/cdp-sdk` | 1.51.2 | `viem`, `@solana/kit`, zod  | pay  | **Optional peer (EVM wired)** — the CDP **wallet** custody SDK, loaded lazily. Only the CDP signer path pulls it; raw-key/user-supplied-signer users don't. EVM `getOrCreateAccount` → a `ClientEvmSigner`; Solana still via the escape hatch. |
+| `@coinbase/x402`    | 2.1.0  | `@coinbase/cdp-sdk`, `viem` | pay  | **Facilitator-auth helper, NOT a signer** — `createCdpAuthHeaders` / `createFacilitatorConfig` / `facilitator`. Use only for a CDP _facilitator_, not wallet custody (corrected 2026-07-04).                                                   |
 
 **Do NOT depend on:**
 
@@ -341,23 +341,55 @@ annotations, handler)` that registers a tool whose dispatch runs the charge
 > `@x402/svm`) is declared directly on `@lunora/x402`. Raw-key custody is now
 > wired on **both** families; the pay rail is fully multi-chain.
 >
-> **Still deferred, failing loudly with `NOT_IMPLEMENTED` + guidance** (recognised
-> config shapes, not silent no-ops): **CDP-managed custody** (on both EVM and SVM).
+> **User-supplied-signer escape hatch now ships** (follow-up, commit `3c9899afc`):
+> a `{ type: "signer"; signer }` variant on `X402SignerConfig` lets a caller hand
+> in a signer they built themselves — any `@x402/evm` `ClientEvmSigner` (a viem
+> account: Turnkey, Privy, an AWS/GCP KMS `toAccount`, CDP's viem adapter, …) on an
+> EVM network, or an `@x402/svm` `ClientSvmSigner` (a `@solana/kit`
+> `TransactionSigner`) on Solana. `registerWallet` handles it first, before any
+> `ctx.secrets` read, and guards the network family (`0x…` address vs base58) so a
+> mismatch is a clear config error. This is the highest-leverage seam: it unlocks
+> **every** custody provider via a structural adapter with **zero** per-provider
+> SDK dependency in `@lunora/x402`.
 >
-> **Plan correction (2026-07-04):** `@coinbase/x402` is **not** a wallet/signer
-> provider — v2.1.0 is a _facilitator-auth_ helper (`createCdpAuthHeaders`,
-> `createFacilitatorConfig`, `facilitator`). CDP **wallet** custody needs
-> `@coinbase/cdp-sdk` (an undeclared, heavier peer). So the "both custodies from
-> day one via `@coinbase/x402`" decision is revised: raw-key ships now (EVM + SVM);
-> CDP custody is scoped to a follow-up that wires `@coinbase/cdp-sdk`. `wrapClient`
-> (the MCP-client payer) is likewise deferred — it belongs with Phase 3's remote
-> MCP transport. The `X-PAYMENT` / `X-PAYMENT-RESPONSE` fetch loop ships now.
+> **First-party CDP-managed EVM custody now ships** (follow-up, commit `c204237dd`):
+> the `{ type: "cdp" }` variant is wired on EVM via the optional `@coinbase/cdp-sdk`
+> peer (optional peer + devDep + `catalog:web3` `1.51.2`, loaded lazily with
+> `await import` so raw-key custody pulls neither Coinbase SDK). `resolveCdpEvmAccount`
+> reads three CDP credentials from `ctx.secrets` (names default to the SDK's own
+> `CDP_API_KEY_ID` / `CDP_API_KEY_SECRET` / `CDP_WALLET_SECRET`, overridable per
+> config), constructs `CdpClient`, and `evm.getOrCreateAccount({ name })` — the
+> account is **structurally a `ClientEvmSigner`** (it signs the x402 EIP-712
+> authorization directly, so the key never leaves Coinbase), so no adapter is
+> needed. The glue is covered by a mocked `@coinbase/cdp-sdk` (no live Coinbase
+> call); the live path is **unverified in CI** (no CDP credentials in the sandbox).
+>
+> **Still deferred, failing loudly with `NOT_IMPLEMENTED` + guidance:**
+> **CDP-managed custody on Solana** — a CDP Solana account is not a `@solana/kit`
+> `TransactionSigner` (it signs via CDP-specific base64 methods), so wiring it needs
+> a non-trivial, untestable kit-signer adapter. The error points at the `{ type:
+"signer" }` escape hatch: build a `@solana/kit` signer around the CDP account and
+> pass it there.
+>
+> **Three pluggable provider seams (matrix):**
+>
+> | Seam                            | Interface                                                    | Wired today                                                                                                                                      | Extend via                                                                                |
+> | ------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+> | **Facilitator** (verify/settle) | `FacilitatorConfig { url, headers }`                         | public `x402.org/facilitator` default; self-hosted / CDP facilitator via `url` + auth `headers` (e.g. `@coinbase/x402`'s `createCdpAuthHeaders`) | any HTTP facilitator                                                                      |
+> | **Wallet custody** (pay signer) | structural `ClientEvmSigner` (EVM) / `ClientSvmSigner` (SVM) | raw-key (EVM + SVM), CDP-managed (EVM), user-supplied signer (both)                                                                              | the `{ type: "signer" }` escape hatch — Turnkey, Privy, Fireblocks, KMS, CDP-on-Solana, … |
+> | **Scheme / chain**              | `@x402/evm` + `@x402/svm` exact schemes                      | EVM (`eip155:*`) + Solana                                                                                                                        | future `@x402/*` scheme packages                                                          |
+>
+> **Plan correction (2026-07-04, still stands):** `@coinbase/x402` is **not** a
+> wallet/signer provider — v2.1.0 is a _facilitator-auth_ helper. CDP **wallet**
+> custody is `@coinbase/cdp-sdk` (now wired for EVM). `wrapClient` (the MCP-client
+> payer) remains deferred — it belongs with Phase 3's remote MCP transport.
 
-1. **`pay/wallet.ts`** — resolve a signer: `privateKeyToAccount(secret)` (viem)
-   where `secret` comes from `ctx.secrets.get(name)`; optional CDP-managed
-   account via `@coinbase/cdp-sdk` (optional peer, **deferred**). Wallet lives on
-   **`ActionCtx` only** (crypto + outbound network → action-only, same as
-   `ctx.browser`/`ctx.sql`).
+1. **`pay/wallet.ts`** — resolve a signer: `privateKeyToAccount(secret)` (viem,
+   EVM) or `resolveSvmSigner(secret)` (`@solana/kit`, SVM) where `secret` comes
+   from `ctx.secrets.get(name)`; CDP-managed EVM account via `@coinbase/cdp-sdk`
+   (optional peer, **wired**); or a user-supplied `{ type: "signer" }`. Wallet
+   lives on **`ActionCtx` only** (crypto + outbound network → action-only, same
+   as `ctx.browser`/`ctx.sql`).
 2. **`pay/fetch.ts`** — `wrapFetchWithPayment` over `@x402/fetch` (or drive
    `@x402/core/client` + `@x402/evm` directly) so an action's outbound `fetch`
    auto-handles a 402: parse `PAYMENT-REQUIRED`, sign with the account, retry
@@ -512,6 +544,9 @@ LUNORA_WORKERD_TESTS=1 pnpm --filter "@lunora/x402" run test --no-coverage --pro
 - **Facilitator**: public `x402.org/facilitator` default, with self-hosted /
   CDP override? Default: public, override-able.
 - **Wallet custody (pay)**: raw private key in `ctx.secrets` (simplest) vs CDP
-  managed (`@coinbase/x402`, optional peer, heavier)? Default: raw-key first,
-  CDP as opt-in.
+  managed vs bring-your-own signer? **RESOLVED (all three shipped)**: raw-key on
+  both families, CDP-managed EVM via the optional `@coinbase/cdp-sdk` peer
+  (`c204237dd`; note custody is `@coinbase/cdp-sdk`, not the facilitator-auth
+  `@coinbase/x402`), and a `{ type: "signer" }` escape hatch (`3c9899afc`) for any
+  provider-built signer. CDP on Solana stays deferred (not a `@solana/kit` signer).
 - **`category:web3`** new project.json tag vs reuse `category:payment`?

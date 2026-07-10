@@ -19,16 +19,34 @@ The root export (`@lunora/x402`) carries only the shared config/types
 
 ## Status
 
-**Scaffold (Phase 0).** The package, subpaths, config vocabulary, and dependency
-wiring are in place; the verify/settle/challenge machinery lands in later phases.
-See `plans/134-x402-agentic-payments.md` for the roadmap.
+**Both rails shipped.** The **charge** rail gates HTTP-action routes, procedures
+(`.x402({ price })`), and MCP tools behind a USDC price; the **pay** rail signs and
+retries `402` challenges under a mandatory spend policy. See
+`plans/134-x402-agentic-payments.md` for the phase history.
 
 ## Networks & custody
 
 - **EVM** (Base, Arbitrum, Ethereum, Polygon, …) is signed via [`@x402/evm`](https://npmjs.com/package/@x402/evm) + [viem](https://viem.sh); pass a raw CAIP-2 id for chains without a friendly alias.
 - **Solana** is signed via [`@x402/svm`](https://npmjs.com/package/@x402/svm).
 - **Facilitator** defaults to the public, Coinbase-operated `https://x402.org/facilitator` (no key required); override it for a self-hosted or CDP facilitator.
-- **Pay-rail wallet custody** supports both a self-custodied raw key (from `ctx.secrets`) and a Coinbase-managed [CDP](https://docs.cdp.coinbase.com) wallet (via the optional `@coinbase/x402` peer).
+
+### Provider seams
+
+Three parts of the exchange are pluggable, and each is chosen independently:
+
+| Seam               | Default                                       | How to change it                                                                         |
+| ------------------ | --------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| **Facilitator**    | public `https://x402.org/facilitator`         | `facilitator: { url, headers }` — self-hosted or a keyed CDP facilitator.                |
+| **Wallet custody** | `"raw-key"` (a `ctx.secrets` key, EVM + SVM)  | `"cdp"` (Coinbase-managed, EVM) or the `"signer"` escape hatch (any provider you adapt). |
+| **Scheme / chain** | exact scheme picked by `network` (EVM vs SVM) | choose the `network`; `@x402/evm` and `@x402/svm` register the matching exact scheme.    |
+
+The pay rail's `signer` config selects wallet custody:
+
+- **`{ type: "raw-key", secretName }`** — a self-custodied 32-byte key read from `ctx.secrets`. Works on **EVM and Solana**.
+- **`{ type: "cdp", account }`** — a Coinbase-managed [CDP](https://docs.cdp.coinbase.com) server wallet via the optional [`@coinbase/cdp-sdk`](https://npmjs.com/package/@coinbase/cdp-sdk) peer. The SDK gets-or-creates the named account and signs the EIP-712 authorization, so the key never leaves Coinbase. Wired on **EVM**; the three CDP credentials are read from `ctx.secrets` (`CDP_API_KEY_ID` / `CDP_API_KEY_SECRET` / `CDP_WALLET_SECRET` by default, each overridable). CDP on Solana is not wired (a CDP Solana account is not a `@solana/kit` signer) — use the escape hatch.
+- **`{ type: "signer", signer }`** — the **escape hatch**: hand in a signer you built yourself. Any custody provider (Turnkey, Privy, Fireblocks, an AWS/GCP KMS `toAccount`, CDP's viem adapter, …) works once adapted to the structural EVM (`ClientEvmSigner`) or Solana (`ClientSvmSigner`) shape — so `@lunora/x402` takes no dependency on any provider's SDK. No secret is read.
+
+> `@coinbase/x402` is a **facilitator-auth** helper, not a custody provider; first-party Coinbase custody is `@coinbase/cdp-sdk`.
 
 ## Safety
 
