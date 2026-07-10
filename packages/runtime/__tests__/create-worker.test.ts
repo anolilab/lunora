@@ -877,6 +877,7 @@ describe("createWorker — RPC batch cross-shard bookmark", () => {
 
                 return {
                     fetch: async (request: Request): Promise<Response> => {
+                        // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- request.json() is Promise<unknown> under the build tsconfig; the assertion is required there
                         const { calls } = (await request.json()) as { calls: { id: string }[] };
                         const results = calls.map((call) => {
                             return { body: { shardKey }, id: call.id, status: 200 };
