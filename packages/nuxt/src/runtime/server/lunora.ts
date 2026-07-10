@@ -19,11 +19,7 @@
  * static `import { toWebRequest }` would throw at module-eval under v2 (missing
  * named export), so `resolveWebRequest` feature-detects it at runtime instead.
  */
-// `h3` ships no runtime type declarations — the module is resolved at runtime
-// by Nitro. `tsc --noEmit` would error here (and it's expected: the actual types
-// are applied by `nuxt-module-build`/vue-tsc, not by the project's tsc).
-// eslint-disable-next-line import/no-namespace, @typescript-eslint/prefer-ts-expect-error -- a namespace import is required to feature-detect `toWebRequest` (h3 v1→v2 break); `ts-ignore` because tsc can't resolve h3 declarations but the module builder does.
-// @ts-ignore -- h3 module is resolved by nuxt-module-build, not tsc
+// eslint-disable-next-line import/no-namespace -- a namespace import is required to feature-detect `toWebRequest` across the h3 v1→v2 break
 import * as h3 from "h3";
 
 // `#lunora/app` is a virtual specifier the @lunora/nuxt module registers
