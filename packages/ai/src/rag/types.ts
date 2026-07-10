@@ -43,7 +43,8 @@ export interface RagVectorRecord {
 }
 
 export interface RagVectorUpsertInput {
-    embed: RagEmbedder;
+    /** Embedder used to vectorize `input`. Optional — omitted for text-search indexes. */
+    embed?: RagEmbedder;
     id: string;
     input: string;
     metadata?: Record<string, unknown>;
@@ -98,6 +99,46 @@ export interface StoredRagChunk {
     text: string;
 }
 
+/**
+ * A pre-defined, reusable filter expression. Declared on `RagConfig.filters`
+ * and referenced by name from `RetrieveOptions.filter` — avoids repeating the
+ * same tenant/RBAC filter shape across every retrieval site.
+ * @example
+ * ```ts
+ * const docs = defineRag({
+ *   index: "docs",
+ *   filters: {
+ *     published: { status: "published", deleted: false },
+ *   },
+ * });
+ * // Later — reference by name:
+ * docs(ctx).retrieve("query", { filter: "published" });
+ * ```
+ */
+export interface RagNamedFilter {
+    /** Optional human-readable description for observability / Studio display. */
+    description?: string;
+    /** The filter expression passed verbatim to Vectorize's `filter` parameter. */
+    filter: Record<string, unknown>;
+    /** The filter name — used as the key in `RagConfig.filters`. */
+    name: string;
+}
+
+/**
+ * Text-search index configuration for hybrid (vector + BM25) retrieval.
+ *
+ * When set, each `index()` call also upserts chunk text to the text-search
+ * index, and each `retrieve()` query fuses results from both indexes via
+ * Reciprocal Rank Fusion (RRF) — combining semantic (vector) and keyword
+ * (BM25) relevance signals.
+ */
+export interface RagTextSearchConfig {
+    /** The Vectorize text-search index name (a `ctx.vectors` index binding key). */
+    index: string;
+    /** Retrieval depth for the text-search leg. Defaults to the RAG `topK`. */
+    topK?: number;
+}
+
 export interface RagConfig {
     /**
      * Suppress the one-time dev warning emitted when `index`/`retrieve` run
@@ -119,6 +160,13 @@ export interface RagConfig {
      * `EmbeddingModel`. Falls back to `createAi`'s `defaultModel` when omitted.
      */
     embeddingModel?: EmbeddingModelInput;
+
+    /**
+     * Pre-defined named filter expressions. Each key is a filter name users
+     * pass through `RetrieveOptions.filter`. Throws at retrieve-time if the
+     * name is not found here — catches spelling mistakes early.
+     */
+    filters?: Record<string, Record<string, unknown>>;
     /** The Vectorize index name (a `ctx.vectors` index binding key). */
     index: string;
 
@@ -129,6 +177,13 @@ export interface RagConfig {
      * in metadata mode the leaked payload includes raw chunk text.
      */
     requireNamespace?: boolean;
+
+    /**
+     * Optional text-search index for hybrid (vector + BM25) retrieval. When
+     * set, `index()` writes to both indexes and `retrieve()` fuses results
+     * from both via Reciprocal Rank Fusion.
+     */
+    textSearch?: RagTextSearchConfig;
     /** Chunk-text storage override — see {@link RagTextStore}. */
     textStore?: RagTextStore;
     /** Default retrieval depth. Default 5. Capped at 20 (metadata mode) / 100 (text-store mode). */
@@ -148,6 +203,13 @@ export interface IndexInput {
     metadata?: Record<string, unknown>;
     /** Tenant/shard key. Required for multi-tenant apps — Vectorize is account-global. */
     namespace?: string;
+
+    /**
+     * Called after each chunk is successfully upserted. Useful for progress
+     * tracking during large indexing operations — e.g. updating a UI progress
+     * bar or logging per-chunk status.
+     */
+    onChunk?: (info: { chunkIndex: number; id: string; text: string; total: number }) => void;
     /** The document body to chunk + embed + upsert. */
     text: string;
 }
@@ -179,7 +241,13 @@ export interface RetrieveOptions {
      * with `chunkOverlap: 0`, since overlapping windows repeat boundary text.
      */
     chunkContext?: { after?: number; before?: number };
-    filter?: Record<string, unknown>;
+
+    /**
+     * Vectorize filter expression — or the name of a pre-defined filter declared
+     * in `RagConfig.filters`. Passing a name that is not registered throws at
+     * call time, catching spelling mistakes early.
+     */
+    filter?: Record<string, unknown> | string;
     /** Drop matches whose (importance-adjusted) score falls below this threshold. */
     minScore?: number;
     namespace?: string;

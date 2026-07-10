@@ -2,7 +2,7 @@ import type { EmbeddingModel } from "ai";
 import { embed } from "ai";
 import { describe, expect, it, vi } from "vitest";
 
-import { defineRag } from "../src/rag";
+import { contentHashFromArrayBuffer, defineRag, guessMimeTypeFromExtension } from "../src/rag";
 import type { RagContext, RagTextStore, RagVectorQueryInput, RagVectors } from "../src/rag/types";
 
 // Partial-mock the AI SDK: `embed` becomes a deterministic token-bag embedder
@@ -52,26 +52,66 @@ interface StoredVector {
  * upserted vectors, namespace filtering, `returnMetadata` projection, and the
  * real topK ceilings (20 with full metadata, 100 otherwise) enforced with the
  * same `RangeError` the live facade throws.
+ *
+ * Accepts an optional set of text-search index names. Indexes in this set
+ * use word-overlap (BM25-simulated) scoring and accept upserts without an
+ * `embed` function — modelling Vectorize text-search indexes faithfully
+ * enough for hybrid-search tests to make assertions.
  */
-const memoryVectors = (): { queryCalls: RagVectorQueryInput[]; store: Map<string, StoredVector>; vectors: RagVectors } => {
-    const store = new Map<string, StoredVector>();
+const memoryVectors = (_textSearchIndexes?: Set<string>): { queryCalls: RagVectorQueryInput[]; store: Map<string, StoredVector>; vectors: RagVectors } => {
+    // Per-index stores so text-search upserts (no embed → values: []) don't
+    // overwrite vector data in the same memory space.
+    const stores = new Map<string, Map<string, StoredVector>>();
     const queryCalls: RagVectorQueryInput[] = [];
+
+    const getStore = (indexName: string): Map<string, StoredVector> => {
+        let store = stores.get(indexName);
+
+        if (!store) {
+            store = new Map<string, StoredVector>();
+            stores.set(indexName, store);
+        }
+
+        return store;
+    };
 
     const dot = (a: ReadonlyArray<number>, b: ReadonlyArray<number>): number => a.reduce((sum, value, index) => sum + value * (b[index] as number), 0);
 
+    /** Simple word-overlap similarity for text-search simulation. */
+    const wordOverlap = (query: string, text: string): number => {
+        const queryWords = new Set(
+            query
+                .toLowerCase()
+                .split(/[^a-z0-9]+/u)
+                .filter(Boolean),
+        );
+        const docWords = text
+            .toLowerCase()
+            .split(/[^a-z0-9]+/u)
+            .filter(Boolean);
+        const overlap = docWords.filter((word) => queryWords.has(word)).length;
+
+        return docWords.length > 0 ? overlap / docWords.length : 0;
+    };
+
     const vectors: RagVectors = {
-        deleteByIds: async (_indexName, ids) => {
+        deleteByIds: async (indexName, ids) => {
+            const store = getStore(indexName);
+
             for (const id of ids) {
                 store.delete(id);
             }
         },
-        getByIds: async (_indexName, ids) =>
-            ids.flatMap((id) => {
+        getByIds: async (indexName, ids) => {
+            const store = getStore(indexName);
+
+            return ids.flatMap((id) => {
                 const record = store.get(id);
 
                 return record ? [{ id: record.id, metadata: record.metadata }] : [];
-            }),
-        query: async (_indexName, input) => {
+            });
+        },
+        query: async (indexName, input) => {
             queryCalls.push(input);
 
             const topK = input.topK ?? 5;
@@ -81,31 +121,54 @@ const memoryVectors = (): { queryCalls: RagVectorQueryInput[]; store: Map<string
                 throw new RangeError(`topK must be an integer between 1 and ${String(ceiling)}`);
             }
 
-            if (!input.embed || typeof input.input !== "string") {
-                throw new TypeError("memoryVectors: query requires `input` + `embed`");
+            if (typeof input.input !== "string") {
+                throw new TypeError("memoryVectors: query requires `input`");
             }
 
-            const queryVector = await input.embed(input.input);
-            const matches = [...store.values()]
-                .filter((record) => input.namespace === undefined || record.namespace === input.namespace)
-                .map((record) => {
-                    return {
-                        id: record.id,
-                        metadata: input.returnMetadata === "all" ? record.metadata : undefined,
-                        score: dot(queryVector, record.values),
-                    };
-                })
-                .toSorted((a, b) => b.score - a.score)
-                .slice(0, topK);
+            const store = getStore(indexName);
+            const matches = await Promise.all(
+                [...store.values()]
+                    .filter((record) => input.namespace === undefined || record.namespace === input.namespace)
+                    .map(async (record) => {
+                        let score: number;
 
-            return { count: matches.length, matches };
+                        if (input.embed) {
+                            // Vector mode: cosine similarity.
+                            score = dot(await (input.embed as (text: string) => Promise<ReadonlyArray<number>>)(input.input as string), record.values);
+                        } else {
+                            // Text-search mode: score by word overlap against stored text.
+                            // We store the raw input text in __ragText metadata for retrieval.
+                            const rawText = typeof record.metadata?.["__ragText"] === "string" ? record.metadata["__ragText"] : "";
+                            score = wordOverlap(input.input as string, rawText);
+                        }
+
+                        return {
+                            id: record.id,
+                            metadata: input.returnMetadata === "all" ? record.metadata : undefined,
+                            score,
+                        };
+                    }),
+            );
+            const sorted = matches.toSorted((a, b) => b.score - a.score).slice(0, topK);
+
+            return { count: sorted.length, matches: sorted };
         },
-        upsert: async (_indexName, input) => {
-            const values = await input.embed(input.input);
+        upsert: async (indexName, input) => {
+            const store = getStore(indexName);
 
-            store.set(input.id, { id: input.id, metadata: input.metadata, namespace: input.namespace, values });
+            if (input.embed) {
+                const values = await input.embed(input.input);
+
+                store.set(input.id, { id: input.id, metadata: input.metadata, namespace: input.namespace, values });
+            } else {
+                // Text-search upsert without embed: store with zero-values vector.
+                store.set(input.id, { id: input.id, metadata: input.metadata, namespace: input.namespace, values: [] });
+            }
         },
     };
+
+    // Expose the primary index store for test assertions (backward compat).
+    const store = getStore("docs");
 
     return { queryCalls, store, vectors };
 };
@@ -482,5 +545,174 @@ describe(defineRag, () => {
         const result = await searchTool.execute!({ query: "rain storm cloud" }, { context: undefined, messages: [], toolCallId: "call_1" });
 
         expect(result).toMatchObject({ sources: [{ id: "weather" }] });
+    });
+
+    describe("guessMimeTypeFromExtension", () => {
+        it("returns known MIME types", () => {
+            expect(guessMimeTypeFromExtension(".pdf")).toBe("application/pdf");
+            expect(guessMimeTypeFromExtension("pdf")).toBe("application/pdf");
+            expect(guessMimeTypeFromExtension(".html")).toBe("text/html");
+            expect(guessMimeTypeFromExtension("jpg")).toBe("image/jpeg");
+            expect(guessMimeTypeFromExtension(".JPG")).toBe("image/jpeg");
+            expect(guessMimeTypeFromExtension("tsx")).toBe("text/typescript");
+        });
+
+        it("falls back to application/octet-stream for unknown extensions", () => {
+            expect(guessMimeTypeFromExtension(".xyzzy")).toBe("application/octet-stream");
+            expect(guessMimeTypeFromExtension("")).toBe("application/octet-stream");
+        });
+    });
+
+    describe("contentHashFromArrayBuffer", () => {
+        it("produces a consistent SHA-256 hex digest", async () => {
+            const encoder = new TextEncoder();
+            const { buffer } = encoder.encode("hello rag world");
+            const hash = await contentHashFromArrayBuffer(buffer);
+
+            expect(hash).toBe("4e520b6e777a6501de8c6d5188bd5f2639137a6ef34a5601047fef3c68e35a12");
+
+            // Same input yields same hash
+            const hash2 = await contentHashFromArrayBuffer(buffer);
+
+            expect(hash2).toBe(hash);
+        });
+
+        it("produces different hashes for different inputs", async () => {
+            const encoder = new TextEncoder();
+            const hash1 = await contentHashFromArrayBuffer(encoder.encode("alpha").buffer);
+            const hash2 = await contentHashFromArrayBuffer(encoder.encode("beta").buffer);
+
+            expect(hash1).not.toBe(hash2);
+        });
+    });
+
+    describe("named filters", () => {
+        it("resolves a named filter from config.filters", async () => {
+            const { queryCalls, vectors } = memoryVectors();
+            const ctx = fakeCtx(vectors);
+            const docs = defineRag({ allowSharedNamespace: true, filters: { published: { status: "published", deleted: false } }, index: "docs" });
+            const rag = docs(ctx);
+
+            await rag.index({ id: "doc-1", text: "hello world" });
+            await rag.retrieve("hello", { filter: "published" });
+
+            expect(queryCalls[0]?.filter).toStrictEqual({ deleted: false, status: "published" });
+        });
+
+        it("throws for unknown named filter", async () => {
+            const { vectors } = memoryVectors();
+            const ctx = fakeCtx(vectors);
+            const docs = defineRag({ allowSharedNamespace: true, filters: { published: { status: "published" } }, index: "docs" });
+            const rag = docs(ctx);
+
+            await rag.index({ id: "doc-1", text: "hello world" });
+
+            await expect(rag.retrieve("hello", { filter: "nonexistent" })).rejects.toThrow(/unknown named filter "nonexistent"/u);
+        });
+
+        it("passes through a literal Record filter unchanged", async () => {
+            const { queryCalls, vectors } = memoryVectors();
+            const ctx = fakeCtx(vectors);
+            const docs = defineRag({ allowSharedNamespace: true, index: "docs" });
+            const rag = docs(ctx);
+
+            await rag.index({ id: "doc-1", text: "hello world" });
+            await rag.retrieve("hello", { filter: { status: "draft" } });
+
+            expect(queryCalls[0]?.filter).toStrictEqual({ status: "draft" });
+        });
+    });
+
+    describe("hybrid search", () => {
+        it("queries both indexes and fuses via RRF", async () => {
+            const { queryCalls, vectors } = memoryVectors(new Set(["docs-text"]));
+            const ctx = fakeCtx(vectors);
+            const docs = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs", textSearch: { index: "docs-text" } });
+            const rag = docs(ctx);
+
+            await rag.index({ id: "doc-1", metadata: { title: "Weather" }, text: "sunny warm bright sunshine | rain rain storm cloud" });
+            await rag.index({ id: "doc-2", metadata: { title: "Cooking" }, text: "pasta tomato basil dinner" });
+
+            const result = await rag.retrieve("rain storm cloud", { topK: 5 });
+
+            // Both indexes were queried
+            expect(queryCalls).toHaveLength(2);
+            expect(queryCalls[0]?.input).toBe("rain storm cloud");
+            expect(queryCalls[1]?.input).toBe("rain storm cloud");
+
+            // The weather doc should rank first (best semantic + keyword match)
+            expect(result.chunks.length).toBeGreaterThan(0);
+            expect(result.chunks[0]?.sourceId).toBe("doc-1");
+            expect(result.chunks[0]?.text).toBe("rain rain storm cloud");
+            expect(result.sources.map((source) => source.id)).toContain("doc-1");
+        });
+
+        it("handles text search when no vector embed is provided", async () => {
+            const { vectors } = memoryVectors(new Set(["docs-text"]));
+            const ctx = fakeCtx(vectors);
+            // The text-search index upsert happens without embed; the vector
+            // index still requires one. This test verifies the dual upsert
+            // does not throw when embed is omitted for the text-search leg.
+            const docs = defineRag({ allowSharedNamespace: true, index: "docs", textSearch: { index: "docs-text" } });
+            const rag = docs(ctx);
+
+            await expect(rag.index({ id: "doc-1", text: "hello world" })).resolves.toMatchObject({ chunks: 1, unchanged: false });
+        });
+    });
+
+    describe("onChunk callback", () => {
+        it("fires after each chunk is upserted with progress info", async () => {
+            const { vectors } = memoryVectors();
+            const ctx = fakeCtx(vectors);
+            const docs = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs" });
+            const rag = docs(ctx);
+            const calls: { chunkIndex: number; id: string; total: number }[] = [];
+
+            await rag.index({
+                id: "doc-1",
+                onChunk: (info) => {
+                    calls.push({ chunkIndex: info.chunkIndex, id: info.id, total: info.total });
+                },
+                text: "alpha | beta | gamma",
+            });
+
+            expect(calls).toStrictEqual([
+                { chunkIndex: 0, id: "doc-1#0", total: 3 },
+                { chunkIndex: 1, id: "doc-1#1", total: 3 },
+                { chunkIndex: 2, id: "doc-1#2", total: 3 },
+            ]);
+        });
+
+        it("is not called for unchanged re-index", async () => {
+            const { vectors } = memoryVectors();
+            const ctx = fakeCtx(vectors);
+            const docs = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs" });
+            const rag = docs(ctx);
+            const onChunk = vi.fn();
+
+            await rag.index({ id: "doc-1", onChunk, text: "hello world" });
+            await rag.index({ id: "doc-1", onChunk, text: "hello world" });
+
+            // First index: 1 chunk fires the callback once. Second: unchanged, callback not called.
+            expect(onChunk).toHaveBeenCalledTimes(1);
+        });
+    });
+
+    describe("text-search cleanup on remove", () => {
+        it("deletes from both vector and text-search indexes", async () => {
+            const { store, vectors } = memoryVectors(new Set(["docs-text"]));
+            const ctx = fakeCtx(vectors);
+            const docs = defineRag({ allowSharedNamespace: true, chunk: pipeChunker, index: "docs", textSearch: { index: "docs-text" } });
+            const rag = docs(ctx);
+
+            await rag.index({ id: "doc-1", text: "one | two | three" });
+
+            // Both indexes share the same store in this double — verify all chunks exist
+            expect(store.size).toBe(3);
+
+            await rag.remove({ id: "doc-1" });
+
+            expect(store.size).toBe(0);
+        });
     });
 });

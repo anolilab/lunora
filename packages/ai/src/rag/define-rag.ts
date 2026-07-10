@@ -3,6 +3,7 @@ import { embed as aiEmbed, jsonSchema, tool } from "ai";
 
 import fixedWindowChunks from "./chunk";
 import { concurrentMap, INDEX_CONCURRENCY } from "./concurrent";
+import hybridRank from "./hybrid-rank";
 import type {
     IndexInput,
     IndexResult,
@@ -255,6 +256,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             }
 
             await concurrentMap(pieces, INDEX_CONCURRENCY, async (piece, chunkIndex) => {
+                const id = ids[chunkIndex] as string;
                 const metadata: Record<string, unknown> = {
                     ...input.metadata,
                     [CHUNK_INDEX_KEY]: chunkIndex,
@@ -276,13 +278,30 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                     metadata[COUNT_KEY] = pieces.length;
                 }
 
-                return context.vectors.upsert(config.index, {
+                // Vector upsert
+                await context.vectors.upsert(config.index, {
                     embed: embedText,
-                    id: ids[chunkIndex] as string,
+                    id,
                     input: piece,
                     metadata,
                     namespace: input.namespace,
                 });
+
+                // Text-search upsert (hybrid mode): upsert without an embed
+                // function — Vectorize text-search indexes tokenise the input
+                // text directly and use BM25 at query time.
+                if (config.textSearch) {
+                    await context.vectors.upsert(config.textSearch.index, {
+                        id,
+                        input: piece,
+                        metadata,
+                        namespace: input.namespace,
+                    });
+                }
+
+                // Progress callback — fires after both upserts so callers see
+                // a consistent state when the callback runs.
+                input.onChunk?.({ chunkIndex, id, text: piece, total: pieces.length });
             });
 
             // A shrinking re-index leaves stale trailing chunks behind — delete
@@ -299,11 +318,19 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             checkNamespace(input.namespace);
 
             const previous = await readHead(input.id, input.namespace);
+            const totalChunks = previous.chunks ?? 1;
+
+            // Clean up the text-search index first (if configured), then vectors.
+            if (config.textSearch) {
+                const ids = Array.from({ length: totalChunks }, (_, offset) => chunkVectorId(input.namespace, input.id, offset));
+
+                await context.vectors.deleteByIds(config.textSearch.index, ids, input.namespace);
+            }
 
             // Without a head record there is nothing reliable to delete; a
             // head without a count (never written by this helper) still has
             // chunk #0 itself to clean up.
-            await deleteChunkRange(input.id, 0, previous.chunks ?? 1, input.namespace);
+            await deleteChunkRange(input.id, 0, totalChunks, input.namespace);
         };
 
         /** Fetch chunk texts by vector id — from the text store or from vector metadata. */
@@ -394,26 +421,26 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             });
         };
 
-        const retrieve = async (query: string, options?: RetrieveOptions): Promise<RetrieveResult> => {
-            checkNamespace(options?.namespace);
+        /** Resolve a named filter or pass a literal filter through. */
+        const resolveFilter = (filter: Record<string, unknown> | string | undefined): Record<string, unknown> | undefined => {
+            if (typeof filter === "string") {
+                const resolved = config.filters?.[filter];
 
-            const topK = Math.min(options?.topK ?? defaultTopK, topKCeiling);
+                if (!resolved) {
+                    throw new TypeError(`@lunora/ai/rag: unknown named filter "${filter}" — must be one of the keys declared in RagConfig.filters`);
+                }
 
-            const result = await context.vectors.query(config.index, {
-                embed: embedText,
-                filter: options?.filter,
-                input: query,
-                namespace: options?.namespace,
-                // Metadata mode reads chunk text back from metadata, so it must
-                // request "all" (and live with the topK ceiling of 20). With a
-                // text store the default "indexed" projection suffices.
-                returnMetadata: textStore ? "indexed" : "all",
-                topK,
-            });
+                return resolved;
+            }
 
-            let chunks: RetrievedChunk[] = result.matches.map((match) => {
+            return filter;
+        };
+
+        /** Convert raw vector matches into the shared RetrievedChunk shape. */
+        const parseMatches = (result: import("./types").RagVectorMatches, namespace: string | undefined): RetrievedChunk[] =>
+            result.matches.map((match) => {
                 const metadata = match.metadata ?? {};
-                const parsed = parseChunkVectorId(match.id, options?.namespace);
+                const parsed = parseChunkVectorId(match.id, namespace);
                 const rawText = metadata[TEXT_KEY];
                 const rawImportance = metadata[IMPORTANCE_KEY];
                 const importance = typeof rawImportance === "number" && rawImportance >= 0 && rawImportance <= 1 ? rawImportance : 1;
@@ -428,28 +455,67 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
                 };
             });
 
-            // Text-store mode: hydrate texts by id; a chunk whose text is gone
-            // (store cleanup raced the vector delete) is useless as context and
-            // is dropped rather than surfaced empty.
-            if (textStore) {
-                const texts = await textsByIds(
-                    chunks.map((chunk) => chunk.id),
-                    options?.namespace,
-                );
+        /** Hydrate chunk texts from the text store — drops chunks whose text is missing. */
+        const hydrateFromStore = async (chunks: RetrievedChunk[], namespace: string | undefined): Promise<RetrievedChunk[]> => {
+            if (!textStore) {
+                return chunks;
+            }
 
-                chunks = chunks.flatMap((chunk) => {
-                    const text = texts.get(chunk.id);
+            const texts = await textsByIds(
+                chunks.map((chunk) => chunk.id),
+                namespace,
+            );
 
-                    return text === undefined ? [] : [{ ...chunk, text }];
+            return chunks.flatMap((chunk) => {
+                const text = texts.get(chunk.id);
+
+                return text === undefined ? [] : [{ ...chunk, text }];
+            });
+        };
+
+        const retrieve = async (query: string, options?: RetrieveOptions): Promise<RetrieveResult> => {
+            checkNamespace(options?.namespace);
+
+            const resolvedFilter = resolveFilter(options?.filter);
+            const topK = Math.min(options?.topK ?? defaultTopK, topKCeiling);
+
+            // Vector query (primary leg)
+            const vectorResult = await context.vectors.query(config.index, {
+                embed: embedText,
+                filter: resolvedFilter,
+                input: query,
+                namespace: options?.namespace,
+                returnMetadata: textStore ? "indexed" : "all",
+                topK,
+            });
+
+            let chunks = await hydrateFromStore(parseMatches(vectorResult, options?.namespace), options?.namespace);
+
+            // Hybrid search: also query the text-search index and fuse via RRF.
+            if (config.textSearch) {
+                const textTopK = config.textSearch.topK ?? topK;
+
+                const textResult = await context.vectors.query(config.textSearch.index, {
+                    input: query,
+                    filter: resolvedFilter,
+                    namespace: options?.namespace,
+                    returnMetadata: textStore ? "indexed" : "all",
+                    topK: textTopK,
                 });
+
+                const textChunks = await hydrateFromStore(parseMatches(textResult, options?.namespace), options?.namespace);
+
+                chunks = [...hybridRank(chunks, textChunks)];
             }
 
             // Importance weighting can reorder; re-rank on the adjusted score
             // before applying the threshold.
             chunks.sort((a, b) => b.score - a.score);
 
-            if (options?.minScore !== undefined) {
-                chunks = chunks.filter((chunk) => chunk.score >= (options.minScore as number));
+            const minScore = options?.minScore;
+
+            if (minScore !== undefined) {
+                chunks = chunks.filter((chunk) => chunk.score >= minScore);
             }
 
             chunks = [...(await expandChunks(chunks, options))];
