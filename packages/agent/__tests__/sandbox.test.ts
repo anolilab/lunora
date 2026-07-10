@@ -19,6 +19,7 @@ const recordingContext = (): { calls: { args: unknown; ref: unknown }[]; context
             env: {},
             getState: async () => undefined,
             idempotencyKey: "tool:x:call-1",
+            reportProgress: () => {},
             run: async (ref: unknown, args: unknown) => {
                 calls.push({ args, ref });
 

@@ -39,10 +39,20 @@ export type {
 } from "./types";
 export type { AgentThreadRecord, AgentThreadStatus, UseAgentApi, UseAgentOptions, UseAgentResult } from "./use-agent";
 export { useAgent } from "./use-agent";
-export type { AgentChatMessage, AgentTokenDelta, UseAgentChatApi, UseAgentChatOptions, UseAgentChatResult } from "./use-agent-chat";
+export type {
+    AgentChatMessage,
+    AgentLiveEvent,
+    AgentProgressEvent,
+    AgentTokenDelta,
+    UseAgentChatApi,
+    UseAgentChatOptions,
+    UseAgentChatResult,
+} from "./use-agent-chat";
 export { useAgentChat } from "./use-agent-chat";
 export type { UseAgentStateApi, UseAgentStateOptions, UseAgentStateResult } from "./use-agent-state";
 export { useAgentState } from "./use-agent-state";
+export type { AgentToolEvent, UseAgentToolEventsApi, UseAgentToolEventsOptions, UseAgentToolEventsResult } from "./use-agent-tool-events";
+export { useAgentToolEvents } from "./use-agent-tool-events";
 export { default as useAuth } from "./use-auth";
 export { default as useConnectionStatus } from "./use-connection-status";
 export type { FlagContext, FlagValue } from "./use-flag";

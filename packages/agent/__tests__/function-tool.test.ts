@@ -13,6 +13,7 @@ const toolContext = (run: AgentToolContext["run"], overrides?: Partial<AgentTool
         env: {},
         getState: async () => undefined,
         idempotencyKey: "tool:lookupOrder:call_1",
+        reportProgress: () => {},
         run,
         setState: async () => {},
         threadKey: "thread-1",

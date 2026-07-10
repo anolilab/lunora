@@ -58,6 +58,18 @@ export interface AgentToolContext {
     getState: () => Promise<Record<string, unknown> | undefined>;
     /** Deterministic idempotency key — the tool's durable-step name. */
     idempotencyKey: string;
+
+    /**
+     * Emit an EPHEMERAL progress event for this tool call on the agent's live
+     * channel — the same live-only sink the streamed token deltas ride. NOT
+     * persisted and NEVER replayed: it fires only while `execute` runs inside the
+     * tool's memoized durable step, so a COMPLETED step is served from the memo on
+     * replay without re-emitting. A safe no-op when the runtime wired no live sink
+     * (the durable path's default), exactly as `streamingText` stays empty then.
+     * Surfaced on the client by `useAgentToolEvents`, correlated to this call by
+     * {@link AgentToolContext.toolCallId}. `data` must be JSON-serializable.
+     */
+    reportProgress: (data: unknown) => void;
     /** Dispatch a Lunora function (the workflow `ctx.run`). */
     run: AgentRunFunction;
 
@@ -646,6 +658,13 @@ export type AgentGenerate = (options: AgentGenerateOptions) => Promise<AgentGene
  * in-flight turn.
  */
 export interface AgentTokenDelta {
+    /**
+     * Discriminates the token arm of {@link AgentLiveEvent}. Optional and left
+     * unset on the wire (a token is the default) so the existing emit site and
+     * its structural test assertions stay byte-identical; narrow the union with
+     * `event.kind === "progress"` to isolate the {@link AgentProgressEvent} arm.
+     */
+    kind?: "token";
     /** The incremental text chunk the model just produced. */
     text: string;
     /** The thread this delta belongs to. */
@@ -655,10 +674,40 @@ export interface AgentTokenDelta {
 }
 
 /**
- * A live-only sink for streamed token deltas. The runtime provides it (teeing
- * to the existing stream transport); tests capture it. Invoked ONLY on the
- * first execution of a turn's durable step — a workflow replay serves the
- * memoized turn without re-running the body, so no delta is re-emitted.
+ * A live, ephemeral progress event a tool emits via
+ * {@link AgentToolContext.reportProgress} while its durable step runs. Rides the
+ * SAME live-only sink as {@link AgentTokenDelta} — NEVER persisted, NEVER
+ * replayed. Correlated to the in-flight tool call (and its persisted tool row)
+ * by `toolCallId` rather than a turn index, since a single turn can fan out many
+ * tool calls.
+ */
+export interface AgentProgressEvent {
+    /** The arbitrary, JSON-serializable payload the tool reported. */
+    data: unknown;
+    /** Discriminates the progress arm of {@link AgentLiveEvent}. */
+    kind: "progress";
+    /** The thread this event belongs to. */
+    threadKey: string;
+    /** The tool call this progress belongs to (correlates with the persisted tool row). */
+    toolCallId: string;
+}
+
+/**
+ * A single event on the agent's live-only channel: either a streamed token
+ * {@link AgentTokenDelta} (turn-keyed) or a tool {@link AgentProgressEvent}
+ * (`toolCallId`-keyed). Both are ephemeral and never replayed — the persisted
+ * thread messages remain the single source of truth. Discriminate on `kind`
+ * (`"progress"` for the progress arm; token deltas leave it unset).
+ */
+export type AgentLiveEvent = AgentProgressEvent | AgentTokenDelta;
+
+/**
+ * A live-only sink for the agent's ephemeral channel — streamed token deltas
+ * ({@link AgentTokenDelta}) and tool progress events
+ * ({@link AgentProgressEvent}). The runtime provides it (teeing to the existing
+ * stream transport); tests capture it. Invoked ONLY on the first execution of a
+ * turn's / tool's durable step — a workflow replay serves the memoized result
+ * without re-running the body, so no event is re-emitted.
  *
  * At-least-once caveat: if a turn's step *fails mid-stream* (before it commits)
  * the workflow retries the not-yet-memoized step and re-tees that turn's deltas
@@ -667,7 +716,7 @@ export interface AgentTokenDelta {
  * per `threadKey`+`turn` boundary so a step retry cannot visually double-append;
  * the persisted assistant message remains the single source of truth.
  */
-export type AgentTokenSink = (delta: AgentTokenDelta) => void;
+export type AgentTokenSink = (event: AgentLiveEvent) => void;
 
 /**
  * The streaming LLM-turn seam: like {@link AgentGenerate} but tees each text

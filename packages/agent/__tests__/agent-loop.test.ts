@@ -9,6 +9,7 @@ import type {
     AgentFunctionReference,
     AgentGenerate,
     AgentGenerateResult,
+    AgentLiveEvent,
     AgentRunFunction,
     AgentStepFinishInfo,
     AgentStreamGenerate,
@@ -18,6 +19,19 @@ import type {
 } from "../src/types";
 
 const IN_FLIGHT_PATTERN = /already has a run in flight/u;
+
+/**
+ * A token sink that captures only token deltas, narrowing off the ephemeral
+ * progress arm (exercised by the reportProgress test) so `deltas` stays
+ * token-typed.
+ */
+const captureTokenDeltas =
+    (deltas: AgentTokenDelta[]): AgentTokenSink =>
+    (event) => {
+        if (event.kind !== "progress") {
+            deltas.push(event);
+        }
+    };
 
 /**
  * Faithful in-memory model of Cloudflare Workflows' `step.do` memoization: a
@@ -862,9 +876,7 @@ describe(runAgentLoop, () => {
         const runtime = memoryRuntime();
 
         const deltas: AgentTokenDelta[] = [];
-        const onTokenDelta: AgentTokenSink = (delta) => {
-            deltas.push(delta);
-        };
+        const onTokenDelta = captureTokenDeltas(deltas);
         const stream = scriptedStreamGenerate([{ deltas: ["It ", "is ", "sunny."], result: finalTurn("It is sunny.") }]);
 
         const result = await runAgentLoop(loopDefaults(agent, { onTokenDelta, run: runtime.run, streamGenerate: stream.seam }));
@@ -893,9 +905,7 @@ describe(runAgentLoop, () => {
         const journal = new DurableStepJournal();
 
         const deltas: AgentTokenDelta[] = [];
-        const onTokenDelta: AgentTokenSink = (delta) => {
-            deltas.push(delta);
-        };
+        const onTokenDelta = captureTokenDeltas(deltas);
         // A single scripted turn — a replay must NOT reach the (now-exhausted) seam.
         const stream = scriptedStreamGenerate([{ deltas: ["hel", "lo"], result: finalTurn("hello") }]);
 
@@ -948,14 +958,64 @@ describe(runAgentLoop, () => {
         const runtime = memoryRuntime();
 
         const deltas: AgentTokenDelta[] = [];
-        const onTokenDelta: AgentTokenSink = (delta) => {
-            deltas.push(delta);
-        };
+        const onTokenDelta = captureTokenDeltas(deltas);
 
         // A sink is present, but with no `streamGenerate` the gate stays closed.
         const result = await runAgentLoop(loopDefaults(agent, { generate: scriptedGenerate([finalTurn("plain")]), onTokenDelta, run: runtime.run }));
 
         expect(result).toStrictEqual({ stopped: "final", text: "plain", turns: 1 });
         expect(deltas).toStrictEqual([]);
+    });
+
+    it("tees ephemeral tool progress on the live sink, keyed by toolCallId, and never on replay", async () => {
+        const agent = defineAgent({
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: {
+                sync: defineAgentTool({
+                    description: "A long-running tool that reports progress.",
+                    execute: (_input: unknown, context) => {
+                        context.reportProgress({ pct: 50 });
+                        context.reportProgress({ pct: 100 });
+
+                        return "synced";
+                    },
+                    inputSchema: { jsonSchema: { type: "object" } } as never,
+                }),
+            },
+        });
+
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+
+        // The progress arm rides the SAME sink as token deltas.
+        const events: AgentLiveEvent[] = [];
+        const onTokenDelta: AgentTokenSink = (event) => {
+            events.push(event);
+        };
+
+        // Non-streaming `generate`: progress is independent of token streaming.
+        const generate = scriptedGenerate([toolTurn("call_p", "sync", {}, "working…"), finalTurn("all synced")]);
+
+        const first = await runAgentLoop(loopDefaults(agent, { generate, onTokenDelta, run: runtime.run, step: journal }));
+
+        expect(first).toStrictEqual({ stopped: "final", text: "all synced", turns: 2 });
+
+        // Only progress events (no token deltas on the non-streaming path), each
+        // keyed to the tool call that emitted it — in emit order.
+        expect(events).toStrictEqual([
+            { data: { pct: 50 }, kind: "progress", threadKey: "thread-1", toolCallId: "call_p" },
+            { data: { pct: 100 }, kind: "progress", threadKey: "thread-1", toolCallId: "call_p" },
+        ]);
+
+        // Replay the SAME instance: the memoized `tool:sync:call_p` step is served
+        // without re-running `execute`, so no progress is re-emitted (ephemeral,
+        // live-only — consistent with token deltas). Reusing the exhausted `generate`
+        // proves the turns are memoized too (a re-invocation would throw).
+        events.length = 0;
+
+        const replay = await runAgentLoop(loopDefaults(agent, { generate, onTokenDelta, run: runtime.run, step: journal }));
+
+        expect(replay).toStrictEqual(first);
+        expect(events).toStrictEqual([]);
     });
 });

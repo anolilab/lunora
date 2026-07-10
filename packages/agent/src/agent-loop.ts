@@ -201,7 +201,7 @@ const awaitApproval = async (turnContext: TurnContext, call: AgentToolCall): Pro
 };
 
 const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promise<void> => {
-    const { env, getState, instanceId, persist, run, setState, step, threadKey, tools } = turnContext;
+    const { env, getState, instanceId, onTokenDelta, persist, run, setState, step, threadKey, tools } = turnContext;
     const stepName = `tool:${call.name}:${call.id}`;
     const tool: AnyAgentTool | undefined = tools[call.name];
     const messageKey = `${instanceId}:tool:${call.id}`;
@@ -215,7 +215,15 @@ const runToolCall = async (turnContext: TurnContext, call: AgentToolCall): Promi
         return;
     }
 
-    const toolContext = { env, getState, idempotencyKey: stepName, run, setState, threadKey, toolCallId: call.id };
+    // Ephemeral progress: tees onto the SAME live-only sink the token deltas
+    // ride. A no-op when the runtime wired no sink (the durable default), and —
+    // because it fires from inside the tool's memoized `step.do` below — never
+    // re-emitted on replay of a completed step.
+    const reportProgress = (data: unknown): void => {
+        onTokenDelta?.({ data, kind: "progress", threadKey, toolCallId: call.id });
+    };
+
+    const toolContext = { env, getState, idempotencyKey: stepName, reportProgress, run, setState, threadKey, toolCallId: call.id };
 
     // Human-in-the-loop: a gated tool pauses the run until a client approves or
     // rejects it. A rejection skips the tool and records why, so the next LLM

@@ -40,6 +40,8 @@ interface AgentChatMessage {
  * persisted assistant message stays the single source of truth.
  */
 interface AgentTokenDelta {
+    /** Discriminates the token arm of {@link AgentLiveEvent}; unset on the wire (token is the default). */
+    kind?: "token";
     /** The incremental text chunk the model just produced. */
     text: string;
     /** The thread this delta belongs to. */
@@ -47,6 +49,30 @@ interface AgentTokenDelta {
     /** The zero-based index of the turn producing the delta. */
     turn: number;
 }
+
+/**
+ * A live tool-progress event streamed via `ctx.reportProgress(...)`. Client-safe
+ * mirror of `@lunora/agent`'s `AgentProgressEvent`. Ephemeral and `toolCallId`-keyed;
+ * surfaced by `useAgentToolEvents`, ignored by {@link UseAgentChatResult.streamingText}.
+ */
+interface AgentProgressEvent {
+    /** The arbitrary, JSON-serializable payload the tool reported. */
+    data: unknown;
+    /** Discriminates the progress arm of {@link AgentLiveEvent}. */
+    kind: "progress";
+    /** The thread this event belongs to. */
+    threadKey: string;
+    /** The tool call this progress belongs to. */
+    toolCallId: string;
+}
+
+/**
+ * A single event on the agent's live-only channel — a streamed token delta or a
+ * tool progress event. Client-safe mirror of `@lunora/agent`'s `AgentLiveEvent`.
+ * Discriminate on `kind` (`"progress"` for the progress arm; token deltas leave
+ * it unset).
+ */
+type AgentLiveEvent = AgentProgressEvent | AgentTokenDelta;
 
 /** The `agents:agentMessages` reference — live durable thread history. */
 type AgentMessagesReference = FunctionReference<"query", { key: string; limit?: number }, ReadonlyArray<Record<string, unknown>>>;
@@ -61,8 +87,12 @@ type AgentApprovalReference = FunctionReference<
 /** The `agents:agentThread` reference — live thread status + in-flight `instanceId`. */
 type AgentThreadReference = FunctionReference<"query", { key: string }, Record<string, unknown> | undefined>;
 
-/** An app stream reference that tees the agent's in-flight token deltas, keyed by thread. */
-type AgentTokenStreamReference = FunctionReference<"stream", { key: string }, AgentTokenDelta>;
+/**
+ * An app stream reference that tees the agent's in-flight live events, keyed by
+ * thread. Carries token deltas and — since `ctx.reportProgress` rides the same
+ * sink — tool progress events; this hook consumes only the token arm.
+ */
+type AgentTokenStreamReference = FunctionReference<"stream", { key: string }, AgentLiveEvent>;
 
 /**
  * The `agents.*` reference surface the chat hook reads. A structural subset of
@@ -247,7 +277,9 @@ const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
     // persisted message becomes the source of truth.
     const assistantCount = durable.filter((message) => message.role === "assistant").length;
     const streamingText = chunks
-        .filter((delta) => delta.threadKey === threadKey && delta.turn >= assistantCount)
+        // Token deltas only — progress events (`kind === "progress"`) ride the same
+        // stream but carry no turn text; `useAgentToolEvents` surfaces those.
+        .filter((event): event is AgentTokenDelta => event.kind !== "progress" && event.threadKey === threadKey && event.turn >= assistantCount)
         .map((delta) => delta.text)
         .join("");
 
@@ -305,5 +337,5 @@ const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
     return { approve, cancel, messages, reject, send, status, streamingText };
 };
 
-export type { AgentChatMessage, AgentTokenDelta, UseAgentChatApi, UseAgentChatOptions, UseAgentChatResult };
+export type { AgentChatMessage, AgentLiveEvent, AgentProgressEvent, AgentTokenDelta, UseAgentChatApi, UseAgentChatOptions, UseAgentChatResult };
 export { useAgentChat };
