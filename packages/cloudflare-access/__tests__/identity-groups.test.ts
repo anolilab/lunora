@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { readIdentityGroups } from "../src/identity-groups";
+import readIdentityGroups from "../src/identity-groups";
 
 // The single group reader shared by `ctx.access` (context.ts) and `accessRoles`
 // (roles.ts). These lock its contract so the two consumers can never drift.

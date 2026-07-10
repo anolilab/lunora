@@ -645,7 +645,7 @@ describe("createStorage", () => {
         // `sha256`/`sha256Base64` via `ownKeys`, so JSON.stringify/spread/keys
         // dropped them — yet list() results are routinely returned from a query
         // and serialized to the client. The plain projection must round-trip.
-        const roundTripped = structuredClone(first) as Record<string, unknown>;
+        const roundTripped = structuredClone(first) as unknown as Record<string, unknown>;
 
         expect(roundTripped.sha256).toBe("010203ff");
         expect(roundTripped.sha256Base64).toBe("AQID/w==");

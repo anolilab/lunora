@@ -877,7 +877,7 @@ describe("createWorker — RPC batch cross-shard bookmark", () => {
 
                 return {
                     fetch: async (request: Request): Promise<Response> => {
-                        const { calls } = (await request.json());
+                        const { calls } = (await request.json()) as { calls: { id: string }[] };
                         const results = calls.map((call) => {
                             return { body: { shardKey }, id: call.id, status: 200 };
                         });

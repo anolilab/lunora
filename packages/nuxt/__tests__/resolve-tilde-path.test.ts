@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveTildePath } from "../src/resolve-tilde-path";
+import resolveTildePath from "../src/resolve-tilde-path";
 
 // `resolveTildePath` produces the absolute `#lunora/app` alias target. Nitro
 // re-resolves a NON-absolute alias against its own `server/` srcDir, so any
