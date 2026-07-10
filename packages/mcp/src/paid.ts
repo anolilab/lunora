@@ -1,0 +1,244 @@
+/* eslint-disable sonarjs/deprecation -- the SDK marks the low-level `Server` @deprecated in favour of the high-level `McpServer`, but explicitly sanctions `Server` for "advanced use cases". Ours qualifies: we dispatch tools defined with plain JSON Schema and bridge structured results ourselves, which avoids McpServer's per-tool zod dependency (matching `server.ts`). */
+
+/**
+ * `@lunora/mcp/paid` — x402-gated (paid) MCP tools.
+ *
+ * A Lunora app authors its own MCP tools and prices some of them in USDC. Free
+ * `tool()` and `paidTool()` registrations coexist on one server (mirroring
+ * Cloudflare's `withX402(server, config)`). The server is served over
+ * Streamable HTTP (paid tools require an HTTP boundary — an HTTP request can
+ * carry `X-PAYMENT`, which stdio cannot), and each `tools/call` for a **paid**
+ * tool is gated by the Phase-1 charge middleware: unpaid → `402` +
+ * `PAYMENT-REQUIRED`; verified → dispatch, settle, attach `X-PAYMENT-RESPONSE`.
+ *
+ * ```ts
+ * const mcp = createPaidMcpServer({ charge: { network: "base", recipient: { evm: env.PAYOUT } } });
+ * mcp.tool({ name: "ping", description: "health check", inputSchema: { properties: {}, type: "object" } }, () => text("pong"));
+ * mcp.paidTool(
+ *   { name: "premium_report", description: "the paid report", inputSchema: { properties: {}, type: "object" }, price: "$0.05" },
+ *   async () => text(await buildReport()),
+ * );
+ * export default { fetch: mcp.fetchHandler };
+ * ```
+ */
+import { LunoraError } from "@lunora/errors";
+import type { ChargeMiddleware, X402ChargeConfig, X402Price } from "@lunora/x402/charge";
+import { createChargeMiddleware } from "@lunora/x402/charge";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+
+import type { McpFetchHandler } from "./http";
+import { serveStateless } from "./http";
+import type { ToolInputSchema, ToolResult } from "./tools";
+
+/** A tool handler: receives the call's `arguments` bag, returns an MCP tool result. */
+type ToolHandler = (arguments_: Record<string, unknown>) => Promise<ToolResult> | ToolResult;
+
+/** Registration shape for a free tool. */
+interface RegisterToolOptions {
+    /** Optional MCP tool annotations (`readOnlyHint`, `title`, …). */
+    annotations?: Tool["annotations"];
+    /** Human/model-facing description of what the tool does. */
+    description: string;
+    /** JSON-Schema object describing the tool's arguments. */
+    inputSchema: ToolInputSchema;
+    /** Unique tool name (the MCP `tools/call` `name`). */
+    name: string;
+}
+
+/** Registration shape for a paid tool: a {@link RegisterToolOptions} plus its USD price. */
+interface RegisterPaidToolOptions extends RegisterToolOptions {
+    /** USD price per call (e.g. `"$0.05"`), charged via x402 before dispatch. */
+    price: X402Price;
+}
+
+/** x402 settlement vocabulary shared by every paid tool (network, recipient, facilitator); price is per-tool. */
+type PaidMcpChargeConfig = Omit<X402ChargeConfig, "price">;
+
+/** Config for `createPaidMcpServer`. */
+interface PaidMcpServerConfig {
+    /** The worker-level x402 charge config; each paid tool supplies only its own `price`. */
+    charge: PaidMcpChargeConfig;
+    /** Name/version advertised in the MCP `initialize` handshake. Defaults to `lunora-paid-mcp`. */
+    serverInfo?: { name: string; version: string };
+}
+
+/** A paid MCP server: register free/paid tools, then serve over Streamable HTTP. */
+interface PaidMcpServer {
+    /** The Streamable-HTTP fetch handler; gates each paid `tools/call` behind x402. */
+    readonly fetchHandler: McpFetchHandler;
+    /** Register a **paid** tool: its dispatch runs the x402 charge middleware first. */
+    paidTool: (options: RegisterPaidToolOptions, handler: ToolHandler) => void;
+    /** Register a **free** tool (coexists with paid tools on the same server). */
+    tool: (options: RegisterToolOptions, handler: ToolHandler) => void;
+}
+
+/** A registered tool: its advertised definition plus the dispatch handler. */
+interface RegisteredTool {
+    definition: Tool;
+    handler: ToolHandler;
+}
+
+/** Default server identity when the caller doesn't supply one. */
+const DEFAULT_SERVER_INFO = { name: "lunora-paid-mcp", version: "0.0.0" } as const;
+
+/** The MCP method that invokes a tool — the only method a price gate applies to. */
+const CALL_TOOL_METHOD = "tools/call";
+
+/**
+ * The tool name a JSON-RPC message targets, if it is a `tools/call`. Returns
+ * `undefined` for any other method or a malformed message — those are never
+ * gated (only a `tools/call` naming a registered paid tool is).
+ */
+const callToolName = (message: unknown): string | undefined => {
+    if (typeof message !== "object" || message === null) {
+        return undefined;
+    }
+
+    const { method, params } = message as { method?: unknown; params?: unknown };
+
+    if (method !== CALL_TOOL_METHOD || typeof params !== "object" || params === null) {
+        return undefined;
+    }
+
+    const { name } = params as { name?: unknown };
+
+    return typeof name === "string" ? name : undefined;
+};
+
+/**
+ * Refuse a JSON-RPC batch that references a paid tool. A single HTTP request
+ * carries at most one `X-PAYMENT`, so it can't settle several priced calls;
+ * rather than let a batched paid call slip through unpaid we fail closed. MCP
+ * 2025-06-18 removed JSON-RPC batching, so this is a defensive belt.
+ */
+const refuseBatch = (): Response =>
+    Response.json({ error: "A JSON-RPC batch may not reference a paid MCP tool; send paid tools/call requests individually." }, { status: 400 });
+
+/**
+ * Create a paid MCP server. Register free tools with `tool()` and priced tools
+ * with `paidTool()` (they coexist), then serve `fetchHandler` over HTTP.
+ *
+ * The server is **stateless**: `fetchHandler` builds a fresh `Server` per
+ * request (reading the live tool registry), so tools registered before the
+ * first request are all visible. Each priced tool memoises one initialised
+ * `ChargeMiddleware` (keyed by tool name, baking that tool's price and naming
+ * the tool as the challenge `resource`); a failed init is not cached, so a
+ * transient facilitator outage retries on the next call.
+ */
+const createPaidMcpServer = (config: PaidMcpServerConfig): PaidMcpServer => {
+    const tools = new Map<string, RegisteredTool>();
+    const prices = new Map<string, X402Price>();
+    const middlewareByTool = new Map<string, Promise<ChargeMiddleware>>();
+    const serverInfo = config.serverInfo ?? DEFAULT_SERVER_INFO;
+
+    const register = (options: RegisterToolOptions, handler: ToolHandler, price?: X402Price): void => {
+        if (tools.has(options.name)) {
+            throw new LunoraError("BAD_REQUEST", `MCP tool "${options.name}" is already registered.`);
+        }
+
+        // `ToolInputSchema` (properties: `Record<string, unknown>`) is structurally
+        // a valid JSON-Schema object; the SDK's `Tool.inputSchema` types property
+        // values as `object` — cast to bridge the narrower value type.
+        const definition: Tool = { description: options.description, inputSchema: options.inputSchema as Tool["inputSchema"], name: options.name };
+
+        if (options.annotations !== undefined) {
+            definition.annotations = options.annotations;
+        }
+
+        tools.set(options.name, { definition, handler });
+
+        if (price !== undefined) {
+            prices.set(options.name, price);
+        }
+    };
+
+    // Build a fresh registry-backed `Server` (the stateless transport connects one per request).
+    const buildServer = (): Server => {
+        const server = new Server(serverInfo, { capabilities: { tools: {} } });
+
+        server.setRequestHandler(ListToolsRequestSchema, () => {
+            return { tools: [...tools.values()].map((entry) => entry.definition) };
+        });
+
+        server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
+            const entry = tools.get(request.params.name);
+
+            // Unknown tools surface as an `isError` result (not a rejection), per
+            // the MCP convention `callTool` follows in `tools.ts`.
+            if (entry === undefined) {
+                return { content: [{ text: `unknown tool: ${request.params.name}`, type: "text" }], isError: true };
+            }
+
+            const result = await entry.handler(request.params.arguments ?? {});
+
+            return result as CallToolResult;
+        });
+
+        return server;
+    };
+
+    // The initialised charge middleware for a paid tool, memoised (built once, reused).
+    const gateFor = (name: string, price: X402Price): Promise<ChargeMiddleware> => {
+        let pending = middlewareByTool.get(name);
+
+        if (pending === undefined) {
+            pending = createChargeMiddleware({ ...config.charge, price }, { resource: name }).catch((error: unknown) => {
+                // Don't cache a failed init — let the next request retry.
+                middlewareByTool.delete(name);
+
+                throw error;
+            });
+            middlewareByTool.set(name, pending);
+        }
+
+        return pending;
+    };
+
+    const fetchHandler: McpFetchHandler = async (request: Request): Promise<Response> => {
+        // Peek the JSON-RPC body from a clone so `request` stays pristine for both
+        // the charge middleware (reads headers/URL) and the transport (below).
+        let parsedBody: unknown;
+
+        try {
+            parsedBody = await request.clone().json();
+        } catch {
+            parsedBody = undefined;
+        }
+
+        // Hand the already-parsed body to the transport so it doesn't re-read the
+        // consumed stream; fall back to letting it read `request` on a parse miss.
+        const dispatch = (): Promise<Response> => serveStateless(buildServer(), request, parsedBody === undefined ? undefined : { parsedBody });
+
+        if (Array.isArray(parsedBody)) {
+            return parsedBody.some((message) => prices.has(callToolName(message) ?? "")) ? refuseBatch() : dispatch();
+        }
+
+        const name = callToolName(parsedBody);
+        const price = name === undefined ? undefined : prices.get(name);
+
+        // Free tool, or any non-`tools/call` method (initialize, tools/list, …):
+        // dispatch without a paywall.
+        if (name === undefined || price === undefined) {
+            return dispatch();
+        }
+
+        const middleware = await gateFor(name, price);
+
+        return middleware.handle(request, dispatch);
+    };
+
+    const paidTool = (options: RegisterPaidToolOptions, handler: ToolHandler): void => {
+        register(options, handler, options.price);
+    };
+
+    const tool = (options: RegisterToolOptions, handler: ToolHandler): void => {
+        register(options, handler);
+    };
+
+    return { fetchHandler, paidTool, tool };
+};
+
+export type { PaidMcpChargeConfig, PaidMcpServer, PaidMcpServerConfig, RegisterPaidToolOptions, RegisterToolOptions, ToolHandler };
+export { createPaidMcpServer };

@@ -1,0 +1,106 @@
+{
+    "name": "@lunora/x402",
+    "version": "1.0.0-alpha.0",
+    "description": "Agentic payments (x402) for Lunora: charge agents per request (charge rail) and let your agents pay x402-gated resources (pay rail)",
+    "keywords": [
+        "agents",
+        "cloudflare",
+        "lunora",
+        "micropayments",
+        "payments",
+        "stablecoin",
+        "usdc",
+        "workers",
+        "x402"
+    ],
+    "homepage": "https://lunora.sh",
+    "bugs": "https://github.com/anolilab/lunora/issues",
+    "license": "FSL-1.1-Apache-2.0",
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/anolilab/lunora.git",
+        "directory": "packages/x402"
+    },
+    "files": [
+        "./dist",
+        "__assets__",
+        "README.md",
+        "LICENSE.md"
+    ],
+    "type": "module",
+    "sideEffects": false,
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.mjs"
+        },
+        "./charge": {
+            "types": "./dist/charge/index.d.ts",
+            "import": "./dist/charge/index.mjs"
+        },
+        "./pay": {
+            "types": "./dist/pay/index.d.ts",
+            "import": "./dist/pay/index.mjs"
+        },
+        "./package.json": "./package.json"
+    },
+    "publishConfig": {
+        "access": "public"
+    },
+    "scripts": {
+        "build": "pnpm exec packem build --development",
+        "build:prod": "pnpm exec packem build --production",
+        "lint:eslint": "eslint .",
+        "lint:eslint:fix": "eslint . --fix",
+        "lint:prettier": "prettier --check .",
+        "lint:prettier:fix": "prettier --write .",
+        "lint:types": "tsc --noEmit",
+        "test": "vitest run",
+        "test:coverage": "vitest run --coverage",
+        "fallow:audit": "fallow audit",
+        "fallow:dead-code": "fallow dead-code",
+        "fallow:health": "fallow health --score"
+    },
+    "dependencies": {
+        "@lunora/errors": "1.0.0-alpha.1",
+        "@solana/kit": "catalog:web3",
+        "@x402/core": "catalog:web3",
+        "@x402/evm": "catalog:web3",
+        "@x402/fetch": "catalog:web3",
+        "@x402/svm": "catalog:web3",
+        "viem": "catalog:web3"
+    },
+    "devDependencies": {
+        "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
+        "@cloudflare/workers-types": "catalog:cloudflare",
+        "@coinbase/cdp-sdk": "catalog:web3",
+        "@coinbase/x402": "catalog:web3",
+        "@types/node": "catalog:types",
+        "@visulima/packem": "catalog:build",
+        "@vitest/coverage-v8": "catalog:test",
+        "esbuild": "catalog:build",
+        "fallow": "catalog:lint",
+        "typescript": "catalog:tsc",
+        "vitest": "catalog:test",
+        "wrangler": "catalog:cloudflare"
+    },
+    "peerDependencies": {
+        "@coinbase/cdp-sdk": ">=1.0.0",
+        "@coinbase/x402": ">=2.0.0"
+    },
+    "peerDependenciesMeta": {
+        "@coinbase/cdp-sdk": {
+            "optional": true
+        },
+        "@coinbase/x402": {
+            "optional": true
+        }
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
+    }
+}

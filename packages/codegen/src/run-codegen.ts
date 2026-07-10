@@ -458,6 +458,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const hasAnalytics = featureUsage.analytics;
     const hasPipelines = featureUsage.pipelines;
     const hasR2sql = featureUsage.r2sql;
+    const hasX402 = featureUsage.x402;
 
     // Which optional, package-backed features the studio should show a nav page
     // for. `buildStudioFeatures` OR's the code-usage flags with the schema/project
@@ -505,6 +506,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasPayments,
         hasPipelines,
         hasR2sql,
+        hasX402,
         identity,
         queues,
         schema,
@@ -529,6 +531,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasPayments,
         hasPipelines,
         hasR2sql,
+        hasX402,
         maskMetadata,
         mutators,
         queues,
@@ -595,6 +598,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasStorage: studioFeatures.storage,
         hasVectors: schema.vectorIndexes.length > 0,
         hasWorkflow: workflows.length > 0,
+        hasX402,
         // The single `defineIdentity(...)` contract (Plan 080). Wires
         // `options.identity` so the runtime trust boundary validates every
         // resolved identity before it becomes `ctx.auth`; `undefined` keeps the

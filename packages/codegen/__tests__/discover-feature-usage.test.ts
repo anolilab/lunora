@@ -28,6 +28,7 @@ const ALL_OFF: FeatureUsage = {
     storage: false,
     vectors: false,
     workflows: false,
+    x402: false,
 };
 
 const NO_SIGNALS = {
@@ -96,6 +97,22 @@ describe("discover-feature-usage", () => {
 
         expect(reverse.ai).toBe(true);
         expect(reverse.payments).toBe(true);
+    });
+
+    it("detects the x402 pay rail via the `@lunora/x402/pay` import or a `ctx.x402` read", () => {
+        expect.assertions(2);
+
+        // The pay rail is an opt-in add-on subpath, so the exact `@lunora/x402/pay`
+        // specifier flips it (the charge rail lives on `/charge` and does not wire ctx).
+        writeSource("buy.ts", `import { createX402Pay } from "@lunora/x402/pay";\nexport const p = () => createX402Pay({}, {});`);
+        const viaImport = discoverFeatureUsage(newProject(), workdir);
+
+        rmSync(join(workdir, "buy.ts"));
+        writeSource("pay.ts", `export const fetchPaid = async (ctx) => ctx.x402.fetch("https://api.example/paid");`);
+        const viaContext = discoverFeatureUsage(newProject(), workdir);
+
+        expect(viaImport.x402).toBe(true);
+        expect(viaContext.x402).toBe(true);
     });
 
     it("detects the new Cloudflare-capability features via import or the `ctx.*` helper", () => {

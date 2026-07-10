@@ -118,6 +118,12 @@ const CAPABILITY_SOURCES = {
     usesPipelines: { pattern: CTX_PIPELINES_PATTERN, source: "@lunora/bindings/pipelines" },
     usesScheduler: { pattern: /\bfrom\s+["']@lunora\/scheduler["']/, source: "@lunora/scheduler" },
     usesStorage: { pattern: /\bfrom\s+["']@lunora\/storage["']/, source: "@lunora/storage" },
+    // x402 rails are opt-in add-on subpaths (not part of the `lunorash` umbrella),
+    // so they key off the exact `@lunora/x402/{charge,pay}` specifiers. Neither
+    // implies a `.dev.vars` secret: the charge recipient is a user-named `[vars]`
+    // entry and the pay wallet key is a Secrets Store binding — both hint-only.
+    usesX402Charge: { pattern: /\bfrom\s+["']@lunora\/x402\/charge["']/, source: "@lunora/x402/charge" },
+    usesX402Pay: { pattern: /\bfrom\s+["']@lunora\/x402\/pay["']/, source: "@lunora/x402/pay" },
 } as const satisfies Record<string, { pattern: RegExp; source: string }>;
 
 /** The import-driven capability flag names (every key of {@link CAPABILITY_SOURCES}). */
@@ -212,6 +218,10 @@ interface InferredBindings {
     usesScheduler: boolean;
     /** `@lunora/storage` is imported (R2 bucket binding name is user-defined). */
     usesStorage: boolean;
+    /** `@lunora/x402/charge` is imported — the charge rail settles USDC to a recipient address (a public `[vars]` entry, user-named; hint-only). */
+    usesX402Charge: boolean;
+    /** `@lunora/x402/pay` is imported — the agent-wallet pay rail signs from a Secrets Store binding paired with a spend policy (ActionCtx-only; hint-only). */
+    usesX402Pay: boolean;
     /** Workflows declared in `lunora/workflows.ts` (exported or not — see {@link InferredWorkflow.exported}). */
     workflows: InferredWorkflow[];
 }
@@ -581,6 +591,14 @@ const describeCapabilitySignals = (capabilities: Capabilities, exported: Readonl
         [
             capabilities.usesPipelines,
             "hint: ctx.pipelines is used; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding, pipeline }) — the pipeline resource can't be auto-provisioned",
+        ],
+        [
+            capabilities.usesX402Charge,
+            "hint: @lunora/x402/charge is imported; set the recipient wallet address as a [vars] entry (the var name is yours to choose) and pass it to the charge config — the x402 facilitator settles USDC to that address",
+        ],
+        [
+            capabilities.usesX402Pay,
+            "hint: @lunora/x402/pay is imported (ActionCtx-only, spends real funds); add a secrets_store_secrets[] binding for the agent wallet key (name it to match signer.secretName) and pair the pay rail with a spend policy — ctx.secrets reads a Secrets Store binding, not .dev.vars, so the key can't be auto-provisioned",
         ],
     ];
 
