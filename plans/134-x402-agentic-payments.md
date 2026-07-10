@@ -180,7 +180,28 @@ Two consumer subpaths mirror Cloudflare's split: **`@lunora/x402/charge`**
 6. **STOP** if `@x402/core`/`@x402/evm` fail to import under workerd (Phase 1
    smoke): re-evaluate the whole approach before writing glue.
 
-## Phase 1 — Charge core + HTTP-action rail (MVP-A)
+## Phase 1 — Charge core + HTTP-action rail (MVP-A) — ✅ shipped (facilitator `a9054ea12`, middleware + http-action `3ab9af42d`)
+
+> **Implemented.** `facilitator.ts` wraps `@x402/core` into a
+> `{ verify, settle }` client defaulting to `https://x402.org/facilitator`
+> (overridable). `charge/middleware.ts` is the fail-closed state machine
+> (`createChargeMiddleware(config, routeOverrides?)` → `{ handle(request,
+runHandler) }`): no/invalid `X-PAYMENT` → build the `PAYMENT-REQUIRED`
+> challenge and return `402` **without** running the handler; verified → run,
+> `settle` (`exact` + settle-after-run, idempotent), attach
+> `X-PAYMENT-RESPONSE`. `charge/http-action.ts` (`withX402(handler, config)`)
+> gates a Lunora `httpRoute` handler with no runtime change. Covered by
+> `charge-flow.test.ts`, `middleware-helpers.test.ts`, `facilitator.test.ts`,
+> `resource-server.test.ts`. The `catalog:web3` `viem` add + `overrides` entry +
+> `sideEffects:false` subpath exports (`./charge`, `./pay`) all landed here.
+>
+> **workerd smoke deferred, not built** (Phase 1 item 5 + the Workers-safety
+> caveat): the `@x402/core` + `@x402/evm` boot-under-workerd probe is not spun up
+> because workerd pool boot is environment-dependent in this sandbox (memory
+> `project-workerd-sandbox-limit`). The intent is recorded in
+> `vitest.config.ts`; gate it on `LUNORA_WORKERD_TESTS=1` when a green pool is
+> available. The Node unit suite proves the protocol glue against in-memory
+> facilitator/account doubles.
 
 The reusable core does verify/settle; we own the Lunora request/response glue.
 
@@ -262,9 +283,29 @@ get a spec-correct 402.
    the header past the origin worker — keep verify/settle at the **origin
    worker boundary**, before shard forwarding.
 
-## Phase 3 — Charge: paid MCP tools (`paidTool` port) — GATED
+## Phase 3 — Charge: paid MCP tools (`paidTool` port) — ✅ shipped (3a transport `84e4ae642`, 3b paidTool `3ffd7717c`)
 
-**Blocked on a prerequisite.** `@lunora/mcp` is stdio-only; `paidTool` needs
+> **Implemented.** The prereq (item 1) landed first: `@lunora/mcp` now serves
+> over **remote Streamable HTTP** — `createMcpFetchHandler` + the shared
+> `serveStateless` helper drive a stateless `WebStandardStreamableHTTPServerTransport`
+> (`sessionIdGenerator: undefined`, `enableJsonResponse: true`), a Web-Standard
+> `Request → Response` handler that runs on Workers/Node18+/Deno/Bun. Then the
+> `paidTool` port (item 2): `createPaidMcpServer({ charge })` registers free
+> `tool()` and priced `paidTool()` tools that coexist on one server (mirroring
+> Cloudflare's `withX402(server, config)`). The gate (item 3 — the only new part)
+> **reuses the Phase 1 charge middleware verbatim**: the fetch handler peeks the
+> JSON-RPC body, and a `tools/call` naming a paid tool is wrapped in
+> `createChargeMiddleware({ ...charge, price }, { resource: toolName })` at the
+> HTTP boundary — unpaid → `402` + `PAYMENT-REQUIRED` (handler never runs);
+> verified → dispatch, settle, `X-PAYMENT-RESPONSE`. Free tools and non-`call`
+> methods dispatch without a paywall; a batch referencing a paid tool fails
+> closed with `400` (one HTTP request carries one `X-PAYMENT`; MCP 2025-06-18
+> removed batching anyway). `@lunora/mcp` gained a `@lunora/x402` dep (no cycle —
+> x402 does not depend on mcp). Covered by `mcp/__tests__/http.test.ts` (3) +
+> `mcp/__tests__/paid.test.ts` (6). The **STOP condition held**: the remote
+> transport was real and committed before any paid tool.
+
+**Prerequisite (now met).** `@lunora/mcp` was stdio-only; `paidTool` needs
 remote MCP-over-HTTP (a client connects over HTTP and can carry `X-PAYMENT`).
 
 1. Prereq: add a **remote HTTP (Streamable HTTP) MCP transport** to `@lunora/mcp`
