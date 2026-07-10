@@ -30,6 +30,39 @@ const discoverSupportAgent = (): ReturnType<typeof discoverAgents> => {
 
 const EMPTY_SCHEMA: SchemaIR = { tables: [], vectorIndexes: [] };
 
+/** Canonical, comparable shape of a `v.*` validator used as an agent-function arg. */
+interface ArgShape {
+    kind: string;
+    literals?: unknown[];
+    optional: boolean;
+}
+
+/**
+ * Reduce a runtime `v.*` validator to its {@link ArgShape} by reading the same
+ * `kind` + `_meta` surface codegen's IR mirrors (`inner` for `optional`,
+ * `members`/`value` for `union`/`literal`). Lets the drift guard compare the
+ * runtime component's validators against the shape emit.ts hand-pins.
+ */
+const describeValidator = (validator: unknown): ArgShape => {
+    const node = validator as { _meta?: Record<string, unknown>; kind: string };
+
+    if (node.kind === "optional") {
+        return { ...describeValidator(node._meta?.inner), optional: true };
+    }
+
+    if (node.kind === "union") {
+        const members = (node._meta?.members ?? []) as ReadonlyArray<{ _meta?: Record<string, unknown>; kind: string }>;
+        const literals = members.filter((member) => member.kind === "literal").map((member) => member._meta?.value);
+
+        return { kind: "union", literals, optional: false };
+    }
+
+    return { kind: node.kind, optional: false };
+};
+
+const describeArgs = (args: unknown): Record<string, ArgShape> =>
+    Object.fromEntries(Object.entries(args as Record<string, unknown>).map(([name, validator]) => [name, describeValidator(validator)]));
+
 describe("discover-agents", () => {
     beforeEach(() => {
         workdir = mkdtempSync(join(tmpdir(), "lunora-agent-disco-"));
@@ -402,26 +435,35 @@ describe("auto-registered agent runtime functions", () => {
 
         // The api types for the public queries are hand-pinned in
         // syntheticAgentApiFunctions (codegen cannot read a published package's
-        // types) — at least the arg KEY SETS must match the runtime validators.
-        // A type-level change still needs a manual mirror; see the KEEP IN SYNC
-        // breadcrumbs in emit.ts and @lunora/agent's component.ts.
+        // types), so codegen and @lunora/agent's `component.ts` validators can
+        // drift silently. Reduce each runtime arg validator to a canonical
+        // {kind, optional, literals?} descriptor and assert it against the shape
+        // syntheticAgentApiFunctions encodes — this catches not just an added or
+        // removed arg (KEY SET) but an optionality flip (e.g. `limit`/`title`
+        // becoming required), a scalar-kind change, or a `decision` union member
+        // added/removed/renamed. Return TYPES stay hand-mirrored (see the KEEP
+        // IN SYNC breadcrumbs in emit.ts) but are pinned on the emit side by the
+        // "exposes the public thread queries…" FunctionReference assertions above.
         const runtime = agentComponent().functions;
 
-        expect(Object.keys(runtime.agentMessages.args as Record<string, unknown>).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["key", "limit"]);
-        expect(Object.keys(runtime.agentState.args as Record<string, unknown>).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["key"]);
-        expect(Object.keys(runtime.agentThread.args as Record<string, unknown>).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["key"]);
-        expect(Object.keys(runtime.agentResolveApproval.args as Record<string, unknown>).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
-            "decision",
-            "instanceId",
-            "note",
-            "threadKey",
-            "toolCallId",
-        ]);
-        expect(Object.keys(runtime.agentRun.args as Record<string, unknown>).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
-            "agent",
-            "input",
-            "threadKey",
-            "title",
-        ]);
+        expect(describeArgs(runtime.agentMessages.args)).toStrictEqual({
+            key: { kind: "string", optional: false },
+            limit: { kind: "number", optional: true },
+        });
+        expect(describeArgs(runtime.agentState.args)).toStrictEqual({ key: { kind: "string", optional: false } });
+        expect(describeArgs(runtime.agentThread.args)).toStrictEqual({ key: { kind: "string", optional: false } });
+        expect(describeArgs(runtime.agentResolveApproval.args)).toStrictEqual({
+            decision: { kind: "union", literals: ["approve", "reject"], optional: false },
+            instanceId: { kind: "string", optional: false },
+            note: { kind: "string", optional: true },
+            threadKey: { kind: "string", optional: false },
+            toolCallId: { kind: "string", optional: false },
+        });
+        expect(describeArgs(runtime.agentRun.args)).toStrictEqual({
+            agent: { kind: "string", optional: false },
+            input: { kind: "string", optional: false },
+            threadKey: { kind: "string", optional: false },
+            title: { kind: "string", optional: true },
+        });
     });
 });

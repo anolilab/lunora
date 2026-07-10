@@ -2401,7 +2401,17 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             return blockedUpgrade;
         }
 
-        const agentName = decodeURIComponent(url.pathname.slice(VOICE_PATH_PREFIX.length));
+        let agentName: string;
+
+        try {
+            agentName = decodeURIComponent(url.pathname.slice(VOICE_PATH_PREFIX.length));
+        } catch {
+            // A malformed percent-encoding (e.g. `/_lunora/voice/%`) makes
+            // `decodeURIComponent` throw `URIError` — treat an undecodable agent
+            // name as an unknown agent (404) rather than a 500.
+            return new Response("Unknown voice agent", { status: 404 });
+        }
+
         const namespace = Object.hasOwn(voiceAgents, agentName) ? voiceAgents[agentName] : undefined;
 
         if (namespace === undefined) {

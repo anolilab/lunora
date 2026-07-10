@@ -793,9 +793,12 @@ const renderSandboxFunctionRegistry = (usesSandbox: boolean, functions: Readonly
  * KEEP IN SYNC with `@lunora/agent`'s `component.ts` (`agentMessages` /
  * `agentState` / `agentThread` / `agentResolveApproval` / `agentRun` inputs +
  * return shapes) — codegen cannot statically discover a
- * published package's function types, so these are pinned by hand; the drift
- * test in `discover-agents.test.ts` asserts the arg KEY SETS against the
- * runtime component, but arg/return TYPE changes must be mirrored manually.
+ * published package's function types, so these are pinned by hand. The drift
+ * test in `discover-agents.test.ts` reduces each runtime arg validator to a
+ * `{kind, optional, literals}` descriptor and asserts it against these shapes,
+ * so an added/removed arg, an optionality flip, a scalar-kind change, or a
+ * `decision` union-member change fails there. Only the RETURN types stay
+ * unguarded and must be mirrored manually.
  */
 const syntheticAgentApiFunctions = (agents: ReadonlyArray<AgentIR>, functions: ReadonlyArray<FunctionIR>): FunctionIR[] => {
     if (agents.length === 0) {

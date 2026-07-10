@@ -3,7 +3,7 @@ import { LunoraError } from "@lunora/errors";
 import type { SkillConfig, SkillDefinition } from "./types";
 
 /** Skill names namespace a skill's knowledge memory source — keep them identifier-shaped. */
-const SKILL_NAME_PATTERN = /^[a-zA-Z][\w-]*$/u;
+const SKILL_NAME_PATTERN: RegExp = /^[a-zA-Z][\w-]*$/u;
 
 /**
  * Reserved skill name. `"default"` is the internal key `defineAgent` gives the
@@ -67,4 +67,4 @@ const isSkillDefinition = (value: unknown): value is SkillDefinition =>
     typeof value === "object" && value !== null && (value as { isLunoraSkill?: unknown }).isLunoraSkill === true;
 
 export type { SkillConfig, SkillDefinition } from "./types";
-export { defineSkill, isSkillDefinition };
+export { defineSkill, isSkillDefinition, RESERVED_SKILL_NAME, SKILL_NAME_PATTERN };

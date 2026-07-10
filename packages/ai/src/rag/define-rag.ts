@@ -41,18 +41,35 @@ const IMPORTANCE_KEY = "__ragImportance";
 
 const INTERNAL_KEYS = new Set([CHUNK_INDEX_KEY, COUNT_KEY, HASH_KEY, IMPORTANCE_KEY, SOURCE_KEY, TEXT_KEY]);
 
-const chunkVectorId = (sourceId: string, chunkIndex: number): string => `${sourceId}#${String(chunkIndex)}`;
+/**
+ * The namespace segment prepended to every chunk id. Vectorize ids are index-
+ * global — a namespace is only a query filter, not a separate id space — so two
+ * tenants that share a `sourceId` would otherwise collide on the same id and
+ * clobber/leak each other's chunks. `encodeURIComponent` guarantees the segment
+ * contains no `#`, so the FIRST `#` unambiguously delimits it from the source id.
+ * A namespace-less (single-tenant) index keeps the bare `${sourceId}#${index}`.
+ */
+const namespacePrefix = (namespace: string | undefined): string => (namespace === undefined ? "" : `${encodeURIComponent(namespace)}#`);
 
-/** Invert {@link chunkVectorId}. The chunk suffix is the LAST `#` segment, so source ids may contain `#`. */
-const parseChunkVectorId = (id: string): { chunkIndex: number; sourceId: string } => {
-    const separator = id.lastIndexOf("#");
-    const chunkIndex = separator === -1 ? Number.NaN : Number(id.slice(separator + 1));
+const chunkVectorId = (namespace: string | undefined, sourceId: string, chunkIndex: number): string =>
+    `${namespacePrefix(namespace)}${sourceId}#${String(chunkIndex)}`;
+
+/**
+ * Invert {@link chunkVectorId}. The (caller-known) namespace prefix is stripped
+ * first; the chunk suffix is then the LAST `#` segment, so source ids may contain
+ * `#`.
+ */
+const parseChunkVectorId = (id: string, namespace: string | undefined): { chunkIndex: number; sourceId: string } => {
+    const prefix = namespacePrefix(namespace);
+    const body = prefix !== "" && id.startsWith(prefix) ? id.slice(prefix.length) : id;
+    const separator = body.lastIndexOf("#");
+    const chunkIndex = separator === -1 ? Number.NaN : Number(body.slice(separator + 1));
 
     if (separator === -1 || !Number.isInteger(chunkIndex) || chunkIndex < 0) {
-        return { chunkIndex: 0, sourceId: id };
+        return { chunkIndex: 0, sourceId: body };
     }
 
-    return { chunkIndex, sourceId: id.slice(0, separator) };
+    return { chunkIndex, sourceId: body.slice(0, separator) };
 };
 
 const sha256Hex = async (text: string): Promise<string> => {
@@ -178,7 +195,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
 
         /** Read chunk #0's bookkeeping metadata (content hash + chunk count) for a source. */
         const readHead = async (sourceId: string, namespace?: string): Promise<{ chunks?: number; hash?: string }> => {
-            const [head] = await context.vectors.getByIds(config.index, [chunkVectorId(sourceId, 0)], namespace);
+            const [head] = await context.vectors.getByIds(config.index, [chunkVectorId(namespace, sourceId, 0)], namespace);
             const hash = head?.metadata?.[HASH_KEY];
             const chunks = head?.metadata?.[COUNT_KEY];
 
@@ -189,7 +206,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
         };
 
         const deleteChunkRange = async (sourceId: string, from: number, to: number, namespace: string | undefined): Promise<void> => {
-            const ids = Array.from({ length: to - from }, (_, offset) => chunkVectorId(sourceId, from + offset));
+            const ids = Array.from({ length: to - from }, (_, offset) => chunkVectorId(namespace, sourceId, from + offset));
 
             if (ids.length === 0) {
                 return;
@@ -216,13 +233,13 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             if (previous.hash === hash && previous.chunks !== undefined) {
                 return {
                     chunks: previous.chunks,
-                    ids: Array.from({ length: previous.chunks }, (_, chunkIndex) => chunkVectorId(input.id, chunkIndex)),
+                    ids: Array.from({ length: previous.chunks }, (_, chunkIndex) => chunkVectorId(input.namespace, input.id, chunkIndex)),
                     unchanged: true,
                 };
             }
 
             const pieces = splitter(input.text);
-            const ids = pieces.map((_, chunkIndex) => chunkVectorId(input.id, chunkIndex));
+            const ids = pieces.map((_, chunkIndex) => chunkVectorId(input.namespace, input.id, chunkIndex));
 
             // Text lands in the store BEFORE the vectors: a match must never
             // point at text that does not exist yet. The reverse failure mode —
@@ -347,7 +364,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
             for (const chunk of chunks) {
                 for (let offset = -before; offset <= after; offset += 1) {
                     const neighbourIndex = chunk.chunkIndex + offset;
-                    const id = chunkVectorId(chunk.sourceId, neighbourIndex);
+                    const id = chunkVectorId(options?.namespace, chunk.sourceId, neighbourIndex);
 
                     if (offset !== 0 && neighbourIndex >= 0 && !known.has(id)) {
                         neighbourIds.add(id);
@@ -357,7 +374,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
 
             const neighbourTexts = await textsByIds([...neighbourIds], options?.namespace);
             const textOf = (sourceId: string, chunkIndex: number): string | undefined => {
-                const id = chunkVectorId(sourceId, chunkIndex);
+                const id = chunkVectorId(options?.namespace, sourceId, chunkIndex);
 
                 return known.get(id) ?? neighbourTexts.get(id);
             };
@@ -396,7 +413,7 @@ const defineRag = (config: RagConfig): ((context: RagContext) => Rag) => {
 
             let chunks: RetrievedChunk[] = result.matches.map((match) => {
                 const metadata = match.metadata ?? {};
-                const parsed = parseChunkVectorId(match.id);
+                const parsed = parseChunkVectorId(match.id, options?.namespace);
                 const rawText = metadata[TEXT_KEY];
                 const rawImportance = metadata[IMPORTANCE_KEY];
                 const importance = typeof rawImportance === "number" && rawImportance >= 0 && rawImportance <= 1 ? rawImportance : 1;

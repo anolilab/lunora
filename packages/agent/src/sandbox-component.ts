@@ -2,41 +2,13 @@ import { LunoraError } from "@lunora/errors";
 import { initLunora } from "@lunora/server";
 import { v } from "@lunora/values";
 
+import { toBase64 } from "../../../shared/base64";
+
 // The runtime function is built with the base procedure builders (no generated
 // server inside a package), same as the agent + presence components. This file
 // stays free of the `ai` SDK so it tree-shakes into the `/component` subpath the
 // codegen emitter imports at emit time.
 const { internalAction } = initLunora.dataModel().create();
-
-/**
- * Standard base64 encoder over raw bytes. Deterministic and dependency-free (no
- * `Buffer`/`btoa`, which are absent or lib-gated across workerd + Node), so the
- * encoded tool result is replay-stable — a workflow replay re-encodes identical
- * bytes to identical text.
- */
-// eslint-disable-next-line no-secrets/no-secrets -- the standard base64 alphabet, not a credential
-const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-/* eslint-disable no-bitwise -- base64 packing is inherently a bit-level transform */
-const encodeBase64 = (bytes: Uint8Array): string => {
-    let output = "";
-
-    for (let index = 0; index < bytes.length; index += 3) {
-        const byte0 = bytes[index] ?? 0;
-        const hasByte1 = index + 1 < bytes.length;
-        const hasByte2 = index + 2 < bytes.length;
-        const byte1 = hasByte1 ? (bytes[index + 1] ?? 0) : 0;
-        const byte2 = hasByte2 ? (bytes[index + 2] ?? 0) : 0;
-
-        output += BASE64_ALPHABET.charAt(byte0 >> 2);
-        output += BASE64_ALPHABET.charAt(((byte0 & 3) << 4) | (byte1 >> 4));
-        output += hasByte1 ? BASE64_ALPHABET.charAt(((byte1 & 15) << 2) | (byte2 >> 6)) : "=";
-        output += hasByte2 ? BASE64_ALPHABET.charAt(byte2 & 63) : "=";
-    }
-
-    return output;
-};
-/* eslint-enable no-bitwise */
 
 /** Extract the page's HTML — runs INSIDE the headless page, where `document` is the DOM. */
 const sandboxScrapeDocument = (): string =>
@@ -107,7 +79,7 @@ const runBrowserOp = async (browser: SandboxBrowserSurface, request: SandboxInvo
             return browser.content(url);
         }
         case "pdf": {
-            return { data: encodeBase64(await browser.pdf(url)), encoding: "base64", mediaType: "application/pdf" };
+            return { data: toBase64(await browser.pdf(url)), encoding: "base64", mediaType: "application/pdf" };
         }
         case "scrape": {
             // The scrape extractor runs in the page and cannot close over
@@ -121,7 +93,7 @@ const runBrowserOp = async (browser: SandboxBrowserSurface, request: SandboxInvo
                 ...(request.type === undefined ? {} : { type: request.type as "jpeg" | "png" }),
             });
 
-            return { data: encodeBase64(bytes), encoding: "base64", mediaType: request.type === "jpeg" ? "image/jpeg" : "image/png" };
+            return { data: toBase64(bytes), encoding: "base64", mediaType: request.type === "jpeg" ? "image/jpeg" : "image/png" };
         }
         default: {
             throw new LunoraError("INTERNAL", `@lunora/agent: sandbox browser op "${request.op}" is not supported`);

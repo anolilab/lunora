@@ -1,6 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { agentAsTool } from "./as-tool";
+import { RESERVED_SKILL_NAME, SKILL_NAME_PATTERN } from "./skill";
 import type {
     AgentConfig,
     AgentDefinition,
@@ -90,6 +91,46 @@ const collectMemorySources = (config: AgentConfig, skills: ReadonlyArray<SkillDe
 };
 
 /**
+ * Validate the skill-name namespace before it is used to key memory sources.
+ * A skill built via `defineSkill` is already checked, but the config type
+ * accepts any `SkillDefinition`-shaped object, so a plain-JS caller can hand one
+ * in unchecked. Each name keys a `memory:retrieve:NAME` durable step, so it
+ * must be a valid identifier, must not be the reserved `"default"` key (which
+ * names the agent's own `memory` source / the historic `"memory:retrieve"`
+ * step), and must be unique — otherwise the step-name namespace collides and the
+ * SECOND retrieval silently returns the FIRST's memoized output. Extracted from
+ * `defineAgent` to keep its cognitive complexity in check.
+ */
+const assertValidSkillNames = (skills: ReadonlyArray<SkillDefinition>): void => {
+    const seen = new Set<string>();
+
+    for (const skill of skills) {
+        if (typeof skill.name !== "string" || !SKILL_NAME_PATTERN.test(skill.name)) {
+            throw new LunoraError(
+                "INTERNAL",
+                `@lunora/agent: skill \`name\` must be a valid identifier (letters, digits, _ or -, starting with a letter), got ${JSON.stringify(skill.name)}`,
+            );
+        }
+
+        if (skill.name === RESERVED_SKILL_NAME) {
+            throw new LunoraError(
+                "INTERNAL",
+                `@lunora/agent: skill name "${RESERVED_SKILL_NAME}" is reserved (it keys the agent's own \`memory\` source / the \`memory:retrieve\` step) — choose another name`,
+            );
+        }
+
+        if (seen.has(skill.name)) {
+            throw new LunoraError(
+                "INTERNAL",
+                `@lunora/agent: skill name "${skill.name}" is used by more than one skill — rename one (a skill name keys its knowledge memory source, which must be unique)`,
+            );
+        }
+
+        seen.add(skill.name);
+    }
+};
+
+/**
  * Declare a durable agent. The definition compiles onto a Cloudflare Workflow
  * (each LLM turn and each tool call a named durable step; thread messages
  * persisted idempotently in DO SQLite), invoked from mutations/actions via
@@ -134,24 +175,10 @@ const defineAgent = (config: AgentConfig): AgentDefinition => {
 
     const skills = config.skills ?? [];
 
-    // Skill names must be unique: each skill's `knowledge` becomes a memory
-    // source keyed by the skill name (durable step `memory:retrieve:<name>`), so
-    // two skills sharing a name collide on a single step name — the SECOND
-    // retrieval silently returns the FIRST's memoized output. Throw the strict
-    // cousin of `mergeSkillTools`' tool-name collision so the step-name namespace
-    // is guaranteed unique.
-    const seenSkillNames = new Set<string>();
-
-    for (const skill of skills) {
-        if (seenSkillNames.has(skill.name)) {
-            throw new LunoraError(
-                "INTERNAL",
-                `@lunora/agent: skill name "${skill.name}" is used by more than one skill — rename one (a skill name keys its knowledge memory source, which must be unique)`,
-            );
-        }
-
-        seenSkillNames.add(skill.name);
-    }
+    // Skill names key each skill's `knowledge` memory source (durable step
+    // `memory:retrieve:<name>`); validate identifier shape, the reserved
+    // `"default"` key, and uniqueness before they are used (see the helper).
+    assertValidSkillNames(skills);
 
     const tools = mergeSkillTools(config, skills);
 

@@ -251,6 +251,34 @@ describe(defineRag, () => {
         expect(result.chunks.map((chunk) => chunk.sourceId)).toStrictEqual(["tenant-a-doc"]);
     });
 
+    it("namespaces chunk ids so tenants sharing a source id do not collide", async () => {
+        const { store, vectors } = memoryVectors();
+        const ctx = fakeCtx(vectors);
+        const docs = defineRag({ chunk: pipeChunker, index: "docs" });
+        const rag = docs(ctx);
+
+        // The SAME source id under two tenants. Vectorize ids are index-global, so
+        // a namespace-less id ("doc-1#0") would clobber tenant A's chunk with
+        // tenant B's — the namespace segment keeps them distinct.
+        await rag.index({ id: "doc-1", namespace: "tenant-a", text: "alpha alpha plans" });
+        await rag.index({ id: "doc-1", namespace: "tenant-b", text: "beta beta plans" });
+
+        expect([...store.keys()].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["tenant-a#doc-1#0", "tenant-b#doc-1#0"]);
+        expect(store.get("tenant-a#doc-1#0")?.namespace).toBe("tenant-a");
+        expect(store.get("tenant-b#doc-1#0")?.namespace).toBe("tenant-b");
+
+        // Retrieval parses the original source id back out of the namespaced id.
+        const result = await rag.retrieve("alpha plans", { namespace: "tenant-a" });
+
+        expect(result.chunks.map((chunk) => chunk.sourceId)).toStrictEqual(["doc-1"]);
+        expect(result.chunks[0]?.text).toBe("alpha alpha plans");
+
+        // Removing tenant A leaves tenant B's identically-named source intact.
+        await rag.remove({ id: "doc-1", namespace: "tenant-a" });
+
+        expect([...store.keys()]).toStrictEqual(["tenant-b#doc-1#0"]);
+    });
+
     it("short-circuits re-indexing unchanged content via the stored hash", async () => {
         const { vectors } = memoryVectors();
         const ctx = fakeCtx(vectors);

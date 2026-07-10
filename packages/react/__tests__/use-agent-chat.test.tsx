@@ -210,6 +210,37 @@ describe("useAgentChat", () => {
         expect(reconciled).toStrictEqual([{ content: "hello there", role: "user", seq: 0 }]);
     });
 
+    it("rolls the optimistic user turn back when the send mutation fails", async () => {
+        expect.hasAssertions();
+
+        const { client, mutation } = buildClient();
+        let latest: UseAgentChatResult | undefined;
+
+        render(
+            <LunoraProvider client={client}>
+                <Harness
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback; a stable ref adds no value in a one-shot render.
+                    onReady={(result) => {
+                        latest = result;
+                    }}
+                    options={buildOptions()}
+                />
+            </LunoraProvider>,
+        );
+
+        // The send fails (offline, server error, …). The optimistic row appears
+        // synchronously, but must NOT linger as a ghost once the mutation rejects.
+        mutation.mockRejectedValueOnce(new Error("send failed"));
+
+        await act(async () => {
+            await expect(latest?.send("will fail")).rejects.toThrow("send failed");
+        });
+
+        const messages = JSON.parse(screen.getByTestId("messages").textContent ?? "[]") as Record<string, unknown>[];
+
+        expect(messages).toStrictEqual([]);
+    });
+
     it("routes approve / reject through agentResolveApproval with the in-flight instanceId", async () => {
         expect.hasAssertions();
 
