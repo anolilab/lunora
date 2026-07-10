@@ -71,8 +71,8 @@ describe("ssr platform gating", () => {
     it("presence starts no network side effects on the server platform", () => {
         const fake = createFakeClient();
 
-        const { present, sessionId } = runInInjectionContext(makeInjector(fake, "server"), () =>
-            presence("room:1", { heartbeat: heartbeatRef, listPresent: listPresentRef, sessionId: "sess-1" }), );
+        const options = { heartbeat: heartbeatRef, listPresent: listPresentRef, sessionId: "sess-1" };
+        const { present, sessionId } = runInInjectionContext(makeInjector(fake, "server"), () => presence("room:1", options));
 
         expect(fake.subscriptions).toHaveLength(0);
         expect(fake.mutationCalls).toHaveLength(0);
