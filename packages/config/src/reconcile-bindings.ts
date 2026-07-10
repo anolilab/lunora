@@ -656,10 +656,24 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
     // class_name the worker doesn't export. Their DO bindings + migration
     // classes ride through `reconcileDurableObjects` alongside the built-ins.
     const exportedContainers = inferred.containers.filter((container) => container.exported);
+    // A voice-enabled agent's real-time session runs in a dedicated Durable
+    // Object (unlike the durable loop, which compiles onto a Workflow). Each such
+    // agent's generated `VoiceSessionDO` subclass therefore needs a
+    // `durable_objects` binding + `new_sqlite_classes` migration, reconciled
+    // through the same `reconcileDurableObjects` step as the built-ins and
+    // containers. Non-voice agents add nothing here (they only touch
+    // `workflows[]` via `exportedAgents`).
+    const voiceAgents = inferred.agents.filter(
+        (agent): agent is InferredAgent & { voiceBindingName: string; voiceClassName: string } =>
+            agent.exported && agent.voice === true && agent.voiceBindingName !== undefined && agent.voiceClassName !== undefined,
+    );
     const requiredDurableObjects: DurableObjectSpec[] = [
         ...inferred.durableObjects,
         ...exportedContainers.map((container) => {
             return { binding: container.bindingName, className: container.className };
+        }),
+        ...voiceAgents.map((agent) => {
+            return { binding: agent.voiceBindingName, className: agent.voiceClassName };
         }),
     ];
 
