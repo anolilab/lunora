@@ -73,20 +73,31 @@ interface UsePresenceResult<L extends ListPresentReference> {
     setData: (data: Record<string, unknown> | undefined) => void;
 }
 
-/** A best-effort unique id for a presence session — `crypto.randomUUID` when available, else a random fallback. */
+/** A best-effort unique id for a presence session — `crypto.randomUUID` when available, else a `crypto.getRandomValues` fallback. */
 const makeSessionId = (): string => {
     // Guard the whole `crypto` reference, not just `randomUUID`: some SSR /
     // older runtimes leave `crypto` undefined, where reading `.randomUUID` off
     // it throws a TypeError instead of falling through. `typeof crypto` (rather
     // than `globalThis.crypto !== undefined`) is the form the lib's
     // non-nullable `Crypto` typing leaves intact — mirrors `offline-queue.ts`.
-    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-        return crypto.randomUUID();
+    if (typeof crypto !== "undefined") {
+        if (typeof crypto.randomUUID === "function") {
+            return crypto.randomUUID();
+        }
+
+        // Older runtimes without `randomUUID` still ship Web Crypto's CSPRNG.
+        // Use it (never `Math.random`) so the id can't be treated as an
+        // insecure-randomness source flowing into a security context.
+        if (typeof crypto.getRandomValues === "function") {
+            const bytes = crypto.getRandomValues(new Uint8Array(16));
+
+            return `sess-${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+        }
     }
 
-    // Non-security id — just needs to be unique per tab for a presence row.
-    // eslint-disable-next-line sonarjs/pseudo-random -- presence session id, not a credential
-    return `sess-${Math.random().toString(36).slice(2)}-${String(Date.now())}`;
+    // No Web Crypto at all (very old/exotic runtime): a presence session id is a
+    // non-secret correlation handle, so a time-based fallback is acceptable.
+    return `sess-${Date.now().toString(36)}`;
 };
 
 const DEFAULT_INTERVAL_MS = 10_000;
