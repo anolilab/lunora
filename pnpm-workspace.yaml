@@ -95,6 +95,11 @@ overrides:
   # `uuid.v4()`, so it's not exploitable here, but bump the whole tree to the
   # patched line to clear the advisory; v11 keeps the named `v4` export.
   uuid@<11.1.0: ^11.1.0
+  # viem's isows@1.0.7 pulls ws@8.20.1, flagged by GHSA-96hv-2xvq-fx4p (memory-
+  # exhaustion DoS from tiny fragments, high severity). Bump the vulnerable 8.x
+  # range to the patched 8.21.0 — already resolved elsewhere in the tree (@solana/kit,
+  # @lunora/vite) — while leaving the legacy ws@1.x/4.x transitive pins untouched.
+  ws@>=8.0.0 <8.21.0: ^8.21.0
 
 catalogs:
   ai:
