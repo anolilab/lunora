@@ -429,9 +429,45 @@ describe(".check() refinement", () => {
 
         expect(caught).toBeInstanceOf(ValidationError);
         expect(caught.expected).toBe("must be non-negative");
-        // describeValue now carries the concrete primitive literal.
-        expect(caught.received).toBe("number -1");
+        // A .check() refinement failure redacts the concrete literal to the bare
+        // type tag so secret-bearing fields never surface their value.
+        expect(caught.received).toBe("number");
         expect(caught.message).toContain("non-negative");
+    });
+
+    it("redacts the offending value's literal on a string refinement failure", () => {
+        expect.hasAssertions();
+
+        // A secret-bearing string field (correct type, failing predicate) must
+        // not echo its value into the ValidationError message/received.
+        const minLength = v.string().check((s) => s.length >= 64);
+        const secret = "supersecrettoken12345";
+
+        let caught: unknown;
+
+        try {
+            minLength.parse(secret);
+        } catch (error: unknown) {
+            caught = error;
+        }
+
+        assertOk(caught instanceof ValidationError, "expected ValidationError");
+
+        expect(caught).toBeInstanceOf(ValidationError);
+        expect(caught.received).toBe("string");
+        expect(caught.message).not.toContain("supersecret");
+    });
+
+    it("keeps the concrete literal for a genuine type mismatch", () => {
+        expect.hasAssertions();
+
+        // Redaction is scoped to refinement failures — a type mismatch keeps its
+        // literal so `string "7"` vs `number 7` stays a useful diagnostic.
+        const failure = v.number().safeParse("7");
+
+        assertOk(!failure.ok, "expected parse to fail");
+
+        expect(failure.error.received).toBe('string "7"');
     });
 
     it("uses a default message when none is supplied", () => {

@@ -130,24 +130,34 @@ const toMetadata = (object: R2ObjectLike): ObjectMetadata => {
  * flowed through. A `ReadableStream`'s length isn't known synchronously, so a
  * counting `TransformStream` is the only way to bound a streaming upload —
  * without it R2 would happily accept (or, for an unknown-length stream, silently
- * truncate) a body larger than the caller intended. Non-byte chunks (no
- * `byteLength`) are passed through uncounted.
+ * truncate) a body larger than the caller intended. A non-byte chunk (no
+ * `byteLength`) can't be measured, so it aborts the stream rather than flowing
+ * through uncounted — otherwise it would silently defeat the `maxSize` bound.
  */
 const enforceStreamMaxSize = (stream: ReadableStream, maxSize: number): ReadableStream => {
     let seen = 0;
 
-    const byteLengthOf = (chunk: unknown): number => {
+    const byteLengthOf = (chunk: unknown): number | undefined => {
         if (chunk instanceof ArrayBuffer) {
             return chunk.byteLength;
         }
 
-        // Covers Uint8Array and every other typed-array / DataView view.
-        return ArrayBuffer.isView(chunk) ? chunk.byteLength : 0;
+        // Covers Uint8Array and every other typed-array / DataView view;
+        // `undefined` signals a non-byte chunk whose length can't be counted.
+        return ArrayBuffer.isView(chunk) ? chunk.byteLength : undefined;
     };
 
     const counter = new TransformStream({
         transform(chunk: unknown, controller) {
-            seen += byteLengthOf(chunk);
+            const length = byteLengthOf(chunk);
+
+            if (length === undefined) {
+                controller.error(new Error("@lunora/storage: stream chunk is not a byte chunk; cannot enforce maxSize"));
+
+                return;
+            }
+
+            seen += length;
 
             if (seen > maxSize) {
                 controller.error(new Error(`@lunora/storage: stream body exceeds maxSize (> ${String(maxSize)} bytes)`));

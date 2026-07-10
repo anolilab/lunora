@@ -22,6 +22,8 @@
  * error. Children are arbitrary user workflows — nothing about their bodies
  * changes; only the base class learns to call home.
  */
+import { LunoraError } from "@lunora/errors";
+
 import { NonRetryableError } from "./errors";
 import type {
     BranchCompensationParams,
@@ -257,6 +259,12 @@ const createParallel = (deps: FanOutDeps): WorkflowParallelFunction => {
 const createSpawn =
     (deps: FanOutDeps): WorkflowSpawnFunction =>
     async (workflow: string, params?: Record<string, unknown>, options?: { id?: string }): Promise<WorkflowInstanceLike> => {
+        // Reject a caller-supplied reserved branch marker at the trust boundary —
+        // only `createParallel`'s internal injection may set `__lunoraBranch`.
+        if (params !== undefined && Object.hasOwn(params, BRANCH_MARKER_KEY)) {
+            throw new LunoraError("BAD_REQUEST", `@lunora/workflow: params may not contain the reserved key "${BRANCH_MARKER_KEY}"`);
+        }
+
         const childId = deps.nextChildId(options?.id);
 
         await deps.step.do(`${SPAWN_STEP_PREFIX}${childId}`, async (): Promise<string> => {
@@ -295,6 +303,14 @@ const extractBranchMarker = (payload: unknown): BranchMarker | undefined => {
         typeof candidate.parentId !== "string" ||
         typeof candidate.index !== "number"
     ) {
+        return undefined;
+    }
+
+    // Defense-in-depth: even if a marker slips past the create-surface guard,
+    // constrain the parent dereference to a `WORKFLOW_*` binding and the send to
+    // the branch event namespace. Legitimate markers always satisfy both
+    // (createParallel builds `WORKFLOW_*` bindings and `lunora:branch:*` types).
+    if (!candidate.parentBinding.startsWith("WORKFLOW_") || !candidate.eventType.startsWith(BRANCH_EVENT_PREFIX)) {
         return undefined;
     }
 

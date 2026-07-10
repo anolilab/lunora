@@ -1504,6 +1504,8 @@ describe("createWorker — relay-tier routing (plan 075 Phase 2)", () => {
     interface Forward {
         binding: null | string;
         name: string;
+        system: null | string;
+        userId: null | string;
     }
 
     const routingNamespace = (relayCount: number, forwards: Forward[]): ShardNamespaceLike => {
@@ -1517,7 +1519,12 @@ describe("createWorker — relay-tier routing (plan 075 Phase 2)", () => {
                             return Response.json({ relayCount }, { headers: { "content-type": "application/json" } });
                         }
 
-                        forwards.push({ binding: request.headers.get("x-lunora-shard-binding"), name });
+                        forwards.push({
+                            binding: request.headers.get("x-lunora-shard-binding"),
+                            name,
+                            system: request.headers.get("x-lunora-system"),
+                            userId: request.headers.get("x-lunora-userid"),
+                        });
 
                         return new Response(null, { status: 101 });
                     },
@@ -1570,5 +1577,33 @@ describe("createWorker — relay-tier routing (plan 075 Phase 2)", () => {
 
         expect(forwards[0]?.name).toBe("cold-c");
         expect(forwards[0]?.binding).toBeNull();
+    });
+
+    it("strips forged x-lunora-* headers from the upgrade before forwarding to the DO", async () => {
+        expect.assertions(4);
+
+        const forwards: Forward[] = [];
+        const namespace = routingNamespace(2, forwards);
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: namespace });
+
+        // Attacker forges control headers on the WS upgrade. With `env` not exposing
+        // the namespace, `resolveShardBindingName` returns undefined, so the forged
+        // `x-lunora-shard-binding` is never overwritten — it must be *stripped*
+        // instead, along with the forged `x-lunora-system`/`x-lunora-userid`.
+        const forged = new Request("https://app.example/_lunora/ws?shard=forged-d", {
+            headers: {
+                Upgrade: "websocket",
+                "x-lunora-shard-binding": "EVIL",
+                "x-lunora-system": "1",
+                "x-lunora-userid": "attacker",
+            },
+        });
+
+        await worker.fetch(forged, {}, fakeContext);
+
+        expect(forwards).toHaveLength(1);
+        expect(forwards[0]?.binding).toBeNull(); // forged "EVIL" stripped, no binding resolved to re-set it
+        expect(forwards[0]?.system).toBeNull(); // forged x-lunora-system stripped
+        expect(forwards[0]?.userId).toBeNull(); // forged x-lunora-userid stripped (anonymous upgrade)
     });
 });

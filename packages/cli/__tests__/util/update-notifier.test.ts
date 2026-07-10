@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -110,5 +110,51 @@ describe("maybeNotifyUpdate", () => {
         await maybeNotifyUpdate({ cacheDir, current: "2.0.0", env: baseEnv, fetchImpl: okFetch("2.0.0"), isTTY: true, logger });
 
         expect(warns).toHaveLength(0);
+    });
+
+    it("defaults the cache under $XDG_CACHE_HOME/lunora, not the shared temp dir", async () => {
+        expect.assertions(2);
+
+        const xdgDir = mkdtempSync(join(tmpdir(), "lunora-xdg-"));
+        const sharedTmpPath = join(tmpdir(), "lunora-cli-update.json");
+        const tmpExistedBefore = existsSync(sharedTmpPath);
+
+        try {
+            const { logger } = recordingLogger();
+
+            // No explicit cacheDir — the default must resolve to the user-owned XDG dir.
+            await maybeNotifyUpdate({
+                current: "1.0.0",
+                env: { XDG_CACHE_HOME: xdgDir },
+                fetchImpl: okFetch("2.0.0"),
+                isTTY: true,
+                logger,
+                now: () => 1000,
+            });
+
+            expect(existsSync(join(xdgDir, "lunora", "lunora-cli-update.json"))).toBe(true);
+            // The notifier must not have written the predictable shared-tmp path.
+            expect(existsSync(sharedTmpPath) && !tmpExistedBefore).toBe(false);
+        } finally {
+            rmSync(xdgDir, { force: true, recursive: true });
+        }
+    });
+
+    it("refuses to write through a pre-planted symlink (no clobber of the target)", async () => {
+        expect.assertions(2);
+
+        const sentinel = join(cacheDir, "victim.txt");
+
+        writeFileSync(sentinel, "do-not-touch", "utf8");
+        // Attacker pre-creates the cache path as a symlink to the victim file.
+        symlinkSync(sentinel, join(cacheDir, "lunora-cli-update.json"));
+
+        const { logger, warns } = recordingLogger();
+
+        await maybeNotifyUpdate({ cacheDir, current: "1.0.0", env: baseEnv, fetchImpl: okFetch("2.0.0"), isTTY: true, logger, now: () => 1000 });
+
+        // The symlink target must be untouched; the notice still fires off the fetched version.
+        expect(readFileSync(sentinel, "utf8")).toBe("do-not-touch");
+        expect(warns).toHaveLength(1);
     });
 });

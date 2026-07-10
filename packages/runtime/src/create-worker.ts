@@ -2165,9 +2165,20 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // resolved-anonymous path never overwrites it, spoof a verified identity on
         // the socket. Only an authenticated `resolveForwardContext` result may set them.
         const upgradeHeaders = new Headers(request.headers);
-        upgradeHeaders.delete("x-lunora-userid");
-        upgradeHeaders.delete("x-lunora-identity");
-        upgradeHeaders.delete("x-lunora-identity-exp");
+        // SECURITY: strip every client-supplied x-lunora-* header before re-setting
+        // server-minted values. The DO trusts these verbatim (identity trio;
+        // x-lunora-shard-binding, learned per-fetch and used to address relay
+        // siblings via env[binding]; x-lunora-system/-client-ip on the RPC path).
+        // The WS-handshake headers are non-x-lunora- and are preserved.
+        // Snapshot the keys before deleting: mutating a Headers object during
+        // live `.keys()` iteration skips entries, leaving forged headers behind.
+        const clientHeaderNames = [...upgradeHeaders.keys()];
+
+        for (const name of clientHeaderNames) {
+            if (name.startsWith("x-lunora-")) {
+                upgradeHeaders.delete(name);
+            }
+        }
         const forwardedUserId = forwardedHeaders["x-lunora-userid"];
         const forwardedIdentity = forwardedHeaders["x-lunora-identity"];
         const forwardedExp = forwardedHeaders["x-lunora-identity-exp"];
@@ -2528,7 +2539,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         // Identity is resolved ONCE for the batch (one authenticated request); the
         // per-shard gate below still runs for every entry, exactly as `handleRpc`.
-        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, options.resolveIdentity);
+        // Use `publicResolveIdentity` (the contract-wrapped resolver) so this public
+        // data path enforces `defineIdentity(...)` exactly like `handleRpc` — the raw
+        // resolver would let contract-violating claims through to the shard verbatim.
+        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity);
 
         // Validate + group by target shard (throws on a malformed/reserved/oversized batch).
         const groups = groupBatchCallsByShard(calls, defaultShard);

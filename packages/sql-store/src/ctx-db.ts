@@ -2954,7 +2954,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 id = generateId();
                 usedExplicitId = false;
             }
-            const creationTime = typeof withDefaults["_creationTime"] === "number" ? withDefaults["_creationTime"] : clock();
+            // Like `_id` above, a document-supplied `_creationTime` is only honored
+            // under the trusted-import `allowExplicitId` opt-in. The default mutation
+            // path (and the optimistic `clientId` path) mints from `clock()` so a
+            // raw-forwarded client payload can't backdate/forward-date the row —
+            // sync reconciles by `clientId`, not by a client-chosen time.
+            const creationTime = insertOptions?.allowExplicitId && typeof withDefaults["_creationTime"] === "number" ? withDefaults["_creationTime"] : clock();
 
             const documentWithMeta: Record<string, unknown> = { ...withDefaults, _creationTime: creationTime, _id: id };
 
@@ -3407,7 +3412,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             return { continueCursor, isDone: !hasMore, page: documents };
         },
 
-        async replace(id, document, expectedTable) {
+        async replace(id, document, expectedTable, replaceOptions) {
             const tableName = await resolveTableName(id, expectedTable);
 
             if (!tableName) {
@@ -3434,7 +3439,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             const needsPrevious =
                 hasTrigger(schema, tableName, "update") || (definition.aggregateIndexes ?? []).length > 0 || (definition.rankIndexes ?? []).length > 0;
             const previous = needsPrevious ? (decodeRow(definition, snapshot) ?? undefined) : undefined;
-            const creationTime = typeof document["_creationTime"] === "number" ? document["_creationTime"] : clock();
+            // A client-supplied `_creationTime` is honored only under the
+            // trusted-replay `allowExplicitId` opt-in (CDC replay, data-migration
+            // rewrite — both replay a row's original creation time). The default
+            // mutation path mints from `clock()` so a forged document
+            // `_creationTime` can't overwrite the persisted timestamp.
+            const creationTime = replaceOptions?.allowExplicitId && typeof document["_creationTime"] === "number" ? document["_creationTime"] : clock();
             const replaced: Record<string, unknown> = { ...document, _creationTime: creationTime, _id: id };
 
             applyOnUpdate(definition, document, replaced, auth);

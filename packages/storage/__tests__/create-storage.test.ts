@@ -126,6 +126,31 @@ describe("createStorage", () => {
         await expect(new Response(wrapped).arrayBuffer()).rejects.toThrow(/exceeds maxSize/);
     });
 
+    it("upload() aborts a non-byte-chunk ReadableStream so maxSize can't be silently defeated", async () => {
+        expect.assertions(3);
+
+        const bucket = fakeBucket();
+        const storage = createStorage({ bucket });
+
+        // A ReadableStream is untyped, so a stream of string chunks reaches the
+        // counter. Its length can't be measured as bytes, so counting it as 0
+        // would let it flow through uncounted and defeat maxSize entirely. The
+        // wrapper now errors the stream when drained instead.
+        const stream = new ReadableStream({
+            start(controller) {
+                controller.enqueue("x".repeat(100));
+                controller.close();
+            },
+        });
+
+        await expect(storage.upload("s.bin", stream, { maxSize: 4 })).resolves.toMatchObject({ key: "s.bin" });
+        expect(bucket.puts).toHaveLength(1);
+
+        const wrapped = bucket.puts[0]?.body as ReadableStream;
+
+        await expect(new Response(wrapped).arrayBuffer()).rejects.toThrow(/not a byte chunk|cannot enforce maxSize/);
+    });
+
     it("upload() rejects a matching-but-absent contentType when allowedContentTypes is set", async () => {
         expect.assertions(2);
 

@@ -6,8 +6,9 @@ import { validateSessionPolicy } from "./session";
 
 /**
  * A `secret` shorter than this is brute-forceable; better-auth itself accepts
- * any non-empty string. We throw on an HTTPS (production) deployment and warn on
- * a local `http://` spike, pointing at `openssl rand -hex 32` (32 bytes hex = 64
+ * any non-empty string. We throw on anything not proven to be a local dev origin
+ * (HTTPS *and* an unset `baseURL` both count as production) and only warn on an
+ * explicit `http://` spike, pointing at `openssl rand -hex 32` (32 bytes hex = 64
  * chars).
  */
 const MIN_SECRET_LENGTH = 32;
@@ -17,33 +18,6 @@ const isWeakSecret = (secret: string | undefined): boolean => {
     const trimmedLength = typeof secret === "string" ? secret.trim().length : 0;
 
     return trimmedLength > 0 && trimmedLength < MIN_SECRET_LENGTH;
-};
-
-/**
- * Whether the deployment's `baseURL` is confidently HTTPS — used to force
- * `Secure` cookies. Returns a plain boolean (no union) so it stays clear of
- * `sonarjs/function-return-type`: anything we can't positively prove is HTTPS
- * (a bare `http://`, an `"auto"`/missing protocol with no https fallback, or no
- * baseURL at all) is treated as not-secure, leaving the dev default untouched.
- */
-const isHttpsBaseUrl = (baseURL: BetterAuthOptions["baseURL"]): boolean => {
-    if (typeof baseURL === "string") {
-        return baseURL.startsWith("https://");
-    }
-
-    if (baseURL && typeof baseURL === "object") {
-        if (baseURL.protocol === "https") {
-            return true;
-        }
-
-        if (baseURL.protocol === "http") {
-            return false;
-        }
-
-        return typeof baseURL.fallback === "string" && baseURL.fallback.startsWith("https://");
-    }
-
-    return false;
 };
 
 /**
@@ -106,11 +80,14 @@ const hardenAuthOptions = (options: BetterAuthOptions): BetterAuthOptions => {
             `@lunora/auth: AUTH_SECRET is only ${String(options.secret?.trim().length)} characters. Use at least ${String(MIN_SECRET_LENGTH)} ` +
             "for a brute-force-resistant secret — generate one with `openssl rand -hex 32`.";
 
-        // A weak secret on an HTTPS (i.e. production) deployment is a real
-        // brute-force exposure, not a dev inconvenience — fail loudly. Local
-        // `http://` spikes keep the soft warning so a quick prototype isn't
-        // blocked.
-        if (isHttpsBaseUrl(options.baseURL)) {
+        // A weak secret on anything not proven to be a local dev origin is a
+        // real brute-force exposure, not a dev inconvenience — fail loudly.
+        // Mirrors the `useSecureCookies` default below: HTTPS *and* an unset
+        // `baseURL` (the common Cloudflare Workers production shape, where
+        // better-auth infers the origin per-request over HTTPS) both count as
+        // production. Only an explicit `http://` local origin keeps the soft
+        // warning so a quick prototype isn't blocked.
+        if (!isExplicitHttpBaseUrl(options.baseURL)) {
             throw new LunoraError("INTERNAL", message);
         }
 

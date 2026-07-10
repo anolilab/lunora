@@ -12,8 +12,8 @@
  * The pure helpers (version compare, cache freshness, notice formatting) carry
  * the logic and are unit-tested; the runtime entry wires them to fs + fetch.
  */
-import { readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type { Logger } from "./logger";
@@ -72,6 +72,28 @@ const formatUpdateNotice = (current: string, latest: string): string =>
 
 const cacheFilePath = (cacheDirectory: string): string => join(cacheDirectory, "lunora-cli-update.json");
 
+/**
+ * Resolve the default cache directory to a user-owned location instead of the
+ * shared OS temp dir. A world-writable `/tmp` lets a local attacker pre-plant
+ * `lunora-cli-update.json` as a symlink so the next `writeCache` clobbers the
+ * link target (CWE-377/CWE-59); `$XDG_CACHE_HOME/lunora` (else `~/.cache/lunora`,
+ * mode 0700) is owned by the running user, closing that vector. Best-effort:
+ * `mkdirSync` is idempotent (`recursive`) and any failure is swallowed by the
+ * caller's cache read/write guards, degrading to "re-check next time".
+ */
+const defaultCacheDirectory = (env: NodeJS.ProcessEnv): string => {
+    const base = env.XDG_CACHE_HOME && env.XDG_CACHE_HOME.length > 0 ? env.XDG_CACHE_HOME : join(homedir(), ".cache");
+    const directory = join(base, "lunora");
+
+    try {
+        mkdirSync(directory, { mode: 0o700, recursive: true });
+    } catch {
+        // Best-effort — a failed mkdir degrades to a missing-cache re-check.
+    }
+
+    return directory;
+};
+
 /** Read the cached latest-version record, or `undefined` (best-effort, never throws). */
 const readCache = (cacheDirectory: string): UpdateCache | undefined => {
     try {
@@ -94,7 +116,20 @@ const readCache = (cacheDirectory: string): UpdateCache | undefined => {
 /** Persist the latest-version record (best-effort, never throws). */
 const writeCache = (cacheDirectory: string, cache: UpdateCache): void => {
     try {
-        writeFileSync(cacheFilePath(cacheDirectory), `${JSON.stringify(cache)}\n`, "utf8");
+        const path = cacheFilePath(cacheDirectory);
+
+        // Defense-in-depth against symlink following (CWE-59): refuse to write
+        // through a pre-planted symlink so we truncate the cache, never its
+        // link target. `lstatSync` does not follow the final component.
+        try {
+            if (lstatSync(path).isSymbolicLink()) {
+                return;
+            }
+        } catch {
+            // No existing entry (ENOENT) — safe to create it below.
+        }
+
+        writeFileSync(path, `${JSON.stringify(cache)}\n`, "utf8");
     } catch {
         // A cache write failure is non-fatal — we just re-check next time.
     }
@@ -121,7 +156,7 @@ const fetchLatestVersion = async (fetchImpl: FetchLike): Promise<string | undefi
 };
 
 interface NotifyUpdateDeps {
-    /** Override the cache directory (defaults to the OS temp dir). */
+    /** Override the cache directory (defaults to `$XDG_CACHE_HOME/lunora` or `~/.cache/lunora`). */
     cacheDir?: string;
     /** The running CLI version. */
     current: string;
@@ -155,7 +190,7 @@ const maybeNotifyUpdate = async (deps: NotifyUpdateDeps): Promise<void> => {
         return;
     }
 
-    const cacheDirectory = deps.cacheDir ?? tmpdir();
+    const cacheDirectory = deps.cacheDir ?? defaultCacheDirectory(env);
     const nowMs = (deps.now ?? Date.now)();
     const ttlMs = deps.ttlMs ?? CACHE_TTL_MS;
     const cache = readCache(cacheDirectory);

@@ -220,6 +220,22 @@ describe("createSpawn", () => {
         expect(get).toHaveBeenCalledWith("parent-1-c0");
         expect(instance.id).toBe("parent-1-c0");
     });
+
+    it("rejects a caller-supplied reserved branch marker without touching the step API", async () => {
+        expect.assertions(4);
+
+        const step = makeStep();
+        const { create, deps } = makeDeps(step);
+
+        const forged = { eventType: "lunora:branch:victim", index: 0, parentBinding: "WORKFLOW_PARENT", parentId: "victim" };
+
+        const error = await createSpawn(deps)("child", { [BRANCH_MARKER_KEY]: forged }).catch((error_: unknown) => error_);
+
+        expect((error as Error).name).toBe("LunoraError");
+        expect((error as { code?: string }).code).toBe("BAD_REQUEST");
+        expect(step.do).not.toHaveBeenCalled();
+        expect(create).not.toHaveBeenCalled();
+    });
 });
 
 describe("branch marker helpers", () => {
@@ -231,6 +247,24 @@ describe("branch marker helpers", () => {
         expect(extractBranchMarker({ [BRANCH_MARKER_KEY]: marker, other: 1 })).toEqual(marker);
         expect(extractBranchMarker({ other: 1 })).toBeUndefined();
         expect(extractBranchMarker({ [BRANCH_MARKER_KEY]: { eventType: "x" } })).toBeUndefined();
+    });
+
+    it("rejects a shape-valid marker whose parentBinding is not a WORKFLOW_ binding", () => {
+        expect.assertions(1);
+
+        // Attacker-chosen env key that is not a Workflow binding must not be dereferenced.
+        const forged = { eventType: "lunora:branch:x", index: 0, parentBinding: "SECRETS", parentId: "p1" };
+
+        expect(extractBranchMarker({ [BRANCH_MARKER_KEY]: forged })).toBeUndefined();
+    });
+
+    it("rejects a shape-valid marker whose eventType is outside the branch namespace", () => {
+        expect.assertions(1);
+
+        // Attacker-chosen event type outside `lunora:branch:*` must not be sent.
+        const forged = { eventType: "attacker:event", index: 0, parentBinding: "WORKFLOW_PARENT", parentId: "p1" };
+
+        expect(extractBranchMarker({ [BRANCH_MARKER_KEY]: forged })).toBeUndefined();
     });
 
     it("strips the marker from a child's params", () => {

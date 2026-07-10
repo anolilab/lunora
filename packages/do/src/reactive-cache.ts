@@ -392,6 +392,15 @@ class ReactiveCache {
  * RLS-filtered list, or `getMyProfile()` with no args) would otherwise memoize
  * the first caller's result under an identity-independent key and serve it to
  * everyone. Anonymous/subscription callers pass `null` (their own bucket).
+ *
+ * The discriminator is an opaque `null | string`, NOT just a userId: the wiring
+ * layer (`ShardDO#runCachedQuery`) folds the FULL resolved identity — userId
+ * plus the `getIdentity()` claims (active-org / role / tenant) — into a single
+ * `stableStringify`'d string before it reaches here. That matters because RLS
+ * can key on a claim OTHER than userId: a multi-tenant caller whose userId is
+ * stable but whose active-org claim varies request-to-request must NOT share a
+ * cache entry across those requests. Encoding the whole identity, not the
+ * userId alone, is what keeps those contexts isolated.
  */
 const reactiveCacheKey = (functionPath: string, args: Record<string, unknown>, identity: null | string): string =>
     `${identity ?? " anon"} ${functionPath}:${stableStringify(args)}`;

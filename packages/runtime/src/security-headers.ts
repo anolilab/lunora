@@ -503,7 +503,27 @@ const handleCorsPreflight = (request: Request, resolved: ResolvedSecurity): Resp
     const requested = request.headers.get("access-control-request-headers");
 
     headers.set("access-control-allow-methods", resolved.cors.allowedMethods.join(", "));
-    headers.set("access-control-allow-headers", requested ?? resolved.cors.allowedHeaders.join(", "));
+
+    // Enforce the configured allowlist rather than echoing the browser's
+    // requested headers verbatim: intersect the requested list against
+    // `allowedHeaders` case-insensitively (preserving the requested casing),
+    // so a client can never widen the advertised set beyond what the developer
+    // permitted. `allowedHeaders` has no wildcard support, so none is honored.
+    let allowedHeaders: string;
+
+    if (requested === null) {
+        allowedHeaders = resolved.cors.allowedHeaders.join(", ");
+    } else {
+        const permitted = new Set(resolved.cors.allowedHeaders.map((name) => name.toLowerCase()));
+
+        allowedHeaders = requested
+            .split(",")
+            .map((name) => name.trim())
+            .filter((name) => name.length > 0 && permitted.has(name.toLowerCase()))
+            .join(", ");
+    }
+
+    headers.set("access-control-allow-headers", allowedHeaders);
     headers.set("access-control-max-age", String(resolved.cors.maxAge));
 
     // eslint-disable-next-line unicorn/no-null -- the Fetch API requires `null` (not `undefined`) for an empty 204 body

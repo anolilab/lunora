@@ -119,6 +119,16 @@ const transportRejectionReason = (request: IncomingMessage): string | undefined 
         return "Lunora studio rejects a non-localhost Host header in dev.";
     }
 
+    // A direct loopback browser never sets forwarding headers; their presence
+    // means a reverse proxy/tunnel is relaying a (possibly remote) client, which
+    // must not receive the inlined admin token. Refuse rather than trust Host.
+    const FORWARDING_HEADERS = ["x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "forwarded"] as const;
+
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `headers` is typed required but partial/mocked requests omit it
+    if (FORWARDING_HEADERS.some((name) => request.headers?.[name] !== undefined)) {
+        return "Lunora studio refuses a proxied (X-Forwarded-*) request in dev.";
+    }
+
     return undefined;
 };
 

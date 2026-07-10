@@ -1,0 +1,246 @@
+/* eslint-disable sonarjs/no-clear-text-protocols -- SSRF regression fixtures deliberately target http:// private/link-local hosts (metadata endpoint, RFC1918, loopback). */
+import { describe, expect, it, vi } from "vitest";
+
+import { createBrowser } from "../src/create-browser";
+import type { BrowserBindingLike, BrowserLaunchLike, PageLike, RouteLike } from "../src/types";
+
+const binding: BrowserBindingLike = {};
+
+/**
+ * A fake `@cloudflare/playwright` `launch` chain (browser → context → page) that
+ * records whether `page.route` was registered and captures the interceptor
+ * handler, so a test can drive individual (redirect / sub-resource) requests
+ * through it without a real headless browser.
+ */
+interface Harness {
+    gotoCalls: string[];
+    launch: BrowserLaunchLike;
+    routeHandler?: (route: RouteLike) => unknown;
+    routeRegistered: boolean;
+}
+
+const makeHarness = (pageContent = "<html></html>"): Harness => {
+    const harness: Harness = {
+        gotoCalls: [],
+        launch: undefined as never,
+        routeRegistered: false,
+    };
+
+    const page: PageLike = {
+        content: async () => pageContent,
+        evaluate: async (function_) => function_(),
+        goto: async (url) => {
+            harness.gotoCalls.push(url);
+
+            return undefined;
+        },
+        pdf: async () => new Uint8Array(),
+        route: async (_pattern, handler) => {
+            harness.routeRegistered = true;
+            harness.routeHandler = handler;
+        },
+        screenshot: async () => new Uint8Array(),
+    };
+
+    const context = { newPage: async () => page };
+    const browser = { close: async () => {}, newContext: async () => context };
+
+    harness.launch = async () => browser;
+
+    return harness;
+};
+
+/** A fake `Route` (with spied `abort`/`continue`) for a single intercepted request. */
+const makeRoute = (url: string, isNavigation: boolean) => {
+    const abort = vi.fn(async () => {});
+    const continueFn = vi.fn(async () => {});
+
+    const route: RouteLike = {
+        abort,
+        continue: continueFn,
+        request: () => {
+            return { isNavigationRequest: () => isNavigation, url: () => url };
+        },
+    };
+
+    return { abort, continueFn, route };
+};
+
+describe("createBrowser SSRF redirect guard (finding #6)", () => {
+    it("registers the redirect interceptor when allowPrivateTargets is true AND allowedHosts is set", async () => {
+        const harness = makeHarness();
+        const browser = createBrowser({
+            allowedHosts: ["example.com"],
+            allowPrivateTargets: true,
+            binding,
+            launch: harness.launch,
+        });
+
+        await browser.content("https://example.com/");
+
+        expect(harness.routeRegistered).toBe(true);
+    });
+
+    it("does NOT register the interceptor when allowPrivateTargets is true and allowedHosts is unset (no regression)", async () => {
+        const harness = makeHarness();
+        const browser = createBrowser({
+            allowPrivateTargets: true,
+            binding,
+            launch: harness.launch,
+        });
+
+        await browser.content("https://example.com/");
+
+        expect(harness.routeRegistered).toBe(false);
+    });
+
+    it("aborts a redirect hop to an off-allowlist host under allowPrivateTargets + allowedHosts", async () => {
+        const harness = makeHarness();
+        const browser = createBrowser({
+            allowedHosts: ["example.com"],
+            allowPrivateTargets: true,
+            binding,
+            launch: harness.launch,
+        });
+
+        await browser.content("https://example.com/");
+
+        expect(harness.routeHandler).toBeDefined();
+
+        const evil = makeRoute("https://evil.example/steal", true);
+
+        await harness.routeHandler?.(evil.route);
+
+        expect(evil.abort).toHaveBeenCalledWith("blockedbyclient");
+        expect(evil.continueFn).not.toHaveBeenCalled();
+    });
+
+    it("continues a redirect hop that stays on the allowlist", async () => {
+        const harness = makeHarness();
+        const browser = createBrowser({
+            allowedHosts: ["example.com"],
+            allowPrivateTargets: true,
+            binding,
+            launch: harness.launch,
+        });
+
+        await browser.content("https://example.com/");
+
+        const allowed = makeRoute("https://example.com/next", true);
+
+        await harness.routeHandler?.(allowed.route);
+
+        expect(allowed.continueFn).toHaveBeenCalledTimes(1);
+        expect(allowed.abort).not.toHaveBeenCalled();
+    });
+
+    it("does not run a per-hop DoH lookup when allowPrivateTargets is true (resolveDns gating companion edit)", async () => {
+        const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+        try {
+            const harness = makeHarness();
+            const browser = createBrowser({
+                allowedHosts: ["example.com"],
+                allowPrivateTargets: true,
+                binding,
+                launch: harness.launch,
+                resolveDns: true,
+            });
+
+            await browser.content("https://example.com/");
+
+            const hop = makeRoute("https://example.com/next", true);
+
+            await harness.routeHandler?.(hop.route);
+
+            // The per-hop `resolveDns` branch is gated by `!allowPrivateTargets`,
+            // so no DoH `fetch` fires for the intended internal host — the Tunnel
+            // config isn't self-rejected.
+            expect(fetchSpy).not.toHaveBeenCalled();
+            expect(hop.continueFn).toHaveBeenCalledTimes(1);
+        } finally {
+            fetchSpy.mockRestore();
+        }
+    });
+});
+
+describe("createBrowser SSRF sub-resource guard (finding #7)", () => {
+    const defaultBrowser = (harness: Harness) => createBrowser({ binding, launch: harness.launch });
+
+    it("aborts a sub-resource request to a private/link-local host", async () => {
+        const harness = makeHarness();
+
+        await defaultBrowser(harness).content("https://example.com/");
+
+        expect(harness.routeHandler).toBeDefined();
+
+        const metadata = makeRoute("http://169.254.169.254/latest/meta-data/", false);
+
+        await harness.routeHandler?.(metadata.route);
+
+        expect(metadata.abort).toHaveBeenCalledWith("blockedbyclient");
+        expect(metadata.continueFn).not.toHaveBeenCalled();
+    });
+
+    it("aborts a sub-resource request to a loopback / localhost host", async () => {
+        const harness = makeHarness();
+
+        await defaultBrowser(harness).content("https://example.com/");
+
+        const loopback = makeRoute("http://localhost:6379/", false);
+        const rfc1918 = makeRoute("http://10.0.0.5/probe", false);
+
+        await harness.routeHandler?.(loopback.route);
+        await harness.routeHandler?.(rfc1918.route);
+
+        expect(loopback.abort).toHaveBeenCalledWith("blockedbyclient");
+        expect(rfc1918.abort).toHaveBeenCalledWith("blockedbyclient");
+    });
+
+    it("continues a sub-resource request to a public host", async () => {
+        const harness = makeHarness();
+
+        await defaultBrowser(harness).content("https://example.com/");
+
+        const cdn = makeRoute("https://cdn.example.net/app.js", false);
+
+        await harness.routeHandler?.(cdn.route);
+
+        expect(cdn.continueFn).toHaveBeenCalledTimes(1);
+        expect(cdn.abort).not.toHaveBeenCalled();
+    });
+
+    it("continues non-http(s) sub-resources (data:/blob:) so inline assets keep rendering", async () => {
+        const harness = makeHarness();
+
+        await defaultBrowser(harness).content("https://example.com/");
+
+        const dataUri = makeRoute("data:image/png;base64,iVBORw0KGgo=", false);
+        const blob = makeRoute("blob:https://example.com/9f8c-uuid", false);
+
+        await harness.routeHandler?.(dataUri.route);
+        await harness.routeHandler?.(blob.route);
+
+        expect(dataUri.continueFn).toHaveBeenCalledTimes(1);
+        expect(dataUri.abort).not.toHaveBeenCalled();
+        expect(blob.continueFn).toHaveBeenCalledTimes(1);
+        expect(blob.abort).not.toHaveBeenCalled();
+    });
+
+    it("aborts a public but off-allowlist sub-resource when allowedHosts is configured", async () => {
+        const harness = makeHarness();
+        const browser = createBrowser({ allowedHosts: ["example.com"], binding, launch: harness.launch });
+
+        await browser.content("https://example.com/");
+
+        const offList = makeRoute("https://cdn.other.net/app.js", false);
+        const onList = makeRoute("https://example.com/app.js", false);
+
+        await harness.routeHandler?.(offList.route);
+        await harness.routeHandler?.(onList.route);
+
+        expect(offList.abort).toHaveBeenCalledWith("blockedbyclient");
+        expect(onList.continueFn).toHaveBeenCalledTimes(1);
+        expect(onList.abort).not.toHaveBeenCalled();
+    });
+});

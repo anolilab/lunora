@@ -118,19 +118,21 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         // authorized one. Strip it here so the invariant holds regardless of adapter spread order.
         const metadata = stripReferenceId(input.metadata);
 
-        let { customerId } = input;
+        // Never trust a caller-supplied `input.customerId` (cross-tenant checkout IDOR): the authorizer
+        // covers only `referenceId`, so honoring a client-set customer id would bind the authorized
+        // reference's checkout to an arbitrary provider customer. Always derive the customer from the
+        // store for the authorized reference — mirroring `createPortalSession` — minting one only the
+        // first time. `input.customerId` is intentionally ignored (kept on the type for back-compat).
+        let customerId: string;
+        const existing = await store.getCustomerByReference(adapter.identifier, input.referenceId);
 
-        if (!customerId) {
-            const existing = await store.getCustomerByReference(adapter.identifier, input.referenceId);
+        if (existing) {
+            customerId = existing.id;
+        } else {
+            const customer = await adapter.getOrCreateCustomer({ email: input.email, referenceId: input.referenceId });
 
-            if (existing) {
-                customerId = existing.id;
-            } else {
-                const customer = await adapter.getOrCreateCustomer({ email: input.email, referenceId: input.referenceId });
-
-                customerId = customer.id;
-                await store.upsertCustomer(customer);
-            }
+            customerId = customer.id;
+            await store.upsertCustomer(customer);
         }
 
         // Derive a key over every request-shaping field, not just (reference, price, mode): a second

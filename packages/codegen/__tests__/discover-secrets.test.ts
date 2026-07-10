@@ -33,6 +33,26 @@ const CONCAT_SECRET = `
     export const key = "a3f9c2e1b7d8049f5c6a1e2d3b" + "4c5f6071829304a1b2c3d4e5f60718293a4b5c6";
 `;
 
+/**
+ * A complete secret literal concatenated with a *dynamic* operand — the top-level
+ * `+` root folds to `undefined`, so the fully-formed literal must be scanned on its
+ * own rather than lost with the un-foldable root.
+ */
+// eslint-disable-next-line no-secrets/no-secrets -- synthetic fixture, not a real credential
+const CONCAT_SECRET_DYNAMIC = `
+    export function makeKey(suffix: string) {
+        return "sk_live_0123456789abcdefABCDEFghij" + suffix; // gitleaks:allow
+    }
+`;
+
+/** A secret key literal joined with a dynamic host and a static `/path` tail — still surfaced. */
+// eslint-disable-next-line no-secrets/no-secrets -- synthetic fixture, not a real credential
+const CONCAT_SECRET_PATH = `
+    export function makeUrl(host: string) {
+        return "sk_live_0123456789abcdefABCDEFghij" + host + "/path"; // gitleaks:allow
+    }
+`;
+
 let workdir: string;
 let project: Project;
 
@@ -78,6 +98,29 @@ describe("discoverSecrets", () => {
         const found = discoverSecrets(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
+    });
+
+    it("flags a complete secret literal concatenated with a dynamic operand", () => {
+        expect.assertions(3);
+
+        writeFileSync(join(workdir, "lunora", "dynamic.ts"), CONCAT_SECRET_DYNAMIC, "utf8");
+
+        const found = discoverSecrets(project, join(workdir, "lunora"));
+
+        expect(found).toHaveLength(1);
+        expect(found[0]?.kind).toBe("stripe_live_key");
+        expect(found[0]?.preview).toContain("chars)");
+    });
+
+    it("surfaces a secret key literal joined with a dynamic host and a static path", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(workdir, "lunora", "path.ts"), CONCAT_SECRET_PATH, "utf8");
+
+        const found = discoverSecrets(project, join(workdir, "lunora"));
+
+        expect(found.map((secret) => secret.kind)).toStrictEqual(["stripe_live_key"]);
+        expect(found[0]?.preview.includes("/path")).toBe(false);
     });
 
     it("records nothing for a module with no secret-shaped literals", () => {

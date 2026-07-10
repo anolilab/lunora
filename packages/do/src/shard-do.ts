@@ -98,7 +98,7 @@ import type { QueueMessageOutcome, RecordQueueMessageInput } from "./queue-catch
 import { clearQueueMessages, isLossyBody, QUEUE_TABLE, readQueueMessageById, readQueueMessages, recordQueueMessages } from "./queue-catcher";
 import type { ShardRankPageResult } from "./rank";
 import type { ReactiveCacheOptions } from "./reactive-cache";
-import { ReactiveCache, reactiveCacheKey } from "./reactive-cache";
+import { ReactiveCache, reactiveCacheKey, stableStringify } from "./reactive-cache";
 import type { OwnerRelay, RelayHost, RelayMember } from "./relay-hub";
 import { createRelayLink, DEFAULT_MAX_RELAYS } from "./relay-hub";
 import type { AppendRequestLogEntry, ContextLogLevel, LogEventInput, RequestLogResult, RequestLogWriteOptions } from "./request-log";
@@ -4118,11 +4118,24 @@ abstract class ShardDO {
         // whether the cache is even enabled.
         const hitsBefore = this.reactiveCache.stats().hits;
 
+        // Scope the cache entry to the caller's FULL identity — userId AND the
+        // identity claims (active-org/role/tenant) that RLS can key on — so a
+        // per-request claim that varies while userId stays constant never
+        // memoizes one context's rows for another caller sharing the same DO.
+        // An anonymous request (no userId, no claims) collapses to the `null`
+        // bucket. `stableStringify` canonicalizes key order, so equal identities
+        // yield equal discriminators (same guarantee the args encoding relies on).
+        const userId = this.getCurrentUserId();
+        const claims = this.getCurrentIdentity();
+        const identity =
+            userId === undefined && claims === undefined
+                ? // eslint-disable-next-line unicorn/no-null -- reactiveCacheKey's identity arg is `null | string`; null is the documented "anonymous caller" discriminator
+                  null
+                : // eslint-disable-next-line unicorn/no-null -- fold userId/claims into the discriminator; missing fields serialize as null so the shape stays canonical
+                  stableStringify({ claims: claims ?? null, userId: userId ?? null });
+
         try {
-            // Scope the cache entry to the caller's identity so a per-user /
-            // RLS-filtered result is never served across users on a shared DO.
-            // eslint-disable-next-line unicorn/no-null -- reactiveCacheKey's identity arg is `null | string`; null is the documented "anonymous caller" discriminator
-            const result = await this.reactiveCache.run(reactiveCacheKey(functionPath, args, this.getCurrentUserId() ?? null), tracker.collect(), run);
+            const result = await this.reactiveCache.run(reactiveCacheKey(functionPath, args, identity), tracker.collect(), run);
 
             this.currentRequestCacheHit = this.reactiveCache.stats().hits > hitsBefore;
             this.currentRequestReadTables = tablesFromDeps(tracker.collect());

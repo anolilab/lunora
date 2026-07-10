@@ -473,9 +473,47 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
         const assertNavigationAllowed = async (requestUrl: string): Promise<void> => {
             validateUrl(requestUrl, allowPrivateTargets, options.allowedHosts);
 
-            if (resolveDns) {
+            if (!allowPrivateTargets && resolveDns) {
                 await assertResolvedHostIsPublic(requestUrl, dohTimeout);
             }
+        };
+
+        /**
+         * Sub-resource SSRF guard. A rendered page autonomously issues img/fetch/
+         * link/xhr requests; each fires the route handler as a non-navigation
+         * request and must not be let through unchecked to a private/internal host.
+         *
+         * This is a deliberately narrower, string-only check than {@link validateUrl}:
+         * it must NOT throw on non-http(s) schemes (`data:`/`blob:`/`about:` inline
+         * assets are legitimate and network-unreachable, so they pass), and it must
+         * NOT do a per-request DNS lookup (a DoH query per sub-resource would be a
+         * DoS footgun). It mirrors validateUrl's allowlist + `isPrivateTarget` arms
+         * only. Returns `true` when the request should be aborted (fail-closed on an
+         * unparseable/private/off-allowlist http(s) host), `false` to continue.
+         */
+        const isBlockedSubresource = (rawUrl: string): boolean => {
+            let parsed: URL;
+
+            try {
+                parsed = new URL(rawUrl);
+            } catch {
+                return false;
+            }
+
+            // Non-http(s) schemes (data:/blob:/about:) can't reach a network host.
+            if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+                return false;
+            }
+
+            if (options.allowedHosts && options.allowedHosts.length > 0) {
+                const host = normalizeHost(parsed.hostname);
+
+                if (!options.allowedHosts.some((entry) => normalizeHost(entry) === host)) {
+                    return true;
+                }
+            }
+
+            return isPrivateTarget(parsed);
         };
 
         return withBrowser(async (browser) => {
@@ -486,15 +524,29 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
             // public initial URL can bounce the browser to a private/metadata host.
             // Validate EVERY main-frame navigation request (the redirect targets)
             // with the same checks the initial URL passed, aborting fail-closed on
-            // a private/off-allowlist host. Sub-resources are let through (only the
-            // navigation vector is an SSRF concern here). If the injected page lacks
-            // `route` (an older/fake page), the initial-URL guard still stands.
-            if (!allowPrivateTargets && page.route) {
+            // a private/off-allowlist host. Sub-resources (img/fetch/link/xhr) are
+            // additionally checked against the private-target/allowlist guard so a
+            // hostile page can't probe internal hosts — but public sub-resources and
+            // non-http(s) schemes (data:/blob:) still pass so inline/CDN assets keep
+            // rendering. If the injected page lacks `route` (an older/fake page), the
+            // initial-URL guard still stands.
+            //
+            // Register whenever we default-deny private targets OR pin to an
+            // allowlist: `allowPrivateTargets: true` WITH `allowedHosts` (the
+            // documented pin-to-internal-host-via-Tunnel config) must still re-check
+            // every redirect hop against the allowlist, not only the initial URL.
+            if (page.route && (!allowPrivateTargets || (options.allowedHosts?.length ?? 0) > 0)) {
                 await page.route("**/*", async (route: RouteLike) => {
                     const request = route.request();
                     const isNavigation = request.isNavigationRequest?.() ?? true;
 
                     if (!isNavigation) {
+                        if (isBlockedSubresource(request.url())) {
+                            await route.abort("blockedbyclient");
+
+                            return;
+                        }
+
                         await route.continue();
 
                         return;

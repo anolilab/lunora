@@ -32,6 +32,20 @@ describe("toCsv", () => {
 
         expect(csv).toBe('v\n"a,b"\n"say ""hi"""\n"line1\nline2"');
     });
+
+    it("neutralizes spreadsheet formula-injection triggers with a leading tab", () => {
+        expect.assertions(1);
+
+        const csv = toCsv(["v"], [{ v: "=WEBSERVICE(1)" }, { v: "+1" }, { v: "-1+2" }, { v: "@foo" }, { v: "\tleading tab" }, { v: "\rleading cr" }]);
+
+        expect(csv).toBe("v\n\t=WEBSERVICE(1)\n\t+1\n\t-1+2\n\t@foo\n\t\tleading tab\n\t\rleading cr");
+    });
+
+    it("does not alter number-typed negative values (neutralization is scoped to strings)", () => {
+        expect.assertions(1);
+
+        expect(toCsv(["n"], [{ n: -5 }])).toBe("n\n-5");
+    });
 });
 
 describe("toJson", () => {

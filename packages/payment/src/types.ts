@@ -85,7 +85,12 @@ export interface CustomerRef {
 
 export interface CheckoutInput {
     readonly cancelUrl: string;
-    /** Existing provider customer id, if known. */
+
+    /**
+     * @deprecated Ignored at runtime. The provider customer is always derived from the store for the
+     * authorized `referenceId` (never caller-supplied) to prevent cross-tenant checkout attachment (IDOR).
+     * Retained on the type only for backward compatibility; setting it has no effect.
+     */
     readonly customerId?: string;
 
     /**

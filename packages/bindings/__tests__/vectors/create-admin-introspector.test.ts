@@ -1,3 +1,4 @@
+import { LunoraError } from "@lunora/errors";
 import { describe, expect, it, vi } from "vitest";
 
 import { createVectorAdminIntrospector } from "../../src/vectors/create-admin-introspector";
@@ -121,5 +122,31 @@ describe("createVectorAdminIntrospector", () => {
         });
 
         await expect(introspector.queryIndex?.({ name: "orphan", text: "x" })).rejects.toThrow(/no embedder/);
+    });
+
+    it("rejects a prototype-key index name with a controlled LunoraError, never calling the embedder", async () => {
+        expect.assertions(7);
+
+        const embed = vi.fn<(text: string) => Promise<number[]>>(async () => [1, 0, 0]);
+        const introspector = createVectorAdminIntrospector({
+            embedders: { by_body: embed },
+            indexes: { by_body: fakeIndex() },
+            registry: REGISTRY,
+        });
+
+        // "__proto__"/"constructor" are inherited on the plain `indexes` object,
+        // so a truthiness/undefined guard would let them slip through and then
+        // call a non-function → raw TypeError (500 + unvetted wire shape). The
+        // own-property check must route them into the controlled LunoraError.
+        for (const name of ["__proto__", "constructor"]) {
+            // eslint-disable-next-line no-await-in-loop -- sequential assertions keep the mock-call check unambiguous
+            const error = await introspector.queryIndex?.({ name, text: "x" }).catch((error_: unknown) => error_);
+
+            expect(error).toBeInstanceOf(LunoraError);
+            expect((error as LunoraError).code).toBe("INTERNAL");
+            expect((error as LunoraError).message).toMatch(/no Vectorize binding registered/);
+        }
+
+        expect(embed).not.toHaveBeenCalled();
     });
 });

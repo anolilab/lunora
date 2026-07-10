@@ -359,3 +359,79 @@ describe("createSqlCtxDb — cross-dialect SQL rendering", () => {
         },
     );
 });
+
+describe("createSqlCtxDb — _creationTime is server-authoritative", () => {
+    /** A recording exec that captures every rendered statement WITH its bound params, answering reads from a fixed row set. */
+    const recordingExecWithParams = (rows: Record<string, unknown>[]): { calls: { params: ReadonlyArray<unknown>; sql: string }[]; exec: SqlCtxExec } => {
+        const calls: { params: ReadonlyArray<unknown>; sql: string }[] = [];
+
+        return {
+            calls,
+            exec: {
+                all: (query, parameters) => {
+                    calls.push({ params: parameters, sql: query });
+
+                    return Promise.resolve(rows);
+                },
+                run: (query, parameters) => {
+                    calls.push({ params: parameters, sql: query });
+
+                    return Promise.resolve();
+                },
+            },
+        };
+    };
+
+    // A fixed clock so a minted `_creationTime` is a distinctive, assertable value.
+    const CLOCK = 999;
+
+    it("insert() WITHOUT allowExplicitId mints clock() and ignores a forged document _creationTime", async () => {
+        expect.assertions(3);
+
+        const { calls, exec } = recordingExecWithParams([]);
+        const writer = createSqlCtxDb({ clock: () => CLOCK, dialect: makeSqliteDialect(), exec, schema });
+
+        // A raw-forwarded client payload smuggling a backdated `_creationTime`.
+        await writer.insert("notes", { _creationTime: 1, archived: false, body: "x", priority: 3, slug: "forge" });
+
+        const insert = calls.find((call) => /insert into .*notes.* values/iu.test(call.sql));
+
+        expect(insert).toBeDefined();
+        // Values tuple is [id, _creationTime, ...fields], so the minted clock() lands at index 1 — never the forged 1.
+        expect(insert?.params[1]).toBe(CLOCK);
+        expect(insert?.params).not.toContain(1);
+    });
+
+    it("insert() WITH allowExplicitId honors the document _creationTime (import/CDC preservation)", async () => {
+        expect.assertions(2);
+
+        const { calls, exec } = recordingExecWithParams([]);
+        const writer = createSqlCtxDb({ clock: () => CLOCK, dialect: makeSqliteDialect(), exec, schema });
+
+        // The trusted import/CDC path opts in to preserve the original creation time.
+        await writer.insert("notes", { _creationTime: 1, archived: false, body: "x", priority: 3, slug: "import" }, { allowExplicitId: true });
+
+        const insert = calls.find((call) => /insert into .*notes.* values/iu.test(call.sql));
+
+        expect(insert).toBeDefined();
+        expect(insert?.params[1]).toBe(1);
+    });
+
+    it("replace() mints clock() and ignores a forged document _creationTime", async () => {
+        expect.assertions(3);
+
+        // resolveTableName + the OCC snapshot both read; return this row for every SELECT.
+        const snapshotRow = { _creationTime: 42, archived: 0, body: "x", id: "row1", priority: 1, slug: "s" };
+        const { calls, exec } = recordingExecWithParams([snapshotRow]);
+        const writer = createSqlCtxDb({ clock: () => CLOCK, dialect: makeSqliteDialect(), exec, schema });
+
+        await writer.replace("row1", { _creationTime: 5, archived: false, body: "y", priority: 7, slug: "s" });
+
+        const update = calls.find((call) => /update .*notes.* set/iu.test(call.sql));
+
+        expect(update).toBeDefined();
+        // The SET clause binds `_creationTime = ?` first, so the minted clock() is the leading param — never the forged 5.
+        expect(update?.params[0]).toBe(CLOCK);
+        expect(update?.params).not.toContain(5);
+    });
+});

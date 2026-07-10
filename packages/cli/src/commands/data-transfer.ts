@@ -271,6 +271,8 @@ interface ImportCommandOptions {
     table?: string;
     token?: string;
     url?: string;
+    /** Confirm bulk-writing production. Required alongside `--prod`. */
+    yes?: boolean;
 }
 
 interface ImportCommandResult {
@@ -294,6 +296,12 @@ interface ImportRequest {
 const resolveImportRequest = async (options: ImportCommandOptions): Promise<ImportRequest | undefined> => {
     if (options.prod && options.url === undefined) {
         options.logger.error("--prod requires an explicit --url (refusing to import to the implicit localhost worker)");
+
+        return undefined;
+    }
+
+    if (options.prod && options.yes !== true) {
+        options.logger.error("import --prod bulk-writes production. Re-run with --yes to confirm.");
 
         return undefined;
     }

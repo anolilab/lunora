@@ -75,8 +75,15 @@ interface LunoraMcpServerOptions {
     fetch?: typeof fetch;
 
     /**
-     * Bearer token sent on every RPC. Prefer a LEAST-PRIVILEGE token here, not
-     * the admin token — the token bounds everything the exposed agent can do.
+     * Bearer token sent on every RPC. This must be the deployment's **admin
+     * bearer**: the introspection/allowlist path every tool depends on
+     * (`lunora_list_functions`, `lunora_list_tables`, and the `assertRunnable`
+     * precheck that runs before every `run` tool) hits admin-gated
+     * `/_lunora/admin/*` routes, so no scoped/app token works today — it would
+     * 403 (`ADMIN_FORBIDDEN`) on the first tool call. The read-only guarantee is
+     * therefore NOT enforced by the token's scope; it is enforced in-process via
+     * `allowWrites: false` (the default), which omits the write tools from the
+     * advertised list and refuses them at dispatch.
      */
     token?: string;
     /** Base URL of the deployed Lunora Worker. Required unless `client` is given. */

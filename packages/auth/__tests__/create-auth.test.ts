@@ -263,15 +263,27 @@ describe("createAuth — secure-by-default hardening", () => {
         expect(auth.options.advanced?.useSecureCookies).toBe(false);
     });
 
-    it("warns when AUTH_SECRET is shorter than 32 characters", () => {
+    it("warns (does not throw) for a weak AUTH_SECRET on an explicit http:// dev baseURL", () => {
         expect.assertions(2);
 
         const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
-        createAuth({ secret: "short-secret" });
+        createAuth({ baseURL: "http://localhost:8787", secret: "short-secret" });
 
         expect(warn).toHaveBeenCalledTimes(1);
         expect(warn.mock.calls[0]?.[0]).toMatch(/AUTH_SECRET/);
+    });
+
+    it("throws for a weak AUTH_SECRET when baseURL is unset (Workers serve HTTPS in prod)", () => {
+        expect.assertions(1);
+
+        expect(() => createAuth({ secret: "short-secret" })).toThrow(/AUTH_SECRET/);
+    });
+
+    it("throws for a weak AUTH_SECRET on an https baseURL", () => {
+        expect.assertions(1);
+
+        expect(() => createAuth({ baseURL: "https://app.example.com", secret: "short-secret" })).toThrow(/AUTH_SECRET/);
     });
 
     it("does not warn for a 32+ character secret", () => {

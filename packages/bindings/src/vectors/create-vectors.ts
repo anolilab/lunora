@@ -15,9 +15,13 @@ import type {
 } from "./types";
 
 const resolveIndex = (indexes: Record<string, VectorizeIndexLike>, name: string): VectorizeIndexLike => {
+    // Own-property check, not truthiness: a prototype key ("__proto__",
+    // "constructor", …) would otherwise resolve to an inherited Object.prototype
+    // member and slip past the not-found guard. Object.hasOwn keeps unknown
+    // names (including prototype keys) on the controlled LunoraError path.
     const index = indexes[name];
 
-    if (!index) {
+    if (!Object.hasOwn(indexes, name) || index === undefined) {
         throw new LunoraError(
             "INTERNAL",
             `@lunora/bindings/vectors: no index registered for "${name}". Known indexes: ${Object.keys(indexes).join(", ") || "(none)"}`,

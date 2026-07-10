@@ -184,6 +184,15 @@ const buildEqPredicate = (
             throw new LunoraError("UNKNOWN_COLUMN", `unknown column: ${filter.column}`, { status: 404 });
         }
 
+        // An eq filter on a redacted column of an external (non-schema) table
+        // would leak an equality oracle: `total`/count reveals whether a guessed
+        // value matched, bypassing the '•••' redaction. Reject it, mirroring the
+        // facet path's masked-bucket collapse. Declared `.global()` tables (whose
+        // values are not redacted) intentionally bypass this guard.
+        if (schema.tables[table] === undefined && SENSITIVE_COLUMN.test(filter.column)) {
+            throw new LunoraError("FORBIDDEN", `cannot filter on a redacted column: ${filter.column}`, { status: 403 });
+        }
+
         const quoted = quoteIdentifier(physicalColumnName(schema, table, filter.column));
 
         if (filter.value === null || filter.value === undefined) {

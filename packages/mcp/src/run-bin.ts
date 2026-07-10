@@ -6,7 +6,7 @@ import { connectStdio } from "./server";
  * a plain bag so the entry logic is testable without mutating `process.env`.
  *
  * - `LUNORA_URL` (required) — base URL of the deployed Worker.
- * - `LUNORA_ADMIN_TOKEN` (optional) — bearer token sent on every RPC. Prefer a least-privilege token, not the admin token — it bounds everything the agent can do.
+ * - `LUNORA_ADMIN_TOKEN` (optional, but effectively required to be the admin bearer) — bearer token sent on every RPC. It must be the deployment's admin token: every tool depends on admin-gated introspection (`/_lunora/admin/*`), so a scoped/app token 403s (`ADMIN_FORBIDDEN`) on the first call. The read-only guarantee is enforced in-process via `LUNORA_MCP_ALLOW_WRITES` defaulting off — NOT by the token's scope.
  * - `LUNORA_MCP_ALLOW_WRITES` (optional) — set to `1`/`true`/`yes`/`on` to expose the mutation/action tools. Default: read-only (writes disabled).
  */
 interface BinEnvironment {

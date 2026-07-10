@@ -47,6 +47,12 @@ const rpc = (): Request =>
         method: "POST",
     });
 
+const rpcBatch = (): Request =>
+    new Request("https://app.example/_lunora/rpc-batch", {
+        body: JSON.stringify({ calls: [{ args: {}, functionPath: "messages:list" }] }),
+        method: "POST",
+    });
+
 /** A contract that requires a numeric-string `tenantId` claim beyond `userId`. */
 const tenantContract = (onInvalid: "anonymous" | "reject"): IdentityContractLike => {
     return {
@@ -244,6 +250,27 @@ describe("identity contract trust boundary", () => {
         expect(res.status).toBe(401);
         await expect(res.json()).resolves.toMatchObject({ error: { code: "UNAUTHENTICATED" } });
         // Request never dispatched to the shard.
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("rejects a contract-violating identity with 401 on the batch path (onInvalid: 'reject')", async () => {
+        expect.assertions(3);
+
+        const worker = createWorker({
+            identity: tenantContract("reject"),
+            resolveIdentity: (): ResolvedIdentity => {
+                return { userId: "user_42" };
+            },
+            shardDO: shard.namespace,
+        });
+
+        // The batch transport (/_lunora/rpc-batch) is a public data path and must
+        // enforce the identity contract exactly like /_lunora/rpc — otherwise a
+        // contract-violating identity reaches the shard verbatim through the batch.
+        const res = await worker.fetch(rpcBatch(), {}, fakeContext);
+
+        expect(res.status).toBe(401);
+        await expect(res.json()).resolves.toMatchObject({ error: { code: "UNAUTHENTICATED" } });
         expect(shard.calls).toHaveLength(0);
     });
 

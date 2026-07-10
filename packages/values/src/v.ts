@@ -266,11 +266,15 @@ interface InternalColumnValidator<T> extends InternalValidator<T> {
 // `value` after `if (!check) fail(...)`. `func-style` is disabled here because
 // an arrow const loses that narrowing and surfaces no-unsafe-call downstream.
 // eslint-disable-next-line func-style
-function fail(context: ParseContext, expected: string, received: unknown): never {
+function fail(context: ParseContext, expected: string, received: unknown, options?: { redactValue?: boolean }): never {
     // Snapshot the live mutable path stack — composite parsers push/pop into it,
     // so the ValidationError must own its own copy.
     const path = [...context.path];
-    const receivedDescription = describeValue(received);
+    // `redactValue` suppresses the concrete primitive literal in `received`/the
+    // message. Set only on `.check()` refinement failures (the value already
+    // passed its type check) so a secret-bearing field never leaks its value to
+    // the wire/logs; type-mismatch failures keep the literal for diagnostics.
+    const receivedDescription = describeValue(received, { literal: !options?.redactValue });
 
     throw new ValidationError(`Expected ${expected} at ${formatPath(path)}, received ${receivedDescription}`, {
         expected,
@@ -380,7 +384,7 @@ const createValidator = <T>(
             const parsed = parser(value, context);
 
             if (!predicate(parsed)) {
-                fail(context, message ?? "value matching refinement", parsed);
+                fail(context, message ?? "value matching refinement", parsed, { redactValue: true });
             }
 
             return parsed;

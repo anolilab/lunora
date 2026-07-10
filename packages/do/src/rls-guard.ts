@@ -92,7 +92,7 @@ interface GuardableWriter {
     rank: (tableName: string, indexName: string, options: unknown) => unknown;
     rankBefore?: (tableName: string, indexName: string, options: unknown) => unknown;
     rankPage: (tableName: string, indexName: string, options?: unknown) => unknown;
-    replace: (id: string, document: unknown, expectedTable?: string) => unknown;
+    replace: (id: string, document: unknown, expectedTable?: string, options?: { allowExplicitId?: boolean }) => unknown;
     restore?: (id: string, expectedTable?: string) => unknown;
 }
 
@@ -278,10 +278,10 @@ const guardWriter = <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId): 
 
             return base.rankPage(tableName, indexName, options);
         },
-        replace: async (id: string, document: unknown, expectedTable?: string) => {
+        replace: async (id: string, document: unknown, expectedTable?: string, options?: { allowExplicitId?: boolean }) => {
             await guardById(id, expectedTable);
 
-            return base.replace(id, document, expectedTable);
+            return base.replace(id, document, expectedTable, options);
         },
         restore: async (id: string, expectedTable?: string) => {
             // Restore is a by-id write (clears the soft-delete marker); gate it

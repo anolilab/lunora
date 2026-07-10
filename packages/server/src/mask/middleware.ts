@@ -64,6 +64,7 @@ interface QueryArgs {
     baseWhere?: unknown;
     cursor?: null | string;
     limit?: number;
+    orderBy?: ReadonlyArray<Record<string, unknown>>;
     where?: unknown;
     with?: Record<string, unknown>;
 }
@@ -71,11 +72,13 @@ interface QueryArgs {
 interface AggregateArgs {
     field?: string;
     op: string;
+    where?: unknown;
 }
 
 interface GroupByArgs {
     agg?: { field?: string; op: string };
     by: ReadonlyArray<string>;
+    where?: unknown;
 }
 
 interface TableReaderLike {
@@ -475,8 +478,9 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
      * X } } })` (row present ⇒ value confirmed) or a range predicate lets a caller
      * binary-search the exact value the mask is meant to hide. Fail closed — like
      * `assertReductionAllowed` does for aggregate/groupBy — when a client `where`
-     * references a masked column. `baseWhere` (the server-injected RLS filter) is
-     * deliberately NOT checked: it is server-trusted, not a caller oracle.
+     * references a masked column. `baseWhere` is a CALLER-reachable field on the
+     * public `count`/query args (it reaches the SQL predicate via `mergeWhere`),
+     * so it is routed through this same guard too — it is not a server-only field.
      */
     const assertWhereAllowed = (tableName: string, where: unknown, method: string): void => {
         const columns = perTable.get(tableName);
@@ -496,11 +500,40 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
         }
     };
 
+    /**
+     * SECURITY (value oracle via sort order): masking rewrites OUTPUT cells but
+     * preserves ROW ORDER, so `findMany({ orderBy: [{ ssn: "asc" }] })` returns
+     * masked cells sorted by the true hidden value — a sort/binary-search/relative-
+     * rank oracle across pages. Fail closed when an `orderBy` entry references a
+     * masked column, mirroring `assertWhereAllowed` and the index-reader guard
+     * (`order()` over a masked `withIndex` already throws). `orderBy` is a
+     * `Partial&lt;Record&lt;column, "asc" | "desc">>[]`, so each entry's keys are the
+     * ordered columns.
+     */
+    const assertOrderByAllowed = (tableName: string, orderBy: unknown, method: string): void => {
+        const columns = perTable.get(tableName);
+
+        if (!columns || !Array.isArray(orderBy)) {
+            return;
+        }
+
+        for (const entry of orderBy) {
+            if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+                for (const field of Object.keys(entry as Record<string, unknown>)) {
+                    if (field in columns) {
+                        throw new LunoraError("MASK_UNSUPPORTED", `${method}() ordering "${tableName}" by masked column "${field}" is not supported`);
+                    }
+                }
+            }
+        }
+    };
+
     const wrapped: MaskDatabase = {
         ...base,
 
         aggregate(tableName, options) {
             assertReductionAllowed(tableName, [options.field], "aggregate");
+            assertWhereAllowed(tableName, options.where, "aggregate");
 
             return base.aggregate(tableName, options);
         },
@@ -515,11 +548,19 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
 
             assertWhereAllowed(tableName, where, "count");
 
+            // `baseWhere` is in the public `count` args and reaches the SQL
+            // predicate (`mergeWhere(baseWhere, where, scope)`), so a masked
+            // column smuggled through it is the same oracle — guard it too.
+            if (wrapper) {
+                assertWhereAllowed(tableName, wrapper.baseWhere, "count");
+            }
+
             return base.count(tableName, whereOrArgs);
         },
 
         async findFirst(tableName, args) {
             assertWhereAllowed(tableName, args?.where, "findFirst");
+            assertOrderByAllowed(tableName, args?.orderBy, "findFirst");
 
             const row = await base.findFirst(tableName, args);
             const columns = perTable.get(tableName);
@@ -529,6 +570,7 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
 
         async findFirstOrThrow(tableName, args) {
             assertWhereAllowed(tableName, args?.where, "findFirstOrThrow");
+            assertOrderByAllowed(tableName, args?.orderBy, "findFirstOrThrow");
 
             const row = await base.findFirstOrThrow(tableName, args);
             const columns = perTable.get(tableName);
@@ -538,6 +580,7 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
 
         async findMany(tableName, args) {
             assertWhereAllowed(tableName, args?.where, "findMany");
+            assertOrderByAllowed(tableName, args?.orderBy, "findMany");
 
             const page = await base.findMany(tableName, args);
             const columns = perTable.get(tableName);
@@ -558,6 +601,7 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
 
         groupBy(tableName, options) {
             assertReductionAllowed(tableName, [...options.by, options.agg?.field], "groupBy");
+            assertWhereAllowed(tableName, options.where, "groupBy");
 
             return base.groupBy(tableName, options);
         },

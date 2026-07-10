@@ -44,6 +44,22 @@ const exportFetch =
 const NDJSON = `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n`;
 const FIXED_NOW = (): Date => new Date("2026-06-03T12:00:00.000Z");
 
+const capturingImportFetch =
+    (calls: string[]): StreamingFetchLike =>
+    async (url) => {
+        calls.push(url);
+
+        return {
+            body: null,
+            json: async () => {
+                return { inserted: { users: 1 } };
+            },
+            ok: true,
+            status: 200,
+            text: async () => "",
+        };
+    };
+
 let workDir: string;
 
 describe("lunora backup", () => {
@@ -115,19 +131,7 @@ describe("lunora backup", () => {
         });
 
         const importCalls: string[] = [];
-        const importFetch: StreamingFetchLike = async (url) => {
-            importCalls.push(url);
-
-            return {
-                body: null,
-                json: async () => {
-                    return { inserted: { users: 1 } };
-                },
-                ok: true,
-                status: 200,
-                text: async () => "",
-            };
-        };
+        const importFetch = capturingImportFetch(importCalls);
 
         const result = await runBackupCommand({
             cwd: workDir,
@@ -137,6 +141,73 @@ describe("lunora backup", () => {
             target: created.entry?.id,
             token: "t",
             url: "http://localhost:8787",
+        });
+
+        expect(result.code).toBe(0);
+        expect(importCalls[0]).toContain("/_lunora/admin/import");
+    });
+
+    it("restore refuses --prod without --yes (no import request)", async () => {
+        expect.assertions(2);
+
+        const { logger } = capturingLogger();
+
+        const created = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: exportFetch(NDJSON),
+            logger,
+            now: FIXED_NOW,
+            subcommand: "create",
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        const importCalls: string[] = [];
+        const importFetch = capturingImportFetch(importCalls);
+
+        const result = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: importFetch,
+            logger,
+            prod: true,
+            subcommand: "restore",
+            target: created.entry?.id,
+            token: "t",
+            url: "https://app.example.com",
+        });
+
+        expect(result.code).toBe(1);
+        expect(importCalls).toHaveLength(0);
+    });
+
+    it("restore proceeds with --prod when --yes confirms", async () => {
+        expect.assertions(2);
+
+        const { logger } = capturingLogger();
+
+        const created = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: exportFetch(NDJSON),
+            logger,
+            now: FIXED_NOW,
+            subcommand: "create",
+            token: "t",
+            url: "http://localhost:8787",
+        });
+
+        const importCalls: string[] = [];
+        const importFetch = capturingImportFetch(importCalls);
+
+        const result = await runBackupCommand({
+            cwd: workDir,
+            fetchImpl: importFetch,
+            logger,
+            prod: true,
+            subcommand: "restore",
+            target: created.entry?.id,
+            token: "t",
+            url: "https://app.example.com",
+            yes: true,
         });
 
         expect(result.code).toBe(0);

@@ -43,6 +43,14 @@ interface InboundAttachment {
  * on `email.from` alone — gate on these verdicts (or your own policy) instead.
  * Verdicts are best-effort: when the receiving MX did not stamp an
  * `Authentication-Results` header, every field is `null` ("unknown").
+ *
+ * SECURITY: verdicts are read from the **first/topmost** `Authentication-Results`
+ * header in document order. The receiving MX prepends its own genuine header per
+ * RFC 8601, so the topmost occurrence is the trustworthy one; any lower
+ * occurrences (which an untrusted sender can inject into the raw message) are
+ * ignored. As defense-in-depth a consumer may additionally verify the topmost
+ * header's `authserv-id` matches its receiving MX (e.g. Cloudflare) — that needs
+ * config this runtime-agnostic parser does not carry, so it is left to the host.
  */
 interface InboundAuthentication {
     /** DKIM verdict (`"pass"`/`"fail"`/…), or `null` when not reported. */
@@ -60,8 +68,11 @@ interface InboundEmail {
 
     /**
      * Sender-authentication verdicts (DKIM/SPF/DMARC) parsed from the receiving
-     * MX's `Authentication-Results` header. SECURITY: see {@link InboundAuthentication}
-     * — `from` is spoofable; gate trust on these verdicts, not on `from`.
+     * MX's **first/topmost** `Authentication-Results` header. SECURITY: see
+     * {@link InboundAuthentication} — `from` is spoofable; gate trust on these
+     * verdicts, not on `from`. Reading the raw `headers["authentication-results"]`
+     * map instead exposes last-wins (a lower, potentially attacker-injected)
+     * value — trust `authentication`, not the raw map.
      */
     authentication: InboundAuthentication;
     /** Sender mailbox (`from`), CR/LF-checked. Empty string when the message omitted it. SECURITY: spoofable — do not trust for authorization. */
@@ -152,10 +163,20 @@ const parseInboundEmail = async (raw: RawInboundEmail): Promise<InboundEmail> =>
     const headers: Record<string, string> = {};
 
     for (const header of parsed.headers) {
-        // Last-wins on duplicate keys; values are CR/LF-checked before surfacing.
+        // Last-wins on duplicate keys (documented generic contract of the flattened
+        // `headers` map); values are CR/LF-checked before surfacing.
         assertSafeHeaderValue(`inbound header \`${header.key}\``, header.value);
         headers[header.key] = header.value;
     }
+
+    // SECURITY: source the sender-auth verdicts from the FIRST/topmost
+    // `Authentication-Results` header (document order), NOT the last-wins
+    // flattened `headers` map. The receiving MX prepends its own genuine header
+    // per RFC 8601, so the topmost occurrence is the trustworthy one; a lower
+    // occurrence injected by an untrusted sender must not override it. postal-mime
+    // lowercases every header key, so the literal comparison is correct. The value
+    // is already CR/LF-checked by the loop above.
+    const topmostAuthResults = parsed.headers.find((header) => header.key === "authentication-results")?.value;
 
     const to = (parsed.to ?? []).map((entry) => {
         const formatted = formatAddress(entry);
@@ -181,7 +202,7 @@ const parseInboundEmail = async (raw: RawInboundEmail): Promise<InboundEmail> =>
 
     return {
         attachments,
-        authentication: parseAuthentication(headers["authentication-results"]),
+        authentication: parseAuthentication(topmostAuthResults),
         from,
         headers,
         ...(parsed.html === undefined ? {} : { html: parsed.html }),

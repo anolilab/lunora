@@ -99,6 +99,66 @@ describe("createPayment", () => {
         ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
 
+    it("ignores a caller-supplied customerId, forwarding the store's customer for the reference", async () => {
+        expect.assertions(2);
+
+        // Capture whatever `customerId` the facade actually hands the provider.
+        let forwarded: string | undefined = "unset";
+        const adapter = fakeAdapter({
+            createCheckout: async (input) => {
+                forwarded = input.customerId;
+
+                return { id: "cs_1", provider: "stripe", url: "https://pay.test/ok" };
+            },
+        });
+        const store = new MemoryPaymentStore();
+
+        // The reference already has a legitimate stored customer.
+        await store.upsertCustomer({ createdAt: 0, id: "cus_legit", provider: "stripe", referenceId: "user_1" });
+
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store });
+
+        await payment.createCheckout({
+            cancelUrl: "https://x/cancel",
+            // Attacker-chosen victim customer — must be dropped in favor of the store-derived one.
+            customerId: "cus_victim",
+            mode: "payment",
+            priceId: "price_1",
+            referenceId: "user_1",
+            successUrl: "https://x/ok",
+        });
+
+        expect(forwarded).toBe("cus_legit");
+        expect(forwarded).not.toBe("cus_victim");
+    });
+
+    it("ignores a caller-supplied customerId on an empty store, minting a fresh customer instead", async () => {
+        expect.assertions(2);
+
+        let forwarded: string | undefined = "unset";
+        const adapter = fakeAdapter({
+            createCheckout: async (input) => {
+                forwarded = input.customerId;
+
+                return { id: "cs_1", provider: "stripe", url: "https://pay.test/ok" };
+            },
+        });
+        // No stored customer for the reference — the facade mints one via getOrCreateCustomer ("cus_1").
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", store: new MemoryPaymentStore() });
+
+        await payment.createCheckout({
+            cancelUrl: "https://x/cancel",
+            customerId: "cus_victim",
+            mode: "payment",
+            priceId: "price_1",
+            referenceId: "user_1",
+            successUrl: "https://x/ok",
+        });
+
+        expect(forwarded).toBe("cus_1");
+        expect(forwarded).not.toBe("cus_victim");
+    });
+
     it("rejects cancelling another caller's subscription as NOT_FOUND (no existence oracle)", async () => {
         expect.assertions(2);
 
