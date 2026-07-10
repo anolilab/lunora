@@ -2,11 +2,19 @@ import type { FunctionReference } from "@lunora/client";
 import type { ComputedRef, MaybeRefOrGetter } from "vue";
 import { computed, toValue } from "vue";
 
-import type { AgentChatMessage } from "./use-agent-chat";
+import type { AgentChatMessage, AgentLiveEvent } from "./use-agent-chat";
+import { useStream } from "./use-stream";
 import { useSubscription } from "./use-subscription";
 
 /** The `agents:agentMessages` reference — live durable thread history. */
 type AgentMessagesReference = FunctionReference<"query", { key: string; limit?: number }, ReadonlyArray<Record<string, unknown>>>;
+
+/**
+ * An app stream reference that tees the agent's in-flight live events, keyed by
+ * thread. Carries token deltas and tool progress events; this composable consumes
+ * only the progress arm (`kind === "progress"`).
+ */
+type AgentLiveStreamReference = FunctionReference<"stream", { key: string }, AgentLiveEvent>;
 
 /**
  * The `agents.*` reference surface the tool-events composable reads. A structural
@@ -24,6 +32,14 @@ interface UseAgentToolEventsOptions {
     api: UseAgentToolEventsApi;
     /** History depth forwarded to `agents:agentMessages`. */
     limit?: number;
+
+    /**
+     * Optional live event stream — the same app stream function `useAgentChat`
+     * uses. When supplied, ephemeral `ctx.reportProgress(...)` events for the
+     * thread are surfaced as `{ type: "progress" }` entries; when omitted only the
+     * durable lifecycle (call / result / awaiting-approval) is returned.
+     */
+    stream?: AgentLiveStreamReference;
     /** The thread whose tool activity to observe — may be a plain value, `ref`, or getter (a reactive source re-subscribes). */
     threadKey: MaybeRefOrGetter<string>;
 }
@@ -31,12 +47,8 @@ interface UseAgentToolEventsOptions {
 /**
  * A single tool-lifecycle event for a thread. The durable arms
  * (`call`/`result`/`awaiting-approval`) are derived from `agents:agentMessages`
- * and carry the persisted `seq`; the ephemeral `progress` arm — surfaced by
- * React's `useAgentToolEvents` off its `useStream` transport — has no `seq`.
- * `@lunora/vue` ships no token-stream primitive, so this adapter never emits the
- * `progress` arm today (see {@link UseAgentToolEventsResult.events}); the arm
- * stays in the union for parity with `@lunora/react` and forward-compatibility.
- * Discriminate on `type`.
+ * and carry the persisted `seq`; the ephemeral `progress` arm comes live off the
+ * stream and has no `seq`. Discriminate on `type`.
  */
 type AgentToolEvent =
     | { data: unknown; toolCallId: string; type: "progress" }
@@ -46,15 +58,19 @@ type AgentToolEvent =
 
 interface UseAgentToolEventsResult {
     /**
-     * The thread's tool events: the durable lifecycle (oldest first, by `seq`),
-     * recomputed from the live subscription. Live `ctx.reportProgress(...)` events
-     * would trail the durable lifecycle, but `@lunora/vue` exposes no token-stream
-     * primitive (unlike `@lunora/react`'s `useStream`), so no `progress` events are
-     * surfaced yet — the UI advances tool-call-by-tool-call from durable history.
-     * See the package followups for the token-stream gap.
+     * The thread's tool events: the durable lifecycle (oldest first, by `seq`)
+     * followed by any in-flight ephemeral progress events, recomputed from the live
+     * subscription + stream. Treat as derived, not identity-stable.
      */
     events: ComputedRef<ReadonlyArray<AgentToolEvent>>;
 }
+
+/**
+ * A placeholder stream reference so `useStream` is called unconditionally even
+ * when the caller supplies no live stream. Paired with `"skip"` args, it never
+ * opens a stream.
+ */
+const NO_STREAM_REF: AgentLiveStreamReference = { __lunoraRef: "" };
 
 /** Stable empty history so the un-loaded subscription doesn't churn the derived list identity. */
 const EMPTY_MESSAGES: ReadonlyArray<Record<string, unknown>> = [];
@@ -97,20 +113,21 @@ const toDurableEvent = (message: AgentChatMessage): AgentToolEvent[] | undefined
 };
 
 /**
- * A focused view of a thread's tool activity: tool calls, their results, and
- * human-in-the-loop approval pauses — without the full chat message surface. The
- * Vue counterpart to React's `useAgentToolEvents`, re-expressed as a `computed`.
+ * A focused view of a thread's tool activity: tool calls, their results,
+ * human-in-the-loop approval pauses, and live `ctx.reportProgress(...)` events —
+ * without the full chat message surface. The Vue counterpart to React's
+ * `useAgentToolEvents`, re-expressed as a `computed`.
  *
- * It composes the existing primitive rather than adding transport:
- * `useSubscription(api.agents.agentMessages)` for the durable lifecycle. React's
- * hook also tees live `ctx.reportProgress(...)` events off its `useStream`
- * transport; `@lunora/vue` ships no token-stream primitive, so this composable
- * surfaces the durable lifecycle only and the `progress` arm stays unused for now
- * (message-level liveness). For the conversational surface (messages + approvals)
- * use `useAgentChat`; this composable is the tool-observability slice.
+ * It composes the existing primitives rather than adding transport:
+ * `useSubscription(api.agents.agentMessages)` for the durable lifecycle and
+ * {@link useStream} over the optional app event stream for ephemeral progress.
+ * Progress events are live-only (the durable path never emits them): they ride
+ * the same sink as token deltas and are surfaced here, correlated to their tool
+ * call by `toolCallId`. For the conversational surface (messages + streaming text
+ * + approvals) use `useAgentChat`; this composable is the tool-observability slice.
  */
 const useAgentToolEvents = (options: UseAgentToolEventsOptions): UseAgentToolEventsResult => {
-    const { api, limit, threadKey } = options;
+    const { api, limit, stream: streamReference, threadKey } = options;
 
     const messagesArguments = (): { key: string; limit?: number } => {
         const key = toValue(threadKey);
@@ -119,10 +136,31 @@ const useAgentToolEvents = (options: UseAgentToolEventsOptions): UseAgentToolEve
     };
     const { data: history } = useSubscription(api.agents.agentMessages, messagesArguments);
 
-    const events = computed<ReadonlyArray<AgentToolEvent>>(() => {
-        const durable = (history.value ?? EMPTY_MESSAGES) as unknown as ReadonlyArray<AgentChatMessage>;
+    // The event stream is optional: with no reference we pass the sentinel + "skip"
+    // so `useStream` never opens a stream (and no progress events are surfaced).
+    const streamArguments: "skip" | (() => { key: string }) =
+        streamReference === undefined
+            ? "skip"
+            : () => {
+                  return { key: toValue(threadKey) };
+              };
+    const { chunks } = useStream(streamReference ?? NO_STREAM_REF, streamArguments);
 
-        return durable.flatMap((message) => toDurableEvent(message) ?? []);
+    const events = computed<ReadonlyArray<AgentToolEvent>>(() => {
+        const key = toValue(threadKey);
+        const durable = (history.value ?? EMPTY_MESSAGES) as unknown as ReadonlyArray<AgentChatMessage>;
+        const derived: AgentToolEvent[] = durable.flatMap((message) => toDurableEvent(message) ?? []);
+
+        // Append the thread's in-flight progress events after the durable
+        // lifecycle. They're transient — cleared when the stream resets — so they
+        // naturally trail the persisted history.
+        for (const event of chunks.value) {
+            if (event.kind === "progress" && event.threadKey === key) {
+                derived.push({ data: event.data, toolCallId: event.toolCallId, type: "progress" });
+            }
+        }
+
+        return derived;
     });
 
     return { events };

@@ -5,6 +5,7 @@ import { computed, ref, toValue } from "vue";
 import type { AgentThreadRecord, AgentThreadStatus } from "./use-agent";
 import { NO_MUTATION_REF } from "./use-agent";
 import { useMutation } from "./use-mutation";
+import { useStream } from "./use-stream";
 import { useSubscription } from "./use-subscription";
 
 /**
@@ -32,6 +33,47 @@ interface AgentChatMessage {
     toolName?: string;
 }
 
+/**
+ * A live token delta streamed while a turn is generating. Client-safe mirror of
+ * `@lunora/agent`'s `AgentTokenDelta`. Ephemeral — deltas feed
+ * {@link UseAgentChatResult.streamingText} live and are never replayed; the
+ * persisted assistant message stays the single source of truth.
+ */
+interface AgentTokenDelta {
+    /** Discriminates the token arm of {@link AgentLiveEvent}; unset on the wire (token is the default). */
+    kind?: "token";
+    /** The incremental text chunk the model just produced. */
+    text: string;
+    /** The thread this delta belongs to. */
+    threadKey: string;
+    /** The zero-based index of the turn producing the delta. */
+    turn: number;
+}
+
+/**
+ * A live tool-progress event streamed via `ctx.reportProgress(...)`. Client-safe
+ * mirror of `@lunora/agent`'s `AgentProgressEvent`. Ephemeral and `toolCallId`-keyed;
+ * surfaced by `useAgentToolEvents`, ignored by {@link UseAgentChatResult.streamingText}.
+ */
+interface AgentProgressEvent {
+    /** The arbitrary, JSON-serializable payload the tool reported. */
+    data: unknown;
+    /** Discriminates the progress arm of {@link AgentLiveEvent}. */
+    kind: "progress";
+    /** The thread this event belongs to. */
+    threadKey: string;
+    /** The tool call this progress belongs to. */
+    toolCallId: string;
+}
+
+/**
+ * A single event on the agent's live-only channel — a streamed token delta or a
+ * tool progress event. Client-safe mirror of `@lunora/agent`'s `AgentLiveEvent`.
+ * Discriminate on `kind` (`"progress"` for the progress arm; token deltas leave
+ * it unset).
+ */
+type AgentLiveEvent = AgentProgressEvent | AgentTokenDelta;
+
 /** The `agents:agentMessages` reference — live durable thread history. */
 type AgentMessagesReference = FunctionReference<"query", { key: string; limit?: number }, ReadonlyArray<Record<string, unknown>>>;
 
@@ -44,6 +86,13 @@ type AgentApprovalReference = FunctionReference<
 
 /** The `agents:agentThread` reference — live thread status + in-flight `instanceId`. */
 type AgentThreadReference = FunctionReference<"query", { key: string }, Record<string, unknown> | undefined>;
+
+/**
+ * An app stream reference that tees the agent's in-flight live events, keyed by
+ * thread. Carries token deltas and — since `ctx.reportProgress` rides the same
+ * sink — tool progress events; this composable consumes only the token arm.
+ */
+type AgentTokenStreamReference = FunctionReference<"stream", { key: string }, AgentLiveEvent>;
 
 /**
  * The `agents.*` reference surface the chat composable reads. A structural subset
@@ -80,6 +129,13 @@ interface UseAgentChatOptions {
     send: FunctionReference<"mutation">;
     /** Extra args merged into every `send` call (e.g. an `owner` or `title`). */
     sendArgs?: Record<string, unknown>;
+
+    /**
+     * Optional live token-delta stream — an app stream function that tees the
+     * agent's in-flight deltas. When omitted {@link UseAgentChatResult.streamingText}
+     * stays empty and the UI updates message-by-message from durable history.
+     */
+    stream?: AgentTokenStreamReference;
     /** The thread to observe and continue — may be a plain value, `ref`, or getter (a reactive source re-subscribes). */
     threadKey: MaybeRefOrGetter<string>;
 }
@@ -102,12 +158,7 @@ interface UseAgentChatResult {
     /** The live thread status, or `undefined` before the thread exists. */
     status: ComputedRef<AgentThreadStatus | undefined>;
 
-    /**
-     * The in-flight turn's streamed text. `@lunora/vue` ships no token-stream
-     * primitive (unlike `@lunora/react`'s `useStream`), so this stays `""` and the
-     * UI updates message-by-message from durable history — message-level liveness.
-     * See the package followups for the token-stream gap.
-     */
+    /** The in-flight turn's streamed text — live-only, empty once the turn persists to `messages`. */
     streamingText: ComputedRef<string>;
 }
 
@@ -116,6 +167,13 @@ interface OptimisticMessage {
     content: string;
     id: number;
 }
+
+/**
+ * A placeholder stream reference so `useStream` is called unconditionally even
+ * when the caller supplies no token stream. Paired with `"skip"` args, it never
+ * opens a stream.
+ */
+const NO_STREAM_REF: AgentTokenStreamReference = { __lunoraRef: "" };
 
 /**
  * Drop the optimistic user turns the durable history has now caught up on:
@@ -140,33 +198,46 @@ const reconcileOptimistic = (optimistic: ReadonlyArray<OptimisticMessage>, durab
 };
 
 /**
- * A first-class agent chat surface: live durable history + the send / approve /
- * reject / cancel writes, keyed by `threadKey` — the Vue counterpart to React's
- * `useAgentChat`, re-expressed with refs.
+ * A first-class agent chat surface: live durable history + in-flight token
+ * streaming + the send / approve / reject / cancel writes, keyed by `threadKey` —
+ * the Vue counterpart to React's `useAgentChat`, re-expressed with refs.
  *
  * It composes the existing primitives rather than adding transport:
  * `useSubscription(api.agents.agentMessages)` for durable history,
  * `useSubscription(api.agents.agentThread)` for live status + the in-flight
- * `instanceId`, and `useMutation` for the writes (`api.agents.agentResolveApproval`
- * for approvals; app-defined wrappers for `send`/`cancel`). Only the `agents:*`
- * surface is hard-coded — `send`/`cancel` stay generic references.
+ * `instanceId`, {@link useStream} over an app token stream for in-flight deltas,
+ * and `useMutation` for the writes (`api.agents.agentResolveApproval` for
+ * approvals; app-defined wrappers for `send`/`cancel`). Only the `agents:*`
+ * surface is hard-coded — `send`/`cancel`/`stream` stay generic references.
  *
  * A `send` optimistically appends the user turn so it renders immediately; the
  * optimistic row clears once the durable history carries the acknowledged turn.
- *
- * `@lunora/vue` exposes no token-stream primitive, so {@link UseAgentChatResult.streamingText}
- * stays `""` and the UI advances message-by-message from durable history
- * (message-level liveness). When a Vue token-stream primitive lands this
- * composable can tee in-flight deltas the same way the React hook does.
+ * `streamingText` is live-only: it holds the current turn's streamed text and
+ * empties as soon as that turn's assistant message lands in `messages` (the
+ * persisted message is the source of truth), consistent with the loop's
+ * replay-safe, live-only delta design.
  */
 const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
-    const { api, cancel: cancelReference, limit, send: sendReference, sendArgs, threadKey } = options;
+    const { api, cancel: cancelReference, limit, send: sendReference, sendArgs, stream: streamReference, threadKey } = options;
 
-    const { data: history } = useSubscription(api.agents.agentMessages, () =>
-        (limit === undefined ? { key: toValue(threadKey) } : { key: toValue(threadKey), limit }), );
+    const { data: history } = useSubscription(api.agents.agentMessages, () => {
+        const key = toValue(threadKey);
+
+        return limit === undefined ? { key } : { key, limit };
+    });
     const { data: threadData } = useSubscription(api.agents.agentThread, () => {
         return { key: toValue(threadKey) };
     });
+
+    // The token stream is optional: with no reference we pass the sentinel + "skip"
+    // so `useStream` never opens a stream (and `streamingText` stays empty).
+    const streamArguments: "skip" | (() => { key: string }) =
+        streamReference === undefined
+            ? "skip"
+            : () => {
+                  return { key: toValue(threadKey) };
+              };
+    const { chunks } = useStream(streamReference ?? NO_STREAM_REF, streamArguments);
 
     const sendMutation = useMutation(sendReference);
     const cancelMutation = useMutation(cancelReference ?? NO_MUTATION_REF);
@@ -204,8 +275,22 @@ const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
         ];
     });
 
-    // No token-stream primitive on this adapter — see the type doc above.
-    const streamingText = computed(() => "");
+    // The in-flight turn is the one whose assistant message hasn't persisted yet:
+    // each completed turn persists exactly one assistant row, so `turn >= <count of
+    // durable assistant rows>` isolates deltas that have NOT been superseded. Once
+    // the turn's message lands the count advances and its deltas fall away — the
+    // persisted message becomes the source of truth. Token deltas only — progress
+    // events (`kind === "progress"`) ride the same stream but carry no turn text;
+    // `useAgentToolEvents` surfaces those.
+    const streamingText = computed<string>(() => {
+        const key = toValue(threadKey);
+        const assistantCount = durable.value.filter((message) => message.role === "assistant").length;
+
+        return chunks.value
+            .filter((event): event is AgentTokenDelta => event.kind !== "progress" && event.threadKey === key && event.turn >= assistantCount)
+            .map((delta) => delta.text)
+            .join("");
+    });
 
     const send = async (input: string, arguments_?: Record<string, unknown>): Promise<void> => {
         const id = nextId;
@@ -253,5 +338,5 @@ const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
     return { approve, cancel, messages, reject, send, status, streamingText };
 };
 
-export type { AgentChatMessage, UseAgentChatApi, UseAgentChatOptions, UseAgentChatResult };
+export type { AgentChatMessage, AgentLiveEvent, AgentProgressEvent, AgentTokenDelta, UseAgentChatApi, UseAgentChatOptions, UseAgentChatResult };
 export { useAgentChat };
