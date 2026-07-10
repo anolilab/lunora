@@ -354,7 +354,7 @@ a real network:
    and no `maxPrice` (unbounded autonomous spend) — mirror the advisor posture
    used elsewhere.
 
-## Phase 6 — Reporting bridge into `@lunora/payment` (optional)
+## Phase 6 — Reporting bridge into `@lunora/payment` (optional) — ✅ shipped (commit `34b29c24`)
 
 1. **`receipt.ts`** — normalize each settlement into a
    `{ network, tx, from, to, amount, resource, ts }` receipt.
@@ -362,6 +362,26 @@ a real network:
    (`PaymentObserver`) and/or a durable table, so x402 revenue/spend shows up
    next to Stripe/Polar in **Studio** — **without** coupling the rails (x402 is
    not a `PaymentAdapter`). Keep it a one-way, opt-in bridge.
+
+> **Implemented.** `charge/receipt.ts` normalizes each settlement into a stable
+> `X402Receipt` (atomic USDC `amount` kept as an exact string — never coerced to
+> a fractional-dollar number; prefers the actually-settled amount, falls back to
+> the route requirement). An opt-in `config.onReceipt` sink is fired from the
+> charge middleware after settlement — **best-effort** (not awaited; sync throws
+> and async rejections both swallowed) so a reporting failure never withholds a
+> paid resource — and rides on `X402ChargeConfig`, so it flows to the HTTP-action
+> rail and the per-procedure gate for free. `toPaymentEventRow` is a **zero-import**
+> bridge that shapes a receipt as a `@lunora/payment` `events` row (unique on the
+> tx hash) so it renders in Studio's Payments panel with no Studio change.
+>
+> **Ruling on the observer path:** the typed `PaymentObserver` seam was rejected
+> deliberately. It is an _outbound_ alert callback with **no settlement/success
+> event** and a **closed `ProviderId` union** (no `"x402"`), so it cannot carry a
+> receipt. The durable-table path stays fully decoupled because `@lunora/payment`'s
+> `provider` columns are plain `v.string()` — a `provider: "x402"` row persists
+> and renders fine. Amounts don't render in the Payments panel today (it shows
+> `provider`/`type`/`providerEventId`/`processedAt`); surfacing USDC amounts would
+> need a Studio panel change + a revenue table (deferred, out of this plan's scope).
 
 ## Codegen / config wiring
 
