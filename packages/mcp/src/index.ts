@@ -8,9 +8,13 @@
  * (or the `LUNORA_MCP_ALLOW_WRITES` env) is set, and every run tool is
  * allowlisted against the deployment's discovered public functions. Run the
  * `lunora-mcp` binary (configured via the `LUNORA_URL`, `LUNORA_ADMIN_TOKEN`,
- * and `LUNORA_MCP_ALLOW_WRITES` env vars) for the stdio transport, or build a
- * server programmatically with `createLunoraMcpServer` and connect any transport.
+ * and `LUNORA_MCP_ALLOW_WRITES` env vars) for the stdio transport, serve the
+ * server remotely over Streamable HTTP with `createMcpFetchHandler` (a
+ * Workers-ready `Request` → `Response` handler), or build a server
+ * programmatically with `createLunoraMcpServer` and connect any transport.
  */
+export type { McpFetchHandler } from "./http";
+export { createMcpFetchHandler } from "./http";
 export type { LunoraMcpServerOptions } from "./server";
 export { connectStdio, createLunoraMcpServer } from "./server";
 export type { ToolDefinition, ToolInputSchema, ToolResult } from "./tools";
