@@ -21,6 +21,8 @@ export type {
     AgentBindingSpec,
     AgentConfig,
     AgentDefinition,
+    AgentEmailMapper,
+    AgentEmailRun,
     AgentFunctionPaths,
     AgentFunctionReference,
     AgentGenerate,

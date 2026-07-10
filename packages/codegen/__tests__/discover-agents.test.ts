@@ -204,6 +204,28 @@ describe("discover-agents", () => {
 
         expect(() => discoverAgents(newProject(), workdir)).toThrow("`publicRun` must be a static boolean literal");
     });
+
+    it("flags onEmail by AST presence in any property form, and leaves it off when absent", () => {
+        expect.assertions(4);
+
+        writeAgents(`
+            import { defineAgent } from "@lunora/agent";
+
+            export const arrow = defineAgent({ model: "m", onEmail: (email) => ({ input: email.subject ?? "", threadKey: "t" }) });
+            export const method = defineAgent({ model: "m", onEmail(email) { return { input: email.subject ?? "", threadKey: "t" }; } });
+            export const plain = defineAgent({ model: "m" });
+        `);
+
+        const byName = new Map(discoverAgents(newProject(), workdir).map((agent) => [agent.exportName, agent]));
+
+        // The closure is never evaluated — presence in any form (assignment or
+        // method) sets the flag.
+        expect(byName.get("arrow")?.onEmail).toBe(true);
+        expect(byName.get("method")?.onEmail).toBe(true);
+        // Absent leaves the field off entirely, so email-free output is byte-identical.
+        expect(byName.get("plain")?.onEmail).toBeUndefined();
+        expect(byName.get("plain") && "onEmail" in byName.get("plain")!).toBe(false);
+    });
 });
 
 describe("emit (agents)", () => {

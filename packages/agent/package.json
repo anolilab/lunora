@@ -50,6 +50,10 @@
             "types": "./dist/component.d.ts",
             "import": "./dist/component.mjs"
         },
+        "./inbound": {
+            "types": "./dist/inbound.d.ts",
+            "import": "./dist/inbound.mjs"
+        },
         "./naming": {
             "types": "./dist/naming.d.ts",
             "import": "./dist/naming.mjs"
@@ -81,6 +85,7 @@
     "dependencies": {
         "@lunora/ai": "1.0.0-alpha.4",
         "@lunora/errors": "1.0.0-alpha.1",
+        "@lunora/mail": "1.0.0-alpha.13",
         "@lunora/server": "1.0.0-alpha.14",
         "@lunora/values": "1.0.0-alpha.4",
         "@lunora/workflow": "1.0.0-alpha.6",

@@ -1,3 +1,4 @@
+import type { InboundEmail } from "@lunora/mail/inbound";
 import type { FlexibleSchema, LanguageModel, ModelMessage, StopCondition, TelemetryOptions, ToolChoice, ToolSet } from "ai";
 
 /**
@@ -309,6 +310,40 @@ export interface AgentPrepareStepResult {
  */
 export type AgentPrepareStep = (input: AgentPrepareStepInput) => AgentPrepareStepResult | Promise<AgentPrepareStepResult | undefined> | undefined;
 
+/**
+ * The subset of {@link AgentRunInput} an {@link AgentEmailMapper} returns to
+ * start a run from an inbound email.
+ */
+export interface AgentEmailRun {
+    /** The user message that starts (or continues) the thread — the model's prompt. */
+    input: string;
+
+    /**
+     * Verified owner of the thread (its RLS scope). SECURITY: inbound `from` is
+     * spoofable and the run dispatches RLS-bypassed — derive this from a verified
+     * signal (a DKIM-checked address, a mapped account), never blindly from
+     * `email.from`.
+     */
+    owner?: string;
+    /** The thread key — reuse to continue a conversation (e.g. a ticket id parsed from the subject). */
+    threadKey: string;
+    /** Optional thread title, set on first creation. */
+    title?: string;
+}
+
+/**
+ * Map an inbound email into an agent run, or `null`/`undefined` to DROP it (a
+ * failed DKIM/SPF/DMARC check, or a message not addressed to this agent). Wired
+ * by codegen onto the worker's top-level `email()` handler when set — see
+ * `@lunora/agent/inbound`.
+ *
+ * SECURITY: the parsed `from`/`subject`/body are attacker-controlled and the run
+ * is dispatched with RLS bypassed. Gate on `email.authentication` (DKIM/SPF/DMARC
+ * verdicts) here before returning a run, and treat every returned field as
+ * untrusted input.
+ */
+export type AgentEmailMapper = (email: InboundEmail) => AgentEmailRun | null | Promise<AgentEmailRun | null | undefined> | undefined;
+
 export interface AgentConfig {
     /** Restrict the tools the model may call, by name. Default: all tools. */
     activeTools?: ReadonlyArray<string>;
@@ -363,6 +398,14 @@ export interface AgentConfig {
      * is never a concurrent run (the guard compares the stored instance id).
      */
     onConcurrentRun?: "queue" | "reject" | "replace";
+
+    /**
+     * Map an inbound email into an agent run — see {@link AgentEmailMapper}.
+     * When set, codegen wires this agent onto the worker's top-level `email()`
+     * handler (via `@lunora/agent/inbound`) so a received message starts a
+     * durable run. Return `null`/`undefined` to drop the message.
+     */
+    onEmail?: AgentEmailMapper;
     /** Called after each LLM turn — see {@link AgentOnStepFinish}. */
     onStepFinish?: AgentOnStepFinish;
 

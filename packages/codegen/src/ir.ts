@@ -483,6 +483,16 @@ export interface AgentIR {
     name: string;
 
     /**
+     * Whether the definition declares an `onEmail` mapper on
+     * `defineAgent({ onEmail: … })`. When `true` the emitter wires this agent
+     * onto the worker's top-level `email()` handler (via `@lunora/agent/inbound`)
+     * so inbound mail starts a durable run. Detected by AST PRESENCE — the
+     * closure is never evaluated — and written to IR only when present, so
+     * email-free agents (and agent-free projects) stay byte-identical.
+     */
+    onEmail?: boolean;
+
+    /**
      * Whether the definition opted into public run-starts via
      * `defineAgent({ publicRun: true })` — emitted into the `ctx.agents` wiring
      * spec so the public `agents:agentRun` mutation can gate on it fail-closed.

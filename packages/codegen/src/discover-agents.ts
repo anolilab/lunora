@@ -124,6 +124,15 @@ const agentFromCall = (call: CallExpression, exportName: string): AgentIR => {
         ir.voiceClassName = voiceClassName(exportName);
     }
 
+    // Opt-in to inbound email (`defineAgent({ onEmail })`). `onEmail` is a runtime
+    // closure the emitter never evaluates — its mere presence (in any property
+    // form: assignment, shorthand, or method) tells codegen to wire this agent
+    // onto the worker's `email()` handler. Carried onto IR only when present, so
+    // email-free agents stay byte-identical.
+    if (argument.getProperty("onEmail")) {
+        ir.onEmail = true;
+    }
+
     return ir;
 };
 
@@ -170,12 +179,13 @@ const agentsFromSource = (source: SourceFile): AgentIR[] => {
 
 /**
  * Discover every agent the project declares: exported `defineAgent()` calls in
- * `lunora/agents.ts`. Returns `[]` when the file doesn't exist. Only three things
+ * `lunora/agents.ts`. Returns `[]` when the file doesn't exist. Only four things
  * are read statically — the optional `name` override (wrangler `workflows[].name`),
- * the optional `publicRun` opt-in (the `agents:agentRun` capability gate), and the
- * presence of a `voice` block (which turns on the voice-session Durable Object);
- * the rest of the agent config (model / tools / memory / voice models) is
- * runtime-only, so codegen never evaluates it.
+ * the optional `publicRun` opt-in (the `agents:agentRun` capability gate), the
+ * presence of a `voice` block (which turns on the voice-session Durable Object),
+ * and the presence of an `onEmail` mapper (which wires the worker `email()`
+ * handler); the rest of the agent config (model / tools / memory / voice models /
+ * the `onEmail` closure body) is runtime-only, so codegen never evaluates it.
  */
 const discoverAgents = (project: Project, lunoraDirectory: string): AgentIR[] => {
     const agentsPath = join(lunoraDirectory, AGENTS_FILENAME);

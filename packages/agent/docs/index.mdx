@@ -480,6 +480,53 @@ single durable run when the timer fires, with the trailing object as its
 await ctx.scheduler.runAfter(5 * 60_000, agents.support, { input: "follow up", threadKey: "t-1" });
 ```
 
+## Inbound email
+
+Give an agent an `onEmail` mapper and codegen wires it onto the worker's
+top-level `email()` handler (via `@lunora/agent/inbound`), so a message routed by
+[Cloudflare Email Routing](https://developers.cloudflare.com/email-routing/)
+starts a durable run. The mapper turns a parsed `InboundEmail` into an
+`AgentRunInput` — or returns `null`/`undefined` to decline. When several agents
+declare `onEmail`, each received message is offered to them in order and the
+**first** that returns a run claims it:
+
+```ts
+export const support = defineAgent({
+    instructions: "You are a helpful support agent.",
+    model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    onEmail: (email) => {
+        // SECURITY: the sender is spoofable — gate trust on the verified verdicts,
+        // never on `email.from`. Drop anything that isn't DKIM+SPF authenticated.
+        if (email.authentication.dkim !== "pass" || email.authentication.spf !== "pass") {
+            return null; // declined — no run, no bounce
+        }
+
+        return {
+            input: `${email.subject ?? "(no subject)"}\n\n${email.text ?? ""}`,
+            // `owner` gates the thread's reads and the run dispatches RLS-bypassed,
+            // so derive it from a verified signal (a DKIM-checked address mapped to
+            // an account) — never blindly from the spoofable sender.
+            owner: accountForVerifiedSender(email.from),
+            threadKey: email.messageId ?? email.from,
+            title: email.subject,
+        };
+    },
+    tools: {/* … */},
+});
+```
+
+**Security — inbound mail is untrusted and a run dispatches privileged.**
+Cloudflare Email Routing authenticates only the _recipient_ domain, not the
+_sender_: the envelope `from`, subject, and body are trivially spoofable. Make
+trust decisions on `email.authentication` (the DKIM/SPF/DMARC verdicts) and treat
+every mapped field as attacker-controlled input. A message no agent claims is
+dropped silently; a throw while parsing or dispatching bounces the message with a
+fixed generic reason (never reflecting internal error detail back to the sender).
+
+The auto-wired handler is registered _before_ any manual `.onEmail(...)` you add
+to the app builder, so a hand-registered handler still wins if you need full
+control.
+
 ## Access control
 
 Pass `owner: ctx.auth.userId` when starting a run. An **owned** thread's public

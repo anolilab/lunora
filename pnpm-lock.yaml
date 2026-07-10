@@ -1683,6 +1683,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/mail':
+        specifier: workspace:*
+        version: link:../mail
       '@lunora/server':
         specifier: workspace:*
         version: link:../server
