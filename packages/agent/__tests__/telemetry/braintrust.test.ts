@@ -3,6 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { BraintrustLike, BraintrustSpan } from "../../src/telemetry/braintrust";
 import { braintrustTelemetry } from "../../src/telemetry/braintrust";
 
+/**
+ * The ai@7 `Telemetry` event shapes are broad and churn across patch releases;
+ * these tests intentionally pass minimal fixtures to exercise the integration's
+ * defensive partial-field reads. `evt` widens a fixture to the callback's event
+ * type without fabricating (and then having to maintain) every unrelated field.
+ */
+const evt = (fixture: Record<string, unknown>): never => fixture as unknown as never;
+
 interface TracedCall {
     args?: { name?: string; type?: string };
     logs: Record<string, unknown>[];
@@ -40,7 +48,7 @@ describe(braintrustTelemetry, () => {
         const result = await telemetry.executeTool?.({
             callId: "call-1",
             execute: () => Promise.resolve("tool-value"),
-            toolCall: { input: { q: "x" }, toolName: "lookup" },
+            toolCall: evt({ input: { q: "x" }, toolName: "lookup" }),
             toolCallId: "tc-1",
         });
 
@@ -55,7 +63,7 @@ describe(braintrustTelemetry, () => {
         await braintrustTelemetry({ logger }).executeTool?.({
             callId: "call-1",
             execute: () => Promise.resolve("SECRET-OUTPUT"),
-            toolCall: { input: { q: "SECRET-INPUT" }, toolName: "lookup" },
+            toolCall: evt({ input: { q: "SECRET-INPUT" }, toolName: "lookup" }),
             toolCallId: "tc-1",
         });
 
@@ -71,7 +79,7 @@ describe(braintrustTelemetry, () => {
         await braintrustTelemetry({ logger, recordInputs: true, recordOutputs: true }).executeTool?.({
             callId: "call-1",
             execute: () => Promise.resolve("the-output"),
-            toolCall: { input: { q: "the-input" }, toolName: "lookup" },
+            toolCall: evt({ input: { q: "the-input" }, toolName: "lookup" }),
             toolCallId: "tc-1",
         });
 

@@ -3,6 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { SentryLike } from "../../src/telemetry/sentry";
 import { sentryTelemetry } from "../../src/telemetry/sentry";
 
+/**
+ * The ai@7 `Telemetry` event shapes are broad and churn across patch releases;
+ * these tests intentionally pass minimal fixtures to exercise the integration's
+ * defensive partial-field reads. `evt` widens a fixture to the callback's event
+ * type without fabricating (and then having to maintain) every unrelated field.
+ */
+const evt = (fixture: Record<string, unknown>): never => fixture as unknown as never;
+
 interface Span {
     attributes?: Record<string, unknown>;
     name: string;
@@ -37,7 +45,7 @@ describe(sentryTelemetry, () => {
         const result = await telemetry.executeTool?.({
             callId: "call-1",
             execute: () => Promise.resolve("tool-value"),
-            toolCall: { input: { q: "SENSITIVE" }, toolName: "lookup" },
+            toolCall: evt({ input: { q: "SENSITIVE" }, toolName: "lookup" }),
             toolCallId: "tc-1",
         });
 
@@ -54,7 +62,7 @@ describe(sentryTelemetry, () => {
         await sentryTelemetry({ Sentry }).executeTool?.({
             callId: "call-1",
             execute: () => Promise.resolve("ok"),
-            toolCall: { input: { q: "SENSITIVE" }, toolName: "lookup" },
+            toolCall: evt({ input: { q: "SENSITIVE" }, toolName: "lookup" }),
             toolCallId: "tc-1",
         });
 
@@ -68,7 +76,7 @@ describe(sentryTelemetry, () => {
         await sentryTelemetry({ recordInputs: true, Sentry }).executeTool?.({
             callId: "call-1",
             execute: () => Promise.resolve("ok"),
-            toolCall: { input: { q: "hello" }, toolName: "lookup" },
+            toolCall: evt({ input: { q: "hello" }, toolName: "lookup" }),
             toolCallId: "tc-1",
         });
 
@@ -109,7 +117,7 @@ describe(sentryTelemetry, () => {
         await sentryTelemetry({ Sentry }).executeTool?.({
             callId: "c",
             execute: () => Promise.resolve(1),
-            toolCall: { toolName: "t" },
+            toolCall: evt({ toolName: "t" }),
             toolCallId: "tc",
         });
 

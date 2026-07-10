@@ -3,6 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 
 import { combineTelemetry } from "../../src/telemetry/combine";
 
+/**
+ * The ai@7 `Telemetry` event shapes are broad and churn across patch releases;
+ * these tests intentionally pass minimal fixtures to exercise the fan-out and
+ * isolation behaviour. `evt` widens a fixture to the callback's event type
+ * without fabricating (and then having to maintain) every unrelated field.
+ */
+const evt = (fixture: Record<string, unknown>): never => fixture as unknown as never;
+
 /** A tool-execution wrapper that brackets `execute` with named markers. */
 const bracketTool = (order: string[], label: string): Telemetry => {
     return {
@@ -24,7 +32,7 @@ describe(combineTelemetry, () => {
         const b = vi.fn();
         const combined = combineTelemetry({ onStepEnd: a }, { onStepEnd: b });
 
-        const event = { finishReason: "stop", stepNumber: 1 };
+        const event = evt({ finishReason: "stop", stepNumber: 1 });
 
         await combined.onStepEnd?.(event);
 
@@ -38,7 +46,7 @@ describe(combineTelemetry, () => {
         const onObjectStepEnd = vi.fn();
         const combined = combineTelemetry({ onObjectStepEnd, onObjectStepStart, onStepFinish });
 
-        const event = { stepNumber: 0 };
+        const event = evt({ stepNumber: 0 });
 
         await combined.onStepFinish?.(event);
         await combined.onObjectStepStart?.(event);
@@ -72,7 +80,7 @@ describe(combineTelemetry, () => {
         };
         const combined = combineTelemetry(buggy, { onStepEnd: sibling });
 
-        await expect(combined.onStepEnd?.({ stepNumber: 1 })).resolves.toBeUndefined();
+        await expect(combined.onStepEnd?.(evt({ stepNumber: 1 }))).resolves.toBeUndefined();
         expect(sibling).toHaveBeenCalledTimes(1);
     });
 
@@ -102,7 +110,7 @@ describe(combineTelemetry, () => {
         // First integration has no onStepEnd; must not throw when fanning out.
         const combined = combineTelemetry({}, { onStepEnd: onlyB });
 
-        await expect(combined.onStepEnd?.({ stepNumber: 0 })).resolves.toBeUndefined();
+        await expect(combined.onStepEnd?.(evt({ stepNumber: 0 }))).resolves.toBeUndefined();
         expect(onlyB).toHaveBeenCalledTimes(1);
     });
 

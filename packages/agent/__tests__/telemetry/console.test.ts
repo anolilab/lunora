@@ -3,6 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { ConsoleLogLevel } from "../../src/telemetry/console";
 import { consoleTelemetry } from "../../src/telemetry/console";
 
+/**
+ * The ai@7 `Telemetry` event shapes are broad and churn across patch releases;
+ * these tests intentionally pass minimal fixtures to exercise the logger's
+ * defensive partial-field reads. `evt` widens a fixture to the callback's event
+ * type without fabricating (and then having to maintain) every unrelated field.
+ */
+const evt = (fixture: Record<string, unknown>): never => fixture as unknown as never;
+
 interface Entry {
     fields: Record<string, unknown>;
     level: ConsoleLogLevel;
@@ -26,7 +34,7 @@ describe(consoleTelemetry, () => {
         const { entries, logger } = capture();
         const telemetry = consoleTelemetry({ functionId: "support", logger });
 
-        telemetry.onStart?.({ callId: "c1", modelId: "gpt", operationId: "ai.generateText", provider: "openai" });
+        telemetry.onStart?.(evt({ callId: "c1", modelId: "gpt", operationId: "ai.generateText", provider: "openai" }));
 
         expect(entries).toHaveLength(1);
         expect(entries[0]?.message).toContain("[support]");
@@ -37,7 +45,7 @@ describe(consoleTelemetry, () => {
         const { entries, logger } = capture();
         const telemetry = consoleTelemetry({ logger });
 
-        telemetry.onToolExecutionStart?.({ toolCall: { input: { ssn: "SECRET-INPUT" }, toolName: "lookup" } });
+        telemetry.onToolExecutionStart?.(evt({ toolCall: { input: { ssn: "SECRET-INPUT" }, toolName: "lookup" } }));
 
         expect(dump(entries)).not.toContain("SECRET-INPUT");
         // The tool name itself is structural and IS logged.
@@ -49,17 +57,21 @@ describe(consoleTelemetry, () => {
         const { entries, logger } = capture();
         const telemetry = consoleTelemetry({ logger });
 
-        telemetry.onLanguageModelCallEnd?.({
-            content: [{ text: "SECRET-MODEL-TEXT", type: "text" }],
-            finishReason: "stop",
-            modelId: "gpt",
-            provider: "openai",
-        });
-        telemetry.onToolExecutionEnd?.({
-            toolCall: { toolName: "lookup" },
-            toolExecutionMs: 12,
-            toolOutput: { output: "SECRET-TOOL-OUTPUT", type: "tool-result" },
-        });
+        telemetry.onLanguageModelCallEnd?.(
+            evt({
+                content: [{ text: "SECRET-MODEL-TEXT", type: "text" }],
+                finishReason: "stop",
+                modelId: "gpt",
+                provider: "openai",
+            }),
+        );
+        telemetry.onToolExecutionEnd?.(
+            evt({
+                toolCall: { toolName: "lookup" },
+                toolExecutionMs: 12,
+                toolOutput: { output: "SECRET-TOOL-OUTPUT", type: "tool-result" },
+            }),
+        );
 
         expect(dump(entries)).not.toContain("SECRET-MODEL-TEXT");
         expect(dump(entries)).not.toContain("SECRET-TOOL-OUTPUT");
@@ -69,13 +81,15 @@ describe(consoleTelemetry, () => {
         const { entries, logger } = capture();
         const telemetry = consoleTelemetry({ logger, recordInputs: true, recordOutputs: true });
 
-        telemetry.onToolExecutionStart?.({ toolCall: { input: { q: "hello" }, toolName: "lookup" } });
-        telemetry.onLanguageModelCallEnd?.({ content: [{ text: "the answer", type: "text" }], modelId: "gpt", provider: "openai" });
-        telemetry.onToolExecutionEnd?.({
-            toolCall: { toolName: "lookup" },
-            toolExecutionMs: 5,
-            toolOutput: { output: "tool-result-value", type: "tool-result" },
-        });
+        telemetry.onToolExecutionStart?.(evt({ toolCall: { input: { q: "hello" }, toolName: "lookup" } }));
+        telemetry.onLanguageModelCallEnd?.(evt({ content: [{ text: "the answer", type: "text" }], modelId: "gpt", provider: "openai" }));
+        telemetry.onToolExecutionEnd?.(
+            evt({
+                toolCall: { toolName: "lookup" },
+                toolExecutionMs: 5,
+                toolOutput: { output: "tool-result-value", type: "tool-result" },
+            }),
+        );
 
         expect(dump(entries)).toContain("hello");
         expect(dump(entries)).toContain("the answer");
@@ -86,12 +100,14 @@ describe(consoleTelemetry, () => {
         const { entries, logger } = capture();
         const telemetry = consoleTelemetry({ logger });
 
-        telemetry.onToolExecutionEnd?.({
-            toolCall: { toolName: "lookup" },
-            toolExecutionMs: 42,
-            toolOutput: { output: "ok", type: "tool-result" },
-        });
-        telemetry.onStepEnd?.({ finishReason: "stop", stepNumber: 0, usage: { inputTokens: 10, outputTokens: 3, totalTokens: 13 } });
+        telemetry.onToolExecutionEnd?.(
+            evt({
+                toolCall: { toolName: "lookup" },
+                toolExecutionMs: 42,
+                toolOutput: { output: "ok", type: "tool-result" },
+            }),
+        );
+        telemetry.onStepEnd?.(evt({ finishReason: "stop", stepNumber: 0, usage: { inputTokens: 10, outputTokens: 3, totalTokens: 13 } }));
 
         const toolEntry = entries.find((entry) => entry.message.includes("tool execution ended"));
 
@@ -108,11 +124,13 @@ describe(consoleTelemetry, () => {
         const { entries, logger } = capture();
         const telemetry = consoleTelemetry({ logger, recordOutputs: true });
 
-        telemetry.onToolExecutionEnd?.({
-            toolCall: { toolName: "lookup" },
-            toolExecutionMs: 7,
-            toolOutput: { error: new Error("boom"), type: "tool-error" },
-        });
+        telemetry.onToolExecutionEnd?.(
+            evt({
+                toolCall: { toolName: "lookup" },
+                toolExecutionMs: 7,
+                toolOutput: { error: new Error("boom"), type: "tool-error" },
+            }),
+        );
 
         const entry = entries[0];
 
@@ -138,14 +156,14 @@ describe(consoleTelemetry, () => {
         const telemetry = consoleTelemetry({ logger });
 
         expect(() => {
-            telemetry.onStart?.({});
-            telemetry.onStepStart?.({});
-            telemetry.onLanguageModelCallEnd?.({});
-            telemetry.onToolExecutionStart?.({});
-            telemetry.onToolExecutionEnd?.({});
-            telemetry.onStepEnd?.({});
-            telemetry.onEnd?.({});
-            telemetry.onAbort?.({});
+            telemetry.onStart?.(evt({}));
+            telemetry.onStepStart?.(evt({}));
+            telemetry.onLanguageModelCallEnd?.(evt({}));
+            telemetry.onToolExecutionStart?.(evt({}));
+            telemetry.onToolExecutionEnd?.(evt({}));
+            telemetry.onStepEnd?.(evt({}));
+            telemetry.onEnd?.(evt({}));
+            telemetry.onAbort?.(evt({}));
         }).not.toThrow();
 
         expect(entries.length).toBeGreaterThan(0);
@@ -155,7 +173,7 @@ describe(consoleTelemetry, () => {
         const info = vi.spyOn(globalThis.console, "info").mockImplementation(() => undefined);
         const telemetry = consoleTelemetry();
 
-        telemetry.onStart?.({ operationId: "ai.generateText" });
+        telemetry.onStart?.(evt({ operationId: "ai.generateText" }));
 
         expect(info).toHaveBeenCalledTimes(1);
 
