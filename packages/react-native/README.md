@@ -75,8 +75,8 @@ import { FlatList, Text } from "react-native";
 import { api } from "./lunora/_generated/api";
 
 export function Chat() {
-    const messages = useQuery(api.messages.list, { channelId: "general" });
-    const send = useMutation(api.messages.send);
+    const messages = useQuery(api.messages.list, {});
+    const { mutate: send } = useMutation(api.messages.send);
 
     return <FlatList data={messages ?? []} keyExtractor={(m) => m._id} renderItem={({ item }) => <Text>{item.text}</Text>} />;
 }
