@@ -220,7 +220,7 @@ describe("framework-compose-plugin", () => {
             // string literal `\U` is an invalid unicode escape → SyntaxError, and
             // `\l`/`\a` silently vanish → unresolvable specifier. The emitter must
             // convert to forward slashes so the composed worker boots everywhere.
-            const code = buildWorkerEntrySource("tanstack-start", "C:\\Users\\dev\\app\\lunora\\_generated", true);
+            const code = buildWorkerEntrySource("tanstack-start", String.raw`C:\Users\dev\app\lunora\_generated`, true);
 
             expect(code).toContain('"C:/Users/dev/app/lunora/_generated/functions"');
             expect(code).toContain('"C:/Users/dev/app/lunora/_generated/containers"');

@@ -29,4 +29,4 @@ const resolveTildePath = (specifier: string, rootDirectory: string, sourceDirect
     return specifier;
 };
 
-export { resolveTildePath };
+export default resolveTildePath;

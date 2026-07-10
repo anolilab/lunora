@@ -43,7 +43,7 @@ export interface LunoraAiOptions {
     /**
      * Default Workers AI **embedding** model id used by `embeddingModel()` when no
      * explicit model is passed (e.g. `@cf/baai/bge-base-en-v1.5`). Kept separate
-     * from {@link defaultModel} because a language-model id and an embedding-model
+     * from `defaultModel` because a language-model id and an embedding-model
      * id belong to different Workers AI families and are never interchangeable —
      * reusing the language-model default here would defer a wrong-family error to
      * inference time. Has no effect on bring-your-own providers.
@@ -52,7 +52,7 @@ export interface LunoraAiOptions {
 
     /**
      * Default Workers AI **language** model id used by `model()` when no explicit
-     * model is passed. For embeddings, set {@link defaultEmbeddingModel} instead.
+     * model is passed. For embeddings, set `defaultEmbeddingModel` instead.
      * Has no effect on bring-your-own providers.
      */
     defaultModel?: string;

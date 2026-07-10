@@ -166,6 +166,7 @@ const usePaginatedCore = <F extends FunctionReference>(
                         if (next) {
                             migrateResultsForRebalance(latestPages, next);
                             pages.set(next);
+                            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- runs inside a deferred subscription callback, after syncSubscriptions is defined
                             syncSubscriptions(next);
                             doRebuildPageResults();
                         }
@@ -198,7 +199,7 @@ const usePaginatedCore = <F extends FunctionReference>(
     // — that follow-up pass closes any now-stale sub and opens the genuinely new
     // pages against complete bookkeeping.
     let syncing = false;
-    let resyncRequested = false;
+    let resyncRequested: boolean = false;
 
     const syncSubscriptions = (currentPages: Page[]): void => {
         if (syncing) {
@@ -216,6 +217,7 @@ const usePaginatedCore = <F extends FunctionReference>(
                 resyncRequested = false;
                 syncPass(pagesToSync);
                 pagesToSync = pages();
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- resyncRequested is set by syncPass through a nested call the flow analyzer cannot track
             } while (resyncRequested);
         } finally {
             syncing = false;

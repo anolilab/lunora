@@ -6,7 +6,7 @@
  * `renderError` renders it (and its actionable hint) directly at the CLI/overlay
  * edge, and adds the transport fields Lunora needs: a machine `code`, an HTTP/RPC
  * `status`, an optional `docsUrl`, and an optional wire-encodable `data` payload.
- * Constructing one looks its defaults up in the central {@link ERROR_CATALOG} by
+ * Constructing one looks its defaults up in the central `ERROR_CATALOG` by
  * `code`, so a bare `new LunoraError("NOT_FOUND")` already carries the right
  * status/title/hint.
  *
@@ -76,7 +76,7 @@ export class LunoraError extends Error {
     /** Source location, when known (mirrors `VisulimaError.loc`). */
     public readonly loc: ErrorLocation | undefined;
 
-    /** Machine-readable reason, keyed into {@link ERROR_CATALOG}. */
+    /** Machine-readable reason, keyed into `ERROR_CATALOG`. */
     public readonly code: string;
 
     /** HTTP/RPC status for the transport mappers. */

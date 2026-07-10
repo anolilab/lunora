@@ -59,6 +59,7 @@ const usePreloadedQuery = function <T>(preloaded: Preloaded<T>): T {
     // case. A `??` here would also coalesce `null`, but `null` is a normal
     // Lunora query result (document deleted, access revoked): a live push of
     // `null` must pass through, not resurrect the stale preloaded value.
+    // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- intentional: a live null push must pass through, not fall back to the stale preloaded value
     return data === undefined ? value : data;
 };
 

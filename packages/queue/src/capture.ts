@@ -148,7 +148,7 @@ const createQueueCaptureSink = (env: QueueEnv, options: QueueCaptureOptions = {}
 
                 throw new LunoraError(
                     "INTERNAL",
-                    `@lunora/queue: capture write to the root shard failed (${response.status} ${response.statusText})${detail === "" ? "" : `: ${detail}`}`,
+                    `@lunora/queue: capture write to the root shard failed (${String(response.status)} ${response.statusText})${detail === "" ? "" : `: ${detail}`}`,
                 );
             }
 

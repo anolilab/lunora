@@ -103,7 +103,7 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
     // and the render scope never stops — so `onScopeDispose` never fires and each
     // request would leak a live `setInterval` handle. Skip the whole client wiring
     // server-side; the returned refs stay inert until the component hydrates.
-    if (typeof window !== "undefined") {
+    if ((globalThis as { window?: unknown }).window !== undefined) {
         // Heartbeat: immediately on mount, on interval, and on tab re-focus.
         sendHeartbeat();
         const intervalHandle = setInterval(sendHeartbeat, intervalMs);

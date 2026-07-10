@@ -92,7 +92,7 @@ describe("index", () => {
         });
     });
 
-    describe("VERSION", () => {
+    describe("vERSION", () => {
         it("reflects the real package.json version, not the old hardcoded 0.0.0", () => {
             expect.assertions(2);
 

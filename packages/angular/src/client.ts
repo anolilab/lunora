@@ -1,3 +1,4 @@
+/* eslint-disable no-secrets/no-secrets -- camelCase identifiers in prose, not secrets */
 import type { EnvironmentProviders } from "@angular/core";
 import { inject, InjectionToken, makeEnvironmentProviders } from "@angular/core";
 import type { LunoraClientOptions } from "@lunora/client";

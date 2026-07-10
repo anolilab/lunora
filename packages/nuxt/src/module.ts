@@ -33,7 +33,7 @@ import { dirname, join, resolve } from "node:path";
 
 import { addServerHandler, createResolver, defineNuxtModule, useLogger } from "@nuxt/kit";
 
-import { resolveTildePath } from "./resolve-tilde-path";
+import resolveTildePath from "./resolve-tilde-path";
 
 /** Matches a trailing `.js` extension so it can be swapped for `.ts` (module-scope: compiled once). */
 const JS_EXTENSION_SUFFIX = /\.js$/;

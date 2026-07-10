@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import applyJurisdiction from "./jurisdiction";
-import type { LunoraSchedulerOptions } from "./types";
+import type { DurableObjectNamespaceLike, LunoraSchedulerOptions } from "./types";
 
 /**
  * Resolve the `SchedulerDO` stub for a scheduler/workpool instance, applying any
@@ -12,7 +12,7 @@ import type { LunoraSchedulerOptions } from "./types";
  * {@link LunoraSchedulerOptions}; `WorkpoolOptions` extends it, so both factories
  * pass their options straight through.
  */
-const schedulerStub = (options: LunoraSchedulerOptions) => {
+const schedulerStub = (options: LunoraSchedulerOptions): ReturnType<DurableObjectNamespaceLike["get"]> => {
     const namespace = applyJurisdiction(options.namespace, options.jurisdiction);
 
     return namespace.get(namespace.idFromName(options.instanceName ?? "default"));

@@ -185,6 +185,7 @@ const bytesToBase64 = (bytes: Uint8Array): string => {
     const chunk = 0x80_00;
 
     for (let index = 0; index < bytes.length; index += chunk) {
+        // eslint-disable-next-line unicorn/prefer-code-point -- byte values 0-255 -> latin1; fromCharCode is correct and faster here
         binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
     }
 

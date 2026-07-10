@@ -414,6 +414,7 @@ const buildSubscribe = (runRegistered: RunRegisteredFunction, queryContext: Quer
 
                         pendingError = undefined;
 
+                        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- re-surfaces the subscription's original thrown value verbatim
                         return Promise.reject(error);
                     }
 

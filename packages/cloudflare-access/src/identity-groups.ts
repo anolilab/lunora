@@ -12,11 +12,11 @@
  * is unchanged.
  */
 const readIdentityGroups = (identity: Record<string, unknown>): ReadonlyArray<string> | undefined => {
-    const access = identity["access"];
+    const { access } = identity;
     const nested = typeof access === "object" && access !== null ? (access as { groups?: unknown }).groups : undefined;
     const groups = identity["groups"] ?? nested;
 
     return Array.isArray(groups) ? groups.filter((group): group is string => typeof group === "string") : undefined;
 };
 
-export { readIdentityGroups };
+export default readIdentityGroups;

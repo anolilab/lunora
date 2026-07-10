@@ -130,12 +130,12 @@ export type LunoraErrorCode = keyof typeof ERROR_CATALOG;
 
 /**
  * Look up a catalog entry by `code`, or `undefined` when the code isn't
- * registered. The single guarded seam for reading {@link ERROR_CATALOG} by an
+ * registered. The single guarded seam for reading `ERROR_CATALOG` by an
  * arbitrary string: because the catalog is a plain object literal, a bracket
  * read for an inherited key (e.g. `"constructor"`, `"toString"`) would resolve
  * to `Object.prototype`'s member instead of `undefined`, so this uses
  * `Object.hasOwn` to only ever return an own entry. Reused by the
- * {@link LunoraError} constructor, {@link isInternalCode}, and {@link resolveHint}.
+ * `LunoraError` constructor, {@link isInternalCode}, and {@link resolveHint}.
  */
 export const getCatalogEntry = (code: string): ErrorCatalogEntry | undefined =>
     Object.hasOwn(ERROR_CATALOG, code) ? (ERROR_CATALOG as Record<string, ErrorCatalogEntry>)[code] : undefined;

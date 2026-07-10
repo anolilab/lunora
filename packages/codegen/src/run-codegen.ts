@@ -278,6 +278,7 @@ export const refreshCodegenProject = (project: Project, lunoraDirectory: string)
  * split — opt-in instrumentation that is otherwise zero-cost and side-effect-free
  * on the returned {@link CodegenResult}.
  */
+// eslint-disable-next-line sonarjs/cognitive-complexity -- top-level codegen orchestrator; splitting further would obscure the linear pipeline
 export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const timingEnabled = isTimingEnabled();
     const startedAt = timingEnabled ? performance.now() : 0;

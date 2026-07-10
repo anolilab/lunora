@@ -2012,11 +2012,12 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      * companion (the SCAN-free rank path will be unavailable, but the data
      * remains correct).
      */
-    const syncRanks = async (
+        const syncRanks = async (
         tableName: string,
         id: string,
         previous: Record<string, unknown> | undefined,
         next: Record<string, unknown> | undefined,
+        // eslint-disable-next-line sonarjs/cognitive-complexity -- rank companion sync: fast-path + soft-delete + per-index branches are inherent
     ): Promise<void> => {
         const definition = schema.tables[tableName];
         const indexes = definition?.rankIndexes;
@@ -2030,9 +2031,11 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         // still-deleted row (admin fix-up, `$onUpdateFn` stamp, `onSetNull`
         // cascade) must not resurrect it into `rank()`/`rankPage()`. `restore()`
         // clears the marker *before* re-adding, so its INSERT still runs.
+        /* eslint-disable @typescript-eslint/no-unnecessary-condition -- the schema type over-narrows softDeleteMode; this guard defends the real runtime shape */
         const softField = definition?.softDeleteMode?.field;
-        const nextSoftDeleted =
-            softField !== undefined && next !== undefined && next[softField] !== null && next[softField] !== undefined;
+        const nextFieldValue = softField === undefined || next === undefined ? undefined : next[softField];
+        const nextSoftDeleted = nextFieldValue !== null && nextFieldValue !== undefined;
+        /* eslint-enable @typescript-eslint/no-unnecessary-condition */
 
         for (const index of indexes) {
             // Fast path: both images exist and no field THIS index reads

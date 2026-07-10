@@ -1,6 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
-import { createDatabaseOpener, createWithStore, promisifyRequest } from "./idb-util";
+import { createDatabaseOpener, createWithStore, promisifyRequest } from "./idb-utility";
 import type { PersistedMutation, PersistenceAdapter } from "./types";
 
 /**

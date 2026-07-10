@@ -116,11 +116,15 @@ describe("createAi", () => {
             // CLI's renderLunoraError surface the curated catalog title/hint.
             expect(() => ai.embeddingModel("@cf/baai/bge-base-en-v1.5")).toThrow(/does not expose `textEmbeddingModel`/);
 
+            let caught: unknown;
+
             try {
                 ai.embeddingModel("@cf/baai/bge-base-en-v1.5");
             } catch (error) {
-                expect(isLunoraError(error)).toBe(true);
+                caught = error;
             }
+
+            expect(isLunoraError(caught)).toBe(true);
         });
 
         it("falls back to defaultEmbeddingModel when no embedding model is passed", () => {

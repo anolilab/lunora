@@ -22,6 +22,7 @@ describe("useFileBrowser list cancellation", () => {
         const mock = createMockClient();
 
         mock.listStorageObjects.mockImplementation(
+            // eslint-disable-next-line @typescript-eslint/no-misused-promises -- test mock returns a deferred promise by design
             async (options: { bucket?: string; cursor?: string; limit?: number; prefix?: string } = {}) =>
                 new Promise<StorageListPage>((resolve) => {
                     deferred.push({ prefix: options.prefix ?? "", resolve });

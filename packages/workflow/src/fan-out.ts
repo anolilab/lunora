@@ -412,7 +412,7 @@ const signalBranchParent = async (
 };
 
 /**
- * {@link signalBranchParent} wrapped so it never throws. A failed parent signal —
+ * A never-throwing wrapper over {@link signalBranchParent}. A failed parent signal —
  * the parent instance was terminated, or `sendEvent` rejects after its durable
  * step retries — must not become the child's own recorded failure (success path)
  * nor mask the handler's real error (error path). The parent simply falls back to

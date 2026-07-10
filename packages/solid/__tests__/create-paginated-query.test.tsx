@@ -241,7 +241,7 @@ describe("createPaginatedQuery rebalance migration (FINDING 1 regression)", () =
 
         // The bounded page 0 now grows past the SPLIT threshold (> 2×5) and reports a
         // `splitCursor`, so rebalance cuts it into (null, mid] and (mid, cur-1].
-        const grownFirstPage = Array.from({ length: 11 }, (_, index) => {return { id: `g${index}` }});
+        const grownFirstPage = Array.from({ length: 11 }, (_, index) => {return { id: `g${String(index)}` }});
 
         const boundedFirstSub = fake.subscriptions.find(
             (s) => JSON.stringify(s.args) === JSON.stringify({ paginationOpts: { cursor: null, endCursor: "cur-1", numItems: NUM_ITEMS } }),

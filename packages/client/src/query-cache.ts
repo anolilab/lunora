@@ -1,6 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
-import { createDatabaseOpener, createWithStore, promisifyRequest } from "./idb-util";
+import { createDatabaseOpener, createWithStore, promisifyRequest } from "./idb-utility";
 import type { CachedQuery, QueryCacheAdapter } from "./types";
 
 /** A stored read-cache row: the {@link CachedQuery} plus its primary key. */

@@ -226,7 +226,7 @@ describe("schedulerDO — workpool concurrency", () => {
 
         // job-A completed and must NOT be resurrected; only B and C hold slots.
         expect(poolRow.inFlightIds).not.toContain("job-A");
-        expect(poolRow.inFlightIds.toSorted()).toEqual([bId, cId].toSorted());
+        expect(poolRow.inFlightIds.toSorted((a, b) => a.localeCompare(b))).toEqual([bId, cId].toSorted((a, b) => a.localeCompare(b)));
         expect(poolRow.inFlight).toBe(2);
     });
 

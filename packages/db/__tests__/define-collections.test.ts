@@ -228,6 +228,7 @@ describe(defineCollections, () => {
         // write also carries a stable `mutationId` (the executor's idempotency key)
         // so the server dedupes a committed-but-unacked retry at the transport
         // layer, not only by the app's manual `id`-arg dedup.
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- test fixture id from a mocked runtime
         expect(mutation).toHaveBeenCalledWith(messagesSend, { channelId: "c1", id, text: "hi" }, { mutationId: expect.any(String) });
     });
 
@@ -349,6 +350,7 @@ describe(defineCollections, () => {
         // (undefined) but `crypto.getRandomValues` still works, so `safeRandomUUID`
         // must fall back. A bare `crypto.randomUUID()` here would throw and break
         // every `db.actions.*` call.
+        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- test stubs globalThis.crypto to exercise the non-secure-context fallback
         const realCrypto = globalThis.crypto;
         const nonSecureCrypto = new Proxy(realCrypto, {
             get(target, property) {
@@ -358,6 +360,7 @@ describe(defineCollections, () => {
 
                 const value = Reflect.get(target, property) as unknown;
 
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-return -- Reflect.get over a stubbed crypto proxy
                 return typeof value === "function" ? value.bind(target) : value;
             },
         });

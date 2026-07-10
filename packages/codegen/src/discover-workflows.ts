@@ -198,6 +198,7 @@ const assertUniqueNames = (workflows: ReadonlyArray<WorkflowIR>): void => {
 
         if (priorName !== undefined) {
             throw new LunoraError(
+                // eslint-disable-next-line no-secrets/no-secrets -- an error code, not a secret
                 "DUPLICATE_WORKFLOW_NAME",
                 `Duplicate workflow name "${workflow.name}": produced by both "${priorName}" and "${workflow.exportName}". Deployed workflow names must be unique across the project.`,
                 { status: 500 },
@@ -210,6 +211,7 @@ const assertUniqueNames = (workflows: ReadonlyArray<WorkflowIR>): void => {
 
         if (priorBinding !== undefined) {
             throw new LunoraError(
+                // eslint-disable-next-line no-secrets/no-secrets -- an error code, not a secret
                 "DUPLICATE_WORKFLOW_BINDING",
                 `Duplicate workflow binding "${workflow.bindingName}": produced by both "${priorBinding}" and "${workflow.exportName}". Workflow export names must yield unique binding names.`,
                 { status: 500 },

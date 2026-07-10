@@ -165,7 +165,7 @@ const buildWorkerEntrySource = (
     // invalid unicode escape (a hard SyntaxError) and `\l`/`\a` are silently
     // swallowed into an unresolvable specifier. Posix-ify first: Vite/rolldown
     // resolve `C:/…` ids fine, so the emitted imports are valid in all environments.
-    const base = generatedImportBase.replace(/\\/gu, "/");
+    const base = generatedImportBase.replaceAll('\\', "/");
 
     // Umbrella-aware runtime import (see `projectUsesUmbrella`): the generated
     // `_generated/*` already use `lunorash/*` for umbrella projects, so the composed

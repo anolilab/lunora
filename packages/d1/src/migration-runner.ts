@@ -19,9 +19,9 @@ interface Migration {
  * journal-based migrations can read the same table without a data migration.
  *
  * - `hash` is the SHA-256 of the migration SQL — content-addressed dedup.
- *   `UNIQUE` so two runners racing the same pending migration (parallel CI
- *   deploys / two isolates on the migrate path) can't both insert the tracking
- *   row: the loser's atomic batch rolls back and its body never double-applies.
+ * `UNIQUE` so two runners racing the same pending migration (parallel CI
+ * deploys / two isolates on the migrate path) can't both insert the tracking
+ * row: the loser's atomic batch rolls back and its body never double-applies.
  * - `created_at` is wall-clock millis at apply time (NUMERIC per drizzle).
  */
 const TRACKING_TABLE_NAME = "__drizzle_migrations";
@@ -161,7 +161,6 @@ const assertSingleStatement = (migration: Migration): number | undefined => {
             // strip it plus any trailing comment/whitespace before submitting to
             // D1, which rejects any content after the statement's terminator.
             terminatorIndex = index;
-            continue;
         }
     }
 

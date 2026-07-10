@@ -1,6 +1,6 @@
 import type { Middleware } from "@lunora/server";
 
-import { readIdentityGroups } from "./identity-groups";
+import readIdentityGroups from "./identity-groups";
 import type { AccessClaims } from "./types";
 
 /**

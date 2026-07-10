@@ -54,13 +54,11 @@ const projectFixedWindow = (config: RateLimitConfig, prior: RateLimitValue | und
     if (!prior || prior.ts < windowStart) {
         let carry = 0;
 
-        if (prior && prior.value < 0) {
-            // A negative balance is reserved debt owed forward: it must survive
-            // the boundary and be repaid out of the next grant, never forgiven.
-            carry = prior.value;
-        } else if (prior && config.capacity !== undefined) {
-            // Positive leftovers roll over only under an explicit capacity
-            // (the default `capacity === rate` disables cross-window rollover).
+        // Carry the prior balance forward when it is reserved debt (a negative
+        // balance that must survive the boundary and be repaid, never forgiven)
+        // or a positive leftover under an explicit capacity (the default
+        // `capacity === rate` disables cross-window rollover).
+        if (prior && (prior.value < 0 || config.capacity !== undefined)) {
             carry = prior.value;
         }
 

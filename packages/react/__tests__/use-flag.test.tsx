@@ -247,7 +247,9 @@ describe("useFlags", () => {
 
         const mock = createMockClient();
         const commits: string[] = [];
+        // eslint-disable-next-line react-perf/jsx-no-new-object-as-prop -- test harness fixture passed as a prop
         const initialFlags: Record<string, unknown> = { a: false };
+        // eslint-disable-next-line react-perf/jsx-no-new-object-as-prop -- test harness fixture passed as a prop
         const nextFlags: Record<string, unknown> = { b: 0 };
 
         const view = render(

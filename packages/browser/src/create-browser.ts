@@ -412,7 +412,7 @@ const resolveTimeout = (callTimeout: number | undefined, factoryTimeout: number 
  * worker until the platform limit kills it (holding the billed Browser Rendering
  * session open). Racing the whole goto+operation sequence against the resolved
  * budget honours the documented "navigation + operation" invariant; the browser
- * is torn down by {@link withBrowser}'s `finally` when the deadline rejects. The
+ * is torn down by `withBrowser`'s `finally` when the deadline rejects. The
  * timer is always cleared so a completed operation never keeps the runtime alive.
  */
 const withDeadline = async <T>(operation: () => Promise<T>, timeoutMs: number): Promise<T> => {

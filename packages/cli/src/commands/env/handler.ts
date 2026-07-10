@@ -125,7 +125,7 @@ const upsertDevVariableLine = (content: string, key: string, value: string): str
  * newline), preserving all other lines, comments, and blanks verbatim.
  */
 const removeDevVariableLine = (content: string, key: string): string =>
-    content.replace(new RegExp(String.raw`^[ \t]*${key}[ \t]*=.*(?:\r?\n|$)`, "gmu"), "");
+    content.replaceAll(new RegExp(String.raw`^[ \t]*${key}[ \t]*=.*(?:\r?\n|$)`, "gmu"), "");
 
 const redact = (value: string): string => {
     if (value.length <= 4) {

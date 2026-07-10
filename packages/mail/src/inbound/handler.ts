@@ -206,6 +206,7 @@ const toBase64 = (bytes: Uint8Array): string => {
     // one `String.fromCodePoint` call per byte for multi-megabyte attachments,
     // while staying under the argument-count limit of a single spread call.
     for (let index = 0; index < bytes.length; index += BASE64_CHUNK) {
+        // eslint-disable-next-line unicorn/prefer-code-point -- byte values 0-255 -> latin1; fromCharCode is correct and faster here
         binary += String.fromCharCode(...bytes.subarray(index, index + BASE64_CHUNK));
     }
 

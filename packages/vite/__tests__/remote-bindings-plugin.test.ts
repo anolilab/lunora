@@ -8,6 +8,7 @@ const callConfig = (plugin: Plugin, command: "build" | "serve"): void => {
     const hook = plugin.config;
     const run = typeof hook === "function" ? hook : hook?.handler;
 
+    // eslint-disable-next-line @typescript-eslint/no-floating-promises -- fire-and-forget config hook in a unit test
     run?.call({} as never, {} as never, { command, mode: "development" } as never);
 };
 

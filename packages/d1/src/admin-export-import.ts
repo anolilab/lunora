@@ -104,10 +104,12 @@ const exportGlobalRows = async function* (exec: D1Exec, schema: SchemaLike, args
 
         while (hasMore) {
              
+            /* eslint-disable no-await-in-loop -- sequential keyset pagination: each page depends on the prior page's last id */
             const rows =
                 lastId === undefined
                     ? await exec.all(`SELECT * FROM ${quoted} ORDER BY "id" LIMIT ?`, [batchSize])
                     : await exec.all(`SELECT * FROM ${quoted} WHERE "id" > ? ORDER BY "id" LIMIT ?`, [lastId, batchSize]);
+            /* eslint-enable no-await-in-loop */
 
             for (const row of rows) {
                 yield { doc: decodeRow(schema, table, row), table };

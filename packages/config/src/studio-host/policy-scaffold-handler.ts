@@ -27,7 +27,7 @@ import { LunoraError } from "@lunora/errors";
 import join from "../path";
 import type { DestructivePolicyEdit, PolicyEdit, PolicyScaffoldFailureReason, ScaffoldPolicyEdit, WireRlsEdit } from "../schema-edit/policy-scaffold";
 import { classifyPolicyEdit, scaffoldPolicyFile, wireRlsIntoProcedure } from "../schema-edit/policy-scaffold";
-import { writeFileAtomic } from "./write-atomic";
+import writeFileAtomic from "./write-atomic";
 
 /**
  * Endpoint path both dev hosts mount the handler at. A sibling of the schema

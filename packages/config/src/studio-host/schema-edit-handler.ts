@@ -25,7 +25,7 @@ import type { ApplyFailureReason, SchemaEdit } from "../schema-edit/mutate";
 import { applyAdditiveEdit, classifyEdit } from "../schema-edit/mutate";
 import type { ParseSchemaResult, SchemaTable } from "../schema-edit/parse";
 import { parseSchema } from "../schema-edit/parse";
-import { writeFileAtomic } from "./write-atomic";
+import writeFileAtomic from "./write-atomic";
 
 /**
  * Endpoint path both dev hosts mount the handler at. Distinct from the CLI's
@@ -119,7 +119,7 @@ const needsMigrationResponse = (edit: SchemaEdit): SchemaEditResponse => {
 
 /** Handle a `POST` additive/destructive edit. */
 const handlePost = (request: SchemaEditRequest, schemaPath: string): SchemaEditResponse => {
-    const edit = request.body as SchemaEdit | undefined;
+    const edit = request.body as SchemaEdit | null | undefined;
 
     if (edit === undefined || edit === null || typeof edit !== "object" || typeof (edit as { kind?: unknown }).kind !== "string") {
         return { body: { error: "invalid-edit", ok: false }, status: 400 };

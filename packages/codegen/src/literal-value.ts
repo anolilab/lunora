@@ -14,6 +14,7 @@
  * `emit.ts` (`v.literal(...)` type emission) and `compile-validator.ts` (AOT
  * inlining) so the two safety judgments can't drift apart.
  */
+// eslint-disable-next-line sonarjs/regex-complexity -- validated JSON-literal allowlist; splitting the alternation would risk a correctness gap
 const LITERAL_VALUE_RE = /^(?:"(?:[^"\\]|\\(?:["\\/bfnrt]|u[0-9A-Fa-f]{4}))*"|'[^'\\]*'|-?\d+(?:\.\d+)?|true|false|null)$/u;
 
 export default LITERAL_VALUE_RE;

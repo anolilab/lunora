@@ -27,7 +27,7 @@ export const concurrentMap = async <T, U>(items: ReadonlyArray<T>, limit: number
     const effectiveLimit = Math.max(1, Math.min(limit, items.length));
     const results: U[] = Array.from({ length: items.length });
     let cursor = 0;
-    let failed = false;
+    let failed: boolean = false;
     let firstError: unknown;
 
     const workers = Array.from({ length: effectiveLimit }, async () => {
@@ -56,6 +56,7 @@ export const concurrentMap = async <T, U>(items: ReadonlyArray<T>, limit: number
                 // eslint-disable-next-line no-await-in-loop -- sequential by design: bounds concurrency
                 results[index] = await function_(items[index] as T, index);
             } catch (error) {
+                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `failed` is set by other concurrent workers; not statically const
                 if (!failed) {
                     failed = true;
                     firstError = error;
@@ -68,6 +69,7 @@ export const concurrentMap = async <T, U>(items: ReadonlyArray<T>, limit: number
 
     await Promise.all(workers);
 
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `failed` is set inside the worker callbacks; not statically const
     if (failed) {
         throw firstError;
     }

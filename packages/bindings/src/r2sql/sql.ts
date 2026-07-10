@@ -25,6 +25,9 @@ const IDENTIFIER_RE = /^\w+(?:\.\w+)*$/;
 /** A table reference: a dotted identifier with an optional `[AS] alias` (e.g. `s.zones z`, `users AS u`). */
 const TABLE_REF_RE = /^\w+(?:\.\w+)*(?:\s+(?:as\s+)?\w+)?$/i;
 
+/** R2 SQL's documented `LIMIT` ceiling. */
+const MAX_LIMIT = 10_000;
+
 /**
  * A composed SQL fragment. Carries the finished `text`; `toString()` returns it
  * so a fragment can be dropped straight into a template or `String(...)`.
@@ -157,9 +160,6 @@ export const sql = (strings: TemplateStringsArray, ...values: unknown[]): Sql =>
 
 /** Join SQL fragments/strings with `separator` into one {@link Sql} (e.g. `AND`-ed conditions). */
 export const joinSql = (parts: ReadonlyArray<Sql | string>, separator: string): Sql => new Sql(parts.map((part) => toText(part)).join(separator));
-
-/** R2 SQL's documented `LIMIT` ceiling. */
-const MAX_LIMIT = 10_000;
 
 /**
  * Validate a `LIMIT` value against R2 SQL's 1–10,000 integer range, eagerly and

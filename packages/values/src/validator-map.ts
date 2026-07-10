@@ -89,6 +89,7 @@ const installCompiledValidatorMap = (validators: object, compiled: CompiledValid
  * record (a confident success — the common case) or {@link DEFER_VALIDATION}, in
  * which case the interpreted loop below runs and owns the result (and any error).
  */
+// eslint-disable-next-line sonarjs/cognitive-complexity -- validator-map parser; the branch set is inherent to the validator kinds
 const parseValidatorMap = (validators: ValidatorMap, source: Record<string, unknown>, label: string): Record<string, unknown> => {
     const compiled = COMPILED_PARSERS.get(validators);
 

@@ -28,4 +28,4 @@ const writeFileAtomic = (path: string, text: string): void => {
     }
 };
 
-export { writeFileAtomic };
+export default writeFileAtomic;

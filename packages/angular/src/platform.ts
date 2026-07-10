@@ -44,7 +44,7 @@ export const shouldOpenSubscription = (fromInjectionContext: boolean): boolean =
  * `destroyRef` outside DI, or a zoneless app with no `NgZone`).
  */
 export const runOutsideAngular = <T>(fromInjectionContext: boolean, register: () => T): T => {
-    const zone = fromInjectionContext ? inject(NgZone, { optional: true }) : null;
+    const zone = fromInjectionContext ? inject(NgZone, { optional: true }) : undefined;
 
     return zone ? zone.runOutsideAngular(register) : register();
 };

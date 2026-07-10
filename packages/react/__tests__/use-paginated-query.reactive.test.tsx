@@ -347,7 +347,7 @@ describe("usePaginatedCore — reset key stability", () => {
         const backend = createReactiveBackend(["a", "b", "c", "d", "e", "f"]);
 
         let loadMore: (numberItems: number) => void = (_numberItems) => undefined;
-        const capture = (next: (numberItems: number) => void): void => {
+        const capture = (next: (numberItems: number) => void): void => { // eslint-disable-line react-perf/jsx-no-new-function-as-prop -- test harness capture callback
             loadMore = next;
         };
 

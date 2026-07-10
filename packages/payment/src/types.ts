@@ -87,7 +87,7 @@ export interface CheckoutInput {
     readonly cancelUrl: string;
 
     /**
-     * @deprecated Ignored at runtime. The provider customer is always derived from the store for the
+     * Ignored at runtime (kept for backward-compat). The provider customer is always derived from the store for the
      * authorized `referenceId` (never caller-supplied) to prevent cross-tenant checkout attachment (IDOR).
      * Retained on the type only for backward compatibility; setting it has no effect.
      */

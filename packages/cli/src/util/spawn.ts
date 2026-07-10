@@ -6,9 +6,13 @@ import { spawn as nodeSpawn } from "node:child_process";
  * separators / redirection operators (`& | < > ^`), an env-var `%`, and a
  * literal `"` (which toggles cmd's quote state). Wrapping such a value in double
  * quotes neutralises the separators/redirection so an argument like
- * `C:\Dev&Ops\dist` can't spawn `Ops\dist` as a second command.
+ * `C:\Dev&amp;Ops\dist` can't spawn `Ops\dist` as a second command.
  */
 const NEEDS_CMD_QUOTING = /[\s"%&<>^|]/u;
+// eslint-disable-next-line sonarjs/slow-regex -- linear (no nested quantifier); input is a bounded developer-supplied CLI argument
+const BACKSLASH_RUN_BEFORE_QUOTE = /(\\*)"/gu;
+// eslint-disable-next-line sonarjs/slow-regex -- linear; bounded CLI-argument input
+const TRAILING_BACKSLASH_RUN = /(\\+)$/u;
 
 export interface SpawnDescriptor {
     args: ReadonlyArray<string>;
@@ -63,7 +67,7 @@ export type Spawner = (descriptor: SpawnDescriptor) => Promise<SpawnResult>;
  * carrying a cmd metacharacter (whitespace, `& | < > ^ % "`) is double-quoted
  * here — with CommandLineToArgvW-safe escaping of embedded quotes and trailing
  * backslashes — so a `--config` temp path under a spaced user dir, or a value
- * like `C:\Dev&Ops\dist`, can't be re-split or run as a second command;
+ * like `C:\Dev&amp;Ops\dist`, can't be re-split or run as a second command;
  * everything else passes through untouched. POSIX platforms return the input
  * unchanged.
  */
@@ -94,7 +98,7 @@ export const spawnShellCompat = (
         // quote we append) must be doubled, and each embedded `"` becomes `\"`.
         // Without this, `C:\path\` before the closing quote would escape it and
         // re-split the value mid-argument.
-        const escaped = value.replaceAll(/(\\*)"/gu, String.raw`$1$1\"`).replace(/(\\+)$/u, "$1$1");
+        const escaped = value.replaceAll(BACKSLASH_RUN_BEFORE_QUOTE, String.raw`$1$1\"`).replace(TRAILING_BACKSLASH_RUN, "$1$1");
 
         return `"${escaped}"`;
     };
