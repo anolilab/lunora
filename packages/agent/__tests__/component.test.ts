@@ -497,6 +497,29 @@ describe("agentRun", () => {
         expect(started).toStrictEqual([{ input: "next turn", owner: "user-a", threadKey: "mcp-cont" }]);
     });
 
+    it("refuses a foreign-owned thread before starting a run (no doomed instance spawned)", async () => {
+        const { functions } = agentComponent();
+        const database = fakeDatabase({ userId: "user-a" });
+        const { agents, started } = fakeRunAgents();
+
+        // user-a owns an in-flight thread on this key.
+        await callMutation(
+            functions.agentEnsureThread,
+            { ...database.ctx, agents },
+            { agent: "support", instanceId: "wf-a", key: "mcp-owned", owner: "user-a" },
+        );
+
+        // user-b targets the same threadKey. The owner is immutable, so the run
+        // is refused HERE — before `handle.run` spawns a workflow instance the
+        // bootstrap would only reject afterwards (billable-compute amplification).
+        const strangerCtx = { ...database.ctx, agents, auth: { userId: "user-b" } };
+
+        await expect(callMutation(functions.agentRun, strangerCtx, { agent: "support", input: "hi", threadKey: "mcp-owned" })).rejects.toThrow(
+            ANOTHER_OWNER_PATTERN,
+        );
+        expect(started).toStrictEqual([]);
+    });
+
     it("errors when no ctx.agents producer is wired for the named agent", async () => {
         const { functions } = agentComponent();
         const { ctx: baseCtx } = fakeDatabase({ userId: "user-a" });

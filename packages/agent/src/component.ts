@@ -597,9 +597,8 @@ export const agentComponent = (): AgentComponent => {
             // the original. A finished (idle/error/cancelled) thread is NOT
             // deduped, so reusing the threadKey to continue a conversation still
             // starts a fresh run. Only dedupe when the caller may attach (owner
-            // matches or the thread is ownerless); a foreign owner falls through
-            // to `handle.run`, whose bootstrap rejects it. A retry that races the
-            // not-yet-written thread row also falls through — the
+            // matches or the thread is ownerless). A retry that races the
+            // not-yet-written thread row falls through to `handle.run` — the
             // `agentEnsureThread` concurrency guard is the backstop there.
             const inflight = await context.db
                 .query(THREADS_TABLE)
@@ -617,6 +616,19 @@ export const agentComponent = (): AgentComponent => {
                     (inflightOwner === undefined || inflightOwner === owner)
                 ) {
                     return { id: inflightInstanceId, threadKey: args.threadKey };
+                }
+
+                // A thread's owner is immutable (see agentEnsureThread's owner
+                // gate): an authenticated caller may never (re)start a run on a
+                // thread owned by a DIFFERENT identity. The workflow bootstrap
+                // rejects this too, but only AFTER a workflow instance has been
+                // spawned — so an authenticated caller could amplify billable
+                // compute by targeting known/guessed foreign threadKeys. Reject
+                // here, before `handle.run`, so no doomed instance is started. An
+                // ownerless caller (owner === undefined) is still admitted,
+                // exactly as the bootstrap admits it.
+                if (inflightOwner !== owner && owner !== undefined) {
+                    throw new LunoraError("FORBIDDEN", `@lunora/agent: thread "${args.threadKey}" belongs to another owner`);
                 }
             }
 
