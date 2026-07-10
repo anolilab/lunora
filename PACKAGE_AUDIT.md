@@ -13,6 +13,46 @@
 - By severity (refuted excluded): 0 critical, 15 high, 84 medium, 125 low.
 - By category: 133 bug, 25 security, 8 perf, 34 refactor, 24 reuse.
 
+## Security remediation status
+
+All 25 security-category findings were adversarially re-verified with a fix plan; **24 were confirmed
+and fixed** (commit `2627966`, this branch), **1 was refuted** and left unchanged. Each fix is surgical
+and ships a regression test; every changed package passes `lint:types`, ESLint, and its full Vitest suite.
+
+| #   | Package                | Severity | Fix                                                                                            | Status    |
+| --- | ---------------------- | -------- | ---------------------------------------------------------------------------------------------- | --------- |
+| 1   | @lunora/mail           | high     | Read auth verdicts from the topmost `Authentication-Results`, not the last-wins map            | fixed     |
+| 2   | @lunora/runtime        | high     | Batch RPC uses the `defineIdentity` contract-wrapped resolver                                  | fixed     |
+| 3   | @lunora/server         | high     | Mask guards `aggregate`/`groupBy` where-filters as masked-column oracles                       | fixed     |
+| 4   | @lunora/workflow       | high     | Reject reserved `__lunoraBranch` at create surfaces + prefix-validate the marker               | fixed     |
+| 5   | @lunora/auth           | medium   | Weak `AUTH_SECRET` hard-fails on unset/HTTPS `baseURL`, not only HTTPS                         | fixed     |
+| 6   | @lunora/browser        | medium   | Redirect-chain guard runs with `allowedHosts` under `allowPrivateTargets`                      | fixed     |
+| 7   | @lunora/browser        | medium   | Sub-resource requests are SSRF-checked fail-closed                                             | fixed     |
+| 8   | @lunora/do             | medium   | Reactive cache keys on the full identity (userId + claims)                                     | fixed     |
+| 9   | @lunora/mcp            | medium   | Correct the inoperable least-privilege-token guidance (docs)                                   | fixed     |
+| 10  | @lunora/payment        | medium   | Derive checkout customer from the store; ignore caller `customerId` (IDOR)                     | fixed     |
+| 11  | @lunora/runtime        | medium   | WS upgrade strips all client `x-lunora-*` headers before re-setting trusted values             | fixed     |
+| 12  | @lunora/server         | medium   | Mask guards `count` baseWhere and findMany/findFirst orderBy oracles                           | fixed     |
+| 13  | @lunora/studio         | medium   | Neutralize CSV formula injection in grid export                                                | fixed     |
+| 14  | @lunora/bindings       | low      | `Object.hasOwn` guards on registry lookups (prototype-key bypass)                              | fixed     |
+| 15  | @lunora/cli            | low      | `import`/`backup restore --prod` require `--yes`                                               | fixed     |
+| 16  | @lunora/cli            | low      | Update-notifier cache off shared `/tmp` → user-owned XDG dir + symlink guard                   | fixed     |
+| 17  | @lunora/codegen        | low      | hardcoded-secret advisor detects `secret-literal + dynamic` concatenation                      | fixed     |
+| 18  | @lunora/d1             | low      | Forbid eq-filter equality oracle on redacted external columns                                  | fixed     |
+| 19  | @lunora/flags          | low      | Drop the raw env value from parse-error messages (secret leak)                                 | fixed     |
+| 20  | @lunora/runtime        | low      | CORS preflight enforces the configured `allowedHeaders` allowlist                              | fixed     |
+| 21  | @lunora/sql-store + do | low      | `_creationTime` server-authoritative on insert/replace unless trusted `allowExplicitId` opt-in | fixed     |
+| 22  | @lunora/storage        | low      | Abort the stream when a non-byte chunk would defeat `maxSize`                                  | fixed     |
+| 23  | @lunora/studio         | info     | Dev-host CSRF header — verifier **refuted** (dev-only, same-origin)                            | no change |
+| 24  | @lunora/values         | low      | Redact the raw input literal from `.check()` ValidationError messages                          | fixed     |
+| 25  | @lunora/vite           | low      | Refuse proxied (`X-Forwarded-*`) studio requests (admin-token leak)                            | fixed     |
+
+Note: finding #21 also revealed that `replace()` had two legitimate trusted callers (CDC replay and
+online data-migration) that must preserve a row's original `_creationTime`; the fix threads an
+`allowExplicitId` opt-in through `replace` so those paths are preserved while the default client path
+mints a server-authoritative timestamp. The non-security findings (bugs, refactors, perf, test gaps)
+below remain open for follow-up.
+
 ## Highest-priority findings (verified high severity)
 
 | Package                               | Severity | Category | Finding                                                                                                                                                         | Location                                               |
