@@ -446,7 +446,9 @@ peerDependencyRules:
 # scripts unless the workspace explicitly approves them. Re-run
 # `pnpm approve-builds` to repopulate this list when a new package joins.
 allowBuilds:
-  '@coinbase/x402': set this to true or false
+  # Its only build hook is a postinstall that console.logs a TOS notice — no
+  # build step (the tarball ships dist/), so skip it.
+  '@coinbase/x402': false
   '@parcel/watcher': true
   core-js: false
   cpu-features: true
