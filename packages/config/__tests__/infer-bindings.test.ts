@@ -372,6 +372,8 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
         ["@lunora/browser", "usesBrowser", /browser \(@lunora\/browser/u],
         ["@lunora/bindings/images", "usesImages", /images \(@lunora\/bindings\/images/u],
         ["@lunora/bindings/analytics", "usesAnalytics", /analytics_engine_datasets/u],
+        ["@lunora/x402/charge", "usesX402Charge", /hint: @lunora\/x402\/charge/u],
+        ["@lunora/x402/pay", "usesX402Pay", /hint: @lunora\/x402\/pay/u],
     ] as const)("infers %s usage and emits the expected signal", async (source, flag, signalRe) => {
         expect.assertions(2);
 
