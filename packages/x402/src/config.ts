@@ -88,6 +88,29 @@ export interface X402PayConfig {
 }
 
 /**
+ * CDP-managed wallet custody via `@coinbase/cdp-sdk` (an optional peer). The SDK
+ * gets-or-creates a named server account and signs the x402 EIP-712 payment
+ * authorization with it — no private key ever leaves Coinbase. Needs three CDP
+ * credentials, read from `ctx.secrets` under names that default to the SDK's own
+ * env-var names; override them if your secrets are named differently. (Note
+ * `@coinbase/x402` is a facilitator-auth helper, not a signer provider — CDP
+ * custody is `@coinbase/cdp-sdk`.) EVM only today; for CDP on Solana, build a
+ * `@solana/kit` signer around your CDP account and pass it via the `"signer"`
+ * escape hatch.
+ */
+export interface X402CdpSignerConfig {
+    /** CDP account name to get-or-create and sign with. */
+    readonly account: string;
+    /** `ctx.secrets` name for the CDP API key id. Default `"CDP_API_KEY_ID"`. */
+    readonly apiKeyIdSecretName?: string;
+    /** `ctx.secrets` name for the CDP API key secret. Default `"CDP_API_KEY_SECRET"`. */
+    readonly apiKeySecretName?: string;
+    readonly type: "cdp";
+    /** `ctx.secrets` name for the CDP wallet secret. Default `"CDP_WALLET_SECRET"`. */
+    readonly walletSecretName?: string;
+}
+
+/**
  * Wallet custody for the pay rail — three shapes.
  *
  * `"raw-key"` resolves a private key from `ctx.secrets` (viem for EVM, a
@@ -100,13 +123,15 @@ export interface X402PayConfig {
  * custody provider to the structural signer and pass it here; `@lunora/x402`
  * takes no dependency on the provider's SDK.
  *
- * `"cdp"` is a Coinbase-managed wallet via `@coinbase/cdp-sdk` (note
- * `@coinbase/x402` is a facilitator-auth helper, not a signer provider).
+ * `"cdp"` is a Coinbase-managed wallet via `@coinbase/cdp-sdk`
+ * ({@link X402CdpSignerConfig}).
  *
- * Wired today: raw-key (EVM + SVM) and the user-supplied signer (both families).
- * CDP is a recognised shape wired via `@coinbase/cdp-sdk` (an optional peer).
+ * Wired today: raw-key (EVM + SVM), the user-supplied signer (both families),
+ * and CDP-managed EVM custody. CDP on Solana is not yet wired — use the escape
+ * hatch.
  */
 export type X402SignerConfig =
+    | X402CdpSignerConfig
     | {
           /** Name of the `ctx.secrets` entry holding the private key. */
           readonly secretName: string;
@@ -120,11 +145,6 @@ export type X402SignerConfig =
            */
           readonly signer: ClientEvmSigner | ClientSvmSigner;
           readonly type: "signer";
-      }
-    | {
-          /** CDP account name / id. */
-          readonly account: string;
-          readonly type: "cdp";
       };
 
 /** Resolve a facilitator's base URL, applying the public default. */

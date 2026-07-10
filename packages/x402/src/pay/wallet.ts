@@ -14,10 +14,12 @@
  * `"signer"` escape hatch lets a caller hand in a signer they built themselves —
  * any custody provider (Turnkey, Privy, an AWS/GCP KMS `toAccount`, CDP's viem
  * adapter, …) adapted to the structural EVM/SVM signer — so `@lunora/x402` needs
- * no per-provider SDK. CDP-managed custody is a recognised config shape but not
- * yet wired on either family; it fails loudly with guidance. (A CDP wallet needs
- * `@coinbase/cdp-sdk` — `@coinbase/x402` is a facilitator-auth helper, not a
- * signer provider.)
+ * no per-provider SDK. CDP-managed custody is wired on EVM via the optional
+ * `@coinbase/cdp-sdk` peer: the SDK gets-or-creates a named server account and
+ * signs the x402 EIP-712 authorization with it, so the key never leaves Coinbase.
+ * CDP on Solana is not yet wired (the CDP Solana account is not a `@solana/kit`
+ * signer); it fails loudly, pointing at the escape hatch. (`@coinbase/x402` is a
+ * facilitator-auth helper, not a signer provider — CDP custody is `@coinbase/cdp-sdk`.)
  */
 import { LunoraError } from "@lunora/errors";
 import type { x402Client } from "@x402/core/client";
@@ -25,7 +27,7 @@ import type { ClientEvmSigner } from "@x402/evm";
 import type { ClientSvmSigner } from "@x402/svm";
 import type { PrivateKeyAccount } from "viem/accounts";
 
-import type { X402PayConfig } from "../config";
+import type { X402CdpSignerConfig, X402PayConfig } from "../config";
 import { isEvmNetwork, toCaip2 } from "../networks";
 
 /** Reads a secret by name; resolves `undefined` when unset. */
@@ -61,6 +63,36 @@ const assertSignerFamily = (signer: ClientEvmSigner | ClientSvmSigner, evm: bool
     if (!evm && looksEvm) {
         throw new LunoraError("ENV_INVALID", `x402 pay: the supplied signer address "${signer.address}" is an EVM (0x…) address, but the network is Solana.`);
     }
+};
+
+/**
+ * Resolve a CDP-managed EVM server account as a `ClientEvmSigner`. Reads the three
+ * CDP credentials from `ctx.secrets` (names default to the SDK's own env vars),
+ * constructs the client, and gets-or-creates the named account. The account signs
+ * the x402 EIP-712 authorization directly, so the key never leaves Coinbase. Needs
+ * the optional `@coinbase/cdp-sdk` peer installed — a clear error says so if not.
+ */
+const resolveCdpEvmAccount = async (signer: X402CdpSignerConfig, getSecret: GetSecret): Promise<ClientEvmSigner> => {
+    const [apiKeyId, apiKeySecret, walletSecret] = await Promise.all([
+        requireSecret(getSecret, signer.apiKeyIdSecretName ?? "CDP_API_KEY_ID"),
+        requireSecret(getSecret, signer.apiKeySecretName ?? "CDP_API_KEY_SECRET"),
+        requireSecret(getSecret, signer.walletSecretName ?? "CDP_WALLET_SECRET"),
+    ]);
+
+    let cdpModule: typeof import("@coinbase/cdp-sdk");
+
+    try {
+        cdpModule = await import("@coinbase/cdp-sdk");
+    } catch {
+        throw new LunoraError(
+            "ENV_INVALID",
+            'x402 pay: CDP-managed custody needs the optional @coinbase/cdp-sdk peer — install it, or use "raw-key"/"signer" custody instead.',
+        );
+    }
+
+    const cdp = new cdpModule.CdpClient({ apiKeyId, apiKeySecret, walletSecret });
+
+    return cdp.evm.getOrCreateAccount({ name: signer.account });
 };
 
 /** How the wallet reads its key material — wired to `ctx.secrets.get` in an action. */
@@ -168,14 +200,11 @@ export const registerWallet = async (client: x402Client, config: X402PayConfig, 
     }
 
     if (evm) {
-        if (signer.type === "cdp") {
-            throw new LunoraError(
-                "NOT_IMPLEMENTED",
-                `x402 pay: CDP-managed EVM custody (account "${signer.account}") is not wired yet — it needs @coinbase/cdp-sdk. Use a "raw-key" signer for now.`,
-            );
-        }
-
-        const account = await resolveEvmAccount(await requireSecret(deps.getSecret, signer.secretName));
+        // CDP-managed custody: the SDK signs the EIP-712 authorization; no key read.
+        const account =
+            signer.type === "cdp"
+                ? await resolveCdpEvmAccount(signer, deps.getSecret)
+                : await resolveEvmAccount(await requireSecret(deps.getSecret, signer.secretName));
         const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
 
         registerExactEvmScheme(client, { networks: [network], signer: account });
@@ -183,11 +212,12 @@ export const registerWallet = async (client: x402Client, config: X402PayConfig, 
         return;
     }
 
-    // SVM (Solana). Raw-key custody is wired; CDP-managed custody is not yet.
+    // SVM (Solana). Raw-key custody is wired; CDP on Solana is not (the CDP Solana
+    // account is not a `@solana/kit` signer) — point at the escape hatch.
     if (signer.type === "cdp") {
         throw new LunoraError(
             "NOT_IMPLEMENTED",
-            `x402 pay: CDP-managed Solana custody (account "${signer.account}") is not wired yet — it needs @coinbase/cdp-sdk. Use a "raw-key" signer for now.`,
+            `x402 pay: CDP-managed Solana custody (account "${signer.account}") is not wired — a CDP Solana account is not a @solana/kit signer. Build a @solana/kit signer around it and pass it via the { type: "signer" } escape hatch, or use "raw-key".`,
         );
     }
 

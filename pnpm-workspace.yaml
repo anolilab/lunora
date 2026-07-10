@@ -270,9 +270,12 @@ catalogs:
   # directly in @lunora/x402 (the repo pins zod@4; two instances break
   # `instanceof`). `viem` (>=2.48.11 per @x402/evm) is the EVM signer; `@solana/kit`
   # (a peer of `@x402/svm`) is the SVM signer, declared directly because @lunora/x402
-  # imports it to resolve the agent keypair. `@coinbase/x402` is the CDP wallet path
-  # (optional peer + devDep, mirrors @cloudflare/playwright on @lunora/browser).
+  # imports it to resolve the agent keypair. `@coinbase/cdp-sdk` is the first-party
+  # CDP-managed-wallet custody path and `@coinbase/x402` the CDP facilitator-auth
+  # helper — both optional peer + devDep (mirrors @cloudflare/playwright on
+  # @lunora/browser), loaded lazily so neither is required for raw-key custody.
   web3:
+    "@coinbase/cdp-sdk": 1.51.2
     "@solana/kit": 5.5.1
     "@x402/core": 2.17.0
     "@x402/evm": 2.17.0

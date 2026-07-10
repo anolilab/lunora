@@ -1,11 +1,39 @@
 import { createKeyPairSignerFromPrivateKeyBytes, getBase58Decoder } from "@solana/kit";
 import { x402Client as X402Client } from "@x402/core/client";
 import type { ClientEvmSigner } from "@x402/evm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { X402PayConfig } from "../src/config";
 import { createX402Pay } from "../src/pay";
 import { registerWallet, resolveEvmAccount, resolveSvmSigner } from "../src/pay/wallet";
+
+// Records what the CDP branch passes to `@coinbase/cdp-sdk` so we can assert the
+// credential + account wiring without any live Coinbase call. `vi.hoisted` keeps
+// it referenceable from the (hoisted) `vi.mock` factory below.
+const cdpRecorder = vi.hoisted(() => {
+    return { account: undefined as string | undefined, creds: undefined as Record<string, unknown> | undefined };
+});
+
+// String-path form (not `import()`) on purpose: the typed `import()` form checks
+// this partial factory against the full module and rejects a minimal CdpClient stub.
+// eslint-disable-next-line vitest/prefer-import-in-mock -- partial mock; typed form over-constrains
+vi.mock("@coinbase/cdp-sdk", () => {
+    return {
+        CdpClient: class {
+            public evm = {
+                getOrCreateAccount: ({ name }: { name: string }) => {
+                    cdpRecorder.account = name;
+
+                    return Promise.resolve({ address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266", signTypedData: () => Promise.resolve("0x") });
+                },
+            };
+
+            public constructor(options: Record<string, unknown>) {
+                cdpRecorder.creds = options;
+            }
+        },
+    };
+});
 
 // A well-known public Hardhat/Anvil test key (account #0). Not a real secret.
 const TEST_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"; // secret-scanner:allow -- public Hardhat test key #0
@@ -87,11 +115,36 @@ describe("registerWallet", () => {
         await expect(registerWallet(client, config, { getSecret: () => undefined })).rejects.toThrow(/secret "AGENT_KEY" is not set/);
     });
 
-    it("refuses CDP-managed EVM custody with guidance (needs @coinbase/cdp-sdk)", async () => {
+    it("registers the EVM exact scheme for a CDP-managed signer (get-or-create + creds wired)", async () => {
         const client = new X402Client();
         const config: X402PayConfig = { network: "base", policy: boundedPolicy, signer: { account: "agent-wallet", type: "cdp" } };
 
-        await expect(registerWallet(client, config, { getSecret: () => TEST_KEY })).rejects.toThrow(/CDP-managed EVM custody.*cdp-sdk/s);
+        await expect(registerWallet(client, config, { getSecret: (name) => `secret-for-${name}` })).resolves.toBeUndefined();
+        expect(cdpRecorder.account).toBe("agent-wallet");
+        expect(cdpRecorder.creds).toStrictEqual({
+            apiKeyId: "secret-for-CDP_API_KEY_ID",
+            apiKeySecret: "secret-for-CDP_API_KEY_SECRET",
+            walletSecret: "secret-for-CDP_WALLET_SECRET",
+        });
+    });
+
+    it("fails clearly when a CDP credential secret is unset", async () => {
+        const client = new X402Client();
+        const config: X402PayConfig = { network: "base", policy: boundedPolicy, signer: { account: "agent-wallet", type: "cdp" } };
+
+        await expect(registerWallet(client, config, { getSecret: () => undefined })).rejects.toThrow(/is not set/);
+    });
+
+    it("honours custom CDP credential secret names", async () => {
+        const client = new X402Client();
+        const config: X402PayConfig = {
+            network: "base",
+            policy: boundedPolicy,
+            signer: { account: "agent-wallet", apiKeyIdSecretName: "MY_ID", apiKeySecretName: "MY_SECRET", type: "cdp", walletSecretName: "MY_WALLET" },
+        };
+
+        await expect(registerWallet(client, config, { getSecret: (name) => `secret-for-${name}` })).resolves.toBeUndefined();
+        expect(cdpRecorder.creds).toStrictEqual({ apiKeyId: "secret-for-MY_ID", apiKeySecret: "secret-for-MY_SECRET", walletSecret: "secret-for-MY_WALLET" });
     });
 
     it("registers the SVM exact scheme for a raw-key signer", async () => {
@@ -101,11 +154,11 @@ describe("registerWallet", () => {
         await expect(registerWallet(client, config, { getSecret: () => svmSeedJson })).resolves.toBeUndefined();
     });
 
-    it("refuses CDP-managed SVM custody with guidance (needs @coinbase/cdp-sdk)", async () => {
+    it("refuses CDP-managed SVM custody, pointing at the escape hatch", async () => {
         const client = new X402Client();
         const config: X402PayConfig = { network: "solana", policy: boundedPolicy, signer: { account: "agent-wallet", type: "cdp" } };
 
-        await expect(registerWallet(client, config, { getSecret: () => svmSeedJson })).rejects.toThrow(/CDP-managed Solana custody.*cdp-sdk/s);
+        await expect(registerWallet(client, config, { getSecret: () => svmSeedJson })).rejects.toThrow(/CDP-managed Solana custody.*escape hatch/s);
     });
 
     it("registers a user-supplied EVM signer (escape hatch) without reading a secret", async () => {

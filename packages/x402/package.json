@@ -77,6 +77,7 @@
     "devDependencies": {
         "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
+        "@coinbase/cdp-sdk": "catalog:web3",
         "@coinbase/x402": "catalog:web3",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
@@ -88,9 +89,13 @@
         "wrangler": "catalog:cloudflare"
     },
     "peerDependencies": {
+        "@coinbase/cdp-sdk": ">=1.0.0",
         "@coinbase/x402": ">=2.0.0"
     },
     "peerDependenciesMeta": {
+        "@coinbase/cdp-sdk": {
+            "optional": true
+        },
         "@coinbase/x402": {
             "optional": true
         }
