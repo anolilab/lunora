@@ -1303,6 +1303,31 @@ export const cached = query.input({ key: v.string() }).query(async ({ args, ctx 
             expect(result.generated.app).not.toContain("public vectors(");
         });
 
+        it("emits a long-tail .x402() pass-through and wires the ActionCtx-only pay rail when an action reads ctx.x402", () => {
+            expect.assertions(3);
+
+            writeFileSync(
+                join(workdir, "lunora", "buy.ts"),
+                `import { action, v } from "@lunora/server";
+export const buyReport = action.input({ url: v.string() }).action(async ({ args, ctx }) => {
+    const res = await ctx.x402.fetch(args.url);
+    return res.text();
+});
+`,
+                "utf8",
+            );
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            // The fluent builder method + its config-type pass-through are emitted…
+            // eslint-disable-next-line no-secrets/no-secrets -- asserting on a generated builder-method signature, not a credential
+            expect(result.generated.app).toContain('public x402(factory: NonNullable<ShardConfig["x402"]>): this');
+            // …the typed rail rides the ActionCtx…
+            expect(result.generated.server).toContain("readonly x402: X402Pay;");
+            // …and the value is attached only inside the action-only `if (isAction)` block.
+            expect(result.generated.shard).toContain("ctx.x402 = x402;");
+        });
+
         it("emits app.ts with the .auth() method when @lunora/auth is a declared dependency", () => {
             expect.assertions(3);
 
@@ -2174,6 +2199,59 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             expect(withoutPayments).not.toContain("@lunora/payment");
             expect(withoutPayments).not.toContain("readonly payments:");
+        });
+
+        it("wires ctx.x402 onto the ACTION ctx ONLY (value-level) via a lazy, Secrets-Store-backed rail when the pay rail is used", () => {
+            expect.assertions(6);
+
+            const schema: SchemaIR = { tables: [], vectorIndexes: [] };
+
+            const output = emitShard({ hasX402: true, schema });
+
+            expect(output).toContain('import { lazyX402Pay } from "@lunora/x402/pay";');
+            expect(output).toContain("x402?: (env: Record<string, unknown>) => X402PayConfig;");
+            expect(output).toContain("const x402Stub: X402Pay");
+            // Lazy by construction — the signer/secret cost is deferred to the first fetch,
+            // and the wallet key is read through the in-scope `secrets` (Secrets Store) facade.
+            expect(output).toContain("lazyX402Pay(config.x402(env), { getSecret: (name: string) => secrets.get(name) })");
+            // Attached only inside the `if (isAction)` block — never spliced into the shared ctx literal.
+            expect(output).toContain("ctx.x402 = x402;");
+            // eslint-disable-next-line no-secrets/no-secrets -- asserting on a generated ctx-builder line, not a credential
+            expect(output).toContain('const isAction = LUNORA_FUNCTIONS[options.functionPath ?? ""]?.kind === "action";');
+        });
+
+        it("never attaches ctx.x402 onto the base ctx literal, and omits the pay rail entirely when unused", () => {
+            expect.assertions(5);
+
+            const schema: SchemaIR = { tables: [], vectorIndexes: [] };
+
+            // Slice everything BEFORE the `isAction` gate to inspect only the shared
+            // (query/mutation/action) ctx body: the money-spending rail must never appear there.
+            const withX402 = emitShard({ hasX402: true, schema });
+            const baseCtxBody = withX402.slice(0, withX402.indexOf("const isAction ="));
+
+            expect(baseCtxBody).not.toContain("\n                x402,");
+
+            const withoutX402 = emitShard({ schema });
+
+            expect(withoutX402).not.toContain("@lunora/x402/pay");
+            expect(withoutX402).not.toContain("lazyX402Pay");
+            expect(withoutX402).not.toContain("x402Stub");
+            expect(withoutX402).not.toContain("ctx.x402 = x402;");
+        });
+
+        it("adds a typed ctx.x402 to the generated ActionCtx when the pay rail is used (and not otherwise)", () => {
+            expect.assertions(4);
+
+            const withX402 = emitServer({ hasX402: true });
+
+            expect(withX402).toContain('import type { X402Pay } from "@lunora/x402/pay";');
+            expect(withX402).toContain("readonly x402: X402Pay;");
+
+            const withoutX402 = emitServer({});
+
+            expect(withoutX402).not.toContain("@lunora/x402/pay");
+            expect(withoutX402).not.toContain("readonly x402:");
         });
 
         it("adds a typed ctx.ai to the generated ActionCtx when AI is used (and not otherwise)", () => {

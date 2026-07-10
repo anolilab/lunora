@@ -942,6 +942,124 @@ describe("createWorker — RPC batch cross-shard bookmark", () => {
     });
 });
 
+describe("createWorker — x402 paid procedures", () => {
+    let shard: ShardSpy;
+
+    beforeEach(() => {
+        shard = createShardSpy();
+    });
+
+    /** Structural shape of the injected `x402Charge` gate (the type is internal to create-worker). */
+    type ChargeGateStub = (request: Request, spec: { functionPath: string; price: number | string }, dispatch: () => Promise<Response>) => Promise<Response>;
+
+    /** A registry with one paid `.x402({ price })`-tagged query. */
+    const paidFunctions = { "reports:latest": { kind: "query", x402: { price: "$0.05" } } } as const;
+
+    /** A single paid RPC POST for `functionPath`, merging any extra envelope fields (e.g. `fanOut`). */
+    const paidRpc = (functionPath: string, extra: Record<string, unknown> = {}): Request =>
+        new Request("https://app.example/_lunora/rpc", {
+            body: JSON.stringify({ args: {}, functionPath, ...extra }),
+            method: "POST",
+        });
+
+    it("fail-closes a paid function with no x402Charge gate: 500, never served free", async () => {
+        expect.assertions(3);
+
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, functions: paidFunctions, shardDO: shard.namespace });
+
+        const res = await worker.fetch(paidRpc("reports:latest"), {}, fakeContext);
+
+        expect(res.status).toBe(500);
+        await expect(res.json()).resolves.toMatchObject({ error: { code: "MISCONFIGURED" } });
+        // The crown jewel: a paid function without a paywall is refused, NOT dispatched free.
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("runs the injected charge gate around dispatch and withholds the shard when unpaid", async () => {
+        expect.assertions(4);
+
+        // A gate that always challenges (unpaid): it must never invoke `dispatch`.
+        const x402Charge = vi.fn<ChargeGateStub>(() => Promise.resolve(new Response(null, { status: 402 })));
+
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, functions: paidFunctions, shardDO: shard.namespace, x402Charge });
+
+        const res = await worker.fetch(paidRpc("reports:latest"), {}, fakeContext);
+
+        expect(res.status).toBe(402);
+        expect(x402Charge).toHaveBeenCalledTimes(1);
+        // The gate is handed the paid function's path + declared price as the charge spec.
+        expect(x402Charge.mock.calls[0]![1]).toStrictEqual({ functionPath: "reports:latest", price: "$0.05" });
+        // Unpaid: the gate never ran `dispatch`, so no shard was touched.
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("dispatches to the shard once the gate settles the payment", async () => {
+        expect.assertions(2);
+
+        // A gate that treats the request as paid: run the real dispatch.
+        const x402Charge = vi.fn<ChargeGateStub>((_request, _spec, dispatch) => dispatch());
+
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, functions: paidFunctions, shardDO: shard.namespace, x402Charge });
+
+        const res = await worker.fetch(paidRpc("reports:latest"), {}, fakeContext);
+
+        expect(res.status).toBe(200);
+        // Paid: the gate ran `dispatch`, forwarding to the shard exactly once.
+        expect(shard.calls).toHaveLength(1);
+    });
+
+    it("refuses to fan out a paid function: 400, gate never consulted, coordinator untouched", async () => {
+        expect.assertions(3);
+
+        const x402Charge = vi.fn<ChargeGateStub>((_request, _spec, dispatch) => dispatch());
+        const fanOut = vi.fn<() => never>();
+
+        const worker = createWorker({
+            allowUnauthenticatedShardAccess: true,
+            // Allow the fan-out past the authorization gate so the paid-fan-out refusal is what's under test.
+            authorizeFanOut: () => true,
+            functions: paidFunctions,
+            queryCoordinator: { fanOut } as never,
+            shardDO: shard.namespace,
+            x402Charge,
+        });
+
+        const res = await worker.fetch(paidRpc("reports:latest", { fanOut: { merge: { kind: "concat" }, table: "reports" } }), {}, fakeContext);
+
+        expect(res.status).toBe(400);
+        // A paid fan-out is one payment fanned across N shards — refused before the gate or the coordinator runs.
+        expect(x402Charge).not.toHaveBeenCalled();
+        expect(fanOut).not.toHaveBeenCalled();
+    });
+
+    it("rejects a paid function inside a batch: 400 for the whole batch, no shard forward", async () => {
+        expect.assertions(3);
+
+        const x402Charge = vi.fn<ChargeGateStub>((_request, _spec, dispatch) => dispatch());
+
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, functions: paidFunctions, shardDO: shard.namespace, x402Charge });
+
+        const res = await worker.fetch(
+            new Request("https://app.example/_lunora/rpc-batch", {
+                body: JSON.stringify({
+                    calls: [
+                        { functionPath: "messages:list", id: 0 },
+                        { functionPath: "reports:latest", id: 1 },
+                    ],
+                }),
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(res.status).toBe(400);
+        await expect(res.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST" } });
+        // The batch is refused whole — no entry (paid or free) reaches a shard, and the gate never runs.
+        expect(shard.calls).toHaveLength(0);
+    });
+});
+
 describe("createWorker — migration endpoint", () => {
     let shard: ShardSpy;
 

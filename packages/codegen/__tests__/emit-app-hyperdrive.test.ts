@@ -23,6 +23,7 @@ const baseOptions = {
     hasStorage: false,
     hasVectors: false,
     hasWorkflow: false,
+    hasX402: false,
     useUmbrella: false,
     wantsOpenApi: false,
     wantsOpenRpc: false,

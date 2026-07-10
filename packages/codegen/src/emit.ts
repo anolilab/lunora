@@ -1049,6 +1049,8 @@ interface EmitServerOptions {
     hasPipelines?: boolean;
     /** A `lunora/` source uses `@lunora/bindings/r2sql` / `ctx.r2sql` — wires `ctx.r2sql` onto ActionCtx only. */
     hasR2sql?: boolean;
+    /** A `lunora/` source uses `@lunora/x402/pay` / `ctx.x402` — wires the agent-wallet pay rail onto ActionCtx only. */
+    hasX402?: boolean;
 
     /**
      * The single `defineIdentity(...)` claim contract declared in
@@ -1083,6 +1085,7 @@ const emitServer = ({
     hasPayments = false,
     hasPipelines = false,
     hasR2sql = false,
+    hasX402 = false,
     identity,
     queues = [],
     schema,
@@ -1107,6 +1110,11 @@ const emitServer = ({
     // (payment ops are external calls), and `@lunora/payment` is imported only when used.
     const paymentsTypeImport = hasPayments ? `import type { LunoraPayment } from "@lunora/payment";\n` : "";
     const paymentsActionField = hasPayments ? `\n    readonly payments: LunoraPayment;` : "";
+    // Same gating for the x402 pay rail: it signs and settles USDC over the
+    // network, so the typed `ctx.x402` facade rides ActionCtx only, and
+    // `@lunora/x402/pay` is imported only when a handler actually uses it.
+    const x402TypeImport = hasX402 ? `import type { X402Pay } from "@lunora/x402/pay";\n` : "";
+    const x402ActionField = hasX402 ? `\n    readonly x402: X402Pay;` : "";
 
     // Same gating for containers: container calls are external I/O, so the
     // typed `ctx.containers` record lives on ActionCtx only. One property per
@@ -1330,7 +1338,7 @@ import type {
 } from "${base.server}";
 
 import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, Relations, TableName } from "./dataModel.js";
-${aiTypeImport}${paymentsTypeImport}${containersTypeImport}${workflowsTypeImport}${queuesTypeImport}${identityTypeImport}${envTypeImport}
+${aiTypeImport}${paymentsTypeImport}${x402TypeImport}${containersTypeImport}${workflowsTypeImport}${queuesTypeImport}${identityTypeImport}${envTypeImport}
 export type { DataModel, Doc, Id, TableName } from "./dataModel.js";
 
 /** Storage buckets this schema declares (\`v.storage("name")\`), narrowing \`ctx.storage.bucket(name)\`. */
@@ -1378,7 +1386,7 @@ export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${wor
 export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${workflowsOmit}${authOmit}${envOmit}> {
     readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
-    readonly storage: StorageBase<StorageBucketName>;${accessContextField}${aiActionField}${paymentsActionField}${containersActionField}${kvContextField}${flagsContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${envContextField}${workflowsContextField}${queuesContextField}${authContextField}
+    readonly storage: StorageBase<StorageBucketName>;${accessContextField}${aiActionField}${paymentsActionField}${x402ActionField}${containersActionField}${kvContextField}${flagsContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${r2sqlActionField}${envContextField}${workflowsContextField}${queuesContextField}${authContextField}
 }
 
 /**
@@ -2785,6 +2793,44 @@ const paymentStub: LunoraPayment = {
 };
 
 /**
+ * The bespoke `ctx.x402` fragments (mirrors {@link emitPaymentFragments}). The
+ * pay rail signs and settles USDC per request, so — like `ctx.payments` — it is
+ * built inline rather than from a capability row's `serverCtxField`.
+ *
+ * `lazyX402Pay` keeps `buildCtx` synchronous: it returns immediately and builds
+ * the real (async, secret-reading, signer-importing) rail on the first `fetch`,
+ * memoising it so one spend-policy state is shared for the ctx's lifetime. The
+ * wallet secret is read through `ctx.secrets` (a Secrets Store binding), which is
+ * why `getSecret` closes over the in-scope `secrets` facade. Falls back to
+ * `x402Stub` — a rail whose `fetch` throws — when no `x402` config is passed.
+ */
+const emitX402Fragments = (hasX402: boolean): { build: string; configField: string; contextField: string; imports: ReadonlyArray<string>; stub: string } => {
+    if (!hasX402) {
+        return { build: "", configField: "", contextField: "", imports: [], stub: "" };
+    }
+
+    return {
+        imports: [`import type { X402Pay, X402PayConfig } from "@lunora/x402/pay";`, `import { lazyX402Pay } from "@lunora/x402/pay";`],
+        // Built lazily off `secrets` (the Secrets Store facade already in scope) and
+        // the `config.x402` thunk over env; falls back to `x402Stub`.
+        build: `
+            const x402: X402Pay = config.x402
+                ? lazyX402Pay(config.x402(env), { getSecret: (name: string) => secrets.get(name) })
+                : x402Stub;
+`,
+        configField: `\n    x402?: (env: Record<string, unknown>) => X402PayConfig;`,
+        contextField: `\n                x402,`,
+        stub: `
+const x402Stub: X402Pay = {
+    fetch: () => {
+        throw new Error("ctx.x402: no pay rail configured. Pass \\\`x402\\\` to createShardDO().");
+    },
+} as unknown as X402Pay;
+`,
+    };
+};
+
+/**
  * The `@lunora/do` type names the generated shard imports. The base set is always
  * present; `WorkflowsResult` / `QueuesResult` are added only when the project
  * declares workflows / queues (their `*Metadata()` overrides reference them) and
@@ -2846,6 +2892,8 @@ interface EmitShardOptions {
     hasPipelines?: boolean;
     /** A `lunora/` source reads `ctx.r2sql` (R2 SQL) — wires `ctx.r2sql` onto the ActionCtx only. */
     hasR2sql?: boolean;
+    /** A `lunora/` source reads `ctx.x402` — wires the agent-wallet pay rail onto the ActionCtx only. */
+    hasX402?: boolean;
     maskMetadata?: MaskMetadataIR;
     /** Custom mutators declared via `defineMutator` in `lunora/mutators.ts` — wires the `isCustomMutator` push-protocol override. */
     mutators?: ReadonlyArray<MutatorIR>;
@@ -2879,6 +2927,7 @@ const emitShard = ({
     hasPayments = false,
     hasPipelines = false,
     hasR2sql = false,
+    hasX402 = false,
     maskMetadata,
     mutators = [],
     queues = [],
@@ -2929,6 +2978,11 @@ const emitShard = ({
         imports: paymentsImports,
         stub: paymentStub,
     } = emitPaymentFragments(hasPayments);
+    // `ctx.x402` is ActionCtx-only and money-spending, so — like `ctx.sql` /
+    // `ctx.browser` / `ctx.images` — it is built AND attached only inside the
+    // `if (isAction)` block below (its `contextField` is deliberately unused: a
+    // query/mutation ctx never carries the property at runtime, not just in types).
+    const { build: x402Build, configField: x402ConfigField, imports: x402Imports, stub: x402Stub } = emitX402Fragments(hasX402);
     // Drift guard + the data we emit: the advisor's `Finding`s must stay
     // assignable to the DO's `AdvisoryFinding` (the generated `LUNORA_ADVISORIES`
     // is typed against it). This assignment fails `tsc` if the two shapes drift —
@@ -3146,6 +3200,7 @@ const LUNORA_RLS_READ_REGISTRY = buildRlsReadRegistry(Object.values(LUNORA_FUNCT
         ...workflowImportLines,
         ...queueImportLines,
         ...paymentsImports,
+        ...x402Imports,
         ``,
         `import schema from "../schema.js";`,
         // Local-first sync registries are pulled in alongside the function table
@@ -3544,18 +3599,19 @@ ${schema.tables
     // is an `action`, so a query/mutation handler never even has `ctx.sql` on the
     // object (its type already forbids it; this makes the runtime match). Gated
     // behind a single `isAction` check derived from the dispatch registry.
-    const actionOnlyHasAny = hasImages || hasHyperdrive || hasBrowser || hasR2sql || hasPipelines;
+    const actionOnlyHasAny = hasImages || hasHyperdrive || hasBrowser || hasR2sql || hasPipelines || hasX402;
     const actionOnlyBlock = actionOnlyHasAny
         ? `
             // ActionCtx-only helpers (external, non-deterministic I/O): constructed
             // and attached only for an \`action\` so query/mutation ctx never carry them.
             if (isAction) {
-${imagesFragments.build}${hyperdriveFragments.build}${browserFragments.build}${r2sqlFragments.build}${pipelinesFragments.build}${[
+${imagesFragments.build}${hyperdriveFragments.build}${browserFragments.build}${r2sqlFragments.build}${pipelinesFragments.build}${x402Build}${[
               ...(hasImages ? ["                ctx.images = images;"] : []),
               ...(hasHyperdrive ? ["                ctx.sql = sql;"] : []),
               ...(hasBrowser ? ["                ctx.browser = browser;"] : []),
               ...(hasR2sql ? ["                ctx.r2sql = r2sql;"] : []),
               ...(hasPipelines ? ["                ctx.pipelines = pipelines;"] : []),
+              ...(hasX402 ? ["                ctx.x402 = x402;"] : []),
           ].join("\n")}
             }
 `
@@ -3607,7 +3663,7 @@ export interface ShardDOConfig {
     /** Optional telemetry sink. When supplied, each \`ctx.log.*\` call is forwarded to \`sink.onLog\`. Pass the SAME sink you give \`createWorker({ observability })\` (which drives \`onRpc\`) to route both RPC and log events. */
     observability?: (env: Record<string, unknown>) => LogSink | undefined;
     scheduler?: (env: Record<string, unknown>) => unknown;
-    storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}${aiConfigField}${kvFragments.configField}${flagsFragments.configField}${analyticsFragments.configField}${imagesFragments.configField}${hyperdriveFragments.configField}${browserFragments.configField}${r2sqlFragments.configField}${pipelinesFragments.configField}${paymentsConfigField}${d1ConfigField}${hyperdriveGlobalConfigField}${sourceClientConfigField}
+    storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}${aiConfigField}${kvFragments.configField}${flagsFragments.configField}${analyticsFragments.configField}${imagesFragments.configField}${hyperdriveFragments.configField}${browserFragments.configField}${r2sqlFragments.configField}${pipelinesFragments.configField}${paymentsConfigField}${x402ConfigField}${d1ConfigField}${hyperdriveGlobalConfigField}${sourceClientConfigField}
 }
 
 const schedulerStub = {
@@ -3645,7 +3701,7 @@ const storageStub = {
         throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
     },
 };
-${globalDatabaseStub}${sourceClientCacheConst}${vectorsStub}${aiStub}${kvFragments.stub}${flagsFragments.stub}${analyticsFragments.stub}${imagesFragments.stub}${hyperdriveFragments.stub}${browserFragments.stub}${r2sqlFragments.stub}${pipelinesFragments.stub}${paymentStub}${bindTableHelper}
+${globalDatabaseStub}${sourceClientCacheConst}${vectorsStub}${aiStub}${kvFragments.stub}${flagsFragments.stub}${analyticsFragments.stub}${imagesFragments.stub}${hyperdriveFragments.stub}${browserFragments.stub}${r2sqlFragments.stub}${pipelinesFragments.stub}${paymentStub}${x402Stub}${bindTableHelper}
 // Bound in-process \`ctx.run*\` composition depth so a self- or cyclically-
 // referencing call fails loudly with a clear error instead of overflowing the
 // stack. Tracked across the awaited handler chain (one DO invocation is

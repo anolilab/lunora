@@ -32,6 +32,8 @@ const baseInferred = (overrides: Partial<InferredBindings> = {}): InferredBindin
         usesPipelines: false,
         usesScheduler: false,
         usesStorage: false,
+        usesX402Charge: false,
+        usesX402Pay: false,
         workflows: [],
         ...overrides,
     };
@@ -255,6 +257,28 @@ describe("reconcileWranglerBindings", () => {
         // Payment rides the existing ShardDO via ctx.db — no new binding written.
         expect(result.changed).toBe(false);
         expect(readConfig().durable_objects.bindings.map((binding: { name: string }) => binding.name)).toEqual(["SHARD"]);
+    });
+
+    it("reminds to add a recipient [vars] entry when @lunora/x402/charge is used, without writing a binding", () => {
+        expect.assertions(2);
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesX402Charge: true }));
+
+        expect(result.warnings.join(" ")).toMatch(/x402\/charge.*recipient wallet address.*\[vars\]/u);
+        // The recipient var name is user-chosen — nothing is auto-written.
+        expect(result.changed).toBe(false);
+    });
+
+    it("reminds to add a Secrets Store binding + spend policy when @lunora/x402/pay is used, without writing a binding", () => {
+        expect.assertions(3);
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesX402Pay: true }));
+
+        expect(result.warnings.join(" ")).toMatch(/x402\/pay.*secrets_store_secrets\[\].*spend policy/u);
+        // ctx.secrets is a Secrets Store binding (created out-of-band), not a
+        // .dev.vars value, so the pay wallet key is a hint — never auto-written.
+        expect(result.warnings.join(" ")).toMatch(/Secrets Store binding, not \.dev\.vars/u);
+        expect(result.changed).toBe(false);
     });
 
     it("warns when auth is used but no SessionDO is exported, without binding SESSION", () => {

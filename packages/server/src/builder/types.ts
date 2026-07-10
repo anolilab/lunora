@@ -11,6 +11,7 @@ import type {
     RegisteredMutation,
     RegisteredQuery,
     RegisteredStream,
+    X402ProcedureConfig,
 } from "../types";
 
 /** Builder discriminator. Codegen reads this kind. */
@@ -68,6 +69,14 @@ export interface QueryBuilder<Context, Args extends ArgsValidator, Output = unde
         handler: (options: { args: InferArgs<Args>; ctx: Context; signal: AbortSignal }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
     ) => RegisteredStream<Args, R>;
     use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => QueryBuilder<ContextOut, Args, Output>;
+
+    /**
+     * Mark this query as paid. The origin worker answers an unpaid client RPC
+     * with HTTP 402, verifies + settles the x402 payment, then dispatches. `price`
+     * is USD (a number of dollars or a `"0.01"`/`"$0.01"` string); the network,
+     * recipient, and facilitator come from the worker-level x402 charge config.
+     */
+    x402: (config: X402ProcedureConfig) => QueryBuilder<Context, Args, Output>;
 }
 
 export interface MutationBuilder<Context, Args extends ArgsValidator, Output = undefined> {
@@ -78,6 +87,14 @@ export interface MutationBuilder<Context, Args extends ArgsValidator, Output = u
         : (handler: (options: { args: InferArgs<Args>; ctx: Context }) => Output | Promise<Output>) => RegisteredMutation<Args, Output>;
     output: <V extends Validator>(validator: V) => MutationBuilder<Context, Args, Infer<V>>;
     use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => MutationBuilder<ContextOut, Args, Output>;
+
+    /**
+     * Mark this mutation as paid. The origin worker answers an unpaid client RPC
+     * with HTTP 402, verifies + settles the x402 payment, then dispatches. `price`
+     * is USD (a number of dollars or a `"0.01"`/`"$0.01"` string); the network,
+     * recipient, and facilitator come from the worker-level x402 charge config.
+     */
+    x402: (config: X402ProcedureConfig) => MutationBuilder<Context, Args, Output>;
 }
 
 export interface ActionBuilder<Context, Args extends ArgsValidator, Output = undefined> {
@@ -88,6 +105,14 @@ export interface ActionBuilder<Context, Args extends ArgsValidator, Output = und
     input: <A extends ArgsValidator>(validators: A) => ActionBuilder<Context, A & Args, Output>;
     output: <V extends Validator>(validator: V) => ActionBuilder<Context, Args, Infer<V>>;
     use: <ContextOut>(middleware: Middleware<Context, ContextOut>) => ActionBuilder<ContextOut, Args, Output>;
+
+    /**
+     * Mark this action as paid. The origin worker answers an unpaid client RPC
+     * with HTTP 402, verifies + settles the x402 payment, then dispatches. `price`
+     * is USD (a number of dollars or a `"0.01"`/`"$0.01"` string); the network,
+     * recipient, and facilitator come from the worker-level x402 charge config.
+     */
+    x402: (config: X402ProcedureConfig) => ActionBuilder<Context, Args, Output>;
 }
 
 /**

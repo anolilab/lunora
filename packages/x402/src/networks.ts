@@ -1,0 +1,75 @@
+/**
+ * Network identity for `@lunora/x402`.
+ *
+ * `@x402/core` v2 speaks **CAIP-2** chain ids (`eip155:8453` for Base,
+ * `solana:5eyk…` for Solana mainnet) — `type Network = ` `${string}:${string}` ``.
+ * Lunora keeps ergonomic **friendly** names (`"base"`, `"base-sepolia"`) as the
+ * public surface and maps them to CAIP-2 here, at the single seam where we hand a
+ * network to the SDK. A raw CAIP-2 string is also accepted as a power-user escape
+ * hatch (e.g. a chain we don't yet have a friendly alias for).
+ *
+ * The friendly set is intentionally scoped to chains `@x402/evm` / `@x402/svm`
+ * can settle the ergonomic `price:"$0.01"` path on out of the box (i.e. chains in
+ * their `DEFAULT_STABLECOINS` registry). Notably that excludes Optimism and
+ * Avalanche today — advertising them would 500 at settlement — so they are not
+ * friendly aliases; a caller who needs them can still pass a raw CAIP-2 id with an
+ * explicit asset.
+ */
+
+/** A CAIP-2 chain identifier, e.g. `"eip155:8453"` (Base) or `"solana:5eyk…"`. */
+export type Caip2 = `${string}:${string}`;
+
+/** Friendly network names Lunora maps to CAIP-2 for `@x402/core`. */
+export type FriendlyNetwork = "arbitrum" | "arbitrum-sepolia" | "base" | "base-sepolia" | "ethereum" | "polygon" | "solana" | "solana-devnet";
+
+/**
+ * A network Lunora can settle on: a {@link FriendlyNetwork} alias (mapped to
+ * CAIP-2 internally) or a raw {@link Caip2} id for chains without a friendly name.
+ */
+export type X402Network = Caip2 | FriendlyNetwork;
+
+/**
+ * Friendly name → CAIP-2 id. Values verified against `@x402/evm` and `@x402/svm`
+ * `DEFAULT_STABLECOINS` at 2.17.0. `base` / `base-sepolia` are the primary
+ * prod / test pair.
+ */
+export const NETWORK_TO_CAIP2 = {
+    arbitrum: "eip155:42161",
+    "arbitrum-sepolia": "eip155:421614",
+    base: "eip155:8453",
+    "base-sepolia": "eip155:84532",
+    ethereum: "eip155:1",
+    polygon: "eip155:137",
+    solana: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+    "solana-devnet": "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
+} as const satisfies Record<FriendlyNetwork, Caip2>;
+
+/** EVM friendly networks (signed via `@x402/evm` + viem). */
+export const EVM_NETWORKS = ["arbitrum", "arbitrum-sepolia", "base", "base-sepolia", "ethereum", "polygon"] as const satisfies ReadonlyArray<FriendlyNetwork>;
+
+/** Solana friendly networks (signed via `@x402/svm`). */
+export const SVM_NETWORKS = ["solana", "solana-devnet"] as const satisfies ReadonlyArray<FriendlyNetwork>;
+
+/**
+ * Resolve a network to its CAIP-2 id. Friendly aliases are looked up; a value
+ * that already looks like CAIP-2 (`namespace:reference`) passes through.
+ */
+export const toCaip2 = (network: X402Network): Caip2 => {
+    const mapped = (NETWORK_TO_CAIP2 as Record<string, Caip2>)[network];
+
+    if (mapped !== undefined) {
+        return mapped;
+    }
+
+    if (network.includes(":")) {
+        return network as Caip2;
+    }
+
+    throw new Error(`Unknown x402 network "${network}". Use a friendly name (${EVM_NETWORKS.join(", ")}, ${SVM_NETWORKS.join(", ")}) or a raw CAIP-2 id.`);
+};
+
+/** True when `network` settles on an EVM chain (viem signer path). */
+export const isEvmNetwork = (network: X402Network): boolean => toCaip2(network).startsWith("eip155:");
+
+/** True when `network` settles on Solana (`@x402/svm` signer path). */
+export const isSvmNetwork = (network: X402Network): boolean => toCaip2(network).startsWith("solana:");

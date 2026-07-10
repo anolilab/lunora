@@ -201,6 +201,30 @@ const collectHintBindingWarnings = (inferred: InferredBindings, parsed?: Wrangle
 };
 
 /**
+ * Capability reminders for the x402 rails. Neither implies a wrangler binding
+ * Lunora can auto-write: the charge recipient is a user-named `[vars]` entry, and
+ * the pay wallet key is a Secrets Store binding created out-of-band. So both are
+ * always-on reminders — nothing in `wrangler.jsonc` can confirm them away (the pay
+ * binding name is `signer.secretName`, unknown here) — rather than suppressible
+ * hint bindings. The pay reminder also flags the mandatory spend policy: the rail
+ * moves real funds.
+ */
+const collectX402Warnings = (inferred: InferredBindings): string[] => {
+    const rules: ReadonlyArray<[boolean, string]> = [
+        [
+            inferred.usesX402Charge,
+            "@lunora/x402/charge is used; set the recipient wallet address as a [vars] entry (the var name is your choice) and pass it to the charge config — the x402 facilitator settles USDC to that address.",
+        ],
+        [
+            inferred.usesX402Pay,
+            "@lunora/x402/pay is used (ActionCtx-only, spends real funds); add a secrets_store_secrets[] binding holding the agent wallet key (binding name == signer.secretName) and pair the pay rail with a spend policy — ctx.secrets reads a Secrets Store binding, not .dev.vars.",
+        ],
+    ];
+
+    return rules.filter(([active]) => active).map(([, warning]) => warning);
+};
+
+/**
  * Hints for capabilities used but not safely auto-provisionable — only emitted
  * when the corresponding binding is actually **missing**. `parsed` (the existing
  * `wrangler.jsonc`, when one was read) suppresses a hint whose binding is already
@@ -266,7 +290,7 @@ const collectWarnings = (inferred: InferredBindings, parsed?: WranglerShape): st
         );
     }
 
-    warnings.push(...collectHintBindingWarnings(inferred, parsed));
+    warnings.push(...collectX402Warnings(inferred), ...collectHintBindingWarnings(inferred, parsed));
 
     return warnings;
 };

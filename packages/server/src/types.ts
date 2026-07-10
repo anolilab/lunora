@@ -321,6 +321,23 @@ type FunctionKind = "action" | "mutation" | "query" | "stream";
  */
 type FunctionVisibility = "internal" | "public";
 
+/**
+ * x402 payment tag attached by the `.x402({ price })` builder modifier. Marks a
+ * public procedure as paid: the origin worker answers an unpaid client RPC with
+ * HTTP 402, verifies + settles the payment, and only then dispatches to the
+ * shard. The runtime reads only `price` from here — the network, recipient, and
+ * facilitator live in the worker-level x402 charge config, so `@lunora/runtime`
+ * never has to import `@lunora/x402` (and its viem/solana deps).
+ */
+interface X402ProcedureConfig {
+    /**
+     * USD-denominated price: a number of dollars (`0.01`) or a decimal string
+     * (`"0.01"`, or the `"$0.01"` shorthand). Resolved to the network
+     * stablecoin's base units (USDC has 6 decimals) at challenge time.
+     */
+    readonly price: number | string;
+}
+
 interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKind> {
     readonly args: A;
     readonly handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R;
@@ -334,6 +351,13 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
      */
     readonly lifecycle?: LifecycleEventKind;
     readonly visibility?: FunctionVisibility;
+
+    /**
+     * Set by the `.x402({ price })` builder modifier. Marks the procedure as paid
+     * so the origin worker gates it behind an x402 402-challenge before dispatch.
+     * Absent on unpaid functions.
+     */
+    readonly x402?: X402ProcedureConfig;
 }
 
 type RegisteredQuery<A extends ArgsValidator, R> = RegisteredFunction<A, R, "query">;
@@ -1521,4 +1545,5 @@ export type {
     WorkflowInstanceStatus,
     Workflows,
     WorkflowStatusResult,
+    X402ProcedureConfig,
 };

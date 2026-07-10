@@ -165,6 +165,20 @@ const CAPABILITY_ROWS = [
         key: "payments",
         moduleSpecifier: "@lunora/payment",
     },
+    // `ctx.x402` — the x402 agent-wallet pay rail. ActionCtx ONLY: it signs and
+    // settles real USDC over the network per request. Like `payments`, its ctx
+    // field is bespoke (a lazily-built, per-run-metered rail), so no
+    // `serverCtxField` — `emit.ts` hand-wires it.
+    {
+        appMethod: {
+            configKey: "x402",
+            doc: "Wire the x402 agent-wallet pay rail backing `ctx.x402` — a payment-enabled `fetch` that answers `402` challenges under a mandatory spend policy (ActionCtx-only; spends real funds).",
+            method: "x402",
+        },
+        contextProperty: "x402",
+        key: "x402",
+        moduleSpecifier: "@lunora/x402/pay",
+    },
     // Pipelines is its own `@lunora/bindings/pipelines` subpath (distinct from
     // `/analytics`), so a real import is a clean signal that won't be flipped by a
     // plain analytics import; `ctx.pipelines` reads flip it too.
