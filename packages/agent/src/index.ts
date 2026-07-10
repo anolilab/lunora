@@ -11,7 +11,7 @@ export { createAgentGenerate, createStreamGenerate, resolveAgentModel } from "./
 export type { McpCallResult, McpClientLike, McpContentPart, McpToolInfo, McpToolsOptions } from "./mcp";
 export { adaptMcpResult, mcpTools } from "./mcp";
 export { buildModelMessages } from "./model-messages";
-export { agentBindingName, agentClassName, agentDefaultName } from "./naming";
+export { agentBindingName, agentClassName, agentDefaultName, voiceBindingName, voiceClassName } from "./naming";
 export { AGENT_MODULE, DEFAULT_AGENT_FUNCTION_PATHS, SANDBOX_INVOKE_PATH, SANDBOX_MODULE, toFunctionReference } from "./paths";
 export type { BrowserToolInput, BrowserToolOptions, ContainerToolInput, ContainerToolOptions } from "./sandbox";
 export { browserTool, containerTool } from "./sandbox";
@@ -54,10 +54,23 @@ export type {
     AgentToolContext,
     AgentToolDefinition,
     AgentUsage,
+    AgentVoiceConfig,
     AgentWorkflowBindingLike,
     AgentWorkflowInstanceLike,
     AnyAgentTool,
     SkillConfig,
     SkillDefinition,
 } from "./types";
+export type {
+    RunVoiceTurnOptions,
+    VoiceAudioSource,
+    VoiceClientFrame,
+    VoiceSend,
+    VoiceSendAudio,
+    VoiceServerFrame,
+    VoiceSynthesize,
+    VoiceTranscribe,
+    VoiceTurnResult,
+} from "./voice-do";
+export { runVoiceTurn, VoiceSessionDO } from "./voice-do";
 export { default as compileAgentWorkflow } from "./workflow";

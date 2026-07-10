@@ -398,6 +398,65 @@ export interface AgentConfig {
     toolChoice?: ToolChoice<ToolSet>;
     /** The tools the model may call, by name. */
     tools?: Record<string, AnyAgentTool>;
+
+    /**
+     * Opt into a real-time voice session — see {@link AgentVoiceConfig}. Its mere
+     * presence tells codegen to emit the `VOICE_...` hibernatable-WebSocket DO
+     * (`VoiceSessionDO` subclass) and the `api.agents.{name}Voice` client
+     * reference; an agent without it is byte-identical to before. Runtime config
+     * for the in-DO pipeline (models/voice) rides the same object.
+     */
+    voice?: AgentVoiceConfig;
+}
+
+/**
+ * Opt an agent into a real-time VOICE session — a dedicated hibernatable-
+ * WebSocket Durable Object (`VoiceSessionDO`) that runs a per-turn
+ * STT→LLM→TTS pipeline IN-DO and SHARES the agent's existing thread tables
+ * (`agent_threads`/`agent_messages`) via the runtime dispatch seam. Presence of
+ * this block is what codegen keys on to emit the `VOICE_...` DO class + the
+ * `api.agents.{name}Voice` client reference; agents without it are byte-
+ * identical.
+ *
+ * v1 slice: conversational turns only. In-DO voice turns are NOT replay-durable
+ * and get NO Workflow tool-loop — tool calls are deferred. All fields are
+ * optional; the defaults target Workers AI (`@cf/openai/whisper-large-v3-turbo`
+ * for STT, `@cf/deepgram/aura-1` for TTS).
+ */
+export interface AgentVoiceConfig {
+    /**
+     * Server→client audio container. `"mp3"` (default) matches the TTS model's
+     * native stream; carried to the client so it decodes the returned frames
+     * with the right codec.
+     */
+    audioFormat?: "mp3" | "wav";
+
+    /**
+     * Spoken on connect before the first user turn — a fixed greeting synthesized
+     * through the TTS model. Omit for a silent-until-spoken-to session.
+     */
+    greeting?: string;
+
+    /**
+     * TTS voice/speaker id forwarded to the TTS model (e.g. a Deepgram Aura voice
+     * like `"aura-asteria-en"`). Model-specific; omitted when unset so the model
+     * uses its own default voice.
+     */
+    speaker?: string;
+
+    /**
+     * Speech-to-text model id (a Workers AI id, resolved via `env.AI`). Defaults
+     * to `@cf/openai/whisper-large-v3-turbo` — batch per-utterance transcription
+     * (the client marks utterance boundaries; continuous STT is deferred).
+     */
+    stt?: string;
+
+    /**
+     * Text-to-speech model id (a Workers AI id, resolved via `env.AI`). Defaults
+     * to `@cf/deepgram/aura-1` — streamed MP3 synthesized sentence-by-sentence
+     * from the LLM's token stream.
+     */
+    tts?: string;
 }
 
 /** The input the parent model provides when delegating to a sub-agent tool. */
@@ -561,6 +620,14 @@ export interface AgentGenerateOptions {
     messages: ReadonlyArray<unknown>;
     /** A per-turn model override (from {@link AgentConfig.prepareStep}). */
     model?: LanguageModel;
+
+    /**
+     * Abort the in-flight turn (the streaming seam forwards it to `streamText`'s
+     * `abortSignal`). On abort the streaming seam returns the text streamed so
+     * far rather than rejecting, so a barge-in can persist the spoken prefix.
+     * The durable (non-streaming) loop never sets it.
+     */
+    signal?: AbortSignal;
     /** A per-turn tool-choice override. */
     toolChoice?: ToolChoice<ToolSet>;
 }

@@ -10,4 +10,16 @@ const agentBindingName = (exportName: string): string => `AGENT_${exportName.rep
 /** `supportBot` → `agent-support-bot` — the default deployed workflow name. */
 const agentDefaultName = (exportName: string): string => `agent-${exportName.replaceAll(CAMEL_BOUNDARY, "$1-$2").toLowerCase()}`;
 
-export { agentBindingName, agentClassName, agentDefaultName };
+/**
+ * `support` → `SupportVoiceDO` — the generated voice-session Durable Object
+ * class name (a subclass of `VoiceSessionDO`). Distinct from the agent's
+ * `WorkflowEntrypoint` (`SupportAgentWorkflow`): the voice path is a
+ * hibernatable-WebSocket DO that runs the per-turn STT→LLM→TTS pipeline in-DO,
+ * NOT the replay-durable Workflow.
+ */
+const voiceClassName = (exportName: string): string => `${exportName.charAt(0).toUpperCase()}${exportName.slice(1)}VoiceDO`;
+
+/** `support` → `VOICE_SUPPORT` — the Cloudflare Durable Object binding name for the voice session. */
+const voiceBindingName = (exportName: string): string => `VOICE_${exportName.replaceAll(CAMEL_BOUNDARY, "$1_$2").toUpperCase()}`;
+
+export { agentBindingName, agentClassName, agentDefaultName, voiceBindingName, voiceClassName };

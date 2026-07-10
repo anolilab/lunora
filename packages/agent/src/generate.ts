@@ -92,7 +92,7 @@ const prepareAgentTurn = (agent: AgentDefinition, env: Record<string, unknown>) 
  * and `streamText` — both accept the same option shape — so the memoized turn is
  * identical whether it streamed or not.
  */
-const buildTurnRequest = (base: ReturnType<typeof prepareAgentTurn>, { activeTools, messages, model, toolChoice }: AgentGenerateOptions) => {
+const buildTurnRequest = (base: ReturnType<typeof prepareAgentTurn>, { activeTools, messages, model, signal, toolChoice }: AgentGenerateOptions) => {
     const { defaultModel, output, staticSettings, tools } = base;
 
     // `activeTools` restricts the exposed schema map — the model can only pick
@@ -106,6 +106,9 @@ const buildTurnRequest = (base: ReturnType<typeof prepareAgentTurn>, { activeToo
         ...(Object.keys(exposed).length > 0 ? { tools: exposed } : {}),
         ...(toolChoice === undefined ? {} : { toolChoice }),
         ...(output === undefined ? {} : { output }),
+        // A voice barge-in aborts the turn mid-stream; the durable loop never
+        // sets it. Harmless on `generateText` (which accepts the same option).
+        ...(signal === undefined ? {} : { abortSignal: signal }),
     };
 };
 
@@ -160,8 +163,23 @@ const createStreamGenerate = (agent: AgentDefinition, env: Record<string, unknow
         // Drain the delta stream first, teeing each chunk to the live sink. This
         // both feeds the live channel and drives the call to completion, so the
         // settled promises below resolve to the final turn.
-        for await (const delta of result.textStream) {
-            onDelta(delta);
+        let streamed = "";
+
+        try {
+            for await (const delta of result.textStream) {
+                streamed += delta;
+                onDelta(delta);
+            }
+        } catch (error) {
+            // A barge-in aborts the turn: `streamText` rejects the stream once
+            // its `abortSignal` fires. Resolve to the text streamed so far (the
+            // spoken prefix) rather than propagating — the caller persists it.
+            // Any non-abort failure is re-thrown.
+            if (options.signal?.aborted) {
+                return { text: streamed, toolCalls: [] };
+            }
+
+            throw error;
         }
 
         // `output` is only awaited when the agent declared a structured schema —
