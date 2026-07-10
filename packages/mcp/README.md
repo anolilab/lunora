@@ -40,14 +40,16 @@ Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-sa
 
 ## Tools
 
-| Tool                         | Description                                                                                                    |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `lunora_list_functions`      | List the deployment's public functions (queries, mutations, actions) with their kinds.                         |
-| `lunora_list_tables`         | List the deployment's `.global()` tables with their row counts.                                                |
-| `lunora_get_function_schema` | Return a function's argument descriptors and kind by path, so a caller can construct a valid arguments object. |
-| `lunora_run_query`           | Run a query and return its result. Read-only.                                                                  |
-| `lunora_run_mutation`        | Run a mutation and return its result. Writes data — use with care.                                             |
-| `lunora_run_action`          | Run an action and return its result. May call external services.                                               |
+| Tool                         | Description                                                                                                                                                   |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lunora_list_functions`      | List the deployment's public functions (queries, mutations, actions) with their kinds.                                                                        |
+| `lunora_list_tables`         | List the deployment's `.global()` tables with their row counts.                                                                                               |
+| `lunora_get_function_schema` | Return a function's argument descriptors and kind by path, so a caller can construct a valid arguments object.                                                |
+| `lunora_run_query`           | Run a query and return its result. Read-only.                                                                                                                 |
+| `lunora_run_mutation`        | Run a mutation and return its result. Writes data — use with care.                                                                                            |
+| `lunora_run_action`          | Run an action and return its result. May call external services.                                                                                              |
+| `agent_<name>`               | Start a durable [`@lunora/agent`](https://www.npmjs.com/package/@lunora/agent) run and await its answer. One tool per exposed agent. Requires agents enabled. |
+| `lunora_agent_status`        | Poll a running agent by `threadKey` and return its answer once finished. Requires agents enabled.                                                             |
 
 ### Recommended agent flow
 
@@ -105,6 +107,36 @@ const server = createLunoraMcpServer({ url: "https://app.example.workers.dev", t
 await server.connect(myTransport);
 ```
 
+## Expose an agent
+
+A deployment's durable [`@lunora/agent`](https://www.npmjs.com/package/@lunora/agent) agents can be fronted as MCP tools. This is **opt-in and fail-closed**, mirroring `allowWrites`: starting an agent run is a side effect, so the agent tools are omitted from the advertised list _and_ refused at dispatch unless you explicitly enable them. `@lunora/mcp` takes no dependency on `@lunora/agent` — it reaches the agent's public `agents:agentRun` mutation over RPC like any other function.
+
+Enable it with two env vars (or the matching `createLunoraMcpServer` options):
+
+- `LUNORA_MCP_ALLOW_AGENTS` — set to `1`/`true`/`yes`/`on` to expose the agent tools. Default: agents disabled.
+- `LUNORA_MCP_AGENTS` — a `;`-separated list of `name:description` pairs selecting which agents to expose, e.g. `"support:Support questions;billing:Billing help"`.
+- `LUNORA_MCP_AGENT_TIMEOUT_MS` (optional) — wall-clock budget a single `agent_<name>` call awaits before returning a pending result to poll.
+
+```jsonc
+{
+    "mcpServers": {
+        "lunora": {
+            "command": "lunora-mcp",
+            "env": {
+                "LUNORA_URL": "https://app.example.workers.dev",
+                "LUNORA_ADMIN_TOKEN": "...",
+                "LUNORA_MCP_ALLOW_AGENTS": "1",
+                "LUNORA_MCP_AGENTS": "support:Support questions;billing:Billing help",
+            },
+        },
+    },
+}
+```
+
+Each exposed agent gets an `agent_<name>` tool taking `prompt` (required), an optional `threadKey` (reuse to continue a conversation; omit to start a new thread), and an optional `title`. The tool starts a durable run and awaits it up to the timeout budget; if the run outlasts the budget it returns a pending result whose `threadKey` you feed to the generic `lunora_agent_status` tool to poll for the final answer.
+
+Runs are **owner-scoped** to the identity the configured token resolves to. Grant a **least-privilege** token mapped to a bot identity so an agent's threads stay isolated per deployment — never the admin token.
+
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs)**.
 
 ## Related
@@ -112,6 +144,7 @@ await server.connect(myTransport);
 - [`@lunora/client`](https://www.npmjs.com/package/@lunora/client) — the HTTP RPC client backing every tool.
 - [`@lunora/cli`](https://www.npmjs.com/package/@lunora/cli) — deploy the app the server introspects and invokes.
 - [`@lunora/server`](https://www.npmjs.com/package/@lunora/server) — defines the queries, mutations, and actions the tools call.
+- [`@lunora/agent`](https://www.npmjs.com/package/@lunora/agent) — the durable agents the `agent_<name>` tools front over RPC.
 
 ## Supported Node.js Versions
 

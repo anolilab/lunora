@@ -1,3 +1,7 @@
+export type { AgentApi, AgentHandle, AgentOptions, AgentThreadRecord, AgentThreadStatus } from "./agent";
+export { agent } from "./agent";
+export type { AgentChatApi, AgentChatHandle, AgentChatMessage, AgentChatOptions } from "./agent-chat";
+export { agentChat } from "./agent-chat";
 export type { AuthStore } from "./auth";
 export { auth } from "./auth";
 export type { ConnectionStatusStore } from "./connection-status";

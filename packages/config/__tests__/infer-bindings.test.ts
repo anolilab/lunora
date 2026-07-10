@@ -333,6 +333,71 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
         expect(result.workflows).toEqual([]);
     });
 
+    const AGENTS_TS = `import { defineAgent } from "@lunora/agent";
+
+export const support = defineAgent({ model: "m" });
+`;
+
+    it("infers a declared agent as exported via the star re-export", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("lunora/agents.ts", AGENTS_TS);
+        write(
+            "src/server/index.ts",
+            `${ENTRY_SHARD_ONLY}
+export * from "../../lunora/_generated/agents.js";
+`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.agents).toHaveLength(1);
+        expect(result.agents[0]).toMatchObject({ bindingName: "AGENT_SUPPORT", className: "SupportAgentWorkflow", exported: true });
+        expect(result.signals.join(" ")).toContain('agent "support" declared and exported');
+    });
+
+    it("infers a declared agent as exported via a named re-export of the AgentWorkflow class", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("lunora/agents.ts", AGENTS_TS);
+        write(
+            "src/server/index.ts",
+            `${ENTRY_SHARD_ONLY}
+export { SupportAgentWorkflow } from "../../lunora/_generated/agents.js";
+`,
+        );
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.agents[0]).toMatchObject({ exported: true });
+    });
+
+    it("flags a declared agent the entry does not export", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("lunora/agents.ts", AGENTS_TS);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.agents[0]).toMatchObject({ exported: false });
+        expect(result.signals.join(" ")).toContain('agent "support" is declared but SupportAgentWorkflow is not exported');
+    });
+
+    it("reports no agents for a project without lunora/agents.ts", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.agents).toEqual([]);
+    });
+
     it("infers payment from a @lunora/payment import and hints at the provider secrets, without binding a class", async () => {
         expect.assertions(4);
 
@@ -401,6 +466,61 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
         expect(result.usesBrowser).toBe(false);
         expect(result.usesImages).toBe(false);
         expect(result.usesAnalytics).toBe(false);
+    });
+
+    it("provisions BROWSER from a sandbox browserTool import even without a direct @lunora/browser import", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        // The batteries-included browserTool drives ctx.browser inside the sandbox
+        // dispatcher, so importing it must provision the BROWSER binding.
+        write("lunora/agents.ts", `import { browserTool } from "@lunora/agent/sandbox";\nexport const t = browserTool();`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesBrowser).toBe(true);
+        expect(result.signals.join(" ")).toMatch(/browser \(@lunora\/browser/u);
+    });
+
+    it("provisions BROWSER from a browserTool re-exported by the @lunora/agent main entry", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        // The documented import is from the package root (index.ts re-exports it),
+        // so this must provision BROWSER too — not only the /sandbox subpath.
+        write("lunora/agents.ts", `import { browserTool, defineAgent } from "@lunora/agent";\nexport const t = browserTool();`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesBrowser).toBe(true);
+    });
+
+    it("does not provision BROWSER for a sandbox containerTool-only import", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/agents.ts", `import { containerTool } from "@lunora/agent/sandbox";\nexport const t = containerTool("worker");`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesBrowser).toBe(false);
+    });
+
+    it("does not provision BROWSER for a type-only browserTool import", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        // A type-only import wires nothing at runtime, so it must not provision a
+        // binding — mirroring codegen's `declaration.isTypeOnly()` exclusion.
+        write("lunora/agents.ts", `import type { browserTool } from "@lunora/agent/sandbox";\nexport const t = 1;`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesBrowser).toBe(false);
     });
 
     it("infers pipelines from a ctx.pipelines access and emits the hint signal", async () => {

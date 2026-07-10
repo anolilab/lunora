@@ -35,6 +35,10 @@ export type {
     UseQueryOptions,
     User,
 } from "./types";
+export type { AgentThreadRecord, AgentThreadStatus, UseAgentApi, UseAgentOptions, UseAgentResult } from "./use-agent";
+export { useAgent } from "./use-agent";
+export type { AgentChatMessage, UseAgentChatApi, UseAgentChatOptions, UseAgentChatResult } from "./use-agent-chat";
+export { useAgentChat } from "./use-agent-chat";
 export type { UseAuthResult } from "./use-auth";
 export { useAuth } from "./use-auth";
 export { default as useConnectionStatus } from "./use-connection-status";

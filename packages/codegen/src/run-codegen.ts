@@ -8,6 +8,7 @@ import { Project } from "ts-morph";
 
 import { lintSchema } from "./advisor";
 import discoverAdminRoutes from "./discover-admin-routes";
+import { discoverAgents } from "./discover-agents";
 import discoverAiRawRuns from "./discover-ai-raw-runs";
 import discoverAiToolSideEffects from "./discover-ai-tool-side-effects";
 import discoverArgumentDerivedFetches from "./discover-argument-derived-fetches";
@@ -53,6 +54,7 @@ import discoverRatelimitKeySelectors from "./discover-ratelimit-key-selectors";
 import discoverRawRowReturns from "./discover-raw-row-returns";
 import discoverRelationLoads from "./discover-relation-loads";
 import discoverRlsProcedures, { discoverRlsMetadata } from "./discover-rls-procedures";
+import { discoverSandboxUsage } from "./discover-sandbox";
 import discoverSchema from "./discover-schema";
 import discoverSecrets from "./discover-secrets";
 import { discoverShapes } from "./discover-shapes";
@@ -66,6 +68,7 @@ import discoverWorkflowCalls from "./discover-workflow-calls";
 import { discoverWorkflows } from "./discover-workflows";
 import {
     buildStorageColumns,
+    emitAgents,
     emitApi,
     emitCollections,
     emitContainers,
@@ -82,7 +85,7 @@ import {
     emitWranglerCronTriggers,
 } from "./emit";
 import { emitApp } from "./emit-app";
-import type { ContainerIR, QueueIR, WorkflowIR, WranglerVariableIR } from "./ir";
+import type { AgentIR, ContainerIR, QueueIR, WorkflowIR, WranglerVariableIR } from "./ir";
 import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
 import { buildOpenRpcDocument, emitOpenRpcModule } from "./openrpc";
 import type { SchemaSnapshot } from "./schema-drift";
@@ -333,7 +336,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // (`_generated/queues.ts` → the worker `queue()` dispatch), and the config
     // layer's wrangler `queues.producers[]` / `queues.consumers[]` reconciliation.
     const queues = discoverQueues(project, lunoraDirectory);
-    const crons = discoverCrons(project, lunoraDirectory, workflows);
+    // Agents declared via `defineAgent` exports in `lunora/agents.ts` — each
+    // compiles onto a Cloudflare Workflow, so this drives `_generated/agents.ts`
+    // (the agent WorkflowEntrypoint classes), the typed `ctx.agents` producers on
+    // Mutation/Action contexts, and the config layer's reconciliation of the
+    // wrangler `workflows[]` array (an agent binding is a Workflow binding).
+    const agents = discoverAgents(project, lunoraDirectory);
+    const crons = discoverCrons(project, lunoraDirectory, workflows, agents);
 
     // Static advisories (unindexed FKs, redundant indexes, unknown index/relation
     // fields, filter-without-index, …). Cheap, derived from the schema + the
@@ -455,7 +464,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // (`useFlag`) iterate these. Only meaningful when a provider is wired.
     const flagKeys = hasFlags ? discoverFlagKeys(project, lunoraDirectory) : [];
     const hasHyperdrive = featureUsage.hyperdrive;
-    const hasBrowser = featureUsage.browser;
+    // Batteries-included sandbox tools (`@lunora/agent/sandbox`). `browserTool`
+    // drives `ctx.browser`, so it flips `hasBrowser` (provisioning the BROWSER
+    // binding + wiring `ctx.browser` onto the action ctx the dispatcher runs on);
+    // either tool registers the `sandbox:invoke` dispatcher via `emitFunctions`.
+    const sandboxUsage = discoverSandboxUsage(project, lunoraDirectory);
+    const usesSandbox = sandboxUsage.usesSandboxBrowser || sandboxUsage.usesSandboxContainer;
+    const hasBrowser = featureUsage.browser || sandboxUsage.usesSandboxBrowser;
     const hasImages = featureUsage.images;
     const hasAnalytics = featureUsage.analytics;
     const hasPipelines = featureUsage.pipelines;
@@ -493,8 +508,9 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const emitStartedAt = timingEnabled ? performance.now() : 0;
 
     const dataModelContent = emitDataModel(schema, useUmbrella);
-    const apiContent = emitApi(functions, workflows, useUmbrella);
+    const apiContent = emitApi({ agents, functions, useUmbrella, workflows });
     const serverContent = emitServer({
+        agents,
         containers,
         env,
         hasAccessFacade,
@@ -516,9 +532,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         useUmbrella,
         workflows,
     });
-    const functionsContent = emitFunctions(functions, migrations, useUmbrella, mutators, shapes);
+    const functionsContent = emitFunctions({ agents, functions, migrations, mutators, shapes, useUmbrella, usesSandbox });
     const shardContent = emitShard({
         advisories,
+        agents,
         containers,
         env,
         flagKeys,
@@ -552,6 +569,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const collectionsContent = emitCollections(shapes, dependencies.has("@lunora/db"), useUmbrella);
     const containersContent = emitContainers(containers, schema.jurisdiction);
     const workflowsContent = emitWorkflows(workflows);
+    const agentsContent = emitAgents(agents);
     const queuesContent = emitQueues(queues);
     const cronsContent = emitCrons(crons);
     const vectorsContent = emitVectors(schema.vectorIndexes);
@@ -609,6 +627,15 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         // Schema `.jurisdiction("…")` → pin the generated worker's DOs to the region.
         jurisdiction: schema.jurisdiction,
         useUmbrella,
+        // Voice-enabled agents (`defineAgent({ voice: … })`) → wire the worker's
+        // `/_lunora/voice/<exportName>` route to each agent's `VOICE_*` DO
+        // namespace. Empty for voice-free (and agent-free) projects, so the
+        // emitted app.ts stays byte-identical.
+        voiceAgents: agents
+            .filter((agent) => agent.voice === true && agent.voiceBindingName !== undefined)
+            .map((agent) => {
+                return { bindingName: agent.voiceBindingName as string, exportName: agent.exportName };
+            }),
         wantsOpenApi,
         wantsOpenRpc,
     });
@@ -667,6 +694,8 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         //   - seed.ts        → `@lunora/seed`, when it's a declared dependency
         writeIfPresent(join(outputDirectory, "containers.ts"), containersContent);
         writeIfPresent(join(outputDirectory, "workflows.ts"), workflowsContent);
+        //   - agents.ts      → `@lunora/agent`, when agents are declared
+        writeIfPresent(join(outputDirectory, "agents.ts"), agentsContent);
         writeIfPresent(join(outputDirectory, "queues.ts"), queuesContent);
         writeIfPresent(join(outputDirectory, "seed.ts"), seedContent);
         //   - collections.ts → `@lunora/db`, when the project declares shapes
@@ -706,9 +735,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
 
     return {
         advisories,
+        agents,
         containers,
         cronTriggers: emitWranglerCronTriggers(crons),
         generated: {
+            agents: agentsContent,
             api: apiContent,
             app: appContent,
             collections: collectionsContent,
@@ -813,6 +844,14 @@ export interface CodegenResult {
     advisories: ReadonlyArray<Finding>;
 
     /**
+     * Agents discovered from `defineAgent` exports in `lunora/agents.ts` — the
+     * list the config layer reconciles into wrangler's `workflows[]` array (an
+     * agent compiles onto a Cloudflare Workflow). Agents are NOT Durable Objects,
+     * so this adds no binding or migration. Empty when the project declares none.
+     */
+    agents: ReadonlyArray<AgentIR>;
+
+    /**
      * Containers discovered from `defineContainer` exports in
      * `lunora/containers.ts` — the list the config layer reconciles into
      * wrangler's `containers[]`, `CONTAINER_*` Durable Object bindings, and
@@ -828,6 +867,8 @@ export interface CodegenResult {
     cronTriggers: ReadonlyArray<string>;
 
     generated: {
+        /** WorkflowEntrypoint classes for declared agents (`_generated/agents.ts`); `""` (and not written) when no agents are declared. */
+        agents: string;
         api: string;
         /** Fluent worker-composition builder (`_generated/app.ts`) — `defineApp()`. Always written. */
         app: string;

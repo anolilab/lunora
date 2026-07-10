@@ -58,6 +58,16 @@ export const WORKFLOWS_TARGET: ReexportTarget = {
 };
 
 /**
+ * Agent WorkflowEntrypoint classes — a `defineAgent` run IS a Cloudflare
+ * Workflow instance, so (exactly like {@link WORKFLOWS_TARGET}) wrangler
+ * requires every generated agent class to be exported by the deployed worker.
+ */
+export const AGENTS_TARGET: ReexportTarget = {
+    comment: "// Agent WorkflowEntrypoint classes — wrangler requires every agent workflow class to be exported by the worker.",
+    module: "agents",
+};
+
+/**
  * Find the class-B/C worker entry and return it rewritten with the
  * `_generated/<target.module>` re-export appended. Conservative: only touches a
  * file that unmistakably is a Lunora worker entry (`createShardDO(`), is

@@ -667,6 +667,7 @@ catalogs:
 
 overrides:
   '@lunora/advisor': workspace:*
+  '@lunora/agent': workspace:*
   '@lunora/ai': workspace:*
   '@lunora/angular': workspace:*
   '@lunora/astro': workspace:*
@@ -1674,6 +1675,52 @@ importers:
         specifier: catalog:test
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.0)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@26.1.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
+  packages/agent:
+    dependencies:
+      '@lunora/ai':
+        specifier: workspace:*
+        version: link:../ai
+      '@lunora/errors':
+        specifier: workspace:*
+        version: link:../errors
+      '@lunora/server':
+        specifier: workspace:*
+        version: link:../server
+      '@lunora/values':
+        specifier: workspace:*
+        version: link:../values
+      '@lunora/workflow':
+        specifier: workspace:*
+        version: link:../workflow
+      '@modelcontextprotocol/sdk':
+        specifier: catalog:mcp
+        version: 1.29.0(zod@4.4.3)
+      ai:
+        specifier: catalog:ai
+        version: 7.0.14(zod@4.4.3)
+    devDependencies:
+      '@lunora/dispatch':
+        specifier: workspace:*
+        version: link:../dispatch
+      '@types/node':
+        specifier: catalog:types
+        version: 26.1.0
+      '@visulima/packem':
+        specifier: catalog:build
+        version: 2.0.0-alpha.93(7d7355f4dde905904cde433ffbd331bd)
+      '@vitest/coverage-v8':
+        specifier: catalog:test
+        version: 4.1.9(vitest@4.1.9)
+      esbuild:
+        specifier: catalog:build
+        version: 0.28.1
+      typescript:
+        specifier: catalog:tsc
+        version: 6.0.3
+      vitest:
+        specifier: catalog:test
+        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@26.1.0)(@vitest/coverage-v8@4.1.9)(@vitest/ui@4.1.9)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.1.3(@types/node@26.1.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
+
   packages/ai:
     dependencies:
       '@lunora/errors':
@@ -2096,6 +2143,9 @@ importers:
       '@lunora/advisor':
         specifier: workspace:*
         version: link:../advisor
+      '@lunora/agent':
+        specifier: workspace:*
+        version: link:../agent
       '@lunora/container':
         specifier: workspace:*
         version: link:../container
@@ -3443,6 +3493,9 @@ importers:
 
   packages/testing:
     dependencies:
+      '@lunora/agent':
+        specifier: workspace:*
+        version: link:../agent
       '@lunora/do':
         specifier: workspace:*
         version: link:../do

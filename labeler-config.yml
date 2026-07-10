@@ -1,6 +1,9 @@
 "package: advisor":
     - changed-files:
           - any-glob-to-any-file: "packages/advisor/**/*"
+"package: agent":
+    - changed-files:
+          - any-glob-to-any-file: "packages/agent/**/*"
 "package: ai":
     - changed-files:
           - any-glob-to-any-file: "packages/ai/**/*"

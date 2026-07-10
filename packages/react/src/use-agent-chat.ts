@@ -1,0 +1,299 @@
+"use client";
+
+import type { FunctionReference } from "@lunora/client";
+import { useRef, useState } from "react";
+
+import type { AgentThreadRecord, AgentThreadStatus } from "./use-agent";
+import { useMutation } from "./use-mutation";
+import { useStream } from "./use-stream";
+import useSubscription from "./use-subscription";
+
+/**
+ * One persisted (or optimistic) thread message, as `agents:agentMessages`
+ * surfaces it. Client-safe mirror of `@lunora/agent`'s `AgentMessageRow` —
+ * re-declared here (rather than imported) so this React entry never pulls in the
+ * server-only `@lunora/agent` module graph. Keep in sync with the `agent_messages`
+ * table in `packages/agent/src/component.ts`.
+ */
+interface AgentChatMessage {
+    content: string;
+    createdAt?: number;
+
+    /**
+     * `true` for a client-side optimistic user message not yet acknowledged by
+     * the server. Cleared once the durable history carries the matching user turn.
+     */
+    optimistic?: boolean;
+    role: "assistant" | "system" | "tool" | "user";
+    seq: number;
+    /** Approval lifecycle marker on a human-in-the-loop tool message. */
+    status?: "approved" | "awaiting_approval" | "rejected";
+    toolCallId?: string;
+    toolCalls?: ReadonlyArray<{ id: string; input: unknown; name: string }>;
+    toolName?: string;
+}
+
+/**
+ * A live token delta streamed while a turn is generating. Client-safe mirror of
+ * `@lunora/agent`'s `AgentTokenDelta`. Ephemeral — deltas feed
+ * {@link UseAgentChatResult.streamingText} live and are never replayed; the
+ * persisted assistant message stays the single source of truth.
+ */
+interface AgentTokenDelta {
+    /** The incremental text chunk the model just produced. */
+    text: string;
+    /** The thread this delta belongs to. */
+    threadKey: string;
+    /** The zero-based index of the turn producing the delta. */
+    turn: number;
+}
+
+/** The `agents:agentMessages` reference — live durable thread history. */
+type AgentMessagesReference = FunctionReference<"query", { key: string; limit?: number }, ReadonlyArray<Record<string, unknown>>>;
+
+/** The `agents:agentResolveApproval` reference — resolves a human-in-the-loop tool approval. */
+type AgentApprovalReference = FunctionReference<
+    "mutation",
+    { decision: "approve" | "reject"; instanceId: string; note?: string; threadKey: string; toolCallId: string },
+    { resolved: boolean }
+>;
+
+/** The `agents:agentThread` reference — live thread status + in-flight `instanceId`. */
+type AgentThreadReference = FunctionReference<"query", { key: string }, Record<string, unknown> | undefined>;
+
+/** An app stream reference that tees the agent's in-flight token deltas, keyed by thread. */
+type AgentTokenStreamReference = FunctionReference<"stream", { key: string }, AgentTokenDelta>;
+
+/**
+ * The `agents.*` reference surface the chat hook reads. A structural subset of
+ * the generated `api.agents`, so the whole generated `api` object is assignable.
+ */
+interface UseAgentChatApi {
+    agents: {
+        agentMessages: AgentMessagesReference;
+        agentResolveApproval: AgentApprovalReference;
+        agentThread: AgentThreadReference;
+    };
+}
+
+interface UseAgentChatOptions {
+    /** The generated `api` — its `agents.*` surface provides history, thread state, and approval resolution. */
+    api: UseAgentChatApi;
+
+    /**
+     * Optional app mutation over the agent's cancel path
+     * (`ctx.agents.&lt;name>.cancel(id)`). Called with `{ instanceId, threadKey }`.
+     * When omitted (or no run is in flight) {@link UseAgentChatResult.cancel} is a
+     * no-op.
+     */
+    cancel?: FunctionReference<"mutation">;
+    /** History depth forwarded to `agents:agentMessages`. */
+    limit?: number;
+
+    /**
+     * The app mutation that starts (or continues) a run — a thin wrapper over
+     * `ctx.agents.&lt;name>.run(...)`. Called with `{ threadKey, input }` merged with
+     * {@link UseAgentChatOptions.sendArgs} and the per-call args.
+     */
+    send: FunctionReference<"mutation">;
+    /** Extra args merged into every `send` call (e.g. an `owner` or `title`). */
+    sendArgs?: Record<string, unknown>;
+
+    /**
+     * Optional live token-delta stream — an app stream function that tees the
+     * agent's in-flight deltas. When omitted {@link UseAgentChatResult.streamingText}
+     * stays empty and the UI updates message-by-message from durable history.
+     */
+    stream?: AgentTokenStreamReference;
+    /** The thread to observe and continue. */
+    threadKey: string;
+}
+
+interface UseAgentChatResult {
+    /** Approve a paused human-in-the-loop tool call (optionally with a note). */
+    approve: (toolCallId: string, note?: string) => Promise<void>;
+
+    /**
+     * Terminate the in-flight run and mark its thread `"cancelled"`. Resolves as a
+     * no-op when no `cancel` mutation was supplied or no run is in flight.
+     */
+    cancel: () => Promise<void>;
+    /** Durable thread history (oldest first) plus any un-acknowledged optimistic user turns. */
+    messages: ReadonlyArray<AgentChatMessage>;
+    /** Reject a paused human-in-the-loop tool call (optionally with a reason). */
+    reject: (toolCallId: string, note?: string) => Promise<void>;
+    /** Start (or continue) a run with a user message; extra args merge over `sendArgs`. Appends an optimistic user turn. */
+    send: (input: string, args?: Record<string, unknown>) => Promise<void>;
+    /** The live thread status, or `undefined` before the thread exists. */
+    status: AgentThreadStatus | undefined;
+    /** The in-flight turn's streamed text — live-only, empty once the turn persists to `messages`. */
+    streamingText: string;
+}
+
+/** A local optimistic user turn awaiting server acknowledgement. */
+interface OptimisticMessage {
+    content: string;
+    id: number;
+}
+
+/**
+ * A placeholder mutation reference so `useMutation` is called unconditionally
+ * (Rules of Hooks) even when the caller supplies no `cancel` mutation. Never
+ * dispatched — `cancel()` short-circuits before invoking it unless a real
+ * reference was provided.
+ */
+const NO_MUTATION_REF: FunctionReference<"mutation"> = { __lunoraRef: "" };
+
+/**
+ * A placeholder stream reference so `useStream` is called unconditionally even
+ * when the caller supplies no token stream. Paired with `"skip"` args, it never
+ * opens a stream.
+ */
+const NO_STREAM_REF: AgentTokenStreamReference = { __lunoraRef: "" };
+
+/** Stable empty history so the un-loaded subscription doesn't churn the merged list identity. */
+const EMPTY_MESSAGES: ReadonlyArray<Record<string, unknown>> = [];
+
+/**
+ * Drop the optimistic user turns the durable history has now caught up on:
+ * consume one durable `user` message per matching optimistic content, hiding
+ * those that have been acknowledged. One-to-one consumption keeps repeated
+ * identical prompts from all collapsing onto a single durable row.
+ */
+const reconcileOptimistic = (optimistic: ReadonlyArray<OptimisticMessage>, durable: ReadonlyArray<AgentChatMessage>): OptimisticMessage[] => {
+    const pool = durable.filter((message) => message.role === "user").map((message) => message.content);
+
+    return optimistic.filter((pending) => {
+        const index = pool.indexOf(pending.content);
+
+        if (index !== -1) {
+            pool.splice(index, 1);
+
+            return false;
+        }
+
+        return true;
+    });
+};
+
+/**
+ * A first-class agent chat surface: live durable history + in-flight token
+ * streaming + the send / approve / reject / cancel writes, keyed by `threadKey`.
+ *
+ * It composes the existing primitives rather than adding transport:
+ * `useSubscription(api.agents.agentMessages)` for durable history,
+ * `useSubscription(api.agents.agentThread)` for live status + the in-flight
+ * `instanceId`, {@link useStream} over an app token stream for in-flight deltas,
+ * and `useMutation` for the writes (`api.agents.agentResolveApproval` for
+ * approvals; app-defined wrappers for `send`/`cancel`). Only the `agents:*`
+ * surface is hard-coded — `send`/`cancel`/`stream` stay generic references.
+ *
+ * A `send` optimistically appends the user turn so it renders immediately; the
+ * optimistic row clears once the durable history carries the acknowledged turn.
+ * `streamingText` is live-only: it holds the current turn's streamed text and
+ * empties as soon as that turn's assistant message lands in `messages` (the
+ * persisted message is the source of truth), consistent with the loop's
+ * replay-safe, live-only delta design.
+ */
+const useAgentChat = (options: UseAgentChatOptions): UseAgentChatResult => {
+    const { api, cancel: cancelReference, limit, send: sendReference, sendArgs, stream: streamReference, threadKey } = options;
+
+    const messagesArguments = limit === undefined ? { key: threadKey } : { key: threadKey, limit };
+    const { data: history } = useSubscription(api.agents.agentMessages, messagesArguments);
+    const { data: threadData } = useSubscription(api.agents.agentThread, { key: threadKey });
+
+    // The token stream is optional: with no reference we pass the sentinel + "skip"
+    // so `useStream` never opens a stream (and `streamingText` stays empty).
+    const streamArguments = streamReference === undefined ? "skip" : { key: threadKey };
+    const { chunks } = useStream(streamReference ?? NO_STREAM_REF, streamArguments);
+
+    const sendMutation = useMutation(sendReference);
+    const cancelMutation = useMutation(cancelReference ?? NO_MUTATION_REF);
+    const approvalMutation = useMutation(api.agents.agentResolveApproval);
+
+    const [optimistic, setOptimistic] = useState<ReadonlyArray<OptimisticMessage>>([]);
+    // A monotonic id source for optimistic rows — client-side only (the
+    // replay-safety rule governs the durable loop, not this hook).
+    const nextIdRef = useRef(0);
+
+    const thread = threadData as unknown as AgentThreadRecord | undefined;
+    const status = thread?.status;
+    const instanceId = thread?.instanceId;
+
+    const durable = (history ?? EMPTY_MESSAGES) as unknown as ReadonlyArray<AgentChatMessage>;
+
+    // Merge durable history with the optimistic user turns the server hasn't
+    // acknowledged yet (reconciled in render — no effect, no setState churn).
+    const visibleOptimistic = reconcileOptimistic(optimistic, durable);
+    const messages: ReadonlyArray<AgentChatMessage> =
+        visibleOptimistic.length === 0
+            ? durable
+            : [
+                  ...durable,
+                  ...visibleOptimistic.map<AgentChatMessage>((pending, index) => {
+                      return {
+                          content: pending.content,
+                          optimistic: true,
+                          role: "user",
+                          seq: durable.length + index,
+                      };
+                  }),
+              ];
+
+    // The in-flight turn is the one whose assistant message hasn't persisted yet:
+    // each completed turn persists exactly one assistant row, so `turn >= <count of
+    // durable assistant rows>` isolates deltas that have NOT been superseded. Once
+    // the turn's message lands the count advances and its deltas fall away — the
+    // persisted message becomes the source of truth.
+    const assistantCount = durable.filter((message) => message.role === "assistant").length;
+    const streamingText = chunks
+        .filter((delta) => delta.threadKey === threadKey && delta.turn >= assistantCount)
+        .map((delta) => delta.text)
+        .join("");
+
+    const { mutate: sendMutate } = sendMutation;
+    const { mutate: cancelMutate } = cancelMutation;
+    const { mutate: resolveMutate } = approvalMutation;
+
+    const send = async (input: string, args?: Record<string, unknown>): Promise<void> => {
+        const id = nextIdRef.current;
+
+        nextIdRef.current += 1;
+
+        // Prune already-acknowledged optimistic rows as we add the new one, so the
+        // list stays bounded without a messages-dependent effect.
+        setOptimistic((previous) => [...reconcileOptimistic(previous, durable), { content: input, id }]);
+
+        await sendMutate({ input, threadKey, ...sendArgs, ...args });
+    };
+
+    const approve = async (toolCallId: string, note?: string): Promise<void> => {
+        if (instanceId === undefined) {
+            throw new Error("useAgentChat: cannot approve — no in-flight run (thread has no instanceId)");
+        }
+
+        await resolveMutate({ decision: "approve", instanceId, threadKey, toolCallId, ...(note === undefined ? {} : { note }) });
+    };
+
+    const reject = async (toolCallId: string, note?: string): Promise<void> => {
+        if (instanceId === undefined) {
+            throw new Error("useAgentChat: cannot reject — no in-flight run (thread has no instanceId)");
+        }
+
+        await resolveMutate({ decision: "reject", instanceId, threadKey, toolCallId, ...(note === undefined ? {} : { note }) });
+    };
+
+    const cancel = async (): Promise<void> => {
+        // No cancel path, or no run to cancel — nothing to terminate.
+        if (cancelReference === undefined || instanceId === undefined) {
+            return;
+        }
+
+        await cancelMutate({ instanceId, threadKey });
+    };
+
+    return { approve, cancel, messages, reject, send, status, streamingText };
+};
+
+export type { AgentChatMessage, AgentTokenDelta, UseAgentChatApi, UseAgentChatOptions, UseAgentChatResult };
+export { useAgentChat };
