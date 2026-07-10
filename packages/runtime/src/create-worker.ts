@@ -889,6 +889,18 @@ interface WorkerOptions {
     vectorIntrospector?: VectorIntrospector;
 
     /**
+     * Voice-session Durable Object namespaces, keyed by the agent's
+     * `lunora/agents.ts` export name (e.g. `{ support: env.VOICE_SUPPORT }`).
+     * Codegen wires this for every voice-enabled agent. When set, the worker
+     * exposes `/_lunora/voice/&lt;agentExportName>` — a WebSocket upgrade that
+     * resolves the caller's identity, forwards it on the server-minted
+     * `x-lunora-userid` / `x-lunora-identity` headers, and hands the socket to
+     * the agent's `VoiceSessionDO`. Omit it (voice-free apps) and the route does
+     * not exist.
+     */
+    voiceAgents?: Record<string, ShardNamespaceLike>;
+
+    /**
      * Resolver for the Cloudflare Workflows REST client, built from the
      * deployment `env` (its `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN`).
      * Set by the codegen-emitted worker entry (which depends on
@@ -915,6 +927,8 @@ const NDJSON_ENCODER = new TextEncoder();
 const RPC_PATH = "/_lunora/rpc";
 const RPC_BATCH_PATH = "/_lunora/rpc-batch";
 const WS_PATH = "/_lunora/ws";
+/** Prefix for a voice-enabled agent's real-time session upgrade — `/_lunora/voice/&lt;agentExportName>` (dynamic, so matched by prefix not the exact-path table). */
+const VOICE_PATH_PREFIX = "/_lunora/voice/";
 const SCHEDULER_DISPATCH_PATH = "/_lunora/scheduler/dispatch";
 /** Admin-gated POST that manually fires one code-defined cron job by name (studio "Run now"). */
 const CRON_JOBS_RUN_PATH = "/_lunora/admin/cron-jobs/run";
@@ -935,6 +949,25 @@ const STATUS_PATH = "/_lunora/status";
 
 /** True for the admin routes the async `adminGate` may authorize — everything under `/_lunora/admin/` plus `/_lunora/migrate`. */
 const isAdminPath = (pathname: string): boolean => pathname.startsWith(ADMIN_PATH_PREFIX) || pathname === MIGRATE_PATH;
+
+/**
+ * Read the optional caller identity a server-initiated dispatch may forward on
+ * the `x-lunora-userid` / `x-lunora-identity` headers, returning the shape
+ * `dispatchToShard` threads to the shard (or `undefined` when neither is set).
+ */
+const readForwardedIdentity = (request: Request): { identity?: string; userId?: string } | undefined => {
+    const forwardedUserId = request.headers.get("x-lunora-userid");
+    const forwardedIdentity = request.headers.get("x-lunora-identity");
+
+    if (forwardedUserId === null && forwardedIdentity === null) {
+        return undefined;
+    }
+
+    return {
+        ...(forwardedIdentity === null ? {} : { identity: forwardedIdentity }),
+        ...(forwardedUserId === null ? {} : { userId: forwardedUserId }),
+    };
+};
 // The cross-shard orchestration (`migrate` / `rank` / `rankpage` / `shard-traffic`)
 // + `pitr`, data-movement (`export` / `import` / `sync` / `connector/sync` /
 // `apply`), static-introspection (`functions` / `cron-jobs` / `openapi` /
@@ -1626,7 +1659,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * (system) identity so a server job can't reach a shard a same-shard end-user
      * RPC would be denied, then POSTs `{ functionPath, args }` to the shard's RPC.
      */
-    const dispatchToShard = async (functionPath: string, args: Record<string, unknown>, shardKey: string, mutationId?: string): Promise<Response> => {
+    const dispatchToShard = async (
+        functionPath: string,
+        args: Record<string, unknown>,
+        shardKey: string,
+        mutationId?: string,
+        forwardedIdentity?: { identity?: string; userId?: string },
+    ): Promise<Response> => {
         if (options.authorizeShard) {
             // eslint-disable-next-line unicorn/no-null -- the public authorizeShard callback's anonymous-identity sentinel is `null`; system dispatch has no end-user identity
             const allowed = await options.authorizeShard(null, shardKey);
@@ -1641,6 +1680,21 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // internal). Authorization was already enforced above; this header is set
         // only here, never on the client RPC path.
         const headers: Record<string, string> = { "content-type": "application/json", "x-lunora-system": "1" };
+
+        // A trusted server dispatch may ALSO carry a verified caller identity (e.g.
+        // a voice session attributing its thread writes to the socket's user). The
+        // shard reconstructs identity from these headers independently of the system
+        // flag, so `x-lunora-system: "1"` and a userId coexist — the call runs with
+        // system privileges AND the caller's RLS/ownership context. Only reachable
+        // from the admin/HMAC-gated scheduler-dispatch endpoint, so these values
+        // already passed the runtime's own `resolveForwardContext` mint upstream.
+        if (forwardedIdentity?.userId !== undefined && forwardedIdentity.userId.length > 0) {
+            headers["x-lunora-userid"] = forwardedIdentity.userId;
+        }
+
+        if (forwardedIdentity?.identity !== undefined && forwardedIdentity.identity.length > 0) {
+            headers["x-lunora-identity"] = forwardedIdentity.identity;
+        }
 
         // A stable per-job dedup key makes an at-least-once re-fire safe: the DO
         // idempotency table (keyed on `(identity, mutation-id)`) collapses a repeat
@@ -1871,10 +1925,17 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // contract actually hold.
         const mutationId = typeof candidate.id === "string" && candidate.id.length > 0 ? candidate.id : undefined;
 
+        // A server-initiated dispatch may forward a verified caller identity on the
+        // `x-lunora-userid` / `x-lunora-identity` headers (e.g. a voice session
+        // attributing its `agents:*` thread writes to the socket's user). This
+        // endpoint is admin-bearer/HMAC gated, so the caller is already trusted; the
+        // headers pass through to the shard alongside the system flag for RLS.
+        const identity = readForwardedIdentity(request);
+
         // Re-apply per-shard authorization (inside `dispatchToShard`) so a
         // scheduled job cannot reach a shard a direct RPC for the same shard
         // would be denied — the scheduler runs jobs with no end-user identity.
-        const response = await dispatchToShard(candidate.functionPath, args, shardKey, mutationId);
+        const response = await dispatchToShard(candidate.functionPath, args, shardKey, mutationId, identity);
 
         // Workpool jobs hold a concurrency slot until the action settles; release
         // it best-effort (a missed release is reconciled by the pool's next drain).
@@ -2202,6 +2263,96 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
 
         return forwardToShard(shardDO, shardKey, new Request(request, { headers: upgradeHeaders }));
+    };
+
+    /**
+     * Handle a voice-session WebSocket upgrade for `/_lunora/voice/&lt;agentExportName>`.
+     * Only registered when `options.voiceAgents` is provided (a voice-free app has
+     * no route). Mirrors {@link handleWebSocketUpgrade}: enforce the WS origin
+     * guard, resolve the caller's identity once, and forward the socket to the
+     * agent's `VoiceSessionDO` keyed by `threadKey`, carrying the server-minted
+     * `x-lunora-userid` / `x-lunora-identity` headers so the voice turn attributes
+     * its thread writes to the caller. Returns 404 for an unknown agent and 400 for
+     * a missing `threadKey`; never throws (a thrown upgrade handler 500s a socket).
+     */
+    const handleVoiceUpgrade = async (request: Request, env: unknown, url: URL): Promise<Response> => {
+        const { voiceAgents } = options;
+
+        if (voiceAgents === undefined) {
+            return new Response("Not found", { status: 404 });
+        }
+
+        if (request.headers.get("Upgrade") !== "websocket") {
+            return new Response("Expected a WebSocket upgrade", { headers: { allow: "GET" }, status: 426 });
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define -- `resolvedSecurity` is a closure-captured `let` assigned at construction and re-resolved per request in `fetch()` before routing reaches this handler
+        const blockedUpgrade = enforceWebSocketOrigin(request, resolvedSecurity);
+
+        if (blockedUpgrade) {
+            return blockedUpgrade;
+        }
+
+        const agentName = decodeURIComponent(url.pathname.slice(VOICE_PATH_PREFIX.length));
+        const namespace = Object.hasOwn(voiceAgents, agentName) ? voiceAgents[agentName] : undefined;
+
+        if (namespace === undefined) {
+            return new Response("Unknown voice agent", { status: 404 });
+        }
+
+        const threadKey = url.searchParams.get("threadKey");
+
+        if (threadKey === null || threadKey.length === 0) {
+            return new Response("Missing threadKey", { status: 400 });
+        }
+
+        // Resolve the caller's identity once and forward it to the voice DO so the
+        // session's `agents:*` thread writes are attributed to the caller (RLS /
+        // ownership). Same shape/authorization ordering as the RPC/WS paths.
+        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, publicResolveIdentity);
+
+        if (options.authorizeShard) {
+            const allowed = await options.authorizeShard(identity, threadKey);
+
+            if (!allowed) {
+                return new Response("Forbidden", { status: 403 });
+            }
+        } else {
+            // Every voice `threadKey` is client-supplied and there is no default
+            // voice shard, so — like the RPC/WS non-default-shard paths — this is
+            // default-denied without an `authorizeShard`: an unauthenticated caller
+            // must not be able to name an arbitrary threadKey and reach another
+            // tenant's shared agent thread. Throws a 403 `LunoraError` (rendered by
+            // the outer handler's `toErrorResponse`), overridable by
+            // `allowUnauthenticatedShardAccess: true` for RLS-only single-tenant apps.
+            guardUnauthenticatedShardAccess("shard");
+        }
+
+        // SECURITY: `x-lunora-userid` / `x-lunora-identity` are server-minted and
+        // trusted verbatim by the DO. Strip any client-supplied copies from the
+        // clone unconditionally before re-setting the resolved values — otherwise a
+        // caller could forge an identity the anonymous path never overwrites.
+        const upgradeHeaders = new Headers(request.headers);
+        upgradeHeaders.delete("x-lunora-userid");
+        upgradeHeaders.delete("x-lunora-identity");
+        upgradeHeaders.delete("x-lunora-identity-exp");
+        const forwardedUserId = forwardedHeaders["x-lunora-userid"];
+        const forwardedIdentity = forwardedHeaders["x-lunora-identity"];
+        const forwardedExp = forwardedHeaders["x-lunora-identity-exp"];
+
+        if (forwardedUserId !== undefined) {
+            upgradeHeaders.set("x-lunora-userid", forwardedUserId);
+        }
+
+        if (forwardedIdentity !== undefined) {
+            upgradeHeaders.set("x-lunora-identity", forwardedIdentity);
+        }
+
+        if (forwardedExp !== undefined) {
+            upgradeHeaders.set("x-lunora-identity-exp", forwardedExp);
+        }
+
+        return forwardToShard(namespace, threadKey, new Request(request, { headers: upgradeHeaders }));
     };
 
     /**
@@ -3168,6 +3319,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             await applyAdminGate(request, url.pathname);
 
             return internalRoute(request, env, url, context);
+        }
+
+        // Voice sessions live under a DYNAMIC prefix (`/_lunora/voice/<agent>`), so
+        // they can't ride the exact-path `internalRoutes` table. Only reachable when
+        // the app wired `voiceAgents` (a voice-enabled agent) — otherwise it falls
+        // through to the 404 below.
+        if (options.voiceAgents !== undefined && url.pathname.startsWith(VOICE_PATH_PREFIX)) {
+            return handleVoiceUpgrade(request, env, url);
         }
 
         // HTTP actions are the lowest-priority matcher: explicit routes and the
