@@ -3,6 +3,8 @@ export type { AgentThreadRecord, AgentThreadStatus, CreateAgentApi, CreateAgentO
 export { createAgent } from "./create-agent";
 export type { AgentChatMessage, CreateAgentChatApi, CreateAgentChatOptions, CreateAgentChatResult } from "./create-agent-chat";
 export { createAgentChat } from "./create-agent-chat";
+export type { AgentToolEvent, CreateAgentToolEventsApi, CreateAgentToolEventsOptions, CreateAgentToolEventsResult } from "./create-agent-tool-events";
+export { createAgentToolEvents } from "./create-agent-tool-events";
 export type { UseAuthResult } from "./create-auth";
 export { Authenticated, AuthLoading, createAuth, Unauthenticated } from "./create-auth";
 export { default as createConnectionStatus } from "./create-connection-status";
