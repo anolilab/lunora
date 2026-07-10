@@ -20,3 +20,5 @@ export type { ChargeHandler, ChargeMiddleware, ChargeRouteOverrides } from "./mi
 export { createChargeMiddleware } from "./middleware";
 export type { X402ProcedureChargeConfig, X402ProcedureChargeGate, X402ProcedureSpec } from "./procedure";
 export { createProcedureChargeGate } from "./procedure";
+export type { PaymentEventRow, X402Receipt, X402ReceiptSink } from "./receipt";
+export { toPaymentEventRow, toReceipt } from "./receipt";

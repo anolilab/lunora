@@ -10,6 +10,7 @@
  * Validate with `@lunora/values` (`v.*`) if you need runtime schema checks.
  */
 
+import type { X402ReceiptSink } from "./charge/receipt";
 import type { X402Network } from "./networks";
 import type { SpendPolicy } from "./pay/policy";
 
@@ -55,6 +56,14 @@ export interface X402ChargeConfig {
     readonly facilitator?: FacilitatorConfig;
     /** Network this resource settles on. */
     readonly network: X402Network;
+
+    /**
+     * Opt-in, one-way telemetry sink fired once per settled payment. Best-effort:
+     * it runs after settlement, never blocks the paid response, and its errors are
+     * swallowed. Use it to mirror x402 revenue into a durable table / `@lunora/payment`'s
+     * `events` table (see `toPaymentEventRow`) so it surfaces in Studio.
+     */
+    readonly onReceipt?: X402ReceiptSink;
     /** Default price for a gated resource; per-resource overrides win. */
     readonly price: X402Price;
     /** Payout wallet(s). */

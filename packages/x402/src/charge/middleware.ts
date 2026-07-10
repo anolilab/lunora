@@ -8,11 +8,13 @@
  * and attach `X-PAYMENT-RESPONSE`. Any Lunora HTTP surface (HTTP actions today,
  * procedures and MCP tools later) wraps its handler with this.
  */
-import type { HTTPAdapter, HTTPRequestContext, HTTPResponseInstructions, PaymentOption, RouteConfig } from "@x402/core/http";
+import type { HTTPAdapter, HTTPRequestContext, HTTPResponseInstructions, PaymentOption, ProcessSettleSuccessResponse, RouteConfig } from "@x402/core/http";
 import { x402HTTPResourceServer as X402HTTPResourceServer } from "@x402/core/http";
 
 import type { X402ChargeConfig } from "../config";
 import { isEvmNetwork, toCaip2 } from "../networks";
+import type { X402ReceiptSink } from "./receipt";
+import { toReceipt } from "./receipt";
 import { buildResourceServer } from "./resource-server";
 
 /** The x402 request header carrying the client's signed payment payload. */
@@ -27,6 +29,28 @@ const headerRecord = (headers: Headers): Record<string, string> => {
     }
 
     return record;
+};
+
+/**
+ * Fire the opt-in receipt sink for a settled payment. Best-effort telemetry: the
+ * payment already settled, so a sink failure must never withhold the paid
+ * resource — a synchronous throw and a rejected promise are both swallowed, and
+ * the sink is not awaited into the response path.
+ */
+export const reportReceipt = (sink: X402ReceiptSink | undefined, settlement: ProcessSettleSuccessResponse, resource: string): void => {
+    if (sink === undefined) {
+        return;
+    }
+
+    try {
+        // A `.catch()`-terminated chain handles an async sink's rejection without
+        // awaiting it (which would block the paid response).
+        Promise.resolve(sink(toReceipt(settlement, { resource, ts: Date.now() }))).catch(() => {
+            // best-effort: a reporting failure must not affect the paid response.
+        });
+    } catch {
+        // a synchronous sink throw is likewise swallowed.
+    }
 };
 
 /** Runs the protected resource handler, producing the Response to gate. */
@@ -193,6 +217,10 @@ export const createChargeMiddleware = async (config: X402ChargeConfig, routeOver
         });
 
         if (settlement.success) {
+            // The route's `resource` override names the paid resource (a procedure's
+            // `functionPath`); the generic rail has none, so fall back to the URL.
+            reportReceipt(config.onReceipt, settlement, routeOverrides?.resource ?? request.url);
+
             return withHeaders(response, settlement.headers);
         }
 

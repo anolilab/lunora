@@ -7,6 +7,7 @@
  *
  * The root export carries only the shared, framework-level config/types.
  */
+export type { X402Receipt, X402ReceiptSink } from "./charge/receipt";
 export type { EvmAddress, FacilitatorConfig, X402ChargeConfig, X402PayConfig, X402Price, X402Recipient, X402SignerConfig } from "./config";
 export { DEFAULT_FACILITATOR_URL, resolveFacilitatorUrl } from "./config";
 export type { Caip2, FriendlyNetwork, X402Network } from "./networks";
