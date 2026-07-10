@@ -5,6 +5,7 @@ import { runAgentLoop } from "./agent-loop";
 import { createAgentGenerate, createStreamGenerate } from "./generate";
 import { agentDefaultName } from "./naming";
 import { DEFAULT_AGENT_FUNCTION_PATHS } from "./paths";
+import resolveAgentRun from "./resolve-run";
 import type { AgentDefinition, AgentFunctionPaths, AgentRunInput, AgentRunResult } from "./types";
 
 /**
@@ -41,7 +42,14 @@ const compileAgentWorkflow = (
                 instanceId: context.event.instanceId,
                 params: context.params,
                 paths: options?.paths ?? DEFAULT_AGENT_FUNCTION_PATHS,
-                run: context.run,
+                // The loop reads its own owner-gated thread back through
+                // `agents:*` queries. The default `context.run` forwards no
+                // identity, so on an OWNED thread those reads would come back
+                // empty and the model would answer blind. `resolveAgentRun`
+                // dispatches an owner-scoped run under that verified identity so
+                // the owner gate admits the loop's reads (ownerless runs keep the
+                // identity-free `context.run`). See `resolve-run.ts`.
+                run: resolveAgentRun(context.run, context.params.owner, context.env),
                 step: context.step,
                 // The streaming seam is wired and ready, but stays dormant until a
                 // live token sink is threaded onto the run (a follow-up wires
