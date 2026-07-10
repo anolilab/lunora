@@ -2876,14 +2876,17 @@ export class ${agent.className} extends LunoraWorkflow<AgentRunInput, AgentRunRe
                 return workflowClass;
             }
 
-            assertIdentifier(agent.voiceClassName ?? "", `agent voice class "${agent.voiceClassName ?? ""}"`);
+            const voiceClassName = agent.voiceClassName ?? "";
+            const voiceBindingName = agent.voiceBindingName ?? "";
+
+            assertIdentifier(voiceClassName, `agent voice class "${voiceClassName}"`);
 
             // The voice session is a Durable Object (not a Workflow): a thin
             // VoiceSessionDO subclass constructed with the same agent definition +
-            // export name the runtime pipeline reads. Bound as `${agent.voiceBindingName ?? ""}`.
+            // export name the runtime pipeline reads. Bound as `${voiceBindingName}`.
             const voiceClass = `
-/** Voice-session Durable Object for the \`${agent.exportName}\` agent (binding \`${agent.voiceBindingName ?? ""}\`). */
-export class ${agent.voiceClassName ?? ""} extends VoiceSessionDO {
+/** Voice-session Durable Object for the \`${agent.exportName}\` agent (binding \`${voiceBindingName}\`). */
+export class ${voiceClassName} extends VoiceSessionDO {
     public constructor(ctx: ConstructorParameters<typeof VoiceSessionDO>[0], env: Record<string, unknown>) {
         super(ctx, env, ${agent.exportName}, "${agent.exportName}");
     }
