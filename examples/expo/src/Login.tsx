@@ -1,8 +1,28 @@
 import type { ReactElement } from "react";
 import { useState } from "react";
-import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { authClient } from "./auth-client";
+
+type Mode = "signin" | "signup";
+
+/**
+ * Run the sign-in / sign-up call and return an error message, or `null` on
+ * success. Kept at module scope (not inside the component) so its `try/catch`
+ * lives outside anything the React Compiler compiles.
+ */
+const authenticate = async (mode: Mode, credentials: { email: string; name: string; password: string }): Promise<null | string> => {
+    const { email, name, password } = credentials;
+
+    try {
+        const result =
+            mode === "signin" ? await authClient.signIn.email({ email, password }) : await authClient.signUp.email({ email, name: name || email, password });
+
+        return result.error ? (result.error.message ?? `${mode} failed`) : null;
+    } catch (error_: unknown) {
+        return error_ instanceof Error ? error_.message : "unknown error";
+    }
+};
 
 /**
  * Email/password sign-in + sign-up against the worker's `/api/auth/*` routes.
@@ -11,33 +31,21 @@ import { authClient } from "./auth-client";
  * render — no token to plumb through by hand.
  */
 export function Login(): ReactElement {
-    const [mode, setMode] = useState<"signin" | "signup">("signin");
+    const [mode, setMode] = useState<Mode>("signin");
     const [name, setName] = useState("");
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [error, setError] = useState<null | string>(null);
     const [pending, setPending] = useState(false);
 
-    const submit = (): void => {
+    const submit = async (): Promise<void> => {
         setError(null);
         setPending(true);
 
-        void (async () => {
-            try {
-                const result =
-                    mode === "signin"
-                        ? await authClient.signIn.email({ email, password })
-                        : await authClient.signUp.email({ email, name: name || email, password });
+        const message = await authenticate(mode, { email, name, password });
 
-                if (result.error) {
-                    setError(result.error.message ?? `${mode} failed`);
-                }
-            } catch (error_: unknown) {
-                setError(error_ instanceof Error ? error_.message : "unknown error");
-            } finally {
-                setPending(false);
-            }
-        })();
+        setError(message);
+        setPending(false);
     };
 
     return (
@@ -58,18 +66,18 @@ export function Login(): ReactElement {
 
             <TextInput onChangeText={setPassword} placeholder="Password (min 8 chars)" secureTextEntry style={styles.input} value={password} />
 
-            <TouchableOpacity disabled={pending} onPress={submit} style={styles.button}>
+            <Pressable disabled={pending} onPress={() => void submit()} style={({ pressed }) => [styles.button, pressed && styles.pressed]}>
                 {pending ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>{mode === "signin" ? "Sign in" : "Sign up"}</Text>}
-            </TouchableOpacity>
+            </Pressable>
 
-            <TouchableOpacity
+            <Pressable
                 onPress={() => {
                     setMode(mode === "signin" ? "signup" : "signin");
                     setError(null);
                 }}
             >
                 <Text style={styles.switch}>{mode === "signin" ? "Need an account? Sign up" : "Have an account? Sign in"}</Text>
-            </TouchableOpacity>
+            </Pressable>
 
             {error ? <Text style={styles.error}>{error}</Text> : null}
         </View>
@@ -82,6 +90,7 @@ const styles = StyleSheet.create({
     container: { gap: 12, justifyContent: "center", padding: 24 },
     error: { color: "#dc2626", textAlign: "center" },
     input: { borderColor: "#d1d5db", borderRadius: 8, borderWidth: 1, fontSize: 16, padding: 12 },
+    pressed: { opacity: 0.85 },
     switch: { color: "#3b82f6", textAlign: "center" },
     title: { fontSize: 28, fontWeight: "700", marginBottom: 8, textAlign: "center" },
 });

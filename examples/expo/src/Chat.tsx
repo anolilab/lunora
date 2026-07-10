@@ -1,7 +1,7 @@
 import { useConnectionStatus, useMutation, useQuery } from "@lunora/react-native";
 import type { ReactElement } from "react";
 import { useState } from "react";
-import { FlatList, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { authClient } from "./auth-client";
 import { api } from "../lunora/_generated/api";
@@ -51,9 +51,9 @@ export function Chat(): ReactElement {
                 <View style={styles.headerRight}>
                     <View style={[styles.dot, { backgroundColor: badge.color }]} />
                     <Text style={styles.status}>{badge.label}</Text>
-                    <TouchableOpacity onPress={() => void authClient.signOut()}>
+                    <Pressable onPress={() => void authClient.signOut()}>
                         <Text style={styles.signOut}>Sign out</Text>
-                    </TouchableOpacity>
+                    </Pressable>
                 </View>
             </View>
 
@@ -75,9 +75,9 @@ export function Chat(): ReactElement {
 
             <View style={styles.composer}>
                 <TextInput onChangeText={setDraft} onSubmitEditing={handleSend} placeholder="Message" returnKeyType="send" style={styles.input} value={draft} />
-                <TouchableOpacity onPress={handleSend} style={styles.sendButton}>
+                <Pressable onPress={handleSend} style={({ pressed }) => [styles.sendButton, pressed && styles.pressed]}>
                     <Text style={styles.sendText}>Send</Text>
-                </TouchableOpacity>
+                </Pressable>
             </View>
         </KeyboardAvoidingView>
     );
@@ -95,6 +95,7 @@ const styles = StyleSheet.create({
     headerRight: { alignItems: "center", flexDirection: "row", gap: 8 },
     input: { borderColor: "#d1d5db", borderRadius: 20, borderWidth: 1, flex: 1, fontSize: 16, paddingHorizontal: 14, paddingVertical: 8 },
     listContent: { padding: 12 },
+    pressed: { opacity: 0.85 },
     sendButton: { alignItems: "center", backgroundColor: "#3b82f6", borderRadius: 20, justifyContent: "center", paddingHorizontal: 18 },
     sendText: { color: "#fff", fontWeight: "600" },
     signOut: { color: "#3b82f6" },
