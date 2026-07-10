@@ -189,7 +189,6 @@ export const FunctionRunner = ({ functions: functionsProp, runAsIdentity = false
         setError(null);
 
         try {
-
             // For a real identity, the admin `runAs` RPC dispatches the target on
             // the DO under the forged identity (kind-agnostic: every kind routes
             // through the DO's `handleRpc`, so a forged *action* runs inline), sent

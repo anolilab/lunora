@@ -33,7 +33,7 @@ describe("aNY_TOKEN_RE degraded-mode detection", () => {
         writeFileSync(full, source);
     };
 
-    it("keeps a return type carrying a `\"any\"` literal or a property named `any`, but still degrades a real `any`", () => {
+    it('keeps a return type carrying a `"any"` literal or a property named `any`, but still degrades a real `any`', () => {
         expect.assertions(5);
 
         writeFunction(

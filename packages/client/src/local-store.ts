@@ -83,12 +83,12 @@ export const createLocalStore = (
             return matches;
         },
         getQuery: <F extends FunctionReference>(function_: F, args: ArgsOf<F>): ReturnOf<F> | undefined => {
-            const state = findState(function_.__lunoraRef, (args ?? {}));
+            const state = findState(function_.__lunoraRef, args ?? {});
 
             return state?.lastValue as ReturnOf<F> | undefined;
         },
         setQuery: <F extends FunctionReference>(function_: F, args: ArgsOf<F>, value: ReturnOf<F> | undefined): void => {
-            const state = findState(function_.__lunoraRef, (args ?? {}));
+            const state = findState(function_.__lunoraRef, args ?? {});
 
             if (!state) {
                 return;

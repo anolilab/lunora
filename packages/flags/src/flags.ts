@@ -169,14 +169,16 @@ const createFlags = (options: CreateFlagsOptions): LunoraFlags => {
 
         // Fail closed to the default value. The OpenFeature client itself never
         // throws, but binding the provider can (a failed `initialize`).
-        const failClosed = (error: unknown): EvaluationDetails<FlagValue> => {return {
-            errorCode: ErrorCode.GENERAL,
-            errorMessage: error instanceof Error ? error.message : String(error),
-            flagKey,
-            flagMetadata: {},
-            reason: "ERROR",
-            value: defaultValue,
-        }};
+        const failClosed = (error: unknown): EvaluationDetails<FlagValue> => {
+            return {
+                errorCode: ErrorCode.GENERAL,
+                errorMessage: error instanceof Error ? error.message : String(error),
+                flagKey,
+                flagMetadata: {},
+                reason: "ERROR",
+                value: defaultValue,
+            };
+        };
 
         const run = (): Promise<EvaluationDetails<FlagValue>> =>
             bindClient({ hooks, logger, provider })

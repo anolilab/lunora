@@ -165,14 +165,15 @@ describe("planDevVariablesScaffold", () => {
     });
 
     it("never mints provider-issued keys — their placeholders survive so they stay detectable as unfilled", () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const plan = generatePlan(
             planDevVariablesScaffold({
                 devVarsExists: false,
                 // RESEND_API_KEY / STRIPE_SECRET_KEY are provider-issued (in the registry with `<…>`
                 // placeholders): Lunora cannot mint a valid value, so they must be left verbatim.
-                exampleContent: 'RESEND_API_KEY="<your-resend-api-key>"\nSTRIPE_SECRET_KEY="<your-stripe-secret-key>"\nAUTH_SECRET="replace-with-openssl-rand-hex-32"\n',
+                exampleContent:
+                    'RESEND_API_KEY="<your-resend-api-key>"\nSTRIPE_SECRET_KEY="<your-stripe-secret-key>"\nAUTH_SECRET="replace-with-openssl-rand-hex-32"\n',
                 randomHex: fixedHex,
             }),
         );

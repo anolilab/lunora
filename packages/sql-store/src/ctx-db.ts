@@ -2012,7 +2012,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
      * companion (the SCAN-free rank path will be unavailable, but the data
      * remains correct).
      */
-        const syncRanks = async (
+    const syncRanks = async (
         tableName: string,
         id: string,
         previous: Record<string, unknown> | undefined,

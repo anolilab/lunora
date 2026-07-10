@@ -93,7 +93,9 @@ export const useFacets = (): UseFacets => {
             return;
         }
 
-        setFacets((current) => {return { ...current, [column]: { error: null, loading: true, result: null } }});
+        setFacets((current) => {
+            return { ...current, [column]: { error: null, loading: true, result: null } };
+        });
 
         if (fetcher !== null) {
             fireAndForget(fetchFacet(column, fetcher));

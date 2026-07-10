@@ -217,7 +217,7 @@ const usePaginatedCore = <F extends FunctionReference>(
                 resyncRequested = false;
                 syncPass(pagesToSync);
                 pagesToSync = pages();
-            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- resyncRequested is set by syncPass through a nested call the flow analyzer cannot track
+                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- resyncRequested is set by syncPass through a nested call the flow analyzer cannot track
             } while (resyncRequested);
         } finally {
             syncing = false;

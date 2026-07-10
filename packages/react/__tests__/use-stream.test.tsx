@@ -114,7 +114,7 @@ describe("useStream", () => {
         expect(screen.getByTestId("status").textContent).toBe("idle");
     });
 
-    it("transitioning args to \"skip\" mid-stream resets to idle with empty chunks", async () => {
+    it('transitioning args to "skip" mid-stream resets to idle with empty chunks', async () => {
         expect.hasAssertions();
 
         const { client, openStream } = buildClientWithStream();

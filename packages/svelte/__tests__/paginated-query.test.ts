@@ -347,19 +347,13 @@ describe("paginatedQuery rebalance result migration (FINDING 1 & 2 regression)",
         await flushAsync();
 
         // Page-2 resolves and is exhausted.
-        pushTo(
-            { paginationOpts: { cursor: "c1", endCursor: null, numItems: NUM } },
-            { continueCursor: null, isDone: true, page: [{ id: "5" }, { id: "6" }] },
-        );
+        pushTo({ paginationOpts: { cursor: "c1", endCursor: null, numItems: NUM } }, { continueCursor: null, isDone: true, page: [{ id: "5" }, { id: "6" }] });
         await flushAsync();
 
         // Now the pinned page-1 shrinks to a single item (< JOIN threshold of 2).
         // rebalance JOINs page-1 with the tail → the merged page's key is exactly
         // the ORIGINAL open-tail key `{null → null}`.
-        pushTo(
-            { paginationOpts: { cursor: null, endCursor: "c1", numItems: NUM } },
-            { continueCursor: "c1", isDone: false, page: [{ id: "x" }] },
-        );
+        pushTo({ paginationOpts: { cursor: null, endCursor: "c1", numItems: NUM } }, { continueCursor: "c1", isDone: false, page: [{ id: "x" }] });
         await flushAsync();
 
         // FINDING 1: the merged page must carry the surviving page-1 result — not

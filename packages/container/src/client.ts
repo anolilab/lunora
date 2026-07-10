@@ -662,4 +662,4 @@ export type {
 };
 export { createContainerContext, createContainerTestContext };
 
-export {type DurableObjectJurisdiction} from "./jurisdiction";
+export { type DurableObjectJurisdiction } from "./jurisdiction";

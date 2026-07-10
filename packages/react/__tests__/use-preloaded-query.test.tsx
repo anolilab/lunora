@@ -94,7 +94,6 @@ describe("usePreloadedQuery", () => {
         // coalesce that `null` back to the stale preloaded `{ count: 1 }` — the
         // deleted post would keep rendering forever. `null` must pass through.
         await act(async () => {
-             
             mock.emit("posts:list", null);
         });
 

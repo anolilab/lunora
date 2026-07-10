@@ -163,10 +163,7 @@ describe("lunoraContainer secretsStore resolution", () => {
         // First `.get()` rejects (a transient Secrets Store hiccup), the second
         // succeeds. A cached rejected promise would poison every later start; the
         // memo must be cleared on failure so the next resolution retries.
-        const get = vi
-            .fn<() => Promise<string>>()
-            .mockRejectedValueOnce(new Error("secrets store unavailable"))
-            .mockResolvedValueOnce("sk_live_123");
+        const get = vi.fn<() => Promise<string>>().mockRejectedValueOnce(new Error("secrets store unavailable")).mockResolvedValueOnce("sk_live_123");
         const definition = defineContainer({ image: "./app", secretsStore: { STRIPE_KEY: "STRIPE_SECRET" } });
 
         const instance = new LunoraContainer(

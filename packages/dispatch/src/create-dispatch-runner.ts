@@ -123,7 +123,9 @@ export const createDispatchRunner = (options: DispatchRunnerOptions): DispatchRu
             // JSON-encoded return value — it's a malformed response (an
             // intermediary's HTML error page, a misconfigured proxy). Surface it
             // instead of handing the raw text back as the "return value".
-            throw new LunoraError("INTERNAL", `${label}: function dispatch returned a non-JSON body (${String(response.status)}): ${text}`, { status: response.status });
+            throw new LunoraError("INTERNAL", `${label}: function dispatch returned a non-JSON body (${String(response.status)}): ${text}`, {
+                status: response.status,
+            });
         }
     };
 };

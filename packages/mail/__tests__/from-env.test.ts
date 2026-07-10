@@ -35,7 +35,7 @@ describe("shouldCaptureMail", () => {
         expect(shouldCaptureMail({ LUNORA_MAIL_CAPTURE: "yes", WORKER_ENV: "development" })).toBe(true);
         // …and a prod env still delivers, rather than the value forcing capture off.
         expect(shouldCaptureMail({ LUNORA_MAIL_CAPTURE: "on", WORKER_ENV: "production" })).toBe(false);
-        expect(warn).toHaveBeenCalledWith();
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("unrecognized LUNORA_MAIL_CAPTURE"));
 
         warn.mockRestore();
     });
@@ -116,7 +116,7 @@ describe("createCaptureSink", () => {
 
         // Best-effort: the send still succeeds, but never with a bogus recorded id.
         expect(result).toStrictEqual({ id: "uncaptured" });
-        expect(consoleError).toHaveBeenCalledWith();
+        expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("failed to record captured mail"), expect.anything());
 
         consoleError.mockRestore();
     });

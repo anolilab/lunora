@@ -176,7 +176,7 @@ describe("remoteBindingsConfigPlugin", () => {
         expect(options.configPath).toBe("/user/wrangler.jsonc");
     });
 
-    it("runs before the cloudflare plugin via enforce: \"pre\"", () => {
+    it('runs before the cloudflare plugin via enforce: "pre"', () => {
         expect.assertions(1);
 
         const plugin = remoteBindingsConfigPlugin({}, { cleanup: () => {}, enabled: false });

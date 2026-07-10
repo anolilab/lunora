@@ -50,11 +50,13 @@ const coerceFilterValue = (value: string): number | string => {
 const toFilterClauses = (filters: ReadonlyArray<EditableFilter>): FilterClause[] =>
     filters
         .filter((filter) => filter.column !== "")
-        .map((filter) => {return {
-            column: filter.column,
-            operator: filter.operator,
-            value: filter.operator === "contains" ? filter.value : coerceFilterValue(filter.value),
-        }});
+        .map((filter) => {
+            return {
+                column: filter.column,
+                operator: filter.operator,
+                value: filter.operator === "contains" ? filter.value : coerceFilterValue(filter.value),
+            };
+        });
 
 /**
  * The data browser's filtering controls: the substring search box plus a stack

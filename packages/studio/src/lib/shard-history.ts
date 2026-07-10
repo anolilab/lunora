@@ -14,8 +14,7 @@ const STORAGE_KEY = "lunora-studio-recent-shards";
 const MAX_RECENTS = 10;
 
 /** Recent shard keys, most-recently-used first. Empty when storage is unavailable. */
-export const loadRecentShards = (): string[] =>
-    loadJsonArray<unknown>(STORAGE_KEY, "session").filter((entry): entry is string => typeof entry === "string");
+export const loadRecentShards = (): string[] => loadJsonArray<unknown>(STORAGE_KEY, "session").filter((entry): entry is string => typeof entry === "string");
 
 /**
  * Record `shardKey` as recently used (moved to the front, de-duplicated, capped).

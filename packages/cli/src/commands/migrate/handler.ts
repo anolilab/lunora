@@ -600,7 +600,9 @@ const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions
         }
 
         if (importResult.inserted === exportResult.rows) {
-            logger.info(`✓ Migrated ${String(exportResult.rows)} row(s) — counts match. Verify your app reads from Hyperdrive, then decommission the D1 binding.`);
+            logger.info(
+                `✓ Migrated ${String(exportResult.rows)} row(s) — counts match. Verify your app reads from Hyperdrive, then decommission the D1 binding.`,
+            );
         } else {
             logger.warn(
                 `Imported ${String(importResult.inserted)} of ${String(exportResult.rows)} exported row(s) — the remainder likely already existed in the target (see conflicts above). Re-run after resolving, or inspect the dump with --out.`,

@@ -103,7 +103,6 @@ const exportGlobalRows = async function* (exec: D1Exec, schema: SchemaLike, args
         let hasMore = true;
 
         while (hasMore) {
-             
             /* eslint-disable no-await-in-loop -- sequential keyset pagination: each page depends on the prior page's last id */
             const rows =
                 lastId === undefined

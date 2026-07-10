@@ -67,7 +67,9 @@ const createDatabaseOpener = (
  * a durable write is confirmed before the promise resolves; rejects on
  * `error`/`abort`.
  */
-const createWithStore = (open: () => Promise<IDBDatabase>, storeName: string): WithStore => async <T>(mode: IDBTransactionMode, run: (store: IDBObjectStore) => Promise<T> | T): Promise<T> => {
+const createWithStore =
+    (open: () => Promise<IDBDatabase>, storeName: string): WithStore =>
+    async <T>(mode: IDBTransactionMode, run: (store: IDBObjectStore) => Promise<T> | T): Promise<T> => {
         const database = await open();
         const transaction = database.transaction(storeName, mode);
         const result = await run(transaction.objectStore(storeName));

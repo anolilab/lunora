@@ -70,11 +70,7 @@ describe("applyDelta", () => {
         const current = [row("c", { _creationTime: 30 }), row("a", { _creationTime: 10 })];
         const delta: MutationDelta = { key: "b", op: "insert", row: row("b", { _creationTime: 20 }), table: "messages" };
 
-        expect(applyDelta(current, delta)).toStrictEqual([
-            row("c", { _creationTime: 30 }),
-            row("b", { _creationTime: 20 }),
-            row("a", { _creationTime: 10 }),
-        ]);
+        expect(applyDelta(current, delta)).toStrictEqual([row("c", { _creationTime: 30 }), row("b", { _creationTime: 20 }), row("a", { _creationTime: 10 })]);
     });
 
     it("updates a matching row in place, preserving position", () => {

@@ -4385,7 +4385,6 @@ class LunoraClient {
 
         const token = this.authToken;
 
-         
         return token === null ? false : this.hashToken(token) === stamped;
     }
 

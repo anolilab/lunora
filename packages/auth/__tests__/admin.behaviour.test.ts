@@ -100,7 +100,7 @@ describe("createAuthAdmin", () => {
         // must null it out, else the "permanent" ban silently lapses after the first expiry.
         await adminApi.banUser({ expiresInSeconds: 3600, reason: "temp", userId: user.id });
 
-        expect(userRow(user.id)?.["banExpires"]).toBe(true);
+        expect(userRow(user.id)?.["banExpires"] ?? null).not.toBeNull();
 
         await adminApi.banUser({ reason: "permanent", userId: user.id });
 

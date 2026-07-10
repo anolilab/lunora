@@ -5,7 +5,9 @@ import type { FacetFetcher } from "../../../src/features/data/hooks/use-facets";
 import { useFacets } from "../../../src/features/data/hooks/use-facets";
 import type { FacetResult } from "../../../src/lib/admin";
 
-const facetResult = (label: string): FacetResult => {return { truncated: false, values: [{ count: 1, value: label }] }};
+const facetResult = (label: string): FacetResult => {
+    return { truncated: false, values: [{ count: 1, value: label }] };
+};
 
 describe("useFacets", () => {
     it("fires exactly one fetch when a column is toggled on (fetch is not inside the state updater)", async () => {

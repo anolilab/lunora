@@ -137,17 +137,19 @@ describe("reconcile", () => {
 
         // Provider truth for this session carries an empty reference (e.g. a Polar order snapshot).
         const blankReferenceAdapter = {
-            getPaymentStatus: async (sessionId: string) => {return {
-                amount: money(1000, "USD"),
-                capturedAmount: money(1000, "USD"),
-                createdAt: 5,
-                id: sessionId,
-                provider: "stripe",
-                referenceId: "",
-                refundedAmount: money(0, "USD"),
-                state: "captured" as const,
-                updatedAt: 5,
-            }},
+            getPaymentStatus: async (sessionId: string) => {
+                return {
+                    amount: money(1000, "USD"),
+                    capturedAmount: money(1000, "USD"),
+                    createdAt: 5,
+                    id: sessionId,
+                    provider: "stripe",
+                    referenceId: "",
+                    refundedAmount: money(0, "USD"),
+                    state: "captured" as const,
+                    updatedAt: 5,
+                };
+            },
             identifier: "stripe",
         } as unknown as PaymentAdapter;
 

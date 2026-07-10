@@ -82,7 +82,9 @@ const shouldCaptureMail = (env: MailEnv): boolean => {
         // fall through to environment detection rather than silently forcing
         // capture off (which would send real provider mail from a dev box).
         // eslint-disable-next-line no-console -- surface a likely-misconfigured flag rather than swallowing it
-        console.warn(`@lunora/mail: unrecognized LUNORA_MAIL_CAPTURE value "${flag}" — expected "1"/"true" or "0"/"false"; falling back to environment detection.`);
+        console.warn(
+            `@lunora/mail: unrecognized LUNORA_MAIL_CAPTURE value "${flag}" — expected "1"/"true" or "0"/"false"; falling back to environment detection.`,
+        );
     }
 
     return ENVIRONMENT_VARS.some((key) => {

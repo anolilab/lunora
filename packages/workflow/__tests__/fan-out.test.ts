@@ -428,7 +428,9 @@ describe("signalBranchParentSafe", () => {
         const env = { WORKFLOW_PARENT: { get: vi.fn<(id: string) => Promise<WorkflowInstanceLike>>(async () => parent) } };
         const log = makeLog();
 
-        await expect(signalBranchParentSafe({ env, log: log as unknown as FanOutDeps["log"], step: makeStep() }, marker, okOutcome(null))).resolves.toBeUndefined();
+        await expect(
+            signalBranchParentSafe({ env, log: log as unknown as FanOutDeps["log"], step: makeStep() }, marker, okOutcome(null)),
+        ).resolves.toBeUndefined();
         expect(log.error).toHaveBeenCalledTimes(1);
     });
 });

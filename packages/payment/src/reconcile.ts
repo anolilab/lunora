@@ -67,7 +67,8 @@ const mergePaymentTruth = (existing: PaymentSession | undefined, current: Paymen
     }
 
     const sameRefundCurrency = existing.refundedAmount.currency === current.refundedAmount.currency;
-    const refundedAmount = sameRefundCurrency && compareMoney(existing.refundedAmount, current.refundedAmount) > 0 ? existing.refundedAmount : current.refundedAmount;
+    const refundedAmount =
+        sameRefundCurrency && compareMoney(existing.refundedAmount, current.refundedAmount) > 0 ? existing.refundedAmount : current.refundedAmount;
     const state = current.state === "captured" && REFUND_STATES.has(existing.state) ? existing.state : current.state;
     const referenceId = current.referenceId === "" ? existing.referenceId : current.referenceId;
 

@@ -73,9 +73,7 @@ describe("token bucket", () => {
         // rate 10, no explicit capacity → capacity 10. A count of 11 can never
         // fit in the bucket, so it must surface caller misuse rather than a
         // finite retryAfter the caller would chase forever.
-        expect(() => evaluate(tokenBucket, undefined, consumeOptions(11, 0))).toThrow(
-            "@lunora/ratelimit: requested count 11 exceeds the limiter capacity 10",
-        );
+        expect(() => evaluate(tokenBucket, undefined, consumeOptions(11, 0))).toThrow("@lunora/ratelimit: requested count 11 exceeds the limiter capacity 10");
     });
 
     it("throws when a reserve request exceeds capacity (never admittable)", () => {

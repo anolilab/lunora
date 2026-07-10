@@ -110,8 +110,7 @@ export const postgresDialect: SqlDialect = {
     // TABLE / SELECT would. Without this filter the probe sees same-named tables in
     // OTHER schemas of the same database (a common multi-tenant/multi-env Hyperdrive
     // setup), reporting a companion table that does not exist on the search_path.
-    tableExists: (table) =>
-        sql`SELECT table_name FROM information_schema.tables WHERE table_schema = ANY (current_schemas(false)) AND table_name = ${table}`,
+    tableExists: (table) => sql`SELECT table_name FROM information_schema.tables WHERE table_schema = ANY (current_schemas(false)) AND table_name = ${table}`,
 };
 
 /**

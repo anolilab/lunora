@@ -190,7 +190,9 @@ const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<Tabl
     // supplies at least one id; an empty array means the caller sampled the table
     // but found no rows, so its FKs still need a freshly-seeded pool.
     const covered = new Set(Object.keys(existingIds).filter((table) => !requested.has(table) && (existingIds[table] ?? []).length > 0));
-    const selected = new Set([...fkParentClosure(specs, requested, covered)].filter((table) => requested.has(table) || (existingIds[table] ?? []).length === 0));
+    const selected = new Set(
+        [...fkParentClosure(specs, requested, covered)].filter((table) => requested.has(table) || (existingIds[table] ?? []).length === 0),
+    );
     const order = orderTables(specs, selected);
     const specByName = new Map(specs.map((spec) => [spec.name, spec]));
 

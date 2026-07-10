@@ -681,14 +681,24 @@ describe("lunora migrate d1-to-hyperdrive", () => {
                             controller.close();
                         },
                     }),
-                    json: async () => {return {}},
+                    json: async () => {
+                        return {};
+                    },
                     ok: true,
                     status: 200,
                     text: async () => ndjson,
                 };
             }
 
-            return { body: null, json: async () => {return {}}, ok: false, status: 500, text: async () => "boom" };
+            return {
+                body: null,
+                json: async () => {
+                    return {};
+                },
+                ok: false,
+                status: 500,
+                text: async () => "boom",
+            };
         };
 
         const dumpDirsBefore = readdirSync(tmpdir()).filter((name) => name.startsWith("lunora-d1ps-"));

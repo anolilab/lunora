@@ -27,6 +27,32 @@ const formatExamples = (ids: string[], total: number): string => {
 
 // ── per-table check helpers ───────────────────────────────────────────────────
 
+/**
+ * Resolve the set of referenced key values a FK is checked against. For the
+ * default `_id` reference the sample already exposes `existingIds`; a custom
+ * `references` column (e.g. `one("users", { references: "slug" })`) is resolved
+ * from the target's sampled rows — comparing against the `_id` set would flag
+ * every row.
+ */
+const resolveReferenceValues = (referencedColumn: string, targetSample: AdvisorTableSample): ReadonlySet<string> => {
+    if (referencedColumn === "_id") {
+        return targetSample.existingIds;
+    }
+
+    const values = new Set<string>();
+
+    for (const row of targetSample.rows) {
+        const value = row[referencedColumn];
+
+        if (value !== null && value !== undefined) {
+            // eslint-disable-next-line @typescript-eslint/no-base-to-string -- referenced key column is a primitive from SQLite
+            values.add(String(value));
+        }
+    }
+
+    return values;
+};
+
 /** Check FK referential integrity for a single `one` relation on a sampled table. */
 const checkFkRelation = (
     lint: Lint,
@@ -48,26 +74,8 @@ const checkFkRelation = (
         return undefined;
     }
 
-    // Build the set of referenced key values. For the default `_id` reference the
-    // sample already exposes `existingIds`; a custom `references` column (e.g.
-    // `one("users", { references: "slug" })`) must be resolved from the target's
-    // sampled rows — comparing against the `_id` set would flag every row.
     const referencedColumn = relation.references;
-    const referenceValues =
-        referencedColumn === "_id"
-            ? targetSample.existingIds
-            : new Set(
-                  targetSample.rows.reduce<string[]>((values, row) => {
-                      const value = row[referencedColumn];
-
-                      if (value !== null && value !== undefined) {
-                          // eslint-disable-next-line @typescript-eslint/no-base-to-string -- referenced key column is a primitive from SQLite
-                          values.push(String(value));
-                      }
-
-                      return values;
-                  }, []),
-              );
+    const referenceValues = resolveReferenceValues(referencedColumn, targetSample);
 
     const fkColumn = relation.field;
     const danglingIds: string[] = [];
@@ -98,7 +106,7 @@ const checkFkRelation = (
 
     // Only source truncation remains possible here (the target is complete).
     const isTruncated = sample.truncated;
-    const {cap} = sample;
+    const { cap } = sample;
     const referencedLabel = referencedColumn === "_id" ? `"${relation.table}"` : `"${relation.table}"."${referencedColumn}"`;
     const detail =
         `Table "${sample.table}": ${danglingIds.length.toString()} sampled row(s) have a dangling FK value in column "${fkColumn}" — ` +

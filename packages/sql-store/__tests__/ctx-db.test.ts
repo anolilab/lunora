@@ -86,7 +86,8 @@ const col = (kind: string, extra: Record<string, unknown> = {}): ValidatorLike =
 };
 
 /** An `optional(inner)` column — stays nullable in the DDL; `effectiveColumnKind` unwraps to `inner` for storage affinity/decode. */
-const optionalCol = (innerKind: string): ValidatorLike => ({ _meta: { column: { notNull: false }, inner: { _meta: { column: { notNull: false } }, kind: innerKind } }, kind: "optional" } as never);
+const optionalCol = (innerKind: string): ValidatorLike =>
+    ({ _meta: { column: { notNull: false }, inner: { _meta: { column: { notNull: false } }, kind: innerKind } }, kind: "optional" }) as never;
 
 const schema: SchemaLike = {
     tables: {

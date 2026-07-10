@@ -220,9 +220,10 @@ describe("signedUrl", () => {
             status: 400,
         });
 
-        await expect(
-            buildSignedUrl({ baseUrl: "https://cdn.test", expiresInSeconds: 8 * 24 * 60 * 60, key: "x", secret: "shh" }),
-        ).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
+        await expect(buildSignedUrl({ baseUrl: "https://cdn.test", expiresInSeconds: 8 * 24 * 60 * 60, key: "x", secret: "shh" })).rejects.toMatchObject({
+            code: "VALIDATION_ERROR",
+            status: 400,
+        });
     });
 
     it("normalises a multi-trailing-slash baseUrl to a single-slash join", async () => {

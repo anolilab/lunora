@@ -117,7 +117,14 @@ describe("createAccessResolver", () => {
     it("falls back to the derived id when mapClaims returns an empty userId", async () => {
         expect.assertions(1);
 
-        const resolve = createAccessResolver({ aud: AUD, keySet: publicKey, mapClaims: () => {return { userId: "" }}, teamDomain: TEAM });
+        const resolve = createAccessResolver({
+            aud: AUD,
+            keySet: publicKey,
+            mapClaims: () => {
+                return { userId: "" };
+            },
+            teamDomain: TEAM,
+        });
         const token = await sign({ sub: "user-7" });
 
         const identity = await resolve(requestWithHeader(token));

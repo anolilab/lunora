@@ -177,8 +177,7 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown):
                 // through `keyValidator`, so honour any key constraints (minLength,
                 // format, …) rather than emitting a plain lorem word that the
                 // writer's validation would reject. Keys must be strings.
-                const key =
-                    keyValidator === undefined ? copycat.word(["k", itemInput]) : String(generateValue(keyValidator, fieldName, ["k", itemInput]));
+                const key = keyValidator === undefined ? copycat.word(["k", itemInput]) : String(generateValue(keyValidator, fieldName, ["k", itemInput]));
                 const value = valueValidator === undefined ? copycat.word(["v", itemInput]) : generateValue(valueValidator, fieldName, ["v", itemInput]);
 
                 return [key, value] as const;

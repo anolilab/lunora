@@ -127,7 +127,9 @@ describe("polar adapter", () => {
         const client = makeClient();
         // Polar copies checkout metadata onto the order; the status read must surface it, not blank it.
         (client as { orders: { get: unknown } }).orders = {
-            get: async () => {return { currency: "usd", id: "ord_1", metadata: { referenceId: "user_1" }, status: "paid", totalAmount: 2500 }},
+            get: async () => {
+                return { currency: "usd", id: "ord_1", metadata: { referenceId: "user_1" }, status: "paid", totalAmount: 2500 };
+            },
         };
         const adapter = createPolarAdapter({ client, webhookSecret: SECRET });
 

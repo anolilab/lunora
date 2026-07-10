@@ -29,7 +29,11 @@ const capacityOf = (config: RateLimitConfig): number => config.capacity ?? confi
  * caller reuses. Shared by {@link evaluate} and {@link availableAt} so the
  * refill math lives in one place.
  */
-const projectTokenBucket = (config: RateLimitConfig, prior: RateLimitValue | undefined, now: number): { available: number; capacity: number; ratePerMs: number } => {
+const projectTokenBucket = (
+    config: RateLimitConfig,
+    prior: RateLimitValue | undefined,
+    now: number,
+): { available: number; capacity: number; ratePerMs: number } => {
     const capacity = capacityOf(config);
     const ratePerMs = config.rate / config.period;
     const base = prior ?? { ts: now, value: capacity };

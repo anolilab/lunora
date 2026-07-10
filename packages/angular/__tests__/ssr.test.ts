@@ -83,7 +83,12 @@ describe("ssr platform gating", () => {
 
     it("hydratePreloaded keeps its synchronous seed but opens no subscription on the server platform", () => {
         const fake = createFakeClient();
-        const preloaded = { args: { channelId: "general" }, functionPath: "messages:list", shardKey: undefined, value: { messages: ["seed"] } } as unknown as Preloaded<{
+        const preloaded = {
+            args: { channelId: "general" },
+            functionPath: "messages:list",
+            shardKey: undefined,
+            value: { messages: ["seed"] },
+        } as unknown as Preloaded<{
             messages: string[];
         }>;
 

@@ -668,9 +668,9 @@ describe("createStorage", () => {
         await expect(storage.upload("big.bin", new ArrayBuffer(16), { maxSize: 8 })).rejects.toMatchObject({ code: "PAYLOAD_TOO_LARGE", status: 413 });
 
         // A disallowed content-type → 400.
-        await expect(
-            storage.upload("doc.bin", new ArrayBuffer(4), { allowedContentTypes: ["image/png"], contentType: "text/html" }),
-        ).rejects.toMatchObject({ status: 400 });
+        await expect(storage.upload("doc.bin", new ArrayBuffer(4), { allowedContentTypes: ["image/png"], contentType: "text/html" })).rejects.toMatchObject({
+            status: 400,
+        });
 
         // A NUL-byte list prefix → 400.
         await expect(storage.list("bad\0prefix")).rejects.toMatchObject({ status: 400 });
