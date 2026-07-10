@@ -63,6 +63,8 @@ export { useRateLimit } from "./use-rate-limit";
 export type { UseStreamOptions, UseStreamResult, UseStreamStatus } from "./use-stream";
 export { useStream } from "./use-stream";
 export { default as useSubscription } from "./use-subscription";
+export type { UseVoiceAgentOptions, UseVoiceAgentResult, VoiceAudioFormat, VoiceReference, VoiceStatus } from "./use-voice-agent";
+export { useVoiceAgent } from "./use-voice-agent";
 
 // Framework-neutral error discriminators re-exported from `@lunora/client` so a
 // React-only user gets them without a second import (see the header note).
