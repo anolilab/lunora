@@ -200,6 +200,59 @@ describe("emit (agents)", () => {
         expect(emitAgents([])).toBe("");
     });
 
+    it("emits a VoiceSessionDO subclass only when the agent declares a voice block", () => {
+        expect.assertions(7);
+
+        writeAgents(`
+            import { defineAgent } from "@lunora/agent";
+            export const support = defineAgent({ model: "m", voice: { greeting: "hi" } });
+        `);
+
+        const [agent] = discoverAgents(newProject(), workdir);
+
+        expect(agent).toMatchObject({ voice: true, voiceBindingName: "VOICE_SUPPORT", voiceClassName: "SupportVoiceDO" });
+
+        const content = emitAgents(discoverAgents(newProject(), workdir));
+
+        expect(content).toContain('import { compileAgentWorkflow, VoiceSessionDO } from "@lunora/agent";');
+        expect(content).toContain("export class SupportVoiceDO extends VoiceSessionDO {");
+        expect(content).toContain('super(ctx, env, support, "support");');
+        // The workflow class is still emitted alongside the voice DO.
+        expect(content).toContain("export class SupportAgentWorkflow extends LunoraWorkflow<AgentRunInput, AgentRunResult> {");
+
+        // A voice-free agent emits neither the import nor the DO class (byte-identical path).
+        const voiceless = emitAgents(discoverSupportAgent());
+
+        expect(voiceless).toContain('import { compileAgentWorkflow } from "@lunora/agent";');
+        expect(voiceless).not.toContain("VoiceSessionDO");
+    });
+
+    it("rejects a non-object voice literal with a located diagnostic", () => {
+        expect.assertions(1);
+
+        writeAgents(`
+            import { defineAgent } from "@lunora/agent";
+            export const support = defineAgent({ model: "m", voice: true });
+        `);
+
+        expect(() => discoverAgents(newProject(), workdir)).toThrow(/`voice` must be an inline object literal/u);
+    });
+
+    it("exposes agents.<name>Voice as a typed stream reference only for voice agents", () => {
+        expect.assertions(2);
+
+        writeAgents(`
+            import { defineAgent } from "@lunora/agent";
+            export const support = defineAgent({ model: "m", voice: {} });
+        `);
+
+        const content = emitApi({ agents: discoverAgents(newProject(), workdir), functions: [] });
+
+        expect(content).toContain('supportVoice: FunctionReference<"stream", { threadKey: string }, Record<string, unknown>>;');
+        // A voice-free agent adds no Voice member.
+        expect(emitApi({ agents: discoverSupportAgent(), functions: [] })).not.toContain("Voice");
+    });
+
     it("emitServer types ctx.agents on Mutation/Action only when agents exist", () => {
         expect.assertions(5);
 

@@ -491,6 +491,24 @@ export interface AgentIR {
      * byte-identical.
      */
     publicRun?: boolean;
+
+    /**
+     * Whether the definition opted into a real-time voice session via a `voice`
+     * block on `defineAgent({ voice: … })`. Unlike the durable loop (a Workflow),
+     * the voice path IS a Durable Object — so when this is `true` the emitter
+     * generates the `voiceClassName` `VoiceSessionDO` subclass and the
+     * `api.agents.{name}Voice` client reference, and the config layer reconciles
+     * a `durable_objects` binding (`voiceBindingName`) + `new_sqlite_classes`
+     * migration. Written to IR only when the literal is present, so voice-free
+     * agents (and agent-free projects) stay byte-identical.
+     */
+    voice?: boolean;
+
+    /** The voice DO's Cloudflare `DurableObjectNamespace` binding name, e.g. `VOICE_SUPPORT`. Present only when `voice`. */
+    voiceBindingName?: string;
+
+    /** Generated `VoiceSessionDO` subclass name, e.g. `SupportVoiceDO`. Present only when `voice`. */
+    voiceClassName?: string;
 }
 
 /** One durable step call lifted from a workflow handler body (the use side of {@link WorkflowIR.steps}). */

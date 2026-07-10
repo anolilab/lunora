@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 // The /naming subpath keeps codegen from loading the agent runtime (and the
 // AI SDK behind it) just to derive deploy names.
-import { agentBindingName, agentClassName, agentDefaultName } from "@lunora/agent/naming";
+import { agentBindingName, agentClassName, agentDefaultName, voiceBindingName, voiceClassName } from "@lunora/agent/naming";
 import type { CallExpression, Expression, Identifier, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
@@ -103,6 +103,27 @@ const agentFromCall = (call: CallExpression, exportName: string): AgentIR => {
         ir.publicRun = true;
     }
 
+    // Opt-in to a real-time voice session. Presence of a `voice` block (any object
+    // literal) turns on the hibernatable-WebSocket DO; the block's fields are
+    // runtime config the DO reads, so codegen keys only on presence, not contents.
+    // Only carried onto IR when present, so voice-free agents stay byte-identical.
+    const voiceProperty = argument.getProperty("voice");
+
+    if (voiceProperty && Node.isPropertyAssignment(voiceProperty)) {
+        const voiceInitializer = voiceProperty.getInitializerOrThrow();
+
+        if (!Node.isObjectLiteralExpression(voiceInitializer)) {
+            throw diagnosticAt(
+                voiceInitializer,
+                `agent "${exportName}": \`voice\` must be an inline object literal — its presence tells codegen to emit the voice-session Durable Object`,
+            );
+        }
+
+        ir.voice = true;
+        ir.voiceBindingName = voiceBindingName(exportName);
+        ir.voiceClassName = voiceClassName(exportName);
+    }
+
     return ir;
 };
 
@@ -149,11 +170,12 @@ const agentsFromSource = (source: SourceFile): AgentIR[] => {
 
 /**
  * Discover every agent the project declares: exported `defineAgent()` calls in
- * `lunora/agents.ts`. Returns `[]` when the file doesn't exist. Only two literals
- * are read statically — the optional `name` override (wrangler `workflows[].name`)
- * and the optional `publicRun` opt-in (the `agents:agentRun` capability gate); the
- * rest of the agent config (model / tools / memory) is runtime-only, so codegen
- * never evaluates it.
+ * `lunora/agents.ts`. Returns `[]` when the file doesn't exist. Only three things
+ * are read statically — the optional `name` override (wrangler `workflows[].name`),
+ * the optional `publicRun` opt-in (the `agents:agentRun` capability gate), and the
+ * presence of a `voice` block (which turns on the voice-session Durable Object);
+ * the rest of the agent config (model / tools / memory / voice models) is
+ * runtime-only, so codegen never evaluates it.
  */
 const discoverAgents = (project: Project, lunoraDirectory: string): AgentIR[] => {
     const agentsPath = join(lunoraDirectory, AGENTS_FILENAME);

@@ -858,6 +858,24 @@ const syntheticAgentApiFunctions = (agents: ReadonlyArray<AgentIR>, functions: R
         },
     ];
 
+    // Per voice-enabled agent: a live `agents.<name>Voice` reference the
+    // `useVoiceAgent` hook consumes (it reads the ref's `__lunoraRef` to open the
+    // voice DO's WebSocket, keyed by `threadKey`). Modeled as a `stream` kind — a
+    // voice session is exactly a live, bidirectional, WS-backed channel. Emitted
+    // only for agents that declared a `voice` block, so voice-free (and agent-free)
+    // projects keep a byte-identical `api`.
+    for (const agent of agents) {
+        if (agent.voice) {
+            definitions.push({
+                args: { threadKey: { kind: "string" } },
+                exportName: `${agent.exportName}Voice`,
+                filePath: "agents",
+                kind: "stream",
+                returnType: "Record<string, unknown>",
+            });
+        }
+    }
+
     return definitions.filter((definition) => !taken.has(definition.exportName));
 };
 
@@ -2838,22 +2856,51 @@ const emitAgents = (agents: ReadonlyArray<AgentIR>): string => {
         return "";
     }
 
+    const voiceAgents = agents.filter((agent) => agent.voice);
+    const hasVoice = voiceAgents.length > 0;
+
     const classes = agents
         .map((agent) => {
             assertIdentifier(agent.exportName, `agent export "${agent.exportName}"`);
             assertIdentifier(agent.className, `agent class "${agent.className}"`);
 
-            return `/** WorkflowEntrypoint for the \`${agent.exportName}\` agent (binding \`${agent.bindingName}\`). */
+            const workflowClass = `/** WorkflowEntrypoint for the \`${agent.exportName}\` agent (binding \`${agent.bindingName}\`). */
 export class ${agent.className} extends LunoraWorkflow<AgentRunInput, AgentRunResult> {
     public constructor(ctx: ConstructorParameters<typeof LunoraWorkflow>[0], env: Record<string, unknown>) {
         super(ctx, env, compileAgentWorkflow(${agent.exportName}, "${agent.exportName}"), "${agent.exportName}");
     }
 }
 `;
+
+            if (!agent.voice) {
+                return workflowClass;
+            }
+
+            assertIdentifier(agent.voiceClassName ?? "", `agent voice class "${agent.voiceClassName ?? ""}"`);
+
+            // The voice session is a Durable Object (not a Workflow): a thin
+            // VoiceSessionDO subclass constructed with the same agent definition +
+            // export name the runtime pipeline reads. Bound as `${agent.voiceBindingName ?? ""}`.
+            const voiceClass = `
+/** Voice-session Durable Object for the \`${agent.exportName}\` agent (binding \`${agent.voiceBindingName ?? ""}\`). */
+export class ${agent.voiceClassName ?? ""} extends VoiceSessionDO {
+    public constructor(ctx: ConstructorParameters<typeof VoiceSessionDO>[0], env: Record<string, unknown>) {
+        super(ctx, env, ${agent.exportName}, "${agent.exportName}");
+    }
+}
+`;
+
+            return `${workflowClass}${voiceClass}`;
         })
         .join("\n");
 
     const imports = agents.map((agent) => agent.exportName).join(", ");
+    const runtimeImport = hasVoice
+        ? `import { compileAgentWorkflow, VoiceSessionDO } from "@lunora/agent";`
+        : `import { compileAgentWorkflow } from "@lunora/agent";`;
+    const voiceHeaderNote = hasVoice
+        ? `\n *\n * Voice-enabled agents ALSO get a \`VoiceSessionDO\` subclass here — a real\n * Durable Object (unlike the Workflow), so wrangler needs both its\n * \`durable_objects\` binding and its \`class_name\` export (the same re-export\n * line covers it).`
+        : "";
 
     return `${GENERATED_HEADER}/**
  * WorkflowEntrypoint classes for the agents declared in \`lunora/agents.ts\`.
@@ -2861,10 +2908,10 @@ export class ${agent.className} extends LunoraWorkflow<AgentRunInput, AgentRunRe
  * Workflow. Re-export them from your worker entry — wrangler requires each
  * \`workflows[].class_name\` to be exported by the worker:
  *
- * \`export * from "./lunora/_generated/agents.js";\`
+ * \`export * from "./lunora/_generated/agents.js";\`${voiceHeaderNote}
  */
 import LunoraWorkflow from "@lunora/workflow/do";
-import { compileAgentWorkflow } from "@lunora/agent";
+${runtimeImport}
 import type { AgentRunInput, AgentRunResult } from "@lunora/agent";
 
 import { ${imports} } from "../agents.js";

@@ -47,6 +47,15 @@ interface EmitAppOptions {
     jurisdiction?: JurisdictionIR;
     /** Project depends on the unscoped `lunorash` umbrella → import the runtime via `lunorash/runtime` instead of `@lunora/runtime`. */
     useUmbrella: boolean;
+
+    /**
+     * Voice-enabled agents (`defineAgent({ voice: … })`) → wire
+     * `options.voiceAgents`, mapping each agent's export name to its `VOICE_*`
+     * Durable Object namespace binding so the runtime exposes
+     * `/_lunora/voice/&lt;exportName>`. Empty/absent ⇒ no wiring, byte-identical
+     * output for voice-free (and agent-free) projects.
+     */
+    voiceAgents?: ReadonlyArray<{ bindingName: string; exportName: string }>;
     /** An OpenAPI spec is emitted (`openapi.ts`) → wire `openApiSpec` into the worker. */
     wantsOpenApi: boolean;
     /** An OpenRPC spec is emitted (`openrpc.ts`) → wire `openRpcSpec` into the worker. */
@@ -550,6 +559,23 @@ const buildWorkerOptionLines = (options: EmitAppOptions): string[] => [
                   : `        if (this.accessSelector) {
             options.resolveIdentity = createAccessResolver(this.accessSelector(env));
         }`,
+          ]
+        : []),
+    // Voice-enabled agents: map each export name to its `VOICE_*` Durable Object
+    // namespace so the runtime serves `/_lunora/voice/<exportName>`. Read off
+    // `env` structurally (the binding is provisioned by the config layer's
+    // reconcile step, so it may not be on the generated `Env` type). Emitted only
+    // when at least one agent opted into voice — voice-free output is unchanged.
+    ...(options.voiceAgents && options.voiceAgents.length > 0
+        ? [
+              `        options.voiceAgents = {
+${options.voiceAgents
+    .map(
+        (agent) =>
+            `            ${JSON.stringify(agent.exportName)}: (env as Record<string, unknown>)[${JSON.stringify(agent.bindingName)}] as ShardNamespaceLike,`,
+    )
+    .join("\n")}
+        };`,
           ]
         : []),
 ];

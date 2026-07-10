@@ -621,6 +621,15 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         // Schema `.jurisdiction("…")` → pin the generated worker's DOs to the region.
         jurisdiction: schema.jurisdiction,
         useUmbrella,
+        // Voice-enabled agents (`defineAgent({ voice: … })`) → wire the worker's
+        // `/_lunora/voice/<exportName>` route to each agent's `VOICE_*` DO
+        // namespace. Empty for voice-free (and agent-free) projects, so the
+        // emitted app.ts stays byte-identical.
+        voiceAgents: agents
+            .filter((agent) => agent.voice === true && agent.voiceBindingName !== undefined)
+            .map((agent) => {
+                return { bindingName: agent.voiceBindingName as string, exportName: agent.exportName };
+            }),
         wantsOpenApi,
         wantsOpenRpc,
     });
