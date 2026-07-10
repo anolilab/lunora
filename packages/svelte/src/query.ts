@@ -34,16 +34,20 @@ export type QueryStore<F extends FunctionReference> = Readable<ReturnOf<F> | und
  * store across several components shares a single underlying subscription
  * (the `LunoraClient` de-dupes by `(fn, args, shardKey)`).
  *
+ * Pass `"skip"` as `args` to keep the store connected but the subscription
+ * dormant (the value stays `undefined`, no socket opens) — useful for a query
+ * gated on auth or a route param, matching React/Vue/Solid's `useQuery`.
+ *
  * Pass `client` explicitly, or omit it to resolve the ambient client published
  * by `setLunoraClient` (which must therefore be called during component init,
  * before this runs).
  */
-export function query<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: QueryStoreOptions): QueryStore<F>;
-export function query<F extends FunctionReference>(client: LunoraClient, function_: F, args: ArgsOf<F>, options?: QueryStoreOptions): QueryStore<F>;
+export function query<F extends FunctionReference>(function_: F, args: ArgsOf<F> | "skip", options?: QueryStoreOptions): QueryStore<F>;
+export function query<F extends FunctionReference>(client: LunoraClient, function_: F, args: ArgsOf<F> | "skip", options?: QueryStoreOptions): QueryStore<F>;
 export function query<F extends FunctionReference>(
     clientOrFunction: LunoraClient | F,
-    functionOrArguments: ArgsOf<F> | F,
-    argumentsOrOptions?: ArgsOf<F> | QueryStoreOptions,
+    functionOrArguments: ArgsOf<F> | F | "skip",
+    argumentsOrOptions?: ArgsOf<F> | QueryStoreOptions | "skip",
     maybeOptions?: QueryStoreOptions,
 ): QueryStore<F> {
     // Resolve the overload: when the first arg is a function reference (carries
@@ -52,7 +56,7 @@ export function query<F extends FunctionReference>(
     const hasExplicitClient = !isFunctionReference(clientOrFunction);
     const client = hasExplicitClient ? clientOrFunction : getLunoraClient();
     const functionRef = (hasExplicitClient ? functionOrArguments : clientOrFunction) as F;
-    const args = (hasExplicitClient ? argumentsOrOptions : functionOrArguments) as ArgsOf<F>;
+    const args = (hasExplicitClient ? argumentsOrOptions : functionOrArguments) as ArgsOf<F> | "skip";
     const options = (hasExplicitClient ? maybeOptions : (argumentsOrOptions as QueryStoreOptions | undefined)) ?? {};
 
     return readable<ReturnOf<F> | undefined>(undefined, (set) =>
@@ -70,6 +74,12 @@ export function query<F extends FunctionReference>(
                     set(value);
                 },
                 onError: options.onError,
+                // `args === "skip"` short-circuits inside the shared helper and
+                // fires this reset — clear any prior value so a store that flips
+                // to `"skip"` does not retain stale data.
+                onReset: () => {
+                    set(undefined);
+                },
             },
             { shardKey: options.shardKey },
         ),

@@ -216,6 +216,34 @@ describe("seedPlan", () => {
         expect(secondIds.some((id) => firstIds.has(id))).toBe(false);
     });
 
+    it("throws on an unknown table name in `only` (regression: was a silent empty plan)", () => {
+        expect.hasAssertions();
+
+        expect(() => seedPlan(schema, { only: ["userz"] })).toThrow(/unknown table/iu);
+    });
+
+    it("does not seed a grandparent reached only through an existingIds-covered parent", () => {
+        // comments → posts → users. Seeding just `comments` with `posts` covered by
+        // existingIds must not pull in `users`: nothing being seeded references it.
+        expect.hasAssertions();
+
+        const chain = defineSchema({
+            comments: defineTable({ body: v.string(), postId: v.id("posts") }),
+            posts: defineTable({ authorId: v.id("users"), title: v.string() }),
+            users: defineTable({ name: v.string() }),
+        });
+
+        const plan = seedPlan(chain, { defaultCount: 4, existingIds: { posts: ["p1", "p2"] }, only: ["comments"] });
+        const tables = plan.map((entry) => entry.table);
+
+        expect(tables).toEqual(["comments"]);
+        expect(tables).not.toContain("users");
+
+        const pool = new Set(["p1", "p2"]);
+
+        expect(plan[0]!.rows.every((row) => pool.has(row.postId as string))).toBe(true);
+    });
+
     it("exposes a cross-table `store` to override functions", () => {
         expect.hasAssertions();
 

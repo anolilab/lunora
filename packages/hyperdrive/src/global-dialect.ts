@@ -105,7 +105,13 @@ export const postgresDialect: SqlDialect = {
     name: "postgres",
     supportsReturning: true,
 
-    tableExists: (table) => sql`SELECT table_name FROM information_schema.tables WHERE table_name = ${table}`,
+    // Restrict to schemas on the effective search_path (excluding the implicit
+    // pg_catalog with `false`) so an unqualified name resolves exactly as CREATE
+    // TABLE / SELECT would. Without this filter the probe sees same-named tables in
+    // OTHER schemas of the same database (a common multi-tenant/multi-env Hyperdrive
+    // setup), reporting a companion table that does not exist on the search_path.
+    tableExists: (table) =>
+        sql`SELECT table_name FROM information_schema.tables WHERE table_schema = ANY (current_schemas(false)) AND table_name = ${table}`,
 };
 
 /**
@@ -135,8 +141,13 @@ export const mysqlDialect: SqlDialect = {
         { name: "id", type: "VARCHAR(768) PRIMARY KEY" },
         { name: "_creationTime", type: "DOUBLE NOT NULL" },
     ],
-    // InnoDB can't index a TEXT/LONGTEXT/BLOB column without a key prefix; bound it to 768 chars.
-    indexKeyPrefix: (kind) => (MYSQL_PREFIX_INDEX_RE.test(mysqlColumnType(kind)) ? 768 : undefined),
+    // InnoDB can't index a TEXT/LONGTEXT/BLOB column without a key prefix. Bound it
+    // to 191 chars (191 × 4 = 764 bytes under utf8mb4), matching the rank-companion
+    // convention: a flat 768-char prefix is 3072 bytes — exactly InnoDB's whole-index
+    // key limit — so ANY composite index containing a string field (e.g.
+    // `.index("by_project", ["projectId", "seq"])`) would exceed 3072 and fail CREATE
+    // INDEX with ER_TOO_LONG_KEY. 191 leaves room for several columns under the cap.
+    indexKeyPrefix: (kind) => (MYSQL_PREFIX_INDEX_RE.test(mysqlColumnType(kind)) ? 191 : undefined),
     isUniqueViolation: (error) => {
         const candidate = error as { code?: unknown; errno?: unknown };
 

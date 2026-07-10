@@ -94,6 +94,17 @@ describe("dispatchQueueBatch", () => {
         await expect(dispatchQueueBatch(batch("ghost", []), {}, { env: {} })).rejects.toThrow(/no push handler is registered/);
     });
 
+    it("throws the directed error for a prototype-named queue not in the registry (constructor)", async () => {
+        expect.assertions(1);
+
+        // `constructor` is a valid wrangler queue name AND a member of Object.prototype.
+        // A plain `registry[batch.queue]` would resolve the inherited `Object`, make
+        // `entry === undefined` false, and then throw an opaque TypeError while
+        // destructuring `entry.definition`. The lookup must treat it as unregistered
+        // and raise the directed "no push handler is registered" error instead.
+        await expect(dispatchQueueBatch(batch("constructor", []), {}, { env: {} })).rejects.toThrow(/no push handler is registered/);
+    });
+
     it("throws for a pull-declared queue with no handler", async () => {
         expect.assertions(1);
 
@@ -349,5 +360,26 @@ describe("dispatchQueueBatch capture", () => {
         await expect(dispatchQueueBatch(batch("q", [captureMessage(1)]), { q: { definition: throwing, exportName: "q" } }, { capture, env: {} })).rejects.toBe(
             boom,
         );
+    });
+
+    it("logs a warning when the capture sink rejects (observability of the observability feature)", async () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        try {
+            const capture = vi.fn(() => Promise.reject(new Error("sink down")));
+            const queue = defineQueue({ handler: () => {} });
+
+            // A silently-swallowed sink failure (stale admin token / shard error) used
+            // to leave the studio Queues panel empty with zero diagnostic. The bare
+            // `catch {}` must now warn (delivery still unaffected — clean return resolves).
+            await dispatchQueueBatch(batch("q", [captureMessage(1)]), { q: { definition: queue, exportName: "q" } }, { capture, env: {} });
+
+            expect(warn).toHaveBeenCalledTimes(1);
+            expect(warn.mock.calls[0]?.[0]).toMatch(/capture sink failed/u);
+        } finally {
+            warn.mockRestore();
+        }
     });
 });

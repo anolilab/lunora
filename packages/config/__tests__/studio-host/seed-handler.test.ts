@@ -108,6 +108,16 @@ describe("handleSeedRequest", () => {
         expect(handleSeedRequest({ body: undefined, method: "POST", projectRoot }).status).toBe(400);
     });
 
+    it("rejects a body of literal null with a 400 (not a 500 TypeError)", () => {
+        expect.assertions(2);
+
+        // `typeof null === "object"`, so a naive guard destructures null and 500s.
+        const result = handleSeedRequest({ body: null, method: "POST", projectRoot });
+
+        expect(result.status).toBe(400);
+        expect(result.body).toStrictEqual({ error: "invalid-request", ok: false });
+    });
+
     it("rejects an unsupported HTTP method", () => {
         expect.assertions(1);
 

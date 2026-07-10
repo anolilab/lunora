@@ -215,6 +215,32 @@ describe("presence (Svelte)", () => {
         expect(fake.mutationCalls).toHaveLength(callsAtTeardown);
     });
 
+    it("teardown is idempotent — releases the connection context exactly once (FINDING 3 regression)", () => {
+        let releaseCalls = 0;
+
+        const client = {
+            acquireConnectionContext: () => () => {
+                releaseCalls += 1;
+            },
+            mutation: () => Promise.resolve(undefined),
+            subscribe: () => () => undefined,
+        } as unknown as LunoraClient;
+
+        const handle = presence(client, "room-1", {
+            heartbeat: HEARTBEAT,
+            intervalMs: 500,
+            listPresent: LIST_PRESENT,
+            sessionId: "sess-idem",
+        });
+
+        // The auto-wired `onDestroy` and a manual `handle.teardown()` may both
+        // fire in a real component; teardown must guard so the release runs once.
+        handle.teardown();
+        handle.teardown();
+
+        expect(releaseCalls).toBe(1);
+    });
+
     it("two concurrent presence stores don't clear each other's context (refcount)", () => {
         const fake = createPresenceFakeClient();
 

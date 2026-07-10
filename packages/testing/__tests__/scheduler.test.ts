@@ -24,6 +24,26 @@ const scheduleAppendAt = mutation
     .input({ atMs: v.number(), message: v.string() })
     .mutation(({ args, ctx }) => ctx.scheduler.runAt(args.atMs, "log:appendLog", { message: args.message }));
 
+/** Mutation that schedules `appendLog` relative to `ctx.now` (the harness's virtual clock). */
+const scheduleRelativeToNow = mutation
+    .input({ delayMs: v.number(), message: v.string() })
+    .mutation(({ args, ctx }) => ctx.scheduler.runAt(ctx.now + args.delayMs, "log:appendLog", { message: args.message }));
+
+/**
+ * Internal mutation that cancels every pending `log:appendLog` job — used as a
+ * scheduled job that cancels a sibling job due in the same sweep.
+ */
+const cancelPendingAppends = internalMutation.mutation(async ({ ctx }) => {
+    const jobs = await ctx.scheduler.list();
+
+    for (const job of jobs) {
+        if (job.functionPath === "log:appendLog") {
+            // eslint-disable-next-line no-await-in-loop -- sequential cancels over a small snapshot; ordering is irrelevant
+            await ctx.scheduler.cancel(job.id);
+        }
+    }
+});
+
 /** Mutation that schedules the throwing batch via ctx.scheduler.runAfter. */
 const scheduleThrow = mutation.mutation(({ ctx }) => ctx.scheduler.runAfter(0, "log:appendThenThrow", {}));
 
@@ -67,6 +87,7 @@ const functions = {
     "log:appendLog": appendLog,
     "log:appendOrThrow": appendOrThrow,
     "log:appendThenThrow": appendThenThrow,
+    "log:cancelPendingAppends": cancelPendingAppends,
 };
 
 const open: ReturnType<typeof lunoraTest>[] = [];
@@ -185,6 +206,56 @@ describe("fake scheduler", () => {
         const log = await t.query(readLog, {});
 
         expect(log).toHaveLength(0);
+    });
+
+    it("does not execute a job cancelled by an earlier job in the same sweep", async () => {
+        expect.assertions(3);
+
+        const t = start();
+
+        // Enqueue the canceller FIRST so it dispatches before the target within the
+        // sweep, then the appendLog target. Both are due at 0.
+        await t.run(async (ctx) => {
+            await ctx.scheduler.runAfter(0, "log:cancelPendingAppends", {});
+            await ctx.scheduler.runAfter(0, "log:appendLog", { message: "should-not-run" });
+        });
+
+        const executed = await t.scheduler.runPending();
+
+        // Only the canceller ran; the appendLog job was removed mid-sweep and skipped
+        // (its handler must not run, honouring cancel's `{ cancelled: true }`), so it
+        // is not counted as executed either.
+        expect(executed).toBe(1);
+        expect(t.scheduler.list()).toHaveLength(0);
+
+        await expect(t.query(readLog, {})).resolves.toHaveLength(0);
+    });
+
+    it("seeds the virtual clock from options.now so ctx.now-relative scheduling is deterministic", async () => {
+        expect.assertions(3);
+
+        // A fixed `now` far below the wall clock. Before the fix the scheduler seeded
+        // its virtual clock from Date.now() (~2026) while ctx.now was this value
+        // (~2023), so a `runAt(ctx.now + delay)` job sat far below virtual now and
+        // advance(1) fired it immediately.
+        const fixedNow = 1_700_000_000_000;
+        const t = lunoraTest(schema, { functions, now: fixedNow });
+
+        open.push(t);
+
+        await t.mutation(scheduleRelativeToNow, { delayMs: 60_000, message: "relative" });
+
+        // Advancing less than the delay must NOT fire it.
+        const early = await t.scheduler.advance(1);
+
+        expect(early).toBe(0);
+
+        // Advancing past the delay fires it.
+        const late = await t.scheduler.advance(60_000);
+
+        expect(late).toBe(1);
+
+        await expect(t.query(readLog, {})).resolves.toHaveLength(1);
     });
 
     it("cancel returns cancelled: false for an unknown id", async () => {

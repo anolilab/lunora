@@ -10,7 +10,7 @@ export type { Entitlements, EntitlementsConfig, PlanDefinition } from "./entitle
 export { entitlementsForReference, featureNames, hasActivePrice, resolveEntitlements, usagePeriodStart } from "./entitlements";
 export type { PaymentErrorCode } from "./errors";
 export { LunoraPaymentError } from "./errors";
-export { default as idempotencyKey } from "./idempotency";
+export { idempotencyKey } from "./idempotency";
 export type { MoneyJSON } from "./money";
 export {
     addMoney,

@@ -72,6 +72,37 @@ describe("usePreloadedQuery", () => {
         });
     });
 
+    it("a live push of null replaces the preloaded value instead of falling back to it", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient(() => {
+            return { count: 1 };
+        });
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <Display token={preloaded("posts:list", { count: 1 })} />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(mock.subscribe).toHaveBeenCalledTimes(1);
+        });
+
+        // The document is deleted / access revoked: the server legitimately
+        // re-evaluates the query to `null`. A `data ?? value` fallback would
+        // coalesce that `null` back to the stale preloaded `{ count: 1 }` — the
+        // deleted post would keep rendering forever. `null` must pass through.
+        await act(async () => {
+             
+            mock.emit("posts:list", null);
+        });
+
+        await waitFor(() => {
+            expect(screen.getByTestId("display").textContent).toBe(JSON.stringify(null));
+        });
+    });
+
     it("server-renders the preloaded value (SSR getServerSnapshot, no effects)", () => {
         expect.assertions(3);
 

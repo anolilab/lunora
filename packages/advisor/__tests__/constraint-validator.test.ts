@@ -182,17 +182,66 @@ describe("constraint_validator", () => {
         });
     });
 
-    it("notes the sample cap in the finding detail when truncated", () => {
+    it("notes the sample cap in the finding detail when the source is truncated", () => {
         expect.assertions(1);
 
-        const userSample = makeSample("users", [{ _id: "u1", email: "a@b.com" }], { cap: 100, truncated: true });
-        // posts.authorId "ghost" dangling, and sample is truncated.
-        const postSample = makeSample("posts", [{ _id: "p1", authorId: "ghost", title: "Hello" }]);
+        // The FK target (users) is complete; the referencing sample (posts) is
+        // truncated, so the caveat means "more violations may exist beyond the
+        // window" — which is the case where noting the cap is correct.
+        const userSample = makeSample("users", [{ _id: "u1", email: "a@b.com" }]);
+        const postSample = makeSample("posts", [{ _id: "p1", authorId: "ghost", title: "Hello" }], { cap: 100, truncated: true });
 
         const findings = constraintValidator.run({ schema, tableSamples: [userSample, postSample] });
         const fkFinding = findings.find((f) => f.metadata["kind"] === "fk");
 
         expect(fkFinding?.detail).toContain("capped");
+    });
+
+    it("does not flag a FK whose target row lies beyond a truncated target sample (Finding 3)", () => {
+        expect.assertions(1);
+
+        // users is truncated at cap 1: `u_beyond` is a real row that exists past
+        // the sample window. posts.authorId points at it — a VALID reference that
+        // must not be reported as dangling just because the target sample is
+        // bounded.
+        const userSample = makeSample("users", [{ _id: "u1", email: "a@b.com" }], { cap: 1, truncated: true });
+        const postSample = makeSample("posts", [{ _id: "p1", authorId: "u_beyond", title: "Hello" }]);
+
+        const findings = constraintValidator.run({ schema, tableSamples: [userSample, postSample] });
+
+        expect(findings.filter((f) => f.metadata["kind"] === "fk")).toHaveLength(0);
+    });
+
+    it("checks a custom `references` column, not the target's _id set (Finding 4)", () => {
+        expect.assertions(3);
+
+        // posts.authorSlug references users.slug (not users._id). The valid row
+        // resolves against the slug column; the dangling one does not. Comparing
+        // against the _id set (the old bug) would flag BOTH as dangling.
+        const refSchema = fromServerSchema(
+            defineSchema({
+                posts: defineTable({ authorSlug: v.string(), title: v.string() }).relations((r) => {
+                    return { author: r.one("users", { field: "authorSlug", references: "slug" }) };
+                }),
+                users: defineTable({ slug: v.string() }).index("bySlug", ["slug"], { unique: true }),
+            }),
+        );
+        const userSample = makeSample("users", [
+            { _id: "u1", slug: "alice" },
+            { _id: "u2", slug: "bob" },
+        ]);
+        const postSample = makeSample("posts", [
+            { _id: "p1", authorSlug: "alice", title: "Valid" },
+            { _id: "p2", authorSlug: "ghost", title: "Orphan" },
+        ]);
+
+        const findings = constraintValidator.run({ schema: refSchema, tableSamples: [userSample, postSample] });
+        const fkFinding = findings.find((f) => f.metadata["kind"] === "fk" && f.metadata["table"] === "posts");
+
+        // Exactly one dangling row (p2 → "ghost"); p1 → "alice" resolves.
+        expect(fkFinding).toBeDefined();
+        expect(fkFinding?.metadata["count"]).toBe(1);
+        expect(fkFinding?.metadata["references"]).toBe("slug");
     });
 
     it("sets cacheKey, name, and level correctly", () => {

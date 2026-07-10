@@ -141,7 +141,18 @@ export class SubscriptionRegistry {
     }
 
     public remove(state: SubscriptionState): void {
-        this.byKey.delete(SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey));
+        const key = SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey);
+
+        // Identity-checked: only evict the `byKey` slot when it still maps to
+        // THIS state. After a server `complete` removed S1, a fresh subscription
+        // (S2) under the same (fn, args, shardKey) may have re-claimed the slot;
+        // a late unsubscribe of S1 must not delete S2's slot (which would hide S2
+        // from `subscribe()`'s dedup and the optimistic keyed lookup even though
+        // it keeps receiving frames via `byId`).
+        if (this.byKey.get(key) === state) {
+            this.byKey.delete(key);
+        }
+
         this.byId.delete(state.id);
     }
 

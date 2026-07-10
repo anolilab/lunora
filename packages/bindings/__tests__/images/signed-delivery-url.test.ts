@@ -159,6 +159,25 @@ describe("buildSignedImageUrl / verifySignedImageUrl", () => {
         expect(result.reason).toBe("malformed");
     });
 
+    it("rejects a baseUrl carrying a path — it would make every minted URL fail verification", async () => {
+        // The key is verified from the whole url.pathname, so a subpath base
+        // (`/img`) would leave verify canonicalizing `img/a.png` while the
+        // signature covered `a.png`: 100% bad_signature. Reject it at build time.
+        expect.assertions(1);
+
+        await expect(buildSignedImageUrl({ baseUrl: "https://cdn.acme.test/img", key: "a.png", secret: SECRET })).rejects.toThrow(/must not carry a path/);
+    });
+
+    it("accepts a baseUrl with a bare trailing-slash root path", async () => {
+        expect.assertions(2);
+
+        const url = await buildSignedImageUrl({ baseUrl: "https://cdn.acme.test/", key: "a.png", secret: SECRET });
+        const result = await verifySignedImageUrl(url, SECRET);
+
+        expect(result.valid).toBe(true);
+        expect(result.key).toBe("a.png");
+    });
+
     it("round-trips a key that has a leading slash (canonical/URL mismatch regression)", async () => {
         // A leading-slash key was previously signed with the slash in the
         // canonical but built into the URL without it, so verify always returned

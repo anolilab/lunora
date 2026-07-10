@@ -70,7 +70,7 @@ interface LunoraIntegrationOptions {
  * changing the public surface.
  */
 const lunora = (options: LunoraIntegrationOptions = {}): AstroIntegrationLike => {
-    const serverEntry = options.serverEntry ?? "src/worker.ts";
+    const serverEntry = (options.serverEntry ?? "src/worker.ts").trim();
 
     return {
         hooks: {

@@ -273,8 +273,6 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
     // invalidation loop below target the wrong (empty) directory.
     let absoluteGeneratedDirectory = resolve(options.projectRoot, options.generatedDir);
 
-    let debounceTimer: ReturnType<typeof setTimeout> | undefined;
-
     // Captured in configureServer and used to push overlay events. Undefined in
     // build mode (vite build) — the overlay callbacks are never wired up then.
     let devServer: ViteDevServer | undefined;
@@ -427,6 +425,13 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
             // Set once the server is torn down so a debounced callback that fires
             // after `close` no-ops instead of writing to a dead ws/module graph.
             let closed = false;
+
+            // Per-server-generation debounce timer. Scoped INSIDE configureServer
+            // (not the plugin factory) so a `server.restart()` — which configures the
+            // NEW server before closing the OLD one — can't have the old server's
+            // teardown cancel a codegen run the new server just armed. Nothing outside
+            // configureServer touches it (buildStart never arms a debounce).
+            let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
             // The reused ts-morph Project. Built on first codegen run and refreshed
             // from disk on each subsequent one, so the dev-loop never re-parses the

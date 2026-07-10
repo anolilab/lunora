@@ -1,3 +1,4 @@
+export type { LintSchemaOptions } from "./advisor";
 export { formatAdvisories, lintSchema } from "./advisor";
 export { CodegenDiagnosticError, diagnosticAt } from "./diagnostics";
 export { default as discoverAuthApiCalls } from "./discover-authapi-calls";

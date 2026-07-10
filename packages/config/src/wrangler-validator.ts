@@ -297,6 +297,15 @@ const validateContainerEntry = (entry: WranglerContainerEntry | null | undefined
 };
 
 /**
+ * The object-typed entries of a possibly-malformed bindings array from untrusted
+ * JSONC. Tolerates a non-array value (e.g. a stray string) and drops `null` /
+ * non-object entries (a trailing comma in JSONC parses to `[null]`), so callers
+ * can safely `.find`/`.map` string fields without a raw `TypeError`.
+ */
+const objectBindingEntries = <T>(value: ReadonlyArray<T> | undefined): T[] =>
+    Array.isArray(value) ? value.filter((entry): entry is object & T => entry !== null && typeof entry === "object") : [];
+
+/**
  * Every `containers[]` entry must be a container-enabled Durable Object the
  * worker actually wires up (see {@link validateContainerEntry}). Also nudges
  * when observability is off — container logs are invisible without it.
@@ -320,7 +329,7 @@ const validateContainers = (wrangler: WranglerConfig, errors: string[], warnings
         return;
     }
 
-    const boundClasses = new Set((wrangler.durable_objects?.bindings ?? []).map((binding) => binding.class_name));
+    const boundClasses = new Set(objectBindingEntries(wrangler.durable_objects?.bindings).map((binding) => binding.class_name));
     const migrations = wrangler.migrations ?? [];
     const sqliteClasses = new Set(migrations.flatMap((migration) => [...(migration?.new_sqlite_classes ?? [])]));
     const nonSqliteClasses = new Set(migrations.flatMap((migration) => [...(migration?.new_classes ?? [])]));
@@ -1003,7 +1012,7 @@ const validateWranglerConfig = (wrangler: WranglerConfig | undefined, schema?: S
         return { errors, valid: false, warnings };
     }
 
-    const durableObjectBindings = wrangler.durable_objects?.bindings ?? [];
+    const durableObjectBindings = objectBindingEntries(wrangler.durable_objects?.bindings);
     const shardBinding = durableObjectBindings.find((binding) => binding.name === "SHARD" && binding.class_name === "ShardDO");
 
     if (!shardBinding) {
@@ -1047,7 +1056,7 @@ const validateWranglerConfig = (wrangler: WranglerConfig | undefined, schema?: S
     // adds no signal. We therefore neither require nor reject the flag here.
 
     if (schema?.hasGlobalTable) {
-        const d1Bindings = wrangler.d1_databases ?? [];
+        const d1Bindings = objectBindingEntries(wrangler.d1_databases);
         const databaseBinding = d1Bindings.find((binding) => binding.binding === "DB");
 
         if (!databaseBinding) {

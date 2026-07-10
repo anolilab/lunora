@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -662,5 +662,53 @@ describe("lunora migrate d1-to-hyperdrive", () => {
         expect(calls.some((url) => url.startsWith("https://old.example.com") && url.includes("/_lunora/admin/export"))).toBe(true);
         expect(calls.some((url) => url.startsWith("https://new.example.com") && url.includes("/_lunora/admin/import"))).toBe(true);
         expect(infos.some((line) => line.includes("counts match"))).toBe(true);
+    });
+
+    it("shreds the private plaintext dump dir even when the import throws", async () => {
+        expect.hasAssertions();
+
+        const ndjson = '{"table":"settings","doc":{"_creationTime":1,"_id":"a","key":"x"}}\n';
+        const logger: Logger = { error: () => {}, info: () => {}, success: () => {}, warn: () => {} };
+
+        // Export streams rows, but the import batch POST returns a hard failure,
+        // which makes runImportCommand throw — the temp dir must still be removed.
+        const fetchImpl: StreamingFetchLike = async (input: string) => {
+            if (input.includes("/_lunora/admin/export")) {
+                return {
+                    body: new ReadableStream<Uint8Array>({
+                        start(controller) {
+                            controller.enqueue(new TextEncoder().encode(ndjson));
+                            controller.close();
+                        },
+                    }),
+                    json: async () => ({}),
+                    ok: true,
+                    status: 200,
+                    text: async () => ndjson,
+                };
+            }
+
+            return { body: null, json: async () => ({}), ok: false, status: 500, text: async () => "boom" };
+        };
+
+        const dumpDirsBefore = readdirSync(tmpdir()).filter((name) => name.startsWith("lunora-d1ps-"));
+
+        // No `out` — the command stages the dump in a private mkdtemp dir it owns.
+        await expect(
+            runMigrateToHyperdriveCommand({
+                fetchImpl,
+                fromToken: "source-token",
+                fromUrl: "https://old.example.com",
+                logger,
+                tables: "settings",
+                toToken: "target-token",
+                toUrl: "https://new.example.com",
+            }),
+        ).rejects.toThrow();
+
+        const dumpDirsAfter = readdirSync(tmpdir()).filter((name) => name.startsWith("lunora-d1ps-"));
+
+        // The finally block removed the staging dir it created; no new one leaked.
+        expect(dumpDirsAfter).toStrictEqual(dumpDirsBefore);
     });
 });

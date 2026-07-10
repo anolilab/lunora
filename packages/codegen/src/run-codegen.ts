@@ -119,8 +119,9 @@ const writeIfChanged = (filePath: string, content: string): void => {
  * `@lunora/seed` uninstalled) would leave a lingering `_generated/&lt;feature>.ts`
  * that imports a now-absent package and breaks the build. `force: true` no-ops
  * when the file never existed. Only ever called for the known conditional set
- * (containers/workflows/queues/seed/collections), so it never touches an
- * unrelated file. Keeps the per-feature gating out of `runCodegen`'s control flow.
+ * (containers/workflows/queues/seed/collections and the openapi/openrpc spec
+ * artifacts), so it never touches an unrelated file. Keeps the per-feature gating
+ * out of `runCodegen`'s control flow.
  */
 const writeIfPresent = (filePath: string, content: string): void => {
     if (content === "") {
@@ -355,56 +356,56 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const advisories =
         options.lint === false
             ? []
-            : lintSchema(
-                  schema,
-                  discoverQueries(project, lunoraDirectory),
-                  discoverInserts(project, lunoraDirectory),
-                  discoverAuthApiCalls(project, lunoraDirectory),
-                  discoverRlsProcedures(project, lunoraDirectory),
+            : lintSchema({
+                  adminRoutes: discoverAdminRoutes(project, lunoraDirectory),
+                  aiRawRuns: discoverAiRawRuns(project, lunoraDirectory),
+                  aiToolSideEffects: discoverAiToolSideEffects(project, lunoraDirectory),
+                  argumentDerivedFetches: discoverArgumentDerivedFetches(project, lunoraDirectory),
+                  argumentValidators: discoverArgumentValidators(project, lunoraDirectory),
+                  authApiCalls: discoverAuthApiCalls(project, lunoraDirectory),
+                  authConfigs: discoverAuthConfig(project, lunoraDirectory),
+                  browserUrlAccesses: discoverBrowserUrlAccesses(project, lunoraDirectory),
+                  configCalls: discoverConfigCalls(project, lunoraDirectory),
+                  containerKeyAccesses: discoverContainerKeyAccesses(project, lunoraDirectory),
+                  containerOverrides: discoverContainerOverrides(project, lunoraDirectory),
                   containers,
-                  workflows,
-                  discoverWorkflowCalls(project, lunoraDirectory),
-                  discoverMaskProcedures(project, lunoraDirectory),
-                  discoverNondeterministicCalls(project, lunoraDirectory),
-                  discoverProcedureMiddleware(project, lunoraDirectory),
-                  discoverArgumentValidators(project, lunoraDirectory),
-                  discoverSecrets(project, lunoraDirectory),
-                  discoverSqlInterpolation(project, lunoraDirectory),
-                  discoverAdminRoutes(project, lunoraDirectory),
-                  discoverR2sqlCalls(project, lunoraDirectory),
-                  shapes,
-                  discoverMutatorWrites(project, lunoraDirectory),
-                  discoverConfigCalls(project, lunoraDirectory),
-                  discoverArgumentDerivedFetches(project, lunoraDirectory),
-                  discoverKvKeyAccesses(project, lunoraDirectory),
-                  discoverOwnerFieldWrites(project, lunoraDirectory),
-                  discoverStorageKeyAccesses(project, lunoraDirectory),
-                  discoverAiRawRuns(project, lunoraDirectory),
-                  discoverContainerKeyAccesses(project, lunoraDirectory),
-                  discoverMailRecipientAccesses(project, lunoraDirectory),
-                  discoverVectorNamespaceAccesses(project, lunoraDirectory),
-                  discoverBrowserUrlAccesses(project, lunoraDirectory),
-                  discoverPrivilegedDispatches(project, lunoraDirectory),
-                  discoverContainerOverrides(project, lunoraDirectory),
-                  discoverAuthConfig(project, lunoraDirectory),
-                  discoverMaskStrategies(project, lunoraDirectory),
-                  discoverImageDeliveryUrlAccesses(project, lunoraDirectory),
-                  discoverRatelimitKeySelectors(project, lunoraDirectory),
-                  discoverStorageUploads(project, lunoraDirectory),
-                  discoverHttpActionGuards(project, lunoraDirectory),
-                  discoverHttpHeaderWrites(project, lunoraDirectory),
-                  discoverFailOpenGuards(project, lunoraDirectory),
-                  discoverFlagSecurityDefaults(project, lunoraDirectory),
-                  discoverAiToolSideEffects(project, lunoraDirectory),
-                  discoverIdentityClaimReads(project, lunoraDirectory),
-                  discoverPaymentWebhooks(project, lunoraDirectory),
-                  discoverSoftDeleteReads(project, lunoraDirectory),
-                  discoverRelationLoads(project, lunoraDirectory),
-                  discoverRawRowReturns(project, lunoraDirectory),
-                  discoverNormalizeIdAuthorization(project, lunoraDirectory),
-                  options.wranglerVariables,
+                  failOpenGuards: discoverFailOpenGuards(project, lunoraDirectory),
+                  flagSecurityDefaults: discoverFlagSecurityDefaults(project, lunoraDirectory),
+                  httpActionGuards: discoverHttpActionGuards(project, lunoraDirectory),
+                  httpHeaderWrites: discoverHttpHeaderWrites(project, lunoraDirectory),
+                  identityClaimReads: discoverIdentityClaimReads(project, lunoraDirectory),
+                  imageDeliveryUrlAccesses: discoverImageDeliveryUrlAccesses(project, lunoraDirectory),
+                  inserts: discoverInserts(project, lunoraDirectory),
+                  kvKeyAccesses: discoverKvKeyAccesses(project, lunoraDirectory),
+                  mailRecipientAccesses: discoverMailRecipientAccesses(project, lunoraDirectory),
+                  maskProcedures: discoverMaskProcedures(project, lunoraDirectory),
+                  maskStrategies: discoverMaskStrategies(project, lunoraDirectory),
+                  mutatorWrites: discoverMutatorWrites(project, lunoraDirectory),
+                  nondeterministicCalls: discoverNondeterministicCalls(project, lunoraDirectory),
+                  normalizeIdAuthorizations: discoverNormalizeIdAuthorization(project, lunoraDirectory),
+                  ownerFieldWrites: discoverOwnerFieldWrites(project, lunoraDirectory),
+                  paymentWebhooks: discoverPaymentWebhooks(project, lunoraDirectory),
+                  privilegedDispatches: discoverPrivilegedDispatches(project, lunoraDirectory),
+                  procedureProtections: discoverProcedureMiddleware(project, lunoraDirectory),
+                  queries: discoverQueries(project, lunoraDirectory),
                   queues,
-              );
+                  r2sqlCalls: discoverR2sqlCalls(project, lunoraDirectory),
+                  ratelimitKeySelectors: discoverRatelimitKeySelectors(project, lunoraDirectory),
+                  rawRowReturns: discoverRawRowReturns(project, lunoraDirectory),
+                  relationLoads: discoverRelationLoads(project, lunoraDirectory),
+                  rlsProcedures: discoverRlsProcedures(project, lunoraDirectory),
+                  schema,
+                  secretLiterals: discoverSecrets(project, lunoraDirectory),
+                  shapes,
+                  softDeleteReads: discoverSoftDeleteReads(project, lunoraDirectory),
+                  sqlInterpolations: discoverSqlInterpolation(project, lunoraDirectory),
+                  storageKeyAccesses: discoverStorageKeyAccesses(project, lunoraDirectory),
+                  storageUploads: discoverStorageUploads(project, lunoraDirectory),
+                  vectorNamespaceAccesses: discoverVectorNamespaceAccesses(project, lunoraDirectory),
+                  workflowCalls: discoverWorkflowCalls(project, lunoraDirectory),
+                  workflows,
+                  wranglerVariables: options.wranglerVariables,
+              });
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,
     // emitted into the generated ShardDO's `rlsMetadata()` override. Statically
@@ -666,19 +667,17 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         //   - collections.ts → `@lunora/db`, when the project declares shapes
         writeIfPresent(join(outputDirectory, "collections.ts"), collectionsContent);
 
-        if (wantsOpenApi) {
-            // The `.json` is the portable artifact for external tooling; the
-            // `.ts` (same document, inlined) is what the worker imports and
-            // passes to `createWorker({ openApiSpec })`. Both are gated on the
-            // same `apiSpec` choice so they regenerate together.
-            writeIfChanged(join(outputDirectory, "openapi.json"), openApiContent);
-            writeIfChanged(join(outputDirectory, "openapi.ts"), openApiModuleContent);
-        }
-
-        if (wantsOpenRpc) {
-            writeIfChanged(join(outputDirectory, "openrpc.json"), openRpcContent);
-            writeIfChanged(join(outputDirectory, "openrpc.ts"), openRpcModuleContent);
-        }
+        // The `.json` is the portable artifact for external tooling; the `.ts`
+        // (same document, inlined) is what the worker imports and passes to
+        // `createWorker({ openApiSpec })`. Both are gated on the same `apiSpec`
+        // choice so they regenerate together — and routed through `writeIfPresent`
+        // (empty content when the mode is off) so switching `apiSpec` away from a
+        // format also DELETES its now-stale spec files instead of leaving a
+        // portable artifact that documents endpoints/args that no longer exist.
+        writeIfPresent(join(outputDirectory, "openapi.json"), wantsOpenApi ? openApiContent : "");
+        writeIfPresent(join(outputDirectory, "openapi.ts"), wantsOpenApi ? openApiModuleContent : "");
+        writeIfPresent(join(outputDirectory, "openrpc.json"), wantsOpenRpc ? openRpcContent : "");
+        writeIfPresent(join(outputDirectory, "openrpc.ts"), wantsOpenRpc ? openRpcModuleContent : "");
 
         // Bless the schema baseline on first capture (so a project gets a
         // committed snapshot the moment it runs codegen) or when explicitly

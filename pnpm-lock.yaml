@@ -2591,8 +2591,8 @@ importers:
         specifier: catalog:lint
         version: 3.2.0
       h3:
-        specifier: ^2.0.0
-        version: 2.0.0
+        specifier: ^1.15.11
+        version: 1.15.11
       typescript:
         specifier: catalog:tsc
         version: 6.0.3
@@ -14371,10 +14371,6 @@ packages:
 
   h3@1.15.11:
     resolution: {integrity: sha512-L3THSe2MPeBwgIZVSH5zLdBBU90TOxarvhK9d04IDY2AmVS8j2Jz2LIWtwsGOU3lu2I5jCN7FNvVfY2+XyF+mg==}
-
-  h3@2.0.0:
-    resolution: {integrity: sha512-3INyyEir2VkWXD3auY+uUL/mqrgYX5ejRdUjtjyd4AOZcoijIyvf6PkBPsn+NFGE5rks2nCcMIOLZGTxpp/A7w==}
-    deprecated: please use 1.x or beta
 
   h3@2.0.1-rc.20:
     resolution: {integrity: sha512-28ljodXuUp0fZovdiSRq4G9OgrxCztrJe5VdYzXAB7ueRvI7pIUqLU14Xi3XqdYJ/khXjfpUOOD2EQa6CmBgsg==}
@@ -31418,8 +31414,6 @@ snapshots:
       radix3: 1.1.2
       ufo: 1.6.4
       uncrypto: 0.1.3
-
-  h3@2.0.0: {}
 
   h3@2.0.1-rc.20:
     dependencies:

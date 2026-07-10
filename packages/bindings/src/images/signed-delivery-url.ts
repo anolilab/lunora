@@ -152,6 +152,26 @@ export const buildSignedImageUrl = async (options: SignedImageUrlOptions): Promi
         throw new TypeError(`@lunora/bindings/images: expiresInSeconds must not exceed ${String(MAX_EXPIRES_IN_SECONDS)} (7 days)`);
     }
 
+    // A path on `baseUrl` would be prepended to the key in the minted URL's
+    // pathname (`${base}/${safeKey}`), but `verifySignedImageUrl` reconstructs
+    // the key from the ENTIRE `url.pathname` and can't know the base prefix — so
+    // a base mounted at a subpath makes every minted URL fail verification. The
+    // signature only binds host + key, not the base path, so we can't recover it
+    // on verify; reject it loudly here instead of silently minting dead URLs.
+    let basePath = "";
+
+    try {
+        basePath = new URL(options.baseUrl).pathname;
+    } catch {
+        // Non-absolute baseUrl (host-only form handled by `extractHost`): no path.
+    }
+
+    if (basePath !== "" && basePath !== "/") {
+        throw new TypeError(
+            `@lunora/bindings/images: baseUrl must not carry a path ("${basePath}") — the key is verified from the full URL pathname, so a subpath base would make every signed URL fail verification`,
+        );
+    }
+
     const exp = Math.floor(Date.now() / 1000) + expiresInSeconds;
     const host = extractHost(options.baseUrl);
     const transform = serializeTransform(options.transform);

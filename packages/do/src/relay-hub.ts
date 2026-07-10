@@ -23,6 +23,7 @@
 
 import { LunoraError, toErrorBody } from "@lunora/errors";
 
+import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import type { SqlExec } from "./ctx-db";
 import type { MaskPoliciesResult, RlsPoliciesResult } from "./introspect";
 import { stableStringify } from "./reactive-cache";
@@ -50,27 +51,6 @@ const relaySecretOf = (env: unknown): string | undefined => {
     const value = (env as Record<string, unknown> | undefined)?.[RELAY_SECRET_KEY];
 
     return typeof value === "string" && value.length > 0 ? value : undefined;
-};
-
-/** Constant-time hex-string compare (mirrors the DO admin-token compare) — avoids leaking match progress via early exit. */
-const constantTimeEqual = (a: string, b: string): boolean => {
-    if (a.length !== b.length) {
-        return false;
-    }
-
-    let mismatch = 0;
-
-    for (let index = 0; index < a.length; index += 1) {
-        // eslint-disable-next-line unicorn/prefer-code-point -- compare per UTF-16 code unit; hex strings carry no surrogates
-        const charA = a.charCodeAt(index);
-        // eslint-disable-next-line unicorn/prefer-code-point -- compare per UTF-16 code unit; hex strings carry no surrogates
-        const charB = b.charCodeAt(index);
-
-        // eslint-disable-next-line no-bitwise -- constant-time accumulate of every code-unit delta
-        mismatch |= charA ^ charB;
-    }
-
-    return mismatch === 0;
 };
 
 /**

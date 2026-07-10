@@ -157,3 +157,18 @@ export const sql = (strings: TemplateStringsArray, ...values: unknown[]): Sql =>
 
 /** Join SQL fragments/strings with `separator` into one {@link Sql} (e.g. `AND`-ed conditions). */
 export const joinSql = (parts: ReadonlyArray<Sql | string>, separator: string): Sql => new Sql(parts.map((part) => toText(part)).join(separator));
+
+/** R2 SQL's documented `LIMIT` ceiling. */
+const MAX_LIMIT = 10_000;
+
+/**
+ * Validate a `LIMIT` value against R2 SQL's 1–10,000 integer range, eagerly and
+ * with a clear error, rather than rendering `LIMIT 3.5` / `LIMIT 0` / `LIMIT
+ * 50000` that R2 SQL rejects as an opaque remote error. Matches the package's
+ * eager-validation posture (kv `list` / vectors `query` throw on bad limits).
+ */
+export const assertLimit = (n: number): void => {
+    if (!Number.isInteger(n) || n < 1 || n > MAX_LIMIT) {
+        throw new RangeError(`r2sql: limit must be an integer between 1 and ${String(MAX_LIMIT)} (got ${String(n)}).`);
+    }
+};

@@ -1,24 +1,29 @@
 import type { Dispatch, SetStateAction } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+
+/** Which Web Storage area a helper targets: `localStorage` (persists across sessions) or `sessionStorage` (tab-lifetime). */
+export type StorageKind = "local" | "session";
 
 /**
- * Best-effort `localStorage` handle, guarded so a missing or throwing storage
- * (SSR, sandboxed iframe, privacy mode) degrades to in-memory-only rather than
- * crashing the render. Mirrors {@link ./token-storage}'s `sessionStorage` guard.
+ * Best-effort Web Storage handle for `kind`, guarded so a missing or throwing
+ * storage (SSR, sandboxed iframe, privacy mode) degrades to in-memory-only rather
+ * than crashing the render. The single guarded accessor for both storage areas, so
+ * every persisted-store helper (`saved-queries`, `shard-history`, `token-storage`)
+ * shares one place to fix if e.g. a poisoned value ever needs handling.
  */
-const store = (): Storage | undefined => {
+export const storageOf = (kind: StorageKind = "local"): Storage | undefined => {
     try {
-        return (globalThis as { localStorage?: Storage }).localStorage;
+        return kind === "local" ? (globalThis as { localStorage?: Storage }).localStorage : (globalThis as { sessionStorage?: Storage }).sessionStorage;
     } catch {
-        // Accessing localStorage can throw in sandboxed iframes / privacy mode.
+        // Accessing storage can throw in sandboxed iframes / privacy mode.
         return undefined;
     }
 };
 
-/** Read a JSON array from `localStorage`; returns `[]` on any miss, non-array, or parse/access throw. */
-export const loadJsonArray = function <T>(key: string): T[] {
+/** Read a JSON array from the given storage area; returns `[]` on any miss, non-array, or parse/access throw. */
+export const loadJsonArray = function <T>(key: string, kind: StorageKind = "local"): T[] {
     try {
-        const raw = store()?.getItem(key) ?? undefined;
+        const raw = storageOf(kind)?.getItem(key) ?? undefined;
         const parsed = raw === undefined ? [] : (JSON.parse(raw) as unknown);
 
         return Array.isArray(parsed) ? (parsed as T[]) : [];
@@ -28,8 +33,8 @@ export const loadJsonArray = function <T>(key: string): T[] {
 };
 
 /** Persist `value` as JSON; silently no-ops when storage is unavailable or a write throws (quota / privacy mode). */
-export const saveJson = (key: string, value: unknown): void => {
-    const storage = store();
+export const saveJson = (key: string, value: unknown, kind: StorageKind = "local"): void => {
+    const storage = storageOf(kind);
 
     if (storage === undefined) {
         return;
@@ -51,8 +56,20 @@ export const saveJson = (key: string, value: unknown): void => {
  */
 export const usePersistedList = function <T>(key: string): [T[], Dispatch<SetStateAction<T[]>>] {
     const [value, setValue] = useState<T[]>(() => loadJsonArray<T>(key));
+    // The `key` the current in-memory `value` was loaded/persisted under. When `key`
+    // changes across renders we must NOT write the old key's value under the new key
+    // (that would clobber whatever was persisted there) — instead reload from the new
+    // key so the state reflects it, and let the next render persist normally.
+    const keyRef = useRef(key);
 
     useEffect(() => {
+        if (keyRef.current !== key) {
+            keyRef.current = key;
+            setValue(loadJsonArray<T>(key));
+
+            return;
+        }
+
         saveJson(key, value);
     }, [key, value]);
 

@@ -56,6 +56,25 @@ describe("lunoraError", () => {
         expect(error.status).toBe(502);
     });
 
+    it("rEGRESSION: does not install an own `cause` property when no cause is given", () => {
+        const error = new LunoraError("NOT_FOUND");
+
+        // ES2022 InstallErrorCause keys off `HasProperty(options, "cause")`, so a
+        // bare `{ cause: options.cause }` would install `cause: undefined` on
+        // every error and make presence checks spuriously true.
+        expect(Object.hasOwn(error, "cause")).toBe(false);
+        expect("cause" in error).toBe(false);
+        expect(error.cause).toBeUndefined();
+    });
+
+    it("rEGRESSION: installs an own `cause` when a cause is provided", () => {
+        const underlying = new Error("root");
+        const error = new LunoraError("INTERNAL", "boom", { cause: underlying });
+
+        expect(Object.hasOwn(error, "cause")).toBe(true);
+        expect(error.cause).toBe(underlying);
+    });
+
     it("exposes code/status/hint/data as own enumerable props (so they ride the wire codec)", () => {
         const error = new LunoraError("CONFLICT", "boom", { data: { retryAfterMs: 10 } });
         const keys = Object.keys(error);
@@ -100,6 +119,17 @@ describe("isInternalCode", () => {
         expect(isInternalCode("BAD_REQUEST")).toBe(false);
         expect(isInternalCode("CONFLICT")).toBe(false);
         expect(isInternalCode("NOT_FOUND")).toBe(false);
+    });
+
+    it("rEGRESSION: inherited Object.prototype keys are not treated as catalog codes", () => {
+        // The catalog is a plain object literal; a guarded lookup must return
+        // `undefined` for inherited members instead of resolving to
+        // `Object.prototype`'s value (e.g. the `constructor` function).
+        expect(isInternalCode("constructor")).toBe(false);
+        expect(isInternalCode("toString")).toBe(false);
+        expect(isInternalCode("hasOwnProperty")).toBe(false);
+        expect(resolveHint({ code: "constructor" })).toBeUndefined();
+        expect(resolveHint({ code: "toString" })).toBeUndefined();
     });
 });
 

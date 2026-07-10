@@ -1,10 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { lunora, resolveOverlayOption } from "../src/index";
+import { lunora, resolveOverlayOption, VERSION } from "../src/index";
 import { lunoraSolutionFinder } from "../src/solution-finders";
 
 let workdir: string;
@@ -89,6 +89,17 @@ describe("index", () => {
             const minimal = lunora({ cloudflare: false, overlay: false, projectRoot: workdir, validateWrangler: false });
 
             expect(plugins.length).toBeGreaterThan(minimal.length);
+        });
+    });
+
+    describe("VERSION", () => {
+        it("reflects the real package.json version, not the old hardcoded 0.0.0", () => {
+            expect.assertions(2);
+
+            const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
+
+            expect(VERSION).not.toBe("0.0.0");
+            expect(VERSION).toBe(manifest.version);
         });
     });
 

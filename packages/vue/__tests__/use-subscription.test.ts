@@ -58,4 +58,36 @@ describe(useSubscription, () => {
 
         expect(fake.unsubscribeSpy).toHaveBeenCalledTimes(1);
     });
+
+    it("preserves the SubscriptionError code on the error ref", () => {
+        const fake = createFakeClient();
+
+        const scope = effectScope();
+        const { data, error } = scope.run(() => fake.provide(() => useSubscription(msgRef, args)))!;
+
+        // Drive the subscription's error channel with a coded server error.
+        fake.subscribeCalls[0]?.options.onError?.({ code: "UNAUTHORIZED", message: "not allowed" });
+
+        expect(error.value).toBeInstanceOf(Error);
+        expect(error.value?.message).toBe("not allowed");
+        expect((error.value as { code?: string }).code).toBe("UNAUTHORIZED");
+        expect(data.value).toBeUndefined();
+
+        scope.stop();
+    });
+
+    it("falls back to a plain Error when the SubscriptionError has no code", () => {
+        const fake = createFakeClient();
+
+        const scope = effectScope();
+        const { error } = scope.run(() => fake.provide(() => useSubscription(msgRef, args)))!;
+
+        fake.subscribeCalls[0]?.options.onError?.({ message: "boom" });
+
+        expect(error.value).toBeInstanceOf(Error);
+        expect(error.value?.message).toBe("boom");
+        expect((error.value as { code?: string }).code).toBeUndefined();
+
+        scope.stop();
+    });
 });

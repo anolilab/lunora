@@ -866,6 +866,81 @@ describe("createWorker — RPC batch forward failure (Plan 118 toErrorBody migra
     });
 });
 
+describe("createWorker — RPC batch cross-shard bookmark", () => {
+    // A namespace whose per-shard `/rpc-batch` reply echoes the demux-shaped
+    // `{ results }` and attaches an `x-d1-bookmark` only for the shard keys in
+    // `bookmarks`. Lets a test span shards where only some produce a bookmark.
+    const bookmarkingNamespace = (bookmarks: Record<string, string>): ShardNamespaceLike => {
+        return {
+            get: (id) => {
+                const shardKey = (id as { __name: string }).__name;
+
+                return {
+                    fetch: async (request: Request): Promise<Response> => {
+                        const { calls } = (await request.json());
+                        const results = calls.map((call) => {
+                            return { body: { shardKey }, id: call.id, status: 200 };
+                        });
+                        const headers: Record<string, string> = { "content-type": "application/json" };
+                        const bookmark = bookmarks[shardKey];
+
+                        if (bookmark !== undefined) {
+                            headers["x-d1-bookmark"] = bookmark;
+                        }
+
+                        return Response.json({ results }, { headers, status: 200 });
+                    },
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+    };
+
+    const batchRequest = (calls: unknown[]): Request =>
+        new Request("https://app.example/_lunora/rpc-batch", { body: JSON.stringify({ calls }), method: "POST" });
+
+    it("echoes the bookmark when exactly one shard in the batch produced one", async () => {
+        expect.assertions(1);
+
+        // Shard "a" (the mutation) emits a bookmark; shard "b" (a read) does not.
+        // The single producer's bookmark is safe to pin the client's next read to.
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: bookmarkingNamespace({ a: "bm-a" }) });
+
+        const res = await worker.fetch(
+            batchRequest([
+                { functionPath: "messages:send", id: 0, shardKey: "a" },
+                { functionPath: "messages:list", id: 1, shardKey: "b" },
+            ]),
+            {},
+            fakeContext,
+        );
+
+        expect(res.headers.get("x-d1-bookmark")).toBe("bm-a");
+    });
+
+    it("omits the bookmark when the batch spans shards that each produced one (not comparable across sources)", async () => {
+        expect.assertions(1);
+
+        // Two distinct shards each return a bookmark; their D1 bookmarks are from
+        // different sources and aren't comparable, so pinning the client to an
+        // arbitrary one would silently break read-your-writes — omit instead.
+        const worker = createWorker({ allowUnauthenticatedShardAccess: true, shardDO: bookmarkingNamespace({ a: "bm-a", b: "bm-b" }) });
+
+        const res = await worker.fetch(
+            batchRequest([
+                { functionPath: "messages:send", id: 0, shardKey: "a" },
+                { functionPath: "messages:send", id: 1, shardKey: "b" },
+            ]),
+            {},
+            fakeContext,
+        );
+
+        expect(res.headers.get("x-d1-bookmark")).toBeNull();
+    });
+});
+
 describe("createWorker — migration endpoint", () => {
     let shard: ShardSpy;
 

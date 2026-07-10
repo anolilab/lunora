@@ -1540,6 +1540,47 @@ describe("lunoraClient", () => {
             vi.useRealTimers();
         });
 
+        it("a hydrated write stamped under a token replays after the subject is established on that same token", async () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
+            const persistence = createInMemoryPersistence();
+
+            // Compute the token-hash "token-1" fingerprints to — the stamp a write
+            // queued before the subject resolved would carry.
+            const probe = new LunoraClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
+
+            probe.setAuthToken("token-1");
+            const tokenHash = probe.currentIdentity();
+
+            probe.close();
+
+            // A durable write persisted under the token hash (subject not yet known).
+            await persistence.append({ args: { title: "queued" }, functionPath: "posts:create", id: "m1", identity: tokenHash });
+
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                persistence,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            // On reload the app re-sets the SAME token and now knows the user id, so
+            // the live identity is `subj:user-1`. The hydrated write still carries
+            // the token hash; it must replay (the credential never changed) rather
+            // than be dropped as an identity mismatch.
+            client.setAuthToken("token-1", "user-1");
+
+            await flushMicrotasks();
+            latestSocket().open();
+            await flushMicrotasks();
+
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+            await expect(persistence.load()).resolves.toEqual([]);
+
+            client.close();
+        });
+
         it("pendingCount and onPendingChange track queued writes draining on reconnect", async () => {
             expect.assertions(4);
 
@@ -2042,6 +2083,42 @@ describe("lunoraClient", () => {
 
             expect(received).toEqual([0]);
             expect(result).toEqual({ ok: true });
+        });
+
+        it("optimisticUpdate lands when the subscription's undefined shardKey and the mutation's empty-string shardKey normalize equal", async () => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
+            const client = new LunoraClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const received: unknown[] = [];
+
+            // Subscription registered WITHOUT a shardKey (state.shardKey === undefined).
+            client.subscribe(fnRef("q:list"), {}, (d) => received.push(d));
+            latestSocket().open();
+            const subId = firstSub(latestSocket()).id as string;
+
+            latestSocket().receive({ delta: 0, id: subId, type: "delta" });
+
+            // Mutation issued with an EMPTY-STRING shardKey. Both sides normalize to
+            // "" in the registry key, so the optimistic patch must land — a strict
+            // `undefined === ""` compare in the old findState would silently no-op it.
+            await client.mutation(
+                fnRef("m:set"),
+                {},
+                {
+                    optimisticUpdate: (store) => {
+                        store.setQuery(fnRef("q:list"), {}, 42);
+                    },
+                    shardKey: "",
+                },
+            );
+
+            expect(received).toEqual([0, 42]);
         });
 
         it("optimistic update is scoped to the matching (fn, args) pair and does not touch subscriptions with different args", async () => {

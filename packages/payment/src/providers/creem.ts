@@ -17,7 +17,7 @@
 import type { Creem } from "creem";
 
 import type { PaymentAdapter, WebhookInput } from "../adapter";
-import { asRecord, parseTimestamp, readBoolean, readNumber, readString, referenceFromMetadata } from "../json";
+import { asRecord, parseTimestamp, readAny, readAnyNumber, readBoolean, readNumber, readString, referenceFromMetadata } from "../json";
 import { money, zeroMoney } from "../money";
 import type {
     CaptureInput,
@@ -86,12 +86,10 @@ const notSupported = makeNotSupported("creem (merchant-of-record)");
 /** Creem `product`/`customer` fields are either an expanded object or a bare id string. */
 const idOf = (value: unknown): string | undefined => (typeof value === "string" ? value : readString(asRecord(value), "id"));
 
-const readCheckoutUrl = (checkout: Record<string, unknown>): string => readString(checkout, "checkout_url") ?? readString(checkout, "checkoutUrl") ?? "";
+const readCheckoutUrl = (checkout: Record<string, unknown>): string => readAny(checkout, "checkout_url", "checkoutUrl") ?? "";
 
 const isCanceling = (subscription: Record<string, unknown>): boolean =>
-    readString(subscription, "canceled_at") !== undefined ||
-    readString(subscription, "canceledAt") !== undefined ||
-    readString(subscription, "status") === "scheduled_cancel";
+    readAny(subscription, "canceled_at", "canceledAt") !== undefined || readString(subscription, "status") === "scheduled_cancel";
 
 const subscriptionFromCreem = (input: unknown): Subscription => {
     const subscription = asRecord(input);
@@ -101,8 +99,8 @@ const subscriptionFromCreem = (input: unknown): Subscription => {
     return {
         cancelAtPeriodEnd: isCanceling(subscription),
         createdAt: now,
-        currentPeriodEnd: parseTimestamp(readString(subscription, "current_period_end_date") ?? readString(subscription, "currentPeriodEndDate")),
-        currentPeriodStart: parseTimestamp(readString(subscription, "current_period_start_date") ?? readString(subscription, "currentPeriodStartDate")),
+        currentPeriodEnd: parseTimestamp(readAny(subscription, "current_period_end_date", "currentPeriodEndDate")),
+        currentPeriodStart: parseTimestamp(readAny(subscription, "current_period_start_date", "currentPeriodStartDate")),
         id: readString(subscription, "id") ?? "",
         priceId: idOf(subscription.product) ?? "",
         provider: "creem",
@@ -165,9 +163,8 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
             // (fallback `subscription`), not an `order`. Read those first, keeping the legacy fields
             // as defensive fallbacks. Each event carries this single refund's amount, so the sync
             // layer's default "delta" interpretation is correct.
-            const amount =
-                readNumber(object, "refund_amount") ?? readNumber(object, "refundAmount") ?? readNumber(object, "amount") ?? readNumber(order, "amount");
-            const refundCurrency = readString(object, "refund_currency") ?? readString(object, "refundCurrency") ?? currency;
+            const amount = readAnyNumber(object, "refund_amount", "refundAmount", "amount") ?? readNumber(order, "amount");
+            const refundCurrency = readAny(object, "refund_currency", "refundCurrency") ?? currency;
 
             return {
                 ...base,
@@ -193,8 +190,8 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
             return {
                 ...base,
                 cancelAtPeriodEnd: readBoolean(object, "cancel_at_period_end") ?? isCanceling(object),
-                currentPeriodEnd: parseTimestamp(readString(object, "current_period_end_date") ?? readString(object, "currentPeriodEndDate")),
-                currentPeriodStart: parseTimestamp(readString(object, "current_period_start_date") ?? readString(object, "currentPeriodStartDate")),
+                currentPeriodEnd: parseTimestamp(readAny(object, "current_period_end_date", "currentPeriodEndDate")),
+                currentPeriodStart: parseTimestamp(readAny(object, "current_period_start_date", "currentPeriodStartDate")),
                 customerId: idOf(object.customer),
                 priceId: idOf(object.product),
                 referenceId: referenceFromMetadata(object) ?? idOf(object.customer),
@@ -245,7 +242,7 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
         createPortalSession: async (input: PortalInput) => {
             const link = await client.customers.generateBillingLinks({ customerId: input.customerId });
 
-            return { url: readString(link, "customer_portal_link") ?? readString(link, "customerPortalLink") ?? "" };
+            return { url: readAny(link, "customer_portal_link", "customerPortalLink") ?? "" };
         },
 
         getOrCreateCustomer: async (ref: CustomerRef): Promise<Customer> => {
@@ -285,7 +282,7 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
 
             const event = asRecord(JSON.parse(payload));
 
-            return mapEvent(readString(event, "id") ?? "", readString(event, "eventType") ?? readString(event, "type") ?? "", asRecord(event.object));
+            return mapEvent(readString(event, "id") ?? "", readAny(event, "eventType", "type") ?? "", asRecord(event.object));
         },
 
         // Creem refunds are issued from the dashboard; there is no SDK endpoint to initiate one.

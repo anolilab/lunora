@@ -61,6 +61,31 @@ describe("useQuery", () => {
         expect(mock.subscribe).not.toHaveBeenCalled();
     });
 
+    it('"skip" returns undefined even when a sibling filled the shared cache key', async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient(() => {
+            return { count: 7 };
+        });
+
+        // Both consumers resolve to the SAME queryKey `["lunora", ref, {}, null]`
+        // (a skipped read sets its args to `{}`). The non-skipped sibling fills
+        // that cache entry; the skipped one shares the key but must NOT surface
+        // the sibling's data — it stays `undefined` ("no network call, no data").
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <Display args={DEFAULT_ARGS} />
+                <Display args="skip" />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getAllByTestId("display")[0]?.textContent).toBe(JSON.stringify({ count: 7 }));
+        });
+
+        expect(screen.getAllByTestId("display")[1]?.textContent).toBe("loading");
+    });
+
     it("two components sharing args share a single network call", async () => {
         expect.hasAssertions();
 

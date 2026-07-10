@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
+import { createDatabaseOpener, createWithStore, promisifyRequest } from "./idb-util";
 import type { CachedQuery, QueryCacheAdapter } from "./types";
 
 /** A stored read-cache row: the {@link CachedQuery} plus its primary key. */
@@ -98,17 +99,6 @@ const TS_INDEX = "by_ts";
  */
 const DATABASE_VERSION = 1;
 
-/** Promisify an `IDBRequest`. */
-const promisifyRequest = <T>(request: IDBRequest<T>): Promise<T> =>
-    new Promise<T>((resolve, reject) => {
-        request.addEventListener("success", () => {
-            resolve(request.result);
-        });
-        request.addEventListener("error", () => {
-            reject(request.error ?? new Error("IndexedDB request failed"));
-        });
-    });
-
 /**
  * IndexedDB-backed {@link QueryCacheAdapter}. Each query is stored under its
  * composite key (`functionPath::argsKey::shardKey`) with a `ts` index driving
@@ -132,55 +122,16 @@ const createIndexedDbQueryCache = (options: IndexedDbQueryCacheOptions = {}): Qu
     const databaseName = options.databaseName ?? DEFAULT_DATABASE;
     const storeName = options.storeName ?? DEFAULT_STORE;
     const maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
-    let databasePromise: Promise<IDBDatabase> | undefined;
 
-    const openDatabase = (): Promise<IDBDatabase> => {
-        if (databasePromise) {
-            return databasePromise;
+    const openDatabase = createDatabaseOpener(factory, databaseName, DATABASE_VERSION, (database) => {
+        if (!database.objectStoreNames.contains(storeName)) {
+            const store = database.createObjectStore(storeName, { keyPath: "key" });
+
+            store.createIndex(TS_INDEX, "ts", { unique: false });
         }
+    });
 
-        databasePromise = new Promise<IDBDatabase>((resolve, reject) => {
-            const request = factory.open(databaseName, DATABASE_VERSION);
-
-            request.addEventListener("upgradeneeded", () => {
-                const database = request.result;
-
-                if (!database.objectStoreNames.contains(storeName)) {
-                    const store = database.createObjectStore(storeName, { keyPath: "key" });
-
-                    store.createIndex(TS_INDEX, "ts", { unique: false });
-                }
-            });
-            request.addEventListener("success", () => {
-                resolve(request.result);
-            });
-            request.addEventListener("error", () => {
-                reject(request.error ?? new Error("IndexedDB open failed"));
-            });
-        });
-
-        return databasePromise;
-    };
-
-    const withStore = async <T>(mode: IDBTransactionMode, run: (store: IDBObjectStore) => Promise<T> | T): Promise<T> => {
-        const database = await openDatabase();
-        const transaction = database.transaction(storeName, mode);
-        const result = await run(transaction.objectStore(storeName));
-
-        await new Promise<void>((resolve, reject) => {
-            transaction.addEventListener("complete", () => {
-                resolve();
-            });
-            transaction.addEventListener("error", () => {
-                reject(transaction.error ?? new Error("IndexedDB transaction failed"));
-            });
-            transaction.addEventListener("abort", () => {
-                reject(transaction.error ?? new Error("IndexedDB transaction aborted"));
-            });
-        });
-
-        return result;
-    };
+    const withStore = createWithStore(openDatabase, storeName);
 
     /** Drop oldest rows by `ts` until the store is back under the cap. */
     const evict = async (store: IDBObjectStore): Promise<void> => {

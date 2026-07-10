@@ -5,6 +5,7 @@ import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
 import type { BatchEntry } from "../../../shared/batch-wire";
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
+import { constantTimeEqual } from "../../../shared/constant-time-equal";
 import { jsonResponse } from "../../../shared/json-response";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import type { ExportRow, ImportShardResult } from "./admin-export-import";
@@ -1477,35 +1478,6 @@ const extractBearerToken = (authorization: string | null): string | undefined =>
     const value = rest.join(" ").trim();
 
     return value.length > 0 ? value : undefined;
-};
-
-/**
- * Constant-time string equality. Compares full length (capped at the longer
- * input) so a shorter candidate can't short-circuit the loop. The
- * `lengthDiff` term folds a length mismatch into the result so unequal-length
- * strings still take the same number of XOR ops as equal-length ones.
- *
- * Keep in sync with `packages/runtime/src/create-worker.ts` constantTimeEqual —
- * the two packages don't import from each other to avoid a circular dep.
- */
-const constantTimeEqual = (a: string, b: string): boolean => {
-    const max = Math.max(a.length, b.length);
-    // eslint-disable-next-line no-bitwise -- constant-time compare folds length + every code-unit delta into one accumulator
-    let diff = a.length ^ b.length;
-
-    for (let index = 0; index < max; index += 1) {
-        // charCodeAt returns NaN past the end of the string; coerce to 0
-        // so the XOR still folds into `diff` without poisoning it.
-        // eslint-disable-next-line unicorn/prefer-code-point -- compare per UTF-16 code unit so timing stays independent of surrogate boundaries
-        const charA = index < a.length ? a.charCodeAt(index) : 0;
-        // eslint-disable-next-line unicorn/prefer-code-point -- compare per UTF-16 code unit so timing stays independent of surrogate boundaries
-        const charB = index < b.length ? b.charCodeAt(index) : 0;
-
-        // eslint-disable-next-line no-bitwise -- accumulate per-code-unit difference without branching to keep the compare constant-time
-        diff |= charA ^ charB;
-    }
-
-    return diff === 0;
 };
 
 /**

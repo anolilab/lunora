@@ -427,6 +427,25 @@ describe("ctx.containers.<name>.pool()", () => {
         }
     });
 
+    it("sends a pre-built body-carrying Request exactly once instead of re-building it on retry", async () => {
+        expect.assertions(2);
+
+        // A Request with a body can be consumed only once; re-building it for a
+        // retry would throw "Body has already been used". The pool must clamp to
+        // a single attempt for non-string input (mirroring the cold-start path),
+        // so a 503 is returned as-is rather than masked by that TypeError.
+        const scripted = scriptedNamespace([serverError, ok]);
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: scripted.namespace }, [
+            { binding: "CONTAINER_TRANSCODER", exportName: "transcoder" },
+        ]);
+
+        const request = new Request("https://container/upload", { body: "payload", method: "POST" });
+        const response = await containers.transcoder!.pool({ attempts: 3, backoffMs: 0 }).fetch(request);
+
+        expect(response.status).toBe(503);
+        expect(scripted.calls).toBe(1);
+    });
+
     it("honors a custom retryOn predicate", async () => {
         expect.assertions(2);
 

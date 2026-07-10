@@ -45,6 +45,42 @@ describe("generateValue — string minLength", () => {
     });
 });
 
+describe("generateValue — number constraints", () => {
+    it("throws when minimum > maximum (impossible constraint, regression: was a raw faker error)", () => {
+        expect.hasAssertions();
+
+        const validator = withConstraints(v.number(), { maximum: 10, minimum: 100 });
+
+        expect(() => generateValue(validator, "score", "test-input")).toThrow(/minimum.*maximum/u);
+    });
+
+    it("uses a float when the bounds are non-integers", () => {
+        expect.hasAssertions();
+
+        const validator = withConstraints(v.number(), { maximum: 1, minimum: 0.5 });
+        const value = generateValue(validator, "ratio", "test-input") as number;
+
+        expect(typeof value).toBe("number");
+        expect(value).toBeGreaterThanOrEqual(0.5);
+        expect(value).toBeLessThanOrEqual(1);
+    });
+});
+
+describe("generateValue — record key validator", () => {
+    it("generates keys via the key validator, honouring its constraints (regression: key validator was ignored)", () => {
+        expect.hasAssertions();
+
+        const keyValidator = withConstraints(v.string(), { minLength: 8 }) as unknown as Validator<string>;
+        const validator = v.record(keyValidator, v.boolean());
+        const value = generateValue(validator, "flags", "test-input") as Record<string, unknown>;
+        const keys = Object.keys(value);
+
+        expect(keys.length).toBeGreaterThan(0);
+        expect(keys.every((key) => key.length >= 8)).toBe(true);
+        expect(Object.values(value).every((entry) => typeof entry === "boolean")).toBe(true);
+    });
+});
+
 describe("generateValue — bigint wire representation", () => {
     it("emits a plain number (not BigInt) so the value is JSON-serialisable", () => {
         expect.hasAssertions();

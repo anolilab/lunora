@@ -9,6 +9,10 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { containerBindingName } from "./define-container";
+import type { DurableObjectJurisdiction } from "./jurisdiction";
+import { applyJurisdiction } from "./jurisdiction";
+
 /** Options for explicitly starting an instance (mirrors `@cloudflare/containers`). */
 interface ContainerStartOptions {
     /** Override outbound internet access for this start. */
@@ -48,13 +52,6 @@ interface ContainerStubLike {
     stop?: (signal?: number | string) => Promise<void>;
 }
 
-/**
- * Cloudflare Durable Object data-residency jurisdiction. Widening union —
- * Cloudflare adds values over time.
- * @see https://developers.cloudflare.com/durable-objects/reference/data-location/
- */
-type DurableObjectJurisdiction = "eu" | "fedramp" | "us";
-
 /** What the client needs from a Durable Object namespace binding. */
 interface ContainerNamespaceLike {
     get: (id: unknown) => ContainerStubLike;
@@ -66,25 +63,6 @@ interface ContainerNamespaceLike {
      */
     jurisdiction?: (jurisdiction: DurableObjectJurisdiction) => ContainerNamespaceLike;
 }
-
-/**
- * Return a jurisdiction-restricted view of `namespace`, or `namespace`
- * unchanged when no jurisdiction is configured. Fail-closed when the binding
- * lacks `.jurisdiction()` so a residency constraint is never silently dropped.
- */
-const applyJurisdiction = (namespace: ContainerNamespaceLike, jurisdiction?: DurableObjectJurisdiction): ContainerNamespaceLike => {
-    if (jurisdiction === undefined) {
-        return namespace;
-    }
-
-    if (typeof namespace.jurisdiction !== "function") {
-        throw new TypeError(
-            `@lunora/container: Durable Object namespace does not support jurisdiction("${jurisdiction}") — update @cloudflare/workers-types or remove the jurisdiction option`,
-        );
-    }
-
-    return namespace.jurisdiction(jurisdiction);
-};
 
 /** A handle on one container instance (one Durable Object). */
 interface ContainerHandle {
@@ -523,9 +501,14 @@ const poolHandleFor = (namespace: ContainerNamespaceLike, spec: ContainerBinding
 
     return {
         fetch: async (input, init) => {
+            // Only a string input can be re-issued safely; a pre-built Request
+            // may carry a body that's consumed on the first send, so re-building
+            // it on a retry throws "Body has already been used". Mirror
+            // `coldStartRetryingHandle` and send such inputs exactly once.
+            const totalAttempts = typeof input === "string" ? attempts : 1;
             let lastError: unknown;
 
-            for (let attempt = 0; attempt < attempts; attempt += 1) {
+            for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
                 if (attempt > 0) {
                     // Clamp the doubling delay to the ceiling so a high `attempts`
                     // value can't produce an unboundedly long sleep.
@@ -539,7 +522,7 @@ const poolHandleFor = (namespace: ContainerNamespaceLike, spec: ContainerBinding
                     // eslint-disable-next-line no-await-in-loop -- attempts are inherently sequential
                     const response = await namespace.get(namespace.idFromName(randomPoolName(size))).fetch(request);
 
-                    if (attempt === attempts - 1 || !shouldRetry(response)) {
+                    if (attempt === totalAttempts - 1 || !shouldRetry(response)) {
                         return response;
                     }
                 } catch (error: unknown) {
@@ -548,7 +531,7 @@ const poolHandleFor = (namespace: ContainerNamespaceLike, spec: ContainerBinding
             }
 
             // Exhausted attempts after a thrown error on the last try.
-            throw lastError instanceof Error ? lastError : new Error(`ctx.containers.${spec.exportName}.pool(): all ${String(attempts)} attempts failed`);
+            throw lastError instanceof Error ? lastError : new Error(`ctx.containers.${spec.exportName}.pool(): all ${String(totalAttempts)} attempts failed`);
         },
         port: (targetPort) => poolHandleFor(namespace, spec, options, targetPort),
     };
@@ -648,7 +631,7 @@ const createContainerTestContext = (handlers: Record<string, ContainerTestHandle
 
     for (const [exportName, handler] of Object.entries(handlers)) {
         const namespace = testNamespaceFor(handler);
-        const spec: ContainerBindingSpec = { binding: `CONTAINER_${exportName.toUpperCase()}`, exportName };
+        const spec: ContainerBindingSpec = { binding: containerBindingName(exportName), exportName };
 
         containers[exportName] = {
             // `.any()`/`.pool()` route to a fixed `pool-0` so the handler's
@@ -674,8 +657,9 @@ export type {
     ContainerNamespaceLike,
     ContainerStartOptions,
     ContainerTestHandler,
-    DurableObjectJurisdiction,
     InstanceRetryOptions,
     PoolOptions,
 };
 export { createContainerContext, createContainerTestContext };
+
+export {type DurableObjectJurisdiction} from "./jurisdiction";

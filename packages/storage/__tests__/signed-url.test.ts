@@ -210,6 +210,32 @@ describe("signedUrl", () => {
         ).rejects.toThrow(/must not exceed/);
     });
 
+    it("rejects an out-of-bounds expiresInSeconds as a 400 validation error, not a redacted 500", async () => {
+        expect.assertions(2);
+
+        // A caller passing a bad TTL is a client error → VALIDATION_ERROR / 400,
+        // not an INTERNAL / 500 that redacts the message to a generic string.
+        await expect(buildSignedUrl({ baseUrl: "https://cdn.test", expiresInSeconds: 0, key: "x", secret: "shh" })).rejects.toMatchObject({
+            code: "VALIDATION_ERROR",
+            status: 400,
+        });
+
+        await expect(
+            buildSignedUrl({ baseUrl: "https://cdn.test", expiresInSeconds: 8 * 24 * 60 * 60, key: "x", secret: "shh" }),
+        ).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
+    });
+
+    it("normalises a multi-trailing-slash baseUrl to a single-slash join", async () => {
+        expect.assertions(1);
+
+        // Regression: getUrl trims all trailing slashes, but the signed-URL
+        // builder previously trimmed only one — a `https://cdn.test//` base then
+        // yielded a double-slash signed URL. Both must agree now.
+        const url = await buildSignedUrl({ baseUrl: "https://cdn.test//", expiresInSeconds: 60, key: "uploads/x.png", secret: "shh" });
+
+        expect(new URL(url).pathname).toBe("/uploads/x.png");
+    });
+
     it("returns malformed for an exp with trailing garbage", async () => {
         expect.assertions(2);
 

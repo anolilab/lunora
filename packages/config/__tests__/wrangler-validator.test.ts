@@ -172,6 +172,56 @@ describe("wrangler-validator", () => {
             expect(report.errors.some((line) => line.includes("docs-body"))).toBe(true);
         });
 
+        it("does not throw when durable_objects.bindings contains a null entry (JSONC trailing comma)", () => {
+            expect.assertions(2);
+
+            // `"durable_objects": { "bindings": [null] }` — a stray trailing comma in JSONC
+            // parses to exactly this. The validator must report the missing SHARD binding,
+            // not crash with a raw TypeError dereferencing `binding.name`.
+            const wrangler = {
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                compatibility_flags: [REQUIRED_FLAG],
+                durable_objects: { bindings: [null] },
+            } as unknown as WranglerConfig;
+
+            const report = validateWranglerConfig(wrangler);
+
+            expect(report.valid).toBe(false);
+            expect(report.errors.some((line) => SHARD_BINDING_ERROR_RE.test(line))).toBe(true);
+        });
+
+        it("does not throw when durable_objects.bindings is a non-array value", () => {
+            expect.assertions(2);
+
+            const wrangler = {
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                compatibility_flags: [REQUIRED_FLAG],
+                durable_objects: { bindings: "SHARD" },
+            } as unknown as WranglerConfig;
+
+            const report = validateWranglerConfig(wrangler);
+
+            expect(report.valid).toBe(false);
+            expect(report.errors.some((line) => SHARD_BINDING_ERROR_RE.test(line))).toBe(true);
+        });
+
+        it("does not throw when d1_databases contains a null entry for a global-table schema", () => {
+            expect.assertions(2);
+
+            const wrangler = {
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                compatibility_flags: [REQUIRED_FLAG],
+                d1_databases: [null],
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+            } as unknown as WranglerConfig;
+
+            const report = validateWranglerConfig(wrangler, { hasGlobalTable: true, vectorIndexNames: [] });
+
+            // The null entry is skipped; the missing "DB" binding is reported structurally.
+            expect(report.valid).toBe(false);
+            expect(report.errors.some((line) => line.includes("d1_databases"))).toBe(true);
+        });
+
         it("rejects a wildcard CORS origin paired with credentials in vars", () => {
             expect.assertions(2);
 

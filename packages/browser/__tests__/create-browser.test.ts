@@ -4,7 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import { createBrowser } from "../src/create-browser";
 import type { BrowserBindingLike, BrowserLaunchLike, PageLike, RouteLike } from "../src/types";
 
-const binding: BrowserBindingLike = {};
+// `fetch` is required on the marker type (it excludes a bare `{}`); a no-op is
+// fine because the fake `launch` chain never touches the binding.
+const binding: BrowserBindingLike = { fetch: () => undefined };
 
 /**
  * A fake `@cloudflare/playwright` `launch` chain (browser → context → page) that
@@ -242,5 +244,74 @@ describe("createBrowser SSRF sub-resource guard (finding #7)", () => {
         expect(offList.abort).toHaveBeenCalledWith("blockedbyclient");
         expect(onList.continueFn).toHaveBeenCalledTimes(1);
         expect(onList.abort).not.toHaveBeenCalled();
+    });
+});
+
+describe("createBrowser operation timeout (finding #1)", () => {
+    it("rejects when a post-navigation operation exceeds the timeout budget", async () => {
+        // A hostile page that traps the evaluated function: `page.evaluate` never
+        // resolves. `page.goto` returns fine, so only the outer deadline bounds it.
+        const page: PageLike = {
+            content: async () => "<html></html>",
+            evaluate: () => new Promise<never>(() => {}),
+            goto: async () => undefined,
+            pdf: async () => new Uint8Array(),
+            screenshot: async () => new Uint8Array(),
+        };
+        const context = { newPage: async () => page };
+        const browser = { close: async () => {}, newContext: async () => context };
+        const launch: BrowserLaunchLike = async () => browser;
+
+        const client = createBrowser({ binding, launch });
+
+        await expect(client.scrape("https://example.com/", () => 1, { timeoutMs: 10 })).rejects.toThrow(/exceeded the 10ms timeout budget/);
+    });
+
+    it("closes the browser when the deadline rejects (no leaked session)", async () => {
+        let closed = false;
+        const page: PageLike = {
+            content: () => new Promise<never>(() => {}),
+            evaluate: async (function_) => function_(),
+            goto: async () => undefined,
+            pdf: async () => new Uint8Array(),
+            screenshot: async () => new Uint8Array(),
+        };
+        const context = { newPage: async () => page };
+        const browser = {
+            close: async () => {
+                closed = true;
+            },
+            newContext: async () => context,
+        };
+        const launch: BrowserLaunchLike = async () => browser;
+
+        const client = createBrowser({ binding, launch });
+
+        await expect(client.content("https://example.com/", { timeoutMs: 10 })).rejects.toThrow(/timeout budget/);
+        expect(closed).toBe(true);
+    });
+});
+
+describe("createBrowser URL-boundary error codes (finding #2)", () => {
+    it("rejects a private/internal target as a FORBIDDEN 403 (message intact, not a redacted 500)", async () => {
+        const harness = makeHarness();
+        const browser = createBrowser({ binding, launch: harness.launch });
+
+        await expect(browser.content("http://169.254.169.254/latest/meta-data/")).rejects.toMatchObject({ code: "FORBIDDEN", status: 403 });
+        expect(harness.gotoCalls).toHaveLength(0);
+    });
+
+    it("rejects a non-http(s) scheme as a BAD_REQUEST 400", async () => {
+        const harness = makeHarness();
+        const browser = createBrowser({ binding, launch: harness.launch });
+
+        await expect(browser.content("ftp://example.com/file")).rejects.toMatchObject({ code: "BAD_REQUEST", status: 400 });
+    });
+
+    it("rejects embedded credentials as a BAD_REQUEST 400", async () => {
+        const harness = makeHarness();
+        const browser = createBrowser({ binding, launch: harness.launch });
+
+        await expect(browser.content("https://user:pass@example.com/")).rejects.toMatchObject({ code: "BAD_REQUEST", status: 400 });
     });
 });

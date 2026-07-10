@@ -11,7 +11,7 @@ import { WorkflowEntrypoint } from "cloudflare:workers";
 import { NonRetryableError } from "cloudflare:workflows";
 
 import { convertNonRetryableError } from "../errors";
-import { errorOutcome, extractBranchMarker, okOutcome, signalBranchParent, stripBranchMarker } from "../fan-out";
+import { errorOutcome, extractBranchMarker, okOutcome, signalBranchParentSafe, stripBranchMarker } from "../fan-out";
 import { createWorkflowRunContext } from "../run-context";
 import type { WorkflowDefinition, WorkflowStepLike } from "../types";
 
@@ -74,9 +74,11 @@ class LunoraWorkflow<Params = Record<string, unknown>, Output = unknown> extends
         } catch (error: unknown) {
             // A branch child: tell the parent it failed (best-effort durable send)
             // before the instance itself errors, so the parent fails fast instead
-            // of waiting out its `waitForEvent` timeout.
+            // of waiting out its `waitForEvent` timeout. The send is swallowed on
+            // failure (`signalBranchParentSafe`) so a broken parent signal never
+            // replaces the handler's real error nor skips the conversion below.
             if (marker) {
-                await signalBranchParent({ env: this.env, step: nativeStep }, marker, errorOutcome(error));
+                await signalBranchParentSafe({ env: this.env, log: context.log, step: nativeStep }, marker, errorOutcome(error));
             }
 
             // Convert a portable `NonRetryableError` thrown outside a step (in
@@ -87,9 +89,10 @@ class LunoraWorkflow<Params = Record<string, unknown>, Output = unknown> extends
         }
 
         // A branch child: report the result to the parent so its `ctx.parallel`
-        // join resolves this branch's slot.
+        // join resolves this branch's slot. Swallowed on failure so a broken parent
+        // signal never marks a successfully-completed child instance as errored.
         if (marker) {
-            await signalBranchParent({ env: this.env, step: nativeStep }, marker, okOutcome(output));
+            await signalBranchParentSafe({ env: this.env, log: context.log, step: nativeStep }, marker, okOutcome(output));
         }
 
         return output;

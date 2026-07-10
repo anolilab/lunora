@@ -16,6 +16,8 @@
  * `emitContainerLifecycle` remains the source of truth, so a failed push must
  * never break a lifecycle hook.
  */
+import type { DurableObjectJurisdiction } from "../jurisdiction";
+import { applyJurisdiction } from "../jurisdiction";
 import type { ContainerLifecycleEvent } from "../lifecycle-event";
 
 /** Reserved admin op the root ShardDO serves to append a container event to its log buffer. */
@@ -41,34 +43,6 @@ interface ShardNamespaceLike {
     idFromName: (name: string) => unknown;
     jurisdiction?: (jurisdiction: DurableObjectJurisdiction) => ShardNamespaceLike;
 }
-
-/**
- * Cloudflare Durable Object data-residency jurisdiction. Widening union —
- * Cloudflare adds values over time.
- * @see https://developers.cloudflare.com/durable-objects/reference/data-location/
- */
-type DurableObjectJurisdiction = "eu" | "fedramp" | "us";
-
-/**
- * Return a jurisdiction-restricted view of `namespace`, or `namespace`
- * unchanged when none is configured. Fail-closed: throws when a jurisdiction is
- * requested but the binding can't honor it — the caller (a best-effort lifecycle
- * report) swallows the throw, so the event is dropped rather than written to the
- * un-pinned, out-of-region root shard.
- */
-const applyJurisdiction = (namespace: ShardNamespaceLike, jurisdiction?: DurableObjectJurisdiction): ShardNamespaceLike => {
-    if (jurisdiction === undefined) {
-        return namespace;
-    }
-
-    if (typeof namespace.jurisdiction !== "function") {
-        throw new TypeError(
-            `@lunora/container: Durable Object namespace does not support jurisdiction("${jurisdiction}") — update @cloudflare/workers-types or remove the jurisdiction option`,
-        );
-    }
-
-    return namespace.jurisdiction(jurisdiction);
-};
 
 /** Whether `value` looks like a usable ShardDO namespace binding. */
 const isShardNamespace = (value: unknown): value is ShardNamespaceLike => {
@@ -131,5 +105,7 @@ const reportContainerLifecycle = async (env: unknown, envelope: ContainerLifecyc
     }
 };
 
-export type { DurableObjectJurisdiction, ShardNamespaceLike, ShardStubLike };
+export type { ShardNamespaceLike, ShardStubLike };
 export { RECORD_CONTAINER_EVENT_OP, reportContainerLifecycle, ROOT_SHARD_NAME };
+
+export {type DurableObjectJurisdiction} from "../jurisdiction";

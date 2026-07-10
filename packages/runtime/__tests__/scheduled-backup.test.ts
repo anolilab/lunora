@@ -214,6 +214,30 @@ describe("createWorker — scheduled backup", () => {
         await expect(fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME })).rejects.toThrow(/adminToken/u);
     });
 
+    it("runs the backup using env.LUNORA_ADMIN_TOKEN when no adminToken option is threaded (composed worker)", async () => {
+        expect.assertions(2);
+
+        // No `adminToken` option — the composed-worker entry doesn't thread it, so
+        // the backup must fall back to `env.LUNORA_ADMIN_TOKEN` exactly as the
+        // request-time admin gates do, rather than throwing BACKUP_NOT_CONFIGURED.
+        const store = memoryBackupStore();
+        const worker = createWorker({
+            backupCron: BACKUP_CRON,
+            backupStore: store,
+            queryCoordinator: coordinatorWithExport([{ doc: { _id: "u1" }, table: "users" }]),
+            shardDO: noopNamespace,
+        });
+
+        await worker.scheduled(
+            { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME },
+            { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN },
+            { passThroughOnException: () => undefined, waitUntil: () => undefined },
+        );
+
+        expect(store.objects.has("backups/lunora-backup-2026-06-03T12-00-00-000Z.ndjson")).toBe(true);
+        expect(store.objects.has("backups/lunora-backup-2026-06-03T12-00-00-000Z.ndjson.manifest.json")).toBe(true);
+    });
+
     it("prunes older snapshots beyond backupRetain", async () => {
         expect.assertions(3);
 

@@ -1,26 +1,19 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-/** Split on CRLF or LF line endings; module-scoped so it isn't recompiled per call. */
-const LINE_BREAK = /\r?\n/u;
+import { parseDevVariableEntries } from "../dev-variables-format";
 
-/** Parse a single `KEY=value` (optionally quoted) out of a `.dev.vars` body. */
+/**
+ * Parse a single `KEY=value` (optionally quoted) out of a `.dev.vars` body,
+ * returning `undefined` when the key is absent or its value is empty. A thin
+ * wrapper over {@link parseDevVariableEntries} — the single owner of the
+ * `.dev.vars` line grammar — so the key-validation, comment-skip, and quote-strip
+ * rules can't drift from every other reader/writer of the file.
+ */
 export const parseDevVariable = (contents: string, key: string): string | undefined => {
-    for (const raw of contents.split(LINE_BREAK)) {
-        const line = raw.trim();
-        const eq = line.indexOf("=");
+    const entry = parseDevVariableEntries(contents).find((candidate) => candidate.key === key);
 
-        if (line === "" || line.startsWith("#") || eq === -1 || line.slice(0, eq).trim() !== key) {
-            continue;
-        }
-
-        const value = line.slice(eq + 1).trim();
-        const unquoted = (value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")) ? value.slice(1, -1) : value;
-
-        return unquoted === "" ? undefined : unquoted;
-    }
-
-    return undefined;
+    return entry === undefined || entry.value === "" ? undefined : entry.value;
 };
 
 /**

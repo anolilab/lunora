@@ -50,7 +50,18 @@ export const useFacets = (): UseFacets => {
     const facetsRef = useRef(facets);
     facetsRef.current = facets;
 
+    // Per-column monotonic fetch id. `refetchFacets` fires on every filter/search/
+    // shard/table change while older fetches may still be in flight, so a slow
+    // response for a previous view could otherwise land last and paint stale
+    // value/count summaries that don't match the visible rows. Only the latest
+    // fetch for a column is allowed to write its result.
+    const fetchSeq = useRef<Record<string, number>>({});
+
     const fetchFacet = async (column: string, fetcher: FacetFetcher): Promise<void> => {
+        const seq = (fetchSeq.current[column] ?? 0) + 1;
+
+        fetchSeq.current[column] = seq;
+
         setFacets((current) =>
             column in current ? { ...current, [column]: { error: null, loading: true, result: current[column]?.result ?? null } } : current,
         );
@@ -58,24 +69,35 @@ export const useFacets = (): UseFacets => {
         try {
             const result = await fetcher(column);
 
+            if (fetchSeq.current[column] !== seq) {
+                return;
+            }
+
             setFacets((current) => (column in current ? { ...current, [column]: { error: null, loading: false, result } } : current));
         } catch (error) {
+            if (fetchSeq.current[column] !== seq) {
+                return;
+            }
+
             setFacets((current) => (column in current ? { ...current, [column]: { error: errorMessage(error), loading: false, result: null } } : current));
         }
     };
 
     const toggleFacet = (column: string, fetcher: FacetFetcher | null): void => {
-        setFacets((current) => {
-            if (column in current) {
-                return Object.fromEntries(Object.entries(current).filter(([name]) => name !== column));
-            }
+        // Read the current set from the ref and kick the fetch off OUTSIDE the state
+        // updater: React may invoke an updater more than once (StrictMode dev, render
+        // replays), and a side effect (a facet request) inside one would double-fire.
+        if (column in facetsRef.current) {
+            setFacets((current) => Object.fromEntries(Object.entries(current).filter(([name]) => name !== column)));
 
-            if (fetcher !== null) {
-                fireAndForget(fetchFacet(column, fetcher));
-            }
+            return;
+        }
 
-            return { ...current, [column]: { error: null, loading: true, result: null } };
-        });
+        setFacets((current) => {return { ...current, [column]: { error: null, loading: true, result: null } }});
+
+        if (fetcher !== null) {
+            fireAndForget(fetchFacet(column, fetcher));
+        }
     };
 
     const refetchFacets = (fetcher: FacetFetcher): void => {

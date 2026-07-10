@@ -18,7 +18,7 @@ import { wrapResolverWithContract } from "./identity-resolvers";
 import { streamingImport } from "./import-stream";
 import { buildIntrospectionAdminRoutes } from "./introspection-admin-routes";
 import type { KvIntrospector } from "./kv-admin-routes";
-import { buildKvAdminRoutes } from "./kv-admin-routes";
+import { buildKvAdminRoutes, KV_VALUE_MAX_BODY_BYTES, KV_VALUE_PATH } from "./kv-admin-routes";
 import type { ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext } from "./observability";
 import { emitRpcEvent } from "./observability";
 import { buildOrchestrationAdminRoutes } from "./orchestration-admin-routes";
@@ -1296,6 +1296,14 @@ const relayProbeCache = new Map<string, RelayProbeEntry>();
 const RELAY_PROBE_TTL_MS = 5000;
 
 /**
+ * Cap on the relay-probe cache. `shardKey` comes from the client-chosen `?shard=`
+ * WS-upgrade param, so a client cycling distinct shard values would otherwise grow
+ * this map monotonically for the isolate's lifetime. Bounded (oldest-out) so the
+ * cache can't be turned into an unbounded memory sink.
+ */
+const RELAY_PROBE_MAX_ENTRIES = 4096;
+
+/**
  * Ask the owner how many relays to spread new connections across for `shardKey`
  * (plan 075 Phase 2), cached per isolate so a promoted shard doesn't add a
  * round-trip to every WS upgrade. Fails closed to `0` (owner-served) on any error,
@@ -1307,6 +1315,12 @@ const probeRelayCount = async (namespace: ShardNamespaceLike, shardKey: string):
 
     if (cached !== undefined && cached.expiresMs > now) {
         return cached.relayCount;
+    }
+
+    // Drop the stale entry on a read-miss so an expired, never-re-probed key can't
+    // linger for the isolate's lifetime.
+    if (cached !== undefined) {
+        relayProbeCache.delete(shardKey);
     }
 
     let relayCount = 0;
@@ -1324,6 +1338,17 @@ const probeRelayCount = async (namespace: ShardNamespaceLike, shardKey: string):
         }
     } catch {
         relayCount = 0;
+    }
+
+    // Bound the cache before inserting: evict the oldest entry once at the cap so a
+    // high-cardinality shard set can't grow the map without limit. `Map` preserves
+    // insertion order, so the first key is the oldest.
+    if (relayProbeCache.size >= RELAY_PROBE_MAX_ENTRIES) {
+        const oldest = relayProbeCache.keys().next().value;
+
+        if (oldest !== undefined) {
+            relayProbeCache.delete(oldest);
+        }
     }
 
     relayProbeCache.set(shardKey, { expiresMs: now + RELAY_PROBE_TTL_MS, relayCount });
@@ -2361,18 +2386,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 sinkContext,
             );
 
-            // Propagate the DO's bookmark header so the client can pin reads
-            // after a write.
-            const responseBookmark = response.headers.get("x-d1-bookmark");
-
-            if (responseBookmark) {
-                const headers = new Headers(response.headers);
-
-                headers.set("x-d1-bookmark", responseBookmark);
-
-                return new Response(response.body, { headers, status: response.status });
-            }
-
+            // The DO's `x-d1-bookmark` header (which lets the client pin reads
+            // after a write) is already on the shard `response`, so returning it
+            // verbatim propagates the bookmark. No rebuild is needed — copying the
+            // headers only to re-set that same header would be a pure allocation
+            // (and would drop `statusText`).
             return response;
         } catch (error) {
             emitRpcEvent(observability, buildErrorEvent(functionPath, Date.now() - rpcStartedAt, error, { shardKey }), sinkContext);
@@ -2565,7 +2583,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             : undefined;
 
         const results: unknown[] = [];
-        let latestBookmark: string | undefined;
+        // Each shard is a distinct source whose `x-d1-bookmark` values are not
+        // comparable across shards, so we cannot pick a "latest" when a batch spans
+        // shards. Collect the per-shard bookmarks and only echo one back when a
+        // single shard produced one (the read-your-writes case: one mutation +
+        // reads that touch no other bookmarked source) — pinning the client to an
+        // arbitrary shard's (possibly older) bookmark would silently break RYOW.
+        const bookmarks: string[] = [];
 
         // A slot-level error envelope for an entry whose shard sub-batch never
         // produced a per-call result (forward failure, non-JSON, non-2xx, or an
@@ -2657,7 +2681,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 const bookmark = response.headers.get("x-d1-bookmark");
 
                 if (bookmark) {
-                    latestBookmark = bookmark;
+                    bookmarks.push(bookmark);
                 }
 
                 let parsed: { results?: { body?: unknown; id?: number; status?: number }[] };
@@ -2700,9 +2724,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         );
 
         const responseHeaders: Record<string, string> = { "content-type": "application/json" };
+        const [onlyBookmark] = bookmarks;
 
-        if (latestBookmark !== undefined) {
-            responseHeaders["x-d1-bookmark"] = latestBookmark;
+        if (bookmarks.length === 1 && onlyBookmark !== undefined) {
+            responseHeaders["x-d1-bookmark"] = onlyBookmark;
         }
 
         return Response.json({ results }, { headers: responseHeaders, status: 200 });
@@ -2854,8 +2879,16 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             throw new LunoraError("scheduled backup requires a `queryCoordinator` on the worker", { code: "BACKUP_NOT_CONFIGURED", status: 500 });
         }
 
-        if (!options.adminToken || options.adminToken.length === 0) {
-            throw new LunoraError("scheduled backup requires an `adminToken` to authenticate the per-shard export gate", {
+        // Match the request-time admin gates: fall back to `env.LUNORA_ADMIN_TOKEN`
+        // when no explicit `options.adminToken` is threaded (the composed-worker
+        // default). `handleScheduled` resolves the env token before calling this,
+        // so `effectiveAdminToken()` sees it. Without the fallback, every composed
+        // deployment's backup cron would throw BACKUP_NOT_CONFIGURED despite a
+        // token existing in env.
+        const adminToken = effectiveAdminToken();
+
+        if (!adminToken || adminToken.length === 0) {
+            throw new LunoraError("scheduled backup requires an `adminToken` (or `env.LUNORA_ADMIN_TOKEN`) to authenticate the per-shard export gate", {
                 code: "BACKUP_NOT_CONFIGURED",
                 status: 500,
             });
@@ -2863,7 +2896,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         // The export fans out to each shard's `/rpc` admin op; the shard gate
         // checks this bearer. No end-user identity is involved.
-        const forwardedHeaders: Record<string, string> = { authorization: `Bearer ${options.adminToken}`, "content-type": "application/json" };
+        const forwardedHeaders: Record<string, string> = { authorization: `Bearer ${adminToken}`, "content-type": "application/json" };
         const tables = options.backupTables;
 
         // Stream the NDJSON straight into R2 so the concatenated body is never
@@ -2936,6 +2969,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * is silently swallowed — the platform sees the cron invocation fail.
      */
     const handleScheduled = async (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike): Promise<void> => {
+        // A cron can fire on an isolate that never served a `fetch`, so resolve
+        // `env.LUNORA_ADMIN_TOKEN` here too — the built-in backup authenticates its
+        // per-shard export fan-out with `effectiveAdminToken()`.
+        resolveAdminTokenFromEnv(env);
+
         const errors: Error[] = [];
         const toError = (error: unknown): Error => (error instanceof Error ? error : new Error(String(error)));
 
@@ -3145,8 +3183,15 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // reader, which abort with 413 once cumulative bytes exceed the cap.
         if (request.method === "POST" || request.method === "PUT") {
             const contentLength = Number(request.headers.get("content-length") ?? "");
+            // Routes that declare their own larger body budget (currently the KV
+            // value PUT, which reads under `KV_VALUE_MAX_BODY_BYTES` to allow a
+            // 25 MiB KV value) must not be pre-rejected by the shared 1 MiB cap —
+            // else the per-route cap is dead code for any client that sends a
+            // `Content-Length`. Pick the route's cap so the header check matches
+            // the reader's cap.
+            const maxBodyBytes = url.pathname === KV_VALUE_PATH ? KV_VALUE_MAX_BODY_BYTES : MAX_BODY_BYTES;
 
-            if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
+            if (Number.isFinite(contentLength) && contentLength > maxBodyBytes) {
                 throw new LunoraError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
             }
         }
@@ -3440,7 +3485,7 @@ const createLunoraHandler =
 /** Re-exported helper so callers can roundtrip envelopes in tests. */
 const defineRpcEnvelope = (envelope: RpcEnvelope): RpcEnvelope => envelope;
 
-export { composeWorker, createLunoraHandler, createWorker, defineRpcEnvelope, resolveLunoraOptions, withFrameworkWorker };
+export { composeWorker, createLunoraHandler, createWorker, defineRpcEnvelope, probeRelayCount, resolveLunoraOptions, withFrameworkWorker };
 export { type ExecutionContextLike, NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
 export type {
     AuthAdmin,

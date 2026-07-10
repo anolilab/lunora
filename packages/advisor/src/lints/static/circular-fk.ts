@@ -2,7 +2,17 @@ import emit from "../../finding";
 import type { Finding, Lint } from "../../types";
 
 /**
- * Detect FK cycles in the declared relation graph via a DFS.
+ * Upper bound on the number of distinct FK cycles reported in a single run.
+ * Johnson's algorithm enumerates elementary circuits in `O((V + E)(C + 1))`
+ * time, so a densely interconnected FK graph can hold a combinatorial number of
+ * cycles; capping keeps both the advisor output and its runtime bounded. A
+ * schema with this many FK cycles has a systemic modeling problem the first
+ * handful of findings already surface.
+ */
+const MAX_CYCLES = 100;
+
+/**
+ * Detect FK cycles in the declared relation graph.
  *
  * A "circular FK" exists when a chain of `one` relations forms a loop — for
  * example `A.authorId → B`, `B.ownerId → C`, `C.postId → A`. Such cycles can
@@ -21,11 +31,18 @@ import type { Finding, Lint } from "../../types";
  * would be noise. Only multi-table cycles — the ones the description illustrates
  * — are surfaced.
  *
- * Each unique cycle is reported once: the cycle path is canonicalized to its
- * lexicographically smallest rotation so two DFS traversals that enter the same
- * ring at different nodes emit the same cacheKey and detail. A representative
- * cycle is reported for each distinct simple cycle in the graph; overlapping or
- * chord cycles that share interior nodes are each detected independently.
+ * Cycle enumeration uses **Johnson's algorithm** rather than a naive
+ * enumerate-all-paths DFS. A plain path-DFS re-walks every simple path in the
+ * graph, which is worst-case exponential even on a fully **acyclic** schema
+ * (reconverging FK fan-out — many tables referencing shared parents in a chain —
+ * makes codegen appear to hang). Johnson blocks a vertex once a fruitless
+ * subtree is exhausted and only unblocks it when a new cycle through it is
+ * found, so it runs in `O((V + E)(C + 1))` for `C` elementary circuits — no
+ * blowup on acyclic input. Each circuit is enumerated exactly once from its
+ * lowest-indexed member (vertices are ordered lexicographically), so overlapping
+ * / chord cycles that share interior nodes are each detected independently. The
+ * emitted cycle is still canonicalized to its lexicographically smallest
+ * rotation for a stable cacheKey.
  */
 const circularFk: Lint = {
     categories: ["SCHEMA"],
@@ -39,59 +56,71 @@ const circularFk: Lint = {
     run: (context) => {
         const findings: Finding[] = [];
 
+        // Order tables lexicographically so Johnson's algorithm can restrict each
+        // circuit search to vertices >= the start vertex, finding every
+        // elementary circuit exactly once from its lowest-indexed member. The lex
+        // order also makes the lowest-indexed member the canonical smallest start.
+        const order = [...new Set(context.schema.tables.map((table) => table.name))].sort();
+        const indexOf = new Map(order.map((name, index) => [name, index]));
+
         // Build adjacency map: table → tables it references via `one` relations.
-        // Each entry maps the source table name to the set of targets it points at.
-        const edges = new Map<string, Set<string>>();
+        // Only edges to a known table participate — a relation to an undeclared
+        // target can never close a cycle (handled by the `*_unknown_table` lint).
+        const adjacency = new Map<string, Set<string>>();
 
         for (const table of context.schema.tables) {
             for (const relation of table.relations) {
-                if (relation.kind !== "one") {
+                if (relation.kind !== "one" || !indexOf.has(relation.table)) {
                     continue;
                 }
 
-                let targets = edges.get(table.name);
+                let targets = adjacency.get(table.name);
 
                 if (targets === undefined) {
                     targets = new Set();
-                    edges.set(table.name, targets);
+                    adjacency.set(table.name, targets);
                 }
 
                 targets.add(relation.table);
             }
         }
 
-        // DFS cycle detection. `onStack` tracks nodes on the current DFS path
-        // (used as an O(1) back-edge test); `path` is the ordered path list
-        // used to extract the cycle slice. `reported` deduplicates found cycles
-        // by their canonical form.
-        //
-        // There is intentionally NO global `visited` set that would mark a node
-        // as permanently done after the first DFS visit. Such a set would
-        // prevent the algorithm from re-entering a node that is an interior node
-        // of two different cycles (overlapping / chord cycles), causing the
-        // second cycle to be silently dropped. Instead, redundant subtree work
-        // is bounded by the `reported` set (a known cycle is not re-emitted) and
-        // by the `onStack` guard (a neighbor already on the current path is a
-        // back edge, not a recursive descent).
-        const onStack = new Set<string>();
+        // Johnson's algorithm state. `blocked` marks vertices that cannot yield a
+        // fresh circuit on the current path; `blockMap` records, for a blocked
+        // vertex, which predecessors to unblock when it is unblocked. `stack` is
+        // the current circuit path; `reported` dedups emitted cycles by canonical
+        // key.
+        const blocked = new Set<string>();
+        const blockMap = new Map<string, Set<string>>();
+        const stack: string[] = [];
         const reported = new Set<string>();
+        let capped = false;
 
-        /**
-         * A back edge `… → neighbor` was found while `neighbor` is on the current
-         * path. Extract the ring `path[cycleStart..]`, canonicalize it to its
-         * lexicographically smallest rotation (so the same ring entered at
-         * different nodes produces one key/finding), and emit it once.
-         */
-        const reportBackEdge = (neighbor: string, path: ReadonlyArray<string>): void => {
-            const cycleStart = path.indexOf(neighbor);
+        const unblock = (vertex: string): void => {
+            blocked.delete(vertex);
+            const dependents = blockMap.get(vertex);
 
-            // `neighbor` is on the stack, so it is always in `path` — the guard is
-            // defensive only.
-            if (cycleStart === -1) {
+            if (dependents === undefined) {
                 return;
             }
 
-            const cycle = path.slice(cycleStart);
+            for (const dependent of dependents) {
+                dependents.delete(dependent);
+
+                if (blocked.has(dependent)) {
+                    unblock(dependent);
+                }
+            }
+        };
+
+        /**
+         * Emit the circuit currently on `stack` (which begins and conceptually
+         * closes at its first vertex). Canonicalize it to its lexicographically
+         * smallest rotation so the same ring produces one stable cacheKey, skip a
+         * single-node self-loop (intentional tree shape), and emit once.
+         */
+        const emitCurrentCycle = (): void => {
+            const cycle = [...stack];
 
             // A single-node "cycle" is a self-referential FK (`A.parentId → A`) —
             // the intentional tree/hierarchy shape, not the multi-table delete
@@ -100,7 +129,6 @@ const circularFk: Lint = {
                 return;
             }
 
-            // Canonicalize: rotate to the lexicographically smallest start node.
             let minIndex = 0;
 
             for (let index = 1; index < cycle.length; index += 1) {
@@ -131,31 +159,74 @@ const circularFk: Lint = {
                     },
                 }),
             );
+
+            if (reported.size >= MAX_CYCLES) {
+                capped = true;
+            }
         };
 
         /**
-         * Walk the relation graph from `node`, collecting the current path in
-         * `path` / `onStack`. A neighbor already on the path is a back edge
-         * (handled by {@link reportBackEdge}); any other neighbor is descended into.
+         * Johnson's `CIRCUIT` procedure over the subgraph induced by vertices with
+         * index >= `startIndex`. Returns whether a circuit back to `start` was
+         * found through `vertex`.
          */
-        const dfs = (node: string, path: string[]): void => {
-            onStack.add(node);
-            path.push(node);
+        const circuit = (vertex: string, start: string, startIndex: number): boolean => {
+            let foundCycle = false;
 
-            for (const neighbor of edges.get(node) ?? []) {
-                if (onStack.has(neighbor)) {
-                    reportBackEdge(neighbor, path);
-                } else {
-                    dfs(neighbor, path);
+            stack.push(vertex);
+            blocked.add(vertex);
+
+            for (const neighbor of adjacency.get(vertex) ?? []) {
+                if (capped) {
+                    break;
+                }
+
+                // Restrict to the current subgraph (vertices >= start).
+                if ((indexOf.get(neighbor) as number) < startIndex) {
+                    continue;
+                }
+
+                if (neighbor === start) {
+                    emitCurrentCycle();
+                    foundCycle = true;
+                } else if (!blocked.has(neighbor) && circuit(neighbor, start, startIndex)) {
+                    foundCycle = true;
                 }
             }
 
-            path.pop();
-            onStack.delete(node);
+            if (foundCycle) {
+                unblock(vertex);
+            } else {
+                // No circuit through `vertex` yet — record it as a dependent of
+                // each in-subgraph neighbor so it is unblocked only when one of
+                // them later participates in a circuit.
+                for (const neighbor of adjacency.get(vertex) ?? []) {
+                    if ((indexOf.get(neighbor) as number) < startIndex) {
+                        continue;
+                    }
+
+                    let dependents = blockMap.get(neighbor);
+
+                    if (dependents === undefined) {
+                        dependents = new Set();
+                        blockMap.set(neighbor, dependents);
+                    }
+
+                    dependents.add(vertex);
+                }
+            }
+
+            stack.pop();
+
+            return foundCycle;
         };
 
-        for (const table of context.schema.tables) {
-            dfs(table.name, []);
+        for (let startIndex = 0; startIndex < order.length && !capped; startIndex += 1) {
+            // Fresh blocking state per start vertex (the subgraph shrinks each step).
+            blocked.clear();
+            blockMap.clear();
+
+            circuit(order[startIndex] as string, order[startIndex] as string, startIndex);
         }
 
         return findings;

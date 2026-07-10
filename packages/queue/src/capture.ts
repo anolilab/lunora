@@ -11,6 +11,8 @@
  * Object namespace is projected structurally, and the only I/O is `fetch` on the
  * shard stub. No `cloudflare:workers` import, so it stays unit-testable.
  */
+import { LunoraError } from "@lunora/errors";
+
 import type { CapturedQueueMessage, QueueCaptureSink } from "./dispatch";
 
 /** A Worker `env` projected as a plain record (vars, secrets, and bindings are `unknown`-valued). */
@@ -127,12 +129,32 @@ const createQueueCaptureSink = (env: QueueEnv, options: QueueCaptureOptions = {}
         }, CAPTURE_FETCH_TIMEOUT_MS);
 
         try {
-            await stub.fetch("https://shard.internal/rpc", {
+            const response = await stub.fetch("https://shard.internal/rpc", {
                 body: JSON.stringify({ args: { messages }, functionPath: RECORD_QUEUE_MESSAGE_OP }),
                 headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
                 method: "POST",
                 signal: controller.signal,
             });
+
+            if (!response.ok) {
+                // Surface the failure (the dispatcher logs it): a silent 401 from a
+                // stale/rotated LUNORA_ADMIN_TOKEN or a shard-side 500 is otherwise
+                // indistinguishable from success, leaving the studio Queues panel
+                // mysteriously empty. Read the body first so it's consumed (an
+                // unconsumed response body triggers a workerd runtime warning) and
+                // feeds a diagnostic; `dispatchQueueBatch` swallows the throw, so
+                // delivery semantics stay unchanged.
+                const detail = await response.text().catch(() => "");
+
+                throw new LunoraError(
+                    "INTERNAL",
+                    `@lunora/queue: capture write to the root shard failed (${response.status} ${response.statusText})${detail === "" ? "" : `: ${detail}`}`,
+                );
+            }
+
+            // Consume the success body too — an unread response body is a workerd
+            // anti-pattern (it warns at runtime); the admin RPC result is unused.
+            await response.body?.cancel();
         } finally {
             clearTimeout(timeout);
         }

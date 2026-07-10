@@ -85,6 +85,9 @@ const col = (kind: string, extra: Record<string, unknown> = {}): ValidatorLike =
     return { _meta: { column: { notNull: true, ...extra } }, kind };
 };
 
+/** An `optional(inner)` column — stays nullable in the DDL; `effectiveColumnKind` unwraps to `inner` for storage affinity/decode. */
+const optionalCol = (innerKind: string): ValidatorLike => ({ _meta: { column: { notNull: false }, inner: { _meta: { column: { notNull: false } }, kind: innerKind } }, kind: "optional" } as never);
+
 const schema: SchemaLike = {
     tables: {
         notes: {
@@ -287,6 +290,138 @@ describe("createSqlCtxDb — rank over node:sqlite", () => {
         const second = await writer.rankPage("notes", "byPriority", { cursor: first.continueCursor ?? undefined, take: 2 });
 
         expect(second.page.map((row) => row.slug)).toStrictEqual(["c"]);
+    });
+});
+
+/** A soft-delete (`deletedAt` marker) `notes` table carrying a rank index, exercising the delete/restore/patch → rank companion seam. */
+const softRankSchema: SchemaLike = {
+    tables: {
+        notes: {
+            indexes: [],
+            rankIndexes: [
+                {
+                    name: "byPriority",
+                    on: "notes",
+                    partitionBy: ["archived"],
+                    sortBy: [{ direction: "desc", field: "priority" }],
+                },
+            ],
+            shape: {
+                archived: col("boolean"),
+                body: col("string"),
+                deletedAt: optionalCol("number"),
+                priority: col("number"),
+                slug: col("string"),
+            },
+            softDeleteMode: { field: "deletedAt" },
+            shardMode: { kind: "global" },
+        },
+    },
+} as never;
+
+describe("createSqlCtxDb — soft-delete + rank companion", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    const makeSoftRankWriter = () => createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: softRankSchema });
+
+    it("restore() re-adds the rank entry exactly once (regression: no duplicate-PK on soft-delete tables)", async () => {
+        expect.assertions(3);
+
+        const writer = makeSoftRankWriter();
+
+        await writer.insert("notes", { archived: false, body: "a", priority: 30, slug: "a" });
+        await writer.insert("notes", { archived: false, body: "b", priority: 20, slug: "b" });
+
+        const target = await writer.findFirst("notes", { where: { slug: "a" } });
+
+        // Soft delete drops the row's rank companion entry.
+        await writer.delete(String(target?._id));
+
+        const afterDelete = await writer.rankPage("notes", "byPriority", { take: 10 });
+
+        expect(afterDelete.page.map((row) => row.slug)).toStrictEqual(["b"]);
+
+        // Previously restore()'s forced re-add double-inserted the companion row
+        // and threw a raw UNIQUE-constraint (PRIMARY KEY `__id__`) violation.
+        await expect(writer.restore?.(String(target?._id))).resolves.toBeUndefined();
+
+        const afterRestore = await writer.rankPage("notes", "byPriority", { take: 10 });
+
+        expect(afterRestore.page.map((row) => row.slug)).toStrictEqual(["a", "b"]);
+    });
+
+    it("patching a rank field of a soft-deleted row does not resurrect it in rank (regression)", async () => {
+        expect.assertions(1);
+
+        const writer = makeSoftRankWriter();
+
+        await writer.insert("notes", { archived: false, body: "a", priority: 30, slug: "a" });
+        await writer.insert("notes", { archived: false, body: "b", priority: 20, slug: "b" });
+
+        const target = await writer.findFirst("notes", { where: { slug: "a" } });
+
+        await writer.delete(String(target?._id));
+
+        // An admin/cascade patch touches a RANK field (priority) of the still
+        // soft-deleted row — it must NOT re-add the row to the rank companion.
+        await writer.patch(String(target?._id), { priority: 99 });
+
+        const page = await writer.rankPage("notes", "byPriority", { take: 10 });
+
+        expect(page.page.map((row) => row.slug)).toStrictEqual(["b"]);
+    });
+});
+
+/** A `.global()` table with a two-key aggregate index, so a groupBy `where` can pin a strict subset of the `by`-tuple. */
+const groupSchema: SchemaLike = {
+    tables: {
+        events: {
+            aggregateIndexes: [{ by: ["tenant", "status"], name: "byTenantStatus", on: "events", op: "count" }],
+            indexes: [],
+            shape: {
+                status: col("string"),
+                tenant: col("string"),
+            },
+            shardMode: { kind: "global" },
+        },
+    },
+} as never;
+
+describe("createSqlCtxDb — indexed groupBy honours a partial where", () => {
+    let harness: ReturnType<typeof createSqliteHarness>;
+
+    beforeEach(() => {
+        harness = createSqliteHarness();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("returns only the groups the where selects when it pins a subset of the by-tuple (regression: no leaked groups)", async () => {
+        expect.assertions(3);
+
+        const writer = createSqlCtxDb({ clock: () => 1, dialect: makeSqliteDialect(), exec: harness.exec, schema: groupSchema });
+
+        await writer.insert("events", { status: "active", tenant: "a" });
+        await writer.insert("events", { status: "done", tenant: "a" });
+        await writer.insert("events", { status: "active", tenant: "b" });
+
+        // by=[tenant,status] with where pinning only `tenant` — the materialized
+        // companion must not leak tenant "b" groups (indexed/scan divergence).
+        const groups = await writer.groupBy("events", { agg: { op: "count" }, by: ["tenant", "status"], where: { tenant: "a" } });
+
+        expect(groups).toHaveLength(2);
+        expect(groups.every((entry) => (entry.key as { tenant: string }).tenant === "a")).toBe(true);
+        expect(groups.some((entry) => (entry.key as { tenant: string }).tenant === "b")).toBe(false);
     });
 });
 

@@ -41,4 +41,50 @@ describe("spawnShellCompat", () => {
             shell: true,
         });
     });
+
+    it("quotes cmd.exe metacharacters even without whitespace so they can't be re-split or run as a second command", () => {
+        expect.assertions(1);
+
+        // `&` (and `| < > ^ %`) are unquoted command separators / redirection for
+        // cmd.exe: `--outdir C:\Dev&Ops\dist` would otherwise run `Ops\dist`.
+        expect(spawnShellCompat("pnpm", ["deploy", "--outdir", String.raw`C:\Dev&Ops\dist`], "win32")).toStrictEqual({
+            args: ["deploy", "--outdir", String.raw`"C:\Dev&Ops\dist"`],
+            command: "pnpm",
+            shell: true,
+        });
+    });
+
+    it("escapes an embedded double-quote for CommandLineToArgvW", () => {
+        expect.assertions(1);
+
+        // An embedded `"` would toggle cmd's quote state and re-split the value;
+        // it must reach the child as `\"` inside the wrapping quotes.
+        expect(spawnShellCompat("pnpm", ["--msg", 'a"b'], "win32")).toStrictEqual({
+            args: ["--msg", String.raw`"a\"b"`],
+            command: "pnpm",
+            shell: true,
+        });
+    });
+
+    it("doubles a trailing backslash so it can't escape the closing quote", () => {
+        expect.assertions(1);
+
+        // A quoted path ending in `\` (quoted here for the embedded space) would
+        // otherwise escape the closing quote and re-split the argument.
+        expect(spawnShellCompat("pnpm", ["--dir", "C:\\a b\\"], "win32")).toStrictEqual({
+            args: ["--dir", String.raw`"C:\a b\\"`],
+            command: "pnpm",
+            shell: true,
+        });
+    });
+
+    it("emits an explicit empty token for an empty argument so following positionals don't shift", () => {
+        expect.assertions(1);
+
+        expect(spawnShellCompat("pnpm", ["--flag", "", "tail"], "win32")).toStrictEqual({
+            args: ["--flag", `""`, "tail"],
+            command: "pnpm",
+            shell: true,
+        });
+    });
 });

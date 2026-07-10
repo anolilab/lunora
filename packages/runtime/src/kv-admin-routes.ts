@@ -17,7 +17,7 @@ const KV_VALUE_PATH = "/_lunora/admin/kv/value";
  * shared 1 MiB JSON limit would reject valid writes; allow 32 MiB to cover a
  * 25 MiB value plus the JSON envelope (key/metadata) and string escaping.
  */
-const KV_VALUE_MAX_BODY_BYTES = 32 * 1_048_576;
+const KV_VALUE_MAX_BODY_BYTES: number = 32 * 1_048_576;
 
 /** Minimum seconds a KV `expiration`/`expirationTtl` must span — Cloudflare rejects anything under 60. */
 const KV_MIN_EXPIRATION_SECONDS = 60;
@@ -274,4 +274,4 @@ const buildKvAdminRoutes = (deps: KvAdminRouteDeps): Record<string, (request: Re
 };
 
 export type { KvAdminRouteDeps, KvIntrospector, KvKeyEntry, KvKeyListResult, KvNamespaceSummary, KvValueResult };
-export { buildKvAdminRoutes, KV_KEYS_PATH, KV_NAMESPACES_PATH, KV_VALUE_PATH };
+export { buildKvAdminRoutes, KV_KEYS_PATH, KV_NAMESPACES_PATH, KV_VALUE_MAX_BODY_BYTES, KV_VALUE_PATH };

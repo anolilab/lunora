@@ -348,9 +348,15 @@ const defineContainer = (config: ContainerConfig): ContainerDefinition => {
         );
     }
 
-    if (typeof config.sleepAfter === "string" && !SLEEP_AFTER_PATTERN.test(config.sleepAfter)) {
+    if (typeof config.sleepAfter === "string") {
+        if (!SLEEP_AFTER_PATTERN.test(config.sleepAfter)) {
+            throw new TypeError(
+                `defineContainer: \`sleepAfter\` string "${config.sleepAfter}" must be a number of seconds followed by a unit, e.g. "30s", "5m", or "1h"`,
+            );
+        }
+    } else if (config.sleepAfter !== undefined && (!Number.isInteger(config.sleepAfter) || config.sleepAfter < 1)) {
         throw new TypeError(
-            `defineContainer: \`sleepAfter\` string "${config.sleepAfter}" must be a number of seconds followed by a unit, e.g. "30s", "5m", or "1h"`,
+            `defineContainer: \`sleepAfter\` must be a positive integer number of seconds or a duration string like "5m" (got ${String(config.sleepAfter)})`,
         );
     }
 

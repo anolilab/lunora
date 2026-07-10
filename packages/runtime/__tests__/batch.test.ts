@@ -49,6 +49,22 @@ describe("groupBatchCallsByShard", () => {
         expect(() => groupBatchCallsByShard([{ id: 0 }], "__root__")).toThrow(expect.objectContaining({ code: "BAD_REQUEST", status: 400 }));
     });
 
+    it("rejects a non-object `args` (string/number/array) with BAD_REQUEST, matching the single-call envelope", () => {
+        expect.assertions(3);
+
+        // Parity with `parseEnvelope`: a non-object `args` must be a clean 400 at
+        // the batch boundary, not forwarded to the shard as a malformed envelope.
+        expect(() => groupBatchCallsByShard([{ args: "x", functionPath: "docs:x", id: 0 }], "__root__")).toThrow(
+            expect.objectContaining({ code: "BAD_REQUEST", status: 400 }),
+        );
+        expect(() => groupBatchCallsByShard([{ args: 5, functionPath: "docs:x", id: 0 }], "__root__")).toThrow(
+            expect.objectContaining({ code: "BAD_REQUEST", status: 400 }),
+        );
+        expect(() => groupBatchCallsByShard([{ args: [1, 2], functionPath: "docs:x", id: 0 }], "__root__")).toThrow(
+            expect.objectContaining({ code: "BAD_REQUEST", status: 400 }),
+        );
+    });
+
     it("rejects a batch over the entry cap with BAD_REQUEST (DoS guard)", () => {
         expect.assertions(1);
 

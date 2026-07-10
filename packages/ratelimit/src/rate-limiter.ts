@@ -68,6 +68,16 @@ const shardKeysFor = (name: string, key: string | undefined, shards: number): st
     return shards > 1 ? Array.from({ length: shards }, (_, shard) => `${base}#${String(shard)}`) : [base];
 };
 
+// The single storage key a `(name, key)` pair routes to: the sole bucket when
+// unsharded, or the one shard the deterministic hash selects. `getValue` and
+// `run` must route identically (otherwise a peek reads a different bucket than
+// the consume writes), so both go through here.
+const routeStorageKey = (name: string, key: string | undefined, shards: number): string => {
+    const base = storageKeyFor(name, key);
+
+    return shards > 1 ? `${base}#${String(hashToShard(base, shards))}` : base;
+};
+
 /**
  * Enforces named rate limits over a pluggable store. Construct one per app with
  * a config map; call {@link RateLimiter.limit} to consume and
@@ -134,17 +144,11 @@ class RateLimiter<Names extends string = string> {
         const now = this.now();
         const normalizedKey = args.key === undefined ? undefined : this.normalize(args.key);
 
-        if (shards > 1) {
-            // Mirror the exact routing run() uses so getValue reflects the one
-            // bucket this key actually consumes from.
-            const base = storageKeyFor(name, normalizedKey);
-            const storageKey = `${base}#${String(hashToShard(base, shards))}`;
-            const current = availableAt(perShardConfig(config, shards), await this.store.get(storageKey), now);
-
-            return { config, ts: current.ts, value: current.value };
-        }
-
-        const current = availableAt(config, await this.store.get(storageKeyFor(name, normalizedKey)), now);
+        // Route to the exact bucket run() consumes from — for a sharded limit
+        // that is the single shard this key hashes to; summing siblings would
+        // over-report since this key never touches them.
+        const storageKey = routeStorageKey(name, normalizedKey, shards);
+        const current = availableAt(perShardConfig(config, shards), await this.store.get(storageKey), now);
 
         return { config, ts: current.ts, value: current.value };
     }
@@ -203,13 +207,12 @@ class RateLimiter<Names extends string = string> {
         }
 
         const shards = config.shards ?? 1;
-        const base = storageKeyFor(name, normalizedKey);
         // Deterministic hash routes a given (name, key) to a fixed shard. Per
         // sibling shards are independent — per-key rate is `rate/shards`,
         // aggregate across distinct keys spreads to ~`rate`. Random shard
         // selection (the old behavior) allowed a single key to drain every
         // shard before any of them rate-limited, which defeated the cap.
-        const storageKey = shards > 1 ? `${base}#${String(hashToShard(base, shards))}` : base;
+        const storageKey = routeStorageKey(name, normalizedKey, shards);
         const prior = await this.store.get(storageKey);
         const { status, value } = evaluate(perShardConfig(config, shards), prior, {
             consume,

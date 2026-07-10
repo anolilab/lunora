@@ -8,11 +8,13 @@
  *
  * It is intentionally opaque: callers never touch the binding directly, they
  * hand it to {@link LunoraBrowserOptions.binding} and the Playwright layer
- * consumes it. Typed as a non-empty marker so an arbitrary value (e.g. `{}`)
- * doesn't silently type-check where a binding is required.
+ * consumes it. `fetch` is REQUIRED (the real binding is a `Fetcher`, so it
+ * always has one) so the marker actually excludes an arbitrary value like `{}` —
+ * a bare object fails to type-check where a binding is required, catching the
+ * misuse at the call site instead of deferring to an opaque launch error.
  */
 export interface BrowserBindingLike {
-    readonly fetch?: (...args: never[]) => unknown;
+    readonly fetch: (...args: never[]) => unknown;
 }
 
 /**

@@ -20,8 +20,22 @@ import sanitizeNamespace from "./paths";
 
 const FUNCTION_KINDS = new Set(["action", "mutation", "query", "stream"]);
 
-/** Detects a standalone `any` token in a rendered type (degraded type-checker mode). */
-const ANY_TOKEN_RE = /\bany\b/u;
+/**
+ * Detects a standalone `any` type token in a rendered type (degraded
+ * type-checker mode). The negative lookahead excludes a property *key* named
+ * `any` (`{ any: string }` / `{ any?: T }`) — a key is always followed by `:` /
+ * `?:`, a real `any` type never is. String-literal type members (`kind: "any"`,
+ * `"any" | "all"`) are removed via {@link STRING_LITERAL_SPAN_RE} before this
+ * runs, so a discriminant literal `"any"` no longer degrades the whole type.
+ */
+const ANY_TOKEN_RE = /\bany\b(?!\s*(?:\?\s*)?:)/u;
+
+/**
+ * String / template literal *type* spans in a rendered type. Their text is data,
+ * not a type token, so an `any` inside one (`kind: "any"`) must not trip
+ * degraded-mode detection; callers strip these before testing {@link ANY_TOKEN_RE}.
+ */
+const STRING_LITERAL_SPAN_RE = /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/gu;
 
 /** JS identifier allowlist — mirrors `emit.ts`'s `IDENTIFIER_RE`, gating raw splice of a property name. */
 const IDENTIFIER_RE = /^[A-Za-z_$][\w$]*$/u;
@@ -468,7 +482,7 @@ const unwrapHandlerReturn = (handler: Node): string => {
     // mode — typically because the consuming project lacks the tsconfig
     // wiring to resolve `@lunora/server`/`@lunora/values`. Surfacing such
     // partial types would mislead users; fall back to `unknown` instead.
-    if (ANY_TOKEN_RE.test(rendered)) {
+    if (ANY_TOKEN_RE.test(rendered.replaceAll(STRING_LITERAL_SPAN_RE, ""))) {
         return "unknown";
     }
 
@@ -764,7 +778,7 @@ const chainUsesWrappedCall = (receiver: Node, method: string, wrappedCallee: str
  * `lunora/loop -> ..`) is therefore not descended into, breaking the symlink-cycle
  * infinite-recursion / build-hang that `statSync` (which follows links) would hit.
  */
-const listLunoraSourceFiles = (directory: string, accumulator: string[] = []): string[] => {
+const listLunoraSourceFiles = (directory: string, accumulator: string[] = [], root: string = directory): string[] => {
     let entries: string[];
 
     try {
@@ -782,8 +796,17 @@ const listLunoraSourceFiles = (directory: string, accumulator: string[] = []): s
                 continue;
             }
 
-            listLunoraSourceFiles(full, accumulator);
-        } else if (info.isFile() && extname(entry) === ".ts" && entry !== "schema.ts") {
+            listLunoraSourceFiles(full, accumulator, root);
+        } else if (info.isFile() && extname(entry) === ".ts") {
+            // Skip ONLY the top-level `lunora/schema.ts` — it is loaded separately
+            // by `discoverSchema`. A nested `lunora/<feature>/schema.ts` is an
+            // ordinary source file that can carry query/mutation/migration
+            // registrations, so it must be discovered (the `directory === root`
+            // guard fires at depth 0 only, where `directory` is the passed root).
+            if (entry === "schema.ts" && directory === root) {
+                continue;
+            }
+
             accumulator.push(full);
         }
     }

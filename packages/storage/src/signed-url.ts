@@ -17,6 +17,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { trimTrailingSlashes } from "./internal";
 import type { SignedUrlOptions } from "./types";
 
 const textEncoder = new TextEncoder();
@@ -135,11 +136,11 @@ export const buildSignedUrl = async (
     // already-expired URL that verify silently rejects) and enforce a ceiling
     // so a bogus value can't mint an effectively non-expiring URL.
     if (!Number.isFinite(expiresInSeconds) || expiresInSeconds <= 0) {
-        throw new LunoraError("INTERNAL", "@lunora/storage: expiresInSeconds must be a positive finite number");
+        throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: expiresInSeconds must be a positive finite number");
     }
 
     if (expiresInSeconds > MAX_EXPIRES_IN_SECONDS) {
-        throw new LunoraError("INTERNAL", `@lunora/storage: expiresInSeconds must not exceed ${String(MAX_EXPIRES_IN_SECONDS)} (7 days)`);
+        throw new LunoraError("VALIDATION_ERROR", `@lunora/storage: expiresInSeconds must not exceed ${String(MAX_EXPIRES_IN_SECONDS)} (7 days)`);
     }
 
     // contentType is a PUT-only pin: a GET URL has no request body to constrain,
@@ -152,7 +153,7 @@ export const buildSignedUrl = async (
     const signature = await crypto.subtle.sign("HMAC", cryptoKey, textEncoder.encode(canonicalize(method, host, args.key, exp, contentType)));
     const sig = toBase64Url(new Uint8Array(signature));
 
-    const base = args.baseUrl.endsWith("/") ? args.baseUrl.slice(0, -1) : args.baseUrl;
+    const base = trimTrailingSlashes(args.baseUrl);
     const safeKey = args.key
         .split("/")
         .map((segment) => encodeURIComponent(segment))

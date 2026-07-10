@@ -1,7 +1,7 @@
 /* eslint-disable import/exports-last -- a types-heavy module: public types are declared next to the helpers they build on */
 import type { FunctionReference, LunoraClient, SubscriptionError } from "@lunora/client";
 import type { Collection, Transaction } from "@tanstack/db";
-import { createCollection } from "@tanstack/db";
+import { createCollection, safeRandomUUID } from "@tanstack/db";
 import type { OfflineConfig, OfflineExecutor, OfflineTransaction, StorageDiagnostic } from "@tanstack/offline-transactions";
 import { NonRetriableError, startOfflineExecutor } from "@tanstack/offline-transactions";
 
@@ -62,6 +62,14 @@ export interface CollectionDef<TList extends FunctionReference, TInput = never> 
     onError?: (error: SubscriptionError) => void;
     /** A field that scopes the list (e.g. a shard key); makes the collection re-pointable via `scope`. */
     scopeBy?: string;
+
+    /**
+     * Routes the `list` subscription (and the confirmed-mutation watermark its
+     * frames advance the checkpoint gate from) to a specific shard's DO — so a
+     * sharded collection's overlay gate compares against that shard's mutator
+     * sequence line, not the default ("") watermark bucket.
+     */
+    shardKey?: string;
 }
 
 // A collection def with its type params erased to `any` (not `FunctionReference`/
@@ -196,6 +204,7 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
             ...(definition.load === undefined ? {} : { load: definition.load }),
             onError: definition.onError,
             scopeBy: definition.scopeBy,
+            shardKey: definition.shardKey,
         });
 
         collections[name] = createCollection<Row, string>(config);
@@ -205,13 +214,22 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
         }
 
         if (insert) {
-            mutationFns[name] = async ({ transaction }) => {
-                for (const mutation of transaction.mutations) {
+            mutationFns[name] = async ({ idempotencyKey, transaction }) => {
+                for (const [mutationIndex, mutation] of transaction.mutations.entries()) {
                     const row = mutation.modified as unknown as Row;
+                    // Replay under the executor's stable idempotency key (suffixed
+                    // with the mutation's index so a batched transaction's writes
+                    // stay distinct), NOT a fresh id minted per call: a
+                    // committed-but-unacked write the outbox retries then resends the
+                    // same `x-lunora-mutation-id` and the server dedupes it instead
+                    // of inserting the row twice. Mirrors the reserved
+                    // `__lunora_outbox__` handler, which replays under
+                    // `meta.idempotencyKey`.
+                    const mutationId = `${idempotencyKey}:${String(mutationIndex)}`;
 
                     try {
                         // eslint-disable-next-line no-await-in-loop -- sequential keeps the outbox's FIFO ordering
-                        await runOutboxMutation(() => client.mutation(insert.mutation, insert.toArgs(row)));
+                        await runOutboxMutation(() => client.mutation(insert.mutation, insert.toArgs(row), { mutationId }));
                     } catch (error) {
                         // A permanent (coded) rejection: the executor will roll the
                         // optimistic row back. Report it on the aggregate channel so a
@@ -306,8 +324,12 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
         });
 
         actions[name] = (input) => {
-            // eslint-disable-next-line n/no-unsupported-features/node-builtins -- runs in browser/edge/Node ≥22; `crypto.randomUUID` is available in all of them
-            const id = crypto.randomUUID();
+            // `safeRandomUUID` (from @tanstack/db) falls back to
+            // `crypto.getRandomValues` when `crypto.randomUUID` is unavailable —
+            // e.g. a plain-HTTP dev/LAN origin (non-secure context), where
+            // `crypto.randomUUID` is undefined and a bare call would throw,
+            // breaking every `db.actions.*` invocation.
+            const id = safeRandomUUID();
             const transaction = action({ id, input });
 
             return { id, transaction };

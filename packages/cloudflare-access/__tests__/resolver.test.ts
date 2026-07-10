@@ -93,6 +93,38 @@ describe("createAccessResolver", () => {
         expect(onError).not.toHaveBeenCalled();
     });
 
+    it("throws at factory time when aud is missing (fail fast, not silent-anonymous)", () => {
+        expect.assertions(1);
+
+        expect(() => createAccessResolver({ aud: "", keySet: publicKey, teamDomain: TEAM })).toThrow(/aud/);
+    });
+
+    it("throws at factory time when teamDomain is empty", () => {
+        expect.assertions(1);
+
+        expect(() => createAccessResolver({ aud: AUD, keySet: publicKey, teamDomain: "   " })).toThrow(/teamDomain/);
+    });
+
+    it("treats empty-string email/common_name as anonymous rather than minting userId ''", async () => {
+        expect.assertions(1);
+
+        const resolve = createAccessResolver({ aud: AUD, keySet: publicKey, teamDomain: TEAM });
+        const token = await sign({ common_name: "", email: "", sub: "" });
+
+        await expect(resolve(requestWithHeader(token))).resolves.toBeNull();
+    });
+
+    it("falls back to the derived id when mapClaims returns an empty userId", async () => {
+        expect.assertions(1);
+
+        const resolve = createAccessResolver({ aud: AUD, keySet: publicKey, mapClaims: () => {return { userId: "" }}, teamDomain: TEAM });
+        const token = await sign({ sub: "user-7" });
+
+        const identity = await resolve(requestWithHeader(token));
+
+        expect(identity?.userId).toBe("user-7");
+    });
+
     it("lets mapClaims override the derived userId and add claims", async () => {
         expect.assertions(2);
 

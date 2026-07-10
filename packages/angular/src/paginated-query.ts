@@ -5,6 +5,7 @@ import type { Page, PaginationResult, PaginationStatus } from "@lunora/client/pa
 import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
 
 import { resolveLunoraClient } from "./client";
+import { shouldOpenSubscription } from "./platform";
 
 // ── Shared types ────────────────────────────────────────────────────────────
 
@@ -46,6 +47,7 @@ const usePaginatedCore = <F extends FunctionReference>(
     status: Signal<PaginationStatus>;
 } => {
     const client = resolveLunoraClient(options.client);
+    const fromInjectionContext = options.destroyRef === undefined;
     const destroyRef = options.destroyRef ?? inject(DestroyRef);
     const { initialNumItems, shardKey } = options;
 
@@ -60,9 +62,10 @@ const usePaginatedCore = <F extends FunctionReference>(
     const status = signal<PaginationStatus>("LoadingFirstPage");
 
     /**
-     * Each active subscription entry. `currentKey` is mutable so that when
-     * `loadMore` re-keys a pinned page, the callback still stores its result
-     * under the correct key without needing a closure rebind.
+     * Each active subscription entry, keyed in `activeSubs` by the page key it
+     * was opened under. `loadMore` re-keys a pinned page by closing the old
+     * subscription and opening a fresh one (see below), so `currentKey` is set
+     * once at creation and only read thereafter — never reassigned in place.
      */
     interface SubEntry {
         currentKey: string;
@@ -112,7 +115,7 @@ const usePaginatedCore = <F extends FunctionReference>(
         }
     };
 
-    const syncSubscriptions = (currentPages: Page[]): void => {
+    const syncPass = (currentPages: Page[]): void => {
         const wantedKeys = new Set<string>();
 
         for (const page of currentPages) {
@@ -183,7 +186,45 @@ const usePaginatedCore = <F extends FunctionReference>(
         }
     };
 
-    if (baseArgs !== "skip") {
+    // `client.subscribe` replays a cached value to the new subscriber
+    // SYNCHRONOUSLY — the callback fires before `subscribe` returns, i.e. before
+    // the entry's `unsub` handle and `activeSubs` slot above are set. If that
+    // replay empties `pendingPageKeys` and `rebalance` returns a new layout, the
+    // callback re-enters `syncSubscriptions` against half-populated bookkeeping.
+    // Re-entering the open loop there would duplicate still-wanted subs and orphan
+    // handles (the outer frame's `activeSubs.set` overwrites the reentrant entry).
+    // So guard: while a pass is running, a nested call only flags a re-sync, which
+    // the drain below runs once the outer pass has finished recording every handle
+    // — that follow-up pass closes any now-stale sub and opens the genuinely new
+    // pages against complete bookkeeping.
+    let syncing = false;
+    let resyncRequested = false;
+
+    const syncSubscriptions = (currentPages: Page[]): void => {
+        if (syncing) {
+            resyncRequested = true;
+
+            return;
+        }
+
+        syncing = true;
+
+        try {
+            let pagesToSync = currentPages;
+
+            do {
+                resyncRequested = false;
+                syncPass(pagesToSync);
+                pagesToSync = pages();
+            } while (resyncRequested);
+        } finally {
+            syncing = false;
+        }
+    };
+
+    // The `shouldOpenSubscription()` guard skips all page subscriptions on the
+    // Angular server platform (SSR); the browser render re-runs this and attaches.
+    if (baseArgs !== "skip" && shouldOpenSubscription(fromInjectionContext)) {
         syncSubscriptions(pages());
     }
 
@@ -277,20 +318,6 @@ export interface PaginatedQueryResult<T> {
 
     /** The pagination status. */
     status: Signal<PaginationStatus>;
-}
-
-export interface InfiniteQueryOptions {
-    /** Client to bind to. Defaults to the injected `LUNORA_CLIENT`. */
-    client?: LunoraClient;
-
-    /** `DestroyRef` whose `onDestroy` tears down the subscriptions. Defaults to `inject(DestroyRef)`. */
-    destroyRef?: DestroyRef;
-
-    /** Page size for the first page (and the default for `fetchNextPage`). */
-    initialNumItems: number;
-
-    /** Route to a specific shard when the target function is `.shardBy(...)`-partitioned. */
-    shardKey?: string;
 }
 
 export interface InfiniteQueryResult<T> {

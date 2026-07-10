@@ -65,6 +65,22 @@ const useFlag = <T extends FlagValue>(key: string, defaultValue: T, context?: Fl
     const type = flagKind(defaultValue);
     const serializedContext = context === undefined ? "" : stableStringify(context);
 
+    // A different key/type/context is a different flag. Reset to this flag's
+    // default DURING render (guarded by a ref) so the first paint after the
+    // change never commits the previous flag's resolved value — which would
+    // flash the wrong experiment arm. The effect below re-subscribes and also
+    // seeds the default; doing it here as well closes the one-frame gap before
+    // that effect runs. Same render-phase reset pattern usePaginatedCore uses.
+    const resetKey = `${key}::${type}::${serializedContext}`;
+    const resetKeyRef = useRef(resetKey);
+
+    // react-doctor-disable-next-line react-hooks-js/refs -- intentional: React's sanctioned "reset state when an input changes" pattern — compare a render-phase ref to the current reset key and set state during render, guarded so it runs once per change.
+    if (resetKeyRef.current !== resetKey) {
+        // react-doctor-disable-next-line react-hooks-js/refs -- intentional: writing the ref guard here is what makes the render-phase reset fire exactly once per input change.
+        resetKeyRef.current = resetKey;
+        setValue(defaultValue);
+    }
+
     // The latest default/context, read at subscribe time so re-creating an equal
     // context object (or default) doesn't churn the subscription — the effect
     // keys off `key`/`type`/`serializedContext`, which capture every real change.
@@ -125,6 +141,21 @@ const useFlags = <T extends Record<string, FlagValue>>(flags: T, context?: FlagC
     // doesn't re-subscribe. The context is serialised separately.
     const spec = stableStringify(flags);
     const serializedContext = context === undefined ? "" : stableStringify(context);
+
+    // Reset to the new defaults DURING render (guarded by a ref) when the flag
+    // set or context changes, so the first paint returns a record shaped like
+    // the new `flags` — not the previous state object, which would be missing
+    // the new keys and still carry the old ones (violating the declared `T`).
+    // The effect below also seeds the defaults; this closes the one-frame gap.
+    const resetKey = `${spec}::${serializedContext}`;
+    const resetKeyRef = useRef(resetKey);
+
+    // react-doctor-disable-next-line react-hooks-js/refs -- intentional: React's sanctioned "reset state when an input changes" pattern — compare a render-phase ref to the current reset key and set state during render, guarded so it runs once per change.
+    if (resetKeyRef.current !== resetKey) {
+        // react-doctor-disable-next-line react-hooks-js/refs -- intentional: writing the ref guard here is what makes the render-phase reset fire exactly once per input change.
+        resetKeyRef.current = resetKey;
+        setValues(flags);
+    }
 
     const latest = useRef({ context, flags });
 

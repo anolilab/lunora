@@ -28,7 +28,18 @@ const literalConst = (literalValue: string | undefined): JsonSchema => {
         return { const: null, type: "null" };
     }
 
-    if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+        // Double-quoted literals are canonical JSON (see `parse-validator`), so
+        // decode escapes (`\"`, `\n`, `\uXXXX`, …) rather than naively slicing
+        // the quotes off and leaving the backslashes in the const value.
+        try {
+            return { const: JSON.parse(trimmed) as string, type: "string" };
+        } catch {
+            return { const: trimmed.slice(1, -1), type: "string" };
+        }
+    }
+
+    if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
         return { const: trimmed.slice(1, -1), type: "string" };
     }
 

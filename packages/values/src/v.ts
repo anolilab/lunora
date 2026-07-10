@@ -576,10 +576,20 @@ const array = <V extends Validator>(inner: V): ColumnValidator<Infer<V>[], Infer
     );
 };
 
+/**
+ * Split a value-type map into optional + required keys: any member whose value
+ * type includes `undefined` becomes an optional key. The single optionality rule
+ * shared by object-shape inference ({@link ObjectShapeType}) and args-map
+ * inference (`InferValidatorMap` in `./validator-map`), so the two can never
+ * drift. (`InsertShape` stays separate — it additionally `Exclude`s `undefined`
+ * from the optional value, a deliberate insert-type difference.)
+ */
+type OptionalizeShape<M> = {
+    [K in keyof M as undefined extends M[K] ? K : never]?: M[K];
+} & { [K in keyof M as undefined extends M[K] ? never : K]: M[K] };
+
 type ObjectShape = Record<string, Validator>;
-type ObjectShapeType<S extends ObjectShape> = {
-    [K in keyof S as undefined extends Infer<S[K]> ? K : never]?: Infer<S[K]>;
-} & { [K in keyof S as undefined extends Infer<S[K]> ? never : K]: Infer<S[K]> };
+type ObjectShapeType<S extends ObjectShape> = OptionalizeShape<{ [K in keyof S]: Infer<S[K]> }>;
 
 const objectValidator = <S extends ObjectShape>(shape: S): ColumnValidator<ObjectShapeType<S>, ObjectShapeType<S>> => {
     // Precompute the key list, per-key internal validator, and the optional flag
@@ -604,8 +614,19 @@ const objectValidator = <S extends ObjectShape>(shape: S): ColumnValidator<Objec
                 const { path } = context;
 
                 for (const { child, isOptional, key } of entries) {
-                    const fieldValue = input[key];
+                    // Read via Object.hasOwn so a declared field whose name
+                    // collides with an Object.prototype member (`toString`,
+                    // `constructor`, `valueOf`, `hasOwnProperty`, …) reads as
+                    // absent (`undefined`) rather than the inherited function —
+                    // otherwise the optional-skip below never fires and the inner
+                    // parser rejects a perfectly valid input (`received function`).
+                    const fieldValue = Object.hasOwn(input, key) ? input[key] : undefined;
 
+                    // An absent optional field is skipped wholesale, so a
+                    // `.check()` refinement attached to a `v.optional(...)` never
+                    // runs for an absent field here (it does when the same
+                    // validator is `parse`d standalone). A refinement meant to
+                    // reject `undefined` must not rely on the object/args path.
                     if (fieldValue === undefined && isOptional) {
                         continue;
                     }
@@ -958,6 +979,7 @@ export type {
     InsertShape,
     JsonSchemaFragment,
     MetaOptions,
+    OptionalizeShape,
     SelectShape,
     ServerDefaultContext,
     TimestampColumnValidator,

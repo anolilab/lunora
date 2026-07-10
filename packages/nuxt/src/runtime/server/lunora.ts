@@ -9,8 +9,8 @@
  * `#lunora/app` virtual the module registers (it points at the app entry — by
  * default `~/lunora/server`, where `defineApp().build()` lives and re-exports
  * `ShardDO`). The same `ShardDO` is re-exported to the Cloudflare worker
- * entrypoint via the project's `exports.cloudflare.ts`, so one deploy carries
- * both the SSR handler and the Durable Object class.
+ * entrypoint via the project's root `worker.ts` wrapper (`wrangler.jsonc`'s
+ * `main`), so one deploy carries both the SSR handler and the Durable Object class.
  *
  * This file is only ever bundled by Nitro; `h3`'s `defineEventHandler` is its
  * sole framework entry. We use a namespace import so the seam spans the h3
@@ -19,11 +19,10 @@
  * static `import { toWebRequest }` would throw at module-eval under v2 (missing
  * named export), so `resolveWebRequest` feature-detects it at runtime instead.
  */
-// `h3` ships no runtime type declarations — the module is resolved at runtime
-// by Nitro. `tsc --noEmit` would error here (and it's expected: the actual types
-// are applied by `nuxt-module-build`/vue-tsc, not by the project's tsc).
-// eslint-disable-next-line import/no-namespace, @typescript-eslint/prefer-ts-expect-error -- a namespace import is required to feature-detect `toWebRequest` (h3 v1→v2 break); `ts-ignore` because tsc can't resolve h3 declarations but the module builder does.
-// @ts-ignore -- h3 module is resolved by nuxt-module-build, not tsc
+// A namespace import is required to feature-detect `toWebRequest` across the h3
+// v1 → v2 break (see `resolveWebRequest`); a static named import would throw at
+// module-eval under v2 (missing export).
+// eslint-disable-next-line import/no-namespace -- namespace import needed to feature-detect `toWebRequest` (h3 v1→v2 break)
 import * as h3 from "h3";
 
 // `#lunora/app` is a virtual specifier the @lunora/nuxt module registers

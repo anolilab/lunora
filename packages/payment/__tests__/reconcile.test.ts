@@ -101,6 +101,76 @@ describe("reconcile", () => {
         expect(session?.capturedAmount.minorUnits).toBe(1000n);
     });
 
+    it("does not erase a refund when the provider status can't see it (reconcile must not re-entitle)", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+
+        // A `charge.refunded` webhook already marked this session refunded in the store.
+        await store.upsertPaymentSession({
+            amount: money(1000, "USD"),
+            capturedAmount: money(1000, "USD"),
+            createdAt: 100,
+            id: "pi_1",
+            provider: "stripe",
+            referenceId: "user_1",
+            refundedAmount: money(1000, "USD"),
+            state: "refunded",
+            updatedAt: 100,
+        });
+
+        // The provider snapshot reports captured / refunded 0 (a Stripe PaymentIntent stays `succeeded`
+        // after a refund). Reconcile must preserve the refund rather than overwrite it back to captured.
+        const result = await reconcile({ adapter: truthAdapter(), paymentSessionIds: ["pi_1"], store });
+
+        const session = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(result.updatedPayments).toBe(0);
+        expect(session?.state).toBe("refunded");
+        expect(session?.refundedAmount.minorUnits).toBe(1000n);
+    });
+
+    it("does not blank a stored referenceId when the provider snapshot omits it", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        // Provider truth for this session carries an empty reference (e.g. a Polar order snapshot).
+        const blankReferenceAdapter = {
+            getPaymentStatus: async (sessionId: string) => {return {
+                amount: money(1000, "USD"),
+                capturedAmount: money(1000, "USD"),
+                createdAt: 5,
+                id: sessionId,
+                provider: "stripe",
+                referenceId: "",
+                refundedAmount: money(0, "USD"),
+                state: "captured" as const,
+                updatedAt: 5,
+            }},
+            identifier: "stripe",
+        } as unknown as PaymentAdapter;
+
+        await store.upsertPaymentSession({
+            amount: money(1000, "USD"),
+            capturedAmount: money(1000, "USD"),
+            createdAt: 100,
+            id: "pi_1",
+            provider: "stripe",
+            referenceId: "user_1",
+            refundedAmount: money(0, "USD"),
+            state: "captured",
+            updatedAt: 100,
+        });
+
+        const result = await reconcile({ adapter: blankReferenceAdapter, paymentSessionIds: ["pi_1"], store });
+
+        const session = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(result.updatedPayments).toBe(0);
+        expect(session?.referenceId).toBe("user_1");
+    });
+
     it("isolates a failing id so the rest of the batch still self-heals", async () => {
         expect.assertions(4);
 

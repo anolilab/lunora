@@ -1,43 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
-import applyJurisdiction from "./jurisdiction";
+import { callDO, getDO } from "./do-client";
 import type { ArgsOf, FunctionReference, LunoraSchedulerOptions, RunOptions, Scheduler, ScheduleRecord } from "./types";
-
-const schedulerStub = (options: LunoraSchedulerOptions) => {
-    const namespace = applyJurisdiction(options.namespace, options.jurisdiction);
-
-    return namespace.get(namespace.idFromName(options.instanceName ?? "default"));
-};
-
-const callDO = async <T>(options: LunoraSchedulerOptions, path: string, body: unknown): Promise<T> => {
-    const stub = schedulerStub(options);
-    const response = await stub.fetch(`https://scheduler.internal${path}`, {
-        body: JSON.stringify(body),
-        headers: { "content-type": "application/json" },
-        method: "POST",
-    });
-
-    if (!response.ok) {
-        const text = await response.text();
-
-        throw new LunoraError("INTERNAL", `@lunora/scheduler: SchedulerDO ${path} failed (${String(response.status)}): ${text}`);
-    }
-
-    return await response.json();
-};
-
-const getDO = async <T>(options: LunoraSchedulerOptions, path: string): Promise<T> => {
-    const stub = schedulerStub(options);
-    const response = await stub.fetch(`https://scheduler.internal${path}`, { method: "GET" });
-
-    if (!response.ok) {
-        const text = await response.text();
-
-        throw new LunoraError("INTERNAL", `@lunora/scheduler: SchedulerDO ${path} failed (${String(response.status)}): ${text}`);
-    }
-
-    return await response.json();
-};
 
 /**
  * Client-side scheduler — forwards `runAfter` / `runAt` / `cancel` calls to a

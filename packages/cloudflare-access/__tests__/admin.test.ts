@@ -68,6 +68,18 @@ describe("accessAdminGate", () => {
         expect(onError).toHaveBeenCalledTimes(1);
     });
 
+    it("throws at factory time when aud is missing (fail fast, not deny-all)", () => {
+        expect.assertions(1);
+
+        expect(() => accessAdminGate({ aud: "", isAdmin: () => true, keySet: publicKey, teamDomain: TEAM })).toThrow(/aud/);
+    });
+
+    it("throws at factory time when teamDomain is empty", () => {
+        expect.assertions(1);
+
+        expect(() => accessAdminGate({ aud: AUD, isAdmin: () => true, keySet: publicKey, teamDomain: "   " })).toThrow(/teamDomain/);
+    });
+
     it("reads the token from the CF_Authorization cookie when the header is absent", async () => {
         expect.assertions(1);
 

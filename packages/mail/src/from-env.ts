@@ -20,7 +20,7 @@ import { createCaptureTransport } from "./capture-transport";
 import type { CloudflareSend } from "./cloudflare-transport";
 import createMailer from "./create-mailer";
 import type { DurableObjectJurisdiction, ShardNamespaceLike } from "./inbound/shard";
-import { applyJurisdiction } from "./inbound/shard";
+import { DEFAULT_ROOT_SHARD, postShardRpc } from "./inbound/shard";
 import type { Mailer, SendPayload } from "./types";
 
 /** A Worker `env` projected as a plain record (vars, secrets, and bindings are `unknown`-valued). */
@@ -28,8 +28,6 @@ type MailEnv = Record<string, unknown>;
 
 /** Reserved admin RPC the capture sink records one message through. */
 const RECORD_MAIL_OP = "__lunora_admin__:recordMail";
-/** Default shard the studio's Mail inbox reads from (the runtime's default shard). */
-const DEFAULT_ROOT_SHARD = "__root__";
 /** Env-name values that denote a development deployment (`lunora dev` sets `WORKER_ENV=development`). */
 const DEV_ENVIRONMENT_PATTERN = /^(?:dev(?:elopment)?|local(?:host)?|test)$/iu;
 const ENVIRONMENT_VARS = ["CF_ENV", "ENVIRONMENT", "NODE_ENV", "WORKER_ENV"] as const;
@@ -70,7 +68,21 @@ const shouldCaptureMail = (env: MailEnv): boolean => {
     const flag = env["LUNORA_MAIL_CAPTURE"];
 
     if (typeof flag === "string") {
-        return flag === "1" || flag.toLowerCase() === "true";
+        const normalized = flag.toLowerCase();
+
+        if (normalized === "1" || normalized === "true") {
+            return true;
+        }
+
+        if (normalized === "0" || normalized === "false") {
+            return false;
+        }
+
+        // Any other value (e.g. "yes", "on", a typo) is NOT an explicit override —
+        // fall through to environment detection rather than silently forcing
+        // capture off (which would send real provider mail from a dev box).
+        // eslint-disable-next-line no-console -- surface a likely-misconfigured flag rather than swallowing it
+        console.warn(`@lunora/mail: unrecognized LUNORA_MAIL_CAPTURE value "${flag}" — expected "1"/"true" or "0"/"false"; falling back to environment detection.`);
     }
 
     return ENVIRONMENT_VARS.some((key) => {
@@ -97,17 +109,26 @@ const createCaptureSink = (env: MailEnv, rootShard: string = DEFAULT_ROOT_SHARD,
                 return { id: "uncaptured" };
             }
 
-            const namespace = applyJurisdiction(binding, jurisdiction);
-            const stub = namespace.get(namespace.idFromName(rootShard));
-            const response = await stub.fetch("https://shard.internal/rpc", {
-                body: JSON.stringify({ args: mail, functionPath: RECORD_MAIL_OP }),
-                headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
-                method: "POST",
-            });
+            // Best-effort: a send must never fail for lack of somewhere to record.
+            // `postShardRpc` throws on a non-2xx / error envelope (wrong admin
+            // token, missing route, shard error) — catch it and surface a loud
+            // diagnostic instead of returning a bogus success id for lost mail.
+            try {
+                const body = (await postShardRpc(binding, {
+                    adminToken,
+                    envelope: { args: mail, functionPath: RECORD_MAIL_OP },
+                    jurisdiction,
+                    label: "@lunora/mail: recording captured mail",
+                    shardKey: rootShard,
+                })) as { result?: { id?: string } };
 
-            const body = (await response.json()) as { result?: { id?: string } };
+                return { id: body.result?.id ?? "captured" };
+            } catch (error) {
+                // eslint-disable-next-line no-console -- best-effort sink: log the drop rather than failing the send
+                console.error("@lunora/mail: failed to record captured mail into the studio inbox —", error);
 
-            return { id: body.result?.id ?? "captured" };
+                return { id: "uncaptured" };
+            }
         },
     };
 };

@@ -48,41 +48,66 @@ const hotShard: Lint = {
         // Only positive-traffic shards count: a zero-request shard can't be hot
         // and shouldn't dilute the total.
         const active = (context.shardTraffic ?? []).filter((shard) => shard.requests > 0);
-        const totalRequests = active.reduce((sum, shard) => sum + shard.requests, 0);
 
-        // A single shard can't be "disproportionately" busy relative to peers,
-        // and a sparse window's proportions aren't trustworthy.
-        if (active.length < 2 || totalRequests < MIN_TOTAL_REQUESTS) {
-            return [];
+        // Partition by shard group BEFORE computing shares. Each `.shardBy(...)`
+        // function's shards are their own distribution, so a shard's share must be
+        // measured against ITS group's total — not the combined traffic of every
+        // group. On a multi-group feed (the whole deployment's shard set), summing
+        // across groups dilutes a genuinely hot shard below the threshold (three
+        // single-shard groups each look like ~33%) and lets the active-count gate
+        // be met by shards from unrelated groups. `undefined` and `""` (both
+        // "ungrouped / whole deployment") collapse to one bucket so they neither
+        // split nor collide on the `hot_shard:<group>:<shardKey>` cacheKey.
+        const byGroup = new Map<string, typeof active>();
+
+        for (const shard of active) {
+            const groupKey = shard.group ?? "";
+            const bucket = byGroup.get(groupKey);
+
+            if (bucket === undefined) {
+                byGroup.set(groupKey, [shard]);
+            } else {
+                bucket.push(shard);
+            }
         }
 
         const findings = [];
 
-        for (const shard of active) {
-            const share = shard.requests / totalRequests;
+        for (const [groupKey, groupShards] of byGroup) {
+            const totalRequests = groupShards.reduce((sum, shard) => sum + shard.requests, 0);
 
-            if (share < HOT_SHARE_THRESHOLD) {
+            // A single shard can't be "disproportionately" busy relative to peers,
+            // and a sparse window's proportions aren't trustworthy.
+            if (groupShards.length < 2 || totalRequests < MIN_TOTAL_REQUESTS) {
                 continue;
             }
 
-            const scope = shard.group !== undefined && shard.group !== "" ? `"${shard.group}" ` : "";
-            const label = shard.shardKey === "" ? "the root shard" : `shard "${shard.shardKey}"`;
-            const percent = Math.round(share * 100);
+            for (const shard of groupShards) {
+                const share = shard.requests / totalRequests;
 
-            findings.push(
-                emit(hotShard, {
-                    cacheKey: `hot_shard:${shard.group ?? ""}:${shard.shardKey}`,
-                    detail: `${scope}${label} handled ${shard.requests.toString()} of ${totalRequests.toString()} requests (${percent.toString()}%) across ${active.length.toString()} shards — a hot-key skew. Re-shard on a more evenly-distributed key.`,
-                    metadata: {
-                        group: shard.group,
-                        requests: shard.requests,
-                        shardCount: active.length,
-                        shardKey: shard.shardKey,
-                        share,
-                        totalRequests,
-                    },
-                }),
-            );
+                if (share < HOT_SHARE_THRESHOLD) {
+                    continue;
+                }
+
+                const scope = shard.group !== undefined && shard.group !== "" ? `"${shard.group}" ` : "";
+                const label = shard.shardKey === "" ? "the root shard" : `shard "${shard.shardKey}"`;
+                const percent = Math.round(share * 100);
+
+                findings.push(
+                    emit(hotShard, {
+                        cacheKey: `hot_shard:${groupKey}:${shard.shardKey}`,
+                        detail: `${scope}${label} handled ${shard.requests.toString()} of ${totalRequests.toString()} requests (${percent.toString()}%) across ${groupShards.length.toString()} shards — a hot-key skew. Re-shard on a more evenly-distributed key.`,
+                        metadata: {
+                            group: shard.group,
+                            requests: shard.requests,
+                            shardCount: groupShards.length,
+                            shardKey: shard.shardKey,
+                            share,
+                            totalRequests,
+                        },
+                    }),
+                );
+            }
         }
 
         return findings;

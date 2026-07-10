@@ -1,7 +1,14 @@
 import { spawn as nodeSpawn } from "node:child_process";
 
-/** Matches any character that would make cmd.exe re-split an unquoted argument. */
-const NEEDS_CMD_QUOTING = /\s/;
+/**
+ * Matches any character that would make cmd.exe re-split, redirect, or otherwise
+ * reinterpret an unquoted argument: whitespace (re-split), the command
+ * separators / redirection operators (`& | < > ^`), an env-var `%`, and a
+ * literal `"` (which toggles cmd's quote state). Wrapping such a value in double
+ * quotes neutralises the separators/redirection so an argument like
+ * `C:\Dev&Ops\dist` can't spawn `Ops\dist` as a second command.
+ */
+const NEEDS_CMD_QUOTING = /[\s"%&<>^|]/u;
 
 export interface SpawnDescriptor {
     args: ReadonlyArray<string>;
@@ -52,10 +59,13 @@ export type Spawner = (descriptor: SpawnDescriptor) => Promise<SpawnResult>;
  * since Node's CVE-2024-27980 hardening the call fails outright (`EINVAL`, or
  * `ENOENT` for the extensionless name) and the child never gets a PID. Node
  * itself (`process.execPath`) is a real executable and needs no shell. With
- * `shell: true` Node joins command + args verbatim for cmd.exe, so arguments
- * containing whitespace (e.g. a `--config` temp path under a spaced user
- * dir) are double-quoted here; everything else passes through untouched.
- * POSIX platforms return the input unchanged.
+ * `shell: true` Node joins command + args verbatim for cmd.exe, so any argument
+ * carrying a cmd metacharacter (whitespace, `& | < > ^ % "`) is double-quoted
+ * here — with CommandLineToArgvW-safe escaping of embedded quotes and trailing
+ * backslashes — so a `--config` temp path under a spaced user dir, or a value
+ * like `C:\Dev&Ops\dist`, can't be re-split or run as a second command;
+ * everything else passes through untouched. POSIX platforms return the input
+ * unchanged.
  */
 export const spawnShellCompat = (
     command: string,
@@ -66,7 +76,28 @@ export const spawnShellCompat = (
         return { args: [...args], command, shell: false };
     }
 
-    const quote = (value: string): string => (NEEDS_CMD_QUOTING.test(value) ? `"${value}"` : value);
+    // An empty argument must still reach the child as an empty token; unquoted it
+    // would vanish when cmd.exe re-splits, shifting every following positional.
+    // Otherwise only quote when a metacharacter is present so ordinary args pass
+    // through untouched.
+    const quote = (value: string): string => {
+        if (value === "") {
+            return `""`;
+        }
+
+        if (!NEEDS_CMD_QUOTING.test(value)) {
+            return value;
+        }
+
+        // Escape for the child's CommandLineToArgvW re-parse: any run of
+        // backslashes immediately before a `"` (an embedded quote, or the closing
+        // quote we append) must be doubled, and each embedded `"` becomes `\"`.
+        // Without this, `C:\path\` before the closing quote would escape it and
+        // re-split the value mid-argument.
+        const escaped = value.replaceAll(/(\\*)"/gu, String.raw`$1$1\"`).replace(/(\\+)$/u, "$1$1");
+
+        return `"${escaped}"`;
+    };
 
     return { args: args.map((argument) => quote(argument)), command: quote(command), shell: true };
 };

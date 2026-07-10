@@ -115,6 +115,17 @@ describe("select builder SQL", () => {
         expect(from("s.orders").orderBy(desc("total")).limit(50).toSQL()).toBe("SELECT * FROM s.orders ORDER BY total DESC LIMIT 50");
     });
 
+    it("rejects a non-integer / non-positive / over-ceiling limit eagerly (R2 SQL: 1–10,000)", () => {
+        expect.assertions(4);
+
+        // Previously stored unvalidated, rendering `LIMIT 3.5` / `LIMIT 0` /
+        // `LIMIT 50000` that R2 SQL rejects as an opaque remote error.
+        expect(() => from("s.orders").limit(3.5)).toThrow(/between 1 and 10000/);
+        expect(() => from("s.orders").limit(0)).toThrow(RangeError);
+        expect(() => from("s.orders").limit(-1)).toThrow(RangeError);
+        expect(() => from("s.orders").limit(50_000)).toThrow(/between 1 and 10000/);
+    });
+
     it("rejects an unsafe table identifier spliced into FROM (no injection)", () => {
         expect.assertions(2);
 
@@ -165,6 +176,13 @@ describe("set operations", () => {
         expect(a().union(b()).orderBy("zone_id").limit(100).toSQL()).toMatch(
             /UNION SELECT zone_id FROM s\.zones WHERE plan = 'enterprise' ORDER BY zone_id LIMIT 100$/,
         );
+    });
+
+    it("validates a set-operation limit with the same 1–10,000 rule", () => {
+        expect.assertions(2);
+
+        expect(() => a().union(b()).limit(0)).toThrow(/between 1 and 10000/);
+        expect(() => a().union(b()).limit(3.5)).toThrow(RangeError);
     });
 
     it("chains a third set operation", () => {

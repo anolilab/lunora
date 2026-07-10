@@ -10,7 +10,6 @@ import { drizzle as drizzleD1 } from "drizzle-orm/d1";
  */
 interface D1DatabaseLike {
     batch?: (statements: D1PreparedStatementLike[]) => Promise<unknown[]>;
-    exec?: (sql: string) => Promise<unknown>;
     prepare: (sql: string) => D1PreparedStatementLike;
     withSession: (bookmark?: string) => D1SessionLike;
 }
@@ -54,6 +53,44 @@ interface D1PreparedStatementLike {
 const STMT_CACHE_CAPACITY = 256;
 
 /**
+ * Bounded LRU statement cache lookup shared by {@link D1Session} and
+ * {@link D1Client} (they cache over the same `Map`, differing only in the
+ * underlying `prepare` target). A hit bumps the entry to MRU (delete + re-insert,
+ * so `Map` insertion order tracks recency); a miss prepares via `prepare`,
+ * evicting the oldest entry once {@link STMT_CACHE_CAPACITY} is reached. Extracted
+ * to one definition so the subtle eviction/ordering logic can't drift between the
+ * two callers.
+ */
+const prepareCached = (
+    cache: Map<string, D1PreparedStatementLike>,
+    prepare: (sql: string) => D1PreparedStatementLike,
+    sql: string,
+): D1PreparedStatementLike => {
+    const cached = cache.get(sql);
+
+    if (cached) {
+        cache.delete(sql);
+        cache.set(sql, cached);
+
+        return cached;
+    }
+
+    const stmt = prepare(sql);
+
+    if (cache.size >= STMT_CACHE_CAPACITY) {
+        const oldest = cache.keys().next().value;
+
+        if (oldest !== undefined) {
+            cache.delete(oldest);
+        }
+    }
+
+    cache.set(sql, stmt);
+
+    return stmt;
+};
+
+/**
  * D1 Sessions-API constraint for a bookmark-less first read: serve from any
  * replica for the lowest latency. (`"first-primary"` is the strongly-consistent
  * alternative.) Passed in place of an omitted bookmark so the consistency choice
@@ -73,28 +110,7 @@ class D1Session {
     }
 
     public prepare(sql: string): D1PreparedStatementLike {
-        const cached = this.stmtCache.get(sql);
-
-        if (cached) {
-            this.stmtCache.delete(sql);
-            this.stmtCache.set(sql, cached);
-
-            return cached;
-        }
-
-        const stmt = this.session.prepare(sql);
-
-        if (this.stmtCache.size >= STMT_CACHE_CAPACITY) {
-            const oldest = this.stmtCache.keys().next().value;
-
-            if (oldest !== undefined) {
-                this.stmtCache.delete(oldest);
-            }
-        }
-
-        this.stmtCache.set(sql, stmt);
-
-        return stmt;
+        return prepareCached(this.stmtCache, (text) => this.session.prepare(text), sql);
     }
 
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- T types the result rows for the caller and is forwarded to the prepared statement.
@@ -171,32 +187,7 @@ class D1Client {
      * even when the previous caller already called `.bind(...).run()`.
      */
     public prepare(sql: string): D1PreparedStatementLike {
-        const cached = this.stmtCache.get(sql);
-
-        if (cached) {
-            // Move to tail (MRU) by re-inserting so the LRU eviction below
-            // discards genuinely cold entries.
-            this.stmtCache.delete(sql);
-            this.stmtCache.set(sql, cached);
-
-            return cached;
-        }
-
-        const stmt = this.db.prepare(sql);
-
-        // LRU eviction: drop the oldest entry (insertion-order head) once the
-        // cap is reached. Map iteration order matches insertion order.
-        if (this.stmtCache.size >= STMT_CACHE_CAPACITY) {
-            const oldest = this.stmtCache.keys().next().value;
-
-            if (oldest !== undefined) {
-                this.stmtCache.delete(oldest);
-            }
-        }
-
-        this.stmtCache.set(sql, stmt);
-
-        return stmt;
+        return prepareCached(this.stmtCache, (text) => this.db.prepare(text), sql);
     }
 
     /**

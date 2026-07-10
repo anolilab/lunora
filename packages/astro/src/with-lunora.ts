@@ -38,8 +38,11 @@
  *
  * Set `"main": "src/worker.ts"` in `wrangler.jsonc` — wrangler bundles this file
  * (via `@cloudflare/vite-plugin` through the Astro adapter) so `handle` resolves
- * at build time. The `lunora()` integration (from this package) declares the
- * build-time wiring so templates don't hand-roll it.
+ * at build time. Add the `lunora()` integration (from this package) to
+ * `astro.config.*` to declare the composition in the idiomatic Astro place and
+ * reserve a home for future build-time wiring — but the load-bearing step is
+ * this `withLunora` wrapper plus `wrangler.jsonc`'s `main`; the integration does
+ * not resolve `serverEntry` or emit the worker for you today.
  */
 export type { FrameworkHostHandler as AstroWorkerHandler, LunoraWorker as ComposedWorker, FrameworkWorkerOptions as LunoraOptions } from "@lunora/runtime";
 export { withFrameworkWorker as withLunora } from "@lunora/runtime";

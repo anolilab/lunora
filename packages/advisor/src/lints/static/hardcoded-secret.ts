@@ -1,3 +1,4 @@
+import { dedupeCacheKeys } from "../../dedupe-cache-keys";
 import emit from "../../finding";
 import type { Lint } from "../../types";
 
@@ -31,33 +32,21 @@ const hardcodedSecret: Lint = {
 
         const findings = [];
 
-        // Per-(file, line, kind) occurrence counter: two secrets of the same
-        // kind on the same physical source line (e.g.
-        // `[STRIPE_LIVE_A, STRIPE_LIVE_B]` both `stripe_live_key`) would
-        // otherwise share an identical cacheKey and collapse to one dismissible
-        // finding, hiding the second secret.
-        const occurrenceCount = new Map<string, number>();
-
         for (const secret of context.secretLiterals) {
-            const baseKey = `${secret.file}:${secret.line.toString()}:${secret.kind}`;
-            const occurrence = (occurrenceCount.get(baseKey) ?? 0) + 1;
-
-            occurrenceCount.set(baseKey, occurrence);
-
-            // Suffix the occurrence index only for the second and beyond so
-            // existing single-occurrence cacheKeys remain stable across runs.
-            const occurrenceSuffix = occurrence > 1 ? `:${occurrence.toString()}` : "";
-
             findings.push(
                 emit(hardcodedSecret, {
-                    cacheKey: `hardcoded_secret:${baseKey}${occurrenceSuffix}`,
+                    cacheKey: `hardcoded_secret:${secret.file}:${secret.line.toString()}:${secret.kind}`,
                     detail: `A ${secret.kind.replaceAll("_", " ")} (${secret.preview}) is hard-coded at ${secret.file}:${secret.line.toString()}. Move it to \`.dev.vars\` / \`wrangler secret put\` and read it from \`env\`. Rotate the exposed value.`,
                     metadata: { file: secret.file, kind: secret.kind, line: secret.line, preview: secret.preview },
                 }),
             );
         }
 
-        return findings;
+        // Two secrets of the same kind on one physical source line (e.g.
+        // `[STRIPE_LIVE_A, STRIPE_LIVE_B]`) would otherwise share a cacheKey and
+        // collapse to one dismissible finding, hiding the second. The shared
+        // `dedupeCacheKeys` pass suffixes the repeat so both survive.
+        return dedupeCacheKeys(findings);
     },
     source: "static",
     title: "Hard-coded secret in source",

@@ -83,19 +83,49 @@ const parseDevVariables = (content: string): Map<string, ParsedLine> => {
     return map;
 };
 
-const serializeDevVariables = (map: Map<string, ParsedLine>): string => {
-    const lines: string[] = [];
+/**
+ * Match the `.dev.vars` line that *defines* `key` (matching the shared grammar's
+ * `splitDevVariableLine`: optional leading whitespace, the key, optional
+ * whitespace, then `=`). Comment (`#…`) and blank lines never match. Keys are
+ * always validated against `DEV_VARS_KEY_PATTERN` before we build this, so they
+ * hold only `[A-Za-z_]\w*` — no regex metacharacters to escape.
+ */
+const devVariableLinePattern = (key: string): RegExp => new RegExp(String.raw`^[ \t]*${key}[ \t]*=.*$`, "mu");
 
-    for (const entry of map.values()) {
-        // Always quote to preserve whitespace round-trip. Newlines, double-quotes
-        // and backslashes are rejected at write time (env set) because the shared
-        // grammar's read path does not unescape them, so we can quote verbatim
-        // here — any escaping we added would not survive the round-trip.
-        lines.push(`${entry.key}="${entry.value}"`);
+/**
+ * Surgically upsert a single `KEY="value"` line in raw `.dev.vars` content,
+ * leaving every comment, blank line, and untouched entry verbatim. Rebuilding
+ * the whole file from the parsed entry map (the previous approach) silently
+ * dropped all `# …` comments and blank lines — including the documentation the
+ * registry installer and scaffolder write — and re-quoted lines the user never
+ * touched. If the key already has a line it is replaced in place; otherwise the
+ * new line is appended with a single trailing newline. Always quotes the value
+ * to preserve a whitespace round-trip; `env set` rejects newline/`"`/`\` up
+ * front so the verbatim quote is safe.
+ */
+const upsertDevVariableLine = (content: string, key: string, value: string): string => {
+    const rendered = `${key}="${value}"`;
+    const pattern = devVariableLinePattern(key);
+
+    if (pattern.test(content)) {
+        // Replace via a function so `$`-bearing values aren't treated as
+        // replacement-string special patterns.
+        return content.replace(pattern, () => rendered);
     }
 
-    return `${lines.join("\n")}\n`;
+    if (content === "") {
+        return `${rendered}\n`;
+    }
+
+    return content.endsWith("\n") ? `${content}${rendered}\n` : `${content}\n${rendered}\n`;
 };
+
+/**
+ * Surgically remove every `.dev.vars` line defining `key` (and its trailing
+ * newline), preserving all other lines, comments, and blanks verbatim.
+ */
+const removeDevVariableLine = (content: string, key: string): string =>
+    content.replace(new RegExp(String.raw`^[ \t]*${key}[ \t]*=.*(?:\r?\n|$)`, "gmu"), "");
 
 const redact = (value: string): string => {
     if (value.length <= 4) {
@@ -199,10 +229,9 @@ const runEnvSet = (context: EnvContext): EnvCommandResult => {
         return { code: 1, descriptors: [] };
     }
 
-    const map = loadDevVariables(devVariablesPath);
+    const raw = existsSync(devVariablesPath) ? readFileSync(devVariablesPath, "utf8") : "";
 
-    map.set(options.key, { key: options.key, value: options.value });
-    writeFileSync(devVariablesPath, serializeDevVariables(map), "utf8");
+    writeFileSync(devVariablesPath, upsertDevVariableLine(raw, options.key, options.value), "utf8");
     logger.success(`env: set ${options.key} (${redact(options.value)}) in ${DEV_VARS_FILE}`);
 
     return { code: 0, descriptors: [] };
@@ -217,15 +246,15 @@ const runEnvUnset = (context: EnvContext): EnvCommandResult => {
         return { code: 1, descriptors: [] };
     }
 
-    const map = loadDevVariables(devVariablesPath);
+    const raw = existsSync(devVariablesPath) ? readFileSync(devVariablesPath, "utf8") : "";
 
-    if (!map.delete(options.key)) {
+    if (!parseDevVariables(raw).has(options.key)) {
         logger.warn(`env: ${options.key} was not set in ${DEV_VARS_FILE}`);
 
         return { code: 0, descriptors: [] };
     }
 
-    writeFileSync(devVariablesPath, serializeDevVariables(map), "utf8");
+    writeFileSync(devVariablesPath, removeDevVariableLine(raw, options.key), "utf8");
     logger.success(`env: unset ${options.key} in ${DEV_VARS_FILE}`);
 
     return { code: 0, descriptors: [] };
@@ -455,13 +484,13 @@ const runEnvGenerate = async (context: EnvContext): Promise<EnvCommandResult> =>
     });
 
     if (options.set === true) {
-        const map = loadDevVariables(devVariablesPath);
+        let raw = existsSync(devVariablesPath) ? readFileSync(devVariablesPath, "utf8") : "";
 
         for (const entry of generated) {
-            map.set(entry.key, entry);
+            raw = upsertDevVariableLine(raw, entry.key, entry.value);
         }
 
-        writeFileSync(devVariablesPath, serializeDevVariables(map), "utf8");
+        writeFileSync(devVariablesPath, raw, "utf8");
         logger.success(`env: generated ${String(generated.length)} secret(s) into ${DEV_VARS_FILE}: ${generated.map((entry) => entry.key).join(", ")}`);
 
         return { code: 0, descriptors: [] };

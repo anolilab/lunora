@@ -265,4 +265,39 @@ describe("hyperdrive global — MySQL (mysql-memory-server) integration", () => 
             TEST_TIMEOUT,
         );
     });
+
+    describe("composite string indexes (InnoDB 3072-byte key limit)", () => {
+        const compositeIndexSchema: SchemaLike = {
+            tables: {
+                todos: {
+                    // A [string, number] and a [string, string] index — the idiomatic
+                    // `.index("by_project", ["projectId", "seq"])` shape. Each string column
+                    // is LONGTEXT and gets a MySQL key prefix; at the old flat 768-char prefix
+                    // (3072 bytes) a composite that also carries a string field renders a
+                    // >3072-byte key and MySQL rejects CREATE INDEX with ER_TOO_LONG_KEY (1071).
+                    indexes: [
+                        { fields: ["projectId", "seq"], name: "by_project_seq" },
+                        { fields: ["priority", "projectId"], name: "by_priority_project" },
+                    ],
+                    shape: { archived: col("boolean"), priority: col("string"), projectId: col("string"), seq: col("number") },
+                    shardMode: { kind: "global" },
+                },
+            },
+        };
+
+        it(
+            "migrates composite [string, number] and [string, string] indexes without ER_TOO_LONG_KEY",
+            async () => {
+                expect.assertions(2);
+
+                await expect(runSqlGlobalTableMigrations(harness.exec, compositeIndexSchema, mysqlDialect)).resolves.toBeUndefined();
+
+                const indexes = await harness.query("SHOW INDEX FROM `todos`");
+                const names = new Set(indexes.map((row) => row["Key_name"]));
+
+                expect(names.has("todos_by_project_seq") && names.has("todos_by_priority_project")).toBe(true);
+            },
+            TEST_TIMEOUT,
+        );
+    });
 });

@@ -430,6 +430,32 @@ describe("schedulerDO — retry / dead-letter pipeline", () => {
         expect(state.storageMap.size).toBe(0);
     });
 
+    it("deletes a dangling time-index entry whose id: header is missing instead of busy-looping", async () => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const now = Date.now();
+
+        // A stale index entry (past time) pointing at an id: header that no
+        // longer exists — the orphan a partial-failure path can leave behind.
+        const danglingKey = `t:${String(now - 5000).padStart(15, "0")}:ghost`;
+
+        state.storageMap.set(danglingKey, "ghost");
+
+        // A real future job so rescheduleAlarm() has a legitimate next time.
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "real", scheduledFor: now + 60_000 }));
+
+        await scheduler.alarm();
+
+        // The orphan is cleaned up, nothing was dispatched for it, and the alarm
+        // is armed to the real future job — NOT stuck re-arming the past dangling
+        // time (which would fire, find no record, and busy-loop forever).
+        expect(state.storageMap.has(danglingKey)).toBe(false);
+        expect(scheduler.dispatched).toHaveLength(0);
+        expect(state.alarm).toBe(now + 60_000);
+    });
+
     it("preserves the job for retry when LUNORA_ORIGIN_URL is unset at fire time", async () => {
         expect.assertions(3);
 
@@ -866,17 +892,34 @@ describe("schedulerDO — scheduledFor validation", () => {
         expect(nonFiniteResponse.status).toBe(400);
     });
 
-    it("accepts the maximum valid Date millisecond value", async () => {
+    it("accepts the largest scheduledFor that still pads to a uniform width", async () => {
         expect.assertions(1);
 
         const state = createFakeState();
         const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
 
-        // 8.64e15 is the largest valid Date; String() stays in plain digits so
-        // the index padding holds.
-        const response = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: 8_640_000_000_000_000 }));
+        // 999_999_999_999_999 (1e15 - 1) is the largest accepted value: it fits
+        // in exactly TIME_PAD (15) digits, so its time-index key keeps the
+        // lexical-order == numeric-order invariant.
+        const response = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: 999_999_999_999_999 }));
 
         expect(response.status).toBe(200);
+    });
+
+    it("rejects a scheduledFor one digit wider than the pad width (would break the index sort)", async () => {
+        expect.assertions(2);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+
+        // 1e15 is 16 digits — one wider than TIME_PAD (15) — so it would zero-pad
+        // to a 16-char key that sorts BEFORE shorter 15-char keys (e.g.
+        // "1000000000000000" < "200000000000000"), mis-ordering the alarm. It
+        // must be rejected up front and nothing persisted.
+        const response = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: 1_000_000_000_000_000 }));
+
+        expect(response.status).toBe(400);
+        expect([...state.storageMap.keys()].filter((key) => key.startsWith("id:"))).toHaveLength(0);
     });
 });
 

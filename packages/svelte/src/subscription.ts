@@ -55,10 +55,10 @@ function subscription<F extends FunctionReference>(
     const errorStore = writable<Error | undefined>();
 
     const data = readable<ReturnOf<F> | undefined>(undefined, (set) => {
-        if (args === "skip") {
-            return () => undefined;
-        }
-
+        // `createQuerySubscription` owns the `"skip"` sentinel: on skip it fires
+        // `onReset` (clearing `data`) and returns a no-op teardown without opening
+        // a socket — so the reset path below is reachable, unlike a local early
+        // return that would make it dead code.
         const unsubscribe = createQuerySubscription(
             client,
             functionRef,

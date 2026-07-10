@@ -1,6 +1,6 @@
 import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
 import type { ShallowRef } from "vue";
-import { onScopeDispose, shallowRef } from "vue";
+import { getCurrentScope, onScopeDispose, shallowRef } from "vue";
 
 import { useLunora } from "./lunora-provider";
 
@@ -96,47 +96,65 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
         sendHeartbeat();
     };
 
-    // Heartbeat: immediately on mount, on interval, and on tab re-focus.
-    sendHeartbeat();
-    const intervalHandle = setInterval(sendHeartbeat, intervalMs);
+    // The heartbeat, interval, and live subscription are client-only. During SSR
+    // (this package ships a `/server` entry and pairs with `@lunora/nuxt`) a
+    // component's `setup()` runs inside `renderToString` with no `window`: firing
+    // a heartbeat there writes a ghost presence row under a throwaway session id,
+    // and the render scope never stops — so `onScopeDispose` never fires and each
+    // request would leak a live `setInterval` handle. Skip the whole client wiring
+    // server-side; the returned refs stay inert until the component hydrates.
+    if (typeof window !== "undefined") {
+        // Heartbeat: immediately on mount, on interval, and on tab re-focus.
+        sendHeartbeat();
+        const intervalHandle = setInterval(sendHeartbeat, intervalMs);
 
-    const onVisible = (): void => {
-        if (typeof document !== "undefined" && document.visibilityState === "visible") {
-            sendHeartbeat();
-        }
-    };
-
-    if (typeof document !== "undefined") {
-        document.addEventListener("visibilitychange", onVisible);
-    }
-
-    // Register this room/session as the socket's connection context so the server's
-    // presence `onDisconnect` hook can delete the row instantly on socket drop.
-    // Use the refcounted acquire so a second presence hook on the same client/shard
-    // doesn't clobber this one's context when either unmounts.
-    const releaseConnectionContext = client.acquireConnectionContext({ roomId, sessionId }, { shardKey });
-
-    // Subscribe to the live present-list for the room.
-    const unsubscribe = client.subscribe(
-        listPresent,
-        { roomId } as ArgsOf<L>,
-        (value) => {
-            present.value = value;
-        },
-        { shardKey },
-    );
-
-    // Teardown: clear interval, remove listener, clear connection context, unsubscribe.
-    onScopeDispose(() => {
-        clearInterval(intervalHandle);
+        const onVisible = (): void => {
+            if (typeof document !== "undefined" && document.visibilityState === "visible") {
+                sendHeartbeat();
+            }
+        };
 
         if (typeof document !== "undefined") {
-            document.removeEventListener("visibilitychange", onVisible);
+            document.addEventListener("visibilitychange", onVisible);
         }
 
-        releaseConnectionContext();
-        unsubscribe();
-    });
+        // Register this room/session as the socket's connection context so the server's
+        // presence `onDisconnect` hook can delete the row instantly on socket drop.
+        // Use the refcounted acquire so a second presence hook on the same client/shard
+        // doesn't clobber this one's context when either unmounts.
+        const releaseConnectionContext = client.acquireConnectionContext({ roomId, sessionId }, { shardKey });
+
+        // Subscribe to the live present-list for the room.
+        const unsubscribe = client.subscribe(
+            listPresent,
+            { roomId } as ArgsOf<L>,
+            (value) => {
+                present.value = value;
+            },
+            { shardKey },
+        );
+
+        // Teardown: clear interval, remove listener, clear connection context, unsubscribe.
+        const teardown = (): void => {
+            clearInterval(intervalHandle);
+
+            if (typeof document !== "undefined") {
+                document.removeEventListener("visibilitychange", onVisible);
+            }
+
+            releaseConnectionContext();
+            unsubscribe();
+        };
+
+        if (getCurrentScope()) {
+            onScopeDispose(teardown);
+        } else if (process.env.NODE_ENV !== "production") {
+            console.warn(
+                "[@lunora/vue] usePresence called with no active effect scope — its heartbeat interval and live subscription will not be cleaned up automatically. " +
+                    "Call it inside setup()/an effect scope.",
+            );
+        }
+    }
 
     return { present, sessionId, setData };
 };

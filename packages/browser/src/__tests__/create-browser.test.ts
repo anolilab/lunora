@@ -5,7 +5,7 @@ import type { BrowserBindingLike, BrowserContextLike, BrowserLaunchLike, Browser
 
 /** A throwaway binding marker — the helpers never touch it directly; Playwright consumes it. */
 const fakeBinding = (): BrowserBindingLike => {
-    return {};
+    return { fetch: () => undefined };
 };
 
 interface PageSpy extends PageLike {

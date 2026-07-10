@@ -70,5 +70,30 @@ describe("flagshipProvider", () => {
             expect(constructed).toHaveLength(1);
             expect(constructed[0]).toEqual({ accountId: "acct", appId: "app-abc", authToken: "tok" });
         });
+
+        it("constructs from a full endpoint override", () => {
+            expect.assertions(2);
+
+            const factory = flagshipProvider({ endpoint: "https://flags.example.com/eval" });
+
+            factory({});
+
+            expect(constructed).toHaveLength(1);
+            expect(constructed[0]).toEqual({ endpoint: "https://flags.example.com/eval" });
+        });
+
+        it("throws a directed error when neither appId nor endpoint is set", () => {
+            expect.assertions(2);
+
+            expect(() => flagshipProvider({})).toThrow(/requires either `appId`.*or `endpoint`/s);
+            expect(constructed).toHaveLength(0);
+        });
+
+        it("throws when appId and endpoint are both set (mutually exclusive)", () => {
+            expect.assertions(2);
+
+            expect(() => flagshipProvider({ appId: "app-abc", endpoint: "https://flags.example.com/eval" })).toThrow(/mutually exclusive/);
+            expect(constructed).toHaveLength(0);
+        });
     });
 });

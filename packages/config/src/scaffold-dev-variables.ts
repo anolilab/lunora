@@ -120,15 +120,6 @@ const isPlaceholder = (rawValue: string): boolean => isPlaceholderValue(unquoteD
 const defaultRandomHex = (bytes: number): string => randomBytes(bytes).toString("hex");
 
 /**
- * The fresh secret to substitute for an example `key=value` entry, or `undefined`
- * when the example value should be used as-is (non-secret key, or a value the
- * example already pins to something real). The single rule both the full-file
- * generate and the missing-key augment share.
- */
-const generatedSecretFor = (key: string, rawValue: string, randomHex: (bytes: number) => string): string | undefined =>
-    SECRET_KEY.test(key) && isPlaceholder(rawValue) ? randomHex(SECRET_BYTES) : undefined;
-
-/**
  * Provider-issued secret keys we CANNOT mint locally — you obtain them from a
  * third-party dashboard (Resend, Stripe, Polar, …). Derived from the registry:
  * a secret-keyed entry whose placeholder is an angle-bracket `&lt;your-…>` marker
@@ -148,6 +139,22 @@ const PROVIDER_SECRET_KEYS: ReadonlySet<string> = new Set(
  * ({@link PROVIDER_SECRET_KEYS}) and any non-secret key.
  */
 const isMintableSecretKey = (key: string): boolean => SECRET_KEY.test(key) && !PROVIDER_SECRET_KEYS.has(key);
+
+/**
+ * The fresh secret to substitute for an example `key=value` entry, or `undefined`
+ * when the example value should be used as-is (non-secret key, a provider-issued
+ * key we cannot mint locally, or a value the example already pins to something
+ * real). The single rule both the full-file generate and the missing-key augment
+ * share.
+ *
+ * Only {@link isMintableSecretKey mintable} secret keys are regenerated:
+ * provider-issued placeholders (e.g. `RESEND_API_KEY`, `STRIPE_SECRET_KEY`) are
+ * left verbatim so they stay detectable as unfilled by `lunora env doctor` —
+ * minting a random value for one would be actively wrong (the provider would
+ * reject it) and would hide the misconfiguration.
+ */
+const generatedSecretFor = (key: string, rawValue: string, randomHex: (bytes: number) => string): string | undefined =>
+    isMintableSecretKey(key) && isPlaceholder(rawValue) ? randomHex(SECRET_BYTES) : undefined;
 
 /** Mint a fresh strong secret value — 64 hex chars (32 bytes), like `openssl rand -hex 32`. */
 const generateSecretValue = (randomHex: (bytes: number) => string = defaultRandomHex): string => randomHex(SECRET_BYTES);

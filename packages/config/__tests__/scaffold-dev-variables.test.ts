@@ -164,6 +164,27 @@ describe("planDevVariablesScaffold", () => {
         expect(plan.content).toContain('SHARED_TOKEN="abc123def456"');
     });
 
+    it("never mints provider-issued keys — their placeholders survive so they stay detectable as unfilled", () => {
+        expect.assertions(4);
+
+        const plan = generatePlan(
+            planDevVariablesScaffold({
+                devVarsExists: false,
+                // RESEND_API_KEY / STRIPE_SECRET_KEY are provider-issued (in the registry with `<…>`
+                // placeholders): Lunora cannot mint a valid value, so they must be left verbatim.
+                exampleContent: 'RESEND_API_KEY="<your-resend-api-key>"\nSTRIPE_SECRET_KEY="<your-stripe-secret-key>"\nAUTH_SECRET="replace-with-openssl-rand-hex-32"\n',
+                randomHex: fixedHex,
+            }),
+        );
+
+        // Only the locally-mintable AUTH_SECRET is generated; the provider keys are untouched.
+        expect(plan.generatedKeys).toStrictEqual(["AUTH_SECRET"]);
+        expect(plan.content).toContain('RESEND_API_KEY="<your-resend-api-key>"');
+        expect(plan.content).toContain('STRIPE_SECRET_KEY="<your-stripe-secret-key>"');
+        // The provider placeholders remain detectable as unfilled by `lunora env doctor`.
+        expect(isPlaceholderValue("<your-resend-api-key>")).toBe(true);
+    });
+
     it("does not regenerate a real secret whose value merely contains a marker substring", () => {
         expect.assertions(4);
 

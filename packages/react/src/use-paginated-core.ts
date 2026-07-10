@@ -67,7 +67,6 @@ const usePaginatedCore = function <T>(
 
     const skipped = args === "skip";
     const baseArgs = skipped ? {} : args;
-    const baseArgsKey = JSON.stringify(baseArgs);
 
     const [, forceRender] = useReducer((tick: number) => tick + 1, 0);
     const [pages, setPages] = useState<Page[]>(() => initialPages(initialNumItems));
@@ -75,7 +74,14 @@ const usePaginatedCore = function <T>(
     // Reset to the first page whenever the query identity, base args, page size,
     // or shard changes. Set-state-during-render (guarded by a ref) is React's
     // sanctioned way to derive state from changing inputs without an extra commit.
-    const resetKey = `${function_.__lunoraRef}::${baseArgsKey}::${String(initialNumItems)}::${shardKey ?? ""}`;
+    //
+    // The identity half is built from `serializeQueryKey(lunoraQueryKey(...))`,
+    // the same stable encoder every query key/effect dep uses, rather than a raw
+    // `JSON.stringify(baseArgs)`: raw stringify is property-order-sensitive (so a
+    // conditional-spread arg object of identical content would falsely reset the
+    // feed to page one) and would collapse `shardKey: ""` with `shardKey:
+    // undefined` — which `lunoraQueryKey` keeps distinct (`""` vs `null`).
+    const resetKey = `${serializeQueryKey(lunoraQueryKey(function_, baseArgs, shardKey))}::${String(initialNumItems)}`;
     const resetKeyRef = useRef(resetKey);
 
     // react-doctor-disable-next-line react-hooks-js/refs -- intentional: React's sanctioned "reset state when an input changes" pattern — compare a render-phase ref to the current reset key and set state during render, guarded so it runs once per change (see comment above).

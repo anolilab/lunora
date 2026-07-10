@@ -565,54 +565,58 @@ const runMigrateToHyperdriveCommand = async (options: MigrateToHyperdriveOptions
     const temporaryDirectory = options.out === undefined ? mkdtempSync(join(tmpdir(), "lunora-d1ps-")) : undefined;
     const dumpPath = options.out ?? join(temporaryDirectory as string, "dump.ndjson");
 
-    logger.info(`Exporting .global() data from the D1 source (${fromUrl ?? "http://localhost:8787"}) …`);
+    try {
+        logger.info(`Exporting .global() data from the D1 source (${fromUrl ?? "http://localhost:8787"}) …`);
 
-    const exportResult = await runExportCommand({
-        fetchImpl: options.fetchImpl,
-        logger,
-        out: dumpPath,
-        prod: options.prod,
-        tables: options.tables,
-        token: options.fromToken,
-        url: fromUrl,
-    });
+        const exportResult = await runExportCommand({
+            fetchImpl: options.fetchImpl,
+            logger,
+            out: dumpPath,
+            prod: options.prod,
+            tables: options.tables,
+            token: options.fromToken,
+            url: fromUrl,
+        });
 
-    if (exportResult.code !== 0) {
-        return { code: exportResult.code };
+        if (exportResult.code !== 0) {
+            return { code: exportResult.code };
+        }
+
+        logger.info(`Exported ${String(exportResult.rows)} row(s) (${String(exportResult.bytes)} bytes).`);
+        logger.info(`Importing into the Hyperdrive target (${toUrl ?? "http://localhost:8787"}) …`);
+
+        const importResult = await runImportCommand({
+            batchSize: options.batchSize,
+            fetchImpl: options.fetchImpl,
+            file: dumpPath,
+            logger,
+            prod: options.prod,
+            token: options.toToken,
+            url: toUrl,
+        });
+
+        if (importResult.code !== 0) {
+            return { code: importResult.code };
+        }
+
+        if (importResult.inserted === exportResult.rows) {
+            logger.info(`✓ Migrated ${String(exportResult.rows)} row(s) — counts match. Verify your app reads from Hyperdrive, then decommission the D1 binding.`);
+        } else {
+            logger.warn(
+                `Imported ${String(importResult.inserted)} of ${String(exportResult.rows)} exported row(s) — the remainder likely already existed in the target (see conflicts above). Re-run after resolving, or inspect the dump with --out.`,
+            );
+        }
+
+        return { code: 0 };
+    } finally {
+        // Always shred the private temp dir (and the plaintext, cross-tenant dump
+        // inside it) — even when export/import throws or returns early — unless the
+        // caller asked to keep the dump via --out. Leaving it behind would strand a
+        // full plaintext export in /tmp until OS cleanup.
+        if (temporaryDirectory !== undefined) {
+            rmSync(temporaryDirectory, { force: true, recursive: true });
+        }
     }
-
-    logger.info(`Exported ${String(exportResult.rows)} row(s) (${String(exportResult.bytes)} bytes).`);
-    logger.info(`Importing into the Hyperdrive target (${toUrl ?? "http://localhost:8787"}) …`);
-
-    const importResult = await runImportCommand({
-        batchSize: options.batchSize,
-        fetchImpl: options.fetchImpl,
-        file: dumpPath,
-        logger,
-        prod: options.prod,
-        token: options.toToken,
-        url: toUrl,
-    });
-
-    // Clean up the private temp dir (and the dump inside it) unless the caller
-    // asked to keep the dump via --out.
-    if (temporaryDirectory !== undefined) {
-        rmSync(temporaryDirectory, { force: true, recursive: true });
-    }
-
-    if (importResult.code !== 0) {
-        return { code: importResult.code };
-    }
-
-    if (importResult.inserted === exportResult.rows) {
-        logger.info(`✓ Migrated ${String(exportResult.rows)} row(s) — counts match. Verify your app reads from Hyperdrive, then decommission the D1 binding.`);
-    } else {
-        logger.warn(
-            `Imported ${String(importResult.inserted)} of ${String(exportResult.rows)} exported row(s) — the remainder likely already existed in the target (see conflicts above). Re-run after resolving, or inspect the dump with --out.`,
-        );
-    }
-
-    return { code: 0 };
 };
 
 /** `lunora migrate &lt;subcommand>` handler (lazy-loaded via the command's `loader`). */

@@ -1,5 +1,7 @@
 import type { Middleware } from "@lunora/server";
 
+import { readIdentityGroups } from "./identity-groups";
+
 /**
  * The slice of context {@link accessRoles} reads and augments: the `auth` facade
  * every Lunora ctx carries. `getIdentity()` returns the verified identity
@@ -33,21 +35,6 @@ interface AccessRolesOptions {
      */
     readGroups?: (identity: Record<string, unknown>) => ReadonlyArray<string> | undefined;
 }
-
-/**
- * Default group reader: the promoted top-level `groups` claim, falling back to
- * the verified nested `access.groups`. This mirrors the `ctx.access` facade in
- * `context.ts` (`identity.groups ?? identity.access.groups`), so a custom
- * `mapClaims` that stops promoting `groups` still feeds `accessRoles` instead of
- * silently stripping every RLS role. Keeps only the string entries.
- */
-const defaultReadGroups = (identity: Record<string, unknown>): ReadonlyArray<string> | undefined => {
-    const { access } = identity;
-    const nested = typeof access === "object" && access !== null ? (access as { groups?: unknown }).groups : undefined;
-    const groups = identity["groups"] ?? nested;
-
-    return Array.isArray(groups) ? groups.filter((group): group is string => typeof group === "string") : undefined;
-};
 
 /** Resolve one group to its zero-or-more role names through `map` (verbatim when unset). */
 const rolesForGroup = (group: string, map: AccessRoleMap | undefined): ReadonlyArray<string> => {
@@ -84,7 +71,10 @@ const rolesForGroup = (group: string, map: AccessRoleMap | undefined): ReadonlyA
  * ```
  */
 const accessRoles = <Context extends AccessRolesContext>(options: AccessRolesOptions = {}): Middleware<Context, Context> => {
-    const readGroups = options.readGroups ?? defaultReadGroups;
+    // Default to the shared reader (promoted `groups` ?? nested `access.groups`,
+    // string entries only) — the same helper the `ctx.access` facade uses, so RLS
+    // roles never drift from what `ctx.access.groups` reports for one request.
+    const readGroups = options.readGroups ?? readIdentityGroups;
 
     return async ({ ctx, next }) => {
         const identity = (await ctx.auth?.getIdentity?.()) ?? undefined;

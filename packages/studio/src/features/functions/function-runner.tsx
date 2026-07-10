@@ -11,7 +11,7 @@ import { Label } from "../../components/ui/label";
 import { Textarea } from "../../components/ui/textarea";
 import { useT } from "../../i18n/i18n-context";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
-import { adminRef, errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
+import { adminRef, dispatchByKind, errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
 import { recordShard } from "../../lib/shard-history";
 import type { FunctionDescriptor, FunctionKind, RunStatus } from "../../lib/types";
 import { argumentsTemplate, formatSignature } from "./function-signature";
@@ -192,21 +192,7 @@ export const FunctionRunner = ({ functions: functionsProp, runAsIdentity = false
             let value: unknown;
 
             if (forgedUserId === "") {
-                switch (selected.kind) {
-                    case "action": {
-                        value = await client.action(reference, parsedArgs, options);
-
-                        break;
-                    }
-                    case "mutation": {
-                        value = await client.mutation(reference, parsedArgs, options);
-
-                        break;
-                    }
-                    default: {
-                        value = await client.query(reference, parsedArgs, options);
-                    }
-                }
+                value = await dispatchByKind(client, selected.kind, reference, parsedArgs, options);
             } else {
                 // The admin `runAs` RPC dispatches the target on the DO under the
                 // forged identity and returns its result — kind-agnostic by design:

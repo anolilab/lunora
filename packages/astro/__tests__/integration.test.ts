@@ -48,4 +48,17 @@ describe("lunora() Astro integration", () => {
             (hook as () => void)();
         }).toThrow(/serverEntry/);
     });
+
+    it("rejects a whitespace-only serverEntry when the hook runs", () => {
+        expect.assertions(1);
+
+        // A whitespace-only path is just as unresolvable as an empty string;
+        // the guard trims before the emptiness check so it is caught too.
+        const integration = lunora({ serverEntry: "   " });
+        const hook = integration.hooks["astro:config:done"];
+
+        expect(() => {
+            (hook as () => void)();
+        }).toThrow(/serverEntry/);
+    });
 });

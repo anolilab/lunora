@@ -29,7 +29,7 @@ import type { Autumn } from "autumn-js";
 
 import type { PaymentAdapter, WebhookInput } from "../adapter";
 import { LunoraPaymentError } from "../errors";
-import { asRecord, readBoolean, readNumber, readString } from "../json";
+import { asRecord, readAny, readAnyNumber, readBoolean, readString } from "../json";
 import { money } from "../money";
 import type {
     CaptureInput,
@@ -48,6 +48,7 @@ import type {
     WebhookAction,
 } from "../types";
 import { verifyStandardWebhook } from "../webhook";
+import makeNotSupported from "./not-supported";
 import stateToEventType from "./subscription-event";
 
 /**
@@ -95,9 +96,7 @@ const SUBSCRIPTION_STATE_BY_AUTUMN_ACTION: Record<string, SubscriptionState> = {
 
 const SUBSCRIPTION_ID_SEPARATOR = "::";
 
-const notSupported = (operation: string): never => {
-    throw new LunoraPaymentError("PROVIDER_ERROR", `autumn manages billing through the underlying processor and does not support ${operation}`);
-};
+const notSupported = makeNotSupported("autumn");
 
 /** Encode the Lunora subscription id from Autumn's `(customerId, productId)` pair. */
 const autumnSubscriptionId = (customerId: string, productId: string): string => `${customerId}${SUBSCRIPTION_ID_SEPARATOR}${productId}`;
@@ -115,32 +114,6 @@ const parseAutumnSubscriptionId = (subscriptionId: string): { customerId: string
     }
 
     return { customerId: subscriptionId.slice(0, index), productId: subscriptionId.slice(index + SUBSCRIPTION_ID_SEPARATOR.length) };
-};
-
-/** First defined string among the given keys — tolerates snake_case vs. camelCase SDK generations. */
-const readAny = (object: Record<string, unknown>, ...keys: string[]): string | undefined => {
-    for (const key of keys) {
-        const value = readString(object, key);
-
-        if (value !== undefined) {
-            return value;
-        }
-    }
-
-    return undefined;
-};
-
-/** First defined number among the given keys. */
-const readAnyNumber = (object: Record<string, unknown>, ...keys: string[]): number | undefined => {
-    for (const key of keys) {
-        const value = readNumber(object, key);
-
-        if (value !== undefined) {
-            return value;
-        }
-    }
-
-    return undefined;
 };
 
 /** Autumn expresses a scheduled cancellation via a non-null `canceled_at`. */

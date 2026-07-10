@@ -777,6 +777,21 @@ const createSearchBuilder = (
 };
 
 /**
+ * Whether none of the fields a rank index reads (partition / sort / static
+ * `where`) differ between two row versions — the fast path that lets a patch of
+ * an unrelated field skip the rank companion's DELETE+INSERT. Twin of
+ * `@lunora/do`'s `rankIndexFieldsUnchanged` (replicated rather than imported —
+ * it is a private helper there). This is also what keeps `restore()`'s forced
+ * rank re-add correct: a marker-clearing patch touches no rank field, so the
+ * patch-path sync skips and `restore()` performs the single re-INSERT.
+ */
+const rankIndexFieldsUnchanged = (index: RankIndexDefinitionLike, previous: Record<string, unknown>, next: Record<string, unknown>): boolean => {
+    const fields = [...(index.partitionBy ?? []), ...index.sortBy.map((key) => key.field), ...(index.where ? Object.keys(index.where) : [])];
+
+    return fields.every((field) => previous[field] === next[field]);
+};
+
+/**
  * Build the lexicographic "strictly before" OR-of-AND branches for a rank
  * position count. Each pivot fixes the higher-priority sort columns with `IS ?`
  * equality and applies the directional less-than/greater-than comparison on the
@@ -2003,13 +2018,34 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         previous: Record<string, unknown> | undefined,
         next: Record<string, unknown> | undefined,
     ): Promise<void> => {
-        const indexes = schema.tables[tableName]?.rankIndexes;
+        const definition = schema.tables[tableName];
+        const indexes = definition?.rankIndexes;
 
         if (!indexes || indexes.length === 0) {
             return;
         }
 
+        // A soft-deleted `next` row must never (re-)enter the rank companion:
+        // `delete()`'s soft path drops the entry, and any later write into the
+        // still-deleted row (admin fix-up, `$onUpdateFn` stamp, `onSetNull`
+        // cascade) must not resurrect it into `rank()`/`rankPage()`. `restore()`
+        // clears the marker *before* re-adding, so its INSERT still runs.
+        const softField = definition?.softDeleteMode?.field;
+        const nextSoftDeleted =
+            softField !== undefined && next !== undefined && next[softField] !== null && next[softField] !== undefined;
+
         for (const index of indexes) {
+            // Fast path: both images exist and no field THIS index reads
+            // (partition / sort / static `where`) changed — the companion entry
+            // is already correct, so skip the DELETE+INSERT pair entirely
+            // (mirrors the DO twin). Besides the write saving, this is what makes
+            // `restore()`'s forced re-add correct (a marker-clearing patch leaves
+            // every rank field unchanged, so the patch-path sync skips and the
+            // forced `restore()` INSERT is the sole re-add — no duplicate PK).
+            if (previous !== undefined && next !== undefined && rankIndexFieldsUnchanged(index, previous, next)) {
+                continue;
+            }
+
             // eslint-disable-next-line no-secrets/no-secrets -- false positive: this is a function name referenced in a comment, not a secret.
             // The pre-write `ensureRankBackfilledForTable` hook always runs
             // immediately before this sync, populating `rankBackfilled` with
@@ -2032,7 +2068,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
                 await queryRun(exec, dialect, sql`DELETE FROM ${sql.identifier(rankTable)} WHERE ${sql.identifier("__id__")} = ${id}`);
             }
 
-            if (next) {
+            if (next && !nextSoftDeleted) {
                 if (index.where && !matchesRankStaticWhere(next, index.where)) {
                     continue;
                 }
@@ -2291,7 +2327,21 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             return [{ key: { ...planned.partial }, value: readAggregateValue(agg.op, { count: row.count, value: aggregateScalar(row.value) }) }];
         }
 
-        // Open group key → enumerate every companion row.
+        // A partially-constraining request (`where` pins a strict subset of the
+        // index's `by`-tuple → `partialKeys.length > 0` but not the full length,
+        // since the fully-specified case returned above) can't be answered by
+        // enumerating the whole companion: that would leak the groups the `where`
+        // filters out (indexed/scan divergence). Fall back to the SQL `GROUP BY`
+        // scan, which compiles and honours the `where`. The static-`where`-carry
+        // case (a partial key sourced from the index's own baked-in `where`, on a
+        // field the request never mentioned) also falls back here — the companion
+        // is scoped to that value, so it likewise can't answer an unfiltered
+        // request over it; the scan is the correct, complete answer either way.
+        if (partialKeys.length > 0) {
+            return undefined;
+        }
+
+        // Fully open group key (no constraint) → enumerate every companion row.
         const rowsIndexed = await queryAll(
             exec,
             dialect,
@@ -3093,14 +3143,19 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
             await writer.patch(id, { [field]: null }, expectedTable);
 
             // Soft delete dropped this row's rank-companion entry; `patch`'s rank
-            // sync skips re-adding it (sort fields unchanged), so force a pure
-            // INSERT (`previous=undefined`) — only when restoring an actually
-            // soft-deleted row, to avoid a duplicate on a no-op restore.
+            // sync skips re-adding it (rank fields unchanged, so its fast path
+            // treats the entry as present), so force a pure INSERT
+            // (`previous=undefined`) — only when restoring an actually soft-deleted
+            // row, to avoid a duplicate on a no-op restore. Re-add the RESTORED
+            // image (marker cleared): `snapshot` predates the patch and still
+            // carries the marker, and `syncRanks`' soft-delete guard would skip a
+            // still-deleted `next`.
             if (wasDeleted) {
                 const row = decodeRow(definition, snapshot);
 
                 if (row !== null) {
-                    await syncRanks(tableName, id, undefined, row);
+                    // eslint-disable-next-line unicorn/no-null -- the restored image clears the soft-delete marker, matching what `patch` persisted.
+                    await syncRanks(tableName, id, undefined, { ...row, [field]: null });
                 }
             }
         },

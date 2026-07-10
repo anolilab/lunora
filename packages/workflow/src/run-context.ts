@@ -71,6 +71,7 @@ const createWorkflowRunContext = <Params = Record<string, unknown>>(options: Run
     const fanOutDeps = {
         env: options.env,
         instanceId: options.event.instanceId,
+        log,
         nextChildId,
         parentBinding: workflowBindingName(options.exportName),
         resolveBinding,

@@ -38,6 +38,37 @@ const checkFkRelation = (
         return undefined;
     }
 
+    // A dangling reference can only be *proven* against the COMPLETE set of
+    // target keys. When the target sample is truncated, a valid FK pointing at a
+    // target row beyond the cap would be reported as dangling — a false positive
+    // that could lead an operator to delete or re-link good data. Skip the check
+    // entirely in that case (source truncation, below, is fine — it only means
+    // more violations may exist).
+    if (targetSample.truncated) {
+        return undefined;
+    }
+
+    // Build the set of referenced key values. For the default `_id` reference the
+    // sample already exposes `existingIds`; a custom `references` column (e.g.
+    // `one("users", { references: "slug" })`) must be resolved from the target's
+    // sampled rows — comparing against the `_id` set would flag every row.
+    const referencedColumn = relation.references;
+    const referenceValues =
+        referencedColumn === "_id"
+            ? targetSample.existingIds
+            : new Set(
+                  targetSample.rows.reduce<string[]>((values, row) => {
+                      const value = row[referencedColumn];
+
+                      if (value !== null && value !== undefined) {
+                          // eslint-disable-next-line @typescript-eslint/no-base-to-string -- referenced key column is a primitive from SQLite
+                          values.push(String(value));
+                      }
+
+                      return values;
+                  }, []),
+              );
+
     const fkColumn = relation.field;
     const danglingIds: string[] = [];
 
@@ -56,7 +87,7 @@ const checkFkRelation = (
         // eslint-disable-next-line @typescript-eslint/no-base-to-string -- id column is always a primitive string from SQLite
         const fkString = String(fkValue);
 
-        if (!targetSample.existingIds.has(fkString)) {
+        if (!referenceValues.has(fkString)) {
             danglingIds.push(rowId(row));
         }
     }
@@ -65,11 +96,13 @@ const checkFkRelation = (
         return undefined;
     }
 
-    const isTruncated = sample.truncated || targetSample.truncated;
-    const cap = Math.min(sample.cap, targetSample.cap);
+    // Only source truncation remains possible here (the target is complete).
+    const isTruncated = sample.truncated;
+    const {cap} = sample;
+    const referencedLabel = referencedColumn === "_id" ? `"${relation.table}"` : `"${relation.table}"."${referencedColumn}"`;
     const detail =
         `Table "${sample.table}": ${danglingIds.length.toString()} sampled row(s) have a dangling FK value in column "${fkColumn}" — ` +
-        `the referenced "${relation.table}" row does not exist. Row ids: ${formatExamples(danglingIds, danglingIds.length)}` +
+        `the referenced ${referencedLabel} row does not exist. Row ids: ${formatExamples(danglingIds, danglingIds.length)}` +
         `${truncatedSuffix(isTruncated, cap, "more rows may exist beyond the window")}.`;
 
     return emit(lint, {
@@ -81,6 +114,7 @@ const checkFkRelation = (
             count: danglingIds.length,
             examples: danglingIds.slice(0, MAX_EXAMPLE_IDS),
             kind: "fk",
+            references: referencedColumn,
             referencesTable: relation.table,
             table: sample.table,
             truncated: isTruncated,

@@ -203,9 +203,9 @@ const loadIndexHits = async (source: AnalyticsMetricsSource, options: AnalyticsM
         return hits;
     }
 
-    const seen = new Set(hits.map((hit) => `${hit.table} ${hit.index}`));
+    const seen = new Set(hits.map((hit) => `${hit.table}\0${hit.index}`));
     const zeros = options.declaredIndexes
-        .filter((declared) => !seen.has(`${declared.table} ${declared.index}`))
+        .filter((declared) => !seen.has(`${declared.table}\0${declared.index}`))
         .map((declared) => {
             return { index: declared.index, reads: 0, table: declared.table };
         });

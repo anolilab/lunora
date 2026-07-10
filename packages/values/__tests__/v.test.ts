@@ -116,6 +116,22 @@ describe("composites", () => {
         expect(() => schema.parse({ name: "a", nickname: 7 })).toThrow(ValidationError);
     });
 
+    it("object reads declared fields as own-properties, not through the prototype chain", () => {
+        expect.assertions(3);
+
+        // A field whose name collides with an Object.prototype member must read
+        // as absent when omitted — not as the inherited function.
+        const schema = v.object({ toString: v.optional(v.string()), value: v.string() });
+
+        // An absent optional `toString` is skipped; without the own-property read
+        // it would see `Object.prototype.toString` and reject `received function`.
+        expect(schema.parse({ value: "x" })).toEqual({ value: "x" });
+        // A present own `toString` still validates and round-trips.
+        expect(schema.parse({ toString: "custom", value: "x" })).toEqual({ toString: "custom", value: "x" });
+        // A required field colliding with a prototype member fails when absent.
+        expect(() => v.object({ constructor: v.string() }).parse({})).toThrow(ValidationError);
+    });
+
     it("array parses element-wise and surfaces index in path", () => {
         expect.hasAssertions();
 

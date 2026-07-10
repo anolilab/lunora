@@ -101,6 +101,19 @@ describe("cronJobs", () => {
         expect(() => crons.interval("two", { hours: 1, minutes: 1 }, fnRef("a.b"))).toThrow(/exactly one of/u);
     });
 
+    it("rejects an interval value that does not evenly divide its period", () => {
+        expect.assertions(3);
+
+        const crons = cronJobs();
+
+        // 45 does not divide 60: cron "*/45" fires at :00 and :45 (a 45/15 sawtooth), not every 45 minutes.
+        expect(() => crons.interval("m", { minutes: 45 }, fnRef("a.b"))).toThrow(/interval\.minutes/u);
+        // 7 does not divide 24: cron "0 */7" fires at 00,07,14,21 then wraps to a 3h gap.
+        expect(() => crons.interval("h", { hours: 7 }, fnRef("a.b"))).toThrow(/interval\.hours/u);
+        // 25 does not divide 60 seconds.
+        expect(() => crons.interval("s", { seconds: 25 }, fnRef("a.b"))).toThrow(/interval\.seconds/u);
+    });
+
     it("validates numeric bounds on schedule fields", () => {
         expect.assertions(3);
 

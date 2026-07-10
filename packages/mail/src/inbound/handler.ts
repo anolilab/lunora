@@ -34,7 +34,7 @@ import { LunoraError } from "@lunora/errors";
 
 import type { InboundEmail, RawInboundEmail } from "./parse";
 import type { DurableObjectJurisdiction, ShardNamespaceLike } from "./shard";
-import { applyJurisdiction } from "./shard";
+import { DEFAULT_ROOT_SHARD, postShardRpc } from "./shard";
 
 /**
  * Structural projection of Cloudflare's `ForwardableEmailMessage` (verified
@@ -195,14 +195,18 @@ interface DispatchToLunoraFunctionOptions<TEnv = Record<string, unknown>> {
     shardKey?: string;
 }
 
-const DEFAULT_ROOT_SHARD = "__root__";
+/** Chunk size for {@link toBase64}: kept ≤ the arg-spread limit `String.fromCharCode` tolerates. */
+const BASE64_CHUNK = 0x80_00;
 
 /** Base64-encode raw bytes without relying on Node's `Buffer` (workerd-safe). */
 const toBase64 = (bytes: Uint8Array): string => {
     let binary = "";
 
-    for (const byte of bytes) {
-        binary += String.fromCodePoint(byte);
+    // Build the latin1 string in ≤32KB chunks — orders of magnitude faster than
+    // one `String.fromCodePoint` call per byte for multi-megabyte attachments,
+    // while staying under the argument-count limit of a single spread call.
+    for (let index = 0; index < bytes.length; index += BASE64_CHUNK) {
+        binary += String.fromCharCode(...bytes.subarray(index, index + BASE64_CHUNK));
     }
 
     // `btoa` is available in both workerd and modern Node; it operates on the
@@ -270,29 +274,16 @@ const dispatchToLunoraFunction = <TEnv extends Record<string, unknown> = Record<
             shardKey,
         };
 
-        const namespace = applyJurisdiction(options.shard, options.jurisdiction);
-        const stub = namespace.get(namespace.idFromName(shardKey));
-        const response = (await stub.fetch("https://shard.internal/rpc", {
-            body: JSON.stringify(envelope),
-            headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
-            method: "POST",
-        })) as { json: () => Promise<unknown>; ok?: boolean; status?: number };
-
-        // A shard stub returns a Fetch `Response`; treat a non-2xx (or an error
-        // envelope) as a dispatch failure so the message is rejected upstream.
-        if (response.ok === false) {
-            throw new LunoraError("INTERNAL", `@lunora/mail/inbound: dispatch to \`${options.functionPath}\` failed (HTTP ${String(response.status ?? "?")}).`);
-        }
-
-        const body: unknown = await response.json();
-
-        if (typeof body === "object" && body !== null && "error" in body) {
-            const { error } = body as { error?: unknown };
-
-            if (error !== undefined && error !== null) {
-                throw new LunoraError("INTERNAL", `@lunora/mail/inbound: dispatch to \`${options.functionPath}\` returned an error: ${JSON.stringify(error)}`);
-            }
-        }
+        // The shared helper owns the URL, headers, `response.ok` check, and error
+        // envelope check; a throw here routes through the handler's `onError`
+        // (default `setReject`) so the message is rejected upstream.
+        await postShardRpc(options.shard, {
+            adminToken,
+            envelope,
+            jurisdiction: options.jurisdiction,
+            label: `@lunora/mail/inbound: dispatch to \`${options.functionPath}\``,
+            shardKey,
+        });
     };
 };
 

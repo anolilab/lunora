@@ -19,6 +19,17 @@ const MAX_KEY_LENGTH = 512;
 /** Workers KV's documented per-page list ceiling. */
 const MAX_LIST_LIMIT = 1000;
 
+/** Shared encoder for measuring UTF-8 byte length (not UTF-16 `String.length`). */
+const TEXT_ENCODER = new TextEncoder();
+
+/**
+ * UTF-8 byte length of a key. KV's ceiling is documented in **bytes**, so a key
+ * of multi-byte (CJK/emoji) characters can be well under 512 UTF-16 code units
+ * yet exceed 512 bytes — `String.length` would wave it through only to have KV
+ * reject it remotely, defeating the fail-fast intent.
+ */
+const byteLength = (value: string): number => TEXT_ENCODER.encode(value).length;
+
 /**
  * Reject keys that escape their tenant prefix, contain a path-traversal
  * segment, or exceed KV's size ceiling. Mirrors `@lunora/storage`'s
@@ -34,7 +45,7 @@ const validateKey = (key: string): void => {
         throw new TypeError("@lunora/bindings/kv: key must be a non-empty string");
     }
 
-    if (key.length > MAX_KEY_LENGTH) {
+    if (byteLength(key) > MAX_KEY_LENGTH) {
         throw new LunoraError("INTERNAL", `@lunora/bindings/kv: key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
     }
 
@@ -65,7 +76,7 @@ const validatePrefix = (prefix: string): void => {
         return;
     }
 
-    if (prefix.length > MAX_KEY_LENGTH) {
+    if (byteLength(prefix) > MAX_KEY_LENGTH) {
         throw new LunoraError("INTERNAL", `@lunora/bindings/kv: prefix exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
     }
 
@@ -97,7 +108,7 @@ export const scopeKey = (prefix: string, key: string): string => {
     const trimmedPrefix = prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
     const composed = `${trimmedPrefix}/${key}`;
 
-    if (composed.length > MAX_KEY_LENGTH) {
+    if (byteLength(composed) > MAX_KEY_LENGTH) {
         throw new LunoraError("INTERNAL", `@lunora/bindings/kv: scoped key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
     }
 

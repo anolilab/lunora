@@ -9,29 +9,16 @@
  * `examples/payment-demo/lunora/schema.ts`.
  *
  * Money is stored as `(amountMinor: bigint, currency: string)` columns; every row carries a
- * `provider` discriminator so multiple providers can coexist during a migration. Captures and
- * refunds are append-only records linked to a payment, not booleans.
+ * `provider` discriminator so multiple providers can coexist during a migration. A refund is folded
+ * into its `paymentSessions` row (`refundedMinor` + a `refunded`/`partially_refunded` state), not a
+ * separate ledger table.
+ *
+ * These five tables — `customers`, `subscriptions`, `paymentSessions`, `usageEvents`, and the
+ * `events` webhook log — are exactly what the store reads and writes; mirror only these in your app.
  */
 import type { TableDefinition } from "@lunora/server";
 import { defineTable } from "@lunora/server";
 import { v } from "@lunora/values";
-
-const products = defineTable({
-    description: v.optional(v.string()),
-    name: v.string(),
-    provider: v.string(),
-    providerProductId: v.string(),
-}).index("by_provider_product", ["provider", "providerProductId"], { unique: true });
-
-const prices = defineTable({
-    active: v.boolean(),
-    amountMinor: v.bigint(),
-    currency: v.string(),
-    interval: v.optional(v.string()),
-    provider: v.string(),
-    providerPriceId: v.string(),
-    providerProductId: v.string(),
-}).index("by_provider_price", ["provider", "providerPriceId"], { unique: true });
 
 const customers = defineTable({
     createdAt: v.number(),
@@ -59,16 +46,6 @@ const subscriptions = defineTable({
     .index("by_provider_subscription", ["provider", "providerSubscriptionId"], { unique: true })
     .index("by_reference", ["referenceId"]);
 
-const checkouts = defineTable({
-    createdAt: v.number(),
-    mode: v.string(),
-    priceId: v.string(),
-    provider: v.string(),
-    providerCheckoutId: v.string(),
-    referenceId: v.string(),
-    url: v.string(),
-}).index("by_provider_checkout", ["provider", "providerCheckoutId"], { unique: true });
-
 const paymentSessions = defineTable({
     amountMinor: v.bigint(),
     capturedMinor: v.bigint(),
@@ -83,47 +60,6 @@ const paymentSessions = defineTable({
 })
     .index("by_provider_session", ["provider", "providerSessionId"], { unique: true })
     .index("by_reference", ["referenceId"]);
-
-const payments = defineTable({
-    amountMinor: v.bigint(),
-    createdAt: v.number(),
-    currency: v.string(),
-    provider: v.string(),
-    providerPaymentId: v.string(),
-    referenceId: v.string(),
-    sessionId: v.string(),
-    status: v.string(),
-}).index("by_provider_payment", ["provider", "providerPaymentId"], { unique: true });
-
-const captures = defineTable({
-    amountMinor: v.bigint(),
-    createdAt: v.number(),
-    currency: v.string(),
-    provider: v.string(),
-    providerCaptureId: v.string(),
-    sessionId: v.string(),
-}).index("by_session", ["sessionId"]);
-
-const refunds = defineTable({
-    amountMinor: v.bigint(),
-    createdAt: v.number(),
-    currency: v.string(),
-    provider: v.string(),
-    providerRefundId: v.string(),
-    reason: v.optional(v.string()),
-    sessionId: v.string(),
-}).index("by_session", ["sessionId"]);
-
-const invoices = defineTable({
-    amountMinor: v.bigint(),
-    createdAt: v.number(),
-    currency: v.string(),
-    provider: v.string(),
-    providerInvoiceId: v.string(),
-    referenceId: v.string(),
-    status: v.string(),
-    subscriptionId: v.optional(v.string()),
-}).index("by_provider_invoice", ["provider", "providerInvoiceId"], { unique: true });
 
 // Append-only webhook log: inbound idempotency + audit + debugging.
 const events = defineTable({
@@ -148,16 +84,9 @@ const usageEvents = defineTable({
     .index("by_reference_feature", ["referenceId", "featureId"]);
 
 const paymentTables: Record<string, TableDefinition> = {
-    captures,
-    checkouts,
     customers,
     events,
-    invoices,
     paymentSessions,
-    payments,
-    prices,
-    products,
-    refunds,
     subscriptions,
     usageEvents,
 };

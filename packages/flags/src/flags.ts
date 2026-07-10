@@ -2,6 +2,10 @@ import { LunoraError } from "@lunora/errors";
 import type { Client, EvaluationContext, EvaluationDetails, FlagValue, Hook, Logger, Provider } from "@openfeature/server-sdk";
 import { ErrorCode, OpenFeature } from "@openfeature/server-sdk";
 
+// Repo-root inlined helper (see shared/stable-key.ts) — the canonical
+// code-point-stable, recursively-sorted cache-key encoder, so the flags memo
+// keys match the client/react/do dedup semantics.
+import { stableStringify } from "../../../shared/stable-key";
 import type { LunoraFlags } from "./types";
 
 /**
@@ -86,26 +90,27 @@ type FlagType = "boolean" | "number" | "object" | "string";
 /**
  * Stable memo key over the evaluation's type, key, default, and context.
  *
- * The `[type, flagKey, defaultValue]` prefix is cheap and always computed. The
- * context portion is the expensive part — sorting and serializing its entries
- * — so the common case of an empty/absent context (no per-call context and no
- * default `targetingKey`) short-circuits to a constant suffix instead of doing
- * that work, since `Object.keys(context)` is then `[]` and would otherwise
- * just serialize to the same constant `"[]"`. A non-empty context still goes
- * through the same sort+stringify as before, so the key stays stable and
- * collision-free.
+ * The context portion is encoded with the repo's canonical `stableStringify`
+ * (shared/stable-key.ts) so object keys are sorted at *every* depth: two
+ * logically identical contexts that differ only in (possibly nested) key order
+ * — `{ org: { id, plan } }` vs `{ org: { plan, id } }` — collapse to one key, so
+ * repeated reads of the same flag hit the provider once and stay internally
+ * consistent. The common empty-context case short-circuits to a constant `{}`
+ * suffix (equal to `stableStringify({})`) instead of recursing.
+ *
+ * `stableStringify` throws on a value it can't faithfully encode (a `bigint`, a
+ * circular reference, or a non-plain object such as a `Date` — all of which
+ * `EvaluationContext` structurally permits). Callers wrap this in try/catch and
+ * fall back to an unmemoized evaluation, keeping the never-throws contract.
  */
 const memoKey = (type: FlagType, flagKey: string, defaultValue: FlagValue, context: EvaluationContext): string => {
-    const contextKeys = Object.keys(context);
-    const prefix = JSON.stringify([type, flagKey, defaultValue]);
+    const prefix = stableStringify([type, flagKey, defaultValue]);
 
-    if (contextKeys.length === 0) {
-        return `${prefix}:[]`;
+    if (Object.keys(context).length === 0) {
+        return `${prefix}:{}`;
     }
 
-    const entries = contextKeys.toSorted((a, b) => a.localeCompare(b)).map((name) => [name, context[name]]);
-
-    return `${prefix}:${JSON.stringify(entries)}`;
+    return `${prefix}:${stableStringify(context)}`;
 };
 
 /** Dispatch one evaluation to the matching typed OpenFeature client method. */
@@ -162,27 +167,42 @@ const createFlags = (options: CreateFlagsOptions): LunoraFlags => {
     const evaluate = <T extends FlagValue>(type: FlagType, flagKey: string, defaultValue: T, context?: EvaluationContext): Promise<EvaluationDetails<T>> => {
         const merged: EvaluationContext = resolvedTargetingKey === undefined ? { ...context } : { targetingKey: resolvedTargetingKey, ...context };
 
-        const key = memoKey(type, flagKey, defaultValue, merged);
+        // Fail closed to the default value. The OpenFeature client itself never
+        // throws, but binding the provider can (a failed `initialize`).
+        const failClosed = (error: unknown): EvaluationDetails<FlagValue> => {return {
+            errorCode: ErrorCode.GENERAL,
+            errorMessage: error instanceof Error ? error.message : String(error),
+            flagKey,
+            flagMetadata: {},
+            reason: "ERROR",
+            value: defaultValue,
+        }};
+
+        const run = (): Promise<EvaluationDetails<FlagValue>> =>
+            bindClient({ hooks, logger, provider })
+                .then((client) => resolveDetails(client, type, flagKey, defaultValue, merged))
+                .catch(failClosed);
+
+        // Computing the memo key serializes the merged context. A context value
+        // that can't be encoded — a circular reference, a `bigint`, a non-plain
+        // object like a `Date` — makes `memoKey` throw *synchronously*, before any
+        // async boundary. Contain it and evaluate without memoization so
+        // `ctx.flags.*` upholds its documented never-throws contract.
+        let key: string;
+
+        try {
+            key = memoKey(type, flagKey, defaultValue, merged);
+        } catch {
+            return run() as Promise<EvaluationDetails<T>>;
+        }
+
         const cached = memo.get(key);
 
         if (cached) {
             return cached as Promise<EvaluationDetails<T>>;
         }
 
-        const pending = bindClient({ hooks, logger, provider })
-            .then((client) => resolveDetails(client, type, flagKey, defaultValue, merged))
-            // The OpenFeature client itself never throws, but binding the provider
-            // can (a failed `initialize`). Fail closed to the default value.
-            .catch((error: unknown): EvaluationDetails<FlagValue> => {
-                return {
-                    errorCode: ErrorCode.GENERAL,
-                    errorMessage: error instanceof Error ? error.message : String(error),
-                    flagKey,
-                    flagMetadata: {},
-                    reason: "ERROR",
-                    value: defaultValue,
-                };
-            });
+        const pending = run();
 
         memo.set(key, pending);
 

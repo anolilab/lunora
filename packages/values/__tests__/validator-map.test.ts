@@ -49,6 +49,17 @@ describe("parseValidatorMap", () => {
 
         expect(parseValidatorMap({ name: v.string() }, { extra: "dropped", name: "ada" }, "args")).toStrictEqual({ name: "ada" });
     });
+
+    it("reads declared args as own-properties, not through the prototype chain", () => {
+        expect.assertions(2);
+
+        // An absent optional arg whose name collides with an Object.prototype
+        // member must be skipped, not read as the inherited function (which would
+        // reject a valid body with `received function`).
+        expect(parseValidatorMap({ toString: v.optional(v.string()) }, {}, "args")).toStrictEqual({});
+        // A required colliding arg fails cleanly (received undefined) when absent.
+        expect(() => parseValidatorMap({ constructor: v.string() }, {}, "args")).toThrow(ValidationError);
+    });
 });
 
 describe("parseValidatorMap — compiled fast path", () => {

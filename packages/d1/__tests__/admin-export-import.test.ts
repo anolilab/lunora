@@ -106,6 +106,58 @@ describe("d1 admin export/import globals", () => {
             expect(rows).toHaveLength(2);
             expect(rows[0]).toMatchObject({ table: "settings" });
         });
+
+        // Keyset paging (Finding 1): a small batch size forces several pages;
+        // every row must surface exactly once, in ascending `id` order, with no
+        // skip/duplicate — the property offset paging couldn't guarantee.
+        it("keyset-paginates across multiple pages without skipping or duplicating rows", async () => {
+            expect.assertions(3);
+
+            for (let index = 0; index < 5; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- sequential inserts to build a deterministic fixture
+                await writer.insert("settings", { _id: `s${String(index)}`, name: `n${String(index)}`, value: `v${String(index)}` }, { allowExplicitId: true });
+            }
+
+            const ids: unknown[] = [];
+
+            for await (const row of exportGlobalRows(harness.exec, schema, { batchSize: 2 })) {
+                ids.push(row.doc["_id"]);
+            }
+
+            expect(ids).toHaveLength(5);
+            expect(new Set(ids).size).toBe(5);
+            expect(ids).toEqual(["s0", "s1", "s2", "s3", "s4"]);
+        });
+
+        // Finding 4: a `.global()` table that was never written is provisioned by
+        // the export (idempotent CREATE … IF NOT EXISTS) and yields zero rows,
+        // rather than aborting the stream with a raw `no such table`.
+        it("exports a never-written global table as empty instead of throwing `no such table`", async () => {
+            expect.assertions(1);
+
+            const freshSchema: SchemaLike = {
+                tables: {
+                    widgets: {
+                        indexes: [],
+                        shape: { label: col("string") },
+                        shardMode: { kind: "global" } as never,
+                    },
+                },
+            };
+
+            const fresh = createD1Exec();
+            // Intentionally do NOT create the `widgets` table — exportGlobalRows
+            // must provision it before selecting.
+            const rows: unknown[] = [];
+
+            for await (const row of exportGlobalRows(fresh.exec, freshSchema, {})) {
+                rows.push(row);
+            }
+
+            expect(rows).toEqual([]);
+
+            fresh.close();
+        });
     });
 
     describe("importGlobalRows", () => {

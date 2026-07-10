@@ -1,43 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
-import applyJurisdiction from "./jurisdiction";
+import { callDO, getDO } from "./do-client";
 import type { ArgsOf, EnqueueOptions, FunctionReference, Workpool, WorkpoolOptions } from "./types";
-
-const workpoolStub = (options: WorkpoolOptions) => {
-    const namespace = applyJurisdiction(options.namespace, options.jurisdiction);
-
-    return namespace.get(namespace.idFromName(options.instanceName ?? "default"));
-};
-
-const callDO = async <T>(options: WorkpoolOptions, path: string, body: unknown): Promise<T> => {
-    const stub = workpoolStub(options);
-    const response = await stub.fetch(`https://scheduler.internal${path}`, {
-        body: JSON.stringify(body),
-        headers: { "content-type": "application/json" },
-        method: "POST",
-    });
-
-    if (!response.ok) {
-        const text = await response.text();
-
-        throw new LunoraError("INTERNAL", `@lunora/scheduler: SchedulerDO ${path} failed (${String(response.status)}): ${text}`);
-    }
-
-    return await response.json();
-};
-
-const getDO = async <T>(options: WorkpoolOptions, path: string): Promise<T> => {
-    const stub = workpoolStub(options);
-    const response = await stub.fetch(`https://scheduler.internal${path}`, { method: "GET" });
-
-    if (!response.ok) {
-        const text = await response.text();
-
-        throw new LunoraError("INTERNAL", `@lunora/scheduler: SchedulerDO ${path} failed (${String(response.status)}): ${text}`);
-    }
-
-    return await response.json();
-};
 
 /**
  * Bounded-concurrency action queue — the Lunora equivalent of

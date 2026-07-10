@@ -68,6 +68,45 @@ const remoteJwks = (issuer: string): JWTVerifyGetKey => {
 };
 
 /**
+ * Normalize the configured Access AUD tag(s) to a non-empty list of non-empty
+ * strings, throwing when none remain.
+ *
+ * `aud` is the only claim that scopes a token to *your* Access application — a
+ * token minted for any other app in the same team shares the issuer and JWKS.
+ * `jose` only enforces audience when a truthy value is passed, so a
+ * missing/empty `aud` (a common consequence of an unset `env.CF_ACCESS_AUD`)
+ * would silently disable the check and accept cross-app tokens. Refuse without
+ * one.
+ */
+const normalizeAudiences = (aud: VerifyAccessJwtOptions["aud"]): string[] => {
+    const audiences = (Array.isArray(aud) ? aud : [aud]).filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+
+    if (audiences.length === 0) {
+        throw new LunoraError(
+            "INTERNAL",
+            "@lunora/cloudflare-access: `aud` is required and must be a non-empty Access AUD tag — refusing to verify a token without an audience to scope it to your application",
+        );
+    }
+
+    return audiences;
+};
+
+/**
+ * Eagerly validate the static, construction-time verify options so a misconfigured
+ * deployment fails fast at factory build time instead of degrading to
+ * silent-anonymous on every request. `createAccessResolver` / `accessAdminGate`
+ * call this once when built: `teamDomain` must resolve to a valid Access issuer
+ * and `aud` must be a non-empty tag. The per-request catch in {@link verifyRequest}
+ * then covers only genuine token-verification failures, not config mistakes — a
+ * broken deployment throws here at startup rather than resolving every caller to
+ * anonymous with zero signal.
+ */
+const assertVerifyOptions = (options: VerifyAccessJwtOptions): void => {
+    accessIssuer(options.teamDomain);
+    normalizeAudiences(options.aud);
+};
+
+/**
  * Verify a Cloudflare Access JWT and return its claims.
  *
  * Enforces, in one shot: RS256 signature against the team JWKS, `iss` equal to
@@ -84,23 +123,11 @@ const remoteJwks = (issuer: string): JWTVerifyGetKey => {
 const verifyAccessJwt = async (token: string, options: VerifyAccessJwtOptions): Promise<AccessClaims> => {
     const issuer = accessIssuer(options.teamDomain);
 
-    // `aud` is the only claim that scopes a token to *your* Access application —
-    // a token minted for any other app in the same team shares the issuer and
-    // JWKS. `jose` only enforces audience when a truthy value is passed, so a
-    // missing/empty `aud` (a common consequence of an unset `env.CF_ACCESS_AUD`)
-    // would silently disable the check and accept cross-app tokens. Refuse to
-    // verify without one; the throw is caught by the resolver/admin gate and
-    // fails closed.
-    const audiences = (Array.isArray(options.aud) ? options.aud : [options.aud]).filter(
-        (entry): entry is string => typeof entry === "string" && entry.length > 0,
-    );
-
-    if (audiences.length === 0) {
-        throw new LunoraError(
-            "INTERNAL",
-            "@lunora/cloudflare-access: `aud` is required and must be a non-empty Access AUD tag — refusing to verify a token without an audience to scope it to your application",
-        );
-    }
+    // `aud` scopes the token to *your* Access application; a missing/empty value
+    // is refused (see {@link normalizeAudiences}) so a cross-app token can never
+    // slip through. The throw is caught by the resolver/admin gate and fails
+    // closed.
+    const audiences = normalizeAudiences(options.aud);
 
     const keySet = options.keySet ?? remoteJwks(issuer);
 
@@ -153,4 +180,4 @@ const verifyRequest = async (request: Request, options: RequestVerifyOptions): P
     }
 };
 
-export { accessIssuer, verifyAccessJwt, verifyRequest };
+export { accessIssuer, assertVerifyOptions, verifyAccessJwt, verifyRequest };

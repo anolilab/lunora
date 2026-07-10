@@ -184,6 +184,41 @@ describe("dispatchToLunoraFunction", () => {
         expect([...Buffer.from(attachment?.content ?? "", "base64")]).toStrictEqual([0, 1, 2, 255]);
     });
 
+    it("base64-encodes a large (>32KB) binary attachment correctly across chunk boundaries", async () => {
+        expect.assertions(2);
+
+        const { fetch, shard } = stubShard({
+            json: async () => {
+                return { result: "ok" };
+            },
+            ok: true,
+        });
+
+        // Larger than the 0x8000 chunk the encoder spreads per `String.fromCharCode`
+        // call, so a chunk boundary is crossed — output must still round-trip.
+        const bytes = new Uint8Array(0x80_00 * 2 + 5);
+
+        for (let index = 0; index < bytes.length; index += 1) {
+            bytes[index] = index % 256;
+        }
+
+        const withAttachment: InboundEmail = {
+            ...fixture,
+            attachments: [{ content: bytes, disposition: "attachment", filename: "big.bin", mimeType: "application/octet-stream" }],
+        };
+
+        const dispatch = dispatchToLunoraFunction({ functionPath: "inbound:onEmail", shard });
+
+        await dispatch(withAttachment, { ctx: undefined, env: { LUNORA_ADMIN_TOKEN: "secret" }, message: fakeMessage() });
+
+        const [, init] = fetch.mock.calls[0] as unknown as [string, { body: string }];
+        const envelope = JSON.parse(init.body) as { args: { attachments: { content: string }[] } };
+        const [attachment] = envelope.args.attachments;
+
+        expect(attachment?.content).toBe(Buffer.from(bytes).toString("base64"));
+        expect([...Buffer.from(attachment?.content ?? "", "base64")]).toStrictEqual([...bytes]);
+    });
+
     it("honours a custom shardKey and resolveArgs", async () => {
         expect.assertions(2);
 

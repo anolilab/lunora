@@ -157,6 +157,34 @@ describe("lunoraContainer secretsStore resolution", () => {
         expect(instance.envVars).toStrictEqual({ STRIPE_KEY: "sk_live_123" });
     });
 
+    it("retries resolution after a transient failure instead of caching the rejection forever", async () => {
+        expect.assertions(3);
+
+        // First `.get()` rejects (a transient Secrets Store hiccup), the second
+        // succeeds. A cached rejected promise would poison every later start; the
+        // memo must be cleared on failure so the next resolution retries.
+        const get = vi
+            .fn<() => Promise<string>>()
+            .mockRejectedValueOnce(new Error("secrets store unavailable"))
+            .mockResolvedValueOnce("sk_live_123");
+        const definition = defineContainer({ image: "./app", secretsStore: { STRIPE_KEY: "STRIPE_SECRET" } });
+
+        const instance = new LunoraContainer(
+            fakeDurableObjectContext() as never,
+            { STRIPE_SECRET: { get } },
+            definition,
+            "transcoder",
+        ) as unknown as SecretsStoreProbe;
+
+        await expect(instance.resolveSecretsStoreEnv()).rejects.toThrow("secrets store unavailable");
+
+        // The second attempt must re-run resolution (not replay the rejection).
+        await instance.resolveSecretsStoreEnv();
+
+        expect(get).toHaveBeenCalledTimes(2);
+        expect(instance.envVars).toStrictEqual({ STRIPE_KEY: "sk_live_123" });
+    });
+
     it("fails the start when the Secrets Store binding is missing from the worker env", async () => {
         expect.assertions(1);
 

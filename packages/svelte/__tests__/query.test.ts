@@ -77,6 +77,21 @@ describe("query store", () => {
         stop();
     });
 
+    it("opens no subscription and stays undefined when args is 'skip'", () => {
+        const { client, subscribe } = createFakeClient();
+
+        const store = query(client, fnRef, "skip");
+
+        const stop = store.subscribe(() => {});
+
+        // The shared query state machine short-circuits the skip sentinel: no
+        // socket opens and the value stays undefined (fires the onReset sink).
+        expect(subscribe).not.toHaveBeenCalled();
+        expect(get(store)).toBeUndefined();
+
+        stop();
+    });
+
     it("forwards subscription errors to the onError option", () => {
         const { client, emitError } = createFakeClient();
         const onError = vi.fn();

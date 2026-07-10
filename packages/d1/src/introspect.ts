@@ -23,6 +23,11 @@ import { LunoraError } from "@lunora/errors";
 
 import type { D1Exec } from "./d1-ctx-db";
 import { decodeGlobalRow, runD1GlobalTableMigrations } from "./d1-ctx-db";
+// The one canonical SQL identifier quoter (bundler-inlined via `./dialect` from
+// `shared/quote-identifier.ts`). Reused here rather than re-declared: the shared
+// helper is a security-relevant injection-defense primitive that must have a
+// single definition, not byte-identical copies that can drift.
+import { quoteIdentifier } from "./dialect";
 
 /**
  * Provision the schema's `.global()` tables before the browser reads them, so a
@@ -116,8 +121,6 @@ const DEFAULT_FACET_LIMIT = 30;
 
 /** Hard cap on facet values, so a wide column can't return an unbounded group set. */
 const MAX_FACET_LIMIT = 200;
-
-const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 
 const clamp = (value: number, min: number, max: number): number => Math.min(Math.max(value, min), max);
 

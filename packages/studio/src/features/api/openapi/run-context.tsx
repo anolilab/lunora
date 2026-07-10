@@ -4,7 +4,7 @@ import type { ReactElement, ReactNode } from "react";
 import { createContext, use, useState } from "react";
 
 import { useT } from "../../../i18n/i18n-context";
-import { adminRef, callOptions, errorMessage, fireAndForget } from "../../../lib/internal";
+import { adminRef, callOptions, dispatchByKind, errorMessage, fireAndForget } from "../../../lib/internal";
 import type { ApiOperation } from "./openapi-model";
 import { exampleForSchema } from "./schema-view";
 
@@ -113,24 +113,7 @@ const OperationRunProvider = ({ children, operation }: OperationRunProviderProps
                     value = text;
                 }
             } else {
-                const reference = adminRef(operation.functionPath);
-                const options = callOptions(shardKey);
-
-                switch (operation.kind) {
-                    case "action": {
-                        value = await client.action(reference, parsedArgs, options);
-
-                        break;
-                    }
-                    case "mutation": {
-                        value = await client.mutation(reference, parsedArgs, options);
-
-                        break;
-                    }
-                    default: {
-                        value = await client.query(reference, parsedArgs, options);
-                    }
-                }
+                value = await dispatchByKind(client, operation.kind, adminRef(operation.functionPath), parsedArgs, callOptions(shardKey));
             }
 
             setResponse(value);

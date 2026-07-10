@@ -94,6 +94,49 @@ describe("hot_shard", () => {
 
         expect(findings[0]).toMatchObject({ cacheKey: "hot_shard:rooms:room-42", metadata: { group: "rooms" } });
     });
+
+    it("measures each shard's share against its own group, not the combined total (Finding 5)", () => {
+        expect.assertions(3);
+
+        // Three sharded functions, each served by two shards where one is 100%
+        // hot. Summed across all groups no single shard reaches 50% of the ~3x
+        // combined total, so the old cross-group total hid every hot shard. Per
+        // group each hot shard is >90% and must be flagged.
+        const findings = hotShard.run(
+            traffic([
+                { group: "rooms", requests: 300, shardKey: "room-1" },
+                { group: "rooms", requests: 5, shardKey: "room-2" },
+                { group: "chats", requests: 300, shardKey: "chat-1" },
+                { group: "chats", requests: 5, shardKey: "chat-2" },
+                { group: "feeds", requests: 300, shardKey: "feed-1" },
+                { group: "feeds", requests: 5, shardKey: "feed-2" },
+            ]),
+        );
+
+        expect(findings).toHaveLength(3);
+
+        const flaggedKeys = findings.map((f) => f.metadata["shardKey"]).toSorted();
+
+        expect(flaggedKeys).toEqual(["chat-1", "feed-1", "room-1"]);
+        // Each finding's total is its own group's total (305), never the 915 combined.
+        expect(findings.every((f) => f.metadata["totalRequests"] === 305)).toBe(true);
+    });
+
+    it("does not let unrelated groups satisfy the active-count gate (Finding 5)", () => {
+        expect.assertions(1);
+
+        // Two different single-shard groups. Combined they are two "active"
+        // shards, but each group has only one shard, so neither can be
+        // "disproportionately" busy relative to a peer — no finding.
+        const findings = hotShard.run(
+            traffic([
+                { group: "rooms", requests: 500, shardKey: "room-1" },
+                { group: "chats", requests: 500, shardKey: "chat-1" },
+            ]),
+        );
+
+        expect(findings).toHaveLength(0);
+    });
 });
 
 describe("index_utilization", () => {

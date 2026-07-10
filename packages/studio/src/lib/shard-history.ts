@@ -1,39 +1,21 @@
+import { loadJsonArray, saveJson } from "./browser-storage";
+
 /**
  * Recently-used shard keys, persisted in `sessionStorage` so every shard-scoped
  * panel can offer them as autocomplete. Cloudflare Durable Objects aren't
  * externally enumerable, so the studio can't discover shards server-side;
- * this remembers the ones the operator actually visited instead. Guarded so a
- * missing/throwing storage (SSR, privacy mode) degrades to "no history".
+ * this remembers the ones the operator actually visited instead. The guarded
+ * load/persist path is shared via {@link ./browser-storage} so a missing/throwing
+ * storage (SSR, privacy mode) degrades to "no history" in one place.
  */
 const STORAGE_KEY = "lunora-studio-recent-shards";
 
 /** Cap the list so it stays a short, useful menu rather than an unbounded log. */
 const MAX_RECENTS = 10;
 
-const store = (): Storage | undefined => {
-    try {
-        return (globalThis as { sessionStorage?: Storage }).sessionStorage;
-    } catch {
-        return undefined;
-    }
-};
-
 /** Recent shard keys, most-recently-used first. Empty when storage is unavailable. */
-export const loadRecentShards = (): string[] => {
-    try {
-        const raw = store()?.getItem(STORAGE_KEY);
-
-        if (raw === null || raw === undefined) {
-            return [];
-        }
-
-        const parsed = JSON.parse(raw) as unknown;
-
-        return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : [];
-    } catch {
-        return [];
-    }
-};
+export const loadRecentShards = (): string[] =>
+    loadJsonArray<unknown>(STORAGE_KEY, "session").filter((entry): entry is string => typeof entry === "string");
 
 /**
  * Record `shardKey` as recently used (moved to the front, de-duplicated, capped).
@@ -48,15 +30,8 @@ export const recordShard = (shardKey: string): string[] => {
     }
 
     const next = [trimmed, ...loadRecentShards().filter((entry) => entry !== trimmed)].slice(0, MAX_RECENTS);
-    const storage = store();
 
-    if (storage !== undefined) {
-        try {
-            storage.setItem(STORAGE_KEY, JSON.stringify(next));
-        } catch {
-            /* quota / disabled storage — history simply isn't persisted */
-        }
-    }
+    saveJson(STORAGE_KEY, next, "session");
 
     return next;
 };

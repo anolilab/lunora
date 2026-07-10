@@ -626,6 +626,67 @@ describe("createStorage", () => {
         expect(Object.hasOwn(host, "sha256")).toBe(false);
     });
 
+    it("list() sha256/sha256Base64 survive JSON serialization + spread (wire path)", async () => {
+        expect.assertions(4);
+
+        // 0x01,0x02,0x03,0xff -> hex "010203ff", base64 "AQID/w=="
+        const checksum = new Uint8Array([1, 2, 3, 255]).buffer;
+        const bucket = fakeBucket();
+
+        vi.spyOn(bucket, "list").mockImplementation(async () => {
+            return { objects: [{ checksums: { sha256: checksum }, etag: "e", key: "a", size: 4 }] };
+        });
+
+        const storage = createStorage({ bucket });
+        const listed = await storage.list();
+        const first = listed.objects[0];
+
+        // Regression: a Proxy over R2's non-extensible host object cannot report
+        // `sha256`/`sha256Base64` via `ownKeys`, so JSON.stringify/spread/keys
+        // dropped them — yet list() results are routinely returned from a query
+        // and serialized to the client. The plain projection must round-trip.
+        const roundTripped = JSON.parse(JSON.stringify(first)) as Record<string, unknown>;
+
+        expect(roundTripped.sha256).toBe("010203ff");
+        expect(roundTripped.sha256Base64).toBe("AQID/w==");
+        expect(Object.keys(first ?? {})).toEqual(expect.arrayContaining(["sha256", "sha256Base64"]));
+        expect({ ...first }.sha256).toBe("010203ff");
+    });
+
+    it("classifies caller input as 4xx and reserves 500 for config invariants", async () => {
+        expect.assertions(5);
+
+        const bucket = fakeBucket();
+        const storage = createStorage({ bucket });
+
+        // A path-traversal key is a client error → VALIDATION_ERROR / 400, not a
+        // redacted INTERNAL / 500 (which would strip the helpful message and
+        // pollute alerting/retry logic).
+        await expect(storage.upload("../escape", new ArrayBuffer(4))).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
+
+        // An oversized body → 413 PAYLOAD_TOO_LARGE.
+        await expect(storage.upload("big.bin", new ArrayBuffer(16), { maxSize: 8 })).rejects.toMatchObject({ code: "PAYLOAD_TOO_LARGE", status: 413 });
+
+        // A disallowed content-type → 400.
+        await expect(
+            storage.upload("doc.bin", new ArrayBuffer(4), { allowedContentTypes: ["image/png"], contentType: "text/html" }),
+        ).rejects.toMatchObject({ status: 400 });
+
+        // A NUL-byte list prefix → 400.
+        await expect(storage.list("bad\0prefix")).rejects.toMatchObject({ status: 400 });
+
+        // A genuine server misconfiguration stays INTERNAL / 500 (redacted).
+        let thrown: unknown;
+
+        try {
+            storage.getUrl("x");
+        } catch (error) {
+            thrown = error;
+        }
+
+        expect(thrown).toMatchObject({ code: "INTERNAL", status: 500 });
+    });
+
     describe("getPresignedUrl", () => {
         it("throws when no s3 credentials are configured", async () => {
             expect.assertions(1);

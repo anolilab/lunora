@@ -1,4 +1,4 @@
-import { LunoraError } from "@lunora/errors";
+import { isInternalCode, isLunoraError, LunoraError } from "@lunora/errors";
 import type { Middleware } from "@lunora/server";
 
 import type { RateLimiter } from "./rate-limiter";
@@ -28,6 +28,7 @@ interface RateLimitMiddlewareOptions<Context> {
     message?: string;
 }
 
+/** Wire code/status a denial maps to, keyed by why it was denied. */
 const STATUS_BY_REASON: Record<RateLimitReason, { code: string; status: number }> = {
     deny: { code: "FORBIDDEN", status: 403 },
     rate: { code: "TOO_MANY_REQUESTS", status: 429 },
@@ -48,12 +49,16 @@ const defaultMessage = (name: string, reason: RateLimitReason, retryAfter: numbe
  * hits) carrying `retryAfter` in milliseconds — the runtime maps it to the
  * matching RPC/HTTP status without any import of `@lunora/server` at runtime.
  *
- * **Failure policy:** if resolving or invoking the limiter throws (e.g. the
- * persistence store is unavailable), the middleware **fails closed by default
- * **: it logs via `console.error` and rejects the request with `503`. This is
- * the safer default for security-sensitive limits (auth, account creation).
- * Pass `failOpen: true` to swallow the error and admit the request instead —
- * appropriate only when degraded availability is preferable to refusal.
+ * **Failure policy:** if resolving or invoking the limiter throws for a genuine
+ * availability reason (e.g. the persistence store is unavailable), the
+ * middleware **fails closed by default**: it logs via `console.error` and
+ * rejects the request with `503`. This is the safer default for
+ * security-sensitive limits (auth, account creation). Pass `failOpen: true` to
+ * swallow the error and admit the request instead — appropriate only when
+ * degraded availability is preferable to refusal. Deterministic caller misuse
+ * (an unconfigured limit name, a non-positive count, or a count that exceeds
+ * capacity) throws an `INTERNAL` `LunoraError` that is re-thrown as-is under
+ * **both** policies — a config bug is never masked as a 503 or silently admitted.
  */
 const rateLimit =
     <Context>(limiter: LimiterResolver<Context>, name: string, options: RateLimitMiddlewareOptions<Context> = {}): Middleware<Context, Context> =>
@@ -65,6 +70,16 @@ const rateLimit =
 
             status = await resolved.limit(name, { count: options.count, key: options.key?.(ctx) });
         } catch (error) {
+            // Deterministic caller misuse (unconfigured limit, non-positive
+            // count, a count that exceeds capacity) is thrown as an INTERNAL
+            // LunoraError — a permanent config bug, not a store outage. Surface
+            // it as-is rather than masking it behind a 503 (fail closed) or,
+            // worse, silently admitting every request (fail open). Only genuine
+            // availability failures fall through to the policy below.
+            if (isLunoraError(error) && isInternalCode(error.code)) {
+                throw error;
+            }
+
             // No logger available at this layer; emit via console so the host
             // captures the failure regardless of platform (workerd, Node).
             // eslint-disable-next-line no-console -- intentional: no injected logger
@@ -92,4 +107,4 @@ const rateLimit =
     };
 
 export type { LimiterResolver, RateLimitMiddlewareOptions };
-export { rateLimit };
+export { rateLimit, STATUS_BY_REASON };

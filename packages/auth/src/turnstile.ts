@@ -138,7 +138,16 @@ const verifyTurnstile = async ({
         throw new LunoraError("SERVICE_UNAVAILABLE", `turnstile siteverify returned ${String(response.status)}`, { status: 503 });
     }
 
-    const raw: RawSiteverifyResponse = await response.json();
+    let raw: RawSiteverifyResponse;
+
+    try {
+        raw = await response.json();
+    } catch (error) {
+        // A 2xx with a non-JSON body (captive portal, proxy interstitial, edge error
+        // page) is a transport failure, not a bot verdict — keep the documented contract
+        // that only siteverify-down failures throw `SERVICE_UNAVAILABLE`.
+        throw new LunoraError("SERVICE_UNAVAILABLE", "turnstile siteverify returned a non-JSON body", { cause: error, status: 503 });
+    }
 
     const action = asString(raw.action);
     const hostname = asString(raw.hostname);

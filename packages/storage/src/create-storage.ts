@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 
+import { toHex, trimTrailingSlashes } from "./internal";
 import { buildPresignedUrl } from "./presigned-url";
 import { buildSignedUrl } from "./signed-url";
 import type {
@@ -27,18 +28,6 @@ const MAX_LIST_LIMIT = 1000;
 
 /** Default page size for `list()` — chosen to bound a default call's response shape. */
 const DEFAULT_LIST_LIMIT = 100;
-
-/** Lowercase hex-encode an `ArrayBuffer` (used to surface R2's sha256 checksum). */
-const toHex = (buffer: ArrayBuffer): string => {
-    const bytes = new Uint8Array(buffer);
-    let out = "";
-
-    for (const byte of bytes) {
-        out += byte.toString(16).padStart(2, "0");
-    }
-
-    return out;
-};
 
 /** Base64-encode an `ArrayBuffer` (RFC 9530 digest headers want base64, not hex). */
 const toBase64 = (buffer: ArrayBuffer): string => {
@@ -126,6 +115,39 @@ const toMetadata = (object: R2ObjectLike): ObjectMetadata => {
 };
 
 /**
+ * Project an {@link R2ObjectLike} `list()` entry into a plain object carrying
+ * `sha256`/`sha256Base64` as **real enumerable own properties**.
+ *
+ * Unlike {@link withSha256} — a `Proxy` used by `download()` so R2's native body
+ * accessors (`body`/`arrayBuffer()`/`text()`) keep working — a `list()` entry has
+ * no body, and its results are routinely returned from a query and serialized to
+ * the client (`JSON.stringify`). A `Proxy` over R2's **non-extensible** host
+ * object cannot advertise the synthetic checksum fields as own keys (the
+ * `ownKeys` Proxy invariant forbids reporting keys absent from a non-extensible
+ * target), so `JSON.stringify`/spread/`Object.keys` would silently drop them. A
+ * plain projection makes the fields survive the wire while losing nothing the
+ * body-free {@link R2ObjectLike} surface exposes. Fields are copied by explicit
+ * access (not a spread) so a host object's non-enumerable properties are still
+ * captured.
+ */
+const toListObject = (object: R2ObjectLike): R2ObjectLike => {
+    const raw = object.checksums?.sha256;
+
+    return {
+        checksums: object.checksums,
+        customMetadata: object.customMetadata,
+        etag: object.etag,
+        httpEtag: object.httpEtag,
+        httpMetadata: object.httpMetadata,
+        key: object.key,
+        sha256: raw === undefined ? undefined : toHex(raw),
+        sha256Base64: raw === undefined ? undefined : toBase64(raw),
+        size: object.size,
+        uploaded: object.uploaded,
+    };
+};
+
+/**
  * Wrap a byte stream so the upload aborts once more than `maxSize` bytes have
  * flowed through. A `ReadableStream`'s length isn't known synchronously, so a
  * counting `TransformStream` is the only way to bound a streaming upload —
@@ -172,17 +194,6 @@ const enforceStreamMaxSize = (stream: ReadableStream, maxSize: number): Readable
     return stream.pipeThrough(counter);
 };
 
-/** Trailing-slash trimmer for `publicBaseUrl` — a linear scan (no regex backtracking). */
-const trimTrailingSlashes = (value: string): string => {
-    let end = value.length;
-
-    while (end > 0 && value[end - 1] === "/") {
-        end -= 1;
-    }
-
-    return value.slice(0, end);
-};
-
 /**
  * Reject keys that escape the bucket, contain a path-traversal segment, or
  * exceed R2's size ceiling. Used by every operation that takes a `key` —
@@ -194,19 +205,19 @@ const trimTrailingSlashes = (value: string): string => {
  */
 const validateKey = (key: string): void => {
     if (typeof key !== "string" || key.length === 0) {
-        throw new LunoraError("INTERNAL", "@lunora/storage: key must be a non-empty string");
+        throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: key must be a non-empty string");
     }
 
     if (key.length > MAX_KEY_LENGTH) {
-        throw new LunoraError("INTERNAL", `@lunora/storage: key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
+        throw new LunoraError("VALIDATION_ERROR", `@lunora/storage: key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
     }
 
     if (key.includes("\0")) {
-        throw new LunoraError("INTERNAL", "@lunora/storage: key contains NUL byte");
+        throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: key contains NUL byte");
     }
 
     if (key.startsWith("/")) {
-        throw new LunoraError("INTERNAL", "@lunora/storage: key must not start with `/`");
+        throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: key must not start with `/`");
     }
 
     // Reject `..` as a path component (not just substring) so `a..b` is fine
@@ -215,7 +226,7 @@ const validateKey = (key: string): void => {
 
     for (const segment of segments) {
         if (segment === "..") {
-            throw new LunoraError("INTERNAL", "@lunora/storage: key contains a `..` path component");
+            throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: key contains a `..` path component");
         }
     }
 };
@@ -234,7 +245,7 @@ export const scopeKey = (prefix: string, key: string): string => {
     const composed = `${trimmedPrefix}/${key}`;
 
     if (composed.length > MAX_KEY_LENGTH) {
-        throw new LunoraError("INTERNAL", `@lunora/storage: scoped key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
+        throw new LunoraError("VALIDATION_ERROR", `@lunora/storage: scoped key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
     }
 
     return composed;
@@ -258,11 +269,11 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
         // `contentType` is REQUIRED and must be a member of the list.
         if (uploadOptions.allowedContentTypes !== undefined) {
             if (uploadOptions.contentType === undefined) {
-                throw new LunoraError("INTERNAL", "@lunora/storage: contentType is required when allowedContentTypes is set");
+                throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: contentType is required when allowedContentTypes is set");
             }
 
             if (!uploadOptions.allowedContentTypes.includes(uploadOptions.contentType)) {
-                throw new LunoraError("INTERNAL", `@lunora/storage: contentType "${uploadOptions.contentType}" not in allowedContentTypes`);
+                throw new LunoraError("VALIDATION_ERROR", `@lunora/storage: contentType "${uploadOptions.contentType}" not in allowedContentTypes`);
             }
         }
 
@@ -283,7 +294,7 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
             }
 
             if (size !== undefined && size > uploadOptions.maxSize) {
-                throw new LunoraError("INTERNAL", `@lunora/storage: body exceeds maxSize (${String(size)} > ${String(uploadOptions.maxSize)})`);
+                throw new LunoraError("PAYLOAD_TOO_LARGE", `@lunora/storage: body exceeds maxSize (${String(size)} > ${String(uploadOptions.maxSize)})`);
             }
 
             if (body instanceof ReadableStream) {
@@ -343,7 +354,7 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
         // value just produces an empty result. We still reject NUL bytes since
         // the R2 binding silently truncates at the NUL on some runtimes.
         if (prefix?.includes("\0")) {
-            throw new LunoraError("INTERNAL", "@lunora/storage: prefix contains NUL byte");
+            throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: prefix contains NUL byte");
         }
 
         const requested = listOptions.limit ?? DEFAULT_LIST_LIMIT;
@@ -352,7 +363,9 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
 
         // Forward R2's `truncated` flag so callers can paginate with a clean
         // `while (truncated)` loop instead of inferring "more" from `cursor`.
-        return { cursor: result.cursor, objects: result.objects.map((object) => withSha256(object)), truncated: result.truncated };
+        // `toListObject` (not the `withSha256` Proxy) so `sha256`/`sha256Base64`
+        // survive JSON serialization when the list is returned from a query.
+        return { cursor: result.cursor, objects: result.objects.map((object) => toListObject(object)), truncated: result.truncated };
     };
 
     const getUrl = (key: string): string => {
@@ -418,7 +431,7 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
         validateKey(key);
 
         if (typeof uploadId !== "string" || uploadId.length === 0) {
-            throw new LunoraError("INTERNAL", "@lunora/storage: resumeMultipartUpload requires a non-empty uploadId");
+            throw new LunoraError("VALIDATION_ERROR", "@lunora/storage: resumeMultipartUpload requires a non-empty uploadId");
         }
 
         if (!options.bucket.resumeMultipartUpload) {

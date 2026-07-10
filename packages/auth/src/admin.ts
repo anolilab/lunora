@@ -519,6 +519,20 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
     const context = auth.$context;
     const features = options.features ?? {};
 
+    /** Derive the five capability booleans from the enabled plugin ids + `features` overrides. Single source shared by `capabilities()` and `config()` so the config panel and the capability gate can't drift. */
+    const deriveCapabilities = (authOptions: Awaited<LunoraAuth["$context"]>["options"]): AuthCapabilities => {
+        const ids = new Set((authOptions.plugins ?? []).map((plugin) => plugin.id));
+        const has = (id: string): boolean => ids.has(id);
+
+        return {
+            accounts: features.accounts ?? true,
+            admin: features.admin ?? has("admin"),
+            organization: features.organization ?? has("organization"),
+            passkey: features.passkey ?? has("passkey"),
+            twoFactor: features.twoFactor ?? has("two-factor"),
+        };
+    };
+
     /** Resolve the better-auth context once, then run `fn`, normalizing any thrown `APIError`. */
     const withContext = async <R>(function_: (context_: Awaited<LunoraAuth["$context"]>) => Promise<R>): Promise<R> => {
         try {
@@ -554,11 +568,27 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
     return {
         banUser: ({ expiresInSeconds, reason, userId }) =>
             withContext(async (context_) => {
-                // Clamp to a sane finite ceiling so a huge/NaN value can't overflow to an Invalid Date.
-                const seconds =
-                    typeof expiresInSeconds === "number" && Number.isFinite(expiresInSeconds) ? Math.min(Math.trunc(expiresInSeconds), MAX_BAN_SECONDS) : 0;
-                const banExpires = seconds > 0 ? new Date(Date.now() + seconds * 1000) : undefined;
+                // Omitting `expiresInSeconds` is a permanent ban; a provided-but-non-positive/
+                // non-finite value is a caller error (mirrors impersonateUser) rather than a
+                // silent permanent ban. Clamp valid values to a sane finite ceiling so a huge
+                // value can't overflow to an Invalid Date.
+                // eslint-disable-next-line unicorn/no-null -- permanent ban must explicitly null banExpires (see below)
+                let banExpires: Date | null = null;
+
+                if (expiresInSeconds !== undefined) {
+                    if (!Number.isInteger(expiresInSeconds) || expiresInSeconds <= 0) {
+                        throw new LunoraAuthAdminError("expiresInSeconds must be a positive finite integer", "INVALID_BAN_SECONDS");
+                    }
+
+                    const seconds = Math.min(expiresInSeconds, MAX_BAN_SECONDS);
+
+                    banExpires = new Date(Date.now() + seconds * 1000);
+                }
+
                 const user = await context_.internalAdapter.updateUser(userId, {
+                    // `null` (not `undefined`) for a permanent ban so the adapter clears any prior
+                    // `banExpires` rather than skipping it — otherwise a temp-ban-then-permanent-ban
+                    // escalation leaves the old expiry and the "permanent" ban silently lapses.
                     banExpires,
                     banned: true,
                     banReason: reason ?? "No reason",
@@ -575,19 +605,7 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                 await context_.adapter.delete({ model: "invitation", where: [{ field: "id", value: invitationId }] });
             }),
 
-        capabilities: () =>
-            withContext((context_) => {
-                const ids = new Set((context_.options.plugins ?? []).map((plugin) => plugin.id));
-                const has = (id: string): boolean => ids.has(id);
-
-                return Promise.resolve({
-                    accounts: features.accounts ?? true,
-                    admin: features.admin ?? has("admin"),
-                    organization: features.organization ?? has("organization"),
-                    passkey: features.passkey ?? has("passkey"),
-                    twoFactor: features.twoFactor ?? has("two-factor"),
-                });
-            }),
+        capabilities: () => withContext((context_) => Promise.resolve(deriveCapabilities(context_.options))),
 
         // ── Directly add an existing user to an org (no invitation/acceptance). ──
         addMember: ({ organizationId, role, userId }) =>
@@ -615,15 +633,8 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
         config: () =>
             withContext((context_) => {
                 const authOptions = context_.options;
+                const capabilities = deriveCapabilities(authOptions);
                 const ids = new Set((authOptions.plugins ?? []).map((plugin) => plugin.id));
-                const has = (id: string): boolean => ids.has(id);
-                const capabilities = {
-                    accounts: features.accounts ?? true,
-                    admin: features.admin ?? has("admin"),
-                    organization: features.organization ?? has("organization"),
-                    passkey: features.passkey ?? has("passkey"),
-                    twoFactor: features.twoFactor ?? has("two-factor"),
-                };
 
                 const tables = getAuthTables(authOptions);
                 const session = authOptions.session ?? {};

@@ -3,6 +3,7 @@ import { DestroyRef, inject, signal } from "@angular/core";
 import type { FunctionReference, LunoraClient, Preloaded, SubscriptionError } from "@lunora/client";
 
 import { resolveLunoraClient } from "./client";
+import { shouldOpenSubscription } from "./platform";
 
 export interface HydratePreloadedOptions {
     /** Client to bind to. Defaults to the injected `LUNORA_CLIENT`. */
@@ -40,6 +41,7 @@ export interface HydratePreloadedResult<T> {
  */
 export const hydratePreloaded = <T>(preloaded: Preloaded<T>, options: HydratePreloadedOptions = {}): HydratePreloadedResult<T> => {
     const client = resolveLunoraClient(options.client);
+    const fromInjectionContext = options.destroyRef === undefined;
     const destroyRef = options.destroyRef ?? inject(DestroyRef);
 
     const { args, functionPath, shardKey, value } = preloaded;
@@ -49,22 +51,27 @@ export const hydratePreloaded = <T>(preloaded: Preloaded<T>, options: HydratePre
 
     const functionReference: FunctionReference = { __lunoraRef: functionPath };
 
-    const unsubscribe = client.subscribe(
-        functionReference,
-        args,
-        (next) => {
-            data.set(next as T);
-            error.set(undefined);
-        },
-        {
-            onError: (error_) => {
-                error.set(error_);
+    // During SSR the signal keeps its synchronous seed (`preloaded.value`) — the
+    // server value renders with no loading flash — but no socket is opened. The
+    // browser render re-runs this, re-seeds, and attaches the live subscription.
+    if (shouldOpenSubscription(fromInjectionContext)) {
+        const unsubscribe = client.subscribe(
+            functionReference,
+            args,
+            (next) => {
+                data.set(next as T);
+                error.set(undefined);
             },
-            shardKey,
-        },
-    );
+            {
+                onError: (error_) => {
+                    error.set(error_);
+                },
+                shardKey,
+            },
+        );
 
-    destroyRef.onDestroy(unsubscribe);
+        destroyRef.onDestroy(unsubscribe);
+    }
 
     return { data: data.asReadonly(), error: error.asReadonly() };
 };

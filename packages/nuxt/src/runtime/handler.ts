@@ -8,7 +8,7 @@
  * This is the single-worker composition the void.cloud Nuxt approach uses,
  * inverted: instead of Lunora owning the worker entry, Lunora is mounted
  * inside* Nitro as a server route, and the `ShardDO` class is re-exported to
- * the Cloudflare worker entrypoint via the project's `exports.cloudflare.ts`.
+ * the Cloudflare worker entrypoint via the project's root `worker.ts` wrapper.
  *
  * Kept framework-neutral (a `LunoraWorkerLike` + the resolved `env`/`ctx`, not
  * an H3 event) so it can be unit-tested with a stub worker — no Nuxt or workerd

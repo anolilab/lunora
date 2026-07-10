@@ -146,7 +146,7 @@ const createSeedClient = <InsertModel = Record<string, Record<string, unknown>>>
     const idsByTable: Record<string, string[]> = {};
     const createdCount: Record<string, number> = {};
 
-    const seedTable = async (table: string, spec?: SeedSpec<object>, callOptions?: SeedCallOptions<object>): Promise<Record<string, string[]>> => {
+    const runSeedTable = async (table: string, spec?: SeedSpec<object>, callOptions?: SeedCallOptions<object>): Promise<Record<string, string[]>> => {
         // A fresh client run shares one mapping; reassert it per call so an
         // interleaved client on a different seed can't shift this one's output.
         setHashKey(seed);
@@ -187,21 +187,43 @@ const createSeedClient = <InsertModel = Record<string, Record<string, unknown>>>
         return { [table]: created };
     };
 
+    // Serialize calls on this client through a promise chain. `runSeedTable` reads
+    // `createdCount[table]` for its index offset and then awaits `persist` before
+    // the next table's count is recorded; without serialization two overlapping
+    // calls (e.g. `Promise.all([seed.posts(5), seed.posts(5)])`) would both read
+    // the same offset and generate byte-identical deterministic `_id`s — duplicate
+    // primary keys. Chaining also keeps `$store` ordering deterministic.
+    let queue: Promise<unknown> = Promise.resolve();
+
+    const seedTable = (table: string, spec?: SeedSpec<object>, callOptions?: SeedCallOptions<object>): Promise<Record<string, string[]>> => {
+        const result = queue.then(() => runSeedTable(table, spec, callOptions));
+
+        // Keep the chain alive regardless of this call's outcome so a rejected call
+        // never wedges later ones; the caller still observes `result`'s rejection.
+        queue = result.then(
+            () => undefined,
+            () => undefined,
+        );
+
+        return result;
+    };
+
     const state = {
         $ids: idsByTable,
         $reset: (): void => {
-            // Delete keys entirely rather than assigning empty arrays. `idsByTable`
-            // is passed to `seedPlan` as `existingIds`, and seedPlan treats key
-            // *presence* (not array length) as "this parent table is already covered".
-            // Leaving an empty-array key after reset would suppress parent auto-
-            // generation on the very next child call, producing dangling FK ids.
+            // Clear all three run-state maps in place (the getters expose these
+            // exact references, so they can't be reassigned). Deleting keys keeps
+            // the maps empty rather than retaining zero-length entries; either would
+            // be correct now that `seedPlan` treats a parent as covered by
+            // `existingIds` only when it has a *non-empty* id array (an empty array
+            // is not covered), so a reset can never suppress parent auto-generation.
             for (const key of Object.keys(store)) {
-                // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- key *removal* (not array clearing) is the required reset semantics; see comment above
+                // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- clearing dynamic run-state keys
                 delete store[key];
             }
 
             for (const key of Object.keys(idsByTable)) {
-                // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- presence is what seedPlan keys off, so the entry must be removed
+                // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- clearing dynamic run-state keys
                 delete idsByTable[key];
             }
 

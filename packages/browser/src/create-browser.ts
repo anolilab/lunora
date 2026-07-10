@@ -331,8 +331,11 @@ const isPrivateTarget = (parsed: URL): boolean => {
  * open.
  */
 const validateUrl = (url: string, allowPrivateTargets: boolean, allowedHosts?: ReadonlyArray<string>): string => {
+    // Caller-supplied URL faults are BAD_REQUEST, not INTERNAL: they carry
+    // actionable, client-safe text and must present as 4xx with the message
+    // intact — never as a redacted 500 (see @lunora/errors' toErrorBody).
     if (typeof url !== "string" || url.length === 0) {
-        throw new TypeError("@lunora/browser: url must be a non-empty string");
+        throw new LunoraError("BAD_REQUEST", "@lunora/browser: url must be a non-empty string");
     }
 
     let parsed: URL;
@@ -340,15 +343,15 @@ const validateUrl = (url: string, allowPrivateTargets: boolean, allowedHosts?: R
     try {
         parsed = new URL(url);
     } catch {
-        throw new TypeError(`@lunora/browser: url must be an absolute http(s) URL (got "${url}")`);
+        throw new LunoraError("BAD_REQUEST", `@lunora/browser: url must be an absolute http(s) URL (got "${url}")`);
     }
 
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-        throw new TypeError(`@lunora/browser: url protocol must be http(s) (got "${parsed.protocol}")`);
+        throw new LunoraError("BAD_REQUEST", `@lunora/browser: url protocol must be http(s) (got "${parsed.protocol}")`);
     }
 
     if (parsed.username !== "" || parsed.password !== "") {
-        throw new LunoraError("INTERNAL", "@lunora/browser: url must not embed credentials (strip the `user:pass@` userinfo)"); // gitleaks:allow -- illustrative error text, not a credential
+        throw new LunoraError("BAD_REQUEST", "@lunora/browser: url must not embed credentials (strip the `user:pass@` userinfo)"); // gitleaks:allow -- illustrative error text, not a credential
     }
 
     if (allowedHosts && allowedHosts.length > 0) {
@@ -360,8 +363,11 @@ const validateUrl = (url: string, allowPrivateTargets: boolean, allowedHosts?: R
     }
 
     if (!allowPrivateTargets && isPrivateTarget(parsed)) {
+        // FORBIDDEN (403), matching the sibling SSRF refusals (allowlist mismatch
+        // above, DNS-rebinding re-check) — the same class of refusal must present
+        // identically on the wire, message intact, not as a redacted 500.
         throw new LunoraError(
-            "INTERNAL",
+            "FORBIDDEN",
             `@lunora/browser: url host "${parsed.hostname}" is a private/internal address; pass createBrowser({ …, allowPrivateTargets: true }) to allow it`,
         );
     }
@@ -396,6 +402,40 @@ const resolveTimeout = (callTimeout: number | undefined, factoryTimeout: number 
     const safe = Number.isFinite(requested) ? requested : DEFAULT_TIMEOUT_MS;
 
     return Math.min(Math.max(1, Math.floor(safe)), MAX_TIMEOUT_MS);
+};
+
+/**
+ * Race `operation` against a hard `timeoutMs` deadline. `page.goto`'s own
+ * `timeout` bounds only the navigation phase — `page.evaluate` (scrape),
+ * `page.pdf`, `page.content`, and `page.screenshot` take no timeout, so a
+ * hostile page that traps the operation post-navigation would otherwise pin the
+ * worker until the platform limit kills it (holding the billed Browser Rendering
+ * session open). Racing the whole goto+operation sequence against the resolved
+ * budget honours the documented "navigation + operation" invariant; the browser
+ * is torn down by {@link withBrowser}'s `finally` when the deadline rejects. The
+ * timer is always cleared so a completed operation never keeps the runtime alive.
+ */
+const withDeadline = async <T>(operation: () => Promise<T>, timeoutMs: number): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    try {
+        return await Promise.race([
+            operation(),
+            new Promise<never>((_resolve, reject) => {
+                timer = setTimeout(() => {
+                    reject(
+                        new LunoraError("BROWSER_TIMEOUT", `@lunora/browser: navigation + operation exceeded the ${String(timeoutMs)}ms timeout budget`, {
+                            status: 504,
+                        }),
+                    );
+                }, timeoutMs);
+            }),
+        ]);
+    } finally {
+        if (timer !== undefined) {
+            clearTimeout(timer);
+        }
+    }
 };
 
 // eslint-disable-next-line import/prefer-default-export -- named export: the package barrel re-exports by name, per the repo's no-default-mixing convention
@@ -568,9 +608,14 @@ export const createBrowser = (options: LunoraBrowserOptions): Browser => {
                 await page.setViewportSize(clampViewport(viewport));
             }
 
-            await page.goto(target, { timeout, waitUntil: navigate.waitUntil ?? "load" });
+            // Bound the WHOLE navigation + operation against the resolved timeout
+            // budget, not just `page.goto` — see {@link withDeadline}. `page.goto`
+            // keeps its own `timeout` for a clean navigation-phase abort.
+            return withDeadline(async () => {
+                await page.goto(target, { timeout, waitUntil: navigate.waitUntil ?? "load" });
 
-            return use(page);
+                return use(page);
+            }, timeout);
         });
     };
 

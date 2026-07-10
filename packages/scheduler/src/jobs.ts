@@ -114,9 +114,33 @@ const field = (value: number, label: string, min: number, max: number): string =
 };
 
 /**
+ * Validate an interval step value and render it as a cron step field (the
+ * `star-slash-n` form). Beyond the `[1, period - 1]` range check, the value must
+ * EVENLY DIVIDE the field's period (60 for seconds/minutes, 24 for hours). A
+ * cron step means "at field values divisible by n", which is a fixed `every n`
+ * recurrence ONLY for a divisor: a non-divisor like step 45 fires at :00 and :45
+ * then wraps at the hour — a 45/15-minute sawtooth, not "every 45 minutes" — and
+ * `hours: 7` fires at 00,07,14,21 then a 3-hour gap. We reject such values rather
+ * than emit a silently-wrong schedule.
+ */
+const stepField = (value: number, label: string, period: number): string => {
+    const rendered = field(value, label, 1, period - 1);
+
+    if (period % value !== 0) {
+        throw new LunoraError(
+            "INTERNAL",
+            `@lunora/scheduler: ${label} must evenly divide ${period.toFixed(0)} for a fixed "every ${value.toFixed(0)}" interval — cron "*/${value.toFixed(0)}" means "at values divisible by ${value.toFixed(0)}", which wraps unevenly; pick a divisor of ${period.toFixed(0)}`,
+        );
+    }
+
+    return rendered;
+};
+
+/**
  * Compile an `{ seconds | minutes | hours }` interval into a cron expression.
  * Exactly one unit is allowed; the value is rendered as a stepped wildcard
- * (`star-slash-n`) in the corresponding cron field.
+ * (`star-slash-n`) in the corresponding cron field and must evenly divide the
+ * field's period so the recurrence is truly `every n` (see {@link stepField}).
  */
 const compileInterval = (schedule: IntervalSchedule): string => {
     const units = (["seconds", "minutes", "hours"] as const).filter((unit) => schedule[unit] !== undefined);
@@ -129,14 +153,14 @@ const compileInterval = (schedule: IntervalSchedule): string => {
     const value = schedule[unit] as number;
 
     if (unit === "seconds") {
-        return `*/${field(value, "interval.seconds", 1, 59)} * * * * *`;
+        return `*/${stepField(value, "interval.seconds", 60)} * * * * *`;
     }
 
     if (unit === "minutes") {
-        return `*/${field(value, "interval.minutes", 1, 59)} * * * *`;
+        return `*/${stepField(value, "interval.minutes", 60)} * * * *`;
     }
 
-    return `0 */${field(value, "interval.hours", 1, 23)} * * *`;
+    return `0 */${stepField(value, "interval.hours", 24)} * * *`;
 };
 
 const compileDaily = (schedule: DailySchedule): string => {

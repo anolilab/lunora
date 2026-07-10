@@ -61,16 +61,13 @@ export const rateLimit = (config: RateLimitConfig, options: RateLimitOptions = {
     // Mutable bucket value — not reactive itself.
     let value: RateLimitValue | undefined;
 
-    // `epoch` increments on every state change; the status signal is
-    // re-evaluated whenever epoch changes (via a reactive computation).
-    const epoch = signal(0);
-
     const computeStatus = (): RateLimitStatus => evaluate(config, value, { consume: false, count: 1, now: now(), reserve: false }).status;
 
+    // The single reactive cell: every derived signal (`ok` / `disabled` /
+    // `retryAfter`) reads `status()`, and `bump()` re-sets it on each state change.
     const status = signal<RateLimitStatus>(computeStatus());
 
     const bump = (): void => {
-        epoch.update((v) => v + 1);
         status.set(computeStatus());
     };
 

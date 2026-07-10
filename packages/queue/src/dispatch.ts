@@ -246,7 +246,13 @@ const buildCaptureRecords = (
  * `pull`, or the queue name drifted from the `defineQueue` export).
  */
 const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegistry, options: DispatchOptions): Promise<void> => {
-    const entry = registry[batch.queue];
+    // Guard the lookup with `Object.hasOwn`: the registry is an ordinary object
+    // literal emitted by codegen, so a batch delivered from an undeclared queue
+    // named `constructor` / `toString` / `hasOwnProperty` (all valid wrangler
+    // queue names) would otherwise resolve an inherited Object.prototype member
+    // instead of `undefined` and skip the directed error below (mirrors the
+    // null-prototype/`Object.hasOwn` hardening on the producer map in create-queues.ts).
+    const entry = Object.hasOwn(registry, batch.queue) ? registry[batch.queue] : undefined;
 
     if (entry === undefined) {
         const known = Object.keys(registry);
@@ -294,8 +300,13 @@ const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegist
         const records = buildCaptureRecords(harness, entry, batch.queue, threw, handlerError);
 
         await options.capture(records);
-    } catch {
-        // Swallowed — see above.
+    } catch (captureError) {
+        // Best-effort by contract: never let a capture failure change delivery
+        // semantics (see above). But silent-by-contract for the observability
+        // feature itself is a DX bug — a stale admin token or shard error would
+        // leave the studio Queues panel empty with no diagnostic anywhere — so
+        // log it (delivery is unaffected: the handler-error re-throw is below).
+        console.warn("@lunora/queue: capture sink failed (delivery unaffected):", captureError);
     }
 
     // Preserve workerd's retry-on-throw: re-throw the handler's original value

@@ -143,7 +143,25 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown):
         }
 
         case "number": {
-            return copycat.int(input, { max: constraints.maximum ?? 1000, min: constraints.minimum ?? 0 });
+            const { maximum, minimum } = constraints;
+
+            if (maximum !== undefined && minimum !== undefined && minimum > maximum) {
+                throw new LunoraError(
+                    "INTERNAL",
+                    `Seed constraint error for field "${fieldName}": minimum (${String(minimum)}) > maximum (${String(maximum)}). Adjust the schema constraints.`,
+                );
+            }
+
+            const min = minimum ?? 0;
+            const max = maximum ?? 1000;
+
+            // `v.number()` is a float column, so honour non-integer bounds with a
+            // float (faker's integer generator rejects fractional min/max).
+            if (!Number.isInteger(min) || !Number.isInteger(max)) {
+                return copycat.float(input, { max, min });
+            }
+
+            return copycat.int(input, { max, min });
         }
 
         case "object": {
@@ -153,9 +171,14 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown):
         }
 
         case "record": {
-            const { valueValidator } = metaOf(inner);
+            const { keyValidator, valueValidator } = metaOf(inner);
             const entries = copycat.times(input, [1, 3], (itemInput) => {
-                const key = copycat.word(["k", itemInput]);
+                // `v.record(keyValidator, valueValidator)` re-parses every key
+                // through `keyValidator`, so honour any key constraints (minLength,
+                // format, …) rather than emitting a plain lorem word that the
+                // writer's validation would reject. Keys must be strings.
+                const key =
+                    keyValidator === undefined ? copycat.word(["k", itemInput]) : String(generateValue(keyValidator, fieldName, ["k", itemInput]));
                 const value = valueValidator === undefined ? copycat.word(["v", itemInput]) : generateValue(valueValidator, fieldName, ["v", itemInput]);
 
                 return [key, value] as const;

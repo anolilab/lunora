@@ -1,6 +1,15 @@
+import type { Plugin } from "vite";
 import { describe, expect, it } from "vitest";
 
-import { planViteRemoteBindings, remoteBindingsCleanupPlugin, withRemoteBindings } from "../src/remote-bindings-plugin";
+import { planViteRemoteBindings, remoteBindingsCleanupPlugin, remoteBindingsConfigPlugin, withRemoteBindings } from "../src/remote-bindings-plugin";
+
+/** Call a plugin's `config` hook regardless of whether it is a fn or `{ handler }`. */
+const callConfig = (plugin: Plugin, command: "build" | "serve"): void => {
+    const hook = plugin.config;
+    const run = typeof hook === "function" ? hook : hook?.handler;
+
+    run?.call({} as never, {} as never, { command, mode: "development" } as never);
+};
 
 /** A materialize stub: enabled with a temp configPath + a disposer we can observe. */
 const materializeWith = (configPath: string | undefined, onCleanup?: () => void) => () => {
@@ -86,34 +95,25 @@ describe("planViteRemoteBindings", () => {
 });
 
 describe("withRemoteBindings", () => {
-    it("sets configPath on the cloudflare options during serve when remote is on", () => {
+    it("sets configPath on the cloudflare options when remote is on", () => {
         expect.assertions(1);
 
-        const options = withRemoteBindings({}, () => true, {
-            cleanup: () => {},
-            configPath: "/work/wrangler.remote.jsonc",
-            enabled: true,
-        });
+        const options = withRemoteBindings(
+            {},
+            {
+                cleanup: () => {},
+                configPath: "/work/wrangler.remote.jsonc",
+                enabled: true,
+            },
+        );
 
         expect((options as { configPath?: string }).configPath).toBe("/work/wrangler.remote.jsonc");
-    });
-
-    it("never injects configPath during a production build", () => {
-        expect.assertions(1);
-
-        const options = withRemoteBindings({}, () => false, {
-            cleanup: () => {},
-            configPath: "/work/wrangler.remote.jsonc",
-            enabled: true,
-        });
-
-        expect((options as { configPath?: string }).configPath).toBeUndefined();
     });
 
     it("is a no-op when remote mode is disabled", () => {
         expect.assertions(1);
 
-        const options = withRemoteBindings({}, () => true, { cleanup: () => {}, enabled: false });
+        const options = withRemoteBindings({}, { cleanup: () => {}, enabled: false });
 
         expect((options as { configPath?: string }).configPath).toBeUndefined();
     });
@@ -121,13 +121,66 @@ describe("withRemoteBindings", () => {
     it("never overrides a user-supplied configPath", () => {
         expect.assertions(1);
 
-        const options = withRemoteBindings({ configPath: "/user/wrangler.jsonc" }, () => true, {
-            cleanup: () => {},
-            configPath: "/work/wrangler.remote.jsonc",
-            enabled: true,
-        });
+        const options = withRemoteBindings(
+            { configPath: "/user/wrangler.jsonc" },
+            {
+                cleanup: () => {},
+                configPath: "/work/wrangler.remote.jsonc",
+                enabled: true,
+            },
+        );
 
         expect((options as { configPath?: string }).configPath).toBe("/user/wrangler.jsonc");
+    });
+});
+
+describe("remoteBindingsConfigPlugin", () => {
+    it("injects configPath into the shared options object during serve (deferred to hook time)", () => {
+        expect.assertions(2);
+
+        // Regression: the old wiring evaluated the serve check eagerly at factory
+        // time — where Vite's resolved `command` is still undefined — so `configPath`
+        // was always stripped and remote bindings never activated on `vite dev`.
+        const options: { configPath?: string } = {};
+        const plugin = remoteBindingsConfigPlugin(options, { cleanup: () => {}, configPath: "/work/wrangler.remote.jsonc", enabled: true });
+
+        // Before the `config` hook runs, nothing is injected.
+        expect(options.configPath).toBeUndefined();
+
+        callConfig(plugin, "serve");
+
+        // The hook mutates the SAME object handed to `cloudflare()`.
+        expect(options.configPath).toBe("/work/wrangler.remote.jsonc");
+    });
+
+    it("never injects configPath during a production build", () => {
+        expect.assertions(1);
+
+        const options: { configPath?: string } = {};
+        const plugin = remoteBindingsConfigPlugin(options, { cleanup: () => {}, configPath: "/work/wrangler.remote.jsonc", enabled: true });
+
+        callConfig(plugin, "build");
+
+        expect(options.configPath).toBeUndefined();
+    });
+
+    it("never overrides a user-supplied configPath", () => {
+        expect.assertions(1);
+
+        const options: { configPath?: string } = { configPath: "/user/wrangler.jsonc" };
+        const plugin = remoteBindingsConfigPlugin(options, { cleanup: () => {}, configPath: "/work/wrangler.remote.jsonc", enabled: true });
+
+        callConfig(plugin, "serve");
+
+        expect(options.configPath).toBe("/user/wrangler.jsonc");
+    });
+
+    it("runs before the cloudflare plugin via enforce: \"pre\"", () => {
+        expect.assertions(1);
+
+        const plugin = remoteBindingsConfigPlugin({}, { cleanup: () => {}, enabled: false });
+
+        expect(plugin.enforce).toBe("pre");
     });
 });
 
