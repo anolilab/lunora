@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import { ErrorAlert } from "../../components/error-alert";
 import { Badge } from "../../components/ui/badge";
@@ -147,16 +147,14 @@ const AgentsPanel = ({ initialShardKey = "" }: AgentsPanelProps): ReactElement =
         liveError: threadsLiveError,
     } = useAdminQuery<TablePage>(ADMIN_FUNCTIONS.readTablePage, THREADS_ARGS, { enabled: hasAgentTables, live: true, shardKey: initialShardKey });
 
-    const messagesArgs = useMemo<Record<string, unknown>>(() => {
-        return {
-            filters: [{ column: "threadKey", operator: "eq", value: selectedKey ?? "" }],
-            limit: MESSAGE_LIMIT,
-            offset: 0,
-            orderBy: { column: "seq", direction: "asc" },
-            skipCount: true,
-            table: MESSAGES_TABLE,
-        };
-    }, [selectedKey]);
+    const messagesArgs: Record<string, unknown> = {
+        filters: [{ column: "threadKey", operator: "eq", value: selectedKey ?? "" }],
+        limit: MESSAGE_LIMIT,
+        offset: 0,
+        orderBy: { column: "seq", direction: "asc" },
+        skipCount: true,
+        table: MESSAGES_TABLE,
+    };
 
     const {
         data: messagesPage,
@@ -168,10 +166,10 @@ const AgentsPanel = ({ initialShardKey = "" }: AgentsPanelProps): ReactElement =
         shardKey: initialShardKey,
     });
 
-    const threads = useMemo(() => (Array.isArray(threadsPage?.rows) ? threadsPage.rows : []), [threadsPage]);
-    const messages = useMemo(() => (Array.isArray(messagesPage?.rows) ? messagesPage.rows : []), [messagesPage]);
+    const threads = Array.isArray(threadsPage?.rows) ? threadsPage.rows : [];
+    const messages = Array.isArray(messagesPage?.rows) ? messagesPage.rows : [];
 
-    const selectedThread = useMemo(() => threads.find((row) => readString(row, "key") === selectedKey), [threads, selectedKey]);
+    const selectedThread = threads.find((row) => readString(row, "key") === selectedKey);
 
     let body: ReactElement;
 
