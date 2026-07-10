@@ -1,6 +1,6 @@
 {
     "name": "@lunora/astro",
-    "version": "1.0.0-alpha.31",
+    "version": "1.0.0-alpha.32",
     "description": "Astro integration for Lunora — single-worker composition plus reactive-loader server helpers",
     "keywords": [
         "astro",
@@ -65,7 +65,7 @@
     },
     "dependencies": {
         "@lunora/client": "1.0.0-alpha.20",
-        "@lunora/runtime": "1.0.0-alpha.22"
+        "@lunora/runtime": "1.0.0-alpha.23"
     },
     "devDependencies": {
         "@types/node": "catalog:types",
