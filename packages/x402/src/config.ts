@@ -10,6 +10,9 @@
  * Validate with `@lunora/values` (`v.*`) if you need runtime schema checks.
  */
 
+import type { ClientEvmSigner } from "@x402/evm";
+import type { ClientSvmSigner } from "@x402/svm";
+
 import type { X402ReceiptSink } from "./charge/receipt";
 import type { X402Network } from "./networks";
 import type { SpendPolicy } from "./pay/policy";
@@ -85,20 +88,38 @@ export interface X402PayConfig {
 }
 
 /**
- * Wallet custody for the pay rail. A `"raw-key"` signer resolves a private key
- * from `ctx.secrets` (viem for EVM, an `@x402/svm` keypair for Solana) —
- * simplest, self-custodied. A `"cdp"` signer uses a Coinbase-managed wallet (via
- * `@coinbase/cdp-sdk`; note `@coinbase/x402` is a facilitator-auth helper, not a
- * signer provider).
+ * Wallet custody for the pay rail — three shapes.
  *
- * Wired today: EVM raw-key. SVM raw-key and CDP custody are recognised config
- * shapes that fail loudly with guidance until their signer integrations land.
+ * `"raw-key"` resolves a private key from `ctx.secrets` (viem for EVM, a
+ * `@solana/kit` keypair for Solana) — simplest, self-custodied.
+ *
+ * `"signer"` is the escape hatch: hand in a signer you already built — any
+ * `@x402/evm` `ClientEvmSigner` (a viem account from Turnkey, Privy, an AWS/GCP
+ * KMS `toAccount`, CDP's viem adapter, …) on an EVM network, or an `@x402/svm`
+ * `ClientSvmSigner` (a `@solana/kit` `TransactionSigner`) on Solana. Adapt any
+ * custody provider to the structural signer and pass it here; `@lunora/x402`
+ * takes no dependency on the provider's SDK.
+ *
+ * `"cdp"` is a Coinbase-managed wallet via `@coinbase/cdp-sdk` (note
+ * `@coinbase/x402` is a facilitator-auth helper, not a signer provider).
+ *
+ * Wired today: raw-key (EVM + SVM) and the user-supplied signer (both families).
+ * CDP is a recognised shape wired via `@coinbase/cdp-sdk` (an optional peer).
  */
 export type X402SignerConfig =
     | {
           /** Name of the `ctx.secrets` entry holding the private key. */
           readonly secretName: string;
           readonly type: "raw-key";
+      }
+    | {
+          /**
+           * A pre-built signer you own: an EVM `ClientEvmSigner` (viem account) on
+           * an EVM network, or an SVM `ClientSvmSigner` (`@solana/kit`
+           * `TransactionSigner`) on Solana. Must match the config `network`'s family.
+           */
+          readonly signer: ClientEvmSigner | ClientSvmSigner;
+          readonly type: "signer";
       }
     | {
           /** CDP account name / id. */

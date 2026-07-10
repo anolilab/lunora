@@ -1,5 +1,6 @@
 import { createKeyPairSignerFromPrivateKeyBytes, getBase58Decoder } from "@solana/kit";
 import { x402Client as X402Client } from "@x402/core/client";
+import type { ClientEvmSigner } from "@x402/evm";
 import { describe, expect, it } from "vitest";
 
 import type { X402PayConfig } from "../src/config";
@@ -105,6 +106,45 @@ describe("registerWallet", () => {
         const config: X402PayConfig = { network: "solana", policy: boundedPolicy, signer: { account: "agent-wallet", type: "cdp" } };
 
         await expect(registerWallet(client, config, { getSecret: () => svmSeedJson })).rejects.toThrow(/CDP-managed Solana custody.*cdp-sdk/s);
+    });
+
+    it("registers a user-supplied EVM signer (escape hatch) without reading a secret", async () => {
+        const client = new X402Client();
+        const evmSigner: ClientEvmSigner = { address: TEST_ADDRESS, signTypedData: () => Promise.resolve("0x") };
+        const config: X402PayConfig = { network: "base", policy: boundedPolicy, signer: { signer: evmSigner, type: "signer" } };
+
+        // `getSecret` throws if touched — the escape hatch must not read any secret.
+        await expect(
+            registerWallet(client, config, {
+                getSecret: () => {
+                    throw new Error("must not read a secret for a user-supplied signer");
+                },
+            }),
+        ).resolves.toBeUndefined();
+    });
+
+    it("registers a user-supplied SVM signer (escape hatch)", async () => {
+        const client = new X402Client();
+        const svmSigner = await createKeyPairSignerFromPrivateKeyBytes(SVM_SEED, true);
+        const config: X402PayConfig = { network: "solana", policy: boundedPolicy, signer: { signer: svmSigner, type: "signer" } };
+
+        await expect(registerWallet(client, config, { getSecret: () => undefined })).resolves.toBeUndefined();
+    });
+
+    it("refuses a user-supplied EVM signer on a Solana network (family mismatch)", async () => {
+        const client = new X402Client();
+        const evmSigner: ClientEvmSigner = { address: TEST_ADDRESS, signTypedData: () => Promise.resolve("0x") };
+        const config: X402PayConfig = { network: "solana", policy: boundedPolicy, signer: { signer: evmSigner, type: "signer" } };
+
+        await expect(registerWallet(client, config, { getSecret: () => undefined })).rejects.toThrow(/is an EVM.*network is Solana/s);
+    });
+
+    it("refuses a user-supplied SVM signer on an EVM network (family mismatch)", async () => {
+        const client = new X402Client();
+        const svmSigner = await createKeyPairSignerFromPrivateKeyBytes(SVM_SEED, true);
+        const config: X402PayConfig = { network: "base", policy: boundedPolicy, signer: { signer: svmSigner, type: "signer" } };
+
+        await expect(registerWallet(client, config, { getSecret: () => undefined })).rejects.toThrow(/is not an EVM.*network is EVM/s);
     });
 });
 

@@ -10,13 +10,18 @@
  * Custody status today. Raw-key custody is fully wired on both families. On EVM a
  * `ctx.secrets` private key becomes a viem `LocalAccount` (a structural
  * `ClientEvmSigner`); on SVM a `ctx.secrets` secret key becomes a `@solana/kit`
- * `KeyPairSigner` (a structural `ClientSvmSigner`/`TransactionSigner`). CDP-managed
- * custody is a recognised config shape but not yet wired on either family; it fails
- * loudly with guidance. (A CDP wallet needs `@coinbase/cdp-sdk` — `@coinbase/x402`
- * is a facilitator-auth helper, not a signer provider.)
+ * `KeyPairSigner` (a structural `ClientSvmSigner`/`TransactionSigner`). The
+ * `"signer"` escape hatch lets a caller hand in a signer they built themselves —
+ * any custody provider (Turnkey, Privy, an AWS/GCP KMS `toAccount`, CDP's viem
+ * adapter, …) adapted to the structural EVM/SVM signer — so `@lunora/x402` needs
+ * no per-provider SDK. CDP-managed custody is a recognised config shape but not
+ * yet wired on either family; it fails loudly with guidance. (A CDP wallet needs
+ * `@coinbase/cdp-sdk` — `@coinbase/x402` is a facilitator-auth helper, not a
+ * signer provider.)
  */
 import { LunoraError } from "@lunora/errors";
 import type { x402Client } from "@x402/core/client";
+import type { ClientEvmSigner } from "@x402/evm";
 import type { ClientSvmSigner } from "@x402/svm";
 import type { PrivateKeyAccount } from "viem/accounts";
 
@@ -38,6 +43,24 @@ const requireSecret = async (getSecret: GetSecret, name: string): Promise<string
     }
 
     return value;
+};
+
+/**
+ * Guard a user-supplied signer against the network family. An EVM signer's
+ * `address` is `0x…`; an SVM signer's is base58. A family mismatch is a config
+ * error we catch here — with a clear message — rather than letting it surface as
+ * an opaque scheme failure deep inside `@x402/*`.
+ */
+const assertSignerFamily = (signer: ClientEvmSigner | ClientSvmSigner, evm: boolean): void => {
+    const looksEvm = signer.address.startsWith("0x");
+
+    if (evm && !looksEvm) {
+        throw new LunoraError("ENV_INVALID", `x402 pay: the supplied signer address "${signer.address}" is not an EVM (0x…) address, but the network is EVM.`);
+    }
+
+    if (!evm && looksEvm) {
+        throw new LunoraError("ENV_INVALID", `x402 pay: the supplied signer address "${signer.address}" is an EVM (0x…) address, but the network is Solana.`);
+    }
 };
 
 /** How the wallet reads its key material — wired to `ctx.secrets.get` in an action. */
@@ -115,15 +138,36 @@ export const resolveSvmSigner = async (secret: string): Promise<ClientSvmSigner>
 
 /**
  * Register the scheme family the configured network needs on `client`, wired to
- * the resolved agent signer. Dispatches on network family (EVM vs SVM) and on the
- * configured signer custody (raw key vs CDP). Unwired custodies throw a
- * `NOT_IMPLEMENTED` error rather than silently registering nothing.
+ * the agent signer. Dispatches on network family (EVM vs SVM) and on custody —
+ * `"signer"` (a signer the caller already built; registered directly, no secret
+ * read), `"raw-key"` (a `ctx.secrets` private key → viem account on EVM or a
+ * `@solana/kit` keypair on SVM), or `"cdp"` (a Coinbase-managed wallet via
+ * `@coinbase/cdp-sdk`).
  */
 export const registerWallet = async (client: x402Client, config: X402PayConfig, deps: WalletDeps): Promise<void> => {
     const network = toCaip2(config.network);
     const { signer } = config;
+    const evm = isEvmNetwork(config.network);
 
-    if (isEvmNetwork(config.network)) {
+    // Escape hatch: a signer the caller already constructed. Just pick the
+    // family's exact scheme and register it — no `ctx.secrets` read at all.
+    if (signer.type === "signer") {
+        assertSignerFamily(signer.signer, evm);
+
+        if (evm) {
+            const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
+
+            registerExactEvmScheme(client, { networks: [network], signer: signer.signer as ClientEvmSigner });
+        } else {
+            const { registerExactSvmScheme } = await import("@x402/svm/exact/client");
+
+            registerExactSvmScheme(client, { networks: [network], signer: signer.signer as ClientSvmSigner });
+        }
+
+        return;
+    }
+
+    if (evm) {
         if (signer.type === "cdp") {
             throw new LunoraError(
                 "NOT_IMPLEMENTED",
