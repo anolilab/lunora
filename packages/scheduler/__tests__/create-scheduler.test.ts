@@ -2,12 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 
 import createScheduler from "../src/create-scheduler";
 import { createCronTrigger } from "../src/cron";
-import type { DurableObjectNamespaceLike, DurableObjectStubLike, FunctionReference, ScheduleRecord } from "../src/types";
+import type { DurableObjectNamespaceLike, DurableObjectStubLike, FunctionReference, ScheduleRecord, WorkflowReference } from "../src/types";
 
 const NAMESPACE_PATTERN = /namespace/;
 const ORIGIN_URL_PATTERN = /originUrl/;
 const DELAY_MS_PATTERN = /delayMs/;
 const SCHEDULER_DO_PATTERN = /SchedulerDO/;
+const MISSING_BINDING_PATTERN = /missing its `binding`/;
 
 interface CapturedCall {
     body: Record<string, unknown>;
@@ -54,6 +55,10 @@ const fakeNamespace = (responses: Record<string, unknown> = DEFAULT_RESPONSES): 
 
 const fnRef: FunctionReference = { __lunoraRef: "messages.send" };
 
+// The generated `agents.<name>` / `workflows.<name>` schedule target: a
+// WorkflowReference carrying the `AGENT_*`/`WORKFLOW_*` binding + stable name.
+const agentRef: WorkflowReference = { binding: "AGENT_SUPPORT", isLunoraWorkflow: true, name: "support" };
+
 describe("createScheduler", () => {
     it("requires a namespace + originUrl", () => {
         expect.assertions(2);
@@ -80,6 +85,49 @@ describe("createScheduler", () => {
             scheduledFor: at.getTime(),
             shardKey: undefined,
         });
+    });
+
+    it("runAt() sends a workflow binding (not functionPath) for an agent/workflow target", async () => {
+        expect.assertions(3);
+
+        const { calls, namespace } = fakeNamespace();
+        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+        const at = new Date("2026-06-01T12:00:00Z");
+
+        const result = await scheduler.runAt(at, agentRef, { prompt: "summarize" });
+
+        expect(result).toEqual({ id: "id-1", scheduledFor: 12_345 });
+        // The wire payload carries the binding under `workflow` and omits `functionPath`.
+        expect(calls[0]?.body).toEqual({
+            args: { prompt: "summarize" },
+            originUrl: "https://app.test",
+            scheduledFor: at.getTime(),
+            workflow: "AGENT_SUPPORT",
+        });
+        expect(calls[0]?.body).not.toHaveProperty("functionPath");
+    });
+
+    it("runAfter() forwards a workflow target the same way", async () => {
+        expect.assertions(2);
+
+        const { calls, namespace } = fakeNamespace();
+        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+
+        await scheduler.runAfter(5000, agentRef, { prompt: "digest" });
+
+        expect(calls[0]?.body.workflow).toBe("AGENT_SUPPORT");
+        expect(calls[0]?.body).not.toHaveProperty("functionPath");
+    });
+
+    it("runAt() rejects a workflow target with no binding", async () => {
+        expect.assertions(2);
+
+        const { calls, namespace } = fakeNamespace();
+        const scheduler = createScheduler({ namespace, originUrl: "https://app.test" });
+
+        await expect(scheduler.runAt(1000, { isLunoraWorkflow: true }, {})).rejects.toThrow(MISSING_BINDING_PATTERN);
+        // Nothing was dispatched to the DO.
+        expect(calls).toHaveLength(0);
     });
 
     it("runAfter() rejects negative or non-finite delays", async () => {

@@ -159,6 +159,26 @@ describe("schedulerDO", () => {
         expect(state.alarm).toBe(now + 60_000);
     });
 
+    it("/schedule accepts a workflow target (no functionPath) and alarm() dispatches it", async () => {
+        expect.assertions(4);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const now = Date.now();
+
+        // A workflow/agent schedule carries a `workflow` binding instead of a functionPath.
+        const response = await scheduler.fetch(post("/schedule", { args: { prompt: "digest" }, scheduledFor: now - 1000, workflow: "AGENT_SUPPORT" }));
+
+        expect(response.status).toBe(200);
+
+        await scheduler.alarm();
+
+        expect(scheduler.dispatched).toHaveLength(1);
+        expect(scheduler.dispatched[0]?.workflow).toBe("AGENT_SUPPORT");
+        // The stored record carries no functionPath — the two targets are exclusive.
+        expect(scheduler.dispatched[0]?.functionPath).toBeUndefined();
+    });
+
     it("/get returns a single record by id (direct O(1) read), or {} when absent", async () => {
         expect.assertions(4);
 
@@ -942,7 +962,7 @@ describe("schedulerDO — per-record drain isolation (storage throw)", () => {
         }
 
         protected override async dispatch(record: ScheduleRecord): Promise<boolean> {
-            if (this.poison.has(record.functionPath)) {
+            if (this.poison.has(record.functionPath ?? "")) {
                 return false;
             }
 
@@ -994,7 +1014,7 @@ describe("schedulerDO — per-record drain isolation (storage throw)", () => {
         await expect(scheduler.alarm()).resolves.toBeUndefined();
 
         // The two healthy due records still dispatched despite the poison throw.
-        expect(scheduler.dispatched.map((record) => record.functionPath).toSorted((left, right) => left.localeCompare(right))).toEqual(["ok-a", "ok-b"]);
+        expect(scheduler.dispatched.map((record) => record.functionPath ?? "").toSorted((left, right) => left.localeCompare(right))).toEqual(["ok-a", "ok-b"]);
 
         // rescheduleAlarm() still ran (finally) and armed the next pending time.
         // The poison record was re-claimed (re-fireable) at its original time

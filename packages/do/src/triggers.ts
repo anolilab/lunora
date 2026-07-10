@@ -28,13 +28,27 @@ export type TriggerTimingLike = "after" | "before";
 export type TriggerOpLike = "delete" | "insert" | "update";
 
 /**
+ * A schedulable durable-workflow reference — the generated `workflows.&lt;name>` /
+ * `agents.&lt;name>` object (carries its `WORKFLOW_*`/`AGENT_*` binding + stable
+ * name). Structural mirror so a scheduled target can be a workflow/agent, not
+ * just a function path, without this package depending on `@lunora/scheduler`.
+ */
+export interface SchedulableWorkflowReferenceLike {
+    readonly binding?: string;
+    readonly isLunoraWorkflow: true;
+    readonly name?: string;
+}
+
+/**
  * Structural mirror of `@lunora/server`'s `Scheduler` (kept local so this
  * package takes no runtime dependency on the server package — same reasoning
- * as `RelationDefinitionLike`).
+ * as `RelationDefinitionLike`). `target` is a function path (`"ns:fn"`) or a
+ * generated `workflows.&lt;name>` / `agents.&lt;name>` reference (starts a fresh
+ * durable instance on fire).
  */
 export interface SchedulerLike {
-    runAfter: (delayMs: number, functionPath: string, args?: Record<string, unknown>) => Promise<string>;
-    runAt: (timestampMs: number, functionPath: string, args?: Record<string, unknown>) => Promise<string>;
+    runAfter: (delayMs: number, target: SchedulableWorkflowReferenceLike | string, args?: Record<string, unknown>) => Promise<string>;
+    runAt: (timestampMs: number, target: SchedulableWorkflowReferenceLike | string, args?: Record<string, unknown>) => Promise<string>;
 }
 
 /** What a trigger handler observes about the write that fired it. */

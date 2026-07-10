@@ -239,6 +239,7 @@ export type { TransactionSqlLike } from "./transaction";
 export { ConflictError } from "./transaction";
 export type {
     RunTriggersOptions,
+    SchedulableWorkflowReferenceLike,
     SchedulerLike,
     TriggerContextLike,
     TriggerDefinitionLike,

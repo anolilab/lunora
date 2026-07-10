@@ -1813,23 +1813,33 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     /**
-     * Start the durable workflow a cron job targets: resolve its `WORKFLOW_*`
-     * binding off `env` and `create()` a fresh instance with the job's `args` as
-     * `params`. A missing/malformed binding is a hard failure (the job can't run)
-     * — surfaced like a function-dispatch failure so the cron invocation fails.
+     * Start a fresh durable-workflow instance: resolve `binding` off `env` and
+     * `create()` it with `args` as its `params`. A missing/malformed binding is a
+     * hard failure (the job can't run) surfaced as a 500, so the caller's
+     * invocation fails rather than silently no-op'ing. Shared by cron-fire
+     * ({@link startCronWorkflow}) and one-shot scheduler dispatch
+     * ({@link handleSchedulerDispatch}); `label` names the caller in the error.
      */
-    const startCronWorkflow = async (binding: string, job: CronJobDispatch, env: unknown): Promise<void> => {
+    const startWorkflowInstance = async (binding: string, args: Record<string, unknown>, env: unknown, label: string): Promise<void> => {
         const candidate = (env as Record<string, unknown> | null | undefined)?.[binding];
 
         if (!candidate || typeof (candidate as { create?: unknown }).create !== "function") {
-            throw new LunoraError(`cron job "${job.name}" targets workflow binding "${binding}", which is not bound on env`, {
+            throw new LunoraError(`${label} targets workflow binding "${binding}", which is not bound on env`, {
                 code: "CRON_JOB_FAILED",
                 status: 500,
             });
         }
 
-        await (candidate as WorkflowBindingLike).create({ params: job.args ?? {} });
+        await (candidate as WorkflowBindingLike).create({ params: args });
     };
+
+    /**
+     * Start the durable workflow a cron job targets. Thin wrapper over
+     * {@link startWorkflowInstance} carrying the cron job's `args` + a job-named
+     * error label.
+     */
+    const startCronWorkflow = async (binding: string, job: CronJobDispatch, env: unknown): Promise<void> =>
+        startWorkflowInstance(binding, job.args ?? {}, env, `cron job "${job.name}"`);
 
     /**
      * Run one code-defined cron job: start its durable workflow instance, or
@@ -2006,13 +2016,32 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             throw new LunoraError("Scheduler dispatch body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
         }
 
-        const candidate = (body ?? {}) as { args?: unknown; functionPath?: unknown; id?: unknown; instanceName?: unknown; pool?: unknown; shardKey?: unknown };
+        const candidate = (body ?? {}) as {
+            args?: unknown;
+            functionPath?: unknown;
+            id?: unknown;
+            instanceName?: unknown;
+            pool?: unknown;
+            shardKey?: unknown;
+            workflow?: unknown;
+        };
+
+        const args = (candidate.args ?? {}) as Record<string, unknown>;
+
+        // A workflow/agent target starts a fresh durable instance (the args become
+        // its `params`) rather than dispatching a function to a shard — the
+        // `WORKFLOW_*`/`AGENT_*` binding lives on the runtime's `env`, not the DO.
+        // Workflow jobs never hold a workpool slot, so there is nothing to release.
+        if (typeof candidate.workflow === "string" && candidate.workflow.length > 0) {
+            await startWorkflowInstance(candidate.workflow, args, env, "scheduled workflow");
+
+            return Response.json({ ok: true }, { status: 200 });
+        }
 
         if (typeof candidate.functionPath !== "string" || candidate.functionPath.length === 0) {
             throw new LunoraError("Scheduler dispatch is missing `functionPath`", { code: "BAD_REQUEST", status: 400 });
         }
 
-        const args = (candidate.args ?? {}) as Record<string, unknown>;
         const shardKey = typeof candidate.shardKey === "string" && candidate.shardKey.length > 0 ? candidate.shardKey : defaultShard;
         // Forward the scheduler record id as the idempotency key so an at-least-once
         // re-fire (a retry after the origin response was lost but the side effect

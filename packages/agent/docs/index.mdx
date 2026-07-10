@@ -469,9 +469,16 @@ export default crons;
 
 Each fire is an independent run (its own instance id), so give recurring jobs a
 stable `threadKey` only if you want them to share one conversation thread.
-Delay-based scheduling (`ctx.scheduler.runAfter`/`runAt` targeting an agent) is
-not wired yet — cron targets start a workflow per fire, which is all an agent
-run needs.
+
+For a **one-off delay** (rather than a recurring cron), pass the same
+`agents.<name>` reference to `ctx.scheduler.runAfter`/`runAt` — each starts a
+single durable run when the timer fires, with the trailing object as its
+`AgentRunInput`:
+
+```ts
+// Kick off a fresh `support` run five minutes from now.
+await ctx.scheduler.runAfter(5 * 60_000, agents.support, { input: "follow up", threadKey: "t-1" });
+```
 
 ## Access control
 
