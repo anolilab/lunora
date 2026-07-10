@@ -76,7 +76,6 @@
         "@vitest/coverage-v8": "catalog:test",
         "better-auth": "catalog:auth",
         "esbuild": "catalog:build",
-        "expo-web-browser": "~57.0.0",
         "fallow": "catalog:lint",
         "react": "catalog:frontend",
         "typescript": "catalog:tsc",
