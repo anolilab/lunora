@@ -312,6 +312,6 @@ describe("createBrowser URL-boundary error codes (finding #2)", () => {
         const harness = makeHarness();
         const browser = createBrowser({ binding, launch: harness.launch });
 
-        await expect(browser.content("https://user:pass@example.com/")).rejects.toMatchObject({ code: "BAD_REQUEST", status: 400 });
+        await expect(browser.content("https://user:pass@example.com/")).rejects.toMatchObject({ code: "BAD_REQUEST", status: 400 }); // gitleaks:allow -- test fixture asserting embedded-credential rejection, not a real secret
     });
 });
