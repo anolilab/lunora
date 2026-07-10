@@ -49,3 +49,30 @@ export const createX402Pay = async (config: X402PayConfig, deps: X402PayDeps): P
 
     return { fetch };
 };
+
+/**
+ * A synchronous, lazily-initialised pay rail — what codegen wires `ctx.x402` to.
+ *
+ * `buildCtx` must stay synchronous, but {@link createX402Pay} is async (it reads
+ * the wallet secret and imports the signer). So this returns an {@link X402Pay}
+ * immediately whose `fetch` builds the real rail on its **first** call and
+ * memoises it: the viem/`@x402` signer imports + Secrets Store read are paid for
+ * only when an action actually pays, and the single `SpendState` behind the
+ * rail is shared across every payment for the lifetime of this ctx — so the
+ * per-run cap scopes to the ctx, not to each request. A failed build (e.g. an
+ * unbounded policy) is memoised too, keeping the rail deterministically
+ * fail-closed.
+ */
+export const lazyX402Pay = (config: X402PayConfig, deps: X402PayDeps): X402Pay => {
+    let railPromise: Promise<X402Pay> | undefined;
+
+    const fetch: PayFetch = async (input, init) => {
+        railPromise ??= createX402Pay(config, deps);
+
+        const rail = await railPromise;
+
+        return rail.fetch(input, init);
+    };
+
+    return { fetch };
+};
