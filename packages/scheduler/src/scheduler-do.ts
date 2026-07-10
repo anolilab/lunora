@@ -510,32 +510,30 @@ class SchedulerDO {
      *
      * Claims the job by deleting its time-index entry BEFORE dispatch (an alarm
      * re-fire then won't pick it up again), runs {@link drainRecord}, and on a
-     * thrown storage op decides whether the job stays re-fireable.
+     * thrown storage op re-asserts the claim so the job stays re-fireable.
      *
-     * When the record was NOT successfully dispatched, re-assert the time-index
-     * claim so a later alarm re-attempts it (at-least-once): the claim delete may
-     * have removed it and recordRetry()/requeuePooled() may not have re-armed it
-     * before throwing, and re-inserting the same key is idempotent, so a
-     * surviving claim is simply rewritten to its prior value. When the record WAS
-     * dispatched (the throw came from post-dispatch cleanup), leave the index
-     * deleted so the already-kicked, idempotent job is not re-fired.
+     * A throw reaching here always means the job was NOT dispatched:
+     * {@link drainRecord} swallows its own post-dispatch cleanup errors and
+     * returns instead of throwing once a kick succeeds, so every escaping throw
+     * comes from the pre-dispatch or failed-dispatch paths. We therefore always
+     * re-assert the time-index claim so a later alarm re-attempts it
+     * (at-least-once): the claim delete may have removed it and
+     * recordRetry()/requeuePooled() may not have re-armed it before throwing, and
+     * re-inserting the same key is idempotent, so a surviving claim is simply
+     * rewritten to its prior value.
      */
     private async drainRecordGuarded(record: ScheduleRecord): Promise<void> {
-        let dispatched = false;
-
         try {
             await this.state.storage.delete(SchedulerDO.indexKey(record.scheduledFor, record.id));
-            dispatched = await this.drainRecord(record);
+            await this.drainRecord(record);
         } catch {
-            if (!dispatched) {
-                try {
-                    await this.state.storage.put(SchedulerDO.indexKey(record.scheduledFor, record.id), record.id);
-                } catch {
-                    // The infra is failing hard enough that even the re-claim put
-                    // throws. Swallow so the remaining due records still drain and
-                    // rescheduleAlarm() still runs; the surviving `id:`/`retry:`
-                    // rows keep the job recoverable on a later pass.
-                }
+            try {
+                await this.state.storage.put(SchedulerDO.indexKey(record.scheduledFor, record.id), record.id);
+            } catch {
+                // The infra is failing hard enough that even the re-claim put
+                // throws. Swallow so the remaining due records still drain and
+                // rescheduleAlarm() still runs; the surviving `id:`/`retry:`
+                // rows keep the job recoverable on a later pass.
             }
         }
     }
@@ -550,14 +548,15 @@ class SchedulerDO {
      * {@link recordRetry}. Pool state is read FRESH from storage per record (see
      * {@link reservePoolSlot}) and never held across the dispatch() await, so a
      * concurrent /complete landing mid-dispatch can't be clobbered.
+     * Once a kick succeeds, post-dispatch cleanup (clearing the `id:`/`retry:`
+     * rows) is swallowed rather than allowed to throw, so a successful dispatch
+     * NEVER propagates an error to {@link drainRecordGuarded}: every throw that
+     * escapes comes from the pre-dispatch or failed-dispatch paths, where the job
+     * is still re-fireable and the guard safely re-claims the time index.
      * @returns `true` only when the record was successfully dispatched (a 2xx
-     * kick). The caller ({@link drainRecordGuarded}) uses this in its per-record
-     * error guard: a record that returns `true` (or whose post-dispatch cleanup
-     * later throws) must NOT have its time-index claim restored, since re-firing
-     * an already-kicked job would break idempotency. A `false` return (pool
-     * backpressure or a failed dispatch) means the job is still re-fireable —
-     * either already re-armed here, or, if a throw escapes, re-claimed by the
-     * guard's catch.
+     * kick); `false` on pool backpressure or a failed dispatch (the job is still
+     * re-fireable — already re-armed here). The value is informational (the guard
+     * branches on throw/no-throw, not on this boolean).
      */
     private async drainRecord(record: ScheduleRecord): Promise<boolean> {
         const reserved = await this.reservePoolSlot(record);
