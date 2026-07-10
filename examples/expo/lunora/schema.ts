@@ -1,7 +1,7 @@
 import { defineSchema, defineTable, v } from "lunorash/server";
 
 /**
- * expo-example — a single-room chat, the backend behind the Expo mobile client.
+ * expo — a single-room chat, the backend behind the Expo mobile client.
  *
  * One project-owned table (`messages`) in the default root Durable Object — no
  * sharding, no D1-global, just live queries + optimistic writes, which is all a

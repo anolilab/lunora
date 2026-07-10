@@ -168,7 +168,7 @@ the convenience derived from `storage` / `getAuthHeaders`.
 ## Example app
 
 A complete Expo chat app (auth + live messages + offline queue) lives at
-[`apps/expo-example`](../../apps/expo-example) in this repo.
+[`examples/expo`](../../examples/expo) in this repo.
 
 ## License
 
