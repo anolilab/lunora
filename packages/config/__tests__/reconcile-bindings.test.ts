@@ -407,6 +407,56 @@ describe("reconcileWranglerBindings", () => {
         expect(result.warnings.join(" ")).not.toMatch(/hyperdrive is used/u);
     });
 
+    describe("voice agents", () => {
+        // A voice-enabled agent: its durable loop still rides `workflows[]`, but
+        // the real-time session is a Durable Object, so it ALSO needs a
+        // `durable_objects` binding + `new_sqlite_classes` migration.
+        const VOICE_SUPPORT = {
+            bindingName: "AGENT_SUPPORT",
+            className: "SupportAgentWorkflow",
+            exported: true,
+            exportName: "support",
+            name: "agent-support",
+            voice: true,
+            voiceBindingName: "VOICE_SUPPORT",
+            voiceClassName: "SupportVoiceDO",
+        };
+
+        it("provisions the voice DO binding + migration class for an exported voice agent", () => {
+            expect.assertions(4);
+
+            const result = reconcileWranglerBindings(root, baseInferred({ agents: [VOICE_SUPPORT] }));
+
+            expect(result.changed).toBe(true);
+            expect(result.added).toContain(`${VOICE_SUPPORT.voiceBindingName}/${VOICE_SUPPORT.voiceClassName}`);
+
+            const config = readConfig();
+
+            expect(config.durable_objects.bindings).toContainEqual({ class_name: "SupportVoiceDO", name: "VOICE_SUPPORT" });
+            expect(config.migrations.flatMap((migration: { new_sqlite_classes?: string[] }) => migration.new_sqlite_classes ?? [])).toContain("SupportVoiceDO");
+        });
+
+        it("is idempotent — a second run is a no-op", () => {
+            expect.assertions(1);
+
+            reconcileWranglerBindings(root, baseInferred({ agents: [VOICE_SUPPORT] }));
+
+            expect(reconcileWranglerBindings(root, baseInferred({ agents: [VOICE_SUPPORT] })).changed).toBe(false);
+        });
+
+        it("adds no voice DO for a non-voice agent (workflow-only path never touches durable_objects)", () => {
+            expect.assertions(1);
+
+            const result = reconcileWranglerBindings(
+                root,
+                baseInferred({ agents: [{ ...VOICE_SUPPORT, voice: false, voiceBindingName: undefined, voiceClassName: undefined }] }),
+            );
+
+            // The agent still reconciles into workflows[], but never a voice DO.
+            expect(result.added.join(" ")).not.toContain("VoiceDO");
+        });
+    });
+
     describe("containers", () => {
         const TRANSCODER = {
             bindingName: "CONTAINER_TRANSCODER",
