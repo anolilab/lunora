@@ -205,8 +205,16 @@ export const createChargeMiddleware = async (config: X402ChargeConfig, routeOver
             response = await runHandler();
         } catch (error) {
             // The client paid but we couldn't produce the resource — release the
-            // verified payment so the facilitator never settles it.
-            await result.cancellationDispatcher.cancel({ error, reason: "handler_threw" });
+            // verified payment so the facilitator never settles it. A cancellation
+            // failure must not mask why the handler threw: surface it to the Worker
+            // logs (the client paid and we couldn't release it — worth a tail line)
+            // and rethrow the original error the caller was waiting on.
+            try {
+                await result.cancellationDispatcher.cancel({ error, reason: "handler_threw" });
+            } catch (cancelError) {
+                // eslint-disable-next-line no-console -- a stuck-payment cancellation failure is worth a Worker tail line
+                console.error("x402 charge: failed to cancel payment after the handler threw", cancelError);
+            }
 
             throw error;
         }

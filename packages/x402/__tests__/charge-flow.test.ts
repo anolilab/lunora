@@ -1,3 +1,4 @@
+import { x402HTTPResourceServer as X402HTTPResourceServer } from "@x402/core/http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { withX402 } from "../src/charge/http-action";
@@ -56,6 +57,36 @@ describe("createChargeMiddleware", () => {
         expect(handler).not.toHaveBeenCalled();
         // Only /supported was hit — no verify/settle for an unpaid request.
         expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("preserves the original handler error when payment cancellation also fails", async () => {
+        // Reach the payment-verified branch without a real payment: stub the
+        // resource server's init + request processing so the handler runs, then
+        // make cancellation itself reject. The caller must still see the handler's
+        // error, not the cancellation failure.
+        vi.spyOn(X402HTTPResourceServer.prototype, "initialize").mockResolvedValue(undefined);
+        const cancel = vi.fn<() => Promise<never>>(() => Promise.reject(new Error("cancel exploded")));
+
+        vi.spyOn(X402HTTPResourceServer.prototype, "processHTTPRequest").mockResolvedValue({
+            cancellationDispatcher: { cancel },
+            type: "payment-verified",
+        } as never);
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const middleware = await createChargeMiddleware(chargeConfig);
+        const handlerError = new Error("handler boom");
+
+        await expect(
+            middleware.handle(new Request("https://api.example/report"), () => {
+                throw handlerError;
+            }),
+        ).rejects.toBe(handlerError);
+
+        // Cancellation was attempted and its failure was surfaced, not thrown.
+        expect(cancel).toHaveBeenCalledWith({ error: handlerError, reason: "handler_threw" });
+        expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("failed to cancel payment"), expect.any(Error));
+
+        vi.restoreAllMocks();
     });
 });
 
