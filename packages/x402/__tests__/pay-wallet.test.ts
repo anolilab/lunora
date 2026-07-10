@@ -1,13 +1,20 @@
+import { createKeyPairSignerFromPrivateKeyBytes, getBase58Decoder } from "@solana/kit";
 import { x402Client as X402Client } from "@x402/core/client";
 import { describe, expect, it } from "vitest";
 
 import type { X402PayConfig } from "../src/config";
 import { createX402Pay } from "../src/pay";
-import { registerWallet, resolveEvmAccount } from "../src/pay/wallet";
+import { registerWallet, resolveEvmAccount, resolveSvmSigner } from "../src/pay/wallet";
 
 // A well-known public Hardhat/Anvil test key (account #0). Not a real secret.
 const TEST_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"; // secret-scanner:allow -- public Hardhat test key #0
 const TEST_ADDRESS = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
+
+// A deterministic all-sevens 32-byte Solana seed (not a real key) and the address it derives.
+const SVM_SEED = new Uint8Array(32).fill(7); // secret-scanner:allow -- deterministic all-sevens test seed
+const SVM_ADDRESS = "GmaDrppBC7P5ARKV8g3djiwP89vz1jLK23V2GBjuAEGB";
+const svmSeedJson = JSON.stringify([...SVM_SEED]);
+const svmSeedBase58 = getBase58Decoder().decode(SVM_SEED);
 
 const boundedPolicy = { maxPerCall: "$0.10" } as const;
 
@@ -22,6 +29,45 @@ describe("resolveEvmAccount", () => {
 
     it("rejects a key that is not 32-byte hex", async () => {
         await expect(resolveEvmAccount("nothex")).rejects.toThrow(/32-byte hex/);
+    });
+});
+
+describe("resolveSvmSigner", () => {
+    it("derives the same address from a 32-byte seed given as JSON array or base58", async () => {
+        const fromJson = await resolveSvmSigner(svmSeedJson);
+        const fromBase58 = await resolveSvmSigner(svmSeedBase58);
+
+        expect(fromJson.address).toBe(SVM_ADDRESS);
+        expect(fromBase58.address).toBe(SVM_ADDRESS);
+    });
+
+    it("accepts a full 64-byte secret key (seed ‖ public key)", async () => {
+        // Derive the matching public key to assemble the 64-byte secret-key form.
+        const seedSigner = await createKeyPairSignerFromPrivateKeyBytes(SVM_SEED, true);
+        const publicKey = new Uint8Array(await crypto.subtle.exportKey("raw", seedSigner.keyPair.publicKey));
+        const full = new Uint8Array(64);
+
+        full.set(SVM_SEED, 0);
+        full.set(publicKey, 32);
+
+        const signer = await resolveSvmSigner(JSON.stringify([...full]));
+
+        expect(signer.address).toBe(SVM_ADDRESS);
+    });
+
+    it("rejects a key that decodes to neither 32 nor 64 bytes", async () => {
+        const sixteen = getBase58Decoder().decode(new Uint8Array(16).fill(3));
+
+        await expect(resolveSvmSigner(sixteen)).rejects.toThrow(/32 or 64 bytes/);
+    });
+
+    it("rejects a value that is neither base58 nor a JSON byte array", async () => {
+        await expect(resolveSvmSigner("0OIl-not-base58")).rejects.toThrow(/base58 secret key or a JSON byte array/);
+    });
+
+    it("rejects a malformed JSON byte array", async () => {
+        await expect(resolveSvmSigner("[1, 2,")).rejects.toThrow(/not valid JSON/);
+        await expect(resolveSvmSigner('["a", "b"]')).rejects.toThrow(/array of byte values/);
     });
 });
 
@@ -47,11 +93,18 @@ describe("registerWallet", () => {
         await expect(registerWallet(client, config, { getSecret: () => TEST_KEY })).rejects.toThrow(/CDP-managed EVM custody.*cdp-sdk/s);
     });
 
-    it("refuses SVM custody (pay side not wired yet)", async () => {
+    it("registers the SVM exact scheme for a raw-key signer", async () => {
         const client = new X402Client();
         const config: X402PayConfig = { network: "solana", policy: boundedPolicy, signer: { secretName: "AGENT_KEY", type: "raw-key" } };
 
-        await expect(registerWallet(client, config, { getSecret: () => TEST_KEY })).rejects.toThrow(/Solana \(SVM\)/);
+        await expect(registerWallet(client, config, { getSecret: () => svmSeedJson })).resolves.toBeUndefined();
+    });
+
+    it("refuses CDP-managed SVM custody with guidance (needs @coinbase/cdp-sdk)", async () => {
+        const client = new X402Client();
+        const config: X402PayConfig = { network: "solana", policy: boundedPolicy, signer: { account: "agent-wallet", type: "cdp" } };
+
+        await expect(registerWallet(client, config, { getSecret: () => svmSeedJson })).rejects.toThrow(/CDP-managed Solana custody.*cdp-sdk/s);
     });
 });
 

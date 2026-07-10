@@ -31,7 +31,7 @@ export { createPayFetch } from "./fetch";
 export type { SpendPolicy, SpendState } from "./policy";
 export { assertBoundedPolicy, buildPaymentGuard, buildSpendPolicy, createSpendState, DEFAULT_STABLECOIN_DECIMALS, recordSpend, usdToAtomic } from "./policy";
 export type { WalletDeps } from "./wallet";
-export { registerWallet, resolveEvmAccount } from "./wallet";
+export { registerWallet, resolveEvmAccount, resolveSvmSigner } from "./wallet";
 
 /** A configured pay rail: a payment-enabled `fetch` bounded by the spend policy. */
 export interface X402Pay {

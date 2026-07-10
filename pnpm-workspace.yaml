@@ -268,10 +268,12 @@ catalogs:
   # >24h old so no `minimumReleaseAgeExclude` entry is needed. `@x402/core`'s
   # only runtime dep is `zod@^3`, which arrives TRANSITIVELY — do NOT import zod
   # directly in @lunora/x402 (the repo pins zod@4; two instances break
-  # `instanceof`). `viem` (>=2.48.11 per @x402/evm) is the EVM signer; the
-  # Solana peers ride in via `@x402/svm`. `@coinbase/x402` is the CDP wallet path
+  # `instanceof`). `viem` (>=2.48.11 per @x402/evm) is the EVM signer; `@solana/kit`
+  # (a peer of `@x402/svm`) is the SVM signer, declared directly because @lunora/x402
+  # imports it to resolve the agent keypair. `@coinbase/x402` is the CDP wallet path
   # (optional peer + devDep, mirrors @cloudflare/playwright on @lunora/browser).
   web3:
+    "@solana/kit": 5.5.1
     "@x402/core": 2.17.0
     "@x402/evm": 2.17.0
     "@x402/fetch": 2.17.0

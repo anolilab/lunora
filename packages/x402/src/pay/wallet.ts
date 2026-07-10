@@ -7,15 +7,17 @@
  * a plain var. The right scheme family is registered on the client by the
  * configured network: `@x402/evm` (viem) for `eip155:*`, `@x402/svm` for Solana.
  *
- * Custody status today. EVM raw-key is fully wired: a `ctx.secrets` private key
- * becomes a viem `LocalAccount`, which satisfies `@x402/evm`'s structural
- * `ClientEvmSigner`. SVM raw-key and CDP-managed custody are recognised config
- * shapes but not yet wired here; both fail loudly with guidance. (A CDP wallet
- * needs `@coinbase/cdp-sdk` — `@coinbase/x402` is a facilitator-auth helper, not a
- * signer provider.)
+ * Custody status today. Raw-key custody is fully wired on both families. On EVM a
+ * `ctx.secrets` private key becomes a viem `LocalAccount` (a structural
+ * `ClientEvmSigner`); on SVM a `ctx.secrets` secret key becomes a `@solana/kit`
+ * `KeyPairSigner` (a structural `ClientSvmSigner`/`TransactionSigner`). CDP-managed
+ * custody is a recognised config shape but not yet wired on either family; it fails
+ * loudly with guidance. (A CDP wallet needs `@coinbase/cdp-sdk` — `@coinbase/x402`
+ * is a facilitator-auth helper, not a signer provider.)
  */
 import { LunoraError } from "@lunora/errors";
 import type { x402Client } from "@x402/core/client";
+import type { ClientSvmSigner } from "@x402/svm";
 import type { PrivateKeyAccount } from "viem/accounts";
 
 import type { X402PayConfig } from "../config";
@@ -62,6 +64,56 @@ export const resolveEvmAccount = async (privateKey: string): Promise<PrivateKeyA
 };
 
 /**
+ * Resolve a `@solana/kit` `KeyPairSigner` from a raw Solana secret key. The secret
+ * may be given as a JSON byte array (`[12,34,…]`, the `solana-keygen` keyfile
+ * format) or as a base58 string. A 64-byte value is a full secret key (seed ‖
+ * public key); a 32-byte value is the seed alone. The returned signer is a
+ * structural `ClientSvmSigner` (`TransactionSigner`), so `@x402/svm` accepts it.
+ */
+export const resolveSvmSigner = async (secret: string): Promise<ClientSvmSigner> => {
+    const trimmed = secret.trim();
+    const { createKeyPairSignerFromBytes, createKeyPairSignerFromPrivateKeyBytes, getBase58Encoder } = await import("@solana/kit");
+
+    let bytes: Uint8Array;
+
+    if (trimmed.startsWith("[")) {
+        // `solana-keygen` keyfile format: a JSON array of byte values.
+        let parsed: unknown;
+
+        try {
+            parsed = JSON.parse(trimmed);
+        } catch {
+            throw new LunoraError("ENV_INVALID", "x402 pay: the Solana wallet key looks like a JSON byte array but is not valid JSON.");
+        }
+
+        if (!Array.isArray(parsed) || parsed.some((entry) => typeof entry !== "number")) {
+            throw new LunoraError("ENV_INVALID", "x402 pay: the Solana wallet key JSON must be an array of byte values.");
+        }
+
+        bytes = Uint8Array.from(parsed as number[]);
+    } else {
+        try {
+            bytes = Uint8Array.from(getBase58Encoder().encode(trimmed));
+        } catch {
+            throw new LunoraError("ENV_INVALID", "x402 pay: the Solana wallet key must be a base58 secret key or a JSON byte array.");
+        }
+    }
+
+    if (bytes.length === 64) {
+        return createKeyPairSignerFromBytes(bytes);
+    }
+
+    if (bytes.length === 32) {
+        return createKeyPairSignerFromPrivateKeyBytes(bytes);
+    }
+
+    throw new LunoraError(
+        "ENV_INVALID",
+        `x402 pay: the Solana wallet key must decode to 32 or 64 bytes (got ${String(bytes.length)}). Provide a base58 secret key or a JSON byte array.`,
+    );
+};
+
+/**
  * Register the scheme family the configured network needs on `client`, wired to
  * the resolved agent signer. Dispatches on network family (EVM vs SVM) and on the
  * configured signer custody (raw key vs CDP). Unwired custodies throw a
@@ -87,11 +139,16 @@ export const registerWallet = async (client: x402Client, config: X402PayConfig, 
         return;
     }
 
-    // SVM (Solana). Pay-side custody is not wired yet — the SVM charge rail works.
-    const detail = signer.type === "cdp" ? `CDP account "${signer.account}"` : `raw key "${signer.secretName}"`;
+    // SVM (Solana). Raw-key custody is wired; CDP-managed custody is not yet.
+    if (signer.type === "cdp") {
+        throw new LunoraError(
+            "NOT_IMPLEMENTED",
+            `x402 pay: CDP-managed Solana custody (account "${signer.account}") is not wired yet — it needs @coinbase/cdp-sdk. Use a "raw-key" signer for now.`,
+        );
+    }
 
-    throw new LunoraError(
-        "NOT_IMPLEMENTED",
-        `x402 pay: Solana (SVM) wallet custody (${detail}) is not wired yet. The SVM charge rail works today; SVM pay is coming.`,
-    );
+    const svmSigner = await resolveSvmSigner(await requireSecret(deps.getSecret, signer.secretName));
+    const { registerExactSvmScheme } = await import("@x402/svm/exact/client");
+
+    registerExactSvmScheme(client, { networks: [network], signer: svmSigner });
 };
