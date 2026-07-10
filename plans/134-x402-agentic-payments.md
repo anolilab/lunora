@@ -198,10 +198,12 @@ runHandler) }`): no/invalid `X-PAYMENT` → build the `PAYMENT-REQUIRED`
 > **workerd smoke deferred, not built** (Phase 1 item 5 + the Workers-safety
 > caveat): the `@x402/core` + `@x402/evm` boot-under-workerd probe is not spun up
 > because workerd pool boot is environment-dependent in this sandbox (memory
-> `project-workerd-sandbox-limit`). The intent is recorded in
-> `vitest.config.ts`; gate it on `LUNORA_WORKERD_TESTS=1` when a green pool is
-> available. The Node unit suite proves the protocol glue against in-memory
-> facilitator/account doubles.
+> `project-workerd-sandbox-limit`). **Re-probed 2026-07-10** (the storage workerd
+> gate under `LUNORA_WORKERD_TESTS=1`): still hangs on connect-timeout, so the
+> smoke remains deferred. The intent + the how-to (mirror @lunora/storage's
+> two-project config) is recorded in `vitest.config.ts`; gate it on
+> `LUNORA_WORKERD_TESTS=1` when a green pool is available. The Node unit suite
+> proves the protocol glue against in-memory facilitator/account doubles.
 
 The reusable core does verify/settle; we own the Lunora request/response glue.
 
@@ -328,15 +330,26 @@ annotations, handler)` that registers a tool whose dispatch runs the charge
 > `wrapFetchWithPayment` (`@x402/fetch`). `deps.getSecret` is wired to
 > `ctx.secrets.get` at the call site (wallet key is a **secret**).
 >
-> **Deferred, failing loudly with `NOT_IMPLEMENTED` + guidance** (recognised
-> config shapes, not silent no-ops): **SVM pay custody** and **CDP custody**.
+> **SVM (Solana) raw-key pay custody now ships too** (follow-up, commit
+> `aa196ae98`): `resolveSvmSigner(secret)` decodes a `ctx.secrets` Solana secret
+> key — the `solana-keygen` JSON byte-array keyfile format **or** a base58 string
+> — into a `@solana/kit` `KeyPairSigner` (a structural `ClientSvmSigner` /
+> `TransactionSigner`), routing 64-byte secret keys to
+> `createKeyPairSignerFromBytes` and 32-byte seeds to
+> `createKeyPairSignerFromPrivateKeyBytes`, and registers the SVM exact scheme via
+> `@x402/svm/exact/client`'s `registerExactSvmScheme`. `@solana/kit` (a peer of
+> `@x402/svm`) is declared directly on `@lunora/x402`. Raw-key custody is now
+> wired on **both** families; the pay rail is fully multi-chain.
+>
+> **Still deferred, failing loudly with `NOT_IMPLEMENTED` + guidance** (recognised
+> config shapes, not silent no-ops): **CDP-managed custody** (on both EVM and SVM).
 >
 > **Plan correction (2026-07-04):** `@coinbase/x402` is **not** a wallet/signer
 > provider — v2.1.0 is a _facilitator-auth_ helper (`createCdpAuthHeaders`,
 > `createFacilitatorConfig`, `facilitator`). CDP **wallet** custody needs
 > `@coinbase/cdp-sdk` (an undeclared, heavier peer). So the "both custodies from
-> day one via `@coinbase/x402`" decision is revised: EVM raw-key ships now; CDP
-> custody is scoped to a follow-up that wires `@coinbase/cdp-sdk`. `wrapClient`
+> day one via `@coinbase/x402`" decision is revised: raw-key ships now (EVM + SVM);
+> CDP custody is scoped to a follow-up that wires `@coinbase/cdp-sdk`. `wrapClient`
 > (the MCP-client payer) is likewise deferred — it belongs with Phase 3's remote
 > MCP transport. The `X-PAYMENT` / `X-PAYMENT-RESPONSE` fetch loop ships now.
 
@@ -377,8 +390,16 @@ wrapClient }`. `wrapClient` is the `withX402Client`-equivalent that wraps a
 > - `usdToAtomic` parses digit-by-digit (no binary-float drift), rejects
 >   exponential/negative; refusals surface as typed `LunoraError` codes.
 >
-> Advisor lint (item 4) is a follow-up; the runtime guard is the load-bearing
-> part and it ships now.
+> Advisor lint (item 4) — **obviated, not built** (follow-up review 2026-07-10).
+> The lint was scoped to flag an unbounded/`null` spend policy, but Phase 5 made
+> `X402PayConfig.policy` a **required, non-nullable** field: a missing or `null`
+> policy is now a **compile error**, and `assertBoundedPolicy` throws `FORBIDDEN`
+> at runtime before a signer is resolved. On top of that the pay config lives in
+> the app's `createShardDO({ x402: (env) => ({ policy }) })` thunk — outside any
+> procedure body — so the procedure-middleware advisor feeder
+> (`discover-procedure-middleware` → `ctx.procedureProtections`) is the wrong seam
+> to catch it. The type system + the runtime guard already fail closed, so a
+> static lint would be redundant. Not planned.
 
 Autonomous spending needs guardrails **before** anyone runs the pay rail against
 a real network:
