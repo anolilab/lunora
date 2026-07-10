@@ -83,7 +83,7 @@ export interface X402PayConfig {
     readonly network: X402Network;
     /** Mandatory spend limits + approval gates. An unbounded policy is refused. */
     readonly policy: SpendPolicy;
-    /** How the agent wallet is custodied (raw key or CDP-managed). */
+    /** How the agent wallet is custodied (raw key, a user-supplied signer, or CDP-managed). */
     readonly signer: X402SignerConfig;
 }
 

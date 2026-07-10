@@ -73,12 +73,8 @@ const assertSignerFamily = (signer: ClientEvmSigner | ClientSvmSigner, evm: bool
  * the optional `@coinbase/cdp-sdk` peer installed — a clear error says so if not.
  */
 const resolveCdpEvmAccount = async (signer: X402CdpSignerConfig, getSecret: GetSecret): Promise<ClientEvmSigner> => {
-    const [apiKeyId, apiKeySecret, walletSecret] = await Promise.all([
-        requireSecret(getSecret, signer.apiKeyIdSecretName ?? "CDP_API_KEY_ID"),
-        requireSecret(getSecret, signer.apiKeySecretName ?? "CDP_API_KEY_SECRET"),
-        requireSecret(getSecret, signer.walletSecretName ?? "CDP_WALLET_SECRET"),
-    ]);
-
+    // Load the optional peer first: if it is missing, a "not installed" error is
+    // far more actionable than a "secret not set" one for the same misconfig.
     let cdpModule: typeof import("@coinbase/cdp-sdk");
 
     try {
@@ -89,6 +85,12 @@ const resolveCdpEvmAccount = async (signer: X402CdpSignerConfig, getSecret: GetS
             'x402 pay: CDP-managed custody needs the optional @coinbase/cdp-sdk peer — install it, or use "raw-key"/"signer" custody instead.',
         );
     }
+
+    const [apiKeyId, apiKeySecret, walletSecret] = await Promise.all([
+        requireSecret(getSecret, signer.apiKeyIdSecretName ?? "CDP_API_KEY_ID"),
+        requireSecret(getSecret, signer.apiKeySecretName ?? "CDP_API_KEY_SECRET"),
+        requireSecret(getSecret, signer.walletSecretName ?? "CDP_WALLET_SECRET"),
+    ]);
 
     const cdp = new cdpModule.CdpClient({ apiKeyId, apiKeySecret, walletSecret });
 
@@ -181,48 +183,38 @@ export const registerWallet = async (client: x402Client, config: X402PayConfig, 
     const { signer } = config;
     const evm = isEvmNetwork(config.network);
 
-    // Escape hatch: a signer the caller already constructed. Just pick the
-    // family's exact scheme and register it — no `ctx.secrets` read at all.
+    // Phase 1 — custody: resolve a concrete signer for the network family. The
+    // escape hatch returns the caller's signer with no `ctx.secrets` read; raw-key
+    // and CDP resolve one from secrets; CDP-on-Solana is not wired.
+    let account: ClientEvmSigner | ClientSvmSigner;
+
     if (signer.type === "signer") {
         assertSignerFamily(signer.signer, evm);
-
-        if (evm) {
-            const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
-
-            registerExactEvmScheme(client, { networks: [network], signer: signer.signer as ClientEvmSigner });
-        } else {
-            const { registerExactSvmScheme } = await import("@x402/svm/exact/client");
-
-            registerExactSvmScheme(client, { networks: [network], signer: signer.signer as ClientSvmSigner });
+        account = signer.signer;
+    } else if (signer.type === "cdp") {
+        if (!evm) {
+            throw new LunoraError(
+                "NOT_IMPLEMENTED",
+                `x402 pay: CDP-managed Solana custody (account "${signer.account}") is not wired — a CDP Solana account is not a @solana/kit signer. Build a @solana/kit signer around it and pass it via the { type: "signer" } escape hatch, or use "raw-key".`,
+            );
         }
 
-        return;
+        account = await resolveCdpEvmAccount(signer, deps.getSecret);
+    } else {
+        const secret = await requireSecret(deps.getSecret, signer.secretName);
+
+        account = evm ? await resolveEvmAccount(secret) : await resolveSvmSigner(secret);
     }
 
+    // Phase 2 — scheme: register the family's exact scheme with the resolved
+    // signer. Written once per family; the family guard above keeps the cast safe.
     if (evm) {
-        // CDP-managed custody: the SDK signs the EIP-712 authorization; no key read.
-        const account =
-            signer.type === "cdp"
-                ? await resolveCdpEvmAccount(signer, deps.getSecret)
-                : await resolveEvmAccount(await requireSecret(deps.getSecret, signer.secretName));
         const { registerExactEvmScheme } = await import("@x402/evm/exact/client");
 
-        registerExactEvmScheme(client, { networks: [network], signer: account });
+        registerExactEvmScheme(client, { networks: [network], signer: account as ClientEvmSigner });
+    } else {
+        const { registerExactSvmScheme } = await import("@x402/svm/exact/client");
 
-        return;
+        registerExactSvmScheme(client, { networks: [network], signer: account as ClientSvmSigner });
     }
-
-    // SVM (Solana). Raw-key custody is wired; CDP on Solana is not (the CDP Solana
-    // account is not a `@solana/kit` signer) — point at the escape hatch.
-    if (signer.type === "cdp") {
-        throw new LunoraError(
-            "NOT_IMPLEMENTED",
-            `x402 pay: CDP-managed Solana custody (account "${signer.account}") is not wired — a CDP Solana account is not a @solana/kit signer. Build a @solana/kit signer around it and pass it via the { type: "signer" } escape hatch, or use "raw-key".`,
-        );
-    }
-
-    const svmSigner = await resolveSvmSigner(await requireSecret(deps.getSecret, signer.secretName));
-    const { registerExactSvmScheme } = await import("@x402/svm/exact/client");
-
-    registerExactSvmScheme(client, { networks: [network], signer: svmSigner });
 };

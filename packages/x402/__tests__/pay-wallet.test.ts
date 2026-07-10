@@ -199,6 +199,29 @@ describe("registerWallet", () => {
 
         await expect(registerWallet(client, config, { getSecret: () => undefined })).rejects.toThrow(/is not an EVM.*network is EVM/s);
     });
+
+    it("fails with install guidance when the @coinbase/cdp-sdk peer is not installed", async () => {
+        // Override the file-level mock for this test only: a factory that throws makes
+        // the lazy `import("@coinbase/cdp-sdk")` reject, exercising the missing-peer catch.
+        // A fresh module import keeps the override off the other tests' top-level import.
+        vi.resetModules();
+        vi.doMock(import("@coinbase/cdp-sdk"), () => {
+            throw new Error("Cannot find package '@coinbase/cdp-sdk'");
+        });
+
+        try {
+            const { registerWallet: registerWithoutPeer } = await import("../src/pay/wallet");
+            const client = new X402Client();
+            const config: X402PayConfig = { network: "base", policy: boundedPolicy, signer: { account: "agent-wallet", type: "cdp" } };
+
+            await expect(registerWithoutPeer(client, config, { getSecret: (name) => `secret-for-${name}` })).rejects.toThrow(
+                /needs the optional @coinbase\/cdp-sdk peer/,
+            );
+        } finally {
+            vi.doUnmock("@coinbase/cdp-sdk");
+            vi.resetModules();
+        }
+    });
 });
 
 describe("createX402Pay", () => {
