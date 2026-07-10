@@ -3,6 +3,7 @@ import { createAi } from "@lunora/ai";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { createDispatchRunner } from "@lunora/dispatch";
 
+import { fromBase64, toBase64 } from "../../../shared/base64";
 import { createStreamGenerate } from "./generate";
 import { buildModelMessages } from "./model-messages";
 import { DEFAULT_AGENT_FUNCTION_PATHS, toFunctionReference } from "./paths";
@@ -440,35 +441,6 @@ const readTranscriptionText = (result: unknown): string => {
     return "";
 };
 
-/**
- * Base64-encode bytes for the Workers AI transcription input — Whisper expects
- * `{ audio: &lt;base64 string> }`, not a raw number array. Encoded in fixed-size
- * chunks so a large utterance never blows the call stack via a spread into
- * `String.fromCharCode`.
- */
-const bytesToBase64 = (bytes: Uint8Array): string => {
-    const CHUNK = 0x80_00;
-    let binary = "";
-
-    for (let index = 0; index < bytes.length; index += CHUNK) {
-        binary += String.fromCodePoint(...bytes.subarray(index, index + CHUNK));
-    }
-
-    return btoa(binary);
-};
-
-/** Base64-decode a string to bytes (some TTS models return an `{ audio }` base64 string). */
-const base64ToBytes = (base64: string): Uint8Array => {
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-
-    for (let index = 0; index < binary.length; index += 1) {
-        bytes[index] = binary.codePointAt(index) ?? 0;
-    }
-
-    return bytes;
-};
-
 /** Normalize a Workers AI TTS result (stream, `Response`, or `{ audio }`) to a {@link VoiceAudioSource}. */
 // eslint-disable-next-line sonarjs/function-return-type -- deliberate normalizer: collapses several Workers AI result shapes into the VoiceAudioSource union
 const readSynthesisAudio = (result: unknown): VoiceAudioSource => {
@@ -484,7 +456,8 @@ const readSynthesisAudio = (result: unknown): VoiceAudioSource => {
         const { audio } = result;
 
         if (typeof audio === "string") {
-            return base64ToBytes(audio);
+            // Some TTS models return the audio as an `{ audio }` base64 string.
+            return fromBase64(audio);
         }
 
         if (audio instanceof ReadableStream || audio instanceof Uint8Array) {
@@ -645,7 +618,8 @@ class VoiceSessionDO {
     protected async transcribe(pcm: Uint8Array): Promise<string> {
         const wav = pcmToWav(pcm);
 
-        return readTranscriptionText(await this.ai.run(this.sttModel, { audio: bytesToBase64(wav) }));
+        // Whisper expects `{ audio: <base64 string> }`, not a raw number array.
+        return readTranscriptionText(await this.ai.run(this.sttModel, { audio: toBase64(wav) }));
     }
 
     /** Production TTS seam: synthesize one sentence to a normalized audio source; `signal` aborts an in-flight barge-in. */

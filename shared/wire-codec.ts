@@ -55,6 +55,8 @@
  * plain objects stay byte-identical; only array-position `undefined` is tagged.
  */
 
+import { fromBase64, toBase64 } from "./base64";
+
 /**
  * Self-delimiting tag. A JSON array is significant to the codec **only** when its
  * first element is exactly this string, so the collision surface is a user array
@@ -116,30 +118,6 @@ const ERROR_CTORS: Record<string, { new (message?: string): Error }> = {
     SyntaxError,
     TypeError,
     URIError,
-};
-
-const toBase64 = (bytes: Uint8Array): string => {
-    // Chunk to stay well under the argument-count ceiling of `String.fromCharCode`
-    // on large buffers, without allocating an intermediate string per byte.
-    let binary = "";
-    const chunk = 0x8000;
-
-    for (let index = 0; index < bytes.length; index += chunk) {
-        binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
-    }
-
-    return btoa(binary);
-};
-
-const fromBase64 = (base64: string): Uint8Array => {
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-
-    for (let index = 0; index < binary.length; index += 1) {
-        bytes[index] = binary.codePointAt(index) ?? 0;
-    }
-
-    return bytes;
 };
 
 /**
