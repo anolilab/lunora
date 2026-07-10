@@ -119,6 +119,11 @@
         "description": "useQuery / useMutation / useSubscription / useAuth hooks.",
         "features": ["useQuery / useMutation hooks", "useSubscription live data", "useAuth integration"]
     },
+    "react-native": {
+        "displayName": "React Native",
+        "description": "React Native / Expo integration: the React hooks plus an AsyncStorage client factory and a better-auth Expo bridge.",
+        "features": ["AsyncStorage offline queue", "Credentialed fetch + WebSocket", "better-auth Expo bridge"]
+    },
     "runtime": {
         "displayName": "Runtime",
         "description": "Worker entry: RPC router, shard resolver, query coordinator.",

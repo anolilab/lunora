@@ -32,7 +32,7 @@ const CATEGORY_CONFIG = {
     },
     client: {
         title: "Client & UI",
-        packages: ["client", "react", "vue", "solid", "svelte", "db", "studio"],
+        packages: ["client", "react", "react-native", "vue", "solid", "svelte", "db", "studio"],
     },
     "vite-plugin": { title: "Build & Tooling", packages: ["vite", "astro"] },
     codegen: { title: "Codegen", packages: ["codegen"] },
