@@ -2537,6 +2537,9 @@ importers:
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
+      '@lunora/x402':
+        specifier: workspace:*
+        version: link:../x402
       '@modelcontextprotocol/sdk':
         specifier: catalog:mcp
         version: 1.29.0(zod@4.4.3)

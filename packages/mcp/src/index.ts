@@ -15,6 +15,8 @@
  */
 export type { McpFetchHandler } from "./http";
 export { createMcpFetchHandler } from "./http";
+export type { PaidMcpChargeConfig, PaidMcpServer, PaidMcpServerConfig, RegisterPaidToolOptions, RegisterToolOptions, ToolHandler } from "./paid";
+export { createPaidMcpServer } from "./paid";
 export type { LunoraMcpServerOptions } from "./server";
 export { connectStdio, createLunoraMcpServer } from "./server";
 export type { ToolDefinition, ToolInputSchema, ToolResult } from "./tools";
