@@ -21,8 +21,7 @@ The root export (`@lunora/x402`) carries only the shared config/types
 
 **Both rails shipped.** The **charge** rail gates HTTP-action routes, procedures
 (`.x402({ price })`), and MCP tools behind a USDC price; the **pay** rail signs and
-retries `402` challenges under a mandatory spend policy. See
-`plans/134-x402-agentic-payments.md` for the phase history.
+retries `402` challenges under a mandatory spend policy.
 
 ## Networks & custody
 
