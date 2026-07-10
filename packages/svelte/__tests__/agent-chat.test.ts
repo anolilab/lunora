@@ -1,11 +1,18 @@
-import type { FunctionReference, LunoraClient } from "@lunora/client";
+import type { FunctionReference } from "@lunora/client";
 import { get } from "svelte/store";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import type { AgentChatApi } from "../src/agent-chat";
+import type { AgentChatApi, AgentLiveEvent } from "../src/agent-chat";
 import { agentChat } from "../src/agent-chat";
+import { createFakeClient } from "./fake-client";
 
 const makeRef = (reference: string): FunctionReference => {
+    return { __lunoraRef: reference };
+};
+
+// The token stream must be referenced exactly — a widened `FunctionReference<"stream">`
+// is not assignable to the phantom-typed `AgentTokenStreamReference`.
+const makeStreamRef = (reference: string): FunctionReference<"stream", { key: string }, AgentLiveEvent> => {
     return { __lunoraRef: reference };
 };
 
@@ -14,12 +21,7 @@ const THREAD_REF = "agents:agentThread";
 const APPROVAL_REF = "agents:agentResolveApproval";
 const SEND_REF = "chat:startRun";
 const CANCEL_REF = "chat:cancelRun";
-
-interface SubscribeCall {
-    args: { key: string; limit?: number };
-    callback: (value: unknown) => void;
-    functionPath: string;
-}
+const STREAM_REF = "chat:agentEvents";
 
 const buildApi = (): AgentChatApi =>
     ({
@@ -30,40 +32,6 @@ const buildApi = (): AgentChatApi =>
         },
     }) as unknown as AgentChatApi;
 
-const createFakeClient = () => {
-    const subscribeCalls: SubscribeCall[] = [];
-    const unsubscribeSpy = vi.fn<() => void>();
-    const mutationSpy = vi.fn<() => Promise<{ resolved: boolean }>>(async () => {
-        return { resolved: true };
-    });
-
-    const subscribe = vi.fn<(function_: FunctionReference, args: SubscribeCall["args"], callback: (value: unknown) => void) => () => void>(
-        (function_, args, callback) => {
-            // Bracket access — `__lunoraRef` is the public function-reference marker.
-            subscribeCalls.push({ args, callback, functionPath: function_["__lunoraRef"] });
-
-            return unsubscribeSpy;
-        },
-    );
-
-    const client = { mutation: mutationSpy, subscribe } as unknown as LunoraClient;
-
-    return {
-        client,
-        mutationSpy,
-        /** Push `value` to every subscription opened on `functionPath`. */
-        push: (functionPath: string, value: unknown): void => {
-            for (const call of subscribeCalls) {
-                if (call.functionPath === functionPath) {
-                    call.callback(value);
-                }
-            }
-        },
-        subscribeCalls,
-        unsubscribeSpy,
-    };
-};
-
 describe(agentChat, () => {
     it("surfaces durable history and live status over the agents:* subscriptions", () => {
         const fake = createFakeClient();
@@ -73,7 +41,9 @@ describe(agentChat, () => {
         expect(fake.subscribeCalls.map((call) => call.functionPath).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([MESSAGES_REF, THREAD_REF]);
         expect(get(handle.messages)).toStrictEqual([]);
         expect(get(handle.status)).toBeUndefined();
-        // No token-stream primitive on this adapter — streamingText stays empty.
+        // With no `stream` reference the token stream is opened with `"skip"` args,
+        // so no stream is opened and `streamingText` stays empty.
+        expect(fake.streamCalls).toHaveLength(0);
         expect(get(handle.streamingText)).toBe("");
 
         fake.push(THREAD_REF, { instanceId: "wf-1", status: "running" });
@@ -87,6 +57,35 @@ describe(agentChat, () => {
         handle.teardown();
 
         expect(fake.unsubscribeSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it("accumulates in-flight token deltas into streamingText, then clears once the turn persists", async () => {
+        const fake = createFakeClient();
+        const handle = agentChat(fake.client, {
+            api: buildApi(),
+            send: makeRef(SEND_REF) as FunctionReference<"mutation">,
+            stream: makeStreamRef(STREAM_REF),
+            threadKey: "t1",
+        });
+
+        // The token stream opens eagerly alongside the history/thread subscriptions.
+        expect(fake.streamCalls.map((call) => call.functionPath)).toStrictEqual([STREAM_REF]);
+
+        fake.pushStream(STREAM_REF, { text: "Hel", threadKey: "t1", turn: 0 });
+        fake.pushStream(STREAM_REF, { text: "lo", threadKey: "t1", turn: 0 });
+        // A progress event rides the same stream but carries no turn text — ignored here.
+        fake.pushStream(STREAM_REF, { data: { pct: 50 }, kind: "progress", threadKey: "t1", toolCallId: "c1" });
+        await fake.flush();
+
+        expect(get(handle.streamingText)).toBe("Hello");
+
+        // The turn persists → its assistant row advances the retire gate and the
+        // deltas fall away, leaving the persisted message the source of truth.
+        fake.push(MESSAGES_REF, [{ content: "Hello", role: "assistant", seq: 0 }]);
+
+        expect(get(handle.streamingText)).toBe("");
+
+        handle.teardown();
     });
 
     it("appends an optimistic user turn on send, then reconciles it against durable history", async () => {

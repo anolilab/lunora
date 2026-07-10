@@ -1,11 +1,12 @@
 import type { FunctionReference, LunoraClient } from "@lunora/client";
 import type { Readable } from "svelte/store";
-import { readable, writable } from "svelte/store";
+import { writable } from "svelte/store";
 
 import type { AgentThreadRecord, AgentThreadStatus } from "./agent";
 import { isClient, NO_MUTATION_REF } from "./agent";
 import { getLunoraClient } from "./context";
 import { mutation } from "./mutation";
+import { stream } from "./stream";
 
 /**
  * One persisted (or optimistic) thread message, as `agents:agentMessages`
@@ -32,6 +33,47 @@ interface AgentChatMessage {
     toolName?: string;
 }
 
+/**
+ * A live token delta streamed while a turn is generating. Client-safe mirror of
+ * `@lunora/agent`'s `AgentTokenDelta`. Ephemeral — deltas feed
+ * {@link AgentChatHandle.streamingText} live and are never replayed; the
+ * persisted assistant message stays the single source of truth.
+ */
+interface AgentTokenDelta {
+    /** Discriminates the token arm of {@link AgentLiveEvent}; unset on the wire (token is the default). */
+    kind?: "token";
+    /** The incremental text chunk the model just produced. */
+    text: string;
+    /** The thread this delta belongs to. */
+    threadKey: string;
+    /** The zero-based index of the turn producing the delta. */
+    turn: number;
+}
+
+/**
+ * A live tool-progress event streamed via `ctx.reportProgress(...)`. Client-safe
+ * mirror of `@lunora/agent`'s `AgentProgressEvent`. Ephemeral and `toolCallId`-keyed;
+ * surfaced by `agentToolEvents`, ignored by {@link AgentChatHandle.streamingText}.
+ */
+interface AgentProgressEvent {
+    /** The arbitrary, JSON-serializable payload the tool reported. */
+    data: unknown;
+    /** Discriminates the progress arm of {@link AgentLiveEvent}. */
+    kind: "progress";
+    /** The thread this event belongs to. */
+    threadKey: string;
+    /** The tool call this progress belongs to. */
+    toolCallId: string;
+}
+
+/**
+ * A single event on the agent's live-only channel — a streamed token delta or a
+ * tool progress event. Client-safe mirror of `@lunora/agent`'s `AgentLiveEvent`.
+ * Discriminate on `kind` (`"progress"` for the progress arm; token deltas leave
+ * it unset).
+ */
+type AgentLiveEvent = AgentProgressEvent | AgentTokenDelta;
+
 /** The `agents:agentMessages` reference — live durable thread history. */
 type AgentMessagesReference = FunctionReference<"query", { key: string; limit?: number }, ReadonlyArray<Record<string, unknown>>>;
 
@@ -44,6 +86,13 @@ type AgentApprovalReference = FunctionReference<
 
 /** The `agents:agentThread` reference — live thread status + in-flight `instanceId`. */
 type AgentThreadReference = FunctionReference<"query", { key: string }, Record<string, unknown> | undefined>;
+
+/**
+ * An app stream reference that tees the agent's in-flight live events, keyed by
+ * thread. Carries token deltas and — since `ctx.reportProgress` rides the same
+ * sink — tool progress events; this handle consumes only the token arm.
+ */
+type AgentTokenStreamReference = FunctionReference<"stream", { key: string }, AgentLiveEvent>;
 
 /**
  * The `agents.*` reference surface the chat handle reads. A structural subset of
@@ -79,6 +128,13 @@ interface AgentChatOptions {
     send: FunctionReference<"mutation">;
     /** Extra args merged into every `send` call (e.g. an `owner` or `title`). */
     sendArgs?: Record<string, unknown>;
+
+    /**
+     * Optional live token-delta stream — an app stream function that tees the
+     * agent's in-flight deltas. When omitted {@link AgentChatHandle.streamingText}
+     * stays empty and the UI updates message-by-message from durable history.
+     */
+    stream?: AgentTokenStreamReference;
     /** The thread to observe and continue. */
     threadKey: string;
 }
@@ -102,16 +158,16 @@ interface AgentChatHandle {
     status: Readable<AgentThreadStatus | undefined>;
 
     /**
-     * The in-flight turn's streamed text. `@lunora/svelte` ships no token-stream
-     * primitive (unlike `@lunora/react`'s `useStream`), so this stays `""` and the
-     * UI updates message-by-message from durable history — message-level liveness.
-     * See the package followups for the token-stream gap.
+     * The in-flight turn's streamed text — live-only, `""` once the turn persists
+     * to `messages`. Populated when a `stream` reference is supplied (via the
+     * {@link stream} primitive); with no reference it stays `""` and the UI advances
+     * message-by-message from durable history. Read with `$streamingText`.
      */
     streamingText: Readable<string>;
 
     /**
-     * Stop the live history + thread subscriptions. Call in `onDestroy`
-     * (`onDestroy(handle.teardown)`).
+     * Stop the live history + thread subscriptions (and the token stream, if any).
+     * Call in `onDestroy` (`onDestroy(handle.teardown)`).
      */
     teardown: () => void;
 }
@@ -121,6 +177,13 @@ interface OptimisticMessage {
     content: string;
     id: number;
 }
+
+/**
+ * A placeholder stream reference so {@link stream} is opened unconditionally even
+ * when the caller supplies no token stream. Paired with `"skip"` args, it never
+ * opens a stream.
+ */
+const NO_STREAM_REF: AgentTokenStreamReference = { __lunoraRef: "" };
 
 /**
  * Drop the optimistic user turns the durable history has now caught up on:
@@ -145,7 +208,7 @@ const reconcileOptimistic = (optimistic: ReadonlyArray<OptimisticMessage>, durab
 };
 
 const createAgentChatHandle = (client: LunoraClient, options: AgentChatOptions): AgentChatHandle => {
-    const { api, cancel: cancelReference, limit, send: sendReference, sendArgs, threadKey } = options;
+    const { api, cancel: cancelReference, limit, send: sendReference, sendArgs, stream: streamReference, threadKey } = options;
 
     const sendMutation = mutation(client, sendReference);
     const cancelMutation = mutation(client, cancelReference ?? NO_MUTATION_REF);
@@ -156,13 +219,15 @@ const createAgentChatHandle = (client: LunoraClient, options: AgentChatOptions):
     let latestThread: AgentThreadRecord | undefined;
     let durable: ReadonlyArray<AgentChatMessage> = [];
     let optimistic: ReadonlyArray<OptimisticMessage> = [];
+    // The live token/progress events from the current stream, kept in a closure so
+    // `recomputeStreamingText` reads them synchronously alongside `durable`.
+    let liveEvents: ReadonlyArray<AgentLiveEvent> = [];
     // A monotonic id source for optimistic rows — handle-instance local.
     let nextId = 0;
 
     const messagesStore = writable<ReadonlyArray<AgentChatMessage>>([]);
     const statusStore = writable<AgentThreadStatus | undefined>();
-    // No token-stream primitive on this adapter — see the type doc above.
-    const streamingText = readable("");
+    const streamingTextStore = writable("");
 
     // Merge durable history with the optimistic user turns the server hasn't
     // acknowledged yet, and publish to the messages store.
@@ -188,10 +253,40 @@ const createAgentChatHandle = (client: LunoraClient, options: AgentChatOptions):
         ]);
     };
 
+    // The in-flight turn is the one whose assistant message hasn't persisted yet:
+    // each completed turn persists exactly one assistant row, so `turn >= <count of
+    // durable assistant rows>` isolates deltas that have NOT been superseded. Once
+    // the turn's message lands the count advances and its deltas fall away — the
+    // persisted message becomes the source of truth. Token deltas only — progress
+    // events (`kind === "progress"`) ride the same stream but carry no turn text;
+    // `agentToolEvents` surfaces those. Recomputed on every stream chunk AND every
+    // history change (the assistant count is the retire gate).
+    const recomputeStreamingText = (): void => {
+        const assistantCount = durable.filter((message) => message.role === "assistant").length;
+        const text = liveEvents
+            .filter((event): event is AgentTokenDelta => event.kind !== "progress" && event.threadKey === threadKey && event.turn >= assistantCount)
+            .map((delta) => delta.text)
+            .join("");
+
+        streamingTextStore.set(text);
+    };
+
+    // The token stream is optional: with no reference we pass the sentinel + "skip"
+    // so `stream` never opens a stream (and `streamingText` stays empty). Subscribed
+    // eagerly (matching the history/thread subscriptions) so the stream opens with
+    // the handle and closes on `teardown`.
+    const streamArguments = streamReference === undefined ? "skip" : { key: threadKey };
+    const streamHandle = stream(client, streamReference ?? NO_STREAM_REF, streamArguments);
+    const unsubscribeStream = streamHandle.chunks.subscribe((value) => {
+        liveEvents = value;
+        recomputeStreamingText();
+    });
+
     const historyArgs = limit === undefined ? { key: threadKey } : { key: threadKey, limit };
     const unsubscribeHistory = client.subscribe(api.agents.agentMessages, historyArgs, (value) => {
         durable = value as unknown as ReadonlyArray<AgentChatMessage>;
         recompute();
+        recomputeStreamingText();
     });
     const unsubscribeThread = client.subscribe(api.agents.agentThread, { key: threadKey }, (value) => {
         latestThread = value as AgentThreadRecord | undefined;
@@ -245,6 +340,9 @@ const createAgentChatHandle = (client: LunoraClient, options: AgentChatOptions):
     const teardown = (): void => {
         unsubscribeHistory();
         unsubscribeThread();
+        // Drops the last subscriber, so the stream store's stop callback cancels
+        // the underlying stream.
+        unsubscribeStream();
     };
 
     return {
@@ -254,32 +352,33 @@ const createAgentChatHandle = (client: LunoraClient, options: AgentChatOptions):
         reject,
         send,
         status: { subscribe: statusStore.subscribe },
-        streamingText,
+        streamingText: { subscribe: streamingTextStore.subscribe },
         teardown,
     };
 };
 
 /**
- * A first-class agent chat surface: live durable history + the send / approve /
- * reject / cancel writes, keyed by `threadKey` — the Svelte counterpart to
- * React's `useAgentChat`, re-expressed as stores you read with `$`.
+ * A first-class agent chat surface: live durable history + in-flight token
+ * streaming + the send / approve / reject / cancel writes, keyed by `threadKey` —
+ * the Svelte counterpart to React's `useAgentChat`, re-expressed as stores you
+ * read with `$`.
  *
  * It composes the existing primitives rather than adding transport:
  * `client.subscribe(api.agents.agentMessages)` for durable history,
  * `client.subscribe(api.agents.agentThread)` for live status + the in-flight
- * `instanceId`, and {@link mutation} for the writes (`api.agents.agentResolveApproval`
- * for approvals; app-defined wrappers for `send`/`cancel`). Only the `agents:*`
- * surface is hard-coded — `send`/`cancel` stay generic references.
+ * `instanceId`, {@link stream} over an app token stream for in-flight deltas, and
+ * {@link mutation} for the writes (`api.agents.agentResolveApproval` for approvals;
+ * app-defined wrappers for `send`/`cancel`). Only the `agents:*` surface is
+ * hard-coded — `send`/`cancel`/`stream` stay generic references.
  *
  * A `send` optimistically appends the user turn so it renders immediately; the
  * optimistic row clears once the durable history carries the acknowledged turn.
- * The subscriptions open eagerly and run until {@link AgentChatHandle.teardown} —
- * call `onDestroy(handle.teardown)`.
- *
- * `@lunora/svelte` exposes no token-stream primitive, so {@link AgentChatHandle.streamingText}
- * stays `""` and the UI advances message-by-message from durable history
- * (message-level liveness). When a Svelte token-stream primitive lands this
- * handle can tee in-flight deltas the same way the React hook does.
+ * `streamingText` is live-only: it holds the current turn's streamed text and
+ * empties as soon as that turn's assistant message lands in `messages` (the
+ * persisted message is the source of truth); with no `stream` reference it stays
+ * `""` and the UI advances message-by-message from durable history. The
+ * subscriptions (and the token stream, if any) open eagerly and run until
+ * {@link AgentChatHandle.teardown} — call `onDestroy(handle.teardown)`.
  *
  * Pass `client` explicitly, or omit it to resolve the ambient client published by
  * `setLunoraClient`.
@@ -294,4 +393,4 @@ export function agentChat(clientOrOptions: AgentChatOptions | LunoraClient, mayb
     return createAgentChatHandle(client, options);
 }
 
-export type { AgentChatApi, AgentChatHandle, AgentChatMessage, AgentChatOptions };
+export type { AgentChatApi, AgentChatHandle, AgentChatMessage, AgentChatOptions, AgentLiveEvent, AgentProgressEvent, AgentTokenDelta };
