@@ -52,8 +52,9 @@ The pay rail's `signer` config selects wallet custody:
 
 The **pay** rail spends real money autonomously. It is `ActionCtx`-only and
 fail-closed: every payment is bounded by a spend policy (per-call and per-window
-caps) and may require confirmation. The `policy` is required and non-nullable, so
-an unbounded policy is a compile error — you cannot wire a signer without one.
+caps) and may require confirmation. The `policy` field is required, so you cannot
+wire a signer without one; an unbounded policy is refused at runtime (fail-closed)
+before any signer is resolved.
 
 ## License
 
