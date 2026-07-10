@@ -4,8 +4,8 @@ import { defineAgent } from "../src/define-agent";
 import { agentBindingName, voiceBindingName, voiceClassName } from "../src/naming";
 import { DEFAULT_AGENT_FUNCTION_PATHS } from "../src/paths";
 import type { AgentFunctionReference, AgentRunFunction, AgentStreamGenerate } from "../src/types";
-import type { VoiceServerFrame, VoiceSynthesize } from "../src/voice-do";
-import { runVoiceTurn } from "../src/voice-do";
+import type { VoiceServerFrame, VoiceSynthesize } from "../src/voice-turn";
+import { runVoiceTurn } from "../src/voice-turn";
 
 /** An in-memory model of the shared agent thread functions the voice turn dispatches to. */
 const createThreadStore = (): { calls: { args: Record<string, unknown>; path: string }[]; run: AgentRunFunction } => {

@@ -61,6 +61,7 @@ export type {
     SkillConfig,
     SkillDefinition,
 } from "./types";
+export { default as VoiceSessionDO } from "./voice-do";
 export type {
     RunVoiceTurnOptions,
     VoiceAudioSource,
@@ -71,6 +72,6 @@ export type {
     VoiceSynthesize,
     VoiceTranscribe,
     VoiceTurnResult,
-} from "./voice-do";
-export { runVoiceTurn, VoiceSessionDO } from "./voice-do";
+} from "./voice-turn";
+export { runVoiceTurn } from "./voice-turn";
 export { default as compileAgentWorkflow } from "./workflow";
