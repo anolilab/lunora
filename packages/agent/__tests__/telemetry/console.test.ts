@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { ConsoleLogLevel } from "../src/console";
-import { consoleTelemetry } from "../src/console";
+import type { ConsoleLogLevel } from "../../src/telemetry/console";
+import { consoleTelemetry } from "../../src/telemetry/console";
 
 interface Entry {
     fields: Record<string, unknown>;
@@ -21,12 +21,12 @@ const capture = () => {
 /** Deeply stringify captured fields so we can assert a value never leaked. */
 const dump = (entries: Entry[]): string => JSON.stringify(entries);
 
-describe("consoleTelemetry", () => {
+describe(consoleTelemetry, () => {
     it("logs operation start with the operationId and a functionId prefix", () => {
         const { entries, logger } = capture();
         const telemetry = consoleTelemetry({ functionId: "support", logger });
 
-        telemetry.onStart?.({ callId: "c1", modelId: "gpt", operationId: "ai.generateText", provider: "openai" } as never);
+        telemetry.onStart?.({ callId: "c1", modelId: "gpt", operationId: "ai.generateText", provider: "openai" });
 
         expect(entries).toHaveLength(1);
         expect(entries[0]?.message).toContain("[support]");
@@ -37,7 +37,7 @@ describe("consoleTelemetry", () => {
         const { entries, logger } = capture();
         const telemetry = consoleTelemetry({ logger });
 
-        telemetry.onToolExecutionStart?.({ toolCall: { input: { ssn: "SECRET-INPUT" }, toolName: "lookup" } } as never);
+        telemetry.onToolExecutionStart?.({ toolCall: { input: { ssn: "SECRET-INPUT" }, toolName: "lookup" } });
 
         expect(dump(entries)).not.toContain("SECRET-INPUT");
         // The tool name itself is structural and IS logged.
@@ -54,12 +54,12 @@ describe("consoleTelemetry", () => {
             finishReason: "stop",
             modelId: "gpt",
             provider: "openai",
-        } as never);
+        });
         telemetry.onToolExecutionEnd?.({
             toolCall: { toolName: "lookup" },
             toolExecutionMs: 12,
             toolOutput: { output: "SECRET-TOOL-OUTPUT", type: "tool-result" },
-        } as never);
+        });
 
         expect(dump(entries)).not.toContain("SECRET-MODEL-TEXT");
         expect(dump(entries)).not.toContain("SECRET-TOOL-OUTPUT");
@@ -69,13 +69,13 @@ describe("consoleTelemetry", () => {
         const { entries, logger } = capture();
         const telemetry = consoleTelemetry({ logger, recordInputs: true, recordOutputs: true });
 
-        telemetry.onToolExecutionStart?.({ toolCall: { input: { q: "hello" }, toolName: "lookup" } } as never);
-        telemetry.onLanguageModelCallEnd?.({ content: [{ text: "the answer", type: "text" }], modelId: "gpt", provider: "openai" } as never);
+        telemetry.onToolExecutionStart?.({ toolCall: { input: { q: "hello" }, toolName: "lookup" } });
+        telemetry.onLanguageModelCallEnd?.({ content: [{ text: "the answer", type: "text" }], modelId: "gpt", provider: "openai" });
         telemetry.onToolExecutionEnd?.({
             toolCall: { toolName: "lookup" },
             toolExecutionMs: 5,
             toolOutput: { output: "tool-result-value", type: "tool-result" },
-        } as never);
+        });
 
         expect(dump(entries)).toContain("hello");
         expect(dump(entries)).toContain("the answer");
@@ -90,8 +90,8 @@ describe("consoleTelemetry", () => {
             toolCall: { toolName: "lookup" },
             toolExecutionMs: 42,
             toolOutput: { output: "ok", type: "tool-result" },
-        } as never);
-        telemetry.onStepEnd?.({ finishReason: "stop", stepNumber: 0, usage: { inputTokens: 10, outputTokens: 3, totalTokens: 13 } } as never);
+        });
+        telemetry.onStepEnd?.({ finishReason: "stop", stepNumber: 0, usage: { inputTokens: 10, outputTokens: 3, totalTokens: 13 } });
 
         const toolEntry = entries.find((entry) => entry.message.includes("tool execution ended"));
 
@@ -112,7 +112,7 @@ describe("consoleTelemetry", () => {
             toolCall: { toolName: "lookup" },
             toolExecutionMs: 7,
             toolOutput: { error: new Error("boom"), type: "tool-error" },
-        } as never);
+        });
 
         const entry = entries[0];
 
@@ -138,14 +138,14 @@ describe("consoleTelemetry", () => {
         const telemetry = consoleTelemetry({ logger });
 
         expect(() => {
-            telemetry.onStart?.({} as never);
-            telemetry.onStepStart?.({} as never);
-            telemetry.onLanguageModelCallEnd?.({} as never);
-            telemetry.onToolExecutionStart?.({} as never);
-            telemetry.onToolExecutionEnd?.({} as never);
-            telemetry.onStepEnd?.({} as never);
-            telemetry.onEnd?.({} as never);
-            telemetry.onAbort?.({} as never);
+            telemetry.onStart?.({});
+            telemetry.onStepStart?.({});
+            telemetry.onLanguageModelCallEnd?.({});
+            telemetry.onToolExecutionStart?.({});
+            telemetry.onToolExecutionEnd?.({});
+            telemetry.onStepEnd?.({});
+            telemetry.onEnd?.({});
+            telemetry.onAbort?.({});
         }).not.toThrow();
 
         expect(entries.length).toBeGreaterThan(0);
@@ -155,7 +155,7 @@ describe("consoleTelemetry", () => {
         const info = vi.spyOn(globalThis.console, "info").mockImplementation(() => undefined);
         const telemetry = consoleTelemetry();
 
-        telemetry.onStart?.({ operationId: "ai.generateText" } as never);
+        telemetry.onStart?.({ operationId: "ai.generateText" });
 
         expect(info).toHaveBeenCalledTimes(1);
 

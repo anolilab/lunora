@@ -105,9 +105,9 @@ the durable loop:
   run result and persisted onto the thread.
 - **`telemetry`** — an ai@7 `TelemetryOptions` handed to every turn; set
   `telemetry.integrations` to trace turns and tool calls.
-  [`@lunora/agent-telemetry`](/docs/packages/agent-telemetry) ships ready-made
-  ones — `consoleTelemetry` (zero-dependency), `combineTelemetry`, and the
-  dependency-injected `sentryTelemetry` / `braintrustTelemetry` bridges
+  the [`@lunora/agent/telemetry`](#telemetry-integrations) subpath ships
+  ready-made ones — `consoleTelemetry` (zero-dependency), `combineTelemetry`,
+  and the dependency-injected `sentryTelemetry` / `braintrustTelemetry` bridges
   (privacy-safe by default — no prompt/output recorded without opt-in).
 
 ```ts
@@ -121,6 +121,45 @@ export const support = defineAgent({
     stopWhen: hasToolCall("finalize"),
 });
 ```
+
+## Telemetry integrations
+
+The `@lunora/agent/telemetry` subpath ships ready-made `Telemetry` integrations
+for the `telemetry.integrations` array — each traces every LLM turn and tool call
+in the durable loop. They are **privacy-safe by default**: `recordInputs` and
+`recordOutputs` both default to `false`, so no prompt, message, tool argument,
+generated text, or tool result is recorded without an explicit opt-in — only
+structural metadata (model id, finish reason, token counts, tool name, timing,
+success/failure).
+
+- **`consoleTelemetry`** — a **zero-dependency** structured console tracer.
+- **`combineTelemetry`** — fan the lifecycle out to several integrations and
+  **nest** their execution wrappers (`executeLanguageModelCall`, `executeTool`)
+  right-to-left, so the first integration is outermost.
+- **`sentryTelemetry`** / **`braintrustTelemetry`** — **dependency-injected**
+  bridges: you pass your own initialized Sentry namespace / Braintrust logger, so
+  the heavy vendor SDK is never imported by Lunora. Sentry turns model calls and
+  tool executions into spans (`op: "gen_ai.generate"` / `"gen_ai.execute_tool"`)
+  and routes errors to `Sentry.captureException`; Braintrust logs `type: "llm"` /
+  `type: "tool"` `logger.traced` spans.
+
+```ts
+import { defineAgent } from "@lunora/agent";
+import { combineTelemetry, consoleTelemetry, sentryTelemetry } from "@lunora/agent/telemetry";
+import * as Sentry from "@sentry/cloudflare";
+
+export const support = defineAgent({
+    name: "support",
+    telemetry: {
+        isEnabled: true,
+        integrations: [combineTelemetry(sentryTelemetry({ Sentry }), consoleTelemetry())],
+    },
+    // ...model, tools, loop control
+});
+```
+
+`consoleTelemetry` and `combineTelemetry` have zero runtime dependencies; install
+`@sentry/cloudflare` / `braintrust` only if you use those bridges.
 
 ## Concurrency + cancellation
 
@@ -514,6 +553,6 @@ runtime stubs to back the functions your tools dispatch to.
 
 - [@lunora/ai](/docs/packages/ai) — the model surface (`ctx.ai`) + `defineRag`
 - [@lunora/workflow](/docs/packages/workflow) — the durable-execution engine underneath
-- [@lunora/agent-telemetry](/docs/packages/agent-telemetry) — ready-made `telemetry.integrations` (console, Sentry, Braintrust)
+- [`@lunora/agent/telemetry`](#telemetry-integrations) — ready-made `telemetry.integrations` (console, Sentry, Braintrust)
 - [@lunora/testing](/docs/packages/testing) — `agentHarness` and the wider test toolkit
 - [@lunora/mcp](/docs/packages/mcp) — expose an agent to external MCP clients as an `agent_<name>` tool (see [Expose an agent](/docs/packages/mcp#expose-an-agent))

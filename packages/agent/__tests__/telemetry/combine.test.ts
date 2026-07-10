@@ -1,7 +1,7 @@
 import type { Telemetry } from "ai";
 import { describe, expect, it, vi } from "vitest";
 
-import { combineTelemetry } from "../src/combine";
+import { combineTelemetry } from "../../src/telemetry/combine";
 
 /** A tool-execution wrapper that brackets `execute` with named markers. */
 const bracketTool = (order: string[], label: string): Telemetry => {
@@ -18,7 +18,7 @@ const bracketTool = (order: string[], label: string): Telemetry => {
     };
 };
 
-describe("combineTelemetry", () => {
+describe(combineTelemetry, () => {
     it("fans a value callback out to every integration", async () => {
         const a = vi.fn();
         const b = vi.fn();
@@ -26,7 +26,7 @@ describe("combineTelemetry", () => {
 
         const event = { finishReason: "stop", stepNumber: 1 };
 
-        await combined.onStepEnd?.(event as never);
+        await combined.onStepEnd?.(event);
 
         expect(a).toHaveBeenCalledWith(event);
         expect(b).toHaveBeenCalledWith(event);
@@ -40,9 +40,9 @@ describe("combineTelemetry", () => {
 
         const event = { stepNumber: 0 };
 
-        await combined.onStepFinish?.(event as never);
-        await combined.onObjectStepStart?.(event as never);
-        await combined.onObjectStepEnd?.(event as never);
+        await combined.onStepFinish?.(event);
+        await combined.onObjectStepStart?.(event);
+        await combined.onObjectStepEnd?.(event);
 
         expect(onStepFinish).toHaveBeenCalledWith(event);
         expect(onObjectStepStart).toHaveBeenCalledWith(event);
@@ -72,7 +72,7 @@ describe("combineTelemetry", () => {
         };
         const combined = combineTelemetry(buggy, { onStepEnd: sibling });
 
-        await expect(combined.onStepEnd?.({ stepNumber: 1 } as never)).resolves.toBeUndefined();
+        await expect(combined.onStepEnd?.({ stepNumber: 1 })).resolves.toBeUndefined();
         expect(sibling).toHaveBeenCalledTimes(1);
     });
 
@@ -102,7 +102,7 @@ describe("combineTelemetry", () => {
         // First integration has no onStepEnd; must not throw when fanning out.
         const combined = combineTelemetry({}, { onStepEnd: onlyB });
 
-        await expect(combined.onStepEnd?.({ stepNumber: 0 } as never)).resolves.toBeUndefined();
+        await expect(combined.onStepEnd?.({ stepNumber: 0 })).resolves.toBeUndefined();
         expect(onlyB).toHaveBeenCalledTimes(1);
     });
 

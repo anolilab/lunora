@@ -6,11 +6,16 @@
         "agent",
         "ai",
         "ai-sdk",
+        "braintrust",
         "cloudflare",
         "durable-objects",
         "llm",
         "lunora",
+        "observability",
+        "sentry",
+        "telemetry",
         "tool-use",
+        "tracing",
         "workers",
         "workflows"
     ],
@@ -52,6 +57,10 @@
         "./sandbox": {
             "types": "./dist/sandbox.d.ts",
             "import": "./dist/sandbox.mjs"
+        },
+        "./telemetry": {
+            "types": "./dist/telemetry/index.d.ts",
+            "import": "./dist/telemetry/index.mjs"
         },
         "./package.json": "./package.json"
     },

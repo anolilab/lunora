@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { SentryLike } from "../src/sentry";
-import { sentryTelemetry } from "../src/sentry";
+import type { SentryLike } from "../../src/telemetry/sentry";
+import { sentryTelemetry } from "../../src/telemetry/sentry";
 
 interface Span {
     attributes?: Record<string, unknown>;
@@ -29,7 +29,7 @@ const fakeSentry = () => {
     return { captured, Sentry, spans };
 };
 
-describe("sentryTelemetry", () => {
+describe(sentryTelemetry, () => {
     it("wraps a tool execution in a span and returns its result", async () => {
         const { Sentry, spans } = fakeSentry();
         const telemetry = sentryTelemetry({ Sentry });
@@ -39,7 +39,7 @@ describe("sentryTelemetry", () => {
             execute: () => Promise.resolve("tool-value"),
             toolCall: { input: { q: "SENSITIVE" }, toolName: "lookup" },
             toolCallId: "tc-1",
-        } as never);
+        });
 
         expect(result).toBe("tool-value");
         expect(spans).toHaveLength(1);
@@ -56,7 +56,7 @@ describe("sentryTelemetry", () => {
             execute: () => Promise.resolve("ok"),
             toolCall: { input: { q: "SENSITIVE" }, toolName: "lookup" },
             toolCallId: "tc-1",
-        } as never);
+        });
 
         expect(JSON.stringify(spans)).not.toContain("SENSITIVE");
         expect(spans[0]?.attributes).not.toHaveProperty("gen_ai.tool.input");
@@ -70,7 +70,7 @@ describe("sentryTelemetry", () => {
             execute: () => Promise.resolve("ok"),
             toolCall: { input: { q: "hello" }, toolName: "lookup" },
             toolCallId: "tc-1",
-        } as never);
+        });
 
         expect(spans[0]?.attributes?.["gen_ai.tool.input"]).toStrictEqual({ q: "hello" });
     });
@@ -111,7 +111,7 @@ describe("sentryTelemetry", () => {
             execute: () => Promise.resolve(1),
             toolCall: { toolName: "t" },
             toolCallId: "tc",
-        } as never);
+        });
 
         expect(startSpan).toHaveBeenCalledTimes(1);
     });

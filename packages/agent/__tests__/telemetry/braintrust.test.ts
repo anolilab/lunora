@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { BraintrustLike, BraintrustSpan } from "../src/braintrust";
-import { braintrustTelemetry } from "../src/braintrust";
+import type { BraintrustLike, BraintrustSpan } from "../../src/telemetry/braintrust";
+import { braintrustTelemetry } from "../../src/telemetry/braintrust";
 
 interface TracedCall {
     args?: { name?: string; type?: string };
@@ -32,7 +32,7 @@ const fakeBraintrust = () => {
 /** All logged fields across every traced span, flattened for assertions. */
 const dumpLogs = (calls: TracedCall[]): string => JSON.stringify(calls.map((call) => call.logs));
 
-describe("braintrustTelemetry", () => {
+describe(braintrustTelemetry, () => {
     it("wraps a tool execution in a traced llm/tool span and returns the result", async () => {
         const { calls, logger } = fakeBraintrust();
         const telemetry = braintrustTelemetry({ logger });
@@ -42,7 +42,7 @@ describe("braintrustTelemetry", () => {
             execute: () => Promise.resolve("tool-value"),
             toolCall: { input: { q: "x" }, toolName: "lookup" },
             toolCallId: "tc-1",
-        } as never);
+        });
 
         expect(result).toBe("tool-value");
         expect(calls).toHaveLength(1);
@@ -57,7 +57,7 @@ describe("braintrustTelemetry", () => {
             execute: () => Promise.resolve("SECRET-OUTPUT"),
             toolCall: { input: { q: "SECRET-INPUT" }, toolName: "lookup" },
             toolCallId: "tc-1",
-        } as never);
+        });
 
         const logs = dumpLogs(calls);
 
@@ -73,7 +73,7 @@ describe("braintrustTelemetry", () => {
             execute: () => Promise.resolve("the-output"),
             toolCall: { input: { q: "the-input" }, toolName: "lookup" },
             toolCallId: "tc-1",
-        } as never);
+        });
 
         const logs = dumpLogs(calls);
 

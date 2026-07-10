@@ -1,5 +1,5 @@
 /**
- * `@lunora/agent-telemetry` — observability integrations for `@lunora/agent`.
+ * `@lunora/agent/telemetry` — observability integrations for `@lunora/agent`.
  *
  * Every export here produces an ai@7 `Telemetry` object suitable for the
  * `integrations` array of `TelemetryOptions` (`defineAgent({ telemetry: {

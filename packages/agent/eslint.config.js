@@ -38,6 +38,8 @@ export default createConfig(
             "@typescript-eslint/no-unnecessary-condition": "off",
             "@typescript-eslint/require-await": "off",
             "import/no-extraneous-dependencies": "off",
+            // Telemetry tests exercise ai@7 Telemetry lifecycle callbacks that are @deprecated in the type but still dispatched at runtime.
+            "sonarjs/deprecation": "off",
             "unicorn/no-null": "off",
             "unicorn/prevent-abbreviations": "off",
             "vitest/prefer-expect-assertions": "off",
