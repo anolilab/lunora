@@ -2,15 +2,13 @@ import type { Signal } from "@angular/core";
 import { DestroyRef, inject, signal } from "@angular/core";
 import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf } from "@lunora/client";
 
+import { randomSessionId } from "../../../shared/random-session-id";
 import { resolveLunoraClient } from "./client";
 import { runOutsideAngular, shouldOpenSubscription } from "./platform";
 
 type HeartbeatReference = FunctionReference<"mutation", { data?: Record<string, unknown>; roomId: string; sessionId: string }>;
 
 type ListPresentReference = FunctionReference<"query", { roomId: string }>;
-
-/* eslint-disable-next-line n/no-unsupported-features/node-builtins -- crypto.randomUUID is available in all target browsers, workerd, and Node 22+. */
-const makeSessionId = (): string => crypto.randomUUID();
 
 const DEFAULT_INTERVAL_MS = 10_000;
 
@@ -76,7 +74,7 @@ export const presence = <H extends HeartbeatReference, L extends ListPresentRefe
     const { heartbeat, listPresent, shardKey } = options;
     const intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
 
-    const sessionId = options.sessionId ?? makeSessionId();
+    const sessionId = options.sessionId ?? randomSessionId();
     const present = signal<ReturnOf<L> | undefined>(undefined);
 
     // Latest awareness data — updated by `setData`; read at heartbeat time so

@@ -2,6 +2,7 @@ import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
 import type { ShallowRef } from "vue";
 import { getCurrentScope, onScopeDispose, shallowRef } from "vue";
 
+import { randomSessionId } from "../../../shared/random-session-id";
 import { useLunora } from "./lunora-provider";
 
 /**
@@ -53,33 +54,6 @@ interface UsePresenceResult<L extends ListPresentReference> {
     setData: (data: Record<string, unknown> | undefined) => void;
 }
 
-/** Best-effort unique id for a presence session. */
-const makeSessionId = (): string => {
-    // eslint-disable-next-line n/no-unsupported-features/node-builtins -- crypto is a browser global, not just a Node built-in; guarded for SSR environments
-    if (typeof crypto !== "undefined") {
-        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- same guard as above
-        if (typeof crypto.randomUUID === "function") {
-            // eslint-disable-next-line n/no-unsupported-features/node-builtins -- same guard as above
-            return crypto.randomUUID();
-        }
-
-        // Older runtimes without `randomUUID` still ship Web Crypto's CSPRNG.
-        // Use it (never `Math.random`) so the id can't be treated as an
-        // insecure-randomness source flowing into a security context.
-        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- same guard as above
-        if (typeof crypto.getRandomValues === "function") {
-            // eslint-disable-next-line n/no-unsupported-features/node-builtins -- same guard as above
-            const bytes = crypto.getRandomValues(new Uint8Array(16));
-
-            return `sess-${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
-        }
-    }
-
-    // No Web Crypto at all (very old/exotic runtime): a presence session id is a
-    // non-secret correlation handle, so a time-based fallback is acceptable.
-    return `sess-${Date.now().toString(36)}`;
-};
-
 const DEFAULT_INTERVAL_MS = 10_000;
 
 const usePresence = <H extends HeartbeatReference, L extends ListPresentReference>(roomId: string, options: UsePresenceOptions<H, L>): UsePresenceResult<L> => {
@@ -87,7 +61,7 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
     const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
 
     // One session id per composable call unless the caller pins one.
-    const sessionId = options.sessionId ?? makeSessionId();
+    const sessionId = options.sessionId ?? randomSessionId();
 
     const present = shallowRef<ReturnOf<L> | undefined>(undefined) as ShallowRef<ReturnOf<L> | undefined>;
 

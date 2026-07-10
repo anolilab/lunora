@@ -3,6 +3,7 @@
 import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { randomSessionId } from "../../../shared/random-session-id";
 import { useLunora } from "./lunora-provider";
 
 /**
@@ -74,32 +75,6 @@ interface UsePresenceResult<L extends ListPresentReference> {
 }
 
 /** A best-effort unique id for a presence session — `crypto.randomUUID` when available, else a `crypto.getRandomValues` fallback. */
-const makeSessionId = (): string => {
-    // Guard the whole `crypto` reference, not just `randomUUID`: some SSR /
-    // older runtimes leave `crypto` undefined, where reading `.randomUUID` off
-    // it throws a TypeError instead of falling through. `typeof crypto` (rather
-    // than `globalThis.crypto !== undefined`) is the form the lib's
-    // non-nullable `Crypto` typing leaves intact — mirrors `offline-queue.ts`.
-    if (typeof crypto !== "undefined") {
-        if (typeof crypto.randomUUID === "function") {
-            return crypto.randomUUID();
-        }
-
-        // Older runtimes without `randomUUID` still ship Web Crypto's CSPRNG.
-        // Use it (never `Math.random`) so the id can't be treated as an
-        // insecure-randomness source flowing into a security context.
-        if (typeof crypto.getRandomValues === "function") {
-            const bytes = crypto.getRandomValues(new Uint8Array(16));
-
-            return `sess-${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
-        }
-    }
-
-    // No Web Crypto at all (very old/exotic runtime): a presence session id is a
-    // non-secret correlation handle, so a time-based fallback is acceptable.
-    return `sess-${Date.now().toString(36)}`;
-};
-
 const DEFAULT_INTERVAL_MS = 10_000;
 
 export const usePresence = <H extends HeartbeatReference, L extends ListPresentReference>(
@@ -111,8 +86,8 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
     const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
 
     // One session id per mount unless the caller pins one.
-    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing: `makeSessionId()` mints a fresh random id; it must run once per mount (keyed on `options.sessionId`), never per render, or every render would generate a new presence-row id. Keep the explicit `useMemo` so the identity is stable even if the compiler bails this function.
-    const generatedSessionId = useMemo(() => options.sessionId ?? makeSessionId(), [options.sessionId]);
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization -- load-bearing: `randomSessionId()` mints a fresh random id; it must run once per mount (keyed on `options.sessionId`), never per render, or every render would generate a new presence-row id. Keep the explicit `useMemo` so the identity is stable even if the compiler bails this function.
+    const generatedSessionId = useMemo(() => options.sessionId ?? randomSessionId(), [options.sessionId]);
 
     const [present, setPresent] = useState<ReturnOf<L> | undefined>(undefined);
 
