@@ -1,6 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
+import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { stableStringify } from "../../../shared/stable-key";
 import { decodeWire, encodeWire } from "../../../shared/wire-codec";
 import createInMemoryBookmarkStorage from "./bookmark";
@@ -3968,16 +3969,10 @@ class LunoraClient {
         // A buffer is dropped at its `pokeEnd`; one whose socket drops mid-poke
         // (no `pokeEnd`) is abandoned and the server re-seeds on resume, so it
         // would otherwise linger forever. Bound the map by evicting the oldest
-        // entry (insertion order) once it exceeds the cap — abandoned buffers are
-        // always the oldest, and live pokes resolve within a few frames, so this
-        // only ever reclaims dead buffers in practice.
-        if (this.pokeBuffers.size >= LunoraClient.MAX_POKE_BUFFERS) {
-            const oldest = this.pokeBuffers.keys().next().value;
-
-            if (oldest !== undefined) {
-                this.pokeBuffers.delete(oldest);
-            }
-        }
+        // entry once it exceeds the cap — abandoned buffers are always the oldest,
+        // and live pokes resolve within a few frames, so this only ever reclaims
+        // dead buffers in practice.
+        evictOldestEntry(this.pokeBuffers, LunoraClient.MAX_POKE_BUFFERS);
 
         // Open a buffer for this poke. Parts accumulate per shape and apply
         // atomically at `pokeEnd`, so a socket dropping mid-poke leaves the view

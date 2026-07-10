@@ -25,6 +25,8 @@
  * `outDir`/`rootDir` from their `tsconfig.json` (a set `rootDir` raises TS6059
  * for this out-of-package file under `tsc --noEmit`).
  */
+import { evictOldestEntry } from "./evict-oldest";
+
 const textEncoder = new TextEncoder();
 
 /** Upper bound on a signed-URL TTL — 7 days, matching common CDN/object-store ceilings. */
@@ -72,14 +74,7 @@ const importHmacKey = async (secret: string): Promise<CryptoKey> => {
         return cached;
     }
 
-    // Evict the oldest entry when the cache is full (insertion-ordered Map keys → FIFO).
-    if (keyCache.size >= KEY_CACHE_MAX) {
-        const oldest = keyCache.keys().next().value;
-
-        if (oldest !== undefined) {
-            keyCache.delete(oldest);
-        }
-    }
+    evictOldestEntry(keyCache, KEY_CACHE_MAX);
 
     const keyPromise = crypto.subtle.importKey("raw", textEncoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign", "verify"]);
 

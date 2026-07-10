@@ -90,6 +90,7 @@ import { LunoraError } from "@lunora/errors";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
+import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { SqlDialect, SqlRunResult } from "./dialect";
 import { effectiveColumnKind, sqliteDecode, sqliteEncode } from "./value-codec";
 
@@ -516,12 +517,11 @@ const createTableNameCache = (): {
         set: (id, table) => {
             if (map.has(id)) {
                 map.delete(id);
-            } else if (map.size >= TABLE_NAME_CACHE_CAPACITY) {
-                const oldest = map.keys().next().value;
-
-                if (oldest !== undefined) {
-                    map.delete(oldest);
-                }
+            } else {
+                // New key: bound the cache before inserting. The move-to-tail on
+                // `get` above is what makes this LRU; the eviction itself is the
+                // shared FIFO primitive.
+                evictOldestEntry(map, TABLE_NAME_CACHE_CAPACITY);
             }
 
             map.set(id, table);

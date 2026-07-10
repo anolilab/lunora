@@ -4,6 +4,8 @@ import type { BatchItem, BatchResponse } from "drizzle-orm/batch";
 import type { DrizzleD1Database } from "drizzle-orm/d1";
 import { drizzle as drizzleD1 } from "drizzle-orm/d1";
 
+import { evictOldestEntry } from "../../../shared/evict-oldest";
+
 /**
  * Minimal structural projection of `D1Database` to keep the adapter
  * compatible with the real workers-types value as well as unit-test doubles.
@@ -77,14 +79,7 @@ const prepareCached = (
 
     const stmt = prepare(sql);
 
-    if (cache.size >= STMT_CACHE_CAPACITY) {
-        const oldest = cache.keys().next().value;
-
-        if (oldest !== undefined) {
-            cache.delete(oldest);
-        }
-    }
-
+    evictOldestEntry(cache, STMT_CACHE_CAPACITY);
     cache.set(sql, stmt);
 
     return stmt;

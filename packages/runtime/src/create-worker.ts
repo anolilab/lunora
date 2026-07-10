@@ -1,6 +1,7 @@
 import { isLunoraError, toErrorBody } from "@lunora/errors";
 
 import type { BatchEntry } from "../../../shared/batch-wire";
+import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
 import { relayName } from "../../../shared/relay-name";
@@ -1416,17 +1417,9 @@ const probeRelayCount = async (namespace: ShardNamespaceLike, shardKey: string):
         relayCount = 0;
     }
 
-    // Bound the cache before inserting: evict the oldest entry once at the cap so a
-    // high-cardinality shard set can't grow the map without limit. `Map` preserves
-    // insertion order, so the first key is the oldest.
-    if (relayProbeCache.size >= RELAY_PROBE_MAX_ENTRIES) {
-        const oldest = relayProbeCache.keys().next().value;
-
-        if (oldest !== undefined) {
-            relayProbeCache.delete(oldest);
-        }
-    }
-
+    // Bound the cache before inserting so a high-cardinality shard set can't grow
+    // the map without limit.
+    evictOldestEntry(relayProbeCache, RELAY_PROBE_MAX_ENTRIES);
     relayProbeCache.set(shardKey, { expiresMs: now + RELAY_PROBE_TTL_MS, relayCount });
 
     return relayCount;
